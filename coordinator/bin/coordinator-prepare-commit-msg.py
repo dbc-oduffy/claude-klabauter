@@ -360,17 +360,22 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
     nothing to say" at the call site, which is exactly the fallback-to-
     session-tiers behaviour this hook must degrade to.
 
-    ``coordinator_core.win_portability`` is not importable off a bare
-    ``sys.path`` in a real hook invocation (git spawns this script with no
-    ``PYTHONPATH``), so the bootstrap here MUST be
-    ``_ensure_claude_klabauter_on_syspath()`` — the same self-location bootstrap every
-    other ``coordinator_core`` import in this file already uses — before
-    that import is attempted. A resolution failure still degrades to ``[]``
-    (never blocks the commit), matching the module's fail-soft contract, but
-    is noted on stderr, matching the visible-not-silent convention this file
-    already uses for tier-0 ambiguity (``_resolve_deliverable_id``) — a
-    silently empty tier-0 lookup here previously masqueraded as "nothing
-    staged" indefinitely.
+    This function does not itself import ``coordinator_core`` — see
+    ``_no_console_creationflags()``'s docstring for why the console-
+    suppression path in this file stays engine-free. The bootstrap call here
+    instead pre-flights ``_ensure_claude_klabauter_on_syspath()`` — the same self-
+    location bootstrap every ``coordinator_core`` import in this file already
+    uses — on behalf of the downstream ``_resolve_deliverable_id()`` engine
+    imports the caller is about to attempt with these paths: git spawns this
+    script with no ``PYTHONPATH``, so ``coordinator_core`` is not importable
+    off a bare ``sys.path`` in a real hook invocation, and a resolution
+    failure here is reported once rather than surfacing separately at each
+    downstream tier that would otherwise re-attempt the same bootstrap. A
+    resolution failure still degrades to ``[]`` (never blocks the commit),
+    matching the module's fail-soft contract, but is noted on stderr,
+    matching the visible-not-silent convention this file already uses for
+    tier-0 ambiguity (``_resolve_deliverable_id``) — a silently empty tier-0
+    lookup here previously masqueraded as "nothing staged" indefinitely.
     """
     claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
     if not claude_klabauter_root:
@@ -481,19 +486,6 @@ def _resolve_deliverable_id_from_paths(
     except Exception:
         resolve_claim_state = None
 
-    try:
-        from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-        # The equivalence artifact lives in the COMMITTING repo (`paths` are
-        # relative to it), not claude-klabauter's own worktree -- os.getcwd() is that
-        # repo's root, mirroring how `paths`/`rel_path` are opened below.
-        equivalence_map = load_equivalence_map(Path(os.getcwd()))
-    except Exception:
-        equivalence_map = {}
-
-        def canonicalize(raw_id, _map):  # noqa: ANN001 -- local fallback, see except above
-            return raw_id
-
     common_dir = Path(git_dir) if git_dir else None
 
     found = {}
@@ -524,20 +516,14 @@ def _resolve_deliverable_id_from_paths(
                         continue
                 found[rel_path] = cleaned
 
-    # Canonicalization is confined to the equality check, and the value
-    # returned on the collapse-to-one path is always a RAW value some staged
-    # artifact actually carries -- never the synthesized canonical winner.
-    # This return value becomes a stamped `Deliverable-Id:` trailer, so
-    # returning the canonical id would write a value no staged artifact's own
-    # frontmatter carries verbatim: the mutation the WRITE-PATH-SITE
-    # negative-spec forbids. Kept byte-identical in shape to
+    # The value returned on the collapse-to-one path is always a RAW value
+    # some staged artifact actually carries. Kept byte-identical in shape to
     # `commit_trailers._resolve_deliverable_id_from_paths`, which this
     # mirrors (review-integrator P1, coordinatorcode-reviewer-0f04f47d.md).
-    canonical_by_path = {p: canonicalize(v, equivalence_map) for p, v in found.items()}
-    distinct_canonical = sorted(set(canonical_by_path.values()))
-    if not distinct_canonical:
+    distinct_values = sorted(set(found.values()))
+    if not distinct_values:
         return ""
-    if len(distinct_canonical) == 1:
+    if len(distinct_values) == 1:
         return found[min(found)]
 
     # Producer-contract § 3 / DR-328: omit, don't guess -- and don't raise

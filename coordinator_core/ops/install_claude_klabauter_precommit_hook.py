@@ -37,23 +37,53 @@ diverges from the meta-repo installer's `_gate_block`): that module's gates
 run `"$_py" "$_gate_script" || exit $?`, propagating the gate script's raw
 exit code verbatim. That is safe for THAT registry's four scripts, which
 only ever exit 0 or 1. It is NOT safe here: `detect-staged-rollback.py`'s own
-documented exit contract is 0 (clean) / 1 (finding) / 2 (engine-root
-resolution or import failure — its own transport-layer failure, distinct
-from a business finding). A bare `|| exit $?` would let that 2 escape
-straight out of this hook. A pre-commit hook exiting 2 is read by the Claude
-Code harness as a blocking DENY that kills Bash/Write/Edit together,
-INCLUDING the tools needed to repair the hook — this bricked the primary
-macOS box four times on 2026-07-28 (see the dispatch brief this module was
-built from). So every gate block here captures `$?` into a variable and
-explicitly re-derives the branch from it: exactly 0 continues, anything else
-(1 OR 2 OR any future surprise value) is treated uniformly as a CANNOT-
-PROCEED / BLOCKED case that exits 1 — never the raw code. The gate script's
-OWN override handling (`detect_staged_rollback.main`'s internal
-`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` check) already makes a
-deliberate mass-revert exit 0 before this wrapper ever sees a nonzero code at
-all; this wrapper's own override branch exists for the cases the script
-itself cannot self-bypass — a missing script, a missing interpreter, or its
-own exit-2 transport failure.
+documented exit contract has FIVE values (0 clean / 1 rollback-only finding /
+2 transport failure / 3 mass-deletion-only finding / 4 both findings — see
+that module's own "Exit-code contract" docstring). A bare `|| exit $?` would
+let any of 2/3/4 escape straight out of this hook. A pre-commit hook exiting
+anything other than 0 or 1 is read by the Claude Code harness as a blocking
+DENY that kills Bash/Write/Edit together, INCLUDING the tools needed to
+repair the hook — this bricked the primary macOS box four times on
+2026-07-28 (see the dispatch brief this module was built from). So every
+gate block here captures `$?` into a variable and explicitly re-derives the
+branch from it via `_finding_branch`'s `case` statement: exactly 0 continues
+with no output, every other code (recognized or not) ends in exactly `exit
+1` on its BLOCKED leg — never the raw code.
+
+2026-08-21 fix — per-check override scoping (`_finding_branch`, replacing a
+single `gate.override_env` string previously reused for this branch too):
+before this fix, ANY nonzero `$_gate_rc` was gated on the ONE
+`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` key, so an operator with
+that var exported (real, observed habit from prior legitimate revert work —
+`70ed82e4aa6f`, `e167d08d14ad`, `0f37a6fac346`) had it silently bypass a
+mass-deletion-only BLOCK it never inspected, and
+`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` never reached any branch of
+this wrapper at all. `gate.finding_override_env` now maps each finding exit
+code to the override key(s) THAT code alone honors (`_finding_branch`'s own
+docstring has the full rationale); a code absent from that map — including
+`detect-staged-rollback.py`'s own transport-failure code, 2 — is never
+overridable here, by construction, matching the meta-repo installer's
+`_finding_branch` (which never honors ANY override on a real finding at
+all — see that module's own docstring). The gate script's OWN override
+handling (`detect_staged_rollback.main`'s internal per-check env reads)
+already makes a deliberate override exit 0 before this wrapper ever sees a
+nonzero code for that check — since the hook subprocess inherits this
+wrapper's own environment unchanged, this wrapper's per-code checks can only
+ever confirm what the script already resolved, never diverge from it; the
+wrapper-level check exists for symmetry with the missing-script/missing-
+interpreter CANNOT-PROCEED branches (`_cannot_proceed_branch`, unchanged by
+this fix) and for the BLOCKED banner naming which finding fired, not because
+it is reachable through any other path.
+
+Hooks already installed on disk keep the pre-fix single-key body until this
+installer is RE-RUN — there is no separate migration step, because one
+already exists: `_install_or_append_hook`'s "ours_wholesale" path does a
+full byte-for-byte compare of the hook this installer itself wrote against
+what it would write today (`_hook_body(gates) == existing_text`), and
+rewrites on any difference (`test_stale_gate_body_is_refreshed_not_reported_
+as_installed` pins this generically; this fix's own body change is picked up
+by the same mechanism with no dedicated version stamp needed, unlike the
+meta-repo installer's separate versioned-region system).
 
 Negative-spec:
     - Never emits a hook body that can exit anything other than 0 or 1 — see
@@ -74,9 +104,9 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
@@ -98,7 +128,15 @@ class _Gate:
     marker: str        # presence key: substring searched for in the hook body to find this gate's region
     filename: str       # coordinator/bin/ filename (relative to the resolved bin dir)
     label: str          # human label for the BLOCKED banner
-    override_env: str   # env var that bypasses a CANNOT-RUN/CANNOT-PROCEED block
+    override_env: str   # env var that bypasses a CANNOT-RUN/CANNOT-PROCEED block (missing script/interpreter)
+    # Per-exit-code override mapping for the "gate script itself exited
+    # nonzero" branch — see `_finding_branch`'s docstring. A code absent
+    # from this mapping (including any code the gate script's own contract
+    # names as a transport failure, e.g. `detect-staged-rollback.py`'s 2)
+    # is NEVER overridable at this wrapper: it always BLOCKS. A gate with an
+    # empty mapping (the default) therefore never offers a wrapper-level
+    # bypass for ANY of its findings — the conservative, fail-loud default.
+    finding_override_env: Dict[int, Tuple[str, ...]] = field(default_factory=dict)
 
 
 _GATE_REGISTRY: List[_Gate] = [
@@ -107,6 +145,22 @@ _GATE_REGISTRY: List[_Gate] = [
         filename="detect-staged-rollback.py",
         label="staged-rollback",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",
+        # Mirrors coordinator_core.ops.detect_staged_rollback's own EXIT_*
+        # contract (2026-08-21): exit 1 is a rollback-only finding, exit 3
+        # is a mass-deletion-only finding, exit 4 is both at once (neither
+        # resolved by its own override — see that module's "Exit-code
+        # contract" docstring for why 4 can only be reached when neither
+        # per-check env var was already set at process launch). Exit 2 (that
+        # module's own transport-failure/usage-error code) is deliberately
+        # ABSENT from this mapping — see `_finding_branch`.
+        finding_override_env={
+            1: ("COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",),
+            3: ("COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",),
+            4: (
+                "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",
+                "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",
+            ),
+        },
     ),
 ]
 
@@ -215,19 +269,83 @@ def _py_resolve_line() -> str:
     return _py_probe_sh.python_probe_lines("_py")
 
 
+def _finding_branch(gate: _Gate) -> List[str]:
+    """Emit the "the gate script itself exited nonzero" branch (case 3 of
+    `_gate_block`'s three CANNOT-PROCEED/BLOCKED cases) as a `case
+    "$_gate_rc" in` statement with exactly one arm per exit code
+    `gate.finding_override_env` names, plus a `*)` default arm.
+
+    Fixes the 2026-08-21 defect this module's own `_Gate` used to have: a
+    SINGLE `override_env` string applied uniformly to ANY nonzero
+    `$_gate_rc`, so `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (spelled
+    for check 1 of `detect-staged-rollback.py` only) silently bypassed a
+    check-2 mass-deletion BLOCK it never inspected — an operator who exports
+    that var for legitimate revert work could, without knowing it, suppress
+    the guard built to catch the 2026-07-28 empty-tree incident. Each arm
+    below tests ONLY the override key(s) `gate.finding_override_env` maps to
+    THAT exit code (`&&`-joined when a code needs more than one, e.g. "both
+    findings fired" needs both) — a key correct for a sibling code has no
+    effect here, by construction, since it is never even tested in the
+    wrong arm.
+
+    The `*)` default arm covers every exit code `gate.finding_override_env`
+    does NOT name — including `detect-staged-rollback.py`'s own transport-
+    failure/usage-error code (2) and any future surprise value — and
+    NEVER offers an override: an unrecognized code fails LOUD, unconditionally,
+    rather than falling through to success. This also means a gate with an
+    empty `finding_override_env` (the default) never offers a wrapper-level
+    bypass for any of its findings at all — the conservative default for a
+    future registry entry nobody has reasoned about per-code overrides for
+    yet.
+
+    Every arm still ends in exactly `exit 1` on the BLOCKED leg (never the
+    raw `$_gate_rc` — see module docstring's "Exit-code clamping"); the
+    override leg (when present and satisfied) SKIPS instead, exactly like
+    the CANNOT-PROCEED branches' own override handling.
+    """
+    lines = [
+        '  case "$_gate_rc" in',
+        "    0)",
+        "      :",  # clean run — no-op, matches the pre-existing fall-through-with-no-output shape
+        "      ;;",
+    ]
+    for code in sorted(gate.finding_override_env):
+        keys = gate.finding_override_env[code]
+        override_test = " && ".join(f'[ "${k}" = "1" ]' for k in keys)
+        lines += [
+            f"    {code})",
+            f"      if {override_test}; then",
+            f'        echo "pre-commit: gate [{gate.label}] ({gate.marker}) SKIPPED -- reported a problem (exit code $_gate_rc) (override set)." >&2',
+            "      else",
+            f'        echo "pre-commit: BLOCKED -- gate [{gate.label}] ({gate.marker}) reported a problem (exit code $_gate_rc) -- see output above." >&2',
+            f'        echo "pre-commit: remediation: fix the flagged issue. See {OVERRIDE_KEYS_DOC_DISPLAY} for override options." >&2',
+            "        exit 1",
+            "      fi",
+            "      ;;",
+        ]
+    lines += [
+        "    *)",
+        f'      echo "pre-commit: BLOCKED -- gate [{gate.label}] ({gate.marker}) reported a problem (exit code $_gate_rc) -- see output above." >&2',
+        f'      echo "pre-commit: remediation: fix the flagged issue. See {OVERRIDE_KEYS_DOC_DISPLAY} for override options." >&2',
+        "      exit 1",
+        "      ;;",
+        "  esac",
+    ]
+    return lines
+
+
 def _gate_block(gate: _Gate) -> List[str]:
     """Emit the runtime lines for one gate.
 
-    Three CANNOT-PROCEED cases, each honoring `gate.override_env` and each
-    ending in exactly `exit 1` (never a propagated raw code — see module
-    docstring's "Exit-code clamping"):
-      1. missing script
-      2. missing interpreter
+    Three CANNOT-PROCEED/BLOCKED cases, none of which ever propagates a raw
+    exit code (see module docstring's "Exit-code clamping"):
+      1. missing script — honors `gate.override_env` (`_cannot_proceed_branch`)
+      2. missing interpreter — honors `gate.override_env` (`_cannot_proceed_branch`)
       3. the gate script itself exited nonzero (a real finding, OR its own
-         transport-layer failure such as exit 2 — both collapse to the same
-         BLOCKED/exit-1 shape here; the gate script's own stderr, already
-         flushed to the terminal by the time this branch runs, carries the
-         distinguishing detail)
+         transport-layer failure such as exit 2) — dispatched by exit CODE
+         via `_finding_branch`, never by the single `gate.override_env`; see
+         that function's own docstring for why cases 1-2 and case 3 use
+         different override keys/shapes on purpose.
 
     A clean gate run (`$_gate_rc` = 0) falls through with no output.
 
@@ -278,13 +396,9 @@ def _gate_block(gate: _Gate) -> List[str]:
         "else",
         '  "$_py" "$_gate_script"',
         "  _gate_rc=$?",
-        '  if [ "$_gate_rc" -ne 0 ]; then',
     ]
-    lines += _cannot_proceed_branch(
-        'gate reported a problem (exit code $_gate_rc) -- see output above',
-        "fix the flagged issue",
-    )
-    lines += ["  fi", "fi"]
+    lines += _finding_branch(gate)
+    lines += ["fi"]
     return lines
 
 

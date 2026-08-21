@@ -800,9 +800,8 @@ def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_
     This is the REVERSE of `workstream_complete._resolve_session_handoff_
     plan_by_deliverable_id` (handoff -> plan); that function is not reused
     directly (it walks `docs/plans/*.md` keyed off ONE handoff's
-    `deliverable_id`, the opposite direction), but shares its equivalence-
-    canonicalization and frontmatter-primitive idiom rather than re-deriving
-    either.
+    `deliverable_id`, the opposite direction), but shares its
+    frontmatter-primitive idiom rather than re-deriving it.
 
     Never raises: an unreadable/non-UTF-8 handoff is skipped, not fatal to
     the scan — mirrors the forward join's own resilience. Only scans the
@@ -814,18 +813,7 @@ def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_
     if not handoffs_dir.is_dir():
         return []
 
-    # Function-local imports: `workstream_complete/__init__.py` imports this
-    # module's sibling ops at module scope for other reasons, and importing
-    # it back here at module scope would risk a future cycle -- matching the
-    # function-local-import idiom `directives_lessons_plan.resolve_governing_
-    # plan_with_source` already uses for the same forward-join module.
-    from coordinator_core.ops.deliverable_equivalence import canonicalize as canonicalize_deliverable_id
-    from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
-
-    equivalence_map = load_equivalence_map(root)
-    canonical_plan_id = (
-        canonicalize_deliverable_id(plan_deliverable_id, equivalence_map) if plan_deliverable_id else None
-    )
+    canonical_plan_id = plan_deliverable_id if plan_deliverable_id else None
 
     try:
         plan_resolved = plan_path.resolve()
@@ -856,7 +844,7 @@ def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_
 
         if canonical_plan_id is not None:
             handoff_deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
-            if handoff_deliverable_id and canonicalize_deliverable_id(handoff_deliverable_id, equivalence_map) == canonical_plan_id:
+            if handoff_deliverable_id and handoff_deliverable_id == canonical_plan_id:
                 matches.append(handoff_path)
 
     return matches

@@ -812,6 +812,32 @@ suite. See `check()`'s own Divergence 18 comment for the exact code, and
 adds there (its own "never whether confinement fires" claim describes only
 that function, not `check()`).
 
+Divergence 20 (2026-08-21, generic-deny message honesty fix): filed as
+`state/bug-backlog/2026-08-21-bash-guard-applies-code-reviewer-allowlist-
+to-other-agents-intermittently.yaml` (defect 2 of 3; defects 1 and 3 of
+that entry are a separate ruleset-selection question and an
+unreproducible flap, both explicitly out of scope here). A `python3
+"<script-path>"` invocation this ruleset does not admit (`interpreter_
+allow_scripts` false) falls through `_evaluate_python3_interpreter` to
+the generic Tier B deny message, whose `first_token` is `_extract_first_
+token`'s EFFECTIVE token -- tokens[1], not tokens[0], for an exact
+`python3 <script>` invocation (`_first_effective_token`'s own documented
+behavior, unchanged by this divergence). The message then called that
+effective token "first command token", which mis-describes argv[0]: a
+denied `python3 "<path>/opt34.py"` read "first command token is not
+coordinator-doc-new (got: <path>/opt34.py)", asserting the path WAS
+argv[0] when it was argv[1]. Fix: the generic-deny branch now also reads
+the raw, untouched `tokens_for_interpreter[0]` (already tokenized one
+line above for the misspelling-alias check) and, only when it differs
+from the effective token, names both ("command token is not
+coordinator-doc-new (got: <effective>, invoked via <raw>)") instead of
+mislabeling the effective token as "first". When the two coincide (every
+non-python3-prefixed case, including the AC3/AC5-pinned `curl`/`rm`
+messages) the original byte-identical string is untouched. The
+effective-token MATCHING logic itself (`_first_effective_token`,
+`_evaluate_python3_interpreter`, the alias-remedy tier below) is not
+touched -- this is a message-accuracy fix, not a reclassification.
+
 REFUTED prior hypothesis (recorded so it is not re-investigated): the
 `dispatched-agents.txt` back-pointer row write is NOT broken. A live named
 dispatch this session (`bp-probe@session-0b5c80ee`) produced a correct row
@@ -3324,8 +3350,30 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             deny_reason = interpreter_deny_reason
         else:
             deny = True
+            # `first_token` is the EFFECTIVE token this guard actually
+            # matched against the allowlist -- `_extract_first_token` (via
+            # `_first_effective_token`) deliberately returns tokens[1], not
+            # tokens[0], for an exact `python3 <script>` invocation (see
+            # that function's own docstring). `raw_first_token` is the
+            # UNMODIFIED tokens[0] already tokenized above for the alias
+            # check below. When the two differ, a message that calls
+            # `first_token` "first command token" mis-describes argv[0] --
+            # filed as state/bug-backlog/2026-08-21-bash-guard-applies-
+            # code-reviewer-allowlist-to-other-agents-intermittently.yaml
+            # (defect 2). Naming both keeps the message honest without
+            # touching the effective-token MATCHING logic, which stays
+            # exactly as before (AC3/AC5 pin this string byte-identical for
+            # every case where the two tokens already coincide, e.g.
+            # `curl`/`rm` -- unaffected by this branch).
             first_token = _extract_first_token(cmd_for_check)
-            deny_reason = f"first command token is not coordinator-doc-new (got: {first_token or 'empty'})"
+            raw_first_token = tokens_for_interpreter[0] if tokens_for_interpreter else ""
+            if raw_first_token and raw_first_token != first_token:
+                deny_reason = (
+                    f"command token is not coordinator-doc-new (got: {first_token or 'empty'}, "
+                    f"invoked via {raw_first_token})"
+                )
+            else:
+                deny_reason = f"first command token is not coordinator-doc-new (got: {first_token or 'empty'})"
             # (Divergence 18, 2026-08-11) The exact-`python3` tier above
             # declined (tokens[0] != "python3") -- check whether tokens[0]
             # is a python-family MISSPELLING whose `python3`-corrected form

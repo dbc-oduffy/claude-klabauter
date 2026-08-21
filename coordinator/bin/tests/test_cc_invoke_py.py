@@ -2242,6 +2242,11 @@ class RequireEngineVariantsTest(unittest.TestCase):
         otherwise wave through."""
 
         def _outcome(call):
+            # Bare except is safe ONLY here: raw and wrapped both run the same
+            # call graph under the same fixture, and the comparison keys on
+            # exception type AND first message line precisely so two
+            # different failures cannot compare equal. Lifting this helper to
+            # a shared location requires narrowing the caught type first.
             try:
                 return ("resolved", call())
             except Exception as exc:  # noqa: BLE001 - the class is part of the comparison

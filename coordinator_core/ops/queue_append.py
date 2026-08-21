@@ -1620,9 +1620,9 @@ def _queue_append_handler(
             **schema_fields,
         )
     except _ClaudeKlabauterUnresolvable as exc:
-        # AC6: graceful-degrade on unresolvable CLAUDE_KLABAUTER_ROOT — WARN + skip, exit 0.
+        # AC6: graceful-degrade on unresolvable COORDINATOR_ENGINE_ROOT — WARN + skip, exit 0.
         logger.warning(
-            "queue.append: CLAUDE_KLABAUTER_ROOT unresolvable — skipping write: %s. "
+            "queue.append: COORDINATOR_ENGINE_ROOT unresolvable — skipping write: %s. "
             "Remediation: set COORDINATOR_ENGINE_ROOT or run "
             "'machine-local set repos.claude_klabauter /path/to/claude-klabauter'.",
             exc,

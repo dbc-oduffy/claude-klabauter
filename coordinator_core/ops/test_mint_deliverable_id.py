@@ -4,6 +4,8 @@ Ported test intent from the bash oracle — same three paths (carry / stub /
 slug), same stderr path-label strings, same output-format assertions.
 
 Port of: mint-deliverable-id.test.sh (DoE 3a561713, 2026-07-22)
+Spec backlink: DR-346 §8 — stub path now mints an opaque 6-hex-suffixed
+token (bare "dlv-<stub_id>" is retired) so a carried id can prove a copy.
 """
 from __future__ import annotations
 
@@ -31,10 +33,19 @@ def test_carry_path_is_idempotent():
     assert r1 == r2
 
 
-def test_stub_path_mints_dlv_prefixed_stub_id():
+def test_stub_path_mints_dlv_stub_id_6hex():
+    # DR-346 §8: bare "dlv-<stub_id>" is retired -- the stub path now mints
+    # an opaque 6-hex suffix, mirroring the slug path's uniqueness property.
     result, label = mint(stub_id="some-feature-3")
-    assert result == "dlv-some-feature-3"
+    assert re.match(r"^dlv-some-feature-3-[0-9a-f]{6}$", result)
     assert label == "mint-from-stub"
+
+
+def test_stub_path_repeated_calls_differ():
+    r1, _ = mint(stub_id="some-feature-3")
+    r2, _ = mint(stub_id="some-feature-3")
+    assert r1.startswith("dlv-some-feature-3-")
+    assert r2.startswith("dlv-some-feature-3-")
 
 
 def test_slug_path_mints_dlv_slug_6hex():
@@ -84,7 +95,7 @@ def test_cli_stub_path(capsys):
     rc = main(["--stub-id", "some-feature-3"])
     out = capsys.readouterr()
     assert rc == 0
-    assert out.out.strip() == "dlv-some-feature-3"
+    assert re.match(r"^dlv-some-feature-3-[0-9a-f]{6}$", out.out.strip())
     assert "mint-from-stub path" in out.err
 
 

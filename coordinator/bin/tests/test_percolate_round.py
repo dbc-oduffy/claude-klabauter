@@ -1745,9 +1745,15 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
     with contextlib.redirect_stderr(buf):
         rc = _mod._cmd_round(args)
 
-    assert rc == _mod._EXIT_FAIL
+    # A held dest is a queue, not a defect: distinct exit code (EX_TEMPFAIL),
+    # and a message that names the wait knob instead of inviting a respawn
+    # loop. Regressing either one is what let a session retry 17 times against
+    # a lock that was never going to free faster for the pressure.
+    assert rc == _mod._EXIT_LOCK_BUSY
+    assert _mod._EXIT_LOCK_BUSY != _mod._EXIT_FAIL
     err = buf.getvalue()
-    assert "another round is running against this dest" in err
+    assert "is held by another round" in err
+    assert "COORDINATOR_LOCK_WAIT_SECS" in err
 
     real_run_calls = [
         c for c in spy.calls
@@ -2560,6 +2566,10 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     # `__kwdefaults__` and is safely patchable without touching any call
     # site.
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
+    # knob), so the kwdefaults patch above no longer reaches it -- without this
+    # the test would sit out the real 180s wait rather than the intended 1s.
+    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
 
     # `publish_mod.main` runs IN-PROCESS below (no subprocess spawn despite
     # this test's `spawns_process` marker), so `os.getppid()` observed
@@ -2606,6 +2616,10 @@ def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_b)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
+    # knob), so the kwdefaults patch above no longer reaches it -- without this
+    # the test would sit out the real 180s wait rather than the intended 1s.
+    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
 
     monkeypatch.setenv(
         "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS",
@@ -2623,7 +2637,7 @@ def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
         with locked_write.held_lock(Path(root_b), holder_label="third-party-holder"):
             rc = publish_mod.main(["row-a,row-b"])
 
-    assert rc == 1
+    assert rc == 75
     assert rows_reached == []
 
 
@@ -2643,6 +2657,10 @@ def test_inherited_root_pid_mismatch_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_a)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
+    # knob), so the kwdefaults patch above no longer reaches it -- without this
+    # the test would sit out the real 180s wait rather than the intended 1s.
+    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
 
     # A syntactically well-formed token, but with a PID that cannot be the
     # true parent (`os.getppid()` inside `main` below is this test
@@ -2663,7 +2681,9 @@ def test_inherited_root_pid_mismatch_still_locked(tmp_path, monkeypatch):
     with locked_write.held_lock(Path(root_a), holder_label="third-party-holder"):
         rc = publish_mod.main(["row-a"])
 
-    assert rc == 1
+    # 75 = EX_TEMPFAIL: the root was really locked (the point of the test);
+    # a held destination reports as a queue, not as a broken publish.
+    assert rc == 75
     assert rows_reached == []
 
 
@@ -2681,6 +2701,10 @@ def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_a)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
+    # knob), so the kwdefaults patch above no longer reaches it -- without this
+    # the test would sit out the real 180s wait rather than the intended 1s.
+    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
 
     # No `=` delimiter at all -- the pre-fix bare-realpath format.
     monkeypatch.setenv(
@@ -2697,7 +2721,9 @@ def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
     with locked_write.held_lock(Path(root_a), holder_label="third-party-holder"):
         rc = publish_mod.main(["row-a"])
 
-    assert rc == 1
+    # 75 = EX_TEMPFAIL: the root was really locked (the point of the test);
+    # a held destination reports as a queue, not as a broken publish.
+    assert rc == 75
     assert rows_reached == []
 
 

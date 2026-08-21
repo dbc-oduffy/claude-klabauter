@@ -376,6 +376,14 @@ split as every other axis in this contract. A change to either side (a sixth emi
 lens spelling changed, the path template moved) is exactly as much breaking drift as a
 `report_sidecar`-shaped change (see § Drift detection below).
 
+**Lens-owned body, plan-derivable leg only (docs/plans/2026-08-21-the-provisioner-writes-the-
+sidecar-skeleton.md, C1).** On this leg, when `_TEMPLATE_REGISTRY` holds an entry named for the
+resolved lens, that lens name wins as `doc_type` over `payload["type"]` — the body template is
+lens-owned, not caller-supplied, the same way the path already is. Narrow by construction: only a
+*registered* lens name takes this branch, so today only `coordinator:plan-coverage-checker`
+(`"plan-coverage-check"`) is affected; the other four lenses keep resolving whatever `type` the
+payload supplies, unchanged. The session-keyed path below this leg is not touched by this rule.
+
 ## `contract_blocks` / `injected_prompt_blocks` — dispatch-time prompt-block injection (SUBSUME)
 
 Additive second seam alongside the provision-and-emit contract above, per the canonical

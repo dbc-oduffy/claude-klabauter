@@ -157,6 +157,23 @@ def test_build_file_index_absent_scope_unchanged(git_repo):
     assert unscoped == explicit_none
 
 
+def test_build_file_index_default_untracked_arm_unchanged(git_repo):
+    """Paired no-change assertion (C6): the existing registered-op caller
+    (ops/cartography_file_index.py) never passes `include_untracked`, so
+    leaving it at its default must be byte-identical to output before the
+    arm existed — an untracked file planted in the fixture must NOT appear
+    unless the arm is explicitly turned on.
+    """
+    (git_repo / "scratch_untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+    default_call = build_file_index(git_repo)
+    explicit_false = build_file_index(git_repo, include_untracked=False)
+
+    assert default_call == explicit_false
+    assert "scratch_untracked.txt" not in default_call["index"]
+    assert default_call["file_count"] == 5
+
+
 def test_build_file_index_zero_unmapped_over_this_repo():
     result = build_file_index(_REPO_ROOT)
     assert result["file_count"] > 0

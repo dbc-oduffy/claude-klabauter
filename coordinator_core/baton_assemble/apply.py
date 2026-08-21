@@ -999,6 +999,16 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     real recorded union with a different one -- the same conflict posture
     `handoff.archive_transition`'s supersede mutate closure takes on
     `continued_into`.
+
+    PLAN_IDS THRESHOLD (DR-346 §5 Correction, C3 2026-08-21): `plan_ids`
+    entries below the 2-distinct-id fan-in threshold are dropped before this
+    function's own body ever runs -- see the guard immediately preceding
+    `mutate`'s definition. That guard is this writer's half of "one
+    contract"; `sizing_disposition.cited_plan_fks` no longer reads `plan_ids`
+    as a citation at all (the read half), so the two writers of this field
+    (this one and `resolve_lineage`'s `_ordered_unique`) may now disagree on
+    ORDERING/DEDUPE nuance without corrupting anything downstream -- neither
+    result is ever read as a plan FK.
     """
     from coordinator_core.frontmatter.primitives import (
         insert_fm_field_raw,
@@ -1037,6 +1047,25 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
         # from one d1 authored directly.
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
+
+    # DR-346 §5 (Correction paragraph): `plan_ids` is a FAN-IN AUDIT list, not
+    # a plan FK -- `resolve_lineage`'s own writer (`_ordered_unique` in
+    # `baton_assemble/__init__.py`) enforces a >=2-distinct-id threshold and
+    # emits `None` (no field at all) below it, precisely so a single citation
+    # never masquerades as a fan-in. This handler is a SECOND writer for the
+    # same field, reachable on its own (any caller may pass `--plan-ids=`
+    # directly, not only via the lineage-derived args `_build_directives`
+    # happens to build today) -- so it must enforce the identical threshold
+    # itself rather than trust the caller already applied it. Measured
+    # 2026-08-21: this was the live gap -- 4 of 797 records carry a
+    # single-item `plan_ids`, a shape `_ordered_unique` can never produce,
+    # because this handler applied no threshold at all. Below 2 distinct
+    # ids, `plan_ids` is dropped entirely (not written), matching
+    # `_ordered_unique`'s own `None`-below-threshold contract exactly --
+    # `deliverable_ids` is UNCHANGED here; only `plan_ids` carries the DR-346
+    # citation defect.
+    if len(dict.fromkeys(plan_ids)) < 2:
+        plan_ids = []
 
     _state: dict[str, Any] = {"stamped": []}
 

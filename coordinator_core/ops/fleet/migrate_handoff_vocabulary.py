@@ -184,7 +184,6 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     check_repo_root,
@@ -541,21 +540,10 @@ def _resolve_deliverable_id_successor(
     candidate_path: Path,
     all_paths: List[Path],
     repo_root: Path,
-    equivalence_map: Dict[str, str],
 ) -> Optional[Path]:
     """Third rung of the successor ladder: a JOIN on shared ``deliverable_id``,
     for the one succession shape neither reverse-lineage nor ``superseded_by``
     can see.
-
-    ``equivalence_map`` (``coordinator_core.ops.deliverable_equivalence``,
-    ``{loser_id: winner_id}``) is applied via ``canonicalize()`` at the JOIN
-    predicate ONLY — both the subject's and each candidate's ``deliverable_id``
-    are canonicalized before comparison, never written back to ``fm_text`` or
-    to any record on disk. This re-enables the join for a declared fork pair
-    (e.g. ``sat-01``'s ``dlv-sat-01`` / ``dlv-sat-01-sovereign-tracker-...``)
-    where the raw ids differ but both legs continue the same deliverable. A
-    fork with no declared equivalence entry canonicalizes to itself, so this
-    is a pure widening of the match set, never a narrowing.
 
     A roadmap stub (``kind: spinoff-roadmap``) and its execution baton
     (``kind: session-handoff``) continue the same work while sharing NO
@@ -612,7 +600,7 @@ def _resolve_deliverable_id_successor(
         subject_raw_id = deliverable_raw.strip().strip("\"'") if deliverable_raw else None
         if not subject_raw_id:
             return None
-        deliverable_id = canonicalize(subject_raw_id, equivalence_map)
+        deliverable_id = subject_raw_id
 
         subject_ts = _record_timestamp(fm_text, candidate_path)
         subject_resolved = candidate_path.resolve()
@@ -641,8 +629,7 @@ def _resolve_deliverable_id_successor(
             other_raw_id = (
                 other_deliverable_raw.strip().strip("\"'") if other_deliverable_raw else None
             )
-            other_deliverable = canonicalize(other_raw_id, equivalence_map)
-            if other_deliverable != deliverable_id:
+            if other_raw_id != deliverable_id:
                 continue
 
             other_ts = _record_timestamp(other_fm, other)
@@ -650,29 +637,6 @@ def _resolve_deliverable_id_successor(
                 continue
 
             matches.append(other)
-            # Review finding 3 (2026-08-02): log which equivalence entry
-            # fired whenever the join succeeded ONLY because canonicalization
-            # changed one or both raw ids -- i.e. the raw ids differed but
-            # the canonical ids matched. This is traceability only, not a
-            # gate: the correctness burden stays on the human-reviewed
-            # equivalence artifact (AC7), per the EM's confirmation that no
-            # consumer-local validation should be added here. Makes a
-            # wrongly-declared equivalence entry's effect on THIS join
-            # visible after the fact rather than silent.
-            if subject_raw_id != other_raw_id and (
-                subject_raw_id != deliverable_id or other_raw_id != other_deliverable
-            ):
-                _LOG.info(
-                    "migrate_handoff_vocabulary: deliverable_id join between "
-                    "%s (%r) and %s (%r) fired via equivalence canonicalization "
-                    "-> %r; verify state/deliverable-equivalence.yaml's entry "
-                    "for this pair if this successor looks wrong",
-                    candidate_path,
-                    subject_raw_id,
-                    other,
-                    other_raw_id,
-                    deliverable_id,
-                )
 
         if len(matches) != 1:
             return None
@@ -706,7 +670,6 @@ def _plan_one(
     repo_root: Path,
     state_dir: Path,
     all_paths: List[Path],
-    equivalence_map: Dict[str, str],
 ) -> Optional[Dict[str, Any]]:
     """Plan one record's migration. Returns None on a genuine no-op (already fully
     new-vocabulary — the idempotency contract). Raises ValueError on an
@@ -805,7 +768,7 @@ def _plan_one(
                 successor_rung = "superseded_by"
         if successor is None:
             successor = _resolve_deliverable_id_successor(
-                fm_text, path, all_paths, repo_root, equivalence_map
+                fm_text, path, all_paths, repo_root
             )
             if successor is not None:
                 successor_rung = "deliverable_id-join"
@@ -907,14 +870,13 @@ def plan_migration(repo_root: str) -> Dict[str, Any]:
     root = Path(repo_root).resolve()
     state_dir = root / "state" / "handoffs"
     all_paths = iter_handoff_files(root)
-    equivalence_map = load_equivalence_map(root)
 
     records: List[Dict[str, Any]] = []
     failures: List[Dict[str, str]] = []
 
     for path in all_paths:
         try:
-            plan = _plan_one(path, root, state_dir, all_paths, equivalence_map)
+            plan = _plan_one(path, root, state_dir, all_paths)
         except ValueError as exc:
             failures.append({"path": _repo_rel(path, root), "reason": str(exc)})
             continue

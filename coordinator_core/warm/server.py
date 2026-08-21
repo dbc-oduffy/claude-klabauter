@@ -1380,21 +1380,58 @@ class _ServerContext:
         here would double-count the slot. A wedged dispatch stalls only
         this one worker thread (module docstring's TRANSPORT MODEL note);
         the other `pool_size - 1` workers keep draining the queue.
+
+        THE `except Exception` BELOW IS LOAD-BEARING, NOT DEFENSIVE
+        BOILERPLATE. `_handle_connection` catches `OSError` around its own
+        `io.readline()`, and `_serve_line` catches `Exception` around its
+        own `dispatch(...)` call -- but neither wraps `_write_and_release`'s
+        `write(_encode(response))`, which is `io.write(data)` under the
+        module docstring's TRANSPORT MODEL. A client that hit its own
+        `READ_DEADLINE_SECS` (2s) and went cold already closed its pipe
+        handle -- `warm.client`'s own comment calls this "the common case on
+        this box, not a corner" under the stated load norm -- so by the time
+        a busy worker finally reaches `_write_flushed`, that write raises an
+        unhandled `OSError` (a broken/closed pipe). Before this guard, that
+        exception propagated straight out of this `while True:` loop and
+        killed the thread -- silently and permanently, since nothing
+        restarts a dead worker. Live evidence, this server (pid unchanged
+        across the observation): `WORKER_POOL_SIZE` is 30, but a
+        `py-spy dump` found only 6 of the original 30 numbered worker
+        threads still alive, the rest having died the same way one at a
+        time. Each death shrinks real dispatch concurrency further below
+        the pool's own bound, which lengthens the shared queue's wait under
+        the SAME load, which makes MORE clients hit their own 2s deadline
+        and abandon -- a self-reinforcing die-off, not a one-time fluke,
+        and the direct cause of the intermittent
+        `warm dispatch unavailable` (-32603) rc=1 this guard closes.
+        Logged and continued, never re-raised: the module's own "NEVER FAIL
+        A CALLER" contract already accepts that one connection can be lost
+        to a broken pipe (the client is gone; there is no caller left to
+        answer) -- what this closes is the OTHER cost, this worker thread's
+        own survival for the NEXT connection in the queue.
         """
         while True:
             io = self._queue.get()
-            _handle_connection(
-                io,
-                version_state=self.version_state,
-                server_sha=self.version_state.server_sha,
-                close_listener=self.close_listener,
-                drain=self._drain,
-                in_flight=self.in_flight,
-                dispatch=self._pool_dispatch,
-                record_invocation=self.record_invocation,
-                record_exit=self.record_exit,
-                already_entered=True,
-            )
+            try:
+                _handle_connection(
+                    io,
+                    version_state=self.version_state,
+                    server_sha=self.version_state.server_sha,
+                    close_listener=self.close_listener,
+                    drain=self._drain,
+                    in_flight=self.in_flight,
+                    dispatch=self._pool_dispatch,
+                    record_invocation=self.record_invocation,
+                    record_exit=self.record_exit,
+                    already_entered=True,
+                )
+            except Exception as exc:  # noqa: BLE001 -- see docstring: a dead worker is a permanent capacity loss, not a single lost response
+                print(
+                    f"[warm-server] worker thread survived an unhandled exception "
+                    f"from _handle_connection (likely a write to an abandoned "
+                    f"connection); continuing to drain the queue: {exc!r}",
+                    file=sys.stderr,
+                )
 
     def _enqueue_connection(self, io: Any) -> None:
         """Claim this connection's `in_flight` slot and hand its `io` off

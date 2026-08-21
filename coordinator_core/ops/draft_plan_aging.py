@@ -121,7 +121,6 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -469,11 +468,7 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
 #
 # Ownership predicate (spec of record: DoE-claude
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP):
-#   handoff.deliverable_id == plan.deliverable_id, each side joined through
-#   coordinator_core.ops.deliverable_equivalence.canonicalize (C3b's declared
-#   fork-equivalence map) so a plan/handoff pair split across a declared
-#   fork's winner/loser legs still joins. Raw-string equality alone is the
-#   historical bug this canonicalization step exists to close.
+#   handoff.deliverable_id == plan.deliverable_id, raw-string equality.
 #   A plan carrying no `deliverable_id` at all resolves to NO owner — retired
 #   2026-08-04 (docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
 #   § C12, PM ruling R2): this resolver previously fell back to an anchored
@@ -537,9 +532,6 @@ def resolve_plan_owner(
         # plan with no deliverable_id at all now resolves to no owner rather
         # than falling to the retired path-pointer secondary key.
         return None
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_plan_deliverable_id = canonicalize(plan_deliverable_id, equivalence_map)
-
     handoffs_dir = repo_root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
         return None
@@ -565,9 +557,7 @@ def resolve_plan_owner(
             continue
 
         hf_deliverable_id = extract_frontmatter_scalar(hf_text, "deliverable_id")
-        if hf_deliverable_id and (
-            canonicalize(hf_deliverable_id, equivalence_map) == canonical_plan_deliverable_id
-        ):
+        if hf_deliverable_id and hf_deliverable_id == plan_deliverable_id:
             return "/".join(("state", "handoffs", name))
 
     return None
@@ -856,26 +846,12 @@ def _list_dangling_baton_plan_references(
     reference that does not resolve (AC7). See section docstring above for
     the precedence rule and join direction.
 
-    `known_plan_deliverable_ids` is the CANONICAL-deliverable_id ->
-    repo-relative-paths index built by list_orphaned's own single walk of
-    docs/plans (ALL plan files, any status) — passed in so this function
-    never re-walks docs/plans itself. Multi-valued (a list of paths per
-    canonical id, not a single path): canonicalizing the key can collapse
-    two distinct plan files' raw deliverable_ids (a declared fork's
-    winner/loser legs) onto the same canonical id, and a single-valued
-    dict would silently drop one plan's path on that collision (AC10). This
-    function only ever tests membership against the index, never reads a
-    path back out of it, but the multi-valued shape is load-bearing so no
-    caller of `list_orphaned`'s own reverse-index construction loses a path.
-
-    A handoff's own `deliverable_id` is canonicalized (via the same
-    per-process-memoized `deliverable_equivalence` map) before the
-    membership test — the reported `reference` value stays the RAW id as
-    read from the handoff (diagnostic fidelity: what's actually on disk),
-    only the join key is canonicalized.
+    `known_plan_deliverable_ids` is the deliverable_id -> repo-relative-paths
+    index built by list_orphaned's own single walk of docs/plans (ALL plan
+    files, any status) — passed in so this function never re-walks
+    docs/plans itself.
     """
     findings: List[Dict[str, str]] = []
-    equivalence_map = load_equivalence_map(repo_root)
 
     handoffs_dir = repo_root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
@@ -905,8 +881,7 @@ def _list_dangling_baton_plan_references(
             # retired path-pointer secondary key is no longer consulted here.
             continue
 
-        canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-        if canonical_deliverable_id not in known_plan_deliverable_ids:
+        if deliverable_id not in known_plan_deliverable_ids:
             findings.append(
                 {
                     "handoff": rel_handoff,
@@ -1105,17 +1080,13 @@ def list_orphaned(
     non_plan_excluded_count = 0
     scanned_count = 0
     terminal_count = 0
-    # Reverse-direction (C3, AC7) index: CANONICAL deliverable_id ->
-    # repo-relative paths (list, not a single path — AC10: canonicalizing the
-    # key can collapse a declared fork's winner/loser legs onto one id, and a
-    # single-valued dict would silently drop one plan's path on that
-    # collision), populated from EVERY plan file this walk visits regardless
-    # of status — a shipped/implemented plan is still a real file a handoff
-    # may validly reference. Built from this SAME walk so the reverse check
+    # Reverse-direction (C3, AC7) index: deliverable_id -> repo-relative
+    # paths, populated from EVERY plan file this walk visits regardless of
+    # status — a shipped/implemented plan is still a real file a handoff may
+    # validly reference. Built from this SAME walk so the reverse check
     # never re-walks docs/plans on its own (see
     # _list_dangling_baton_plan_references).
     plan_deliverable_ids: Dict[str, List[str]] = {}
-    equivalence_map = load_equivalence_map(repo_root)
 
     if not plans_dir.is_dir():
         return {
@@ -1165,8 +1136,7 @@ def list_orphaned(
         rel_path = os.path.join("docs", "plans", name).replace(os.sep, "/")
         plan_deliverable_id = extract_frontmatter_scalar(text, "deliverable_id")
         if plan_deliverable_id:
-            canonical_plan_deliverable_id = canonicalize(plan_deliverable_id, equivalence_map)
-            plan_deliverable_ids.setdefault(canonical_plan_deliverable_id, []).append(rel_path)
+            plan_deliverable_ids.setdefault(plan_deliverable_id, []).append(rel_path)
 
         status = extract_frontmatter_scalar(text, "status")
         if status in PLAN_ORPHAN_TERMINAL_STATUS:

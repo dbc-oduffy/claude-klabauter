@@ -73,6 +73,7 @@ pytestmark = [
 # Import under test
 # ---------------------------------------------------------------------------
 
+from coordinator_core import locked_write  # noqa: E402
 from coordinator_core.locked_write import (  # noqa: E402
     LockTimeout,
     MutateAbort,
@@ -651,3 +652,33 @@ class TestCrashSafety:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+
+
+class TestContendedLockWaitSecs:
+    """`contended_lock_wait_secs` — the knob that turns a respawn loop into a wait.
+
+    Why this is tested at all: the failure it closes was not a crash but a
+    read. A contended publish lock timed out at ``LOCK_TIMEOUT_SECS`` and
+    exited like a broken run, so sessions retried with a fresh process each
+    time — 17 attempts against a queue on a box that runs 50-70 concurrent
+    LLMs. The default here has to stay well above LOCK_TIMEOUT_SECS, and a
+    malformed override has to degrade to the default rather than raise on a
+    hot path.
+    """
+
+    def test_default_is_well_above_the_rmw_timeout(self, monkeypatch):
+        monkeypatch.delenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raising=False)
+        assert (
+            locked_write.contended_lock_wait_secs()
+            > locked_write.LOCK_TIMEOUT_SECS
+        )
+        assert locked_write.contended_lock_wait_secs() == 180.0
+
+    def test_env_override_is_honoured(self, monkeypatch):
+        monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "600")
+        assert locked_write.contended_lock_wait_secs() == 600.0
+
+    @pytest.mark.parametrize("raw", ["", "   ", "soon", "0", "-5", "1e"])
+    def test_malformed_or_non_positive_falls_back(self, monkeypatch, raw):
+        monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raw)
+        assert locked_write.contended_lock_wait_secs(default=42.0) == 42.0

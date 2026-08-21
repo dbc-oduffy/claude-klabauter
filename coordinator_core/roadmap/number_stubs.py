@@ -34,6 +34,35 @@ dependency-monotone, (sprint, wave) slot, roadmap_id, spinoff-roadmap.
 Spec backlink: docs/plans/2026-06-28-roadmap-stub-numbering-dependency-order.md § C2
 Port backlink: BIG_PORT Wave B, item roadmap-pair.
 
+Sprint axis (2026-08-21 EXTENSION, AC21): ``topo_number`` (coordinator_core.roadmap.graph)
+is constructive for a single sprint only -- every label gets ``sprint: 1``. This
+module's default-mode caller now supports an author-assigned sprint tag per label
+(``LABEL@N`` in the line-form edges file, ``fromSprint``/``toSprint`` integer fields
+in the JSON form), stamps it onto ``topo_number``'s per-label ``sprintWave`` output
+in place of the uniform ``sprint: 1``, recomputes each label's ``wave`` as a
+per-sprint sequential counter over the already-topological ``order`` (so within a
+sprint, wave still strictly increases dependency-before-dependent), and then
+re-verifies the stamped result is still dependency-monotone via
+``check_dependency_order`` before printing -- an author assigning a dependency to a
+LATER sprint than its dependent is a fail-loud error (exit 1), never a silently
+wrong table. Unannotated edges files are byte-parity unchanged: every label
+defaults to ``sprint: 1``, reproducing ``topo_number``'s own uniform assignment.
+``topo_number`` itself is not modified -- this is caller work on the sprint axis,
+per the source memo's Ask 2.
+
+Sprint-descriptor/stub_id disjointness (AC7): sprint descriptor ids and stub_ids
+MUST be disjoint within a ``roadmap_id`` -- rag's ``roadmap_dag_fleet`` traversal has
+no ``edge_type`` filter, so it walks every edge sharing a ``roadmap_id``, and disjoint
+id namespaces are the only thing stopping a chain hopping sprint -> stub -> sprint.
+``assert_sprint_descriptor_stub_disjoint`` below is that invariant's fail-loud
+primitive. DoE mints sprint descriptor ids (coordinator_core does not, and no
+caller in claude-klabauter's current scope emits sprint-descriptor records yet -- that lands
+with C3's spine.schema.json vendoring and C5b's descriptor-altitude edge emission,
+both blocked/gated independently of this chunk); this chunk ships the shared
+assertion primitive and its collision test now, per the plan body's "Assert it
+fail-loud with a collision test," so C3/C5b call one already-proven function rather
+than each hand-rolling the check.
+
 Invocation:
     python3 -m coordinator_core.roadmap.number_stubs <edges-file>
     python3 -m coordinator_core.roadmap.number_stubs --check <run-id>
@@ -82,7 +111,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.git.repo_root import show_toplevel
@@ -103,6 +132,63 @@ _RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ROADMAP_BATON_KIND_WHERE = "kind in ({})".format(
     ",".join(kind_values_for_canonical("roadmap-baton"))
 )
+
+# ---------------------------------------------------------------------------
+# Sprint-descriptor/stub_id disjointness invariant (AC7)
+# ---------------------------------------------------------------------------
+
+
+class SprintDescriptorStubCollisionError(ValueError):
+    """Raised by ``assert_sprint_descriptor_stub_disjoint`` when a sprint
+    descriptor id and a stub_id collide within the same ``roadmap_id``.
+
+    Carries the offending id set so callers can compose their own
+    error-message policy around it.
+    """
+
+    def __init__(self, colliding_ids: Iterable[str], roadmap_id: Optional[str] = None) -> None:
+        self.colliding_ids = sorted(colliding_ids)
+        self.roadmap_id = roadmap_id
+        where = f" (roadmap_id={roadmap_id})" if roadmap_id else ""
+        super().__init__(
+            "sprint descriptor id(s) collide with stub_id(s)"
+            f"{where}: {', '.join(self.colliding_ids)}"
+        )
+
+
+def assert_sprint_descriptor_stub_disjoint(
+    sprint_descriptor_ids: Iterable[str],
+    stub_ids: Iterable[str],
+    roadmap_id: Optional[str] = None,
+) -> None:
+    """Fail-loud invariant primitive (AC7): sprint descriptor ids and stub_ids
+    MUST be disjoint within a ``roadmap_id``.
+
+    rag's ``roadmap_dag_fleet`` traversal has no ``edge_type`` filter — it
+    walks every edge sharing a ``roadmap_id`` regardless of what kind of node
+    sits at either end, so a sprint descriptor id and a stub_id sharing the
+    same string is enough to let a traversal hop sprint -> stub -> sprint
+    across what should have been two disjoint id namespaces. DoE mints sprint
+    descriptor ids; claude-klabauter mints/emits stub_ids; both halves must agree the
+    two namespaces never intersect. This is the shared, already-proven
+    assertion primitive for that agreement — see the module docstring's
+    "Sprint-descriptor/stub_id disjointness" section for why no production
+    call site exists in this chunk yet (no caller in current scope emits
+    sprint descriptor ids until C3/C5b land).
+
+    Args:
+        sprint_descriptor_ids: every sprint descriptor id known for the
+            roadmap_id being asserted over.
+        stub_ids: every stub_id known for the same roadmap_id.
+        roadmap_id: optional, included in the raised error message only.
+
+    Raises:
+        SprintDescriptorStubCollisionError: the two id sets intersect.
+    """
+    collision = set(sprint_descriptor_ids) & set(stub_ids)
+    if collision:
+        raise SprintDescriptorStubCollisionError(collision, roadmap_id)
+
 
 # ---------------------------------------------------------------------------
 # Root resolution
@@ -170,6 +256,24 @@ def _parse_edges_json_form(trimmed: str) -> List[Tuple[str, str]]:
     return edges
 
 
+_SPRINT_SUFFIX_RE = re.compile(r"^(.*)@(\d+)$")
+
+
+def _split_label_sprint(token: str) -> Tuple[str, Optional[int]]:
+    """Split an optional trailing ``@<digits>`` author-assigned-sprint suffix
+    off a line-form edges-file label token.
+
+    Returns:
+        ``(label, sprint)`` -- *sprint* is ``None`` when *token* carries no
+        ``@N`` suffix (the label is left sprint-unstamped, defaulting to
+        ``topo_number``'s uniform ``sprint: 1`` downstream).
+    """
+    m = _SPRINT_SUFFIX_RE.match(token)
+    if m:
+        return m.group(1), int(m.group(2))
+    return token, None
+
+
 def _split_edge_line(line: str) -> Optional[Tuple[Optional[str], Optional[str]]]:
     """Split one already-stripped, non-blank, non-comment line-form edges-file
     line on ``<-``. Shared token-splitting core for ``parse_edges_file`` and
@@ -194,16 +298,25 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
 
     Accepts two forms:
       (a) JSON array of ``{from, to}`` objects -- detected by a successful
-          ``json.loads``.
+          ``json.loads``. An entry may additionally carry integer
+          ``fromSprint``/``toSprint`` fields (2026-08-21 EXTENSION, AC21) --
+          author-assigned sprint tags for the ``from``/``to`` label.
       (b) Line form: ``"A <- B"`` meaning "A blocked_by B" (-> ``{from:'A',
           to:'B'}``). Blank lines and lines starting with ``#`` are ignored. A
           line with no ``<-`` and non-empty content is treated as an isolated
-          node.
+          node. Either side of an edge line, or an isolated-node line, may
+          carry a trailing ``@N`` suffix (2026-08-21 EXTENSION, AC21) tagging
+          that label with author-assigned sprint ``N`` -- see
+          ``_split_label_sprint``.
 
-    Byte-parity port of roadmap-number-stubs.js's ``parseEdgesFile``.
+    Byte-parity port of roadmap-number-stubs.js's ``parseEdgesFile``, plus the
+    additive ``sprints`` key above (empty when no ``@N``/``fromSprint``/
+    ``toSprint`` tag is present anywhere in the file -- existing callers reading
+    only ``edges``/``isolatedNodes`` are unaffected).
 
     Returns:
-        ``{"edges": [{"from": str, "to": str}], "isolatedNodes": [str]}``.
+        ``{"edges": [{"from": str, "to": str}], "isolatedNodes": [str],
+        "sprints": {label: int}}``.
     """
     trimmed = content.strip()
 
@@ -217,10 +330,18 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
             sys.stderr.write(f"ERROR: file looks like JSON but failed to parse: {exc}\n")
             sys.exit(1)
         edges = [{"from": frm, "to": to} for frm, to in edge_tuples]
-        return {"edges": edges, "isolatedNodes": []}
+        sprints: Dict[str, int] = {}
+        raw_entries = json.loads(trimmed)
+        for entry in raw_entries if isinstance(raw_entries, list) else [raw_entries]:
+            if isinstance(entry.get("fromSprint"), int):
+                sprints[entry["from"]] = entry["fromSprint"]
+            if isinstance(entry.get("toSprint"), int):
+                sprints[entry["to"]] = entry["toSprint"]
+        return {"edges": edges, "isolatedNodes": [], "sprints": sprints}
 
     edges = []
     isolated_nodes = []
+    sprints = {}
     lines = content.split("\n")
     for i, raw in enumerate(lines):
         line = raw.strip()
@@ -228,7 +349,10 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
             continue
         split = _split_edge_line(line)
         if split is None:
-            isolated_nodes.append(line)
+            label, sprint = _split_label_sprint(line)
+            isolated_nodes.append(label)
+            if sprint is not None:
+                sprints[label] = sprint
             continue
         lhs, rhs = split
         if not lhs or not rhs:
@@ -236,8 +360,14 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
                 f'WARNING: malformed edge line {i + 1}: "{raw}" — skipped\n'
             )
             continue
-        edges.append({"from": lhs, "to": rhs})
-    return {"edges": edges, "isolatedNodes": isolated_nodes}
+        lhs_label, lhs_sprint = _split_label_sprint(lhs)
+        rhs_label, rhs_sprint = _split_label_sprint(rhs)
+        edges.append({"from": lhs_label, "to": rhs_label})
+        if lhs_sprint is not None:
+            sprints[lhs_label] = lhs_sprint
+        if rhs_sprint is not None:
+            sprints[rhs_label] = rhs_sprint
+    return {"edges": edges, "isolatedNodes": isolated_nodes, "sprints": sprints}
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +401,63 @@ def derive_nodes(edges: List[Dict[str, str]], isolated_nodes: List[str]) -> List
 # ---------------------------------------------------------------------------
 
 
+def _stamp_author_sprints(
+    order: List[str],
+    sprint_wave: Dict[str, Dict[str, int]],
+    sprints: Dict[str, int],
+) -> Dict[str, Dict[str, int]]:
+    """Stamp author-assigned sprint values (AC21) onto ``topo_number``'s
+    per-label ``sprintWave`` output in place of its uniform ``sprint: 1``, and
+    recompute each label's ``wave`` as a per-sprint sequential counter walked
+    over the already-topological *order*.
+
+    A label absent from *sprints* keeps ``topo_number``'s own ``sprint: 1``
+    (byte-parity default). Because *order* is dependency-before-dependent and
+    each sprint's wave counter only ever increases while walking it, wave
+    strictly increases within a sprint along every edge — cross-sprint
+    monotonicity is NOT assumed here and must be re-verified by the caller via
+    ``check_dependency_order`` (an author can still assign a dependency to a
+    LATER sprint than its dependent; that is a fail-loud error, not something
+    this stamping step can silently prevent).
+    """
+    stamped: Dict[str, Dict[str, int]] = {}
+    wave_counters: Dict[int, int] = {}
+    for label in order:
+        sprint = sprints.get(label, sprint_wave[label]["sprint"])
+        wave_counters[sprint] = wave_counters.get(sprint, 0) + 1
+        stamped[label] = {"sprint": sprint, "wave": wave_counters[sprint]}
+    return stamped
+
+
+def _validate_sprint_axis_order(
+    order: List[str],
+    number: Dict[str, int],
+    sprint_wave: Dict[str, Dict[str, int]],
+    edges: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Re-verify the author-stamped (sprint, wave) ordering is still
+    dependency-monotone (AC21) by handing it to
+    ``coordinator_core.roadmap.graph.check_dependency_order`` — the same
+    verifier ``--check`` mode runs against stubs on disk, so this default-mode
+    caller catches an author sprint-axis mistake before it ever reaches
+    frontmatter.
+    """
+    blocked_by_map: Dict[str, List[str]] = {label: [] for label in order}
+    for e in edges:
+        blocked_by_map.setdefault(e["from"], []).append(e["to"])
+    stubs = [
+        {
+            "stub_id": label,
+            "number": number[label],
+            "sprint": sprint_wave[label]["sprint"],
+            "wave": sprint_wave[label]["wave"],
+            "blocked_by": blocked_by_map[label],
+        }
+        for label in order
+    ]
+    return check_dependency_order(stubs)
+
+
 def run_default_mode(edges_file_path: str) -> None:
     """Run topo_number on the parsed edges and print the mapping table.
 
@@ -286,6 +473,7 @@ def run_default_mode(edges_file_path: str) -> None:
     parsed = parse_edges_file(content)
     edges = parsed["edges"]
     isolated_nodes = parsed["isolatedNodes"]
+    author_sprints = parsed.get("sprints", {})
     nodes = derive_nodes(edges, isolated_nodes)
 
     if not nodes:
@@ -303,6 +491,24 @@ def run_default_mode(edges_file_path: str) -> None:
         sys.stderr.write("Fix the cycle before numbering stubs.\n")
         sys.exit(1)
 
+    order = result["order"]
+    number = result["number"]
+    sprint_wave = _stamp_author_sprints(order, result["sprintWave"], author_sprints)
+
+    axis_check = _validate_sprint_axis_order(order, number, sprint_wave, edges)
+    if not axis_check["ok"]:
+        sys.stderr.write(
+            "ERROR: author-assigned sprint values are not dependency-monotone\n"
+        )
+        for v in axis_check["violations"]:
+            sys.stderr.write(f"  [{v['reason']}] {v['from']} blocked_by {v['to']}\n")
+        for u in axis_check["unresolved"]:
+            sys.stderr.write(f"  [unresolved-edge] {u['from']} blocked_by {u['to']}\n")
+        sys.stderr.write(
+            "Fix the @N sprint tags (or fromSprint/toSprint) before numbering stubs.\n"
+        )
+        sys.exit(1)
+
     sys.stdout.write("# Roadmap stub linearization\n")
     sys.stdout.write("# Transcribe these values into stub frontmatter (number, sprint, wave).\n")
     sys.stdout.write("# Dependencies appear before their dependents.\n")
@@ -313,10 +519,6 @@ def run_default_mode(edges_file_path: str) -> None:
     sys.stdout.write("#\n")
     sys.stdout.write("# label                    stub#  sprint  wave\n")
     sys.stdout.write("# " + "-" * 52 + "\n")
-
-    order = result["order"]
-    number = result["number"]
-    sprint_wave = result["sprintWave"]
 
     max_num = max(number[label] for label in order)
     width = max(2, len(str(max_num)))

@@ -102,26 +102,12 @@ from coordinator_core.ops.ceremony import commit_pipeline as commit_pipeline_mod
 from coordinator_core.ops.ceremony.commit_gates import deletion_block_gate
 from coordinator_core.ops.ceremony.commit_message import compose_message, format_kept_entry
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.pipeline_result import make_pipeline_result
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _EM_DASH = " — "
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    """`deliverable_equivalence.load_equivalence_map` memoizes per-process,
-    keyed to the FIRST `worktree_root` it is ever called with (see that
-    function's own docstring) -- each test here uses a fresh `tmp_path`
-    repo, so without a reset between tests a later test would silently read
-    an earlier test's memoized map for an unrelated root. Mirrors
-    `test_commit_scoped.py`'s own `_reset_equivalence_cache` fixture."""
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 # ---------------------------------------------------------------------------

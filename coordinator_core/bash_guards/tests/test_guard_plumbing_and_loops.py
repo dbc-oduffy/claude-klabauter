@@ -702,3 +702,91 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert guard.classify_command is _canonical_classify_command
         source = inspect.getsource(guard)
         assert "SHAPE_PRECEDENCE" not in source
+
+
+class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
+    """C2 (2026-08-21-guards-under-the-brightline): the interpreter
+    resolution `_bt_python3_invocation` performs on every firing of this
+    fleet's highest-firing advisory used to cost two `python.exe` spawns
+    (`pyresolve._validate_interpreter`'s probe, plus a fresh
+    `resolve_python_bin` walk every call). Half A retires the first spawn
+    when the candidate IS `sys.executable`; Half B retires the second by
+    memoizing the resolved invocation to an on-disk, cross-process cache."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cache(self, tmp_path, monkeypatch):
+        # Never touch this repo's real `state/cache/` from a test process --
+        # point the cache path helper at a private tmp file instead.
+        from coordinator_core.bash_guards import dispatch_checks as dc
+
+        cache_file = tmp_path / "bt-python3-invocation-cache.json"
+        monkeypatch.setattr(dc, "_bt_python3_invocation_cache_path", lambda: str(cache_file))
+        self.dc = dc
+        self.cache_file = cache_file
+
+    def test_half_a_validate_interpreter_skips_the_spawn_for_self(self, monkeypatch):
+        from coordinator_core import pyresolve as pr
+
+        pr.clear_resolution_cache()
+        calls = {"n": 0}
+        orig_run = pr.subprocess.run
+
+        def _counting_run(*args, **kwargs):
+            calls["n"] += 1
+            return orig_run(*args, **kwargs)
+
+        monkeypatch.setattr(pr.subprocess, "run", _counting_run)
+        assert pr._validate_interpreter(sys.executable) is True
+        assert calls["n"] == 0
+
+    def test_half_a_still_probes_a_different_path(self, monkeypatch):
+        from coordinator_core import pyresolve as pr
+
+        pr.clear_resolution_cache()
+        calls = {"n": 0}
+        orig_run = pr.subprocess.run
+
+        def _counting_run(*args, **kwargs):
+            calls["n"] += 1
+            return orig_run(*args, **kwargs)
+
+        monkeypatch.setattr(pr.subprocess, "run", _counting_run)
+        pr._validate_interpreter("this-binary-does-not-exist-xyz")
+        assert calls["n"] == 1
+
+    def test_half_b_second_call_reads_the_cache_not_a_fresh_resolve(self, monkeypatch):
+        first = self.dc._bt_python3_invocation()
+        assert self.cache_file.is_file()
+
+        from coordinator_core import pyresolve as pr
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("resolve_python_bin should not be called on a cache hit")
+
+        monkeypatch.setattr(pr, "resolve_python_bin", _boom)
+        second = self.dc._bt_python3_invocation()
+
+        assert second == first
+
+    def test_half_b_cache_is_a_torn_or_missing_file_falls_open(self):
+        self.cache_file.write_text("not valid json {{{", encoding="utf-8")
+        result = self.dc._bt_python3_invocation()
+        assert isinstance(result, str) and result
+
+    def test_half_b_cache_key_changes_with_coordinator_python_env(self, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
+        key_before = self.dc._bt_python3_invocation_cache_key()
+        monkeypatch.setenv("COORDINATOR_PYTHON", "some-other-interpreter")
+        key_after = self.dc._bt_python3_invocation_cache_key()
+        if key_before is not None and key_after is not None:
+            assert key_before != key_after
+
+    def test_half_b_write_is_atomic_replace_not_truncate(self):
+        # `_bt_python3_invocation` must never open its real cache path in
+        # "w" mode directly -- only its pid-suffixed temp file, replaced
+        # into place via `os.replace`.
+        import inspect
+
+        source = inspect.getsource(self.dc._bt_python3_invocation)
+        assert "os.replace(tmp_path, cache_path)" in source
+

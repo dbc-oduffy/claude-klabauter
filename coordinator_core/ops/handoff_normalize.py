@@ -310,9 +310,27 @@ _BLOCK_SCALAR_INDICATOR_RE = re.compile(r'^[|>][+\-0-9]*(?:[ \t]+#.*)?$')
 # site; if a scaffolder ever adds a second placeholder-summary kind, add its
 # literal here too rather than generalizing to a "looks unfilled" heuristic
 # (see the plan's Anti-scope).
+# 2026-08-21: the set carried ONE of the six literals
+# `coordinator-doc-new.py` actually emits (`_scaffold_spinoff`'s), so the other
+# five — session-handoff, recovery, roadmap stub, vision-slice, capability-arc —
+# were silently exempt from this normalization and kept reaching `state/` with
+# placeholder text as their summary. Enumerated in full rather than generalized
+# to a `startswith("PLACEHOLDER")` heuristic, per the plan's Anti-scope: an
+# author who legitimately writes a summary about placeholders must not have it
+# treated as absent. Found while classifying the authoring surface for
+# `state/handoffs/2026-08-21-handoffs-and-spinoffs-minimal-for-hand-rolling.md`
+# (§ Known instances 2); the emitting literals are at
+# `coordinator-doc-new.py`'s six `placeholder_summary = ...` assignments, and
+# `coordinator/bin/tests/test_placeholder_summaries_are_all_recognized.py`
+# holds the two sides together.
 _PLACEHOLDER_SUMMARIES = frozenset(
     {
         "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)",
+        "PLACEHOLDER — replace with one-line session summary (≤140 chars)",
+        "PLACEHOLDER — replace with one-line recovery summary (≤140 chars)",
+        "PLACEHOLDER — replace with one-line stub summary (≤140 chars)",
+        "PLACEHOLDER — replace with one-line vision-slice summary (≤140 chars)",
+        "PLACEHOLDER — replace with one-line capability-arc summary (≤140 chars)",
     }
 )
 

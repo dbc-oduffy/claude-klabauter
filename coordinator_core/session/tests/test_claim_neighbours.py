@@ -122,63 +122,6 @@ def test_handoff_resolves_via_deliverable_bridge(tmp_path, monkeypatch):
     assert [n.session_id for n in result.neighbours] == ["peer-sid"]
 
 
-def test_handoff_bridges_to_a_plan_whose_deliverable_id_forked(tmp_path, monkeypatch):
-    """The bridge joins on the CANONICAL deliverable_id (C6b/AC11), so a handoff
-    carrying a losing forked id still resolves to the plan carrying the winner.
-    Before canonicalization this pair joined on raw string equality and rendered
-    UNRESOLVABLE — indistinguishable, to the caller, from no plan existing at all.
-    """
-    from coordinator_core.ops import deliverable_equivalence
-
-    sessions = tmp_path / "sessions"
-    repo = tmp_path / "repo"
-    _write(
-        str(repo / "state" / "deliverable-equivalence.yaml"),
-        yaml.safe_dump(
-            {
-                "entries": [
-                    {"loser": "dlv-forked-loser-000001", "winner": "dlv-shared-thing-abc123"}
-                ]
-            },
-            default_flow_style=False,
-            sort_keys=False,
-        ),
-    )
-    deliverable_equivalence._reset_equivalence_map_cache()
-
-    _write_artifact(
-        str(repo / "docs" / "plans" / "bridge-plan.md"),
-        {
-            "title": "bridge plan",
-            "deliverable_id": "dlv-shared-thing-abc123",
-            "scope": ["coordinator_core/session/claim_neighbours.py"],
-        },
-    )
-    handoff_path = repo / "state" / "handoffs" / "forked-handoff.md"
-    _write_artifact(
-        str(handoff_path),
-        {"title": "a forked handoff", "deliverable_id": "dlv-forked-loser-000001"},
-    )
-
-    _session_touched(
-        sessions, "peer-sid", [_touch_line("T", "coordinator_core/session/claim_neighbours.py")]
-    )
-    monkeypatch.setattr(
-        claim_neighbours.liveness, "session_live", lambda sid, cwd=None: sid == "peer-sid"
-    )
-
-    result = claim_neighbours.find_neighbours(
-        str(handoff_path),
-        caller_sid="my-own-sid",
-        cwd=str(repo),
-        sessions_dir=str(sessions),
-    )
-
-    assert result.status == claim_neighbours.RESOLVED
-    assert result.file_set == ["coordinator_core/session/claim_neighbours.py"]
-    assert [n.session_id for n in result.neighbours] == ["peer-sid"]
-
-
 def test_handoff_with_no_matching_plan_is_unresolvable(tmp_path):
     repo = tmp_path / "repo"
     handoff_path = repo / "state" / "handoffs" / "orphan-handoff.md"

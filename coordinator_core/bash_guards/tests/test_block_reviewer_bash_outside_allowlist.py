@@ -1425,6 +1425,71 @@ def test_confined_python3_script_path_still_denies(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Divergence 20 (2026-08-21): generic-deny message must not mislabel argv[1]
+# (the script path in an exact `python3 <script>` invocation) as "first
+# command token" -- state/bug-backlog/2026-08-21-bash-guard-applies-code-
+# reviewer-allowlist-to-other-agents-intermittently.yaml, defect 2.
+# ---------------------------------------------------------------------------
+
+
+def test_python3_script_path_deny_reason_names_both_tokens(monkeypatch):
+    result = _deny('python3 "myscript.py"', monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "invoked via python3" in reason
+    assert "myscript.py" in reason
+    # The old wording asserted the script path WAS argv[0] -- must not
+    # survive for a command where the two tokens genuinely differ.
+    assert "first command token is not coordinator-doc-new (got: myscript.py)" not in reason
+
+
+def test_python3_quoted_script_path_with_spaces_deny_reason_names_both_tokens(monkeypatch):
+    # Reproduces the exact live shape from the filed bug (a quoted absolute
+    # scratchpad path containing no spaces of its own, but exercised here
+    # with an embedded space to also pin the quote-aware tokenization).
+    cmd = 'python3 "C:/Users/example/scratch dir/opt34.py"'
+    result = _deny(cmd, monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "invoked via python3" in reason
+    assert "C:/Users/example/scratch dir/opt34.py" in reason
+
+
+def test_python3_backslash_separator_script_path_deny_reason_names_both_tokens(monkeypatch):
+    # Windows-shaped, unquoted backslash-separated path -- the shape the
+    # 2026-08-07 tokenizer audit (state/audits/2026-08-07-bash-guard-
+    # tokenizer-eats-windows-path-separators.md) names as where this class
+    # of defect breaks. argv[0] extraction ("python3") is unaffected by
+    # POSIX-escape backslash consumption in argv[1] -- shlex tokenizes
+    # left-to-right, so tokens[0] is settled before tokens[1] is ever lexed.
+    cmd = r"python3 C:\Users\example\scratch\opt34.py"
+    result = _deny(cmd, monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "invoked via python3" in reason
+
+
+def test_curl_deny_reason_unchanged_when_tokens_coincide(monkeypatch):
+    # AC3/AC5 pin this string byte-identical -- raw_first_token == first_
+    # token here (no python3 prefix), so Divergence 20 must not add the
+    # "invoked via" clause.
+    result = _deny("curl https://evil.example/x", monkeypatch)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "first command token is not coordinator-doc-new (got: curl)" in reason
+    assert "invoked via" not in reason
+
+
+def test_tokenizer_extracts_python3_as_raw_first_token(monkeypatch):
+    # Direct unit coverage of the tokenizer seam this fix reads from
+    # (`_tokenize_segment`, the same shlex-based machinery `_extract_first_
+    # token` builds on) -- independent of the deny-message assembly above.
+    quoted_with_spaces = guard._tokenize_segment(
+        'python3 "C:/path/with spaces/z.py"'
+    )
+    assert quoted_with_spaces[0] == "python3"
+
+    backslash_separator = guard._tokenize_segment(r"python3 C:\path\to\z.py")
+    assert backslash_separator[0] == "python3"
+
+
+# ---------------------------------------------------------------------------
 # C6 (docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-
 # silent.md): PowerShell Tier A allowlist -- the total-lockout fix.
 #

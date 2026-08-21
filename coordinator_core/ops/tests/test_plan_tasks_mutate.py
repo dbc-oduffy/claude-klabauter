@@ -753,6 +753,95 @@ status: draft
     )
 
 
+_PLAN_THREE_ROWS_MULTILINE_BODY = """\
+---
+title: "Test Plan — three rows, multiline bodies"
+status: draft
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First chunk
+  change_kind: script-edit
+  surface: a.py
+  queue_scope: project
+  deferred: false
+  body: |
+    First paragraph of C1.
+
+    Second paragraph of C1.
+- id: C2
+  title: Second chunk
+  change_kind: script-edit
+  surface: b.py
+  queue_scope: project
+  deferred: false
+  body: |
+    First paragraph of C2.
+
+    Second paragraph of C2.
+- id: C3
+  title: Third chunk
+  change_kind: script-edit
+  surface: c.py
+  queue_scope: project
+  deferred: false
+  body: |
+    First paragraph of C3.
+
+    Second paragraph of C3.
+```
+"""
+
+
+def test_stamp_one_row_preserves_literal_block_style_on_other_rows(tmp_path):
+    """Regression (2026-08-21, row-body-flattening defect): stamping ONE row
+    of a multi-row spine must not flatten every OTHER row's multi-line
+    `body:` field from a literal block scalar (`body: |`) into a
+    double-quoted single line with embedded `\\n` escapes.
+
+    Asserts on the emitted TEXT, not the parsed structure — the parsed
+    structure was always correct (safe_load round-trips either style to the
+    same string), which is exactly why no prior test caught this: the old
+    serializer only ever picked the WRONG scalar style, never the wrong
+    content."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "stamp-preserves-literal-style.md", _PLAN_THREE_ROWS_MULTILINE_BODY)
+
+    before_text = plan.read_text(encoding="utf-8")
+    literal_count_before = before_text.count("body: |")
+    assert literal_count_before == 3, "fixture sanity: all three rows start as literal blocks"
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "C2", "deferred": True, "pm_approved": True}],
+        },
+        repo_root=repo / ".git",
+    ))
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+
+    after_text = plan.read_text(encoding="utf-8")
+    literal_count_after = after_text.count("body: |")
+    assert literal_count_after == 3, (
+        "stamping one row must not change how many rows emit their body as a "
+        f"literal block scalar — before={literal_count_before} "
+        f"after={literal_count_after}, text:\n{after_text}"
+    )
+    # The two rows this stamp did NOT touch keep their body's literal-block
+    # source text verbatim (not merely "some literal block somewhere").
+    assert "First paragraph of C1.\n\n    Second paragraph of C1." in after_text
+    assert "First paragraph of C3.\n\n    Second paragraph of C3." in after_text
+    # No row's body regressed to a quoted single-line-with-\\n-escapes form.
+    assert "\\n" not in after_text
+
+
 # ---------------------------------------------------------------------------
 # Path containment (AC10 / F0)
 # ---------------------------------------------------------------------------

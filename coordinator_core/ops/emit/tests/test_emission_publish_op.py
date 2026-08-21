@@ -178,7 +178,10 @@ def _handler_node() -> ast.FunctionDef:
 def test_ac5_no_loop_constructs_in_handler():
     handler = _handler_node()
     for node in ast.walk(handler):
-        assert not isinstance(node, (ast.For, ast.While, ast.ListComp, ast.SetComp)), (
+        assert not isinstance(
+            node,
+            (ast.For, ast.While, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+        ), (
             "emission_publish handler contains a loop/comprehension construct "
             f"({type(node).__name__}) -- AC5 requires no fan-out/multi-repo code path"
         )

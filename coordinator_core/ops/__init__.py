@@ -125,6 +125,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "handoff.has_live_children" and "handoff.blocked_by_dependents"',
     ),
     ("coordinator_core.ops.artifact_emit", 'registers "artifact.emit"'),
+    ("coordinator_core.ops.emission_publish", 'registers "emission.publish"'),
     ("coordinator_core.hooks", "registers the 15 hooks.* ops (6 advisory + 8 bookkeeping + 1 arrival-check)"),
     (
         "coordinator_core.frontmatter.schema_cli",
@@ -149,6 +150,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),
     ("coordinator_core.ops.handoff_correct_body", 'registers "handoff.correct_body"'),
     ("coordinator_core.ops.handoff_discharge_criteria", 'registers "handoff.discharge_criteria"'),
+    ("coordinator_core.ops.handoff_author_lint", 'registers "handoff.author_lint"'),
+    ("coordinator_core.ops.handoff_append_session_ledger", 'registers "handoff.append_session_ledger"'),
     ("coordinator_core.ops.propagate_body", 'registers "handoff.propagate"'),
     ("coordinator_core.ops.handoff_phase_stamp", 'registers "handoff.stamp_phase"'),
     ("coordinator_core.ops.handoff_ship_archive", 'registers "handoff.ship_and_archive"'),
@@ -284,6 +287,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_lineage_ancestry", 'registers "handoff.lineage_ancestry"'),
     ("coordinator_core.ops.plan_tasks_mutate", ""),
     ("coordinator_core.ops.plan_tasks_grouping_digest", 'registers "plan.tasks.grouping_digest"'),
+    (
+        "coordinator_core.ops.plan_tasks_spine_drift_check",
+        'registers "plan.tasks.spine_drift_check" (read-only spine-vs-tree drift '
+        "check, reusing close_out_and_stamp's commit-coverage oracle)",
+    ),
     ("coordinator_core.ops.engine_drift", 'registers "engine.drift"'),
     ("coordinator_core.plugin_health.drift", 'registers "plugin_health.drift"'),
     ("coordinator_core.plugin_health.scan", 'registers "plugin_health.scan"'),
@@ -510,6 +518,17 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1)",
     ),
     (
+        "coordinator_core.ops.gate_liveness.resolve",
+        'registers "gate_liveness.resolve" (external_gate closure_key join '
+        "reader, docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C1)",
+    ),
+    (
+        "coordinator_core.ops.gate_liveness.reconcile",
+        'registers "gate_liveness.reconcile" (dry-run-default, precondition-'
+        "checked external_gate cleared: true flip through stamp, "
+        "docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2)",
+    ),
+    (
         "coordinator_core.ops.cmd_autorun_guard",
         'registers "install.detect_cmd_autorun_coverage", '
         '"install.write_cmd_autorun_guard", "install.strip_cmd_autorun_guard" '
@@ -535,6 +554,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.eol.repair",
         'registers "eol.repair" (docs/plans/2026-08-20-every-repo-detects-'
         "its-own-eol-drift.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.op_census_report",
+        'registers "op_census.report" (docs/plans/2026-08-21-the-census-that-'
+        "cannot-miss-an-op.md § C6)",
     ),
 ]
 

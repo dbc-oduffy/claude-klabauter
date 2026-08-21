@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.spine_read import (
+    KNOWN_DISPOSITIONS,
     NON_DISPATCHABLE_DISPOSITIONS,
     UNDECLARED,
     DanglingDependencyError,
@@ -12,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     InvalidRowIdError,
     MalformedDependencyEdgeError,
     SpineReadError,
+    UnknownDispositionError,
     read_spine,
 )
 
@@ -862,3 +864,59 @@ def test_unrecognized_blocks_value_still_excludes(tmp_path):
     plan_path = _write_plan(tmp_path, body)
 
     assert read_spine(plan_path) == []
+
+
+# --- An unrecognized disposition refuses instead of dispatching ---
+# example-retrieval-repo-ue-addon-em, 2026-08-20: `disposition: done` is schema-invalid AND
+# fell through the closed-value membership test, so a reconciliation pass using a
+# plausible-but-wrong word dispatched exactly as if no reconciliation had run.
+
+
+def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
+    body = """\
+- id: C1
+  title: reconciled with a plausible but invalid word
+  surface: some/surface
+  disposition: done
+- id: C2
+  title: live row
+  surface: some/surface
+"""
+    plan_path = _write_plan(tmp_path, body)
+    with pytest.raises(UnknownDispositionError) as excinfo:
+        read_spine(plan_path)
+    message = str(excinfo.value)
+    assert "'C1'" in message
+    assert "'done'" in message
+    # The correction is readable off the error, not only out of the schema.
+    assert "coded" in message
+
+
+def test_unknown_disposition_error_is_a_spine_read_error(tmp_path):
+    # Callers catching SpineReadError must not miss this one.
+    body = """\
+- id: C1
+  title: bad value
+  surface: some/surface
+  disposition: complete
+"""
+    plan_path = _write_plan(tmp_path, body)
+    with pytest.raises(SpineReadError):
+        read_spine(plan_path)
+
+
+@pytest.mark.parametrize("disposition", sorted(KNOWN_DISPOSITIONS))
+def test_every_schema_disposition_is_accepted(tmp_path, disposition):
+    # Guards the two sets drifting apart: a value the schema adds that this
+    # module does not learn would refuse every spine using it.
+    body = f"""\
+- id: C1
+  title: schema-legal row
+  surface: some/surface
+  disposition: {disposition}
+- id: C2
+  title: live row
+  surface: some/surface
+"""
+    plan_path = _write_plan(tmp_path, body)
+    read_spine(plan_path)  # must not raise

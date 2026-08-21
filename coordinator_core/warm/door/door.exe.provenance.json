@@ -1,7 +1,7 @@
 {
-  "built_at": "2026-08-21T12:22:18+00:00",
+  "built_at": "2026-08-21T15:53:01+00:00",
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
-  "door_c_sha256": "086530ff4a0a2e4254630755210e219487d26eca0e8a9518791174e3cc76f59c",
+  "door_c_sha256": "5db3adb674a4f52629286113403f8c8acd6c5aea2c043761c10e7310905e1c8d",
   "engine_root": "X:\\claude-klabauter"
 }

@@ -190,15 +190,10 @@ def _git_show_head(repo_root: Path, path_rel: str) -> tuple[Optional[str], Optio
 # ---------------------------------------------------------------------------
 
 
-def _scan_dir_for_advanced_by(
-    base_dir: Path, deliverable_id: str, recursive: bool, equivalence_map: Optional[dict] = None
-) -> List[Path]:
+def _scan_dir_for_advanced_by(base_dir: Path, deliverable_id: str, recursive: bool) -> List[Path]:
     if not base_dir.is_dir():
         return []
-    from coordinator_core.ops.deliverable_equivalence import canonicalize
-
-    equivalence_map = equivalence_map or {}
-    target = canonicalize(deliverable_id, equivalence_map)
+    target = deliverable_id
     globber = base_dir.rglob if recursive else base_dir.glob
     matches: List[Path] = []
     for path in sorted(globber("*.md")):
@@ -211,7 +206,7 @@ def _scan_dir_for_advanced_by(
         if not fm:
             continue
         advanced_by = fm.get("advanced_by")
-        if isinstance(advanced_by, str) and canonicalize(advanced_by.strip(), equivalence_map) == target:
+        if isinstance(advanced_by, str) and advanced_by.strip() == target:
             matches.append(path)
     return matches
 
@@ -224,20 +219,12 @@ def _collect_candidates(worktree_root: Path, deliverable_id: str) -> tuple[List[
     scanned recursively (mirrors `handoff_transition._resolve_blocker_deployment_
     state`'s own per-root discrimination).
 
-    Join canonicalized (C6b/AC11): `advanced_by` was stamped with whichever id
-    a prior `deliverable.cascade_terminal` call was invoked with, which may
-    differ (raw) from THIS call's `deliverable_id` when the two are a declared
-    fork pair — canonicalizing both sides here closes that gap.
+    `advanced_by` was stamped with whichever id a prior
+    `deliverable.cascade_terminal` call was invoked with — matched exactly
+    against THIS call's `deliverable_id`.
     """
-    from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
-
-    equivalence_map = load_equivalence_map(worktree_root)
-    live = _scan_dir_for_advanced_by(
-        worktree_root / "state" / "handoffs", deliverable_id, recursive=False, equivalence_map=equivalence_map
-    )
-    archived = _scan_dir_for_advanced_by(
-        worktree_root / "archive" / "handoffs", deliverable_id, recursive=True, equivalence_map=equivalence_map
-    )
+    live = _scan_dir_for_advanced_by(worktree_root / "state" / "handoffs", deliverable_id, recursive=False)
+    archived = _scan_dir_for_advanced_by(worktree_root / "archive" / "handoffs", deliverable_id, recursive=True)
     return live, archived
 
 
@@ -247,7 +234,7 @@ def _collect_candidates(worktree_root: Path, deliverable_id: str) -> tuple[List[
 
 
 def _row_spans_for_divergence(
-    current_text: str, deliverable_id: str, path_rel: str, equivalence_map: Optional[dict] = None
+    current_text: str, deliverable_id: str, path_rel: str
 ) -> tuple[List[tuple[int, int]], List[tuple[int, int]]]:
     """Returns `(all_row_spans, attributable_row_spans)` — whole-file
     `(start, end)` line-spans (as produced by `_find_row_spans_in_plan`) for
@@ -269,10 +256,7 @@ def _row_spans_for_divergence(
     or is absent, yields an empty `attributable_row_spans` -- so a
     row-depth touch is refused as unattributable rather than accepted, on
     ANY row-provenance ambiguity."""
-    from coordinator_core.ops.deliverable_equivalence import canonicalize
-
-    equivalence_map = equivalence_map or {}
-    target = canonicalize(deliverable_id, equivalence_map)
+    target = deliverable_id
 
     rows, parse_error = _parse_spine_rows(current_text, path_rel)
     if parse_error is not None or not rows:
@@ -292,7 +276,7 @@ def _row_spans_for_divergence(
         advanced_by = row.get("advanced_by")
         if (
             isinstance(advanced_by, str)
-            and canonicalize(advanced_by.strip(), equivalence_map) == target
+            and advanced_by.strip() == target
             and chunk_id in spans_by_id
         ):
             attributable.append(spans_by_id[chunk_id])
@@ -300,7 +284,7 @@ def _row_spans_for_divergence(
 
 
 def _divergence_reason(
-    head_text: str, current_text: str, deliverable_id: str, path_rel: str, equivalence_map: Optional[dict] = None
+    head_text: str, current_text: str, deliverable_id: str, path_rel: str
 ) -> Optional[str]:
     """Returns a human-readable refusal reason when `current_text` diverges from
     `head_text` on any line outside `_CASCADE_FIELD_LINE_RE`'s field set, on a
@@ -320,9 +304,7 @@ def _divergence_reason(
     new_lines = current_text.splitlines(keepends=True)
     matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
 
-    all_spans, attributable_spans = _row_spans_for_divergence(
-        current_text, deliverable_id, path_rel, equivalence_map=equivalence_map
-    )
+    all_spans, attributable_spans = _row_spans_for_divergence(current_text, deliverable_id, path_rel)
 
     def _in_any_row(idx: int) -> bool:
         return any(start <= idx < end for start, end in all_spans)
@@ -381,16 +363,10 @@ def _retract_one(
     if head_text is None:
         return False, f"no HEAD version resolvable: {head_error}"
 
-    from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
-
-    equivalence_map = load_equivalence_map(main_worktree_root(repo_root))
-
     _state = {"applied": False, "message": ""}
 
     def mutate(old_text: str) -> str:
-        divergence = _divergence_reason(
-            head_text, old_text, deliverable_id, path_rel, equivalence_map=equivalence_map
-        )
+        divergence = _divergence_reason(head_text, old_text, deliverable_id, path_rel)
         if divergence is not None:
             raise MutateAbort(divergence)
         if head_text == old_text:

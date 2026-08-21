@@ -35,6 +35,7 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
     main_install_all,
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -82,7 +83,7 @@ def _write_stub_gates(fake_bin: Path) -> None:
 
 def _run_hook(hook: Path, cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True
     )
 
 

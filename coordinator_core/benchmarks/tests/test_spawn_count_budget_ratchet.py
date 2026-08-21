@@ -238,6 +238,41 @@ _SPAWN_COUNT_HIGH_WATER = {
     # floors first measured 2026-08-19, and
     # `machine_local_cli_elimination_calls` legitimately keeps `_sort_unique`
     # stubbed to isolate `_merged_flat_registry`'s CLI elimination.
+    "ceremony.wsc_tail": {
+        "op_total_normal_pass": {
+            "ceiling": 34,
+            "reason": (
+                "34, reproduced across two independent runs 2026-08-21 against "
+                "test_wsc_tail_spawn_budget.py's own fixture -- this is the "
+                "figure the shipped assertion actually measures, and it is the "
+                "one pinned. C3 recorded 37 earlier the same day from a "
+                "STANDALONE REPRO SCRIPT (not shipped), and the plan's origin "
+                "figure was also '~37 per close'. ATTRIBUTION OF THE -3 IS "
+                "OPEN: it is a REDUCTION, so banking it can only make this "
+                "ratchet stricter, and it was banked rather than left "
+                "unbanked. The leading candidate is a1e5dd970 (15:36, "
+                "'wsc-tail: its review-trail records reach the commit that "
+                "reviewed them'), which touched wsc_tail.py after C3's "
+                "measurement; the other candidate is a harness difference "
+                "between C3's standalone script and this fixture. Neither is "
+                "established -- do NOT restate either as the cause without "
+                "measuring it. Recorded open so the next person to see this "
+                "move does not re-derive it from scratch. "
+                "Superseded provenance follows. "
+                "First measured 2026-08-21 (C3, dlv-every-op-knows-what-it-"
+                "spawns-f4bbf6): a fresh single-file commit on `main` "
+                "through the full `ceremony.wsc_tail` handler, deferred-"
+                "push mode with `_spawn_deferred_push_skip_loud` "
+                "monkeypatched off. Matches the plan's own '~37 spawns per "
+                "close' origin figure exactly -- the first time that number "
+                "is a real measurement rather than an inherited "
+                "approximation. Migrated 2026-08-21 (C4) from a test-local "
+                "constant (`_WSC_TAIL_OP_TOTAL_CEILING`, deleted in the "
+                "same change) into this manifest-backed table; the value "
+                "is unchanged by the migration."
+            ),
+        },
+    },
     "ops.discover_working_repos": {
         "per_call": {
             "ceiling": 1,

@@ -107,7 +107,6 @@ from coordinator_core.ops.deliverable_cascade import (
     _collect_live_candidates,
     _predicate_refusal,
 )
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.slug_prefix_family import is_slug_prefix_family
 
@@ -270,24 +269,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
 
     worktree_root = main_worktree_root(repo_root)
-    equivalence_map = load_equivalence_map(worktree_root)
-    only_did = canonicalize((params.get("deliverable_id") or "").strip() or None, equivalence_map)
+    only_did = (params.get("deliverable_id") or "").strip() or None
 
     plan_ids = _terminal_plan_deliverable_ids(worktree_root)
     handoff_ids = _terminal_handoff_deliverable_ids(worktree_root)
 
-    # Exact-equality plan-vs-handoff join, canonicalized (C6b/AC11) -- a declared
-    # fork pair (raw ids differing only because a slug got truncated at two
-    # points, C3b's equivalence-map shape) now merges into one join key here,
-    # closing the gap the plan's Problem section reproduces. The SEPARATE
+    # Exact-equality plan-vs-handoff join (C6b/AC11). The SEPARATE
     # slug-prefix-family check below stays on raw ids by design -- it exists
-    # precisely to catch a fork the equivalence map does not yet declare, and
-    # canonicalizing it would hide the exact case it is for.
+    # precisely to catch a fork a declared-equivalence join would hide.
     all_ids: dict[str, list[str]] = {}
     for did, sources in plan_ids.items():
-        all_ids.setdefault(canonicalize(did, equivalence_map), []).extend(sources)
+        all_ids.setdefault(did, []).extend(sources)
     for did, sources in handoff_ids.items():
-        all_ids.setdefault(canonicalize(did, equivalence_map), []).extend(sources)
+        all_ids.setdefault(did, []).extend(sources)
 
     if only_did is not None:
         all_ids = {did: sources for did, sources in all_ids.items() if did == only_did}

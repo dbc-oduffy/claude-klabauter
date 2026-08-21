@@ -84,7 +84,7 @@ def test_ac4_fails_if_a_future_edit_drops_a_section_key():
     assert set(dropped.keys()) != expected_keys
 
 
-def test_empty_object_body_omits_trailing_comma():
+def test_bodyless_object_fails_loud_on_missing_schema_version():
     raw = b"{}"
     with pytest.raises(pe.PublishEnvelopeError):
         # An empty body has no schema_version to head-scan; this must fail loud on the

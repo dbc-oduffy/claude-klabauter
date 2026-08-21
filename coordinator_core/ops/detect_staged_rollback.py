@@ -145,9 +145,13 @@ Negative-spec:
       git-hook-API limitation, not silently accepted.
     - Does NOT itself decide whether to block anything beyond its own exit
       code — it is a read/report library plus a CLI; the installed hook
-      (``coordinator_core.ops.install_claude_klabauter_precommit_hook``) clamps that
-      exit code to 0/1 at the commit boundary (see that module's own
-      docstring, "Exit-code clamping").
+      (``coordinator_core.ops.install_claude_klabauter_precommit_hook``) clamps
+      whatever nonzero code this module returns to exactly 1 at the commit
+      boundary (see that module's own docstring, "Exit-code clamping") —
+      the DISTINCT codes below (2026-08-21) exist so that wrapper can still
+      tell which check produced the nonzero code and scope its own
+      per-check override correctly, before it clamps the code it actually
+      propagates to sh.
 """
 
 from __future__ import annotations
@@ -201,6 +205,32 @@ MIN_ROLLBACK_PATHS = 3
 MIN_ROLLBACK_DEPTH = 2
 
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
+
+# --- Exit-code contract (2026-08-21) ------------------------------------
+#
+# `main()` used to collapse both checks into a single boolean "blocked"
+# before returning 0/1 — a caller reading the raw exit code (this module's
+# own CLI, and any wrapper shelling out to it, e.g.
+# `coordinator_core.ops.install_claude_klabauter_precommit_hook`) could not tell
+# WHICH check produced a nonzero code. That ambiguity is what let a single
+# wrapper-level override key (spelled for check 1 only) accidentally
+# bypass a check-2 finding it never even inspected — see
+# `install_claude_klabauter_precommit_hook`'s own "Exit-code clamping" section for
+# the live consequence. These constants split "blocked" into which check(s)
+# actually produced the block, so a caller can react to exactly one.
+#
+# 2 stays reserved for a usage error (pre-existing, `main`'s leading-dash
+# argv branch) and the trampoline's own transport failure
+# (`coordinator/bin/detect-staged-rollback.py`, engine-root resolution /
+# import failure) — neither of those is ever a real check finding, so no
+# business-logic code may reuse 2. A caller that sees 2 learns nothing
+# about which check fired, because neither did: the op never ran far
+# enough to know.
+EXIT_CLEAN = 0
+EXIT_ROLLBACK_FINDING = 1
+EXIT_USAGE_ERROR = 2
+EXIT_MASS_DELETION_FINDING = 3
+EXIT_BOTH_FINDINGS = 4
 
 # --- Mass-deletion tripwire (2026-08-10) ---------------------------------
 #
@@ -786,9 +816,13 @@ mutates a repo. repo-root defaults to the current working directory.
 
 exit codes:
   0  clean (no finding, below threshold, or the relevant override is set)
-  1  a rollback finding crossed the breadth/depth threshold, and/or a mass-
-     deletion finding crossed the ratio/floor threshold
+  1  a rollback finding crossed the breadth/depth threshold, unresolved by
+     COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK — no mass-deletion block
   2  usage error
+  3  a mass-deletion finding crossed the ratio/floor threshold, unresolved by
+     COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION — no rollback block
+  4  BOTH a rollback finding and a mass-deletion finding, neither resolved by
+     its own override
 
 overrides:
   see {doc} for this CLI's override keys
@@ -837,18 +871,29 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
     mass_overridden = env.get(MASS_DELETION_OVERRIDE_ENV, "") not in ("", "0")
 
     if not rollback_fires and not mass_fires:
-        return 0
+        return EXIT_CLEAN
 
-    blocked = False
+    # Each check's own BLOCKING state is resolved independently, before
+    # either is folded into an exit code — this is the split `install_
+    # claude_klabauter_precommit_hook`'s wrapper reads to scope its own bypass to the
+    # check that actually fired (see EXIT_* constants' docstring above).
+    rollback_blocking = False
     if rollback_fires:
         print(_report(candidates, rollback_overridden), file=sys.stderr)
-        blocked = blocked or not rollback_overridden
+        rollback_blocking = not rollback_overridden
+    mass_blocking = False
     if mass_fires:
         assert mass_finding is not None  # _mass_deletion_should_fire(None) is False
         print(_mass_deletion_report(mass_finding, mass_overridden), file=sys.stderr)
-        blocked = blocked or not mass_overridden
+        mass_blocking = not mass_overridden
 
-    return 1 if blocked else 0
+    if rollback_blocking and mass_blocking:
+        return EXIT_BOTH_FINDINGS
+    if rollback_blocking:
+        return EXIT_ROLLBACK_FINDING
+    if mass_blocking:
+        return EXIT_MASS_DELETION_FINDING
+    return EXIT_CLEAN
 
 
 if __name__ == "__main__":

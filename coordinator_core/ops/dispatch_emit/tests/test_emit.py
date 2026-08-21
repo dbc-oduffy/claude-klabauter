@@ -415,9 +415,54 @@ def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
 
 
 def test_compose_script_propagates_no_test_target_from_terminal_scope():
-    waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    # Propagation is pinned on the shape that still refuses: an uncovered
+    # .py. A doc-only spine no longer raises here (it composes without a
+    # terminal phase) -- see the three cases below.
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     with pytest.raises(NoTestTargetError):
-        compose_script(waves, name="wf", description="doc only")
+        compose_script(waves, name="wf", description="uncovered module")
+
+
+def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
+    # The composer, not the scope derivation, is where the original gap
+    # lived: the terminal test phase was appended unconditionally, so a wave
+    # with no runnable target was unrepresentable and the derivation had to
+    # refuse in order to defend that invariant.
+    waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(waves, name="wf", description="doc only")
+    assert "Scoped test run" not in script
+    assert "coordinator:test-runner" not in script
+
+
+def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script():
+    # Absence must be reported as absence. A silently missing phase is
+    # indistinguishable from a phase that ran and passed, which is the exact
+    # false-green the original refusal was protecting against.
+    waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(waves, name="wf", description="doc only")
+    assert "No terminal test phase" in script
+    assert "declared, not a pass" in script
+    # A log() line, never a phase or an agent dispatch.
+    assert "log(" in script
+
+
+def test_compose_script_still_composes_the_terminal_phase_for_a_mixed_spine():
+    # A wave with any resolved target keeps the real phase -- the omission is
+    # never a "mostly docs" judgment.
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "coordinator_core/subagent_sandbox/CONTRACT.md",
+                    "coordinator_core/ops/dispatch_emit/spine_read.py",
+                ],
+            )
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="mixed")
+    assert "Scoped test run" in script
+    assert "No terminal test phase" not in script
 
 
 # ---------------------------------------------------------------------------

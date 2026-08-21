@@ -240,90 +240,192 @@ def resolve_cockpit_repo_path() -> Optional[Path]:
     return None
 
 
-def check_source_drift_advisory(vendor_path: Path, cockpit_repo_path: Path) -> dict[str, Any]:
-    """Non-gating drift check for one `*.vendor.ts` file against cockpit HEAD.
+def _source_drift_indeterminate(schema_filename: str, detail: str) -> dict[str, Any]:
+    return {
+        "schema": schema_filename,
+        "diverged": False,
+        "determinate": False,
+        "direction": None,
+        "divergence_kind": None,
+        "local_version": None,
+        "doe_version": None,
+        "local_bump_class": None,
+        "doe_bump_class": None,
+        "doe_bump_note": None,
+        "detail": detail,
+    }
 
-    Same field shape as `schema_validate.check_schema_drift_advisory` (schema,
-    diverged, determinate, direction, divergence_kind, local_version,
-    doe_version, local_bump_class, doe_bump_class, doe_bump_note, detail) so
-    the aggregate reducer in `_scan` can treat both comparison kinds
-    uniformly — version/bump-class fields are always None here (cockpit
-    source files carry no such headers), never fabricated.
 
-    Negative-spec (mirrors check_schema_drift_advisory exactly):
-      - NEVER raises. An unreadable/foreign cockpit clone, an unresolvable
-        header, or a failed `git show` all fold into determinate=False,
-        diverged=False — indeterminate, never a claimed match or a false
-        drift alarm.
+def _cat_file_batch(cockpit_repo_path: Path, tokens: list[str]) -> Optional[dict[str, Optional[str]]]:
+    """One `git cat-file --batch` over every `HEAD:<path>` token, or None if git could not run.
+
+    Returns token -> blob text, with None for a token git reported as missing/ambiguous. This
+    is the batch primitive `git show HEAD:<path>` lacks: `cat-file --batch` reads its tokens
+    from stdin and emits `<oid> <type> <size>\\n<contents>\\n` per resolved token and
+    `<token> <reason>\\n` per unresolved one, so N vendored files cost ONE process instead of N.
+
+    Binary-exact by construction: the record framing is byte-counted, so the payload is sliced
+    by `<size>` from the raw stdout and decoded afterwards. Parsing the text stream instead
+    would desynchronise the framing on any blob whose bytes do not round-trip through the
+    locale codec.
+
+    Never raises — an OSError, a timeout, or a non-zero exit all fold into None, which the
+    caller turns into INDETERMINATE for every token in the batch.
     """
-    schema_filename = vendor_path.name
-
-    def _indeterminate(detail: str) -> dict[str, Any]:
-        return {
-            "schema": schema_filename,
-            "diverged": False,
-            "determinate": False,
-            "direction": None,
-            "divergence_kind": None,
-            "local_version": None,
-            "doe_version": None,
-            "local_bump_class": None,
-            "doe_bump_class": None,
-            "doe_bump_note": None,
-            "detail": detail,
-        }
-
-    source_path = _read_cockpit_source_path(vendor_path)
-    if source_path is None:
-        return _indeterminate(
-            f'Vendored file "{schema_filename}" carries no readable '
-            f'"{_COCKPIT_SOURCE_PATH_PREFIX}" header — cannot resolve which cockpit '
-            "file it mirrors; drift could not be determined."
-        )
-
-    unusable = foreign_repo_unusable_reason(cockpit_repo_path, timeout=30)
-    if unusable is not None:
-        return _indeterminate(
-            f"cockpit repo ({cockpit_repo_path}) could not be read as a git "
-            f"repository ({unusable}) — drift could not be determined; this is "
-            "not a claim that the vendored copy has diverged."
-        )
-
+    if not tokens:
+        return {}
     try:
         result = subprocess.run(
-            ["git", "-C", str(cockpit_repo_path), "show", f"HEAD:{source_path}"],
+            ["git", "-C", str(cockpit_repo_path), "cat-file", "--batch"],
+            input=("\n".join(tokens) + "\n").encode("utf-8"),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=30,
-            stdin=subprocess.DEVNULL,
             env=scoped_git_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return _indeterminate(
-            f"Could not run git against cockpit repo ({cockpit_repo_path}): {exc}"
-        )
-
+    except (OSError, subprocess.SubprocessError):
+        return None
     if result.returncode != 0:
-        return _indeterminate(
-            f'Cannot read cockpit HEAD source "{source_path}": {result.stderr.strip()}. '
-            f"cockpit repo path ({cockpit_repo_path}) unreadable or missing this file at HEAD."
-        )
+        return None
 
-    cockpit_content = result.stdout
-    try:
-        local_content = vendor_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return _indeterminate(f"Could not read vendored copy at {vendor_path}: {exc}")
+    blobs: dict[str, Optional[str]] = {}
+    out = result.stdout
+    pos = 0
+    for token in tokens:
+        newline = out.find(b"\n", pos)
+        if newline == -1:
+            blobs[token] = None
+            continue
+        header = out[pos:newline].decode("utf-8", errors="replace").split()
+        pos = newline + 1
+        # `<oid> <type> <size>` is the only resolved shape; anything shorter is a
+        # `<token> missing`/`<token> ambiguous` line, which carries no payload to skip.
+        if len(header) != 3 or not header[2].isdigit():
+            blobs[token] = None
+            continue
+        size = int(header[2])
+        blobs[token] = out[pos:pos + size].decode("utf-8", errors="replace")
+        pos += size + 1  # the trailing newline git appends after each blob
+    return blobs
 
-    local_body = _vendor_body_without_header(local_content)
-    diverged = local_body.rstrip("\n") != cockpit_content.rstrip("\n")
 
-    if diverged:
-        return {
+def check_source_drift_advisory_batch(
+    vendor_paths: list[Path], cockpit_repo_path: Path
+) -> list[dict[str, Any]]:
+    """Non-gating drift check for N `*.vendor.ts` files against cockpit HEAD, in TWO spawns.
+
+    The batched primary. `check_source_drift_advisory` is the one-element call of this, not the
+    other way round: the per-file form spawned twice PER FILE — a `foreign_repo_unusable_reason`
+    probe whose answer does not vary with `vendor_path` at all, and a `git show HEAD:<path>` —
+    so `_scan`'s loop over the vendored set was a 2N-process walk on a daily cadence surface.
+    Hoisting the invariant probe and replacing `show` with `cat-file --batch` makes the whole
+    set cost 2, whatever N is. Guarded by `coordinator_core/tests/
+    test_no_unbatched_per_item_git_spawn.py`.
+
+    Results are returned in `vendor_paths` order, one dict per input, in the same field shape
+    `check_schema_drift_advisory` uses (schema, diverged, determinate, direction,
+    divergence_kind, local_version, doe_version, local_bump_class, doe_bump_class,
+    doe_bump_note, detail) so `_scan`'s reducer treats both comparison kinds uniformly —
+    version/bump-class fields are always None here (cockpit source files carry no such
+    headers), never fabricated.
+
+    Negative-spec (mirrors check_schema_drift_advisory exactly):
+      - NEVER raises. An unreadable/foreign cockpit clone, an unresolvable header, or a failed
+        `cat-file` all fold into determinate=False, diverged=False — indeterminate, never a
+        claimed match or a false drift alarm.
+      - A batch is never all-or-nothing at the FILE level: a header that will not resolve
+        makes that one entry indeterminate and leaves the rest of the batch comparable.
+    """
+    if not vendor_paths:
+        return []
+
+    source_paths: dict[Path, Optional[str]] = {
+        vendor_path: _read_cockpit_source_path(vendor_path) for vendor_path in vendor_paths
+    }
+
+    # Loop-invariant by inspection: the probe reads the COCKPIT clone, which does not vary
+    # across `vendor_paths`. One call, not one per file.
+    unusable = foreign_repo_unusable_reason(cockpit_repo_path, timeout=30)
+
+    tokens = sorted({f"HEAD:{path}" for path in source_paths.values() if path is not None})
+    blobs: Optional[dict[str, Optional[str]]] = None
+    if unusable is None and tokens:
+        blobs = _cat_file_batch(cockpit_repo_path, tokens)
+
+    results: list[dict[str, Any]] = []
+    for vendor_path in vendor_paths:
+        schema_filename = vendor_path.name
+        source_path = source_paths[vendor_path]
+
+        if source_path is None:
+            results.append(_source_drift_indeterminate(
+                schema_filename,
+                f'Vendored file "{schema_filename}" carries no readable '
+                f'"{_COCKPIT_SOURCE_PATH_PREFIX}" header — cannot resolve which cockpit '
+                "file it mirrors; drift could not be determined.",
+            ))
+            continue
+
+        if unusable is not None:
+            results.append(_source_drift_indeterminate(
+                schema_filename,
+                f"cockpit repo ({cockpit_repo_path}) could not be read as a git "
+                f"repository ({unusable}) — drift could not be determined; this is "
+                "not a claim that the vendored copy has diverged.",
+            ))
+            continue
+
+        if blobs is None:
+            results.append(_source_drift_indeterminate(
+                schema_filename,
+                f"Could not run git against cockpit repo ({cockpit_repo_path}): "
+                "`git cat-file --batch` did not complete.",
+            ))
+            continue
+
+        cockpit_content = blobs.get(f"HEAD:{source_path}")
+        if cockpit_content is None:
+            results.append(_source_drift_indeterminate(
+                schema_filename,
+                f'Cannot read cockpit HEAD source "{source_path}". '
+                f"cockpit repo path ({cockpit_repo_path}) unreadable or missing this file "
+                "at HEAD.",
+            ))
+            continue
+
+        try:
+            local_content = vendor_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            results.append(_source_drift_indeterminate(
+                schema_filename, f"Could not read vendored copy at {vendor_path}: {exc}"
+            ))
+            continue
+
+        local_body = _vendor_body_without_header(local_content)
+        if local_body.rstrip("\n") != cockpit_content.rstrip("\n"):
+            results.append({
+                "schema": schema_filename,
+                "diverged": True,
+                "determinate": True,
+                "direction": None,
+                "divergence_kind": None,
+                "local_version": None,
+                "doe_version": None,
+                "local_bump_class": None,
+                "doe_bump_class": None,
+                "doe_bump_note": None,
+                "detail": (
+                    f'Vendored copy "{schema_filename}" diverges from cockpit HEAD '
+                    f"({cockpit_repo_path}:{source_path}) — cockpit has moved since the "
+                    "pin; re-derive and re-vendor (see the C1 derivation this row "
+                    "guards)."
+                ),
+            })
+            continue
+
+        results.append({
             "schema": schema_filename,
-            "diverged": True,
+            "diverged": False,
             "determinate": True,
             "direction": None,
             "divergence_kind": None,
@@ -333,29 +435,25 @@ def check_source_drift_advisory(vendor_path: Path, cockpit_repo_path: Path) -> d
             "doe_bump_class": None,
             "doe_bump_note": None,
             "detail": (
-                f'Vendored copy "{schema_filename}" diverges from cockpit HEAD '
-                f"({cockpit_repo_path}:{source_path}) — cockpit has moved since the "
-                "pin; re-derive and re-vendor (see the C1 derivation this row "
-                "guards)."
+                f'Vendored copy "{schema_filename}" matches cockpit HEAD '
+                f"({cockpit_repo_path}:{source_path})."
             ),
-        }
+        })
 
-    return {
-        "schema": schema_filename,
-        "diverged": False,
-        "determinate": True,
-        "direction": None,
-        "divergence_kind": None,
-        "local_version": None,
-        "doe_version": None,
-        "local_bump_class": None,
-        "doe_bump_class": None,
-        "doe_bump_note": None,
-        "detail": (
-            f'Vendored copy "{schema_filename}" matches cockpit HEAD '
-            f"({cockpit_repo_path}:{source_path})."
-        ),
-    }
+    return results
+
+
+def check_source_drift_advisory(vendor_path: Path, cockpit_repo_path: Path) -> dict[str, Any]:
+    """Non-gating drift check for ONE `*.vendor.ts` file against cockpit HEAD.
+
+    The single-file seam over `check_source_drift_advisory_batch`, kept because a caller
+    holding one path should not have to build a list to ask about it. Callers holding a SET
+    must use the batch form — this one costs two processes per file by construction, which is
+    the amplification the batch exists to close.
+
+    Field shape and negative-spec are the batch's, unchanged.
+    """
+    return check_source_drift_advisory_batch([vendor_path], cockpit_repo_path)[0]
 
 
 def resolve_doe_repo_path() -> Optional[Path]:
@@ -619,8 +717,11 @@ def _scan(
                 ),
             })
     elif resolved_cockpit is not None:
-        for source_path in source_paths:
-            result = check_source_drift_advisory(source_path, resolved_cockpit)
+        # ONE batched comparison for the whole vendored source set, then a pure reduce over
+        # its results — the per-file call spawned twice per file, of which one probe was
+        # loop-invariant. See `check_source_drift_advisory_batch`.
+        source_results = check_source_drift_advisory_batch(source_paths, resolved_cockpit)
+        for source_path, result in zip(source_paths, source_results):
             name = str(result.get("schema") or source_path.name)
             detail = str(result.get("detail") or "")
             if not result.get("determinate", True):

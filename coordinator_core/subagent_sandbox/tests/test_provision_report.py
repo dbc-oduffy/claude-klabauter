@@ -37,9 +37,16 @@ from coordinator_core.subagent_sandbox.provision_report import (
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_staff_eng_review_doc_text,
 )
+from coordinator_core.subagent_sandbox.provision_report import (
+    _PLAN_COVERAGE_CHECK_SKELETON,
+    _build_plan_coverage_check_doc_text,
+)
+from coordinator_core.subagent_sandbox.provision_report import _frontmatter
 from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_LENS
+from coordinator_core.subagent_sandbox.provision_report import _TEMPLATE_REGISTRY
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
+from coordinator_core.testing.doe_root import doe_root_and_present
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
 # real `git init`'d tree per this file's own module docstring so it behaves
@@ -1308,3 +1315,235 @@ def test_plan_path_stem_sanitizes_to_empty_falls_back_to_session_keyed(
     match = _EMIT_RE.match(envelope["report_sidecar"])
     assert match is not None
     assert match.group("session") == session_id
+
+
+# ---------------------------------------------------------------------------
+# plan-coverage-check lens-owned sidecar skeleton (docs/plans/2026-08-21-the-
+# provisioner-writes-the-sidecar-skeleton.md, C1)
+# ---------------------------------------------------------------------------
+
+_DOE_ROOT, _DOE_PRESENT = doe_root_and_present()
+
+
+def _plan_coverage_checker_agent_path() -> Path:
+    return Path(_DOE_ROOT) / "coordinator" / "agents" / "plan-coverage-checker.md"
+
+
+def test_plan_coverage_check_skeleton_emits_ten_headings_and_the_counts_line() -> None:
+    """AC1: the emitted bytes carry all ten mandated `### ` headings and the
+    thirteen-bucket counts line.
+
+    THIS ENGINE IS THE SOURCE OF TRUTH for these strings, and the assertion
+    is deliberately against ``_PLAN_COVERAGE_CHECK_SKELETON`` rather than
+    against DoE-claude's ``coordinator/agents/plan-coverage-checker.md``.
+
+    The first revision of this test read the headings live out of that agent
+    file, on the reasoning that the consumer prompt stayed canonical and any
+    DoE-side edit would surface here rather than drift. That reasoning was
+    self-defeating: deleting those strings from the agent prompt IS the
+    deliverable this chunk exists to enable (they are the ~1,500 B of recited
+    template the whole change removes), so a guard reading them would have
+    gone red the moment the trim landed, and keeping them to satisfy the
+    guard would have cancelled the saving. The two were mutually exclusive.
+    Caught by doe-claude-em on receipt of the emitted bytes, before either
+    side trimmed anything.
+
+    Ownership follows emission: the provisioner is now the component that
+    actually writes these strings, so it holds them. The inverse direction is
+    what still needs guarding -- see
+    ``test_agent_prompt_does_not_re_add_the_emitted_skeleton`` below."""
+    text = _build_plan_coverage_check_doc_text(
+        "coordinator:plan-coverage-checker",
+        "2026-08-21T00:00:00+00:00",
+        lead_session_id="sess-ac1",
+        plan_path="docs/plans/2026-08-21-example-plan.md",
+    )
+
+    headings = re.findall(r"^### .+$", _PLAN_COVERAGE_CHECK_SKELETON, flags=re.MULTILINE)
+    assert len(headings) == 10, "the skeleton constant must carry exactly ten `### ` headings"
+    for heading in headings:
+        assert heading in text
+
+    counts_line = next(
+        line
+        for line in _PLAN_COVERAGE_CHECK_SKELETON.splitlines()
+        if line.startswith("**Missed:**")
+    )
+    assert counts_line in text
+    assert counts_line.count("**") == 26, "thirteen labelled buckets, each bold-delimited"
+
+
+@pytest.mark.pending_fix
+def test_agent_prompt_does_not_re_add_the_emitted_skeleton() -> None:
+    """The inverse of AC1, guarding the direction drift can now actually go.
+
+    Once the provisioner emits the skeleton, the failure mode is no longer
+    "the agent mistyped a heading" -- it is a future author re-adding the
+    section skeleton to `plan-coverage-checker.md` on the reasonable-looking
+    grounds that an agent should describe its own output shape. Both sides
+    would then emit, and the two copies would diverge silently, which is
+    exactly the DEGRADED-for-an-unwatched-heading failure this work removed.
+
+    Asserts on `### ` HEADING LINES only, never substring presence: the
+    agent's phase prose legitimately names these sections in running text
+    (\"promote to explicit slate citation\", the Phase 4.5/4.6 references),
+    and that prose is instruction which stays. Only a re-added heading is a
+    defect.
+
+    MARKED ``pending_fix`` DELIBERATELY, and this is not a broken test: it is
+    red until doe-claude-em lands the trim this engine change exists to
+    enable, which is their commit to make in their own repo on their own
+    schedule (no cross-repo commit grant exists -- DR-127 retired it). Remove
+    this marker once their trim lands; a green run before that means someone
+    trimmed without telling us, which is itself worth knowing."""
+    if not _DOE_PRESENT or not _plan_coverage_checker_agent_path().exists():
+        pytest.skip(
+            "sibling DoE-claude checkout with coordinator/agents/plan-coverage-checker.md "
+            "not found"
+        )
+    agent_text = _plan_coverage_checker_agent_path().read_text(encoding="utf-8")
+    agent_headings = set(re.findall(r"^### .+$", agent_text, flags=re.MULTILINE))
+    emitted_headings = set(
+        re.findall(r"^### .+$", _PLAN_COVERAGE_CHECK_SKELETON, flags=re.MULTILINE)
+    )
+
+    both = sorted(agent_headings & emitted_headings)
+    assert not both, (
+        "plan-coverage-checker.md carries heading(s) the provisioner already emits: "
+        f"{both} -- two emitters of the same skeleton diverge silently. Delete them "
+        "from the prompt; the engine owns these strings now."
+    )
+
+
+def test_plan_coverage_check_frontmatter_lens_keys_appended_after_pinned() -> None:
+    """AC2/AC3: the seven pinned `_frontmatter` keys are emitted unrenamed,
+    unreordered, and undropped (asserted as an exact prefix match against
+    `_frontmatter`'s own output -- never edited to produce this shape); the
+    five lens-owned keys are appended strictly AFTER them, never inside or
+    before; `status:` stays the pinned `open`, never `implemented`."""
+    lead_session_id = "sess-ac2"
+    spawned_at = "2026-08-21T12:34:56+00:00"
+    agent_type = "coordinator:plan-coverage-checker"
+    plan_path = "docs/plans/2026-08-21-example-plan.md"
+
+    pinned = _frontmatter(agent_type, spawned_at, lead_session_id)
+    pinned_prefix = pinned[: -len("---\n\n")]
+    assert "status: open" in pinned_prefix
+
+    text = _build_plan_coverage_check_doc_text(
+        agent_type, spawned_at, lead_session_id=lead_session_id, plan_path=plan_path
+    )
+
+    assert text.startswith(pinned_prefix)
+    lens_block, sep, _rest = text[len(pinned_prefix) :].partition("---\n\n")
+    assert sep == "---\n\n"
+    assert lens_block == (
+        "title: Plan Coverage Check — 2026-08-21-example-plan\n"
+        "created: 2026-08-21\n"
+        "author: plan-coverage-checker\n"
+        "kind: plan-coverage-check\n"
+        f"plan: {plan_path}\n"
+    )
+    assert "status: implemented" not in text
+
+
+def test_plan_coverage_checker_payload_type_is_overridden_by_lens(
+    git_repo: Path,
+    plan_derivable_policy_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """AC5: the exact probe from § Problem, re-run and asserted -- a
+    plan-coverage-checker dispatch typed "review-findings" now yields the
+    lens-owned skeleton, not the review-findings body. The payload key that
+    resolves a foreground dispatch is `agent_type`, not `subagent_type`
+    (`engine.resolve_effective_types`) -- a `subagent_type`-keyed payload
+    resolves to empty and fails open to no sidecar at all, so this probe
+    deliberately keys on `agent_type`."""
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type="coordinator:plan-coverage-checker",
+        session_id="sess-ac5",
+        plan_path="docs/plans/2026-08-21-ac5-plan.md",
+        doc_type="review-findings",
+    )
+    exit_code, out = _run(payload, plan_derivable_policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    doc_path = git_repo / envelope["report_sidecar"]
+    text = doc_path.read_text(encoding="utf-8")
+
+    assert "## Plan Coverage Verification" in text
+    assert "### Hook registration liveness (Phase 4.6, Lens 5)" in text
+    assert "## Findings" not in text
+
+
+@pytest.mark.parametrize(
+    "agent_type",
+    sorted(t for t in _PLAN_DERIVABLE_LENS if t != "coordinator:plan-coverage-checker"),
+)
+def test_other_plan_derivable_lenses_still_resolve_payload_type(
+    git_repo: Path,
+    plan_derivable_policy_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    agent_type: str,
+) -> None:
+    """AC4: the lens-wins rule is narrow by construction -- only a
+    `_TEMPLATE_REGISTRY`-registered lens name overrides `payload["type"]`.
+    None of the other four `_PLAN_DERIVABLE_LENS` entries are registered
+    there, so each must still resolve its payload-supplied template
+    untouched."""
+    assert _PLAN_DERIVABLE_LENS[agent_type] not in _TEMPLATE_REGISTRY
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=agent_type,
+        session_id="sess-ac4",
+        plan_path="docs/plans/2026-08-21-ac4-plan.md",
+        doc_type="assessment",
+    )
+    exit_code, out = _run(payload, plan_derivable_policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    doc_path = git_repo / envelope["report_sidecar"]
+    text = doc_path.read_text(encoding="utf-8")
+    assert "## Questions" in text
+    assert "## Plan Coverage Verification" not in text
+
+
+def test_plan_coverage_check_idempotent_reopen_never_clobbers_filled_body(
+    git_repo: Path,
+    plan_derivable_policy_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """AC7: a re-dispatch against the same (plan_stem, lens) still re-opens
+    the existing plan-coverage-check sidecar and never clobbers a filled
+    body -- the same idempotent-hit discipline every other plan-derivable
+    lens gets, now exercised against the new lens-owned template itself."""
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type="coordinator:plan-coverage-checker",
+        session_id="sess-ac7",
+        plan_path="docs/plans/2026-08-21-ac7-plan.md",
+    )
+
+    exit_code_1, out_1 = _run(payload, plan_derivable_policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code_1 == 0
+    path_1 = json.loads(out_1.splitlines()[0])["report_sidecar"]
+
+    doc_path = git_repo / path_1
+    filled_content = doc_path.read_text(encoding="utf-8").replace(
+        "**Verdict:** COMPLETE | INCOMPLETE | BLOCKED-SURFACE-TO-PM | SCOPE-MISMATCH | DEGRADED",
+        "**Verdict:** COMPLETE",
+    )
+    doc_path.write_text(filled_content, encoding="utf-8")
+
+    exit_code_2, out_2 = _run(payload, plan_derivable_policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code_2 == 0
+    path_2 = json.loads(out_2.splitlines()[0])["report_sidecar"]
+
+    assert path_1 == path_2
+    assert doc_path.read_text(encoding="utf-8") == filled_content

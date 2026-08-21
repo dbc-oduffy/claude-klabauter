@@ -111,6 +111,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import git_lock_retry
 from coordinator_core.benchmarks import budget
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony import scoped_git_commit
@@ -158,8 +159,16 @@ def _write_meta_live(repo: Path, sid: str, *, live: bool) -> None:
     )
 
 
-def _count_op_spawns_both_ways(fn) -> tuple[int, int, dict]:
-    """Run *fn* ONCE under both counters and return `(native_git_n, all_n, result)`.
+#: Sentinel returned by the `subprocess.Popen` leg of `_count_op_spawns_both_ways` in place of a
+#: real `Popen` object -- see that function's own docstring for why the `Popen` leg never
+#: delegates to the real constructor. Distinct from `None` only so a future accidental
+#: attribute-access on the "process" reads as an obvious `AttributeError` on this name rather
+#: than a `NoneType` error indistinguishable from a dozen other causes.
+_UNSPAWNED_POPEN = object()
+
+
+def _count_op_spawns_both_ways(fn) -> tuple[int, int, int, dict]:
+    """Run *fn* ONCE under both counters and return `(native_git_n, all_n, retries_fired, result)`.
 
     One invocation, two figures, on purpose: this op stages and commits, so it is
     not idempotent and cannot be run twice to collect a second measurement.
@@ -178,17 +187,83 @@ def _count_op_spawns_both_ways(fn) -> tuple[int, int, dict]:
     whenever the fixture changed. Same defect class as a figure measured against
     a stubbed op.
 
-    `all_n`'s own hole is mechanism, not routing: it sees `subprocess.run` and not
-    `Popen`/`os.posix_spawn`/`asyncio.create_subprocess_exec`. That precondition
-    is enforced per-site by `coordinator_core/tests/
+    `all_n` ALSO substitutes `subprocess.Popen` (opro-03 follow-up, 2026-08-21):
+    `auto_push._detach_and_run`'s Windows respawn leg spawns via `Popen`, never
+    `run`, so the run-only counter could never see it -- see
+    `test_no_uncounted_spawn_on_budgeted_path.py`'s `_GLOBAL_SUBPROCESS_SPAWN`
+    for the mechanism-pin half of this widening.
+
+    The `Popen` leg CANNOT blanket-stub every call the way the `run` leg
+    delegates to every call, unlike `run`: CPython's own `subprocess.run()`
+    implementation calls `Popen(...)` internally via this SAME module-global
+    name, so a `Popen` wrapper that never delegates breaks every ordinary git
+    spawn this counter's own `run` leg needs to keep working (measured
+    2026-08-21: every `_run_wrapper` call raised `TypeError` the moment `Popen`
+    was blanket-stubbed, because `run()`'s internal `with Popen(...)` hit the
+    stub too). The wrapper instead delegates to the REAL `Popen` for every call
+    EXCEPT one recognized shape: `auto_push`'s own detached-respawn argv
+    (`[python_exe, <abspath to auto_push.py>, ...]`, `_detach_and_run`'s
+    Windows leg and `spawn_detached_push`'s own respawn, the only two
+    `Popen` call sites on `coordinator_core`'s reachable set -- see this
+    file's own comment above `_init_repo_on_work_branch`). ONLY that shape is
+    counted-and-stubbed (returns `_UNSPAWNED_POPEN`, never spawns); every
+    other `Popen` call -- in particular the ones `subprocess.run()` issues
+    internally for every counted `run()` call -- passes straight through
+    unmodified and uncounted here (it is already counted once, by the `run`
+    leg, at the call site that invoked `.run()`).
+
+    Stubbing that one shape rather than letting it spawn for real is
+    deliberate: a detached, disowned child launched from inside a test on
+    this box (50-70 concurrent LLM sessions, CLAUDE.md's Load norm) would
+    outlive the test and never be reaped. Nothing on `ceremony.
+    scoped_git_commit`'s reachable set touches a `Popen` return value or
+    depends on the child it would have spawned actually running
+    (`_detach_and_run`'s own body discards it, inside a bare `try/finally`
+    that only closes a log file handle), so a call-counting stub that never
+    spawns is a faithful count of the CALL, with none of the escaped-process
+    hazard.
+
+    `all_n`'s own remaining hole is mechanism, not routing: it sees
+    `subprocess.run`/`subprocess.Popen` and not `os.posix_spawn`/
+    `asyncio.create_subprocess_exec`. That precondition is enforced per-site by
+    `coordinator_core/tests/
     test_no_uncounted_spawn_on_budgeted_path.py::
     test_legitimized_site_mechanism_pins_hold`; see that module's operational
     definition of "counted" for why the two counter shapes are complementary
-    rather than ranked."""
+    rather than ranked.
+
+    `retries_fired` (opro-03 follow-up, 2026-08-21) is a MEASURED, attributed
+    subtraction from `all_n`, not a tolerance: `git_native._git()`'s
+    `capture=True` leg (every production caller) wraps its real
+    `subprocess.run` in `git_lock_retry.run_with_lock_retry(_invoke)`, which
+    re-invokes `_invoke` -- a REAL second (third, ...) `subprocess.run` -- up
+    to `DEFAULT_MAX_ATTEMPTS` times on genuine `.git/index.lock` contention
+    (this repo is a deliberately shared working tree, per that module's own
+    docstring; the hazard is real even against an isolated `tmp_path` repo,
+    e.g. Windows Defender's real-time scan on a freshly-written `.git`
+    object). Every retry is invisible to the SEAM counter above (`_git_wrapper`
+    sees ONE call to `_git()` regardless of how many times `_invoke` retried
+    inside it) but IS a real, counted `subprocess.run` call to `all_n` --
+    which is exactly why `op_total`'s seam/global gap moved by up to 2 across
+    otherwise-identical fixture runs (opro-03 follow-up rationale in
+    `budget-manifest.json`'s `ceremony.scoped_git_commit._op_total_rationale`
+    has the full falsification trail). This wraps `git_native.run_with_lock_
+    retry` -- the NAME `_git()` calls, imported into `git_native`'s own
+    namespace -- rather than touching `git_lock_retry.py` itself: the
+    production module is a real resilience mechanism for a real hazard, and
+    the test adapts to it, never the reverse. Counts every attempt beyond the
+    first per `_git()` call (a fresh `run_with_lock_retry` invocation each
+    time) and asserts the observed attempt count never exceeds
+    `git_lock_retry.DEFAULT_MAX_ATTEMPTS` -- if it does, the mechanism
+    changed shape and this instrumentation is wrong, so it fails loud rather
+    than silently absorbing an unbounded figure."""
     seam = {"n": 0}
     allc = {"n": 0}
+    retries = {"extra": 0}
     orig_git = git_native._git
     orig_run = subprocess.run
+    orig_popen = subprocess.Popen
+    orig_run_with_lock_retry = git_native.run_with_lock_retry
 
     def _git_wrapper(*a, **kw):
         seam["n"] += 1
@@ -198,14 +273,48 @@ def _count_op_spawns_both_ways(fn) -> tuple[int, int, dict]:
         allc["n"] += 1
         return orig_run(*a, **kw)
 
+    def _popen_wrapper(*a, **kw):
+        argv = a[0] if a else kw.get("args")
+        is_auto_push_respawn = (
+            isinstance(argv, (list, tuple))
+            and len(argv) >= 2
+            and str(argv[1]).endswith("auto_push.py")
+        )
+        if not is_auto_push_respawn:
+            return orig_popen(*a, **kw)
+        allc["n"] += 1
+        return _UNSPAWNED_POPEN
+
+    def _counting_run_with_lock_retry(invoke, *a, **kw):
+        attempts = {"n": 0}
+
+        def _counted_invoke():
+            attempts["n"] += 1
+            return invoke()
+
+        result = orig_run_with_lock_retry(_counted_invoke, *a, **kw)
+        assert attempts["n"] <= git_lock_retry.DEFAULT_MAX_ATTEMPTS, (
+            "run_with_lock_retry made %d attempts for one `_git()` call, more than "
+            "DEFAULT_MAX_ATTEMPTS=%d can produce -- the retry mechanism's shape "
+            "changed and this instrumentation no longer matches it; fix the "
+            "instrumentation before trusting any retry-adjusted figure it reports"
+            % (attempts["n"], git_lock_retry.DEFAULT_MAX_ATTEMPTS)
+        )
+        retries["extra"] += max(0, attempts["n"] - 1)
+        return result
+
     git_native._git = _git_wrapper
     subprocess.run = _run_wrapper
+    subprocess.Popen = _popen_wrapper
+    git_native.run_with_lock_retry = _counting_run_with_lock_retry
     try:
         result = fn()
     finally:
         git_native._git = orig_git
         subprocess.run = orig_run
-    return seam["n"], allc["n"], result
+        subprocess.Popen = orig_popen
+        git_native.run_with_lock_retry = orig_run_with_lock_retry
+    return seam["n"], allc["n"], retries["extra"], result
 
 
 def _manifest_spawn_budget() -> dict:
@@ -214,7 +323,7 @@ def _manifest_spawn_budget() -> dict:
     return entry["spawn_count_budget"]
 
 
-def _assert_op_total(shape: str, n_all: int) -> None:
+def _assert_op_total(shape: str, n_all: int, retries_fired: int = 0) -> None:
     """Pin the WHOLE-OP spawn count for *shape* against its `op_total_<shape>`
     manifest key (opro-03 C6).
 
@@ -232,16 +341,36 @@ def _assert_op_total(shape: str, n_all: int) -> None:
     2026-08-19 at +6/+6/+8, and it is exactly the uncounted-bypass surface
     `test_no_uncounted_spawn_on_budgeted_path.py` enumerates. Shrinking that gap
     by routing a bypass through the counted seam is progress; shrinking it by
-    editing this number is the failure."""
+    editing this number is the failure.
+
+    `retries_fired` (opro-03 follow-up, 2026-08-21) is subtracted before the
+    equality check -- see `_count_op_spawns_both_ways`'s own docstring for what
+    it measures and why. This is NOT a tolerance: the comparison is still exact
+    equality, against `n_all` MINUS a specifically OBSERVED, attributed count of
+    real `git_lock_retry.run_with_lock_retry` re-invocations, never a fudge
+    factor or a range. A genuinely new, non-retry spawn still fails this
+    assertion -- it was never counted as a retry in the first place. Printed
+    loudly (not silently absorbed) whenever nonzero, since a retry firing is
+    real evidence of contention, not noise to hide."""
+    if retries_fired:
+        print(
+            "%s: %d lock-contention retr%s observed and subtracted from the "
+            "WHOLE-OP spawn count before comparing to budget (git_lock_retry."
+            "run_with_lock_retry re-invoked `_invoke` beyond the first attempt "
+            "-- see _count_op_spawns_both_ways's own docstring)"
+            % (shape, retries_fired, "y" if retries_fired == 1 else "ies")
+        )
+    adjusted = n_all - retries_fired
     budgeted = _manifest_spawn_budget()[f"op_total_{shape}"]
-    assert n_all == budgeted, (
-        "%s WHOLE-OP spawn count is %d, manifest budgets %d. This figure counts "
-        "every process the op spawns, not just the `git_native._git` seam, so it "
-        "moves when a bypass is added ANYWHERE in the op's reached set -- which is "
-        "what it is for. Update budget-manifest.json's ceremony.scoped_git_commit."
-        "spawn_count_budget.op_total_%s (and its _rationale) in the same commit if "
-        "the change is intentional; never edit it to make a new bypass fit."
-        % (shape, n_all, budgeted, shape)
+    assert adjusted == budgeted, (
+        "%s WHOLE-OP spawn count is %d (raw %d, minus %d observed lock-retries), "
+        "manifest budgets %d. This figure counts every process the op spawns, not "
+        "just the `git_native._git` seam, so it moves when a bypass is added "
+        "ANYWHERE in the op's reached set -- which is what it is for. Update "
+        "budget-manifest.json's ceremony.scoped_git_commit.spawn_count_budget."
+        "op_total_%s (and its _rationale) in the same commit if the change is "
+        "intentional; never edit it to make a new bypass fit."
+        % (shape, adjusted, n_all, retries_fired, budgeted, shape)
     )
 
 
@@ -270,10 +399,10 @@ def test_green_path_spawn_count_matches_budget(tmp_path_factory):
             }
         )
 
-    n, n_all, result = _count_op_spawns_both_ways(_run)
+    n, n_all, retries_fired, result = _count_op_spawns_both_ways(_run)
     assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
 
-    _assert_op_total("green_path", n_all)
+    _assert_op_total("green_path", n_all, retries_fired)
 
     budgeted = _manifest_spawn_budget()["green_path"]
     assert n == budgeted, (
@@ -310,10 +439,10 @@ def test_directory_pathspec_expansion_spawn_count_matches_budget(tmp_path_factor
             }
         )
 
-    n, n_all, result = _count_op_spawns_both_ways(_run)
+    n, n_all, retries_fired, result = _count_op_spawns_both_ways(_run)
     assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
 
-    _assert_op_total("directory_pathspec_expansion", n_all)
+    _assert_op_total("directory_pathspec_expansion", n_all, retries_fired)
 
     budgeted = _manifest_spawn_budget()["directory_pathspec_expansion"]
     assert n == budgeted, (
@@ -415,7 +544,7 @@ def test_push_raced_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
 
     time.sleep = _record_sleep
     try:
-        n, n_all, result = _count_op_spawns_both_ways(_run)
+        n, n_all, retries_fired, result = _count_op_spawns_both_ways(_run)
     finally:
         time.sleep = orig_sleep
 
@@ -426,7 +555,7 @@ def test_push_raced_path_spawn_count_and_sleep_match_budget(tmp_path_factory):
         "this test is measuring the wrong path" % (result.get("push_state"),)
     )
 
-    _assert_op_total("push_raced_path", n_all)
+    _assert_op_total("push_raced_path", n_all, retries_fired)
 
     budgeted = _manifest_spawn_budget()["push_raced_path"]
     assert n == budgeted, (
@@ -607,7 +736,7 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
             }
         )
 
-    n, n_all, result = _count_op_spawns_both_ways(_run)
+    n, n_all, retries_fired, result = _count_op_spawns_both_ways(_run)
 
     assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
     assert result["push_state"] == "pushed", (
@@ -628,12 +757,114 @@ def test_pending_drain_superseded_path_spawn_count_matches_budget(tmp_path_facto
         "leg was not taken, so this is not the path this test claims to measure"
     )
 
-    _assert_op_total("pending_drain_superseded", n_all)
+    _assert_op_total("pending_drain_superseded", n_all, retries_fired)
 
     budgeted = _manifest_spawn_budget()["pending_drain_superseded"]
     assert n == budgeted, (
         "pending-drain-superseded e2e spawn count is %d, manifest budgets %d -- update "
         "budget-manifest.json's ceremony.scoped_git_commit.spawn_count_budget."
         "pending_drain_superseded (and its _rationale) together with this test if the change "
+        "is intentional" % (n, budgeted)
+    )
+
+
+# ---------------------------------------------------------------------------
+# opro-03 follow-up (2026-08-21): the deferred-push private-index detach leg --
+# `_replay_post_commit_auto_push` -> `auto_push.main` -> `_detach_and_run`'s
+# Windows respawn `Popen`, the one site `test_no_uncounted_spawn_on_budgeted_
+# path.py` still flagged after C6 emptied `_LEGITIMIZED_SITES` of everything
+# else it could reach.
+# ---------------------------------------------------------------------------
+
+
+def _init_repo_on_work_branch(tmp_path: Path) -> Path:
+    """A `work/*`-branch repo, no remote -- `auto_push.branch_gate` only proceeds past a
+    `work/*` prefix (see that function's own docstring), and the replay this fixture exists to
+    reach runs before any remote is ever consulted, so none is needed here."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(["init", "-q", "-b", "work/spawn-budget/detach"], repo)
+    _git(["config", "user.email", "t@t.example"], repo)
+    _git(["config", "user.name", "t"], repo)
+    return repo
+
+
+def test_deferred_diverged_commit_reaches_detached_push_spawn_count_matches_budget(
+    tmp_path_factory, monkeypatch
+):
+    """opro-03 follow-up: a diverged path under the (default) `deferred` push mode routes
+    `commit_scoped` down `_commit_scoped_private_index`, which fires no git hooks and instead
+    calls `_replay_post_commit_auto_push` -> `auto_push.main` -> `_detach_and_run` directly
+    in-process (`git_native.py`'s own comment: "unlike the agree branch above there is no
+    `post-commit` to stand down OR to rely on"). On this box (win32, no `os.fork`) that
+    function's Windows leg unconditionally reaches its own `subprocess.Popen` respawn -- the one
+    site `test_no_uncounted_spawn_on_budgeted_path.py` flagged after opro-03 C6 emptied
+    `_LEGITIMIZED_SITES` of every other reachable bypass.
+
+    `_detach_and_run` is wrapped DIRECTLY (not inferred from the Popen count alone) so the
+    `executed` leg of its `_LEGITIMIZED_SITES` entry is a measurement of the function actually
+    running, matching this file's own `push_once`/`_is_ancestor`/`_invoke_cockpit_publish`
+    precedent (`test_pending_drain_superseded_path_spawn_count_matches_budget`'s own docstring
+    on why each site gets its own wrapper rather than an inference from a sibling's).
+    `subprocess.Popen` is stubbed by `_count_op_spawns_both_ways` (never delegates)
+    specifically so this measurement never launches a real detached, disowned child on a
+    50-70-concurrent-session box -- see that helper's own docstring.
+    """
+    tmp_path = tmp_path_factory.mktemp("e2e-spawn-deferred-detach")
+    repo = _init_repo_on_work_branch(tmp_path)
+    (repo / "diverge.py").write_text("v1\n", encoding="utf-8")
+    _git(["add", "--", "diverge.py"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # Stage v2, then leave v3 in the worktree -- staged content differs from worktree content,
+    # which is exactly what `diverging_paths` reports and what routes `commit_scoped` down the
+    # hookless private-index branch (mirrors `test_scoped_git_commit.py::test_deferred_push_
+    # publishes_the_hookless_private_index_branch`'s own recipe).
+    (repo / "diverge.py").write_text("v2\n", encoding="utf-8")
+    _git(["add", "--", "diverge.py"], repo)
+    (repo / "diverge.py").write_text("v3\n", encoding="utf-8")
+    _write_meta_live(repo, "sess-caller", live=True)
+
+    from coordinator_core.hooks import auto_push
+
+    detach_calls = {"n": 0}
+    orig_detach = auto_push._detach_and_run
+
+    def _detach_wrapper(*a, **kw):
+        detach_calls["n"] += 1
+        return orig_detach(*a, **kw)
+
+    monkeypatch.setattr(auto_push, "_detach_and_run", _detach_wrapper)
+
+    def _run():
+        return scoped_git_commit._handler(
+            {
+                "worktree_root": str(repo),
+                "paths": ["diverge.py"],
+                "message": "test commit",
+                # `push_mode` deliberately OMITTED -- the default is `deferred`, and only the
+                # non-suppressed shapes call `_replay_post_commit_auto_push` at all
+                # (`_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK` in commit_pipeline.py excludes
+                # it). An explicit `push_mode="sync"`/`"never"` would silently skip the very
+                # leg this test measures.
+            }
+        )
+
+    n, n_all, retries_fired, result = _count_op_spawns_both_ways(_run)
+
+    assert result["committed"] is True, "fixture did not land a commit: %r" % (result,)
+    assert detach_calls["n"] >= 1, (
+        "fixture did not reach auto_push._detach_and_run -- the diverged path did not take the "
+        "hookless private-index branch, or the push-mode default changed, so this is not the "
+        "path this test claims to measure"
+    )
+
+    _assert_op_total("deferred_diverged_detach", n_all, retries_fired)
+
+    budgeted = _manifest_spawn_budget()["deferred_diverged_detach"]
+    assert n == budgeted, (
+        "deferred-diverged-detach e2e spawn count is %d, manifest budgets %d -- update "
+        "budget-manifest.json's ceremony.scoped_git_commit.spawn_count_budget."
+        "deferred_diverged_detach (and its _rationale) together with this test if the change "
         "is intentional" % (n, budgeted)
     )

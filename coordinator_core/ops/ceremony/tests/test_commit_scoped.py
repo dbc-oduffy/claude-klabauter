@@ -40,7 +40,6 @@ import pytest
 from coordinator_core.git.divergence import DivergenceCheckFailed
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import DeliverableIdAssertionConflictError
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from .fixtures.real_git import (
     make_agree_path,
     make_diverged_path,
@@ -942,22 +941,6 @@ def test_wrong_known_diverged_trusts_caller_and_commits_worktree_content(tmp_pat
 # branches -- the branch-parametrised assertion the original (unsplit) C7
 # AC set lacked (staff-eng delta review, finding 5).
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    """`deliverable_equivalence.load_equivalence_map` memoizes per-process,
-    keyed to the FIRST `worktree_root` it is ever called with (see that
-    function's own docstring) -- each test here uses a fresh `tmp_path`
-    repo, so without a reset between tests the second test onward would
-    silently read the FIRST test's (empty) equivalence map result for an
-    unrelated root. Harmless for these tests today (no test declares a fork
-    equivalence), but the reset is cheap and this is the documented contract
-    for "a test iterating multiple roots" -- exactly this file's shape.
-    """
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 def _seed_deliverable_artifact(repo: Path, deliverable_id: str, *, slug: str = "seed-plan") -> Path:

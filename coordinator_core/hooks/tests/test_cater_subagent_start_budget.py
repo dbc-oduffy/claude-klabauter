@@ -31,7 +31,23 @@ primary/secondary split (cited, not re-derived):
     (mirrors `test_cater_subagent_start.py`'s own `git_repo`/`policy_path`
     fixture shape, kept self-contained here rather than shared across test
     modules). No subprocess is spawned to take this measurement, so this
-    guard also stays on the fast tier.
+    guard also stays on the fast tier. This synthetic case is a SINGLE
+    block, inline shape only -- the cheapest case, despite an earlier
+    revision of its own docstring claiming otherwise (fixed by this
+    chunk); the AC9 amendment (a companion-file write is different work
+    on the same hot path) is re-priced separately, against the real
+    `coordinator:staff-eng` policy row (11 blocks, always spills), by
+    `test_compose_catering_process_time_companion_write_widest_type`
+    below -- skipped without a sibling DoE-claude checkout, same gate as
+    `test_cater_subagent_start.py`'s own real-corpus family.
+
+This file also carries the AC9 cap-invariant regression guard
+(`test_every_catered_type_composes_under_the_char_cap`): every catered
+type in the real policy's `contract_blocks` map (33 types, not a
+hand-picked few) must compose under `ADDITIONAL_CONTEXT_CHAR_CAP` --
+the whole failure class this plan exists to close is a payload silently
+exceeding the `additionalContext` channel, so this guard fails loudly
+rather than assuming the spill arm keeps working.
 
 Baselines named in the brief (not re-derived, cited for context only): DoE's
 2026-08-16 hook benchmark put a cold `python3` start at ~35ms median
@@ -53,9 +69,21 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.hooks.cater_subagent_start import compose_catering
+from coordinator_core.hooks.cater_subagent_start import (
+    ADDITIONAL_CONTEXT_CHAR_CAP,
+    compose_catering,
+)
+from coordinator_core.testing.doe_root import doe_root_and_present
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "cater_subagent_start.py"
+
+DOE_ROOT, DOE_ROOT_PRESENT = doe_root_and_present()
+
+#: Widest `contract_blocks` row on disk (module docstring's own AC9 finding,
+#: cited not re-derived) -- the type this file's re-measurement (secondary
+#: guard, companion-write shape) and the cap-invariant sweep both anchor on
+#: for their "worst real case" sample.
+WIDEST_TYPE = "coordinator:staff-eng"
 
 #: Names that would indicate this leg reaches for a process spawn. Matched
 #: against the module's own source text (not its transitive imports --
@@ -199,10 +227,16 @@ def test_compose_catering_process_time_within_ac6_ceiling(
 ) -> None:
     """Min-of-N `time.process_time()` (CPU time) around a direct,
     in-process `compose_catering` call for an eligible type carrying a
-    `contract_blocks` row -- the widest of the three legs this module
-    composes, so the measurement is not the cheapest possible case.
-    Compares against AC6's stated 150ms ceiling; no subprocess is spawned
-    to take this measurement (see module docstring, "Secondary guard").
+    SINGLE `contract_blocks` entry (`quota-self-detect-preamble`), against
+    a synthetic single-block fixture repo -- despite this docstring's
+    earlier claim, this is the cheapest inline shape this module composes,
+    not the widest; the widest real shape (11 blocks, companion-write) is
+    priced separately by
+    `test_compose_catering_process_time_companion_write_widest_type`
+    below, against the real `coordinator:staff-eng` policy row (this
+    chunk's re-measurement, AC6/AC9). Compares against AC6's stated 150ms
+    ceiling; no subprocess is spawned to take this measurement (see module
+    docstring, "Secondary guard").
     """
     payload = {
         "agent_type": ELIGIBLE_TYPE,
@@ -227,3 +261,150 @@ def test_compose_catering_process_time_within_ac6_ceiling(
         f"compose_catering process time {best_ms:.2f}ms exceeds AC6's "
         f"{_AC6_CEILING_MS}ms ceiling (samples={samples!r})"
     )
+
+
+# ---------------------------------------------------------------------------
+# SECONDARY guard, re-priced -- companion-write shape (this chunk's ask)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not DOE_ROOT_PRESENT,
+    reason="sibling DoE-claude checkout not resolvable on this machine "
+    "(see coordinator_core.testing.doe_root.resolve_doe_root)",
+)
+def test_compose_catering_process_time_companion_write_widest_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC6's ceiling was priced against the INLINE shape only (the test
+    above, a single block, no spill). A companion-file write is different
+    work on the same hot path (AC9 amendment) and fires on every dispatch
+    fleet-wide -- this re-measures process time for `WIDEST_TYPE`
+    (`coordinator:staff-eng`, 11 real `contract_blocks`, the widest row on
+    disk), which composes well over `ADDITIONAL_CONTEXT_CHAR_CAP` and so
+    always takes the spill-to-companion-file arm, not merely the widest
+    inline case. Min-of-N `time.process_time()` (CPU time, never
+    wall-clock) against the real policy/snippet corpus -- the shape the
+    fleet actually sees, not a synthetic stand-in. No subprocess is
+    spawned to take this measurement (spilling is a plain `open()` write,
+    covered by `test_module_source_never_spawns_a_process`'s AST sweep
+    over this same module -- 0 additional spawns is not re-measured here).
+    """
+    import os
+    import shutil
+
+    import yaml
+
+    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
+    block_names = policy_data["contract_blocks"][WIDEST_TYPE]
+
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
+    session_id = "budget-companion-write-widest"
+    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / session_id
+    payload = {
+        "agent_type": WIDEST_TYPE,
+        "session_id": session_id,
+        "contract_blocks": block_names,
+    }
+
+    try:
+        # Untimed warm-up, same rationale as the inline case above.
+        compose_catering(payload, cwd=DOE_ROOT)
+
+        samples = []
+        for _ in range(_SAMPLE_COUNT):
+            start = time.process_time()
+            compose_catering(payload, cwd=DOE_ROOT)
+            samples.append((time.process_time() - start) * 1000.0)
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        os.environ.pop("SUBAGENT_SANDBOX_POLICY", None)
+
+    best_ms = min(samples)
+    assert best_ms <= _AC6_CEILING_MS, (
+        f"compose_catering (companion-write shape, {WIDEST_TYPE}) process "
+        f"time {best_ms:.2f}ms exceeds AC6's {_AC6_CEILING_MS}ms ceiling "
+        f"(samples={samples!r})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CAP INVARIANT -- every catered type stays under ADDITIONAL_CONTEXT_CHAR_CAP
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not DOE_ROOT_PRESENT,
+    reason="sibling DoE-claude checkout not resolvable on this machine "
+    "(see coordinator_core.testing.doe_root.resolve_doe_root)",
+)
+def test_every_catered_type_composes_under_the_char_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC9's cap regression guard: enumerate EVERY catered type from the
+    real DoE policy map (`subagent-sandbox-policy.yaml`'s `contract_blocks`
+    keys -- the same 33-type population the EM's own measurement swept,
+    not a hand-picked few) and assert each type's composed
+    `additionalContext` TOTAL is at or under `ADDITIONAL_CONTEXT_CHAR_CAP`.
+
+    This does not merely re-check the spill mechanism fires for the
+    already-known-wide rows -- it is the regression guard against a FUTURE
+    block relocation (a `contract_blocks` edit that moves blocks onto a
+    type currently under the cap, or a bug in the spill arm that leaves a
+    type's total silently over cap despite `compose_catering`'s fail-open
+    contract) going undetected. The failure class this plan exists to
+    close is a payload silently exceeding the `additionalContext` channel;
+    this test is the loud version of that failure.
+    """
+    import shutil
+
+    import yaml
+
+    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
+    catered_types = policy_data["contract_blocks"]
+    assert catered_types, "real policy's contract_blocks map is unexpectedly empty"
+
+    # The sweep resolves blocks and role framing against the REAL sibling
+    # checkout, so `cwd` has to be DOE_ROOT -- there is no synthetic corpus
+    # that would measure the real population. That makes the sidecar and
+    # companion writes land in a PEER's working tree, which is tracked, not
+    # ignored: every directory this loop creates is reconciliation work for
+    # whoever runs `git status` over there next. So record each session
+    # directory as it is minted and remove exactly those. A single
+    # sweep-wide root would be wrong -- `_provision` keys the directory on
+    # `session_id`, one per type, and cleaning a root that is never created
+    # leaves the real ones behind.
+    session_dirs: list[Path] = []
+    share_root = Path(DOE_ROOT) / "state" / "subagent-share"
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
+    try:
+        over_cap: list[tuple[str, int]] = []
+        for agent_type, block_names in catered_types.items():
+            session_id = f"budget-cap-invariant-{_sanitize(agent_type)}"
+            session_dirs.append(share_root / session_id)
+            payload = {
+                "agent_type": agent_type,
+                "session_id": session_id,
+                "contract_blocks": block_names,
+            }
+            result = compose_catering(payload, cwd=DOE_ROOT)
+            if len(result) > ADDITIONAL_CONTEXT_CHAR_CAP:
+                over_cap.append((agent_type, len(result)))
+
+        assert not over_cap, (
+            f"{len(over_cap)} of {len(catered_types)} catered type(s) composed "
+            f"OVER the {ADDITIONAL_CONTEXT_CHAR_CAP}-char cap: {over_cap!r}"
+        )
+    finally:
+        for session_dir in session_dirs:
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def _sanitize(agent_type: str) -> str:
+    """Filesystem/session-id-safe stand-in for a `coordinator:foo` agent
+    type -- mirrors `_sanitize_segment`'s own colon-hostility (Windows
+    reserves `:` in a path segment) without importing that private helper
+    across a package boundary for a single character swap."""
+    return agent_type.replace(":", "-")

@@ -34,9 +34,6 @@ test_blanket_disarm_cache_does_not_fail_open_past_expiry = (
 )
 
 # Site 2
-test_load_equivalence_map_serves_each_roots_own_map = (
-    _slow.test_load_equivalence_map_serves_each_roots_own_map
-)
 test_load_deliverable_ledger_serves_each_roots_own_ledger = (
     _slow.test_load_deliverable_ledger_serves_each_roots_own_ledger
 )

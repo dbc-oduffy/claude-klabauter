@@ -18,7 +18,7 @@ Coverage:
   (l) b_node_generic   — B-node uses pre_resolved_evidence/em_adjudication (not wsc-specific names)
   (m) pickup_phase     — op_tail phase="consume" validates without schema change (naming generality)
   (n) b_node_noreview  — non-review B bracket fits generic slots without rename (naming generality)
-  (o) engine_sha       — optional/additive top-level field (C2); present/absent both validate clean
+  (o) engine_sha       — optional/additive top-level field (C2); absence validates clean
   (p) scoping_method   — optional/additive top-level field (C2, wsc concurrent-tree race fix);
                           enum-checked when present, absence still validates
   (q) foreign_commit_count — optional/additive top-level field (C2, wsc concurrent-tree race
@@ -735,17 +735,6 @@ def test_validate_op_tail_failed_critical_absent_accepted() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_engine_sha_present_validates_clean() -> None:
-    """C2: a receipt carrying engine_sha (str) validates with no errors."""
-    r = _minimal_receipt(
-        op_tail=make_empty_op_tail("archival"),
-        engine_sha="6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9",
-    )
-    assert r["engine_sha"] == "6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9"
-    errors = validate(r)
-    assert errors == [], f"C2: engine_sha present must validate clean; got {errors}"
-
-
 def test_validate_engine_sha_absent_validates_clean() -> None:
     """C2: backward-compat — a receipt WITHOUT engine_sha still validates clean."""
     r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
@@ -754,35 +743,9 @@ def test_validate_engine_sha_absent_validates_clean() -> None:
     assert errors == [], f"C2: engine_sha absent must validate clean (backward-compat); got {errors}"
 
 
-def test_validate_engine_sha_wrong_type_rejected() -> None:
-    """C2: engine_sha must be a str when present; a wrong type (int) is rejected."""
-    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
-    r["engine_sha"] = 12345
-    errors = validate(r)
-    assert any("engine_sha" in e for e in errors), (
-        f"C2: wrong-type engine_sha must be rejected by validate(); got {errors}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # engine_dirty — optional/additive top-level field (coordinator_core.engine_version)
 # ---------------------------------------------------------------------------
-
-
-def test_validate_engine_dirty_true_validates_clean() -> None:
-    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"), engine_dirty=True)
-    assert r["engine_dirty"] is True
-    errors = validate(r)
-    assert errors == [], f"engine_dirty=True must validate clean; got {errors}"
-
-
-def test_validate_engine_dirty_false_validates_clean_and_is_emitted() -> None:
-    """engine_dirty=False is a meaningful, real finding — must still be emitted."""
-    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"), engine_dirty=False)
-    assert "engine_dirty" in r
-    assert r["engine_dirty"] is False
-    errors = validate(r)
-    assert errors == [], f"engine_dirty=False must validate clean; got {errors}"
 
 
 def test_validate_engine_dirty_absent_when_none_validates_clean() -> None:
@@ -792,15 +755,6 @@ def test_validate_engine_dirty_absent_when_none_validates_clean() -> None:
     errors = validate(r)
     assert errors == [], (
         f"engine_dirty absent must validate clean (backward-compat); got {errors}"
-    )
-
-
-def test_validate_engine_dirty_wrong_type_rejected() -> None:
-    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
-    r["engine_dirty"] = "yes"
-    errors = validate(r)
-    assert any("engine_dirty" in e for e in errors), (
-        f"wrong-type engine_dirty must be rejected by validate(); got {errors}"
     )
 
 

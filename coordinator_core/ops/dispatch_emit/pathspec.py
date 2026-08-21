@@ -88,12 +88,40 @@ still refuses.
 
 A doc-only spine (every row's ``writes:`` names only docs) DOES declare
 ``writes:`` — it passes AC10's literal wording, which only checks whether
-any row declared the field. But if every declared path maps to no test
-target, ``terminal_test_scope`` would otherwise return an EMPTY list, which
-is a green test run over nothing — strictly worse than refusing, because it
-reports success rather than absence. ``terminal_test_scope`` refuses
-(``NoTestTargetError``) in that case too, naming the paths that mapped to
-nothing.
+any row declared the field. But every declared path maps to no test target,
+so the derived scope is empty.
+
+AC16's original cut refused every such spine, on the reasoning that an
+empty scope is a green test run over nothing — worse than refusing, because
+it reports success rather than absence. That reasoning was sound about the
+CONSUMER and wrong about the discriminator. An empty scope is only a false
+green if the terminal phase runs anyway; ``emit.compose_script`` now omits
+the phase and narrates the omission onto the emitted script, so absence is
+reported as absence and there is nothing left to be green.
+
+What remains, and is the check's real subject, is telling apart two states
+a ``None`` from ``_map_written_path_to_test_target`` collapses into one:
+
+  - **An authoring omission** — a row writes ``.py`` and no test is named
+    for it. The plan author CAN fix this, refusing is right, and a wave
+    that proves nothing about code it wrote is exactly what AC16 exists to
+    stop. ``NoTestTargetError``, naming the testable surfaces that missed.
+  - **A fact about the surface** — every unmapped path is prose. No edit
+    the author could make would satisfy the check; refusing makes the
+    write-up chunk that is frequently the plan's actual deliverable
+    structurally unexecutable through ``/execute-plan``, whose own body
+    forbids a hand-dispatch fallback. Legitimately empty: return ``[]``.
+
+``_is_testable_surface`` is that discriminator. A wave mixing the two still
+refuses — one uncovered ``.py`` among the docs is an omission, and prose
+wave-mates do not excuse it.
+
+Cross-repo provenance: two repos hit the original cut independently
+(``doe-claude-em`` 2026-08-18, ``example-retrieval-repo-ue-addon-em`` 2026-08-20, the
+latter with its plan's stated product deliverable unwritten). The
+intermediate narrowing at ``2eab5b522`` — a written path that IS a test
+maps to itself — cleared only spines that happen to author their own test,
+which is why a second repo hit the same edge two days later.
 
 ## ``writes: []`` vs an absent ``writes:`` key — the asymmetry is real, and deliberate (finding A4)
 
@@ -473,6 +501,30 @@ def _candidate_test_targets(candidate: PurePosixPath) -> list[PurePosixPath]:
     return targets
 
 
+def _is_testable_surface(path: str) -> bool:
+    """Whether ``path`` is a surface a runnable test could cover AT ALL.
+
+    The discriminator ``terminal_test_scope`` needs to tell two states
+    apart that ``_map_written_path_to_test_target`` returning ``None``
+    collapses into one: "you forgot to declare a test for this module"
+    and "this row is prose." Only the first is an authoring omission; the
+    second cannot be satisfied by any edit the plan author could make.
+
+    ``.py`` is the sole testable suffix because ``_candidate_test_targets``
+    only ever derives ``tests/test_<stem>.py`` — pytest is the only runner
+    the terminal phase invokes. A non-Python path may still RESOLVE (a data
+    fixture whose driver test is named for it), and that is unaffected:
+    this predicate is consulted only for paths that already mapped to
+    nothing, to decide whether the miss is an omission or a fact about the
+    surface.
+
+    Negative spec: this is NOT a "is this file important" judgment and must
+    never grow a doc/config allowlist. A new suffix belongs here only when
+    ``_candidate_test_targets`` learns to derive a runnable target for it.
+    """
+    return PurePosixPath(path).suffix == ".py"
+
+
 def _map_written_path_to_test_target(
     path: str,
     *,
@@ -540,8 +592,16 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     in the whole spine declares ``writes:`` (AC10). Refuses
     (``NoTestTargetError``) if every declared path maps to no runnable test
     target — a doc-only spine (AC16) satisfies AC10's literal wording while
-    still producing nothing runnable, which is the sharper failure AC16
-    exists to catch; see module docstring.
+    still producing nothing runnable — but ONLY when at least one unmapped
+    path is a testable surface (``_is_testable_surface``), which is what
+    separates an authoring omission from prose. An all-prose spine returns
+    an EMPTY list, and ``emit.compose_script`` omits the terminal phase
+    rather than running it over nothing; see module docstring § The sharp
+    edge AC16 exists for.
+
+    Callers must therefore handle an empty return. It is not an error
+    sentinel and never means "no writes were declared" — that shape raises
+    ``NoWritesDeclaredError`` above and cannot reach here.
 
     NOT the same union as ``commit_pathspec`` — every written path is
     mapped through ``_map_written_path_to_test_target`` first, so a doc or
@@ -585,8 +645,21 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     targets = _dedupe(targets)
 
     if not targets:
-        raise NoTestTargetError(
-            "every written path mapped to no runnable test target, "
-            f"refusing an empty terminal test scope (paths: {unmapped!r})"
+        # `unmapped` empty here means the spine contributed NO written path
+        # at all -- every row declared `writes: []`. That is the zero-
+        # contribution refusal, never "this wave is prose": there is no
+        # surface to call non-testable. Guarding on it keeps the AC16
+        # widening from silently swallowing NoWritesDeclaredError's shape 2.
+        omissions = [path for path in unmapped if _is_testable_surface(path)]
+        if omissions or not unmapped:
+            raise NoTestTargetError(
+                "every written path mapped to no runnable test target, "
+                f"refusing an empty terminal test scope (paths: {unmapped!r}; "
+                f"testable surfaces with no target: {omissions!r})"
+            )
+        _logger.info(
+            "spine writes no testable surface; terminal test scope is "
+            "legitimately empty (paths: %r)",
+            unmapped,
         )
     return targets

@@ -37,13 +37,6 @@ at start_server() time.
 Spec backlink: pln-claude-klabauter-deliverable-spine-fact--cd004e § C2
 Producer contract: coordinator_core/contract/deliverable-rollup-producer-contract.md
 
-Fork-equivalence join (chunk C4c): `_scan_artifacts_by_deliverable_id`'s match predicate
-canonicalizes both the queried `deliverable_id` and each artifact's own frontmatter field
-via `coordinator_core.ops.deliverable_equivalence.canonicalize` before comparing, so a query
-for either leg of a DD#1-declared fork pair returns the union of artifacts under both legs.
-This is a read-time join-key transform only — no frontmatter field or emitted output is ever
-mutated. Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b)
-
 Negative-spec (hard-won):
   - ZERO git subprocess — HARD INVARIANT. This op reads on-disk frontmatter and YAML only.
     It has no staged-index reads to perform. The ``commit.anchors`` git-subprocess carve-out
@@ -86,7 +79,6 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.dag import _parse_frontmatter, _read_meta
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.telemetry import op_latency
@@ -216,13 +208,13 @@ def _reset_central_root_cache() -> None:
 def _central_initiatives_dir(worktree_root: Path) -> Path:
     """Return the initiatives directory for this process, resolving central-state root.
 
-    Purpose: resolves the claude-klabauter central-state root (CLAUDE_KLABAUTER_ROOT env → machine-local
+    Purpose: resolves the claude-klabauter central-state root (COORDINATOR_ENGINE_ROOT env → machine-local
     registry → worktree-local fallback) and returns the initiatives directory path.
     The resolved central root is memoized at module scope so the registry subprocess
     fires at most once per process lifetime (AC10).
 
     Resolution precedence:
-        1. CLAUDE_KLABAUTER_ROOT env var — fast path, subprocess-free.
+        1. COORDINATOR_ENGINE_ROOT env var — fast path, subprocess-free.
         2. machine-local get repos.claude_klabauter — non-git subprocess, env-miss only.
         3. Fallback to worktree-local state/initiatives/ — preserves today's behavior
            for claude-klabauter's own worktree and un-provisioned environments. Emits a WARN
@@ -252,7 +244,7 @@ def _central_initiatives_dir(worktree_root: Path) -> Path:
     if not _CENTRAL_ROOT_WARNED:
         logger.warning(
             "deliverable.rollup: claude-klabauter central-state root is unresolvable "
-            "(CLAUDE_KLABAUTER_ROOT unset and machine-local registry lookup returned None). "
+            "(COORDINATOR_ENGINE_ROOT unset and machine-local registry lookup returned None). "
             "Falling back to worktree-local state/initiatives/ — systemic "
             "misconfiguration may cause initiative FKs to resolve empty for "
             "non-claude-klabauter worktrees. Set COORDINATOR_ENGINE_ROOT or configure repos.claude_klabauter "
@@ -377,18 +369,6 @@ def _scan_artifacts_by_deliverable_id(
     deliverable_id is used ONLY as a comparison value against the parsed frontmatter field —
     it is NEVER used as a path component. Scan roots are hard-coded constants.
 
-    Fork-equivalence join (AC6/AC6b): both the queried ``deliverable_id`` and each
-    artifact's own frontmatter ``deliverable_id`` are canonicalized via
-    ``coordinator_core.ops.deliverable_equivalence.canonicalize`` (fed by
-    ``load_equivalence_map(worktree_root)``, C3b's declared artifact) before comparison.
-    This is a JOIN-KEY TRANSFORM ONLY — the canonicalized value is used solely for the
-    equality check below; the artifact's own frontmatter dict (``fm``, appended to
-    ``matches`` unchanged) is never mutated, and nothing is written back to disk. A query
-    for either leg of a declared fork pair therefore returns the union of artifacts under
-    both legs. A deliverable with no declared equivalence entry canonicalizes to itself,
-    so this is a no-op when the equivalence map is empty (today's raw-comparison behaviour,
-    e.g. before C3b's artifact exists).
-
     NOTE: uses os.walk(onerror=...)/iterdir(), NOT Path.glob()/rglob() — glob()'s
     selector silently swallows PermissionError while walking (an unreadable dir/subtree
     yields an empty iterator, no exception), which would make a blocked scan root
@@ -410,14 +390,6 @@ def _scan_artifacts_by_deliverable_id(
     matches: List[dict] = []
     scan_incomplete = False
 
-    # Fork-equivalence join key (AC6/AC6b): canonicalize the query param ONCE, up front.
-    # Each artifact's own deliverable_id is canonicalized per-artifact below. Both sides
-    # must be canonicalized — canonicalizing only one side makes the join
-    # direction-dependent (a query for the losing leg would match, but a query for the
-    # winning leg would not, or vice versa).
-    equivalence_map = load_equivalence_map(worktree_root)
-    canonical_query_id = canonicalize(deliverable_id, equivalence_map)
-
     def _collect(path: Path) -> None:
         try:
             fm = _read_meta(str(path))
@@ -427,18 +399,14 @@ def _scan_artifacts_by_deliverable_id(
         if not fm:
             return
         # deliverable_id used only as a comparison VALUE — no path construction.
-        # fm itself (the artifact's own frontmatter dict) is never mutated: canonicalize()
-        # is a join-key transform for THIS comparison only, never a field write.
         artifact_did = fm.get("deliverable_id")
         if isinstance(artifact_did, str):
-            canonical_artifact_id = canonicalize(artifact_did.strip(), equivalence_map)
-            if canonical_artifact_id == canonical_query_id:
+            if artifact_did.strip() == deliverable_id:
                 matches.append(fm)
                 return
         # plan_id match arm (C10b leg (c), docs/plans/2026-08-13-spec-backlinks-
         # cite-a-stable-deliverable-id.md): compares the SAME `deliverable_id`
-        # argument against the artifact's own `plan_id` field, RAW (no
-        # canonicalize() — fork-equivalence is a deliverable_id-only concept).
+        # argument against the artifact's own `plan_id` field.
         # `pln-` and `dlv-` mint prefixes are disjoint by construction
         # (bin/mint-deliverable-id / bin/mint-plan-id), so a correctly-minted
         # `dlv-`-shaped query can never match a correctly-minted plan_id
@@ -457,14 +425,12 @@ def _scan_artifacts_by_deliverable_id(
         doc = _read_sizing_yaml(path)
         if not doc:
             return
-        # Same fork-equivalence join + plan_id match-arm shape as `_collect`
-        # above, applied to a whole-document YAML dict instead of a
-        # frontmatter dict — sizings are the one root whose records are not
-        # markdown-fenced.
+        # Same match-arm shape as `_collect` above, applied to a
+        # whole-document YAML dict instead of a frontmatter dict — sizings
+        # are the one root whose records are not markdown-fenced.
         artifact_did = doc.get("deliverable_id")
         if isinstance(artifact_did, str):
-            canonical_artifact_id = canonicalize(artifact_did.strip(), equivalence_map)
-            if canonical_artifact_id == canonical_query_id:
+            if artifact_did.strip() == deliverable_id:
                 matches.append(doc)
                 return
         artifact_pid = doc.get("plan_id")

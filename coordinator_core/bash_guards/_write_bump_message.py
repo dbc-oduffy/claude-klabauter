@@ -149,6 +149,13 @@ Negative-spec:
       RECIPE ON THIS CHANNEL" paragraph). Pinned as a property over all
       four renderers in the test suite, not a single string comparison, so
       a future edit cannot quietly reintroduce the button.
+    - Does NOT cosmetically repair the FOREIGN-class contrast form when
+      `target_repo == session_repo` -- that equality is a classification
+      defect in the CALLER (a same-repo write reached this renderer), and
+      `render_em_message`/`render_subagent_message` render a distinct
+      defect-attribution message instead of a plausible-looking contrast
+      (`_classification_defect_notice`, `state/bug-backlog/2026-08-21-
+      foreign-write-deny-names-the-same-repo-on-both-sides.yaml`).
 """
 
 from __future__ import annotations
@@ -206,6 +213,49 @@ DESTINATION_PUBLISH = "publish"
 #: not a filesystem path this guard could read or test.
 _PUBLISH_DOCTRINE_CITATION = "plugin-extraction-and-distribution.md"
 _PUBLISH_DOCTRINE_SECTION = "Publish-Repo Content Authoring"
+
+#: Bug-backlog pointer for the classification defect below -- a same-repo
+#: write reaching the FOREIGN-class renderer at all. Named once here so
+#: both defect-notice sites cite the identical string (B2, never a second,
+#: independently-typed copy that could drift).
+_CLASSIFICATION_DEFECT_BACKLOG_ENTRY = (
+    "state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-"
+    "on-both-sides.yaml"
+)
+
+
+def _classification_defect_notice(target_repo: str, session_repo: str, report_to: str) -> Optional[str]:
+    """FOREIGN-class contrast-form guard, shared by `render_em_message` and
+    `render_subagent_message`.
+
+    NEGATIVE SPEC: the FOREIGN-class contrast form `(not `{session_repo}`)`
+    is correct ONLY when `target_repo != session_repo` -- that inequality is
+    an INVARIANT this module has always assumed, never checked, of its own
+    two independent parameters (module docstring, "CALLERS RESOLVE THE
+    INPUTS"). A caller that violates it (dispatches a SAME-repo write to
+    this FOREIGN-class renderer) is a CLASSIFICATION DEFECT in the caller,
+    not a message-wording edge case -- see
+    `state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-
+    both-sides.yaml`, filed off a live observed render where both slots of
+    `(not \`X\`)` named the identical path and the "what to do instead" leg
+    carried no information. Cosmetically hiding the degenerate contrast (as
+    a prior draft of this fix did) would make a wrong refusal read cleanly
+    instead of loudly -- worse, because it destroys the only visible
+    evidence that the upstream classifier misfired while the legitimate
+    write stays denied. This function instead renders a DISTINCT
+    defect-attribution message naming the mismatch and pointing at the
+    backlog entry, so the render is loud and the next engineer knows where
+    to look, per `docs/wiki/guard-messaging.md` § Register (one fact, once,
+    plus a terse imperative -- no self-legitimacy, apology, or reassurance
+    wrapper). Returns `None` (render normally) when the invariant holds.
+    """
+    if not target_repo or target_repo != session_repo:
+        return None
+    return (
+        "Coordinator guard — instead: this deny is a classification defect "
+        f"(target equals session repo, `{target_repo}`) — report to {report_to}; "
+        f"see `{_CLASSIFICATION_DEFECT_BACKLOG_ENTRY}`."
+    )
 
 
 def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str:
@@ -296,8 +346,17 @@ def render_em_message(
     unchanged and is the entire message now. `gitdir`/`session_id`/
     `surface` are accepted for call-site parity with `render_bump_message`'s
     single dispatch signature and the sibling subagent-class renderer --
-    none is rendered here."""
+    none is rendered here.
+
+    CLASSIFICATION-DEFECT GUARD (see `_classification_defect_notice`'s own
+    docstring): the `(not `{session_repo}`)` contrast leg below is correct
+    only when `target_repo != session_repo` -- an invariant this function
+    never checked before. When it fails, this renders a distinct
+    defect-attribution message instead of the degenerate contrast."""
     del gitdir, session_id, surface
+    defect = _classification_defect_notice(target_repo, session_repo, "your PM")
+    if defect is not None:
+        return defect
     return (
         "Coordinator guard — instead: check with your PM before writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`). "
@@ -322,8 +381,17 @@ def render_subagent_message(
     CHANNEL NEVER CARRIES THE UNLOCK"). `gitdir`/`session_id`/`surface` are
     accepted for call-site parity with the EM-class renderer and
     `render_bump_message`'s single dispatch signature -- none of the three
-    is rendered here, because none of the three is the reader's to use."""
+    is rendered here, because none of the three is the reader's to use.
+
+    CLASSIFICATION-DEFECT GUARD (see `_classification_defect_notice`'s own
+    docstring): the `(not `{session_repo}`)` contrast leg below is correct
+    only when `target_repo != session_repo` -- an invariant this function
+    never checked before. When it fails, this renders a distinct
+    defect-attribution message instead of the degenerate contrast."""
     del gitdir, session_id, surface
+    defect = _classification_defect_notice(target_repo, session_repo, "the EM that dispatched you")
+    if defect is not None:
+        return defect
     return (
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "

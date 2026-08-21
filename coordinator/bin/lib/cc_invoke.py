@@ -9,14 +9,14 @@ Purpose: spawns `sys.executable -m coordinator_core.invoke <op> <params_json> --
 with a timeout cap; applies a fail-closed timeout/nonzero-exit/empty-stdout ladder,
 then parses the
 {jsonrpc,id,result} envelope that is coordinator_core.invoke's default (non---bare)
-response shape (see DR-215 ref below). On the route() path, CLAUDE_KLABAUTER_ROOT is resolved ONCE via the native
+response shape (see DR-215 ref below). On the route() path, the engine root is resolved ONCE via the native
 _resolve_claude_klabauter_root ladder (env var → pointer file → coordinator_core.engine_root,
 no bash subprocess anywhere) — forwarded to cc_invoke() via _claude_klabauter_root for both the
 find_spec gate and the subprocess env (single resolution source).
 
 Public API:
     resolve_colocated_claude_klabauter_root(script_file) -> str
-        Self-location-first CLAUDE_KLABAUTER_ROOT resolution for a CLI that lives INSIDE the
+        Self-location-first engine-root resolution for a CLI that lives INSIDE the
         engine checkout (coordinator/bin/*.py). Tries Path(script_file)'s
         parents[2] first (probed against coordinator_core/ + pyproject.toml markers);
         falls back to _resolve_claude_klabauter_root()'s machine-local registry ladder only
@@ -47,8 +47,8 @@ Public API:
         (engine rc=2).
 
     route(op, params, repo_root, legacy_fn)
-        State-1 seam-absent (find_spec("coordinator_core.invoke") returns None with CLAUDE_KLABAUTER_ROOT
-        on sys.path) → call and return legacy_fn(). No native spawn attempted.
+        State-1 seam-absent (find_spec("coordinator_core.invoke") returns None with the engine
+        root on sys.path) → call and return legacy_fn(). No native spawn attempted.
         State-2 seam-present → cc_invoke(op, params, repo_root); propagate result or exception.
         Transport failure on the native path → raise (HARD error, never fall to legacy_fn).
 
@@ -280,7 +280,7 @@ def _reset_op_timeout_cache() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLAUDE_KLABAUTER_ROOT resolution — native Python ladder, no bash subprocess.
+# Engine-root resolution — native Python ladder, no bash subprocess.
 # _resolve_claude_klabauter_root() below is a from-scratch reimplementation mirroring
 # coordinator-claude-klabauter-root.sh's four-rung discovery chain; it does not shell out
 # to that script. The bash file remains on disk pending its own delete+repoint
@@ -337,7 +337,7 @@ _REGISTRY_READ_TIMEOUT_TOKEN = "machine-local registry read timed out"
 # `coordinator_engine_root_env_exports` (C10) are the dual-read/dual-write seam
 # for this rename everywhere coordinator_core CAN be imported. This module sits
 # on the far side of the same one-way no-import boundary as
-# `_REGISTRY_READ_TIMEOUT_TOKEN` above (its own CLAUDE_KLABAUTER_ROOT-resolution ladder
+# `_REGISTRY_READ_TIMEOUT_TOKEN` above (its own engine-root-resolution ladder
 # exists to LOCATE coordinator_core in the first place, so it cannot depend on
 # importing coordinator_core.engine_root to do it) — these two literals are
 # duplicated by hand for the same reason, not an oversight.
@@ -472,7 +472,7 @@ def _machine_local_get_in_process(key: str) -> str | None:
 
 
 _CLAUDE_KLABAUTER_ROOT_REMEDIATION = (
-    "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — repos.claude_klabauter is not set.\n"
+    "cc_invoke: cannot resolve the engine root — repos.claude_klabauter is not set.\n"
     "  The machine-local registry has no 'repos.claude_klabauter' entry on this machine.\n"
     "  Remediate (choose one):\n"
     "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
@@ -609,14 +609,14 @@ def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str
     ``_CLAUDE_KLABAUTER_ROOT_REMEDIATION`` told every rung (env, registry, self-location)
     to run `machine-local set repos.claude_klabauter`, which is only the right
     instruction for Rung 2 (the case that text was written for). A bogus
-    `CLAUDE_KLABAUTER_ROOT` (Rung 1) or an unimportable/unstamped self-located checkout
+    `COORDINATOR_ENGINE_ROOT` (Rung 1) or an unimportable/unstamped self-located checkout
     (Rung 3) needs a remedy naming the candidate/source that actually failed,
     not a registry-set instruction unrelated to their problem.
     """
     if source == "machine-local repos.claude_klabauter":
         return _CLAUDE_KLABAUTER_ROOT_REMEDIATION
     return (
-        f"cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT — candidate {candidate!r} (from {source}) "
+        f"cc_invoke: cannot resolve the engine root — candidate {candidate!r} (from {source}) "
         "imported coordinator_core.engine_root but the gated ladder returned no root.\n"
         "  Remediate (choose one):\n"
         f"    Confirm {candidate!r} is a genuine, stamped claude-klabauter checkout.\n"
@@ -629,11 +629,11 @@ def _claude_klabauter_root_gate_empty_remediation(candidate: str, *, source: str
 
 
 def _resolve_engine_root() -> str:
-    """Resolve CLAUDE_KLABAUTER_ROOT natively — no bash subprocess anywhere in the ladder.
+    """Resolve the engine root natively — no bash subprocess anywhere in the ladder.
 
     Resolution order (mirrors coordinator_core.engine_root.coordinator_engine_root,
     the native port of coordinator-claude-klabauter-root.sh):
-      Rung 1:   CLAUDE_KLABAUTER_ROOT already set in environment → CANDIDATE, delegated
+      Rung 1:   COORDINATOR_ENGINE_ROOT already set in environment → CANDIDATE, delegated
                 through the single gated ladder (see "DELEGATION" below) rather
                 than answered directly.
       Rung 1.5: machine-local pointer files → cheap direct file reads, no
@@ -696,7 +696,7 @@ def _resolve_engine_root() -> str:
                 function would otherwise raise. On a stranger's box none of the
                 registry/pointer/env rungs resolve, which is why ~24 of the
                 published-CLI failures this rung fixes were the single message
-                "cc_invoke: cannot resolve CLAUDE_KLABAUTER_ROOT". Its answer is now
+                "cc_invoke: cannot resolve the engine root". Its answer is now
                 DELEGATED (see "DELEGATION" above) rather than returned
                 verbatim — hard constraint 2 (a script run by name must still
                 find its own tree) is preserved because self-location still
@@ -787,7 +787,7 @@ def _resolve_engine_root() -> str:
                     from coordinator_core.engine_root import coordinator_engine_root_with_class
                 except ImportError as exc:
                     raise RuntimeError(
-                        f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                        f"cc_invoke: engine-root candidate {candidate!r} (from {source}) is not "
                         f"a valid claude-klabauter checkout — coordinator_core/engine_root.py under it does "
                         f"not define coordinator_engine_root_with_class "
                         f"(import failed: {exc})"
@@ -810,7 +810,7 @@ def _resolve_engine_root() -> str:
             coordinator_engine_root_with_class = _load_foreign_gate_entry_point(candidate)
             if coordinator_engine_root_with_class is None:
                 raise RuntimeError(
-                    f"cc_invoke: CLAUDE_KLABAUTER_ROOT candidate {candidate!r} (from {source}) is not "
+                    f"cc_invoke: engine-root candidate {candidate!r} (from {source}) is not "
                     f"a valid claude-klabauter checkout — no coordinator_core/*_root.py under it defines "
                     f"a coordinator_*_root_with_class entry point"
                 )
@@ -868,7 +868,7 @@ def _resolve_engine_root() -> str:
 
     # DR-326: engine dispatch resolves to the PUBLISHED build, never to the live
     # working tree. The live tree is reachable here only via Rung 1's explicit
-    # CLAUDE_KLABAUTER_ROOT, which is what "claude-klabauter holds live processes only for testing"
+    # COORDINATOR_ENGINE_ROOT, which is what "claude-klabauter holds live processes only for testing"
     # means in practice. `.claude-klabauter-root` is written by the same install
     # pass that registers the mirror, so its presence IS the dual-boot signal —
     # and reading it costs one more `open()`, honouring the no-subprocess bound
@@ -947,7 +947,7 @@ _resolve_claude_klabauter_root = _resolve_engine_root
 # no-op. Remove it only once no published engine references the old spelling.
 _resolve_claude_klabauter_root = _resolve_claude_klabauter_root
 def resolve_colocated_claude_klabauter_root(script_file: str) -> str:
-    """Resolve CLAUDE_KLABAUTER_ROOT for a CLI that lives INSIDE the engine checkout itself.
+    """Resolve the engine root for a CLI that lives INSIDE the engine checkout itself.
 
     Self-location-first ladder for scripts under coordinator/bin/ (e.g. the
     distill-*.py CLIs): those scripts need to find their OWN repo root, which
@@ -1089,7 +1089,7 @@ def _front_insert_on_path(root: str) -> str:
     The one insert primitive every path-mutating resolver wrapper in this
     module (``ensure_engine_on_path``, ``require_engine_on_path``,
     ``require_colocated_engine_on_path``) calls through, so the front-insert
-    behavior — an explicit ``CLAUDE_KLABAUTER_ROOT`` outranking an ambient editable
+    behavior — an explicit ``COORDINATOR_ENGINE_ROOT`` outranking an ambient editable
     install of ``coordinator_core`` — lives in exactly one place. Returns
     ``root`` unchanged, so callers can end on ``return _front_insert_on_path(root)``.
     """
@@ -1103,7 +1103,7 @@ def ensure_engine_on_path(script_file: str) -> str | None:
 
     The one-line form of the ``resolve → if not in sys.path → insert`` dance
     that was hand-rolled at every engine-touching seam in ``coordinator/bin``.
-    Inserts at the FRONT, so an explicit ``CLAUDE_KLABAUTER_ROOT`` outranks an ambient
+    Inserts at the FRONT, so an explicit ``COORDINATOR_ENGINE_ROOT`` outranks an ambient
     editable install of ``coordinator_core``.
 
     Best-effort by design: returns None instead of raising when every rung
@@ -1135,7 +1135,7 @@ def require_engine_on_path(script_file: str) -> str:
     """Resolve the engine root via ``resolve_engine_root`` and put it on ``sys.path``, fail-loud.
 
     Env-first ladder (``resolve_engine_root``'s own rung order: an existing-directory
-    ``CLAUDE_KLABAUTER_ROOT`` first, then self-location, then the pointer-file/registry rungs) — so
+    ``COORDINATOR_ENGINE_ROOT`` first, then self-location, then the pointer-file/registry rungs) — so
     an explicit operator override outranks self-location here, unlike
     ``require_colocated_engine_on_path`` below.
 
@@ -1156,9 +1156,9 @@ def require_colocated_engine_on_path(script_file: str) -> str:
     Self-location-first ladder: ``resolve_colocated_claude_klabauter_root``'s rung 1 probes
     ``Path(script_file)``'s own ``parents[2]`` as a candidate engine checkout BEFORE
     consulting the environment — while its two-marker probe hits, an explicit
-    ``CLAUDE_KLABAUTER_ROOT`` is never even consulted. Only when that self-location probe misses
+    ``COORDINATOR_ENGINE_ROOT`` is never even consulted. Only when that self-location probe misses
     does resolution fall through to ``_resolve_claude_klabauter_root()``'s ladder, where
-    ``CLAUDE_KLABAUTER_ROOT`` is rung 1.
+    ``COORDINATOR_ENGINE_ROOT`` is rung 1.
 
     Catches NOTHING: a ``RuntimeError`` from ``resolve_colocated_claude_klabauter_root`` (both
     rungs missed) or an ``OSError`` from a filesystem probe along the way propagates
@@ -1383,7 +1383,7 @@ def _locator_axis_export() -> dict[str, str]:
     Spec: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md § C18.
     Axis definition: docs/decisions/DR-326.
 
-    `CLAUDE_KLABAUTER_ROOT` in the child env carries the DISPATCH answer -- which engine
+    `COORDINATOR_ENGINE_ROOT` in the child env carries the DISPATCH answer -- which engine
     executes -- because that is what `_resolve_claude_klabauter_root()` returns and what
     this process is about to run. A grandchild asking the LOCATOR question
     ("where is the source checkout?") reads the same variable and is handed a
@@ -1620,7 +1620,7 @@ def _raise_on_process_failure(
                 it cannot mean it as certainly: the engine demonstrably started (it ran
                 a handler far enough to produce an envelope), so an op merely reporting
                 a module problem of its own lands here too and gets told to go check
-                CLAUDE_KLABAUTER_ROOT. Naming the origin is what lets the operator tell those
+                COORDINATOR_ENGINE_ROOT. Naming the origin is what lets the operator tell those
                 apart instead of chasing an install that is fine.
 
             Narrowing the stdout sniff to remove that false positive was considered and
@@ -1631,7 +1631,7 @@ def _raise_on_process_failure(
             lines = [
                 f"cc_invoke: engine will not import/start (op={op}, rc={rc})",
                 "  ImportError — verify COORDINATOR_ENGINE_ROOT and coordinator_core installation:",
-                f"    engine root={claude_klabauter_root!r}",
+                f"    COORDINATOR_ENGINE_ROOT={claude_klabauter_root!r}",
                 f"    ImportError token seen on: {token_origin}",
             ]
             if token_origin == "stdout":
@@ -1911,7 +1911,7 @@ def cc_invoke(
     `--params-file <path>` for this call convention.
 
     Args:
-        _claude_klabauter_root: already-resolved CLAUDE_KLABAUTER_ROOT (forwarded by route() to avoid a
+        _claude_klabauter_root: already-resolved engine root (forwarded by route() to avoid a
             second resolution on the State-2 path). If None, resolved here via
             _resolve_claude_klabauter_root(). Keyword-only; callers outside route() should omit it.
         _stderr_sink: when provided, the child's captured stderr text is appended to
@@ -2079,7 +2079,7 @@ def cc_invoke_bare(
     with cc_invoke() via _raise_on_process_failure — one ladder, two call conventions.
 
     Args:
-        _claude_klabauter_root: already-resolved CLAUDE_KLABAUTER_ROOT (forwarded by route paths to avoid a
+        _claude_klabauter_root: already-resolved engine root (forwarded by route paths to avoid a
             second resolution). Keyword-only; callers outside a router should omit it.
         _stderr_sink: when provided, the child's captured stderr text is appended to
             this list on the SUCCESS return path if non-empty — same purpose as
@@ -2192,7 +2192,7 @@ def _state1_remediation_message(
 ) -> str:
     """Build the engine-install-specific remediation text for a State-1 (seam-absent) failure.
 
-    Enumerates the four-rung CLAUDE_KLABAUTER_ROOT resolution ladder (mirrors
+    Enumerates the four-rung COORDINATOR_ENGINE_ROOT resolution ladder (mirrors
     _resolve_claude_klabauter_root's own rung order) so an operator sees exactly which
     rung to fix, instead of a bare caller-specific "no fallback wired" message.
 
@@ -2207,7 +2207,7 @@ def _state1_remediation_message(
         return (
             f"cc_invoke: native seam resolution unavailable for op={op!r} — "
             f"{_REGISTRY_READ_TIMEOUT_TOKEN} ({_MACHINE_LOCAL_READ_TIMEOUT_SECS}s bound) "
-            "while resolving CLAUDE_KLABAUTER_ROOT via the machine-local registry, and self-location "
+            "while resolving COORDINATOR_ENGINE_ROOT via the machine-local registry, and self-location "
             "also missed.\n"
             "  This machine's declared load norm is 50-70 concurrent LLM sessions "
             "(CLAUDE.md § Load norm); a subprocess-bounded registry read timing out "
@@ -2215,10 +2215,10 @@ def _state1_remediation_message(
             "  Retry the operation."
         )
     root_line = (
-        f"  CLAUDE_KLABAUTER_ROOT resolved to {attempted_claude_klabauter_root!r} but coordinator_core.invoke "
+        f"  COORDINATOR_ENGINE_ROOT resolved to {attempted_claude_klabauter_root!r} but coordinator_core.invoke "
         "was not importable from it (broken/partial checkout).\n"
         if attempted_claude_klabauter_root
-        else "  CLAUDE_KLABAUTER_ROOT could not be resolved via any rung below.\n"
+        else "  COORDINATOR_ENGINE_ROOT could not be resolved via any rung below.\n"
     )
     return (
         f"cc_invoke: native seam unavailable for op={op!r} — claude-klabauter is a mandatory "
@@ -2252,13 +2252,13 @@ def route(
 ) -> Any:
     """Two-state coordinator_core.invoke router.
 
-    State-1 (seam absent — coordinator_core.invoke not importable via CLAUDE_KLABAUTER_ROOT):
+    State-1 (seam absent — coordinator_core.invoke not importable via the engine root):
         Call legacy_fn(); its return value passes through unchanged on success.
         If legacy_fn() raises, the exception is wrapped in an engine-install-specific
-        remediation RuntimeError (the four-rung CLAUDE_KLABAUTER_ROOT resolution ladder) instead
+        remediation RuntimeError (the four-rung engine-root resolution ladder) instead
         of propagating whatever generic message the caller's legacy_fn happened to
         raise (see _state1_remediation_message). No native spawn attempted either way.
-        Trigger: CLAUDE_KLABAUTER_ROOT unresolvable OR find_spec("coordinator_core.invoke") returns None.
+        Trigger: the engine root is unresolvable OR find_spec("coordinator_core.invoke") returns None.
 
     State-2 (seam present — coordinator_core.invoke importable):
         Call cc_invoke(op, params, repo_root); propagate result or exception.
@@ -2272,7 +2272,7 @@ def route(
         _stderr_sink: forwarded to cc_invoke() unchanged (see its docstring); no effect
             on the State-1/legacy_fn path. Keyword-only; most callers omit it.
     """
-    # Resolve CLAUDE_KLABAUTER_ROOT; unresolvable root → treat as seam-absent (State-1).
+    # Resolve the engine root; unresolvable root → treat as seam-absent (State-1).
     # Rationale: if the registry doesn't know about the engine repo, the seam is definitely absent.
     claude_klabauter_root: str | None
     _registry_read_timed_out = False

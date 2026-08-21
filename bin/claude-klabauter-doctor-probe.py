@@ -10,14 +10,14 @@ DR-215: coordinator_core is a command-type, spawn-per-call engine — no residen
 no UDS server, no MCP shim liveness to check.  All probes in this file are static checks.
 
 Checks — one ProbeResult per registered probe, run in dependency order (which is
-why `run_probes` arranges sys.path and resolves CLAUDE_KLABAUTER_ROOT as unconditional
+why `run_probes` arranges sys.path and resolves COORDINATOR_ENGINE_ROOT as unconditional
 prerequisites before any selection is applied — see `_ensure_core_importable`):
 
-  claude-klabauter.root.resolve    REQUIRED — CLAUDE_KLABAUTER_ROOT resolves via env/machine-local/git-root.
+  claude-klabauter.root.resolve    REQUIRED — COORDINATOR_ENGINE_ROOT resolves via env/machine-local/git-root.
   claude-klabauter.registry.key    REQUIRED (OPTIONAL when machine-local absent) — repos.claude_klabauter
                          registered.  Skipped as advisory when coordinator-claude is not
                          installed (machine-local absent → key not needed).
-  claude-klabauter.core.import     REQUIRED — import coordinator_core succeeds from CLAUDE_KLABAUTER_ROOT.
+  claude-klabauter.core.import     REQUIRED — import coordinator_core succeeds from COORDINATOR_ENGINE_ROOT.
   claude-klabauter.resident.debris REQUIRED — detects stale paths from the retired daemon (INFO
                          when found; PASS when absent).
   claude-klabauter.version.sanity  REQUIRED — coordinator_core version helper resolves; retired
@@ -33,7 +33,7 @@ prerequisites before any selection is applied — see `_ensure_core_importable`)
                          SKIP when no DoE clone exists on this machine).
   claude-klabauter.root.pointer    OPTIONAL — claude-klabauter-root pointer file present at
                          <settings-home>/machine-local/.claude-klabauter-root and matches the resolved
-                         CLAUDE_KLABAUTER_ROOT (DEGRADED, not hard FAIL, on absence/mismatch — without it,
+                         COORDINATOR_ENGINE_ROOT (DEGRADED, not hard FAIL, on absence/mismatch — without it,
                          per-invoke resolution falls back to a bash subprocess with a 5 s
                          timeout on Windows).
   claude-klabauter.invoke.latency  OPTIONAL — measures a single coordinator_core.invoke round-trip
@@ -68,7 +68,7 @@ Negative-spec:
     arbitrary third party); ImportError there degrades to SKIP and never breaks
     module import or any other probe.
   - Does NOT depend on a live coordinator_core process — designed to run when it is dead.
-  - Does NOT hardcode the claude-klabauter root path — resolves via CLAUDE_KLABAUTER_ROOT ladder.
+  - Does NOT hardcode the claude-klabauter root path — resolves via COORDINATOR_ENGINE_ROOT ladder.
   - Does NOT probe a resident UDS service — retired under DR-215 (command-type engine).
   - Does NOT handshake a coordinator-core shim — shim probes retired under DR-215.
 
@@ -308,10 +308,11 @@ def _build_envelope_via_module(
 
 
 # ---------------------------------------------------------------------------
-# CLAUDE_KLABAUTER_ROOT resolution ladder
+# COORDINATOR_ENGINE_ROOT resolution ladder
 #
 # Mirrors coordinator-claude-klabauter-root.sh and coordinator-core-shim._resolve_claude_klabauter_root():
-#   Rung 1 — CLAUDE_KLABAUTER_ROOT env var (caller already exported it)
+#   Rung 1 — COORDINATOR_ENGINE_ROOT env var (falls back to the retired
+#             CLAUDE_KLABAUTER_ROOT name if unset; caller already exported it)
 #   Rung 2 — machine-local get repos.claude_klabauter (authoritative coordinator-side key)
 #   Rung 3 — git-root auto-discovery from this script's bin/ location
 #
@@ -411,7 +412,7 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
 
 
 # ---------------------------------------------------------------------------
-# Probe 1: CLAUDE_KLABAUTER_ROOT resolves
+# Probe 1: COORDINATOR_ENGINE_ROOT resolves
 # ---------------------------------------------------------------------------
 
 
@@ -445,7 +446,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
                 probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
                 status=_BROKEN,
                 detail=(
-                    f"CLAUDE_KLABAUTER_ROOT resolved to {str(root)!r} (via {source}) "
+                    f"COORDINATOR_ENGINE_ROOT resolved to {str(root)!r} (via {source}) "
                     "but path does not exist on disk."
                 ),
                 remediation=(
@@ -460,7 +461,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
                 probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
                 status=_BROKEN,
                 detail=(
-                    f"CLAUDE_KLABAUTER_ROOT={str(root)!r} (via {source}) but coordinator_core/ "
+                    f"COORDINATOR_ENGINE_ROOT={str(root)!r} (via {source}) but coordinator_core/ "
                     "directory absent. Is this the correct claude-klabauter repo root?"
                 ),
                 remediation=(
@@ -473,7 +474,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
             probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
             status=_PASS,
             detail=(
-                f"CLAUDE_KLABAUTER_ROOT={str(root)!r} (resolved via {source}); "
+                f"COORDINATOR_ENGINE_ROOT={str(root)!r} (resolved via {source}); "
                 "coordinator_core/ directory present."
             ),
             remediation="—",
@@ -769,8 +770,8 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
         return _ProbeResult(
             probe=_DIALECT_GUARD_ARMED_PROBE,
             status=_INFO,
-            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
-            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            detail="Probe skipped — COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve COORDINATOR_ENGINE_ROOT first (probe 1 remediation).",
             required=False,
             skipped=True,
         )
@@ -879,8 +880,8 @@ def _run_probe_settings_home_complete(claude_klabauter_root: Path | None) -> _Pr
         return _ProbeResult(
             probe=_SETTINGS_HOME_COMPLETE_PROBE,
             status=_INFO,
-            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
-            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            detail="Probe skipped — COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve COORDINATOR_ENGINE_ROOT first (probe 1 remediation).",
             required=False,
             skipped=True,
         )
@@ -972,7 +973,7 @@ def _run_probe_entrypoints_path_resolved(claude_klabauter_root: Path | None) -> 
     probes' one-oracle-two-consumers shape.
 
     required=False: a resolution failure here means the settings-home `bin/`
-    forwarders (a later install step than CLAUDE_KLABAUTER_ROOT resolution) have not
+    forwarders (a later install step than COORDINATOR_ENGINE_ROOT resolution) have not
     landed yet or PATH has not been refreshed in this shell — a real,
     currently-reachable partial-install state, not a broken engine.
 
@@ -986,8 +987,8 @@ def _run_probe_entrypoints_path_resolved(claude_klabauter_root: Path | None) -> 
         return _ProbeResult(
             probe=_ENTRYPOINTS_PATH_RESOLVED_PROBE,
             status=_INFO,
-            detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
-            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+            detail="Probe skipped — COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve).",
+            remediation="Resolve COORDINATOR_ENGINE_ROOT first (probe 1 remediation).",
             required=False,
             skipped=True,
         )
@@ -1241,7 +1242,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
                 probe=_WORKTREE_BLOAT_PROBE,
                 status=_PASS,
                 detail=(
-                    "Worktree bloat scan skipped — CLAUDE_KLABAUTER_ROOT unresolved "
+                    "Worktree bloat scan skipped — COORDINATOR_ENGINE_ROOT unresolved "
                     "(see claude-klabauter.root.resolve)."
                 ),
                 remediation="—",
@@ -1355,7 +1356,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
                 status=_BROKEN,
                 detail=f"import coordinator_core failed: {exc}",
                 remediation=(
-                    "Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT and contains "
+                    "Verify coordinator_core/ is present in COORDINATOR_ENGINE_ROOT and contains "
                     "__init__.py. See also claude-klabauter.core.import probe."
                 ),
             )
@@ -1479,8 +1480,8 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             return _ProbeResult(
                 probe=_INVOKE_SMOKE_PROBE,
                 status=_INFO,
-                detail="Cannot run invoke smoke — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot run invoke smoke — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -1512,7 +1513,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     "Spawn-per-call dispatch should complete in well under 1 s."
                 ),
                 remediation=(
-                    "Run manually from CLAUDE_KLABAUTER_ROOT: "
+                    "Run manually from COORDINATOR_ENGINE_ROOT: "
                     "python3 -m coordinator_core.invoke ping '{}'. "
                     "Investigate hangs or missing dependencies."
                 ),
@@ -1528,7 +1529,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     f"stderr: {result.stderr.strip()!r}"
                 ),
                 remediation=(
-                    "Run manually from CLAUDE_KLABAUTER_ROOT: "
+                    "Run manually from COORDINATOR_ENGINE_ROOT: "
                     "python3 -m coordinator_core.invoke ping '{}'. "
                     "Verify claude-klabauter.core.import and claude-klabauter.version.sanity probes pass first."
                 ),
@@ -1643,8 +1644,8 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
             return _ProbeResult(
                 probe=_STRATEGIC_DRAFT_STALENESS_PROBE,
                 status=_INFO,
-                detail="Cannot check draft staleness — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check draft staleness — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -1958,8 +1959,8 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
             return _ProbeResult(
                 probe=_VENDOR_DRIFT_PROBE,
                 status=_INFO,
-                detail="Cannot check vendored-schema drift — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check vendored-schema drift — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2140,8 +2141,8 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
             return _ProbeResult(
                 probe=_GENERATOR_STALENESS_PROBE,
                 status=_INFO,
-                detail="Cannot check generator/output staleness — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check generator/output staleness — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2301,8 +2302,8 @@ def _run_probe_commitments_recheck(claude_klabauter_root: Path | None) -> _Probe
             return _ProbeResult(
                 probe=_COMMITMENTS_RECHECK_PROBE,
                 status=_INFO,
-                detail="Cannot recheck cross-repo commitments — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot recheck cross-repo commitments — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2458,8 +2459,8 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
             return _ProbeResult(
                 probe=_EOL_CENSUS_PROBE,
                 status=_INFO,
-                detail="Cannot read the eol.census sentinel — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot read the eol.census sentinel — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2656,8 +2657,8 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
             return _ProbeResult(
                 probe=_EOL_DRIFT_PROBE,
                 status=_INFO,
-                detail="Cannot read the eol.audit_producers sentinel — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot read the eol.audit_producers sentinel — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2840,8 +2841,8 @@ def _run_probe_stable_pid_miss(claude_klabauter_root: Path | None) -> _ProbeResu
             return _ProbeResult(
                 probe=_STABLE_PID_MISS_PROBE,
                 status=_INFO,
-                detail="Cannot check stable_pid capture — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check stable_pid capture — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -2941,7 +2942,7 @@ def _resolve_settings_home() -> Path:
     to HOME, falling back to the platform home directory (expanduser —
     USERPROFILE on Windows, the passwd entry on POSIX), with
     `.coordinator-claude-settings` appended to the fall-back rungs. Reimplemented locally (rather than importing
-    coordinator_core) so this probe works even when CLAUDE_KLABAUTER_ROOT/coordinator_core is unresolved —
+    coordinator_core) so this probe works even when COORDINATOR_ENGINE_ROOT/coordinator_core is unresolved —
     the pointer-presence check must be runnable independent of probe 1's outcome.
     """
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
@@ -3062,9 +3063,9 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
     Checks that the claude-klabauter-root pointer file exists at
     <settings-home>/machine-local/.claude-klabauter-root and that its content matches the
-    resolved CLAUDE_KLABAUTER_ROOT.
+    resolved COORDINATOR_ENGINE_ROOT.
 
-    Rationale (DEC-2, F17): without the pointer, CLAUDE_KLABAUTER_ROOT resolution falls back to a
+    Rationale (DEC-2, F17): without the pointer, COORDINATOR_ENGINE_ROOT resolution falls back to a
     bash subprocess (coordinator-claude-klabauter-root.sh) with a 5 s timeout — on Windows this
     bash-fallback subprocess spawn is the dominant per-invoke latency cost, hanging ~5 s
     on every hook/invoke round-trip when the pointer is absent.
@@ -3084,7 +3085,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
         separate install-time step (gen-claude-klabauter-root-pointer.py, DoE-claude C1b).
       - Does NOT emit BROKEN/hard-fail on absence — a missing pointer degrades
         per-invoke latency, it does not break correctness (the ladder fallback still
-        resolves CLAUDE_KLABAUTER_ROOT, just slowly).
+        resolves COORDINATOR_ENGINE_ROOT, just slowly).
 
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
@@ -3101,13 +3102,13 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 status=_DEGRADED,
                 detail=(
                     f"claude-klabauter-root pointer absent at {str(pointer_path)!r}. Without it, "
-                    "per-invoke CLAUDE_KLABAUTER_ROOT resolution falls back to a bash subprocess "
+                    "per-invoke COORDINATOR_ENGINE_ROOT resolution falls back to a bash subprocess "
                     "with a 5 s timeout — this is the dominant latency cost on Windows "
                     "per-invoke/hook round-trips."
                 ),
                 remediation=(
                     "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to "
-                    f"populate {str(pointer_path)!r} with the resolved CLAUDE_KLABAUTER_ROOT path."
+                    f"populate {str(pointer_path)!r} with the resolved COORDINATOR_ENGINE_ROOT path."
                 ),
                 required=False,
                 data={"pointer_path": str(pointer_path), "present": False},
@@ -3135,7 +3136,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 detail=(
                     f"claude-klabauter-root pointer present at {str(pointer_path)!r} "
                     f"(content: {pointer_content!r}); content-match skipped — "
-                    "CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve)."
+                    "COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve)."
                 ),
                 remediation="—",
                 required=False,
@@ -3159,11 +3160,11 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                     status=_DEGRADED,
                     detail=(
                         f"claude-klabauter-root pointer content {pointer_content!r} does not match "
-                        f"resolved CLAUDE_KLABAUTER_ROOT {resolved_str!r} — stale pointer."
+                        f"resolved COORDINATOR_ENGINE_ROOT {resolved_str!r} — stale pointer."
                     ),
                     remediation=(
                         "Re-run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) "
-                        f"to refresh {str(pointer_path)!r} with the current CLAUDE_KLABAUTER_ROOT."
+                        f"to refresh {str(pointer_path)!r} with the current COORDINATOR_ENGINE_ROOT."
                     ),
                     required=False,
                     data={
@@ -3179,7 +3180,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
             status=_PASS,
             detail=(
                 f"claude-klabauter-root pointer present at {str(pointer_path)!r} and matches "
-                f"resolved CLAUDE_KLABAUTER_ROOT {resolved_str!r}."
+                f"resolved COORDINATOR_ENGINE_ROOT {resolved_str!r}."
             ),
             remediation="—",
             required=False,
@@ -3252,8 +3253,8 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
             return _ProbeResult(
                 probe=probe_id,
                 status=_INFO,
-                detail="Cannot check publish provenance — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check publish provenance — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -3479,8 +3480,8 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
                 status=_INFO,
-                detail="Cannot measure invoke latency — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot measure invoke latency — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=False,
                 skipped=True,
             )
@@ -3667,7 +3668,7 @@ def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
                 ),
                 remediation=(
                     "Install coordinator_core's declared dependencies "
-                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                    "(pip install -e . from COORDINATOR_ENGINE_ROOT), then re-run the doctor probe."
                 ),
                 required=False,
                 skipped=True,
@@ -3935,8 +3936,8 @@ def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResul
             return _ProbeResult(
                 probe=_WARM_RESIDENCY_PROBE,
                 status=_INFO,
-                detail="Cannot check warm residency — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check warm residency — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=True,
                 skipped=True,
             )
@@ -3954,7 +3955,7 @@ def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResul
                 ),
                 remediation=(
                     "Install coordinator_core's declared dependencies "
-                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                    "(pip install -e . from COORDINATOR_ENGINE_ROOT), then re-run the doctor probe."
                 ),
                 required=True,
                 skipped=True,
@@ -3970,7 +3971,7 @@ def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResul
                 probe=_WARM_RESIDENCY_PROBE,
                 status=_INFO,
                 detail=f"coordinator_core.warm not importable: {exc}",
-                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                remediation="Verify coordinator_core/ is present in COORDINATOR_ENGINE_ROOT (see claude-klabauter.core.import probe).",
                 required=True,
                 skipped=True,
             )
@@ -4143,7 +4144,7 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
     clone (`claude_klabauter_root`); the breadcrumb it wrote lives under ITS clone,
     not this one, so resolving `claude_klabauter_root`'s own breadcrumb here would
     silently miss it (the bug this probe existed to fix). `claude_klabauter_root`
-    itself is retained only as the pre-flight "is CLAUDE_KLABAUTER_ROOT resolved at
+    itself is retained only as the pre-flight "is COORDINATOR_ENGINE_ROOT resolved at
     all" gate — it plays no further role once enumeration starts.
 
     PURE LOCAL READ, by design: this probe must not connect to any server
@@ -4202,8 +4203,8 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
             return _ProbeResult(
                 probe=_WARM_GENERATION_PROBE,
                 status=_INFO,
-                detail="Cannot check warm generation skew — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check warm generation skew — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=True,
                 skipped=True,
             )
@@ -4221,7 +4222,7 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
                 ),
                 remediation=(
                     "Install coordinator_core's declared dependencies "
-                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                    "(pip install -e . from COORDINATOR_ENGINE_ROOT), then re-run the doctor probe."
                 ),
                 required=True,
                 skipped=True,
@@ -4234,7 +4235,7 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
                 probe=_WARM_GENERATION_PROBE,
                 status=_INFO,
                 detail=f"coordinator_core.warm not importable: {exc}",
-                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                remediation="Verify coordinator_core/ is present in COORDINATOR_ENGINE_ROOT (see claude-klabauter.core.import probe).",
                 required=True,
                 skipped=True,
             )
@@ -4507,8 +4508,8 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
             return _ProbeResult(
                 probe=_WARM_ROUTE_SHARE_PROBE,
                 status=_DEGRADED,
-                detail="Cannot check warm route share — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                detail="Cannot check warm route share — COORDINATOR_ENGINE_ROOT unresolved; skipping.",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
                 required=True,
                 skipped=True,
             )
@@ -4520,7 +4521,7 @@ def _run_probe_warm_route_share(claude_klabauter_root: Path | None) -> _ProbeRes
                 probe=_WARM_ROUTE_SHARE_PROBE,
                 status=_DEGRADED,
                 detail=f"coordinator_core.telemetry.engine_report not importable: {exc}",
-                remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+                remediation="Verify coordinator_core/ is present in COORDINATOR_ENGINE_ROOT (see claude-klabauter.core.import probe).",
                 required=True,
                 skipped=True,
             )
@@ -4676,8 +4677,8 @@ def _run_probe_warm_roundtrip(
         return _ProbeResult(
             probe=_WARM_ROUNDTRIP_PROBE,
             status=_DEGRADED,
-            detail="Cannot attempt a warm round-trip — CLAUDE_KLABAUTER_ROOT unresolved.",
-            remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+            detail="Cannot attempt a warm round-trip — COORDINATOR_ENGINE_ROOT unresolved.",
+            remediation="Resolve COORDINATOR_ENGINE_ROOT first (see claude-klabauter.root.resolve probe).",
             required=False,
             skipped=True,
         )
@@ -4693,7 +4694,7 @@ def _run_probe_warm_roundtrip(
             probe=_WARM_ROUNDTRIP_PROBE,
             status=_DEGRADED,
             detail=f"coordinator_core.warm.client not importable: {exc}",
-            remediation="Verify coordinator_core/ is present in CLAUDE_KLABAUTER_ROOT (see claude-klabauter.core.import probe).",
+            remediation="Verify coordinator_core/ is present in COORDINATOR_ENGINE_ROOT (see claude-klabauter.core.import probe).",
             required=False,
             skipped=True,
         )
@@ -4805,7 +4806,7 @@ def _load_probe_manifest(claude_klabauter_root: Path | None, step_zero: bool = F
     if not toml_path.exists():
         _detail = (
             f"probe manifest not found at {str(toml_path)!r}; "
-            "verify doctor-probes.toml exists at bin/doctor-probes.toml in CLAUDE_KLABAUTER_ROOT."
+            "verify doctor-probes.toml exists at bin/doctor-probes.toml in COORDINATOR_ENGINE_ROOT."
         )
         _remediation = (
             "Re-run python3 scripts/setup.py or restore bin/doctor-probes.toml "
@@ -5079,7 +5080,7 @@ def run_probes(
         if result is not None:
             results.append(result)
 
-    # Prerequisite 1: CLAUDE_KLABAUTER_ROOT (REQUIRED as a probe, unconditional as a dependency).
+    # Prerequisite 1: COORDINATOR_ENGINE_ROOT (REQUIRED as a probe, unconditional as a dependency).
     # Every other probe takes claude_klabauter_root, so this runs whatever the selection says;
     # only its RESULT is gated.
     known_ids.add(_CLAUDE_KLABAUTER_ROOT_PROBE)
@@ -5110,8 +5111,8 @@ def run_probes(
                 # status is ignored when skipped=True (overridden to DEGRADED by the envelope
                 # builder); _INFO is the least-misleading placeholder.
                 status=_INFO,
-                detail="Probe skipped — CLAUDE_KLABAUTER_ROOT unresolved (see claude-klabauter.root.resolve).",
-                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (probe 1 remediation).",
+                detail="Probe skipped — COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve).",
+                remediation="Resolve COORDINATOR_ENGINE_ROOT first (probe 1 remediation).",
                 skipped=True,
             ))
 
@@ -5736,7 +5737,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Load the probe manifest early — needed for selector validation and
     # cluster enrichment.  Resolves the toml path via claude_klabauter_root (rung 3
-    # auto-discovery used when CLAUDE_KLABAUTER_ROOT env / machine-local are absent).
+    # auto-discovery used when COORDINATOR_ENGINE_ROOT env / machine-local are absent).
     # Exits 2 if the manifest is missing or unparseable.
     # -----------------------------------------------------------------------
     early_root, _ = _resolve_claude_klabauter_root()

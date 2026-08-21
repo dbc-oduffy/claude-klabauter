@@ -202,9 +202,9 @@ from coordinator_core.ops.deliverable_carry import (
     DivergentDeliverableIdError,
     resolve_deliverable_and_initiative,
 )
-from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
+from coordinator_core.sizing_disposition import real_id
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session_baton.store import merge_baton
@@ -1728,15 +1728,12 @@ def _scan_deliverable_collision(
     skipped, not fatal (AC6) -- this scan never raises.
     """
     from coordinator_core.frontmatter.baton_class import canonical_kind
-    from coordinator_core.ops.deliverable_equivalence import canonicalize
 
     if not deliverable_id:
         return None
     handoffs_dir = root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
         return None
-    equivalence_map = load_equivalence_map(root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     excluded: set[Path] = set()
     if exclude_path is not None:
         try:
@@ -1756,7 +1753,7 @@ def _scan_deliverable_collision(
             continue
         if not fm:
             continue
-        if canonicalize(_fm_field(fm, "deliverable_id"), equivalence_map) != canonical_deliverable_id:
+        if _fm_field(fm, "deliverable_id") != deliverable_id:
             continue
         deployment_state = _fm_field(fm, "deployment_state")
         if deployment_state in HANDOFF_TERMINAL_DEPLOYMENT:
@@ -2089,14 +2086,10 @@ def resolve_lineage(
         # decision here has anything to say about them.
         _rungs_diverge_on_deliverable_id = True
         if excise_rung in ("plan_file", "predecessor_file") and _plan_file and _predecessor_file:
-            from coordinator_core.ops.deliverable_equivalence import canonicalize
 
-            _excise_equivalence_map = load_equivalence_map(root)
-            _rungs_diverge_on_deliverable_id = canonicalize(
-                _read_frontmatter_field(_plan_file, "deliverable_id"), _excise_equivalence_map
-            ) != canonicalize(
-                _read_frontmatter_field(_predecessor_file, "deliverable_id"), _excise_equivalence_map
-            )
+            _rungs_diverge_on_deliverable_id = _read_frontmatter_field(
+                _plan_file, "deliverable_id"
+            ) != _read_frontmatter_field(_predecessor_file, "deliverable_id")
         if excise_rung == "plan_file" and _rungs_diverge_on_deliverable_id:
             _plan_file = None
         elif excise_rung == "predecessor_file" and _rungs_diverge_on_deliverable_id:
@@ -2147,7 +2140,6 @@ def resolve_lineage(
             _plan_file,
             _predecessor_file,
             additional_predecessors=_cascade_additional_predecessors,
-            equivalence_map=load_equivalence_map(root),
             predecessor_is_plan_input=_predecessor_plan_input,
         )
         discovery = _discovery_tier[0] if _discovery_tier else "mint"
@@ -2511,12 +2503,21 @@ def resolve_lineage(
         _extra_paths_for_union = lineage["additional_predecessors"] or []
 
         def _ordered_unique(values: list[Optional[str]]) -> Optional[list[str]]:
+            # `real_id`, not bare truthiness: `origin_plan_id` survives
+            # frontmatter parsing as the STRING "null" on 80 live batons, and
+            # "null" is truthy. Without this filter a fan-in whose one
+            # predecessor carries a real plan id and whose other carries the
+            # null sentinel emits `plan_ids: ["null", "pln-real-..."]` -- a
+            # lineage carrier holding a non-id that `sizing_disposition.
+            # cited_plan_fks` reads as a citation. No record has hit that yet
+            # (plan_ids is 0/772), which is exactly why it is cheap to close now.
             seen: set[str] = set()
             ordered: list[str] = []
             for value in values:
-                if value and value not in seen:
-                    seen.add(value)
-                    ordered.append(value)
+                real = real_id(value)
+                if real and real not in seen:
+                    seen.add(real)
+                    ordered.append(real)
             return ordered if len(ordered) >= 2 else None
 
         def _field_for(rel_or_abs_path: Optional[str], field: str) -> Optional[str]:

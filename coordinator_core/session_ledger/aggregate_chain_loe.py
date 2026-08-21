@@ -478,6 +478,51 @@ def parse_session_ledgers(text: str) -> List[Dict[str, str]]:
     return records
 
 
+def unparseable_ledger_rows(text: str) -> List[Dict[str, object]]:
+    """Report the lines inside a ``## Session Ledger`` block that this module's
+    own grammars REJECT — the write-time inverse of ``parse_session_ledgers``.
+
+    ``parse_session_ledgers`` is silent by construction: a row it cannot parse
+    is simply not a record, so a whole chain of malformed rows aggregates to
+    zero LoE while every file still looks well-formed to a reader. That is the
+    2026-08-19 defect the block's own legend comment documents (two consecutive
+    sessions wrote ``0.3d``/``0.05d`` durations against a ``\\d+`` COUNT field;
+    the chain reported ``0 of 1`` sessions with a ledger). The parser is the
+    right owner of that inverse — it defines what actually gets summed, so a
+    caller asking "would this row be silently dropped?" must not re-derive the
+    grammar. `handoff.author_lint` is the first caller.
+
+    Returns one dict per rejected line: ``{line_no (1-based), text}``. Blank
+    lines, HTML comments (the block's own format legend), Field/Value table
+    rows (``|``-prefixed — the second recognized grammar), and separator rows
+    are NOT rejections; they are legal block content that carries no one-line
+    record.
+
+    Negative-spec: does NOT judge an EMPTY ledger block (a freshly scaffolded
+    handoff has one, correctly) and does NOT read the filesystem — text in,
+    findings out.
+    """
+    findings: List[Dict[str, object]] = []
+    in_ledger = False
+    for idx, line in enumerate(text.splitlines(), start=1):
+        if _SESSION_LEDGER_HEADING_RE.match(line):
+            in_ledger = True
+            continue
+        if in_ledger and _ANY_HEADING_RE.match(line):
+            in_ledger = False
+            continue
+        if not in_ledger:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("<!--") or stripped.startswith("|"):
+            continue
+        if _SEPARATOR_ROW_RE.match(stripped):
+            continue
+        if _parse_oneline_row(line) is None:
+            findings.append({"line_no": idx, "text": stripped})
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # dispatched-agents.txt fallback — invoked ONLY when a handoff carries NO
 # ``## Session Ledger`` block at all (e.g. a machine-generated crash-

@@ -830,20 +830,11 @@ def group_stamped_by_deliverable_id(
     through to the untouched session-keyed tiers. Groups are returned sorted
     by id (`""` first) purely for determinism — the order carries no
     meaning, and no group's commit depends on another's.
-
-    Grouping key routed through `canonicalize()` (C6b/AC11): two stamped
-    artifacts carrying a declared fork pair's raw ids now land in the SAME
-    group (one commit) instead of two, which is what the trailer resolver's
-    own now-canonicalized tier 0 would treat as one deliverable anyway.
     """
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    equivalence_map = load_equivalence_map(worktree_root)
     groups: dict[str, list[str]] = {}
     for relpath in stamped_paths:
         deliverable_id = _read_deliverable_id_from_frontmatter(worktree_root / relpath)
-        canonical_id = canonicalize(deliverable_id, equivalence_map) if deliverable_id else deliverable_id
-        groups.setdefault(canonical_id, []).append(relpath)
+        groups.setdefault(deliverable_id, []).append(relpath)
     return [(deliverable_id, groups[deliverable_id]) for deliverable_id in sorted(groups)]
 
 

@@ -3973,7 +3973,6 @@ def _adopt_into_baton(
         # closure is a fact about the JSON record, which is why it rides the
         # `merge_baton` call already being made here rather than promoting the
         # journal into the corpus. The store write is the whole cost.
-        "closed_at": _session_core.now_iso(),
         "closed_into": artifact_path,
     }
     if fm:
@@ -3990,6 +3989,10 @@ def _adopt_into_baton(
                 kwargs["intent"] = intent
 
     try:
+        # Review: reviewer(wsc-slice-5) — now_iso() must be called inside this
+        # try/except, not while building kwargs above, so a future non-trivial
+        # now_iso() can never raise uncaught into brief()'s claim path.
+        kwargs["closed_at"] = _session_core.now_iso()
         merge_baton(sid, cwd=str(repo_root), **kwargs)
     except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
         pass

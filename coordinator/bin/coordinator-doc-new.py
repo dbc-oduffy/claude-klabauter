@@ -1577,10 +1577,12 @@ def _delegate_to_workflow_scaffold() -> None:
     sys.argv args (minus --type)
     are forwarded verbatim to the veneer.
 
-    --repo is injected here (from _current_repo_root()) UNLESS the caller already
-    passed --repo explicitly — the veneer requires --repo but coordinator-doc-new's
-    other scaffolders resolve the repo root implicitly, so this delegate preserves
-    that ergonomic default rather than requiring every caller to pass --repo.
+    --repo is NEVER injected here. workflow.scaffold is a "none"-scoped op, so
+    DR-279 makes the veneer refuse --repo rather than silently no-op it; injecting
+    a resolved repo root (which this delegate did until 2026-08-21) refused every
+    invocation of --type workflow, not just the ones that passed --repo. An
+    explicit --repo from the caller is forwarded unchanged so it meets that
+    refusal, which is DR-279's point.
 
     Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d
     Negative-spec: does NOT parse or validate --name/--phase/--pattern here — the
@@ -1597,16 +1599,6 @@ def _delegate_to_workflow_scaffold() -> None:
         if _idx + 1 < len(passthrough) and passthrough[_idx + 1] == "":
             del passthrough[_idx : _idx + 2]
     passthrough = [a for a in passthrough if a != "--repo="]
-    if "--repo" not in passthrough and not any(a.startswith("--repo=") for a in passthrough):
-        repo_root = _current_repo_root()
-        if repo_root is None:
-            print(
-                "error: --type workflow requires --repo (not inside a git repo; "
-                "could not auto-resolve).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        passthrough = passthrough + ["--repo", repo_root]
     cmd = [sys.executable, delegate] + passthrough
     # Explicit capture-then-forward, not bare stdio inheritance: a parent
     # whose OWN stdout is already a redirected pipe (the common shape for
@@ -2467,9 +2459,50 @@ def _scaffold_spinoff(
         "",
         "<!-- Failure modes a context-less EM might hit. Negative scope. -->",
         "",
+        "## What travels with this spinoff",
+        "",
+        "<!-- Sizings, plans, or components leaving this EM's hands with the -->",
+        "<!-- spinoff. Ask, don't search or guess -- nothing to log? Leave this -->",
+        "<!-- section empty; that absence stays truthful. -->",
+        "",
         *_require_session_ledger_block(),
+        "",
+        _spinoff_marker(today, _authoring_session_value, _display_name),
     ])
     return "\n".join(lines)
+
+
+def _spinoff_marker(
+    created: str, authoring_session: str, display_name: str | None
+) -> str:
+    """Render the trailing ``<!-- spinoff: ... -->`` greppability marker.
+
+    Every fact in this line is already resolved at scaffold time — ``created``
+    is the same value emitted as the ``created:`` frontmatter field,
+    ``authoring_session`` the same value emitted as ``authoring_session:``, and
+    ``display_name`` the same value the ``# minted by`` comment carries. The
+    marker is therefore machine-knowable in full, and stamping it here is R6
+    (`docs/research/spike-verdicts/2026-08-21-ceremony-assemblers-cost-
+    attribution.md` § PM rulings) applied to the authoring surface: facts the
+    machine knows at write time get stamped, only facts the EM alone knows get
+    asked.
+
+    Before 2026-08-21 the hand path retyped this line from
+    `skills/spinoff/SKILL.md` Step 2 while the machine path
+    (`coordinator_core/backlog_grind_assemble/readers_blitz.py`, bug-blitz's
+    `build_spinoff_handoff`) already emitted it programmatically — one chore,
+    two producers, and a measured ZERO consumers across `coordinator_core/`,
+    `coordinator/`, `schemas/`, and the skills tree. Greppability is preserved
+    by keeping the `<!-- spinoff: ` prefix byte-identical to the bug-blitz
+    producer's, so the two paths remain one grep.
+
+    Negative-spec: the `by <who>` slot is the session DISPLAY NAME, never a
+    reconstructed identity — an unresolvable display name degrades to the
+    literal `current EM` (the same words the hand-typed form used) rather than
+    scanning for one. R1: absence is information, never a corpus search.
+    """
+    who = display_name if display_name else "current EM"
+    return f"<!-- spinoff: {created} by {who} during {authoring_session} -->"
 
 
 def _scaffold_roadmap_baton(
@@ -3001,6 +3034,7 @@ def _scaffold_plan(
     deliverable_id: str | None = None,
     initiative: str | None = None,
     sizing_object: str | None = None,
+    problem_set: str | None = None,
 ) -> str:
     """Generate validator-clean plan frontmatter + canonical section skeleton.
 
@@ -3018,9 +3052,19 @@ def _scaffold_plan(
     see main()'s --sizing-object validation block). When omitted, the existing
     commented-optional-key skeleton is left unchanged (no behavior change).
 
+    problem_set, when supplied, is emitted as a real frontmatter key (a ratified
+    problem-set slug, or the literal 'inline') instead of the commented
+    `# problem_set: inline` template line — the DoE census's requested bind to
+    the generic insert_fm_field-plus-a-key shape; no new named op required.
+    When omitted, the existing commented-optional-key skeleton is left
+    unchanged (no behavior change). Unlike sizing_object this is never
+    required — a plan with no ratified problem set simply leaves the
+    placeholder commented.
+
     Spec backlink: docs/plans/2026-06-25-example-initiative-tc-1-records-consolidation.md § C5
     Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D3, C3b
     Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § AC2
+    Spec backlink: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md § C7
     """
     today = _today()
     _pid = _yaml_quote(plan_id) if plan_id else "null"
@@ -3058,7 +3102,17 @@ def _scaffold_plan(
     lines += [
         "# Optional keys — uncomment and fill as needed (promoted de-facto keys, D1):",
         "# scope_mode: additive-only         # planning posture",
-        "# problem_set: inline               # ratified problem-set slug or 'inline'",
+    ]
+    if problem_set:
+        # Real key, only when supplied — mirrors the sizing_object arm above.
+        # No absence-declaration sentinel exists for this field (unlike
+        # sizing_object's "null" convention): problem_set is genuinely
+        # optional, so an unsupplied value simply leaves the commented
+        # template line in place rather than emitting a stamped null.
+        lines.append(f"problem_set: {_yaml_quote(problem_set)}  # ratified problem-set slug or 'inline'")
+    else:
+        lines.append("# problem_set: inline               # ratified problem-set slug or 'inline'")
+    lines += [
         "# predecessor_handoff: state/handoffs/YYYY-MM-DD-<slug>.md",
         "# prerequisite_of: docs/plans/YYYY-MM-DD-<slug>.md",
         "# source_memo: YYYY-MM-DD-<topic>.md",
@@ -4886,6 +4940,20 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--problem-set",
+        dest="problem_set",
+        default=None,
+        metavar="SLUG_OR_INLINE",
+        help=(
+            "(plan) Ratified problem-set slug, or the literal 'inline'. "
+            "When supplied, emitted as a real problem_set frontmatter key in place of "
+            "the commented template line. Optional — omitted leaves the existing "
+            "commented-optional-key skeleton unchanged (no --no-problem-set pairing; "
+            "unlike --sizing-object this key is never required). "
+            "Spec: docs/plans/2026-08-21-engine-half-of-the-roadmap-sprint-spine-split.md § C7"
+        ),
+    )
+    parser.add_argument(
         "--no-sizing-object",
         dest="no_sizing_object",
         action="store_true",
@@ -5984,6 +6052,7 @@ def main() -> None:
             deliverable_id=_resolved_deliverable_id,
             initiative=_resolved_initiative,
             sizing_object="null" if args.no_sizing_object else args.sizing_object,
+            problem_set=args.problem_set,
         )
     elif doc_type == "decision":
         content = _scaffold_decision(title=title, dr_id=_resolved_dr_id)

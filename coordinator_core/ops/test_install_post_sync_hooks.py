@@ -30,6 +30,7 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
     main_post_sync,
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -78,7 +79,7 @@ def _write_stub_gates(fake_bin: Path, exit_map: dict | None = None) -> None:
 
 def _run_hook(hook: Path, cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True
     )
 
 
@@ -187,7 +188,7 @@ def test_override_bypasses_missing_gate_script(tmp_path, monkeypatch):
     env[gate.override_env] = "1"
     hook_path = _hook_paths(meta)[0]
     result = subprocess.run(
-        ["/bin/sh", str(hook_path)], cwd=str(meta), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook_path)], cwd=str(meta), capture_output=True, text=True, env=env
     )
     assert result.returncode == 0
     assert "SKIPPED" in result.stderr

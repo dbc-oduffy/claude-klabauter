@@ -147,6 +147,13 @@ UNDECLARED = _Undeclared()
 # so the filter site never re-spells the literals.
 NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
 
+# The schema's COMPLETE enum -- the closed values plus `open`. Named
+# separately because the two sets answer different questions, and conflating
+# them is what let an unrecognized value dispatch: membership in
+# NON_DISPATCHABLE_DISPOSITIONS answers "is this row done", while membership
+# here answers "is this a disposition at all".
+KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
+
 # external_gate literals per coordinator_core/frontmatter/schemas/
 # plan-tasks.schema.json (external-cross-repo-gate, 1.8.0). Named once here
 # so _has_uncleared_execution_gate never re-spells them.
@@ -220,6 +227,30 @@ class SpineReadError(ValueError):
     Covers every non-LOCATED outcome from ``load_rows`` (ABSENT, MALFORMED)
     — this module does not attempt to emit against a spine it could not
     locate or parse.
+    """
+
+
+class UnknownDispositionError(SpineReadError):
+    """Raised when a row's ``disposition`` is not a value the schema defines.
+
+    The exclusion filter tests membership in
+    ``NON_DISPATCHABLE_DISPOSITIONS``, so before this check every
+    unrecognized value read as dispatchable by falling through it. That is a
+    fail-OPEN on exactly the authoring mistake a reconciliation pass invites:
+    an operator marking finished rows reaches for a plausible word (`done`,
+    `complete`, `shipped`), the schema rejects it, but nothing on the emit
+    path validates and the row dispatches anyway. Observed outcome
+    (example-retrieval-repo-ue-addon, 2026-08-20): a wave map covering already-executed
+    chunks -- a well-intentioned reconciliation landing in the same place as
+    no reconciliation at all, and worse than a stale-but-honest `open`
+    because its author believes it was handled.
+
+    Refusing is deliberate, over treating an unknown value as
+    non-dispatchable. Silently excluding fails CLOSED -- safe for this run,
+    but it drops real work with no signal, and an author who typoed one row
+    would get a quietly narrower wave instead of a correction. The refusal
+    names the row, the value, and the legal set, so the fix is readable off
+    the error rather than out of the schema.
     """
 
 
@@ -465,6 +496,16 @@ def read_spine(plan_path) -> list[EmitterRow]:
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
+        # An absent disposition is `open` per the schema default and is the
+        # ordinary shape -- only a PRESENT, unrecognized value refuses.
+        if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
+            raise UnknownDispositionError(
+                f"row {raw.get('id')!r} has disposition {disposition!r}, which is "
+                "not a value plan-tasks.schema.json defines: refusing rather than "
+                "treating it as dispatchable (legal values: "
+                f"{', '.join(sorted(KNOWN_DISPOSITIONS))}). A row that shipped in "
+                "a commit is 'coded'."
+            )
         # raw.get("id") cannot be None here: the id presence/uniqueness
         # loop above already required every raw["id"] to be a non-empty
         # string before this loop runs. Keep the two loops in that

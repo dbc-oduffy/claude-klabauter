@@ -244,7 +244,6 @@ from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import handoff_claim_dir, main_worktree_root
 from coordinator_core.ops.handoff_children import (
     CONCLUSION_EDGE_KINDS,
@@ -533,22 +532,18 @@ def _deliverable_id_pair(
     close anything — purely a pair-resolution leg, symmetric with
     ``_direct_pair``/``_baton_walk_pair``.
 
-    Join key routed through `canonicalize()` (C6b/AC11) when `worktree` is
-    supplied — a declared fork pair now matches here where raw equality
-    previously missed it. `worktree=None` (unused elsewhere in this module
-    today) preserves raw-equality behaviour, so this stays backward-safe.
+    Join key is raw-string equality.
     """
     if not handoffs_dir.is_dir():
         return None
-    equivalence_map = load_equivalence_map(worktree) if worktree is not None else {}
-    target = canonicalize(deliverable_id, equivalence_map)
+    target = deliverable_id
     for p in sorted(handoffs_dir.glob("*.md")):
         if not p.is_file():
             continue
         meta = _read_meta(str(p))
         if not _is_baton_kind(meta.get("kind")):
             continue
-        if canonicalize(_read_deliverable_id(meta), equivalence_map) != target:
+        if _read_deliverable_id(meta) != target:
             continue
         pair = _read_pair(meta)
         if pair is not None:
@@ -960,11 +955,9 @@ async def _try_close(
             if isinstance(proof_deliverable_id, str)
             else proof_deliverable_id
         )
-        equivalence_map = load_equivalence_map(worktree)
         if (
             stub_deliverable_id is not None
-            and canonicalize(stub_deliverable_id, equivalence_map)
-            == canonicalize(proof_deliverable_id_s, equivalence_map)
+            and stub_deliverable_id == proof_deliverable_id_s
         ):
             proof_applies = True
             close_basis = CLOSE_BASIS_DELIVERY_PROOF

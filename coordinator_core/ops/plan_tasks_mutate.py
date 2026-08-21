@@ -598,10 +598,61 @@ def _untouched_invalid_warnings(untouched_invalid: list) -> list:
     ]
 
 
+class _PlanTasksDumper(yaml.SafeDumper):
+    """SafeDumper subclass carrying the literal-block-scalar `str` representer
+    below. A SUBCLASS, never `yaml.SafeDumper` itself (2026-08-21 fix,
+    row-body-flattening defect) — the engine process is warm and long-lived,
+    and every other op that dumps YAML via the module-level `SafeDumper`
+    shares that same class object; registering a representer on it directly
+    would leak this literal-style choice into every other op's dump calls,
+    not only this one's.
+    """
+
+
+def _plan_tasks_str_representer(dumper: yaml.Dumper, data: str):
+    """Emit any multi-line string (a row's `body:` field, chiefly) as a
+    literal block scalar (`|`) instead of PyYAML's default double-quoted
+    single line with embedded `\\n` escapes (2026-08-21 fix).
+
+    Before this fix, `_dump_rows` re-serialized every row in the spine on
+    EVERY mutation (F1's accepted normalization loss), and PyYAML's default
+    `str` representer picks double-quoted style for any string containing a
+    literal newline. On a multi-paragraph `body:` field that meant a single
+    stamp/resolve call touching one row flattened every OTHER untouched
+    row's `body` into one very long double-quoted line — observed on a real
+    17-row plan as a 297-insertion/629-deletion diff for a one-row edit.
+    Content was never lost (the flattened form round-trips through
+    `safe_load` byte-for-byte-equivalent), but it destroyed line-level
+    diffing and made a 3,000-character row body unreadable as one line —
+    exactly the failure mode this representer exists to remove.
+
+    Falls through to PyYAML's own default scalar style (whichever it picks
+    — plain, single-, or double-quoted) for any string with no embedded
+    newline, so this only ever changes MULTI-LINE strings, never single-line
+    field values. A string containing a newline AND trailing whitespace on
+    some line cannot round-trip as `style='|'` (PyYAML falls back to quoted
+    form itself in that case) — this representer does not special-case that,
+    it relies on PyYAML's own fallback rather than stripping content to
+    force a style.
+    """
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_PlanTasksDumper.add_representer(str, _plan_tasks_str_representer)
+
+
 def _dump_rows(rows: list) -> str:
-    """Re-serialize the row list per the pinned dump options (F1)."""
-    return yaml.safe_dump(
+    """Re-serialize the row list per the pinned dump options (F1).
+
+    Uses `_PlanTasksDumper` (not the bare `yaml.safe_dump`/`SafeDumper`) so a
+    row's `body:` field round-trips as a literal block scalar instead of a
+    flattened, escaped single line — see `_plan_tasks_str_representer`.
+    """
+    return yaml.dump(
         rows,
+        Dumper=_PlanTasksDumper,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,

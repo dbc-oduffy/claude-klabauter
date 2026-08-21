@@ -82,11 +82,16 @@ CLAUDE_HOME_ENV = "CLAUDE_HOME"
 # exports the new name only), so this rung should already be unreachable in
 # practice.
 #
-# CONDITION FOR REMOVING IT -- not a date, a measurement:
-# `coordinator_core.engine_root_census.census()` reporting
-# `evidences_absence: True` over a full window. That verdict became reachable
-# on a cleanly-converged box at ee1ea0f2d9b2 (C24); before that it could never
-# return True and could not have discharged this.
+# CONDITION FOR REMOVING IT -- already met, not a future measurement:
+# C14 item 4 (this rung) was discharged at `02ef8ae9de77` on C23's
+# three-leg ratchet -- zero unexcluded executable read sites, proved as a
+# property of the code by falsification against planted tuple/list/dict
+# shapes. `coordinator_core.engine_root_census.census()` no longer reports
+# a verdict field at all (that field, `evidences_absence`, was removed as
+# part of the same cleanup) -- it reports fallback-read observations only,
+# and no future census reading can discharge this or anything else. Do not
+# wait on a census result before deleting this rung; the discharge already
+# happened.
 COORDINATOR_ENGINE_ROOT_ENV = "COORDINATOR_ENGINE_ROOT"
 CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 

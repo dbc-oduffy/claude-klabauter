@@ -21,9 +21,6 @@ Coverage:
   (j) default_path_helper — default_receipt_path returns expected path shape
   (k) applicable_node_ids — the persisted receipt carries the declared-membership
                             list from ctx.applicable_node_ids (op-spec §3)
-  (l) engine_sha         — the persisted receipt carries resolve_engine_sha() (C2);
-                            covers both the present case and the resolver-returns-
-                            None graceful-absent case at the emit call site
 
 Spec backlink:
   coordinator_core/ops/ceremony/receipt_emit.py
@@ -189,125 +186,6 @@ def test_emit_omits_applicable_node_ids_when_ctx_default_empty(tmp_path: Path) -
     path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
     receipt = read_receipt(path)
     assert receipt["applicable_node_ids"] == []
-
-
-# ---------------------------------------------------------------------------
-# (l) engine_sha — emitted receipt carries the resolved engine self-version (C2)
-# ---------------------------------------------------------------------------
-
-
-def test_emit_persists_engine_sha(tmp_path: Path) -> None:
-    """emit_receipt threads resolve_engine_sha() into the written receipt.
-
-    This test runs inside the real coordinator_core git checkout (not a
-    synthetic tmp_path repo — emit_receipt writes to tmp_path, but
-    resolve_engine_sha() resolves the git dir containing engine_version.py
-    itself via Path(__file__), which is this repo), so the resolved SHA is
-    a real 40-char hex HEAD SHA, not a placeholder.
-    """
-    ctx = _make_ctx(nodes=[make_d_node("step-0")])
-    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
-    receipt = read_receipt(path)
-
-    assert "engine_sha" in receipt
-    assert isinstance(receipt["engine_sha"], str)
-    assert len(receipt["engine_sha"]) == 40
-    assert all(c in "0123456789abcdef" for c in receipt["engine_sha"])
-
-    errors = validate(receipt)
-    assert errors == [], f"Unexpected validation errors: {errors}"
-
-
-def test_emit_omits_engine_sha_when_resolver_returns_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """emit_receipt's own resolve_engine_sha() -> None path is graceful-absent.
-
-    Review: code-reviewer Finding 1 (2026-07-12 engine-sha-receipt-field slice) —
-    test_emit_persists_engine_sha only exercises the present case (this repo's
-    real git checkout); nothing proved the None-return branch propagates through
-    emit_receipt's own call site (as opposed to make_receipt's factory-level
-    handling, which test_receipt_schema.py already covers directly). Monkeypatch
-    the name as imported into receipt_emit's namespace (see
-    `from coordinator_core.engine_version import resolve_engine_sha` at the top
-    of receipt_emit.py) so the None branch is forced regardless of the actual
-    git environment running the test.
-    """
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_sha",
-        lambda: None,
-    )
-    ctx = _make_ctx(nodes=[make_d_node("step-0")])
-    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
-    receipt = read_receipt(path)
-
-    assert "engine_sha" not in receipt
-
-    errors = validate(receipt)
-    assert errors == [], f"Unexpected validation errors: {errors}"
-
-
-# ---------------------------------------------------------------------------
-# engine_dirty — emitted receipt carries the resolved dirty discriminator
-# ---------------------------------------------------------------------------
-
-
-def test_emit_persists_engine_dirty_when_resolver_returns_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """emit_receipt threads resolve_engine_dirty()'s False result through.
-
-    False is a meaningful, real finding ("engine source clean") and must
-    still be emitted — not treated as falsy-omit like engine_sha.
-    """
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
-        lambda: False,
-    )
-    ctx = _make_ctx(nodes=[make_d_node("step-0")])
-    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
-    receipt = read_receipt(path)
-
-    assert "engine_dirty" in receipt
-    assert receipt["engine_dirty"] is False
-
-    errors = validate(receipt)
-    assert errors == [], f"Unexpected validation errors: {errors}"
-
-
-def test_emit_persists_engine_dirty_when_resolver_returns_true(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
-        lambda: True,
-    )
-    ctx = _make_ctx(nodes=[make_d_node("step-0")])
-    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
-    receipt = read_receipt(path)
-
-    assert "engine_dirty" in receipt
-    assert receipt["engine_dirty"] is True
-
-    errors = validate(receipt)
-    assert errors == [], f"Unexpected validation errors: {errors}"
-
-
-def test_emit_omits_engine_dirty_when_resolver_returns_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.receipt_emit.resolve_engine_dirty",
-        lambda: None,
-    )
-    ctx = _make_ctx(nodes=[make_d_node("step-0")])
-    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
-    receipt = read_receipt(path)
-
-    assert "engine_dirty" not in receipt
-
-    errors = validate(receipt)
-    assert errors == [], f"Unexpected validation errors: {errors}"
 
 
 # ---------------------------------------------------------------------------

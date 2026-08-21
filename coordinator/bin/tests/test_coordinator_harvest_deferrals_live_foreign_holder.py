@@ -29,8 +29,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
-
 
 def _script_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coordinator-harvest-deferrals.py")
@@ -49,13 +47,6 @@ def _load_harvest_module():
 @pytest.fixture(scope="module")
 def harvest_mod():
     return _load_harvest_module()
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 _PLAN_BODY = """---

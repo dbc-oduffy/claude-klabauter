@@ -65,13 +65,17 @@ def test_plan_fk_that_resolves_is_execution(tmp_path: Path) -> None:
     assert verdict["warning"] is None
 
 
-def test_plural_plan_ids_resolve_too(tmp_path: Path) -> None:
+def test_plural_plan_ids_never_resolve(tmp_path: Path) -> None:
+    """DR-346 §5 (Correction, C3 2026-08-21): `plan_ids` is a fan-in AUDIT
+    list, never a plan FK -- `cited_plan_fks` no longer joins it at all, so
+    a populated `plan_ids` matching a real on-disk plan still reads unsized
+    (absent, not dangling: the field is never cited, so it never earns a
+    warning either)."""
     _write_plan(tmp_path, "docs/plans/2026-08-20-b.md", "pln-b-123456")
 
     verdict = compute_sizing_disposition(tmp_path, {"plan_ids": ["pln-missing", "pln-b-123456"]})
 
-    assert verdict["value"] == "execution"
-    assert "pln-b-123456" in verdict["basis"]
+    assert verdict == {"value": "unsized", "basis": None, "warning": None}
 
 
 def test_archived_spec_still_resolves(tmp_path: Path) -> None:
@@ -121,10 +125,9 @@ def test_citing_nothing_is_unsized_without_a_warning(tmp_path: Path) -> None:
     "fm,cited",
     [
         ({"origin_plan_id": "pln-nothing-declares-this"}, "origin_plan_id=pln-nothing-declares-this"),
-        ({"plan_ids": ["pln-nothing-declares-this"]}, "plan_ids=pln-nothing-declares-this"),
         ({"sizing_object": "state/sizings/absent.yaml"}, "sizing_object=state/sizings/absent.yaml"),
     ],
-    ids=["origin_plan_id", "plan_ids", "sizing_object"],
+    ids=["origin_plan_id", "sizing_object"],
 )
 def test_dangling_fk_is_unsized_plus_a_named_warning(tmp_path: Path, fm: dict, cited: str) -> None:
     """Non-resolution is the failure mode a key-presence check cannot see.
@@ -384,3 +387,88 @@ def test_a_real_fk_still_resolves(tmp_path: Path) -> None:
 
     assert verdict["value"] == "execution"
     assert "docs/plans/2026-08-20-real.md" in verdict["basis"]
+
+
+# ---------------------------------------------------------------------------
+# sizing_object — Path.__truediv__ does not confine to root
+#
+# `root / sizing_ref` is not a containment check: an ABSOLUTE `sizing_ref`
+# replaces `root` outright, and a `..`-laden relative one walks past it.
+# Either shape lets `sizing_object` name ANY file that happens to exist on
+# disk -- not a sizing artifact at all -- and still earn `sized`, purchasing
+# the same "already routed, do not re-litigate" authorization the null
+# sentinel purchased for `execution`.
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_sizing_object_does_not_escape_root(tmp_path: Path) -> None:
+    """`root / <absolute path>` discards `root` entirely (see
+    `_sizing_object_within_root`'s docstring) -- an absolute `sizing_object`
+    must not be able to name a file outside the repo and still read as
+    `sized`."""
+    outside = tmp_path.parent / "outside-sizing-escape.yaml"
+    outside.write_text("not a sizing object", encoding="utf-8")
+
+    verdict = compute_sizing_disposition(tmp_path, {"sizing_object": str(outside)})
+
+    assert verdict["value"] == "unsized"
+
+
+def test_traversal_sizing_object_does_not_escape_root(tmp_path: Path) -> None:
+    """A relative `sizing_object` laden with `..` must not resolve past
+    `root` either -- containment, not merely "not absolute"."""
+    outside = tmp_path.parent / "outside-sizing-traversal.yaml"
+    outside.write_text("not a sizing object", encoding="utf-8")
+
+    verdict = compute_sizing_disposition(
+        tmp_path, {"sizing_object": f"../{outside.name}"}
+    )
+
+    assert verdict["value"] == "unsized"
+
+
+def test_sizing_object_within_root_still_resolves(tmp_path: Path) -> None:
+    """Negative control -- the containment check must not blunt a genuine
+    in-repo sizing artifact."""
+    _write_sizing(tmp_path, "state/sizings/2026-08-20-o.yaml")
+
+    verdict = compute_sizing_disposition(
+        tmp_path, {"sizing_object": "state/sizings/2026-08-20-o.yaml"}
+    )
+
+    assert verdict["value"] == "sized"
+
+
+# ---------------------------------------------------------------------------
+# `plan_ids` is NOT read as a plan citation -- DR-346 §5 (Correction,
+# 2026-08-21) named the read side as the actual defect: `resolve_lineage`
+# writes `plan_ids` as a fan-in DISAGREEMENT AUDIT (only entered when >=2
+# distinct `origin_plan_id` values are seen across a funnel), never as an FK
+# to follow, and `cited_plan_fks` used to read it as a citation regardless --
+# live, not dormant: 4 of 797 records carried a populated `plan_ids`, and
+# `2026-08-21-guards-under-the-brightline.md` resolved `execution` SOLELY
+# through it with no `origin_plan_id` at all. C3 (2026-08-21) closed the
+# mismatch on the READ side: `cited_plan_fks` now joins `origin_plan_id`
+# only. The two write sites (`resolve_lineage`'s `_ordered_unique` and
+# `baton_assemble/apply.py :: baton-stamp-carried-ids`) both still emit
+# `plan_ids` as a >=2-distinct-id audit trail, now consumed by nothing that
+# treats it as a citation -- see `coordinator_core.baton_assemble.apply.
+# _dispatch_baton_stamp_carried_ids`'s own PLAN_IDS THRESHOLD docstring note
+# for the writer-side half of this fix.
+# ---------------------------------------------------------------------------
+
+
+def test_plan_ids_is_still_read_as_a_citation_dr346(tmp_path: Path) -> None:
+    """DR-346 §5 (Correction, C3 2026-08-21): `plan_ids` is a fan-in audit
+    list, never a plan FK. This test used to pin the DEFECTIVE behaviour
+    (a populated `plan_ids` matching an on-disk plan stamped `execution`)
+    as a tripwire naming exactly what had to change -- it is rewritten here,
+    not deleted, to pin the FIXED behaviour instead: `plan_ids` no longer
+    contributes to `execution` at all, even when it names a real plan and
+    even when `origin_plan_id` is entirely absent, matching the corpus
+    record (`2026-08-21-guards-under-the-brightline.md`) DR-346 named."""
+    _write_plan(tmp_path, "docs/plans/2026-08-20-p.md", "pln-p-123456")
+
+    verdict = compute_sizing_disposition(tmp_path, {"plan_ids": ["pln-p-123456"]})
+
+    assert verdict == {"value": "unsized", "basis": None, "warning": None}

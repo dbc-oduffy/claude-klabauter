@@ -162,6 +162,52 @@ def test_token_never_appears_in_missing_token_exception_text(monkeypatch):
     assert FAKE_TOKEN not in str(excinfo.value)
 
 
+def test_non_loopback_http_url_rejected():
+    with pytest.raises(pt.PublishTransportError, match="refusing scheme"):
+        pt.publish_document(
+            "http://cockpit.example", DOC, opener=_opener_returning(200)
+        )
+
+
+def test_loopback_http_url_accepted():
+    pt.publish_document("http://localhost:9999", DOC, opener=_opener_returning(200))
+    pt.publish_document("http://127.0.0.1:9999", DOC, opener=_opener_returning(200))
+
+
+def test_non_http_scheme_rejected():
+    with pytest.raises(pt.PublishTransportError, match="refusing scheme"):
+        pt.publish_document(
+            "file:///etc/passwd", DOC, opener=_opener_returning(200)
+        )
+
+
+def test_redirect_response_raises_loud_instead_of_following():
+    with pytest.raises(pt.PublishTransportError, match="HTTP 302"):
+        pt.publish_document(
+            "https://cockpit.example",
+            DOC,
+            opener=_opener_raising(
+                urllib.error.HTTPError(
+                    "url", 302, "Found", {"Location": "https://evil.example"}, io.BytesIO()
+                )
+            ),
+        )
+
+
+def test_default_opener_does_not_follow_redirects():
+    handler = pt._NoRedirectHandler()
+    assert (
+        handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example")
+        is None
+    )
+
+
+def test_token_never_appears_in_scheme_rejection_text(monkeypatch):
+    with pytest.raises(pt.PublishTransportError) as excinfo:
+        pt.publish_document("http://cockpit.example", DOC, opener=_opener_returning(200))
+    assert FAKE_TOKEN not in str(excinfo.value)
+
+
 def test_url_and_authorization_header_shape(monkeypatch):
     captured = {}
 
@@ -175,3 +221,26 @@ def test_url_and_authorization_header_shape(monkeypatch):
     assert captured["url"] == "https://cockpit.example" + pt.PUBLISH_PATH
     assert captured["auth"] == f"Bearer {FAKE_TOKEN}"
     assert captured["method"] == "POST"
+
+
+def test_no_opener_is_built_at_import_time():
+    """`build_opener` costs 11.75ms of process time (amortised over 2000
+    calls). This module is eagerly imported via `_EAGER_OP_MODULES`, so
+    building the opener at module scope would spend ~24% of the <50ms
+    warm-engine reach budget at every engine start for a transport that fires
+    twice a day. DR-344. Fails if the lazy seam is hoisted back to module
+    scope.
+    """
+    import importlib
+    import sys
+
+    sys.modules.pop("coordinator_core.ops.emit.publish_transport", None)
+    fresh = importlib.import_module("coordinator_core.ops.emit.publish_transport")
+    assert fresh._DEFAULT_OPENER is None
+
+
+def test_default_opener_is_built_once_and_cached():
+    pt._DEFAULT_OPENER = None
+    first = pt._default_opener()
+    second = pt._default_opener()
+    assert first is second

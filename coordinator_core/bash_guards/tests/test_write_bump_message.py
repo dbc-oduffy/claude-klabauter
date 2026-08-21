@@ -151,6 +151,84 @@ def test_subagent_message_never_contains_the_clear_line(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Classification defect -- `target_repo == session_repo` reaching the
+# FOREIGN-class renderer (state/bug-backlog/2026-08-21-foreign-write-deny-
+# names-the-same-repo-on-both-sides.yaml). Never constructed anywhere else
+# in this suite (every other call site passes the distinct module-level
+# _TARGET_REPO/_SESSION_REPO constants) -- these are the only tests that
+# build the degenerate case at all.
+# ---------------------------------------------------------------------------
+
+#: Any string works here -- `_classification_defect_notice` only compares
+#: `target_repo`/`session_repo` for equality, never resolves either as a
+#: real path. Deliberately NOT a real drive-letter path (would be flagged
+#: by the concrete-path-citation guard for no reason: this repo name is
+#: not read from disk anywhere in this suite).
+_SAME_REPO = "claude-klabauter"
+
+
+def test_em_message_names_defect_not_a_degenerate_contrast_when_repos_match(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_SAME_REPO, _SAME_REPO, gitdir, _SESSION_ID)
+    # The old degenerate form named the same path in both slots of "(not `X`)".
+    assert "(not `%s`)" % _SAME_REPO not in text
+    assert "classification defect" in text
+    assert text.count("`%s`" % _SAME_REPO) == 1
+    assert "state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-both-sides.yaml" in text
+
+
+def test_em_message_defect_notice_still_self_attributes(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_SAME_REPO, _SAME_REPO, gitdir, _SESSION_ID)
+    assert text.startswith("Coordinator guard")
+
+
+def test_em_message_defect_notice_fits_the_prose_cap(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_SAME_REPO, _SAME_REPO, gitdir, _SESSION_ID)
+    measurement = _measure(text)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    assert measurement.over_cap is False
+
+
+def test_subagent_message_names_defect_not_a_degenerate_contrast_when_repos_match(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_subagent_message(
+        _SAME_REPO, _SAME_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
+    )
+    assert "(not `%s`)" % _SAME_REPO not in text
+    assert "classification defect" in text
+    assert text.count("`%s`" % _SAME_REPO) == 1
+    assert "state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-both-sides.yaml" in text
+    assert "report to the EM that dispatched you" in text
+
+
+def test_subagent_message_defect_notice_fits_the_prose_cap(tmp_path):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_subagent_message(
+        _SAME_REPO, _SAME_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
+    )
+    measurement = _measure(text)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    assert measurement.over_cap is False
+
+
+def test_em_message_normal_contrast_unaffected_when_repos_differ(tmp_path):
+    """Non-degenerate case (target != session) must keep rendering the
+    ordinary contrast form, byte-identical to before this fix."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
+    assert "classification defect" not in text
+    assert f"(not `{_SESSION_REPO}`)" in text
+
+
+# ---------------------------------------------------------------------------
 # Agent-class copy -- reads correctly for every agent class that can receive it
 # ---------------------------------------------------------------------------
 

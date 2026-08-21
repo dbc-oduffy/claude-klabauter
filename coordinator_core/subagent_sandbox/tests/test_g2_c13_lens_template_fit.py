@@ -35,6 +35,30 @@ type-specific body, so a lens overwriting the body placeholder can never lose
 the wrapper machine-consumers (doc-handoff, exit-interview harvesting) rely
 on.
 
+Supersession (C2, docs/plans/2026-08-21-the-provisioner-writes-the-sidecar-
+skeleton.md, C1 landed at commit `18246abf4fef`): the "no template variant
+needed" conclusion above is superseded for `coordinator:plan-coverage-checker`
+ONLY. That lens's `plan-coverage-check` sidecar -- reached through the
+plan-derivable leg's lens-wins branch in `provision_report._provision`, only
+when the spawn payload also carries a non-empty `plan_path`, never through the
+ordinary `type` string a caller sets directly -- is no longer a freeform
+placeholder heading a lens is at liberty to replace: its ten `### ` findings
+headings and thirteen-bucket counts line are copied byte-exact from
+DoE-claude's `coordinator/agents/plan-coverage-checker.md` § Sidecar
+Format, and their absence classifies the sidecar DEGRADED rather than merely
+differing from a suggested starting point. The finding above still stands,
+unchanged, for the other four surviving lenses (prior-art-checker,
+external-pattern-checker, docs-checker, enricher) and for
+plan-coverage-checker's own non-plan-derivable dispatch shapes -- this
+supersession is scoped to the one lens-owned template, not a retraction of the
+general finding. `report_type_map`'s `coordinator:plan-coverage-checker` row
+was deliberately NOT changed to reflect this: C1 overrides the template on the
+Claude-klabauter side via the lens-wins leg without asking DoE to update that mapping,
+so `test_g2_lens_still_resolves_to_the_template_this_finding_assumes` below
+still asserts `review-findings` for that row, and does so correctly -- that
+row is read only by the ordinary `type`-string axis this lens's plan-derivable
+dispatch no longer goes through.
+
 Spec backlink: DoE-claude:pln-g2-plan-pipeline-agent-fleet-o-c7c20a, C13
 """
 
@@ -150,3 +174,44 @@ def test_g2_lens_template_wrapper_is_body_independent(
     # carry the placeholder heading this lens's real output replaces --
     # otherwise this test would be checking a wrapper around nothing.
     assert _TEMPLATE_PLACEHOLDER_HEADING[expected_template] in text
+
+
+def test_plan_coverage_check_lens_owned_template_wrapper_is_body_independent() -> None:
+    """C2 re-verification case: the same wrapper invariant
+    `test_g2_lens_template_wrapper_is_body_independent` asserts for the five
+    payload-typed templates above also holds for `plan-coverage-checker`'s
+    now-superseding, lens-owned `"plan-coverage-check"` template (C1) -- the
+    shared frontmatter contract and `## Exit interview` survive intact
+    alongside the bespoke, byte-exact DoE § Sidecar Format body, exactly as
+    they do around every freeform placeholder heading above. Unlike the five
+    `_TEMPLATE_REGISTRY` builders parametrized above, this builder takes
+    `plan_path` as a keyword-only argument (`_build_doc_text`'s `*,
+    plan_path` addition for C1), so it is exercised directly here rather than
+    through the shared parametrize table."""
+    text = _build_doc_text(
+        "coordinator:plan-coverage-checker",
+        "2026-01-01T00:00:00+00:00",
+        "plan-coverage-check",
+        lead_session_id="sess-g2-c13-fit",
+        plan_path="docs/plans/2026-08-21-the-provisioner-writes-the-sidecar-skeleton.md",
+    )
+
+    # Shared frontmatter contract -- template-type independent (same seven
+    # pinned assertions as the parametrized case above).
+    assert "status: open" in text
+    assert "agent_type: coordinator:plan-coverage-checker" in text
+    assert "lead_session_id: sess-g2-c13-fit" in text
+    assert "divergence:\n  diverged: false" in text
+    assert "commits: []" in text
+    assert "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter" in text
+    assert "  gate_kind: none" in text
+
+    # Universal exit interview -- inherited verbatim even by the lens-owned body.
+    assert "## Exit interview" in text
+    assert "What did you have to work out that the brief could have told you?" in text
+
+    # Sanity: the bespoke body this wrapper surrounds is really the
+    # lens-owned skeleton (not the old freeform placeholder), so this test
+    # is checking a wrapper around the actual superseding shape.
+    assert "## Plan Coverage Verification" in text
+    assert "### Missed audit items (no slate entry, no architectural OOS)" in text

@@ -462,48 +462,11 @@ def test_artifact_tier_omits_on_genuinely_divergent_multi_artifact_commit(
     assert f"Session-Id: {_SID}" in joined
 
 
-def test_declared_fork_pair_stamps_a_raw_id_never_the_synthesized_canonical_winner(
-    tmp_path, monkeypatch
-):
-    """C6b/AC11 pin (review-integrator P1, coordinatorcode-reviewer-0f04f47d.md):
-    two staged artifacts carrying a DECLARED fork pair's loser and winner raw
-    ids collapse to one canonical id for the equality check (no
-    DivergentDeliverableIdError), but the trailer this stamps must be a RAW
-    value some staged artifact actually carries -- never the synthesized
-    canonical winner conjured purely by the join. The raw value is chosen
-    deterministically by sorted repo-relative path, so the loser's path
-    (sorted first) always wins here."""
-    from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
-
-    repo = _init_repo(tmp_path)
-    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
-
-    state_dir = repo / "state"
-    state_dir.mkdir(exist_ok=True)
-    (state_dir / "deliverable-equivalence.yaml").write_text(
-        "entries:\n"
-        "  - loser: dlv-loser\n"
-        "    winner: dlv-winner\n"
-        "    adjudicated_at: \"2026-08-10T00:00:00Z\"\n",
-        encoding="utf-8",
-    )
-    _write_handoff(repo, "state/handoffs/aa-loser.md", "dlv-loser")
-    _write_handoff(repo, "state/handoffs/bb-winner.md", "dlv-winner")
-    msg = _msg_file(repo)
-
-    _reset_equivalence_map_cache()
-    try:
-        args = compute_missing_trailer_args(
-            msg,
-            repo,
-            paths=["state/handoffs/aa-loser.md", "state/handoffs/bb-winner.md"],
-        )
-    finally:
-        _reset_equivalence_map_cache()
-
-    joined = " ".join(args)
-    assert "Deliverable-Id: dlv-loser" in joined
-    assert "dlv-winner" not in joined
+# Review: C6b/AC11's declared-fork-pair canonical-join pin (review-integrator
+# P1, coordinatorcode-reviewer-0f04f47d.md) tested `state/deliverable-
+# equivalence.yaml` + canonicalize() -- condemned and collapsed to identity
+# (plan 2026-08-20-the-close-ceremony-stops-paying-for-the-join, F-1); the
+# join this test pinned no longer exists.
 
 
 # ---------------------------------------------------------------------------

@@ -12,15 +12,20 @@ each fail loud and non-zero.
 
 Follows the same injectable-``opener`` convention ``_probe_health`` uses
 (itself mirroring ``warm.client._open_pipe``'s isolated-transport seam):
-``opener`` is a ``urllib.request.urlopen``-shaped callable, defaulting to the
-real one, so this module is testable with no network and no endpoint --
-Cockpit's side of ``/api/emissions/publish`` does not exist yet.
+``opener`` is a ``urllib.request.urlopen``-shaped callable, defaulting to a
+no-redirect opener, so this module is testable with no network and no
+endpoint -- cockpit's side of ``/api/emissions/publish`` does not exist yet.
 
 Negative-spec: no retry, no exception-swallowing anywhere in this module, and
 the bearer token never appears in a raised exception's message or in any log
 output (AC7) -- error text names the failure mode (a status code,
 "connection refused"-shaped text, "timed out", "no publish token
 configured"), never the credential's value.
+
+`base_url`'s scheme is validated (https required, plain http permitted only
+to a loopback host) and 3xx responses are never followed -- both checked
+before the token is read, closing off the two ways the bearer token could
+otherwise leave this module unencrypted or land on an unintended host.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import os
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
 
 from coordinator_core.machine_resolver import registry_get
 
@@ -37,6 +43,8 @@ PUBLISH_TIMEOUT_SECS = 10.0
 
 TOKEN_ENV_VAR = "COCKPIT_EMISSION_PUBLISH_TOKEN"
 TOKEN_REGISTRY_KEY = "cockpit_emission_publish_token"
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class PublishTransportError(RuntimeError):
@@ -47,6 +55,55 @@ class PublishTransportError(RuntimeError):
     mode (status code, reason text, or a fixed "no token configured"
     sentence), regardless of which branch below raises it.
     """
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow any 3xx -- the bearer token must never be resent to
+    a redirect target (a possibly cross-host leak). ``redirect_request``
+    returning ``None`` signals "not handled", which surfaces the 3xx as an
+    `urllib.error.HTTPError` through the normal error path below instead of
+    silently chasing it.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_DEFAULT_OPENER: Any = None
+
+
+def _default_opener() -> Any:
+    """Build the no-redirect opener on first use, never at import.
+
+    ``build_opener`` costs 11.75ms of process time (measured amortised over
+    2000 calls; a single sample reads as one 15.6ms clock tick and is noise).
+    This module is imported eagerly via ``ops/__init__.py::_EAGER_OP_MODULES``,
+    so at module scope that is ~24% of the <50ms warm-engine reach budget paid
+    at every engine start, for a transport that fires twice a day at close
+    cadence. Negative-spec: do not hoist this back to module scope. DR-344.
+    """
+    global _DEFAULT_OPENER
+    if _DEFAULT_OPENER is None:
+        _DEFAULT_OPENER = urllib.request.build_opener(_NoRedirectHandler).open
+    return _DEFAULT_OPENER
+
+
+def _validate_scheme(base_url: str) -> None:
+    """Require `https://`; `http://` is permitted only to a loopback host
+    (`localhost`, `127.0.0.1`, `::1`) so local-dev sinks still work. Anything
+    else -- a non-loopback `http://`, or a non-HTTP scheme -- fails loud
+    before the token is even read (AC7: the token is never at risk of an
+    unencrypted send). Names the offending scheme, never the token.
+    """
+    parsed = urlsplit(base_url)
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    if scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS:
+        return
+    raise PublishTransportError(
+        f"publish failed: refusing scheme {scheme!r} (require https, or http to loopback only)"
+    )
 
 
 def _resolve_token() -> str:
@@ -90,13 +147,19 @@ def publish_document(
     more here than it does for a liveness probe. Returns `None` on any 2xx.
 
     `opener` is an injectable `urllib.request.urlopen`-shaped callable for
-    tests, defaulting to the real one -- mirrors
+    tests, defaulting to a no-redirect opener -- mirrors
     `warm.supervisor._probe_health`'s isolated-transport-seam convention,
     inverted only in failure posture (see module docstring).
+
+    `base_url`'s scheme is validated -- and any redirect response rejected --
+    before the token is read, so a misconfigured plaintext or cross-host
+    sink can never see the bearer token (see `_validate_scheme` and
+    `_NoRedirectHandler`).
     """
+    _validate_scheme(base_url)
     token = _resolve_token()
 
-    open_url = opener if opener is not None else urllib.request.urlopen
+    open_url = opener if opener is not None else _default_opener()
     url = base_url.rstrip("/") + PUBLISH_PATH
     request = urllib.request.Request(
         url,

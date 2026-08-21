@@ -17,6 +17,10 @@ Public surface (pinned contract — do not change without updating consumers):
     class LockTimeout(Exception): ...
     class MutateAbort(Exception): ...
     LOCK_TIMEOUT_SECS: float = 10.0
+    CONTENDED_LOCK_WAIT_SECS: float = 180.0
+    CONTENDED_LOCK_WAIT_ENV: str = "COORDINATOR_LOCK_WAIT_SECS"
+
+    def contended_lock_wait_secs(default: float = CONTENDED_LOCK_WAIT_SECS) -> float: ...
 
     def locked_rmw(
         target: Path,
@@ -268,6 +272,45 @@ _LOCKING_AVAILABLE = _FCNTL_AVAILABLE or _MSVCRT_AVAILABLE
 # ---------------------------------------------------------------------------
 
 LOCK_TIMEOUT_SECS: float = 10.0
+
+#: Default wait for a lock whose holder is *working*, not wedged.
+#:
+#: ``LOCK_TIMEOUT_SECS`` is calibrated for a single-file RMW, where ten
+#: seconds of contention means the holder is stuck. A per-destination publish
+#: lock is the opposite case: the holder legitimately holds it for the length
+#: of a round, and on this box (§ CLAUDE.md, Load norm) peers generate rounds
+#: faster than the lock frees. Timing out at ten seconds there does not
+#: protect anything — it converts one sleeping process into a fresh process
+#: per retry, and process creation is the cost the brightline actually counts
+#: (§ DR-344). Waiting is the cheap half; giving up early is the expensive one.
+CONTENDED_LOCK_WAIT_SECS: float = 180.0
+
+#: Per-invocation override for ``contended_lock_wait_secs()``. Named on the
+#: environment rather than passed down every call chain because the callers
+#: that need to raise it (a session that must land a specific commit in a
+#: mirror) are several process boundaries away from the acquire site.
+CONTENDED_LOCK_WAIT_ENV: str = "COORDINATOR_LOCK_WAIT_SECS"
+
+
+def contended_lock_wait_secs(default: float = CONTENDED_LOCK_WAIT_SECS) -> float:
+    """Resolve the contended-lock wait, honouring ``CONTENDED_LOCK_WAIT_ENV``.
+
+    A malformed or non-positive value falls back to *default* rather than
+    raising: the env var is an operator convenience on a hot path, and a
+    typo in it must not be the reason a publish round refuses to run.
+
+    Negative-spec: does NOT clamp an upper bound. A caller that asks to wait
+    an hour has decided that queueing beats respawning; that is the whole
+    point of the knob.
+    """
+    raw = os.environ.get(CONTENDED_LOCK_WAIT_ENV, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
 
 
 class LockTimeout(Exception):

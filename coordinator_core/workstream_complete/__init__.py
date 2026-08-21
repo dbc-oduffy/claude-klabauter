@@ -239,10 +239,6 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
     SINGLE_SESSION,
     canonicalize,
 )
-from coordinator_core.ops.deliverable_equivalence import (
-    canonicalize as canonicalize_deliverable_id,
-)
-from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
 from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
@@ -1926,12 +1922,9 @@ _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
 def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: str) -> Optional[Path]:
     """Resolves a `kind: session-handoff` baton's `deliverable_id`
     frontmatter to the single `docs/plans/*.md` file whose own frontmatter
-    `deliverable_id` matches it, canonicalizing both sides through the
-    declared-fork equivalence map (`deliverable_equivalence.canonicalize`)
-    — the SAME primary-key join `draft_plan_aging.resolve_plan_owner`
-    performs in the opposite direction (plan -> owning handoff), so a
-    plan/handoff pair split across a declared fork's winner/loser legs
-    still joins here too.
+    `deliverable_id` matches it — the SAME primary-key join
+    `draft_plan_aging.resolve_plan_owner` performs in the opposite direction
+    (plan -> owning handoff).
 
     Returns `None` when no plan carries a matching `deliverable_id`, or
     when more than one does — an ambiguous join is not this function's
@@ -1941,8 +1934,6 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
     plans_dir = root / "docs" / "plans"
     if not plans_dir.is_dir():
         return None
-    equivalence_map = load_equivalence_map(root)
-    canonical_target = canonicalize_deliverable_id(deliverable_id, equivalence_map)
 
     matches: list[Path] = []
     for plan_path in sorted(plans_dir.glob("*.md")):
@@ -1956,7 +1947,7 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
         )
         if not plan_deliverable_id or not isinstance(plan_deliverable_id, str):
             continue
-        if canonicalize_deliverable_id(plan_deliverable_id, equivalence_map) == canonical_target:
+        if plan_deliverable_id == deliverable_id:
             matches.append(plan_path)
 
     if len(matches) != 1:

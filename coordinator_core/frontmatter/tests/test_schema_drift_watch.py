@@ -35,6 +35,7 @@ from coordinator_core.frontmatter.schema_drift_watch import (
     STATUS_MATCH,
     STATUS_UNRESOLVED,
     check_source_drift_advisory,
+    check_source_drift_advisory_batch,
     resolve_doe_repo_path,
     resolve_cockpit_repo_path,
     scan_vendored_schema_drift,
@@ -619,6 +620,85 @@ class TestSourceDriftAdvisory:
             vendored_source_dir / _VENDOR_SOURCE_NAME, fake_cockpit
         )
         assert result["diverged"] is False
+
+
+class TestSourceDriftAdvisoryBatch:
+    """check_source_drift_advisory_batch: the batched primary the per-file seam delegates to.
+
+    The per-file form spawned twice PER FILE — a loop-invariant `foreign_repo_unusable_reason`
+    probe plus a `git show HEAD:<path>` — so a vendored set of N cost 2N processes on a daily
+    cadence surface. These pin the two properties that buy: the process count does not grow with
+    N, and per-entry verdicts survive the batching (one unresolvable file must not blind the
+    rest, and results must stay aligned to their inputs)."""
+
+    @staticmethod
+    def _multi(vendored_source_dir: Path, fake_cockpit: Path) -> list[Path]:
+        """Three vendored files against one cockpit HEAD: match, drift, headerless."""
+        drifted = vendored_source_dir / "drifted.vendor.ts"
+        drifted.write_text(
+            f"// cockpit-source-path: {_COCKPIT_SOURCE_REL_PATH}\n"
+            f"// cockpit-source-pin: deadbeef (test fixture)\n"
+            f"export function mintContributorId(x) {{ return 'MOVED'; }}\n",
+            encoding="utf-8",
+        )
+        headerless = vendored_source_dir / "headerless.vendor.ts"
+        headerless.write_text(_cockpit_upstream_body("SAME"), encoding="utf-8")
+        return [vendored_source_dir / _VENDOR_SOURCE_NAME, drifted, headerless]
+
+    def test_results_align_with_inputs_and_mix_verdicts(
+        self, fake_cockpit: Path, vendored_source_dir: Path
+    ) -> None:
+        paths = self._multi(vendored_source_dir, fake_cockpit)
+        results = check_source_drift_advisory_batch(paths, fake_cockpit)
+
+        assert [r["schema"] for r in results] == [p.name for p in paths]
+        assert (results[0]["diverged"], results[0]["determinate"]) == (False, True)
+        assert (results[1]["diverged"], results[1]["determinate"]) == (True, True)
+        assert (results[2]["diverged"], results[2]["determinate"]) == (False, False), (
+            "an unresolvable header must be indeterminate for THAT entry only"
+        )
+
+    def test_process_count_does_not_grow_with_the_set(
+        self, fake_cockpit: Path, vendored_source_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The amplification property itself, guarded here as well as by the repo-wide
+        collector: comparing three files must cost the same spawns as comparing one."""
+        spawns: list[list[str]] = []
+        real_run = subprocess.run
+
+        def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+            spawns.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", counting_run)
+
+        one = check_source_drift_advisory_batch(
+            [vendored_source_dir / _VENDOR_SOURCE_NAME], fake_cockpit
+        )
+        after_one = len(spawns)
+        three = check_source_drift_advisory_batch(
+            self._multi(vendored_source_dir, fake_cockpit), fake_cockpit
+        )
+
+        assert len(one) == 1 and len(three) == 3
+        assert len(spawns) - after_one == after_one, (
+            f"three files cost {len(spawns) - after_one} spawns against {after_one} for one: "
+            f"{spawns[after_one:]}"
+        )
+
+    def test_empty_set_spawns_nothing(self, fake_cockpit: Path) -> None:
+        assert check_source_drift_advisory_batch([], fake_cockpit) == []
+
+    def test_unreadable_cockpit_repo_is_indeterminate_for_every_entry(
+        self, tmp_path: Path, vendored_source_dir: Path, fake_cockpit: Path
+    ) -> None:
+        results = check_source_drift_advisory_batch(
+            self._multi(vendored_source_dir, fake_cockpit), tmp_path / "not-a-repo"
+        )
+        assert all(r["determinate"] is False for r in results)
+        assert all(r["diverged"] is False for r in results), (
+            "unreadable must never be reported as drift"
+        )
 
 
 class TestCockpitRepoPathResolution:

@@ -482,10 +482,6 @@ def _resolve_deliverable_id_from_paths(
     if not paths:
         return ""
 
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    equivalence_map = load_equivalence_map(Path(cwd))
-
     found: dict[str, str] = {}
     for rel_path in paths:
         full_path = Path(cwd) / rel_path
@@ -493,27 +489,13 @@ def _resolve_deliverable_id_from_paths(
         if deliverable_id:
             found[str(rel_path)] = deliverable_id
 
-    # Divergence join canonicalized (C6b/AC11) -- a declared fork pair
-    # covering the same commit is now the SAME distinct value here, not a
-    # false "differing" refusal. Canonicalization is confined to this
-    # equality check: `found` itself keeps the raw per-path values
-    # (unchanged), AND the value this function
-    # returns on the collapse-to-one path is also always a RAW value that
-    # some staged artifact actually carries -- never the synthesized
-    # canonical winner. Returning the canonical value here would stamp a
-    # `Deliverable-Id:` trailer (this function's return value reaches
-    # `git_native.commit_scoped` two hops up, via `_resolve_deliverable_id`)
-    # that no staged artifact's own frontmatter carries verbatim, which is
-    # exactly the mutation the plan's WRITE-PATH-SITE negative-spec forbids
-    # (review-integrator P1, coordinatorcode-reviewer-0f04f47d.md). When two
-    # or more raw values collapse to one canonical id, the raw value is
+    # When two or more paths carry the same raw value, the raw value is
     # chosen deterministically -- sorted by repo-relative path -- so the
     # same input always yields the same trailer.
-    canonical_by_path = {p: canonicalize(v, equivalence_map) for p, v in found.items()}
-    distinct_canonical = sorted(set(canonical_by_path.values()))
-    if not distinct_canonical:
+    distinct_values = sorted(set(found.values()))
+    if not distinct_values:
         return ""
-    if len(distinct_canonical) == 1:
+    if len(distinct_values) == 1:
         winning_path = min(found)
         return found[winning_path]
 

@@ -29,6 +29,7 @@ from coordinator_core.ops.install_claude_klabauter_precommit_hook import (
     main,
 )
 import coordinator_core.ops.install_claude_klabauter_precommit_hook as _mod
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Declared, not excused: this file behaviorally executes the generated hook body
 # via real `sh` against stub gate scripts, and validates it with `sh -n`, to prove
@@ -77,7 +78,7 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
     )
 
 
@@ -297,12 +298,131 @@ def test_gate_script_arbitrary_nonzero_exit_clamped_to_1(tmp_path, monkeypatch):
     assert result.returncode == 1
 
 
-def test_override_bypasses_a_clamped_gate_failure(tmp_path, monkeypatch):
+def test_transport_failure_exit_2_is_never_overridable(tmp_path, monkeypatch):
+    """2026-08-21 fix: exit 2 is `detect-staged-rollback.py`'s own transport-
+    failure/usage-error code, never a real check finding — it is deliberately
+    ABSENT from `gate.finding_override_env`, so no key (not the rollback key,
+    not the mass-deletion key, not both together) can turn it into a SKIP.
+    Regression guard for the pre-fix shape, where a single flat
+    `gate.override_env` bypassed ANY nonzero `$_gate_rc` including this one."""
     gate = _GATE_REGISTRY[0]
     repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 2})
-    result = _run_hook(_hook_path(repo), repo, extra_env={gate.override_env: "1"})
+    all_keys = {k for keys in gate.finding_override_env.values() for k in keys}
+    result = _run_hook(_hook_path(repo), repo, extra_env={k: "1" for k in all_keys})
+    assert result.returncode == 1
+    assert "BLOCKED" in result.stderr
+    assert "SKIPPED" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Per-check exit-code override scoping — 2026-08-21 fix. Regression coverage
+# for the defect this whole change exists to close: a SINGLE
+# `gate.override_env` used to apply to ANY nonzero `$_gate_rc`, so
+# `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (rollback's own key)
+# silently suppressed a mass-deletion-only BLOCK it never inspected. See
+# `detect_staged_rollback`'s EXIT_* contract: 1 = rollback-only finding,
+# 3 = mass-deletion-only finding, 4 = both, unresolved by their own override.
+# ---------------------------------------------------------------------------
+
+_STAGED_ROLLBACK_KEY = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
+_MASS_DELETION_KEY = "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
+
+
+def test_hook_body_contains_both_keys_each_in_its_own_exit_code_branch():
+    """The defect was invisible to structure-level assertions and only shows
+    in the generated body — assert on generated text, not on `_Gate` fields."""
+    content = _mod._hook_body(_GATE_REGISTRY)
+    rollback_arm = content.split("    1)", 1)[1].split("    3)", 1)[0]
+    mass_arm = content.split("    3)", 1)[1].split("    4)", 1)[0]
+    both_arm = content.split("    4)", 1)[1].split("    *)", 1)[0]
+
+    assert _STAGED_ROLLBACK_KEY in rollback_arm
+    assert _MASS_DELETION_KEY not in rollback_arm
+
+    assert _MASS_DELETION_KEY in mass_arm
+    assert _STAGED_ROLLBACK_KEY not in mass_arm
+
+    assert _STAGED_ROLLBACK_KEY in both_arm
+    assert _MASS_DELETION_KEY in both_arm
+
+
+def test_mass_deletion_only_finding_still_blocks_with_rollback_override_set(tmp_path, monkeypatch):
+    """The exact live defect: an operator with
+    COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK=1 exported (a real,
+    observed habit from prior legitimate revert work) must NOT have that key
+    silently suppress an unrelated mass-deletion-only BLOCK (exit 3) it never
+    inspected."""
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 3})
+    result = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
+    assert result.returncode == 1
+    assert "BLOCKED" in result.stderr
+    assert "SKIPPED" not in result.stderr
+
+
+def test_mass_deletion_only_finding_is_bypassed_by_its_own_key(tmp_path, monkeypatch):
+    """The companion to the test above: COORDINATOR_OVERRIDE_PRECOMMIT_MASS_
+    DELETION actually reaches and honours the mass-deletion-only branch
+    (exit 3) — the key the pre-fix wrapper never even tested."""
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 3})
+    result = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
     assert result.returncode == 0
     assert "SKIPPED" in result.stderr
+
+
+def test_rollback_only_finding_not_bypassed_by_mass_deletion_key(tmp_path, monkeypatch):
+    """Mirror of the mass-deletion test above, for the rollback-only branch
+    (exit 1): the mass-deletion key has no effect on it."""
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 1})
+    result = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
+    assert result.returncode == 1
+    assert "BLOCKED" in result.stderr
+    assert "SKIPPED" not in result.stderr
+
+
+def test_rollback_only_finding_is_bypassed_by_its_own_key(tmp_path, monkeypatch):
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 1})
+    result = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
+    assert result.returncode == 0
+    assert "SKIPPED" in result.stderr
+
+
+def test_both_findings_require_both_keys_together(tmp_path, monkeypatch):
+    """Exit 4 (both a rollback and a mass-deletion finding, per
+    `detect_staged_rollback`'s EXIT_BOTH_FINDINGS) needs BOTH override keys
+    set to skip — either one alone still blocks."""
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 4})
+
+    only_rollback = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
+    assert only_rollback.returncode == 1
+    assert "BLOCKED" in only_rollback.stderr
+
+    only_mass = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
+    assert only_mass.returncode == 1
+    assert "BLOCKED" in only_mass.stderr
+
+    both = _run_hook(
+        _hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1", _MASS_DELETION_KEY: "1"}
+    )
+    assert both.returncode == 0
+    assert "SKIPPED" in both.stderr
+
+
+def test_arbitrary_unmapped_exit_code_blocks_unconditionally(tmp_path, monkeypatch):
+    """A future surprise exit code the registry entry's `finding_override_env`
+    does not name must fail LOUD, never fall through to success — mirrors the
+    transport-failure-2 guard above for a code that isn't even a documented
+    contract value."""
+    gate = _GATE_REGISTRY[0]
+    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 47})
+    all_keys = {k for keys in gate.finding_override_env.values() for k in keys}
+    result = _run_hook(_hook_path(repo), repo, extra_env={k: "1" for k in all_keys})
+    assert result.returncode == 1
+    assert "BLOCKED" in result.stderr
 
 
 def test_hook_body_never_contains_a_bare_exit_dollar_question():
@@ -321,7 +441,9 @@ def test_hook_sh_syntax_is_valid(tmp_path, monkeypatch):
     is itself a way to leak a non-0/1 exit status (a shell parse error is
     commonly exit 2)."""
     repo = _install(tmp_path, monkeypatch)
-    result = subprocess.run(["/bin/sh", "-n", str(_hook_path(repo))], capture_output=True, text=True)
+    result = subprocess.run(
+        [require_sh_interpreter(), "-n", str(_hook_path(repo))], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -333,16 +455,23 @@ def test_hook_always_exits_0_or_1_across_every_branch(tmp_path, monkeypatch):
     gate = _GATE_REGISTRY[0]
     seen_codes = set()
 
-    for exit_map, path_env, extra_env in [
+    for case_index, (exit_map, path_env, extra_env) in enumerate([
         (None, None, None),
         ({gate.filename: 1}, None, None),
         ({gate.filename: 2}, None, None),
         ({gate.filename: 2}, None, {gate.override_env: "1"}),
         (None, "/nonexistent-empty-path-dir", None),
-    ]:
+    ]):
         # Build a fresh throwaway repo per case (can't reuse the same repo
         # root across repeated _install calls within one test).
-        case_root = tmp_path / f"case_{path_env}_{extra_env}_{exit_map}".replace("/", "_")
+        # Index, not a repr of the case tuple: `exit_map`/`extra_env` are dicts
+        # whose repr contains `:` and `'`, neither legal in a Windows path
+        # component (WinError 267). The old form built the name from those
+        # reprs, so this test could only ever run on POSIX -- and it is the
+        # test pinning the 0/1 exit-code clamping contract on the commit hot
+        # path, i.e. exactly the coverage a Windows-first repo cannot afford
+        # to have silently dead. Windows is first-class (CLAUDE.md).
+        case_root = tmp_path / f"case_{case_index}"
         case_root.mkdir(parents=True, exist_ok=True)
         repo = _install(case_root, monkeypatch, exit_map=exit_map)
         result = _run_hook(_hook_path(repo), repo, path_env=path_env, extra_env=extra_env)

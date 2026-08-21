@@ -231,6 +231,279 @@ class TestOversizedFileEditFragments:
         )
 
 
+class TestUnrecognizedCallShapesForfeitConclusive:
+    """Regression pins for a narrowing found in review of ddf8587d7d01.
+
+    ``conclusive`` was computed only from the calls ``_ast_spawn_kind``
+    recognizes, while the leg it retires (``_PY_NO_OP_SUPPRESSION_RE``) is a
+    whole-file search with no shape restriction. A clean recognized call could
+    therefore earn file-wide "I have seen everything" credit and silence a
+    DETACHED_PROCESS carried by an unrecognized call elsewhere in the file —
+    the guard going QUIET where it previously fired, which is the one
+    direction this module's negative-spec forbids.
+    """
+
+    def test_bare_popen_import_with_detached_process_still_fires(self):
+        """The reviewer's exact repro — ordinary style, not adversarial."""
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            "from subprocess import Popen\n"
+            'Popen(["python.exe", "script.py"], creationflags=subprocess.DETACHED_PROCESS)\n'
+        )
+        assert _fires("mixed_shapes.py", content), (
+            "a clean recognized call must not silence a DETACHED_PROCESS "
+            "carried by an unrecognized call shape in the same file"
+        )
+
+    def test_aliased_module_spawn_with_creationflags_forfeits_conclusive(self):
+        content = (
+            "import subprocess as sp\n"
+            "import subprocess\n"
+            'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            'sp.Popen(["python.exe", "s.py"], creationflags=subprocess.DETACHED_PROCESS)\n'
+        )
+        _verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert conclusive is False, (
+            "an aliased-module spawn carrying creationflags is unaccounted for"
+        )
+        assert _fires("aliased.py", content)
+
+    def test_subprocess_call_family_with_literal_creationflags_is_now_conclusive(self):
+        """``subprocess.call``/``check_output`` were outside ``_ast_spawn_kind``
+        at review time, so this exact shape forfeited via the kwarg-keyed
+        branch above rather than being analyzed directly. DR-345 Decision 1
+        (b) (2026-08-21) widened ``_ast_spawn_kind`` to recognize the
+        qualified ``subprocess.call``/``check_call``/``check_output`` forms
+        (``coordinator_core.spawn_policy.spawn_names.SPAWN_NAMES_BY_MODULE``),
+        so a LITERAL ``creationflags=`` keyword on ``check_output`` is now
+        read directly by the RECOGNIZED branch — the call's own
+        ``DETACHED_PROCESS`` reference is inspected and accounted for, so the
+        view is genuinely complete rather than defensively forfeited. This is
+        the strict improvement the widening exists to buy: it fires exactly
+        as before, but now because the AST path SAW it, not because the
+        coarse regex leg caught what an incomplete AST view missed."""
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            'subprocess.check_output(["git", "log"], creationflags=subprocess.DETACHED_PROCESS)\n'
+        )
+        verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_FIRE
+        assert conclusive is True
+        assert _fires("callfamily.py", content)
+
+    def test_dict_literal_splat_on_a_recognized_call_still_forfeits_conclusive(self):
+        """Integration review's counter-repro to the first fix.
+
+        At review time `subprocess.call` was outside `_ast_spawn_kind`'s set,
+        and the `flags = {...}` binding is an `ast.Dict` the Call-only walk
+        never visits — so no literal `creationflags=` keyword existed
+        anywhere for a kwarg-only check to find, and the clean
+        `subprocess.run` above earned conclusiveness on its own while a real
+        DETACHED_PROCESS went silent. Closed by also forfeiting on `**`
+        splats (`kw.arg is None`).
+
+        DR-345 Decision 1 (b) (2026-08-21) since widened `_ast_spawn_kind` to
+        recognize the qualified `subprocess.call` form — this exact repro now
+        forfeits via the RECOGNIZED branch's own `has_splat` check instead of
+        the `kind is None` branch, since `subprocess.call` is recognized. The
+        verdict (still forfeits, still fires) is unchanged; only the
+        accounting PATH is. A splat is never resolved to a literal value
+        regardless of which branch handles it, so widening call-name
+        recognition alone was never going to close this one — named here so
+        a future reader does not expect it to.
+        """
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["notepad.exe"],\n'
+            '    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))\n'
+            'flags = {"creationflags": subprocess.DETACHED_PROCESS}\n'
+            'subprocess.call(["cmd.exe", "/c", "dir"], **flags)\n'
+        )
+        _verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert conclusive is False, (
+            "a dict-literal splat on an unrecognized call must forfeit "
+            "conclusiveness — it can convey creationflags invisibly"
+        )
+        assert _fires("dictsplat.py", content)
+
+    def test_flag_passed_positionally_to_a_wrapper_forfeits_conclusive(self):
+        """The structural close: a no-op flag REFERENCE the walk never
+        inspected forfeits conclusiveness, whatever syntax carries it.
+
+        This case has no `creationflags` kwarg and no `**` splat anywhere — the
+        flag is handed positionally to an unrecognized callable — so both
+        earlier kwarg/splat-shaped fixes missed it. Keyed on the AST identifier
+        rather than on text, which is what lets it coexist with
+        `test_a_mere_mention_no_longer_condemns_a_clean_call_site`.
+        """
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["notepad.exe"],\n'
+            '    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))\n'
+            "def my_popen(argv, cflags):\n"
+            "    return _do_spawn(argv, cflags)\n"
+            'my_popen(["cmd.exe", "/c", "dir"], subprocess.DETACHED_PROCESS)\n'
+        )
+        _verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert conclusive is False
+        assert _fires("wrapper.py", content)
+
+    def test_noop_flag_identifier_sets_stay_in_lockstep(self):
+        """`_AST_NO_OP_FLAG_NAMES` and `_PY_NO_OP_SUPPRESSION_RE` are one list
+        in two spellings — a spelling added to one alone is invisible to the
+        other, the same drift hazard the console-target lockstep test pins."""
+        for name in guard._AST_NO_OP_FLAG_NAMES:
+            assert guard._PY_NO_OP_SUPPRESSION_RE.search(name), (
+                f"{name} forfeits conclusiveness but is invisible to the regex"
+            )
+
+    def test_unrecognized_call_without_creationflags_does_not_forfeit(self):
+        """The forfeit is keyed on the kwarg, so ordinary unrelated calls do
+        not gratuitously destroy conclusiveness — otherwise the mirror-defect
+        fix (a prose mention no longer condemning a clean file) would be dead
+        in every real module."""
+        content = (
+            "import subprocess\n"
+            'print("hello")\n'
+            "len([1, 2, 3])\n"
+            'subprocess.run(["git", "push"], creationflags=0x08000000)\n'
+        )
+        _verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert conclusive is True
+        assert not _fires("ordinary.py", content)
+
+
+class TestSpawnKindRecognizesTheWidenedUniverse:
+    """DR-345 Decision 1 (b) (2026-08-21): `_ast_spawn_kind` now positively
+    recognizes the full qualified-attribute spawn universe in
+    `coordinator_core.spawn_policy.spawn_names.SPAWN_NAMES_BY_MODULE`, not
+    only `subprocess.run`/`Popen`/`os.system`/the two `asyncio` forms it
+    recognized before. Before this widening, none of the four forms below
+    were visible to EITHER detector -- outside `_PY_SUBPROCESS_CALL_RE`'s
+    alternation AND outside `_ast_spawn_kind`'s old recognized set -- so an
+    unsuppressed console-target call through any of them evaded the guard
+    entirely. Each case here fires on the AST path directly (`_AST_FIRE`),
+    not via the regex fallback, proving the precise detector -- not just the
+    coarse one -- now sees these forms."""
+
+    def test_subprocess_call_console_target_now_fires(self):
+        content = 'import subprocess\nsubprocess.call(["cmd.exe", "/c", "dir"])\n'
+        verdict, _conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_FIRE
+        assert _fires("bare_call.py", content)
+
+    def test_subprocess_check_call_console_target_now_fires(self):
+        content = 'import subprocess\nsubprocess.check_call(["git", "push"])\n'
+        verdict, _conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_FIRE
+        assert _fires("bare_check_call.py", content)
+
+    def test_subprocess_check_output_console_target_now_fires(self):
+        content = 'import subprocess\nsubprocess.check_output(["python.exe", "-V"])\n'
+        verdict, _conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_FIRE
+        assert _fires("bare_check_output.py", content)
+
+    def test_os_popen_console_target_now_fires(self):
+        """`os.popen`, like `os.system`, carries no `creationflags` parameter
+        at all -- unsuppressable by construction, same as `os.system`."""
+        content = 'import os\nos.popen("git status")\n'
+        verdict, _conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_FIRE
+        assert _fires("bare_popen.py", content)
+
+    def test_suppressed_call_family_forms_stay_clean(self):
+        content = (
+            "import subprocess\n"
+            'subprocess.call(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            'subprocess.check_call(["git", "push"], creationflags=0x08000000)\n'
+            'subprocess.check_output(["python.exe", "-V"], creationflags=0x08000000)\n'
+        )
+        verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_CLEAN
+        assert conclusive is True
+        assert not _fires("suppressed_call_family.py", content)
+
+
+class TestKnownResidueSurvivesWideningB:
+    """DR-345 Decision 1 (b) (2026-08-21) widened `_ast_spawn_kind` to the
+    full `SPAWN_NAMES_BY_MODULE` universe (see `TestSpawnKindRecognizesTheWidenedUniverse`
+    below). That widening closes the shapes where an unrecognized CALLEE was
+    the only reason a no-op flag reference went unaccounted. It does NOT, and
+    per its own module docstring negative-spec CANNOT, close a shape whose
+    defect is upstream of call-name recognition: the closing sweep in
+    `_analyze_py_call_sites` matches a no-op flag by its literal AST
+    IDENTIFIER (`ast.Attribute.attr` / `ast.Name.id`), never by resolving
+    what that identifier is bound to. Both cases below still forfeit-should
+    (should report non-conclusive) but do not, because the flag never reaches
+    the sweep under either of its own real names. Pinned here as an accepted,
+    documented gap (module negative-spec, "KNOWN RESIDUE") rather than left
+    silently rediscoverable -- these tests exist to FAIL loudly if a future
+    change accidentally starts relying on `conclusive` being correct in
+    either shape, and to stop a future reader from re-attempting (b) to close
+    them, since (b) cannot.
+    """
+
+    def test_import_alias_of_a_no_op_flag_is_not_seen_by_the_sweep(self):
+        """`from subprocess import DETACHED_PROCESS as DP` then
+        `my_popen(argv, DP)` -- confirmed hole, round 3 integration review.
+        The literal text `DETACHED_PROCESS` is still present (on the import
+        line), so the file-wide regex leg WOULD catch this were it not gated
+        behind `not ast_conclusive` -- and `ast_conclusive` is falsely True,
+        so the correct verdict is computed by the regex and then discarded.
+        `my_popen` is an ordinary, non-adversarial wrapper shape."""
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            "from subprocess import DETACHED_PROCESS as DP\n"
+            "def my_popen(argv, cflags):\n"
+            "    return _do_spawn(argv, cflags)\n"
+            'my_popen(["python.exe", "script.py"], DP)\n'
+        )
+        verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_CLEAN
+        assert conclusive is True, (
+            "documents the residue: the AST view falsely reports conclusive "
+            "-- an aliased DETACHED_PROCESS reference is invisible to the "
+            "identifier sweep, which was never widened by (b)"
+        )
+        assert not _fires("import_alias_residue.py", content), (
+            "documents the residue: this DETACHED_PROCESS use goes entirely "
+            "unreported -- the regex leg's own correct verdict is discarded "
+            "because ast_conclusive is falsely True"
+        )
+
+    def test_getattr_by_string_flag_lookup_is_not_seen_by_the_sweep(self):
+        """`x = getattr(subprocess, "DETACHED_PROCESS", 0)` then
+        `my_popen(argv, x)` -- confirmed hole, round 3 integration review.
+        The flag name is an `ast.Constant` string, invisible to the sweep's
+        `Attribute`/`Name` `isinstance` branches; the use-site identifier
+        `x` carries no flag-shaped name either. `getattr`-by-name is
+        ordinary style, not an adversarial construction."""
+        content = (
+            "import subprocess\n"
+            'subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)\n'
+            'x = getattr(subprocess, "DETACHED_PROCESS", 0)\n'
+            "def my_popen(argv, cflags):\n"
+            "    return _do_spawn(argv, cflags)\n"
+            'my_popen(["python.exe", "script.py"], x)\n'
+        )
+        verdict, conclusive = guard._analyze_py_call_sites(content)
+        assert verdict == guard._AST_CLEAN
+        assert conclusive is True, (
+            "documents the residue: the AST view falsely reports conclusive "
+            "-- a getattr-by-string flag lookup is invisible to the "
+            "identifier sweep, which was never widened by (b)"
+        )
+        assert not _fires("getattr_flag_residue.py", content), (
+            "documents the residue: this DETACHED_PROCESS use goes entirely "
+            "unreported -- the regex leg's own correct verdict is discarded "
+            "because ast_conclusive is falsely True"
+        )
+
+
 class TestAnalyzerContract:
     """Direct assertions on the analyzer's own two-value contract."""
 

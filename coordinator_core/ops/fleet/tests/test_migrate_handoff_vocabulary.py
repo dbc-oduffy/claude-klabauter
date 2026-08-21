@@ -11,18 +11,7 @@ from pathlib import Path
 import pathlib
 import pytest
 
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from coordinator_core.ops.fleet import migrate_handoff_vocabulary as mig
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    """``load_equivalence_map`` memoizes per-process (deliverable_equivalence.py's
-    documented pytest caveat) — reset before AND after every test in this module
-    so one test's equivalence-map resolution never leaks into the next."""
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 def _write(path: Path, text: str) -> None:
@@ -482,84 +471,13 @@ def test_deliverable_id_join_resolves_roadmap_stub_to_execution_baton(tmp_path: 
     assert any("rung: deliverable_id-join" in c for c in stub_rec["changes"])
 
 
-def test_deliverable_id_join_fires_across_declared_fork_pair_via_canonicalize(
-    tmp_path: Path,
-) -> None:
-    """AC6b (second half): sat-01's declared fork pair — ``dlv-sat-01`` (winner)
-    and ``dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc`` (loser), per
-    ``state/audits/2026-08-01-deliverable-id-fork-population-itemized.md`` row 4
-    — must join ACROSS the pair once canonicalized, even though the two legs
-    carry genuinely different raw deliverable_id strings.
-
-    Proves the pre-fix behaviour actually changes: the identical fixture,
-    planned with NO equivalence artifact on disk (today's raw-comparison
-    behaviour — every id canonicalizes to itself), falls through all three
-    rungs to closed+stale, exactly the audit's "disabled by the condition it
-    exists to handle" diagnosis. Only once ``state/deliverable-equivalence.yaml``
-    declares the fork does the SAME join fire and flip the verdict to
-    continued — a test passing both before and after the fix would prove
-    nothing.
-    """
-    root = _handoffs(tmp_path)
-    stub = root / "state" / "handoffs" / "2026-07-17_160000_roadmap-sat-01.md"
-    _write(stub, (
-        "---\ntitle: stub\nkind: spinoff-roadmap\nstatus: consumed\n"
-        "deployment_state: abandoned\ndeliverable_id: dlv-sat-01\n"
-        "consumed_at: '2026-07-17T16:00:00Z'\nconsumed_by: sess-a\n---\nBody.\n"
-    ))
-    baton = root / "state" / "handoffs" / "2026-07-28_114251_execute-sat-01.md"
-    _write(baton, (
-        "---\ntitle: baton\nkind: session-handoff\nstatus: open\n"
-        "deployment_state: in_flight\n"
-        "deliverable_id: dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc\n"
-        "handoff_id: hnd-execute-sat-01\n---\nBody.\n"
-    ))
-
-    # Pre-fix control: no declared equivalence entry on disk — every id
-    # canonicalizes to itself, matching today's raw-comparison behaviour. The
-    # join must NOT fire across the fork, and the stub falls to closed+stale.
-    pre_fix_plan = mig.plan_migration(str(root))
-    assert not pre_fix_plan["failures"]
-    pre_fix_recs = {r["path"]: r for r in pre_fix_plan["records"]}
-    pre_fix_text = pre_fix_recs["state/handoffs/2026-07-17_160000_roadmap-sat-01.md"]["_rebuilt"]
-    assert "deployment_state: closed" in pre_fix_text
-    assert "closed_reason: stale" in pre_fix_text
-    assert "continued_into" not in pre_fix_text
-
-    _reset_equivalence_map_cache()
-
-    # Declare the fork (winner: dlv-sat-01, loser: the -locke-02c8bc leg) and
-    # re-plan the identical fixture — the join must now fire across the pair.
-    equivalence_artifact = root / "state" / "deliverable-equivalence.yaml"
-    equivalence_artifact.parent.mkdir(parents=True, exist_ok=True)
-    equivalence_artifact.write_text(
-        "entries:\n"
-        "  - loser: dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc\n"
-        "    winner: dlv-sat-01\n"
-        "    evidence: \"sat-01 fork, state/audits/2026-08-01-deliverable-id-fork-population-itemized.md row 4\"\n",
-        encoding="utf-8",
-    )
-
-    post_fix_plan = mig.plan_migration(str(root))
-    assert not post_fix_plan["failures"]
-    post_fix_recs = {r["path"]: r for r in post_fix_plan["records"]}
-    stub_rec = post_fix_recs["state/handoffs/2026-07-17_160000_roadmap-sat-01.md"]
-    post_fix_text = stub_rec["_rebuilt"]
-    assert "deployment_state: continued" in post_fix_text
-    assert "continued_into: hnd-execute-sat-01" in post_fix_text
-    assert any("rung: deliverable_id-join" in c for c in stub_rec["changes"])
-
-    # The equivalence artifact itself must be left byte-for-byte untouched —
-    # canonicalize() is a join-key transform only, never a field mutation, and
-    # this op must never write a canonicalized value back to any record or to
-    # the equivalence artifact itself.
-    assert "dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc" in equivalence_artifact.read_text(
-        encoding="utf-8"
-    )
-    baton_on_disk = baton.read_text(encoding="utf-8")
-    assert "deliverable_id: dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc" in baton_on_disk
-    stub_on_disk = stub.read_text(encoding="utf-8")
-    assert "deliverable_id: dlv-sat-01\n" in stub_on_disk
+# Review (formerly AC6b, second half): sat-01's declared fork pair used to
+# join across `dlv-sat-01` (winner) and the `-locke-02c8bc` loser leg via
+# `state/deliverable-equivalence.yaml` + `canonicalize()`. That mechanism is
+# condemned and collapsed to identity (plan
+# 2026-08-20-the-close-ceremony-stops-paying-for-the-join, F-1); the
+# cross-fork join it proved no longer exists, so genuinely different raw
+# ids never join here regardless of any declared equivalence artifact.
 
 
 def test_deliverable_id_join_two_candidates_falls_to_closed_stale(tmp_path: Path) -> None:

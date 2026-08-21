@@ -139,9 +139,9 @@ def test_divergent_join_does_not_pick_a_winner(tmp_path):
 
 # ---------------------------------------------------------------------------
 # N-rung widening (sedge-01, succession-edge-cardinality roadmap): the cases
-# below exercise `additional_predecessors` and `equivalence_map`, added
-# alongside the original 6 (unedited above) rather than folded into them --
-# AC7 requires those 6 pass byte-identically, so they stay untouched.
+# below exercise `additional_predecessors`, added alongside the original 6
+# (unedited above) rather than folded into them -- AC7 requires those 6 pass
+# byte-identically, so they stay untouched.
 # ---------------------------------------------------------------------------
 
 
@@ -259,35 +259,9 @@ def test_ordering_independence_of_the_raise(tmp_path):
         assert "dlv-order-DIFFERENT" in message
 
 
-def test_ac5_equivalence_map_consulted_declared_fork_no_false_positive(tmp_path):
-    """AC5: a declared fork pair (equivalence_map maps the loser id to the
-    winner id) does NOT false-positive as a divergence, and the returned/
-    minted id stays the RAW winning value -- canonicalize() is read/compare-
-    side only, never written back."""
-    plan = tmp_path / "plan.md"
-    predecessor = tmp_path / "predecessor.md"
-    extra = tmp_path / "extra.md"
-    _write_frontmatter(plan, deliverable_id="dlv-fork-winner")
-    _write_frontmatter(predecessor, deliverable_id="dlv-fork-winner")
-    _write_frontmatter(extra, deliverable_id="dlv-fork-loser")
-
-    dlvr_id, _initiative_id = resolve_deliverable_and_initiative(
-        read_frontmatter_field,
-        mint,
-        str(plan),
-        str(predecessor),
-        additional_predecessors=[str(extra)],
-        equivalence_map={"dlv-fork-loser": "dlv-fork-winner"},
-    )
-
-    # Raw winning value, never canonicalized on the way out.
-    assert dlvr_id == "dlv-fork-winner"
-
-
-def test_equivalence_map_absent_row_still_raises(tmp_path):
-    """A fork with NO declared entry in the equivalence map still diverges --
-    absence is never treated as a silent merge (deliverable_equivalence.py's
-    own negative-spec)."""
+def test_fork_with_no_equivalence_mechanism_still_raises(tmp_path):
+    """A diverging pair still raises -- there is no equivalence-map mechanism
+    left to consult, declared or not (F-1 collapse)."""
     plan = tmp_path / "plan.md"
     predecessor = tmp_path / "predecessor.md"
     _write_frontmatter(plan, deliverable_id="dlv-unforked-a")
@@ -299,7 +273,6 @@ def test_equivalence_map_absent_row_still_raises(tmp_path):
             mint,
             str(plan),
             str(predecessor),
-            equivalence_map={"dlv-some-other-loser": "dlv-some-other-winner"},
         )
 
 

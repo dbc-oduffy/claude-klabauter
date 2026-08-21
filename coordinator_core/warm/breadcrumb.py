@@ -89,6 +89,7 @@ __all__ = [
     "read_breadcrumb",
     "unlink_breadcrumb",
     "should_spawn",
+    "PIPE_LIVENESS_PROBE_TIMEOUT_MS",
 ]
 
 # The old `client.START_DEADLINE` value, reused for a different job now
@@ -317,6 +318,54 @@ def unlink_breadcrumb(
         pass
 
 
+#: Timeout for `_pipe_is_alive`'s `WaitNamedPipeW` probe, milliseconds.
+#: Small on purpose: a healthy server answers near-instantly (it keeps a
+#: pending-listener pool -- `server.py`'s `PENDING_LISTENER_POOL_SIZE` --
+#: so an instance is normally already waiting: measured 0.014ms on this
+#: box). A genuinely absent pipe answers just as fast (measured 0.157ms
+#: -- the kernel already knows there is nothing to wait for). Only a
+#: pipe that exists but currently has no free instance pays the full
+#: timeout, and measured cost there is ~15ms regardless of this constant
+#: (Windows' ~15.6ms scheduler-tick quantisation floors any wait shorter
+#: than one tick -- `benchmarks.process_time`'s own docstring names the
+#: same floor). Either way this is milliseconds, in place of the
+#: multi-second-to-30s cost of finding out the hard way over the real
+#: request pipe (see `warm.client`'s read-deadline machinery, which this
+#: check never touches or replaces).
+PIPE_LIVENESS_PROBE_TIMEOUT_MS = 5
+
+
+def _pipe_is_alive(pipe: str, timeout_ms: int = PIPE_LIVENESS_PROBE_TIMEOUT_MS) -> bool:
+    """Cheap, PIPE-proving liveness check via Win32 `WaitNamedPipeW` --
+    deliberately distinct from `stable_pid_alive`, which proves only that
+    the PROCESS a breadcrumb names is running, not that it is actually
+    serving. A process can be alive and wedged (accepted no new
+    connections since some earlier failure) while its breadcrumb still
+    reads as young and alive by pid alone; this function is what tells
+    the two apart, in milliseconds rather than the read-deadline's
+    seconds.
+
+    `WaitNamedPipeW` connects to nothing and exchanges no data -- it asks
+    the kernel whether an instance of the named pipe is currently
+    listening and available, and returns within `timeout_ms` either way.
+    It therefore carries none of `warm.client`'s mutation-safety
+    concerns (no request is sent, so there is nothing to double-execute)
+    and touches no code on that module's read-deadline path.
+
+    Fails OPEN (returns True) on any error: off Windows, a missing
+    `kernel32` symbol, or an unanticipated `OSError` all degrade to "the
+    process-only answer stands," rather than a caller-visible failure or
+    a wrongly-triggered respawn.
+    """
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        return bool(kernel32.WaitNamedPipeW(pipe, int(timeout_ms)))
+    except Exception:
+        return True
+
+
 def should_spawn(
     engine_root: Optional[Path] = None,
     *,
@@ -334,6 +383,16 @@ def should_spawn(
     is inherently cross-process (one process's `started_at`, another
     process's `now`), so a monotonic clock (meaningless across processes)
     would be the wrong choice here.
+
+    A young, alive breadcrumb is vouched for ONLY if its pipe also proves
+    live (`_pipe_is_alive`) -- pid-liveness alone means the PROCESS is
+    running, not that it is serving. Without this second proof, a server
+    that is alive but has stopped accepting connections (wedged) would
+    debounce every caller's spawn for the whole `SPAWN_DEBOUNCE_SECS`
+    window on pid-liveness alone, exactly the process-vs-pipe confusion
+    this function exists to close. A breadcrumb with no recorded pipe
+    (or one the probe cannot evaluate) falls back to the pid-only answer,
+    unchanged from before this check existed.
     """
     record = read_breadcrumb(engine_root)
     if record is None:
@@ -366,4 +425,12 @@ def should_spawn(
         # for this breadcrumb," which means spawn.
         return True
 
-    return not alive
+    if not alive:
+        return True
+
+    pipe = record.get("pipe")
+    if not isinstance(pipe, str) or not pipe:
+        # No pipe recorded to prove -- fall back to the pid-only answer.
+        return False
+
+    return not _pipe_is_alive(pipe)

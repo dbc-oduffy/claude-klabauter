@@ -206,7 +206,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     resolve_relative as _resolve_relative,
 )
 from coordinator_core.bash_guards.commit_tripwires import _same_tree
-from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_dir import common_dir_from_gitdir, resolve_git_common_dir
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -956,6 +956,40 @@ def _common_dir_cf_from_root(root: Optional[str]) -> Optional[str]:
     return _resolve_and_casefold(str(common))
 
 
+def _common_dir_cf_from_gitdir(private_gitdir: Optional[Path]) -> Optional[str]:
+    """The resolved+case-folded git COMMON dir for an ALREADY-RESOLVED
+    private gitdir -- the spawn-free counterpart of `_common_dir_cf_from_root`,
+    and the form both AC14 comparison sides now use.
+
+    PREFER THIS OVER THE ROOT FORM WHEREVER A GITDIR IS IN HAND. The root
+    form's argument comes from `resolve_git_root`, a `git rev-parse
+    --show-toplevel` spawn documented as failing open to `None` on "not a
+    git repo, git missing, transient spawn error"; the transient leg is
+    routine under this box's load norm, not exotic. Both callers of this
+    predicate already HOLD a gitdir (`resolve_gitdir`, per-process
+    memoized) at the point of comparison, so paying that spawn bought
+    nothing but a value that could be `None` for reasons having nothing to
+    do with repo identity.
+
+    That mattered because BOTH readings of such a `None` are wrong, which is
+    why this function exists instead of a rule for interpreting it:
+    treating it as "a different repo" denied sessions writes to their OWN
+    repo (bug-backlog `2026-08-21-foreign-write-guard-denies-own-repo-push-
+    on-unresolved-target-root`, whose tell is a deny naming the same path in
+    both message slots); treating it as "allow" was MEASURED to permit a
+    genuinely foreign write whenever the ANCHOR's root resolution missed
+    while its gitdir resolved -- a state the upstream missing-gitdir early
+    return does not cover. Deriving from the gitdir removes the unresolved
+    state rather than picking a side on it.
+
+    `None` only when `private_gitdir` is falsy or the realpath+casefold
+    itself fails -- neither reachable from a transient spawn miss.
+    """
+    if not private_gitdir:
+        return None
+    return _resolve_and_casefold(str(common_dir_from_gitdir(private_gitdir, private_gitdir)))
+
+
 # ---------------------------------------------------------------------------
 # AC5 -- the cross-repo-memo carve-out, unconditional and checked first.
 # ---------------------------------------------------------------------------
@@ -1517,7 +1551,20 @@ def _evaluate_foreign_repo_candidate(
     if anchor_has_repo:
         # AC14 -- compare COMMON dirs (worktree-safe), matching
         # `sessions_dir`'s own comparison; see `_common_dir_cf_from_root`.
-        target_common_cf = _common_dir_cf_from_root(probe_root)
+        # Derived from `target_gitdir`, NOT from `probe_root`: the gitdir is
+        # already resolved and non-None here (this function returns early
+        # when `resolve_gitdir(probe_dir)` is None) and its resolver is
+        # per-process memoized, so this costs no spawn and CANNOT be
+        # unresolved. `probe_root` comes from a `git rev-parse
+        # --show-toplevel` that fails open to `None` on any transient error
+        # -- routine under this box's load norm -- and reading that `None`
+        # as "a different repo" is what denied sessions writes to their OWN
+        # repo (bug-backlog 2026-08-21-foreign-write-guard-denies-own-repo-
+        # push-on-unresolved-target-root). The failure source is removed
+        # here rather than reinterpreted: widening the comparison to ALLOW
+        # on an unresolved side was measured to permit a genuinely FOREIGN
+        # write whenever the anchor's own root resolution missed.
+        target_common_cf = _common_dir_cf_from_gitdir(target_gitdir)
         if (
             anchor_common_cf is not None
             and target_common_cf is not None
@@ -1689,6 +1736,15 @@ def check_bump_foreign_repo_write(
     body uses (`_evaluate_foreign_repo_candidate`) -- the two legs differ
     ONLY in candidate extraction, never in verdict logic. `Dialect.BASH`/
     `None` falls through unchanged below (AC4).
+
+    APPLICABILITY BEFORE ROOT RESOLUTION (C3, docs/plans/2026-08-21-guards-
+    under-the-brightline.md): every write-sink candidate this command
+    carries is extracted from the PARSED command alone
+    (`_iter_write_sink_candidates` never spawns a subprocess) BEFORE
+    `resolve_gitdir(anchor)`/`resolve_git_root(anchor)` ever runs. A command
+    with no candidate at all (`echo hello`, `git status --short`) returns
+    `None` before either spawn; a command that does carry a write sink pays
+    the identical spawns it always did.
     """
     dialect = dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None)
     if dialect is Dialect.POWERSHELL:
@@ -1704,6 +1760,14 @@ def check_bump_foreign_repo_write(
         return None
 
     if not bump_applies(session_id, cwd=cwd, env=env):
+        return None
+
+    # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- decide from the parsed
+    # command alone, no subprocess, whether this command has a write sink at
+    # all. `echo hello`/`git status --short` never reach the git spawns
+    # below.
+    candidates = list(_iter_write_sink_candidates(cmd, cwd))
+    if not candidates:
         return None
 
     anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
@@ -1738,13 +1802,23 @@ def check_bump_foreign_repo_write(
     # from the TARGET's own root (see that function's own "TWO ROOTS, NEVER
     # CONFLATED" docstring section).
     anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
+    # Gitdir-derived, matching the target side in
+    # `_evaluate_foreign_repo_candidate` -- `anchor_gitdir` is already
+    # resolved and non-None whenever `anchor_has_repo`, so this pays no
+    # spawn and cannot be unresolved. The `resolve_git_root(anchor)` form
+    # this replaced could return `None` from a transient miss WITHOUT the
+    # missing-gitdir early return above firing (that return covers only
+    # `resolve_gitdir` failing), leaving the comparison unresolved on the
+    # anchor side -- the state measured to allow a genuinely foreign write
+    # under a fail-open reading, and to deny a same-repo one under a
+    # fail-closed reading. See `_common_dir_cf_from_gitdir`.
     anchor_common_cf = (
-        _common_dir_cf_from_root(anchor_root) if anchor_has_repo else None
+        _common_dir_cf_from_gitdir(anchor_gitdir) if anchor_has_repo else None
     )
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
-    for target_dir, write_verb_label, raw_target in _iter_write_sink_candidates(cmd, cwd):
+    for target_dir, write_verb_label, raw_target in candidates:
         # Review: coordinator:code-reviewer -- keyword args at both call
         # sites give this shared eight-parameter predicate a reorder-safe
         # net across the Bash and PowerShell legs.
@@ -1853,30 +1927,6 @@ def _check_bump_foreign_repo_write_powershell(
     if not bump_applies(session_id, cwd=cwd, env=env):
         return None
 
-    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
-    if not anchor:
-        return None
-    anchor_gitdir = resolve_gitdir(anchor)
-    anchor_has_repo = anchor_gitdir is not None
-    if not anchor_has_repo and path_has_git_ancestor(anchor):
-        # UNRESOLVED, not repo-less -- see the Bash body's own identical
-        # guard above for the full reasoning (`resolve_gitdir(anchor)`
-        # returning `None` from a transient spawn failure must not be read
-        # as "no repo here"); mirrored here rather than factored out since
-        # the two legs' surrounding control flow already diverges (dialect
-        # gate, segment tokenization) before either reaches this point.
-        return None
-    # `anchor_root` -- see the Bash body's own identical assignment above
-    # (AC7 fix): the SESSION's own resolved root, threaded to every
-    # candidate rather than re-derived from the TARGET's root inside
-    # `_evaluate_foreign_repo_candidate`.
-    anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
-    anchor_common_cf = (
-        _common_dir_cf_from_root(anchor_root) if anchor_has_repo else None
-    )
-
-    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
-
     segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="bump-foreign-repo-write")
     if segments is None:
         # SILENT already recorded by `resolve_segments_for_dialect` itself
@@ -1887,6 +1937,10 @@ def _check_bump_foreign_repo_write_powershell(
     effective_cwd = cwd or os.getcwd()
     matched_any_cmdlet = False
     cwd_unresolved = False
+    # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- collected here, from the
+    # parsed command alone (no subprocess), and checked for emptiness below
+    # BEFORE `resolve_gitdir`/`resolve_git_root` ever spawns.
+    candidates: List[Tuple[str, str]] = []
 
     for tokens, _pipe_before in segments:
         if not tokens:
@@ -1952,20 +2006,7 @@ def _check_bump_foreign_repo_write_powershell(
                 # Untranslatable -- fail open, no verdict for this
                 # candidate (this guard family's FAIL OPEN posture).
                 continue
-            result = _evaluate_foreign_repo_candidate(
-                target_dir=target_dir,
-                session_id=session_id,
-                payload=payload,
-                anchor=anchor,
-                anchor_has_repo=anchor_has_repo,
-                anchor_common_cf=anchor_common_cf,
-                env=env,
-                agent_id=agent_id,
-                raw_target=raw_target,
-                anchor_root=anchor_root,
-            )
-            if result is not None:
-                return result
+            candidates.append((target_dir, raw_target))
 
     if not matched_any_cmdlet and not cwd_unresolved:
         record_silent(
@@ -1976,5 +2017,58 @@ def _check_bump_foreign_repo_write_powershell(
             "invocations, and any other PowerShell shape are declined "
             "rather than guessed at (see this function's own docstring)",
         )
+
+    if not candidates:
+        return None
+
+    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
+    if not anchor:
+        return None
+    anchor_gitdir = resolve_gitdir(anchor)
+    anchor_has_repo = anchor_gitdir is not None
+    if not anchor_has_repo and path_has_git_ancestor(anchor):
+        # UNRESOLVED, not repo-less -- see the Bash body's own identical
+        # guard above for the full reasoning (`resolve_gitdir(anchor)`
+        # returning `None` from a transient spawn failure must not be read
+        # as "no repo here"); mirrored here rather than factored out since
+        # the two legs' surrounding control flow already diverges (dialect
+        # gate, segment tokenization) before either reaches this point.
+        return None
+    # `anchor_root` -- see the Bash body's own identical assignment above
+    # (AC7 fix): the SESSION's own resolved root, threaded to every
+    # candidate rather than re-derived from the TARGET's root inside
+    # `_evaluate_foreign_repo_candidate`.
+    anchor_root = resolve_git_root(anchor) if anchor_has_repo else None
+    # Gitdir-derived, matching the target side in
+    # `_evaluate_foreign_repo_candidate` -- `anchor_gitdir` is already
+    # resolved and non-None whenever `anchor_has_repo`, so this pays no
+    # spawn and cannot be unresolved. The `resolve_git_root(anchor)` form
+    # this replaced could return `None` from a transient miss WITHOUT the
+    # missing-gitdir early return above firing (that return covers only
+    # `resolve_gitdir` failing), leaving the comparison unresolved on the
+    # anchor side -- the state measured to allow a genuinely foreign write
+    # under a fail-open reading, and to deny a same-repo one under a
+    # fail-closed reading. See `_common_dir_cf_from_gitdir`.
+    anchor_common_cf = (
+        _common_dir_cf_from_gitdir(anchor_gitdir) if anchor_has_repo else None
+    )
+
+    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
+
+    for target_dir, raw_target in candidates:
+        result = _evaluate_foreign_repo_candidate(
+            target_dir=target_dir,
+            session_id=session_id,
+            payload=payload,
+            anchor=anchor,
+            anchor_has_repo=anchor_has_repo,
+            anchor_common_cf=anchor_common_cf,
+            env=env,
+            agent_id=agent_id,
+            raw_target=raw_target,
+            anchor_root=anchor_root,
+        )
+        if result is not None:
+            return result
 
     return None

@@ -1342,6 +1342,58 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-06-executing-session-can-discharge-criteria.md § C7
     "handoff.discharge_criteria": OpClass.MUTATING,
+    # handoff.author_lint — COMPUTE_ONLY: reports the hand-typed values in a
+    # handoff/spinoff body whose real gate fires much later, on someone else's
+    # session (a zero-checkbox `## Acceptance criteria`, a Session Ledger row
+    # the canonical grammar silently drops, an unreplaced placeholder or
+    # over-cap `summary:`). It is the read-only sibling of the two MUTATING
+    # body verbs above and deliberately owns no repair path: an op that
+    # silently fixed a body would re-create the defect it exists to surface,
+    # because the author would keep typing the wrong shape and keep not
+    # learning.
+    # DR-208 five-question affirmation (citing ops/handoff_author_lint.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Reads one path and returns findings; no write path, delegated or own.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      `read_text` only. No sentinel, no lock file, no temp file.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      Its entire output is the returned envelope.
+    # COMPUTE_ONLY over MUTATING is load-bearing, not a formality: the whole
+    # point of moving enforcement earlier is that consulting the lint costs an
+    # author nothing and risks nothing, so it can be invoked freely at author
+    # time. An authz class implying substrate mutation would make callers
+    # hesitate to run exactly the check this op exists to make cheap.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: state/handoffs/2026-08-21-handoffs-and-spinoffs-minimal-for-hand-rolling.md
+    #       docs/reference/handoff-authoring-surface-classification.md
+    "handoff.author_lint": OpClass.COMPUTE_ONLY,
+    # handoff.append_session_ledger — MUTATING: bounded wrapper over
+    # handoff.correct_body for appending the caller's own machine-resolved
+    # `## Session Ledger` row (date/sid6/tshirt/dispatch-counts computed;
+    # only `summary` is caller-supplied) to a claimed handoff body. Same
+    # shape as handoff.discharge_criteria immediately above: it owns no
+    # write path of its own, delegating wholesale to correct_body's handler.
+    # DR-208 five-question affirmation (citing
+    # ops/handoff_append_session_ledger.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Transitively, via handoff_correct_body._handler's locked_rmw seam.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Same single-target write as correct_body; dual-write ban satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Transitively, through the delegated locked_rmw write path.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The handoff body is coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The appended row is what chain-LoE aggregation and downstream
+    #      readers of the ledger sum.
+    # Classified MUTATING on its own account rather than by delegation alone,
+    # same rationale as handoff.discharge_criteria's own entry above.
+    # Authority: DR-247 (handoff.correct_body) / DR-274 § D3 (a second body-
+    #            mutating wrapper verb built the same way) / DR-208 § 5.
+    # Spec: state/handoffs/2026-08-21-handoffs-and-spinoffs-minimal-for-hand-rolling.md AC-5
+    "handoff.append_session_ledger": OpClass.MUTATING,
     # handoff.propagate — MUTATING: peer-delivery door into a `status: claimed`
     # (or legacy `status: consumed`) state/handoffs/*.md file's `## Propagated`
     # section, with no authorship gate (the sibling verb DR-247's `handoff.
@@ -1456,8 +1508,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   Q1 file opened for write?   NO  ("never opens state/deliverable-equivalence.yaml
     #                                    in any write mode, and never imports a writer of it")
     #   Q2 git write command?       NO.
-    #   Q3 queue/backlog mutation?  NO  (no automatic row write into the equivalence map;
-    #                                    winner selection stays human/manual adjudication).
+    #   Q3 queue/backlog mutation?  NO  (no automatic row write; C1g deleted the `entries:`
+    #                                    map and its canonicalize()/load_equivalence_map()
+    #                                    writer symbols outright, so there is no equivalence
+    #                                    map left to write into. The file's surviving
+    #                                    `ledger:` side is read-only via seed_deliverable_ledger_rows).
     #   Q4 subprocess spawned?      NO.
     #   Q5 write-vs-read branch?    NO  (single read path: calls seed_deliverable_ledger_rows
     #                                    for its rows, then clusters them in memory).
@@ -3809,6 +3864,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   out — here it is demonstrated, not merely unruled-out.
     # Spec: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1
     "gate.validate_invocable": OpClass.MUTATING,
+    # gate_liveness.resolve — pure read + compute: joins external_gate[].
+    # closure_key entries against cross-repo/inbox/ and cross-repo/archive/
+    # memos' discharges: blocks. Never writes a file, never mutates plan
+    # frontmatter (the schema's own description: "a reader ... may PROPOSE
+    # the cleared: true flip with a citation — it never performs it").
+    # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C1
+    "gate_liveness.resolve": OpClass.COMPUTE_ONLY,
+    # gate_liveness.reconcile — writes ONLY when apply: true is explicitly
+    # passed (default False = dry run, proposes flips, writes nothing).
+    # Classified MUTATING unconditionally: DR-208's fail-closed direction
+    # applies to the op's CAPABILITY, not today's default param value — an
+    # op that CAN write under a caller-supplied flag is MUTATING regardless
+    # of how often it is invoked with that flag false.
+    # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2
+    "gate_liveness.reconcile": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # C9 leg (a) registration-quad gap sweep (2026-08-14) — 56 ops discovered by
     # gen_dod_backlog_fragment.py's build_rows() with classification: null.

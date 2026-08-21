@@ -34,6 +34,7 @@ from coordinator_core.ops.install_doe_claude_precommit_hook import (
     main,
 )
 import coordinator_core.ops.install_doe_claude_precommit_hook as _mod
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Declared, not excused: this file behaviorally executes the generated hook body
 # via real `sh` against stub gate scripts, and validates it with `sh -n`, to prove
@@ -80,7 +81,7 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
     )
 
 
@@ -421,7 +422,9 @@ def test_hook_sh_syntax_is_valid(tmp_path, monkeypatch):
     is itself a way to leak a non-0/1 exit status (a shell parse error is
     commonly exit 2)."""
     repo = _install(tmp_path, monkeypatch)
-    result = subprocess.run(["/bin/sh", "-n", str(_hook_path(repo))], capture_output=True, text=True)
+    result = subprocess.run(
+        [require_sh_interpreter(), "-n", str(_hook_path(repo))], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 

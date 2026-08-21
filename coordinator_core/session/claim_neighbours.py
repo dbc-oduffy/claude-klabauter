@@ -302,11 +302,6 @@ def _bridge_deliverable_to_plan_scope(
     except OSError:
         return None
 
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-
     for entry in entries:
         if not entry.name.endswith(".md"):
             continue
@@ -322,9 +317,7 @@ def _bridge_deliverable_to_plan_scope(
         if candidate is None:
             continue
         candidate = candidate.strip("'\"")
-        # Join key canonicalized (C6b/AC11): a plan whose deliverable_id forked
-        # from the handoff's still bridges, rather than rendering UNRESOLVABLE.
-        if canonicalize(candidate, equivalence_map) != canonical_deliverable_id:
+        if candidate != deliverable_id:
             continue
         try:
             fm = yaml.safe_load(split.fm_text)

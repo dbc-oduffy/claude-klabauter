@@ -95,18 +95,6 @@ def test_blanket_disarm_cache_does_not_fail_open_past_expiry():
 # ---------------------------------------------------------------------------
 
 
-def _write_equivalence_artifact(root: Path, *, loser: str, winner: str) -> None:
-    state_dir = root / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "deliverable-equivalence.yaml").write_text(
-        "entries:\n"
-        f"  - loser: {loser}\n"
-        f"    winner: {winner}\n"
-        "    adjudicated_at: '2026-08-01T00:00:00Z'\n",
-        encoding="utf-8",
-    )
-
-
 def _write_ledger_artifact(root: Path, rows: list[dict]) -> None:
     state_dir = root / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -120,31 +108,6 @@ def _write_ledger_artifact(root: Path, rows: list[dict]) -> None:
     (state_dir / "deliverable-equivalence.yaml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
-
-
-def test_load_equivalence_map_serves_each_roots_own_map(tmp_path):
-    """C5 -- `load_equivalence_map` now memoizes on `(worktree_root, artifact
-    mtime)` (`_artifact_cache_key`), not root-insensitively. A second call in
-    the same process with a DIFFERENT `worktree_root` gets its OWN root's
-    map, not the first root's."""
-    deliverable_equivalence._reset_equivalence_map_cache()
-    try:
-        root_a = tmp_path / "root_a"
-        root_b = tmp_path / "root_b"
-        root_a.mkdir()
-        root_b.mkdir()
-        _write_equivalence_artifact(root_a, loser="dlv-a-loser", winner="dlv-a-winner")
-        _write_equivalence_artifact(root_b, loser="dlv-b-loser", winner="dlv-b-winner")
-
-        map_a = deliverable_equivalence.load_equivalence_map(root_a)
-        map_b = deliverable_equivalence.load_equivalence_map(root_b)
-
-        # FIXED BEHAVIOUR (C5): each root's call returns its own map.
-        assert map_a == {"dlv-a-loser": "dlv-a-winner"}
-        assert map_b == {"dlv-b-loser": "dlv-b-winner"}
-        assert map_a != map_b
-    finally:
-        deliverable_equivalence._reset_equivalence_map_cache()
 
 
 def test_load_deliverable_ledger_serves_each_roots_own_ledger(tmp_path):

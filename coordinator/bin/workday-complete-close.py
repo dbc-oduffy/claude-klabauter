@@ -269,8 +269,9 @@ def cmd_publish_cadence(args: argparse.Namespace) -> int:
     """
     from coordinator_core.ops.emit.publish_cadence import run_publish_cadence
 
+    repo_root = getattr(args, "repo_root", None) or str(_REPO_ROOT)
     try:
-        result = run_publish_cadence(str(_REPO_ROOT))
+        result = run_publish_cadence(str(Path(repo_root).resolve()))
     except Exception as exc:  # noqa: BLE001 -- best-effort by ceremony policy, loud by log
         print(
             f"ERROR: emission publish failed ({type(exc).__name__}: {exc}) — the "
@@ -429,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_publish = sub.add_parser(
         "publish-cadence", help="Step 10.7: publish emission to cockpit's sink."
+    )
+    p_publish.add_argument(
+        "--repo-root",
+        default=str(_REPO_ROOT),
+        help="Repo root (default: the colocated engine root).",
     )
     p_publish.set_defaults(func=cmd_publish_cadence)
 

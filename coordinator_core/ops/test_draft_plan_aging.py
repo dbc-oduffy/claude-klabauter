@@ -20,11 +20,6 @@ import coordinator_core.ipc as _ipc
 import coordinator_core.ops.draft_plan_aging as _draft_plan_aging
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
-from coordinator_core.ops.deliverable_equivalence import (
-    _reset_equivalence_map_cache,
-    canonicalize,
-    load_equivalence_map,
-)
 from coordinator_core.ops.draft_plan_aging import (
     _CARRY_OBSERVABILITY_FIX_LANDED_ON,
     _git_commit_epoch,
@@ -47,21 +42,6 @@ from coordinator_core.ops.draft_plan_aging import (
 # shrink-only pre-existing residue and is explicitly not the route for this
 # file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_memo():
-    """Clear deliverable_equivalence's module-scope memo before and after each
-    test in this file. `load_equivalence_map` is memoized per-process (spawn-
-    per-call production model); pytest shares one interpreter across every
-    test here, each with its own `tmp_path` repo root, so without this the
-    first test to resolve the map would pin it for every later test in the
-    file. Mirrors the established pattern in
-    coordinator_core/ops/tests/test_deliverable_equivalence.py.
-    """
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 def _run_git(repo: Path, *args: str) -> None:
@@ -1395,157 +1375,6 @@ def test_ac10_cli_end_to_end_exit_code_sanity(tmp_path):
     assert result.returncode in (0, 1, 2), (
         f"unexpected exit code {result.returncode}; stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# C6 (AC9, AC10) — the canonicalized deliverable_id join `resolve_plan_owner`
-# and `list_orphaned` now perform via `deliverable_equivalence.canonicalize`.
-# Spec backlink: pln-deliverable-id-carry-make-the--8ae256
-# § C6 (AC9, AC10); the join itself lands in C5's draft_plan_aging.py edits,
-# reusing deliverable_equivalence.py's own C4a contract (see
-# coordinator_core/ops/tests/test_deliverable_equivalence.py for that
-# module's own unit tests — not duplicated here).
-# ---------------------------------------------------------------------------
-
-
-def _write_equivalence_map(repo: Path, entries: list) -> Path:
-    """Write a minimal state/deliverable-equivalence.yaml fixture (the row
-    shape C3b authors — `loser`/`winner`/`evidence`) and return its path.
-    NEVER touches the tree's real map (state/deliverable-equivalence.yaml at
-    repo root, owned by C8) — always writes under the test's own `tmp_path`.
-    """
-    state_dir = repo / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = state_dir / "deliverable-equivalence.yaml"
-    lines = ["entries:"]
-    for entry in entries:
-        lines.append(f"  - loser: {entry['loser']}")
-        lines.append(f"    winner: {entry['winner']}")
-        lines.append(f"    evidence: {entry.get('evidence', 'test fixture')!r}")
-    artifact_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return artifact_path
-
-
-def test_missing_equivalence_map_is_not_an_error_empty_dict(tmp_path):
-    """Preserved-behaviour pin: no state/deliverable-equivalence.yaml on disk
-    at all -> load_equivalence_map returns {}, not an error.
-    """
-    _init_repo(tmp_path)
-    assert load_equivalence_map(tmp_path) == {}
-
-
-def test_unknown_id_canonicalizes_to_itself(tmp_path):
-    """Preserved-behaviour pin: an id absent from a (possibly non-empty)
-    equivalence map passes through canonicalize() unchanged.
-    """
-    _init_repo(tmp_path)
-    _write_equivalence_map(tmp_path, [{"loser": "dlv-declared-loser", "winner": "dlv-declared-winner"}])
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert canonicalize("dlv-never-declared", equivalence_map) == "dlv-never-declared"
-
-
-def test_declared_pair_collapses_and_join_credits_it(tmp_path):
-    """Happy path (AC8/AC9 positive leg): a plan carrying the declared LOSER
-    id and a handoff carrying the declared WINNER id still join through
-    resolve_plan_owner's canonicalized comparison.
-    """
-    _init_repo(tmp_path)
-    _write_equivalence_map(
-        tmp_path, [{"loser": "dlv-fork-loser", "winner": "dlv-fork-winner", "evidence": "declared fork"}]
-    )
-    plan = _write_plan_with_deliverable(tmp_path, "declared-pair.md", deliverable_id="dlv-fork-loser")
-    _write_handoff(tmp_path, "h-declared-pair.md", "open", deliverable_id="dlv-fork-winner")
-
-    assert resolve_plan_owner(plan, tmp_path) == "state/handoffs/h-declared-pair.md"
-
-
-def test_undeclared_pair_never_collapses_via_resolve_plan_owner(tmp_path):
-    """AC9 — the false-positive pin, functional leg. A plan/handoff pair with
-    DIFFERENT deliverable_ids, and NO declared entry joining them, must read
-    as two distinct deliverables (UNOWNED) even though a declared entry
-    exists in the map for an unrelated pair — the presence of *some* map
-    content must never cause an undeclared pair to collapse.
-    """
-    _init_repo(tmp_path)
-    _write_equivalence_map(
-        tmp_path, [{"loser": "dlv-unrelated-loser", "winner": "dlv-unrelated-winner"}]
-    )
-    plan = _write_plan_with_deliverable(tmp_path, "undeclared-pair.md", deliverable_id="dlv-standalone-a")
-    _write_handoff(tmp_path, "h-undeclared-pair.md", "open", deliverable_id="dlv-standalone-b")
-
-    assert resolve_plan_owner(plan, tmp_path) is None
-
-
-@pytest.mark.parametrize(
-    "id_a, id_b",
-    [
-        # Shared literal prefix — must not collapse via any prefix-match heuristic.
-        ("dlv-widget-catalog", "dlv-widget-catalog-2"),
-        # Slug/fuzzy similarity — must not collapse via any similarity heuristic.
-        ("dlv-search-index", "dlv-search-indexing"),
-        # One id is a strict substring of the other.
-        ("dlv-billing", "dlv-billing-service"),
-    ],
-)
-def test_undeclared_similar_ids_never_collapse_heuristically(tmp_path, id_a, id_b):
-    """AC9 — the false-positive pin, direct unit leg. This is the test that
-    must FAIL if `canonicalize` is EVER made to collapse ids by prefix
-    match, fuzzy match, or slug similarity instead of strictly by declared
-    `loser`/`winner` entry. Each pair here is undeclared but deliberately
-    shaped to trigger a heuristic matcher (shared prefix, near-duplicate
-    slug, substring) if one were ever introduced.
-    """
-    _init_repo(tmp_path)
-    _write_equivalence_map(tmp_path, [{"loser": "dlv-completely-unrelated", "winner": "dlv-also-unrelated"}])
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert canonicalize(id_a, equivalence_map) == id_a
-    assert canonicalize(id_b, equivalence_map) == id_b
-    assert canonicalize(id_a, equivalence_map) != canonicalize(id_b, equivalence_map)
-
-
-def test_plan_deliverable_ids_reverse_index_preserves_both_paths_on_canonicalization_collision(
-    tmp_path, monkeypatch
-):
-    """AC10 — canonicalizing `list_orphaned`'s internal `plan_deliverable_ids`
-    reverse index must not silently drop a plan path when two distinct plan
-    files' RAW deliverable_ids canonicalize to the same id. Construct the
-    exact fixture the AC names: two plan files, one declared-equivalent pair,
-    so both raw ids resolve to one canonical id — then assert both paths
-    survive in the index actually built and used by `list_orphaned`.
-
-    The index itself is an internal local (never returned on the wire), so
-    this intercepts it by monkeypatching the module-level
-    `_list_dangling_baton_plan_references` — the sole consumer `list_orphaned`
-    calls it through — to capture its `known_plan_deliverable_ids` argument,
-    then delegates to the real implementation so behaviour (including
-    `dangling_baton_references` in the return value) is unchanged. This
-    observes the real production code path, not a reimplementation of it.
-    """
-    _init_repo(tmp_path)
-    _write_equivalence_map(
-        tmp_path, [{"loser": "dlv-collision-loser", "winner": "dlv-collision-winner", "evidence": "declared fork"}]
-    )
-    _write_plan_with_deliverable(tmp_path, "collision-a.md", deliverable_id="dlv-collision-loser")
-    _write_plan_with_deliverable(tmp_path, "collision-b.md", deliverable_id="dlv-collision-winner")
-
-    captured: dict = {}
-    real_fn = _draft_plan_aging._list_dangling_baton_plan_references
-
-    def _capturing_spy(repo_root, known_plan_deliverable_ids):
-        captured["index"] = known_plan_deliverable_ids
-        return real_fn(repo_root, known_plan_deliverable_ids)
-
-    monkeypatch.setattr(_draft_plan_aging, "_list_dangling_baton_plan_references", _capturing_spy)
-
-    _draft_plan_aging.list_orphaned(tmp_path, threshold_days=14)
-
-    assert "index" in captured, "list_orphaned did not call _list_dangling_baton_plan_references"
-    assert captured["index"]["dlv-collision-winner"] == [
-        "docs/plans/collision-a.md",
-        "docs/plans/collision-b.md",
-    ]
 
 
 # ---------------------------------------------------------------------------

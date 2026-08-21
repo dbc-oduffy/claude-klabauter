@@ -203,7 +203,16 @@ the emitter never reaches for any other agent or tier here. Tier F and Tier
 U both require a live session-scoped test-invocation grant that no emitted
 phase (running with nobody present) can obtain; ``coordinator:test-runner``
 is Tier-T-only by its own agent description, which is what makes this phase
-safe to emit unconditionally.
+safe to emit without a live grant.
+
+That safety is about the AGENT TIER, not about the phase being mandatory.
+The phase is composed only when ``pathspec.terminal_test_scope`` yields at
+least one target; a spine writing nothing testable gets a ``log()`` line
+declaring the omission instead (``_no_test_scope_narration``). Composing it
+unconditionally is what made a prose deliverable unrepresentable — the
+scope derivation had to refuse in order to defend an invariant this module
+imposed, and the refusal surfaced to plan authors as an unsatisfiable
+guard. See ``pathspec``'s module docstring § The sharp edge AC16 exists for.
 
 ## A review-phase gate abort never suppresses the terminal test phase (Anti-scope)
 
@@ -212,7 +221,9 @@ composes runs (post-execution). ``_review_gate_policy`` therefore disarms
 every gated stage's early-return unconditionally (returns ``""`` always) —
 a gate verdict here narrates onto the emitted script, it never composes a
 ``return`` that would skip the terminal ``coordinator:test-runner`` phase
-``compose_script`` always appends after the review phase. This module never
+``compose_script`` appends after the review phase whenever the derived
+scope is non-empty. A review gate never suppresses that phase; only an
+empty derived scope omits it, and that omission is narrated. This module never
 composes the abort branch ``review.mint_workflow`` (pre-execution, C3) is
 free to compose for the identical staged fragment — the two callers'
 ``gate_policy`` closures are never shared or defaulted to each other's
@@ -783,6 +794,33 @@ def _test_agent_call(scope: list[str], phase_title: str) -> str:
     return f"{phase_call}\n{call}"
 
 
+def _no_test_scope_narration() -> str:
+    """The line composed INSTEAD of the terminal test phase when the spine
+    writes no testable surface at all (``terminal_test_scope`` returned an
+    empty list).
+
+    A ``log()`` call, never an ``agent()`` call and never a phase: the whole
+    point is that no phase runs. It exists so the emitted script is
+    self-describing — a reader of the run, and the EM reading its output
+    with nobody else present, must be able to tell "this wave was prose, so
+    no test was composed" from "a test phase ran and passed." Silence would
+    make those two indistinguishable, which is the false-green the original
+    AC16 refusal was protecting against and which this narration is what
+    replaces.
+
+    Negative spec: never widen this to narrate a PARTIALLY testable wave.
+    A wave with any resolved target composes the real phase, and a wave with
+    an unmapped ``.py`` never reaches here — ``terminal_test_scope`` raises
+    ``NoTestTargetError`` on it.
+    """
+    message = (
+        "No terminal test phase: every path this spine writes is a "
+        "non-testable surface (prose/docs), so there is no runnable target "
+        "to scope. Absence of a test run here is declared, not a pass."
+    )
+    return f"  log({_js_string_literal(message)});"
+
+
 def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Optional[str]:
     """Derive a review TIER (``lightweight``/``standard``/``full``) from
     ``plan_path``'s own sizing object (a) — never from ``routing.md`` prose
@@ -996,8 +1034,11 @@ def compose_script(
             body_blocks.append(block)
 
     scope = terminal_test_scope(waves, repo_root=repo_root)
-    phase_titles.append(_TEST_PHASE_TITLE)
-    body_blocks.append(_test_agent_call(scope, _TEST_PHASE_TITLE))
+    if scope:
+        phase_titles.append(_TEST_PHASE_TITLE)
+        body_blocks.append(_test_agent_call(scope, _TEST_PHASE_TITLE))
+    else:
+        body_blocks.append(_no_test_scope_narration())
 
     meta_block = _meta_block(name, description, phase_titles)
     body = "\n\n".join(body_blocks)

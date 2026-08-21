@@ -15,22 +15,17 @@ tested latency budget (`test_wsc_tail_parity.py::
 test_kpi_wsc_tail_blocking_path_under_2s`); this module is the spawn-count
 axis that regression test does not cover.
 
-WHY THIS PIN LIVES HERE, NOT IN `budget-manifest.json`. The precedent
-(`ceremony.scoped_git_commit`) pins its `op_total_*` figures as manifest
-`spawn_count_budget` keys, ratcheted by `test_spawn_count_budget_ratchet.py`
-against the LIVE manifest. `budget-manifest.json` is out of this chunk's
-declared `writes:` scope (C3's dispatch brief lists only this file and
-`test_spawn_count_budget_ratchet.py`), so `ceremony.wsc_tail` cannot become a
-manifest row here. `_WSC_TAIL_OP_TOTAL_CEILING` below is the same
-ceiling+reason shape `_SPAWN_COUNT_HIGH_WATER` uses, kept local to this
-module rather than merged into that table: the ratchet's own completeness
-checks (`test_spawn_count_high_water_table_covers_every_override` /
-`_stale_high_water_ops`) both key off the LIVE manifest, and an entry
-naming an op absent from `overrides` would read as an orphaned mark and fail
-`_stale_high_water_ops` -- the wrong failure for a row that is deliberately
-not manifest-backed. A follow-up chunk that adds `ceremony.wsc_tail` to
-`budget-manifest.json`'s `overrides` should migrate this local pin into
-`_SPAWN_COUNT_HIGH_WATER` and delete it from here in the same commit.
+THIS PIN IS MANIFEST-BACKED, NOT LOCAL. `ceremony.wsc_tail` is a
+`budget-manifest.json` `overrides` row (`spawn_count_budget.op_total_normal_pass`),
+ratcheted by `test_spawn_count_budget_ratchet.py` against the LIVE manifest --
+the same shape `ceremony.scoped_git_commit`'s `op_total_*` keys use. This
+module previously carried the ceiling as a local module constant
+(`_WSC_TAIL_OP_TOTAL_CEILING`) because `budget-manifest.json` was outside an
+earlier chunk's declared `writes:` scope; that constant is gone (C4,
+2026-08-21) and this test now asserts against the manifest, following
+`test_commit_e2e_spawn_budget.py::_assert_op_total`'s precedent. Raising the
+ceiling means editing `budget-manifest.json` and its `_SPAWN_COUNT_HIGH_WATER`
+mark in `test_spawn_count_budget_ratchet.py`, not this file.
 
 COUNTING MECHANISM: the whole-op `subprocess.run` MODULE-ATTRIBUTE
 substitution, the same "all_n" shape `test_commit_e2e_spawn_budget.py`'s
@@ -71,28 +66,17 @@ from typing import Any
 
 import pytest
 
+from coordinator_core.benchmarks import budget
 import coordinator_core.ops.ceremony.wsc_tail as wsc_tail_mod
 from .test_wsc_tail_parity import WscTailRepo, wsc_tail_repo, _unique_session_id  # noqa: F401
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-#: The whole-op `subprocess.run` ceiling for a normal `ceremony.wsc_tail`
-#: pass -- see module docstring, "MEASURED SHAPE" above, for the fixture
-#: shape this was measured against and why the pin lives here rather than
-#: in `budget-manifest.json`. Shape: `(ceiling, reason)`, matching
-#: `_SPAWN_COUNT_HIGH_WATER`'s per-mark convention in
-#: `test_spawn_count_budget_ratchet.py` (a value may be LOWERED freely;
-#: raising one requires editing this constant with a stated reason, turning
-#: a silent drift into a visible diff).
-_WSC_TAIL_OP_TOTAL_CEILING = 37
-_WSC_TAIL_OP_TOTAL_REASON = (
-    "First measured 2026-08-21 (C3, dlv-every-op-knows-what-it-spawns-f4bbf6): a fresh "
-    "single-file commit on `main` through the full `ceremony.wsc_tail` handler, deferred-push "
-    "mode with `_spawn_deferred_push_skip_loud` monkeypatched off. Matches the plan's own "
-    "'~37 spawns per close' origin figure exactly -- the first time that number is a real "
-    "measurement rather than an inherited approximation."
-)
+def _manifest_spawn_budget() -> dict:
+    manifest = budget.load_manifest()
+    entry = manifest["overrides"]["ceremony.wsc_tail"]
+    return entry["spawn_count_budget"]
 
 
 def _count_whole_op_spawns(fn) -> tuple[int, Any]:
@@ -168,9 +152,12 @@ def test_wsc_tail_op_total_spawn_count_matches_pin(wsc_tail_repo, monkeypatch):
         "landed, tail item needs attention) on a normal pass: %r" % (result.get("exit_code"), result)
     )
 
-    assert n == _WSC_TAIL_OP_TOTAL_CEILING, (
-        "ceremony.wsc_tail whole-op spawn count is %d, pinned ceiling is %d (%s). Over budget is "
+    budgeted = _manifest_spawn_budget()["op_total_normal_pass"]
+    assert n == budgeted, (
+        "ceremony.wsc_tail whole-op spawn count is %d, manifest budgets %d. Over budget is "
         "a kill candidate per docs/wiki/cost-budgets-and-the-kill-disposition.md, not a budget "
-        "raise -- update _WSC_TAIL_OP_TOTAL_CEILING (and its reason) together with this test if "
-        "the change is intentional." % (n, _WSC_TAIL_OP_TOTAL_CEILING, _WSC_TAIL_OP_TOTAL_REASON)
+        "raise -- update budget-manifest.json's ceremony.wsc_tail.spawn_count_budget."
+        "op_total_normal_pass (and its _rationale, and the matching _SPAWN_COUNT_HIGH_WATER mark "
+        "in test_spawn_count_budget_ratchet.py) together with this test if the change is "
+        "intentional; never edit it to make a regression fit." % (n, budgeted)
     )

@@ -986,6 +986,39 @@ def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
     assert max_running[0] == 2  # never exceeded the worker pool size
 
 
+def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monkeypatch):
+    """A worker thread must outlive a single connection's failure -- the
+    defect this closes: `_write_and_release`'s `io.write(...)` (a common
+    case under load, per `warm.client`'s own comment: a caller that hit its
+    own `READ_DEADLINE_SECS` already closed its pipe) raises an unhandled
+    `OSError` that neither `_serve_line` nor `_handle_connection` catches.
+    Before the fix, that exception escaped `_worker_loop`'s `while True:`
+    and killed the thread permanently -- live evidence found only 6 of
+    `WORKER_POOL_SIZE`'s 30 numbered worker threads still alive on the
+    resident server. This asserts the thread survives one failing
+    connection and goes on to serve the next queued item."""
+    calls: list[str] = []
+
+    def _fake_handle_connection(io, **kwargs):
+        calls.append(io)
+        if io == "boom":
+            raise OSError("simulated write to an abandoned connection")
+
+    monkeypatch.setattr(server, "_handle_connection", _fake_handle_connection)
+
+    ctx = server._ServerContext(name="pipe-survive", sid="sid-survive", version_state=_FakeVersionState())
+    ctx._start_worker_pool(pool_size=1)
+
+    ctx._enqueue_connection("boom")
+    ctx._enqueue_connection("after")
+
+    deadline = time.monotonic() + 5
+    while calls != ["boom", "after"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert calls == ["boom", "after"]  # the worker kept draining after "boom" raised
+
+
 def test_drain_waits_for_queued_but_not_yet_dispatched_work():
     """AC8's own refutation criterion: a request queued behind a busy
     worker must not be dropped at shutdown -- `drain_and_exit` must block

@@ -980,6 +980,68 @@ def test_same_repo_write_does_not_bump(repos, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# AC14 FAIL-OPEN REGRESSION (2026-08-21,
+# state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-
+# both-sides.yaml) -- `_evaluate_foreign_repo_candidate`'s AC14 same-repo
+# comparison used to fall through to the FOREIGN branch whenever EITHER
+# side's `resolve_git_root` spawn transiently failed (returned `None`),
+# reading "could not resolve" as "confirmed different repo". These two
+# tests pin the fix: an unresolvable comparison must ALLOW, and a resolved,
+# genuinely-different comparison must still DENY.
+# ---------------------------------------------------------------------------
+
+
+def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, monkeypatch):
+    """The target-side `resolve_git_root(probe_dir)` call fails transiently
+    (simulated) even though the write lands inside the session's own
+    repo -- `anchor_common_cf` (resolved earlier, unaffected) is non-`None`
+    but `target_common_cf` comes back `None`. Before the fix this fell
+    through to FOREIGN and denied a same-repo write; after the fix it must
+    allow."""
+    _set_anchor(monkeypatch, repos, "sess-ac14-unresolved-same-repo")
+    workdir = repos["anchor"] / "workdir"
+    workdir.mkdir()
+    src = repos["anchor"] / "README.md"
+    dest = workdir / "note.txt"
+    cmd = f"cp {_posix(src)} {_posix(dest)}"
+
+    real_resolve_git_root = guard.resolve_git_root
+    failing_abs = str(workdir.resolve())
+
+    def _flaky_resolve_git_root(cwd=None):
+        import os as _os
+
+        if cwd is not None and _os.path.abspath(str(cwd)) == failing_abs:
+            return None  # simulated transient `git rev-parse --show-toplevel` failure
+        return real_resolve_git_root(cwd)
+
+    monkeypatch.setattr(guard, "resolve_git_root", _flaky_resolve_git_root)
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac14-unresolved-same-repo", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_ac14_resolved_and_different_roots_still_bumps(repos, monkeypatch):
+    """Companion to the transient-failure test above -- when BOTH sides
+    resolve successfully and genuinely name different repos, AC14 must
+    still deny. Guards against the fix over-widening into "always allow
+    once the session has a repo"."""
+    _set_anchor(monkeypatch, repos, "sess-ac14-genuinely-foreign")
+    dest = repos["foreign"] / "note.txt"
+    cmd = f"echo hi > {_posix(dest)}"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac14-genuinely-foreign", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+# ---------------------------------------------------------------------------
 # Reads never bump.
 # ---------------------------------------------------------------------------
 
@@ -2320,3 +2382,80 @@ def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeyp
     result = guard.check_bump_foreign_repo_write(cmd, SUB_SID, str(repos["anchor"]), payload)
 
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# AC14 ANCHOR-SIDE COVERAGE GAP (2026-08-21)
+#
+# The suite could not see this class of defect at all: it went 196-green
+# against a build that ALLOWED a genuinely foreign write. Both AC14 tests
+# above drive the TARGET side, and the target side is only reached after the
+# anchor side has already resolved -- so no amount of target-side patching
+# constructs the dangerous state. "Tests pass" was never evidence of safety
+# for a change to this comparison, which is how a fail-open widening reached
+# the working tree with a green suite behind it.
+#
+# The state that matters: `resolve_gitdir(anchor)` SUCCEEDS (so the
+# missing-gitdir early return in `check_bump_foreign_repo_write` does not
+# fire) while `resolve_git_root(anchor)` transiently MISSES. Control then
+# falls through with `anchor_common_cf is None` and no guard above it.
+# ---------------------------------------------------------------------------
+
+
+def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monkeypatch):
+    """A transiently unresolvable ANCHOR root must never license a write into
+    a genuinely different repo.
+
+    Deliberately patches `resolve_git_root` for the ANCHOR path ONLY. A blanket
+    "make resolution fail" patch does NOT reach this state -- it also fails the
+    gitdir probe, which short-circuits at the early return above and proves
+    nothing.
+    """
+    _set_anchor(monkeypatch, repos, "sess-ac14-anchor-miss")
+    anchor_abs = str(repos["anchor"].resolve())
+    real_resolve_git_root = guard.resolve_git_root
+
+    def _anchor_root_misses(cwd=None):
+        import os as _os
+
+        if cwd is not None and _os.path.abspath(str(cwd)) == anchor_abs:
+            return None  # simulated transient `--show-toplevel` miss, gitdir unaffected
+        return real_resolve_git_root(cwd)
+
+    monkeypatch.setattr(guard, "resolve_git_root", _anchor_root_misses)
+
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac14-anchor-miss", str(repos["anchor"]), {}
+    )
+
+    assert result is not None, (
+        "FOREIGN WRITE ALLOWED: the anchor's root resolution missed and the guard "
+        "stopped bumping a write into a different repo. Envelope: %r" % (result,)
+    )
+
+
+def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monkeypatch):
+    """The converse, and the original defect: no root resolution succeeding
+    anywhere must still not deny a write to the session's OWN repo.
+
+    Stronger than the target-side test above, which leaves the anchor side
+    resolving. Passes only because neither side derives from a root spawn any
+    more -- a build that still consulted `resolve_git_root` for the comparison
+    cannot satisfy both this and the anchor test above.
+    """
+    _set_anchor(monkeypatch, repos, "sess-ac14-all-miss")
+    workdir = repos["anchor"] / "inner"
+    workdir.mkdir()
+    cmd = f"cp {_posix(repos['anchor'] / 'README.md')} {_posix(workdir / 'note.txt')}"
+
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: None)
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ac14-all-miss", str(repos["anchor"]), {}
+    )
+
+    assert result is None, (
+        "OWN-REPO WRITE DENIED: unresolvable roots were read as a different repo. "
+        "Envelope: %r" % (result,)
+    )

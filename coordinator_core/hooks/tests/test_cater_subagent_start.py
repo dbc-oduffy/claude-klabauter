@@ -26,6 +26,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks.cater_subagent_start import (
+    ADDITIONAL_CONTEXT_CHAR_CAP,
+    BLOCKS_COMPANION_MARKER_PREFIX,
     SIDECAR_MISS_MARKER,
     SIDECAR_PATH_MARKER_PREFIX,
     compose_catering,
@@ -214,6 +216,49 @@ def test_role_framing_lands_last(git_repo: Path, monkeypatch: pytest.MonkeyPatch
     assert result.index(SIDECAR_PATH_MARKER_PREFIX) < result.index(SNIPPET_A_BODY)
 
 
+def test_under_cap_type_keeps_blocks_inline_no_companion_file(git_repo: Path) -> None:
+    """AC9 amendment, threshold-not-a-switch: a composed total under the
+    cap keeps its blocks inline, byte-identical to today (AC1) -- no
+    pointer marker, no companion file written."""
+    payload = _payload(
+        ELIGIBLE_TYPE, "session-under-cap-1", str(git_repo), contract_blocks=[SNIPPET_A, SNIPPET_B]
+    )
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP
+    assert BLOCKS_COMPANION_MARKER_PREFIX not in result
+    assert SNIPPET_A_BODY in result
+    assert SNIPPET_B_BODY in result
+
+    session_dir = git_repo / "state" / "subagent-share" / "session-under-cap-1"
+    companion_files = list(session_dir.glob("*.blocks.md")) if session_dir.is_dir() else []
+    assert companion_files == []
+
+
+def test_over_cap_write_failure_falls_back_to_inline_blocks(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC9 fail-open: the companion-file write is its own try/except --
+    a resolution/write failure falls back to today's inline blocks, never
+    to silence and never to an exception."""
+    import coordinator_core.hooks.cater_subagent_start as mod
+
+    monkeypatch.setattr(mod, "ADDITIONAL_CONTEXT_CHAR_CAP", 1)
+
+    def _boom(*a, **k):
+        raise OSError("simulated companion-file write failure")
+
+    monkeypatch.setattr(mod, "_spill_blocks_to_companion", _boom)
+
+    payload = _payload(
+        ELIGIBLE_TYPE, "session-spill-fail-1", str(git_repo), contract_blocks=[SNIPPET_A]
+    )
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SNIPPET_A_BODY in result
+    assert BLOCKS_COMPANION_MARKER_PREFIX not in result
+
+
 def test_no_teammate_clause_marker_present(git_repo: Path) -> None:
     """Anti-scope: the named-teammate clause is not ported -- its marker
     must never appear even when the payload happens to carry a `name`
@@ -347,6 +392,79 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(tmp_path: Path)
         # survives placeholder substitution rather than the raw body.
         probe = body.strip().splitlines()[0][:40]
         assert probe in result, f"block {name!r} not present in composed catering text"
+
+
+@pytestmark_doe
+def test_real_staff_eng_payload_spills_blocks_to_companion_file(tmp_path: Path) -> None:
+    """AC9 amendment: `coordinator:staff-eng` (the widest `contract_blocks`
+    row on disk, measured ~31,913 composed chars) must spill its blocks leg
+    to a companion file rather than blow the `additionalContext` cap --
+    injection-only substring checks, not a semantic presence check
+    (Anti-scope)."""
+    import os
+
+    import yaml
+
+    from coordinator_core.snippet_sync.registry import get_snippet_entry, load_registry
+    from coordinator_core.subagent_sandbox.provision_report import (
+        _extract_contract_block_body,
+    )
+
+    OVER_CAP_TYPE = "coordinator:staff-eng"
+
+    policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
+    block_names = policy_data["contract_blocks"][OVER_CAP_TYPE]
+
+    snippets_dir = Path(DOE_ROOT) / "coordinator" / "snippets"
+    registry_data = load_registry(snippets_dir / "registry.toml")
+    probes = []
+    for name in block_names:
+        entry = get_snippet_entry(registry_data, name)
+        header_style = entry.get("header_style", "sentinel-embedded")
+        snippet_text = (snippets_dir / f"{name}.md").read_text(encoding="utf-8")
+        body = _extract_contract_block_body(
+            snippet_text, header_style, entry["sentinel_begin"], entry["sentinel_end"]
+        )
+        assert body is not None, f"could not extract real block {name!r}"
+        probes.append(body.strip().splitlines()[0][:40])
+
+    import shutil
+
+    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / "ac9-real-staff-eng"
+    os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)
+    try:
+        payload = {
+            "agent_type": OVER_CAP_TYPE,
+            "session_id": "ac9-real-staff-eng",
+            "contract_blocks": block_names,
+        }
+        result = compose_catering(payload, cwd=DOE_ROOT)
+
+        assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP
+        assert result.count(BLOCKS_COMPANION_MARKER_PREFIX) == 1
+        for probe in probes:
+            assert probe not in result, f"block probe {probe!r} leaked into additionalContext"
+
+        marker_line = next(
+            line for line in result.splitlines() if line.startswith(BLOCKS_COMPANION_MARKER_PREFIX)
+        )
+        companion_rel_path = marker_line[len(BLOCKS_COMPANION_MARKER_PREFIX):]
+        companion_file = Path(DOE_ROOT) / companion_rel_path
+        assert companion_file.is_file()
+        companion_text = companion_file.read_text(encoding="utf-8")
+        for probe in probes:
+            assert probe in companion_text, f"block probe {probe!r} missing from companion file"
+
+        # Sidecar offer and role framing (if present) keep their canonical
+        # relative order around the pointer -- same order as today.
+        if SIDECAR_PATH_MARKER_PREFIX in result:
+            assert result.index(SIDECAR_PATH_MARKER_PREFIX) < result.index(
+                BLOCKS_COMPANION_MARKER_PREFIX
+            )
+    finally:
+        os.environ.pop("SUBAGENT_SANDBOX_POLICY", None)
+        shutil.rmtree(session_dir, ignore_errors=True)
 
 
 @pytestmark_doe

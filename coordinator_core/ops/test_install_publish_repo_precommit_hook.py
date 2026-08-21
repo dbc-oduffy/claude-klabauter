@@ -22,6 +22,7 @@ import pytest
 import coordinator_core.ops.install_publish_repo_precommit_hook as _mod
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
 from coordinator_core.testing import symlink_capability
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Declared, not excused: this file behaviorally executes the emitted pre-commit
 # hook via real `sh`/`git` (per the D2 fix's own contract) to prove the hook's
@@ -75,7 +76,7 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
     )
 
 
@@ -403,7 +404,9 @@ fi
 
 def _bash_path() -> str:
     # `command` is a shell builtin; invoke via sh -c to resolve it.
-    result = subprocess.run(["/bin/sh", "-c", "command -v bash"], capture_output=True, text=True)
+    result = subprocess.run(
+        [require_sh_interpreter(), "-c", "command -v bash"], capture_output=True, text=True
+    )
     path = result.stdout.strip()
     if not path:
         pytest.skip("bash not found on PATH in this environment")
@@ -411,7 +414,9 @@ def _bash_path() -> str:
 
 
 def _node_path() -> str:
-    result = subprocess.run(["/bin/sh", "-c", "command -v node"], capture_output=True, text=True)
+    result = subprocess.run(
+        [require_sh_interpreter(), "-c", "command -v node"], capture_output=True, text=True
+    )
     path = result.stdout.strip()
     if not path:
         pytest.skip("node not found on PATH in this environment")
@@ -419,7 +424,9 @@ def _node_path() -> str:
 
 
 def _git_path() -> str:
-    result = subprocess.run(["/bin/sh", "-c", "command -v git"], capture_output=True, text=True)
+    result = subprocess.run(
+        [require_sh_interpreter(), "-c", "command -v git"], capture_output=True, text=True
+    )
     path = result.stdout.strip()
     if not path:
         pytest.skip("git not found on PATH in this environment")
@@ -456,12 +463,12 @@ def _path_without_node(tmp_path: Path) -> str:
     identity check regardless of which interpreter-missing case is under
     test) but no node binary resolvable on it."""
     return _make_tool_bindir(
-        tmp_path, {"bash": _bash_path(), "git": _git_path(), "sh": "/bin/sh"}
+        tmp_path, {"bash": _bash_path(), "git": _git_path(), "sh": require_sh_interpreter()}
     )
 
 
 def _path_without_bash(tmp_path: Path) -> str:
     """A PATH with node and git reachable but no bash binary resolvable on it."""
     return _make_tool_bindir(
-        tmp_path, {"node": _node_path(), "git": _git_path(), "sh": "/bin/sh"}
+        tmp_path, {"node": _node_path(), "git": _git_path(), "sh": require_sh_interpreter()}
     )

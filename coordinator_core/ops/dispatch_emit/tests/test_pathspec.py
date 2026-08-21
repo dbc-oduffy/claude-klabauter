@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.pathspec import (
     DirectoryShapedWriteError,
     NoTestTargetError,
+    _map_written_path_to_test_target,
     NoWritesDeclaredError,
     commit_pathspec,
     is_concrete_surface,
@@ -254,10 +255,11 @@ def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
         [_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])],
         [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
     ]
-    with pytest.raises(NoTestTargetError) as excinfo:
-        terminal_test_scope(waves)
-    assert "CONTRACT.md" in str(excinfo.value)
-    assert "dispatch-emit.md" in str(excinfo.value)
+    # Both paths are prose. There is no edit the plan author could make to
+    # satisfy a test-target check on them, so this is a legitimately empty
+    # scope rather than an authoring omission -- emit.compose_script omits
+    # the terminal phase and narrates the omission.
+    assert terminal_test_scope(waves) == []
 
 
 def test_terminal_test_scope_drops_doc_paths_but_keeps_mapped_ones():
@@ -321,9 +323,16 @@ def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path
         encoding="utf-8",
     )
     waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
-    with pytest.raises(NoTestTargetError) as excinfo:
-        terminal_test_scope(waves, repo_root=tmp_path)
-    assert "machine-load-norm.md" in str(excinfo.value)
+    # The point of these cases is that nothing resolves. That now reads as an
+    # empty scope rather than a refusal (the doc is prose), which is a weaker
+    # signal, so assert the mapper directly too.
+    assert terminal_test_scope(waves, repo_root=tmp_path) == []
+    assert (
+        _map_written_path_to_test_target(
+            "docs/wiki/machine-load-norm.md", repo_root=tmp_path
+        )
+        is None
+    )
 
 
 def test_terminal_test_scope_resolves_a_flat_test_directory_at_an_ancestor(tmp_path):
@@ -404,9 +413,16 @@ def test_declared_optimism_does_not_resolve_a_path_nobody_declares(tmp_path):
     # non-existent candidate stays unresolved, so AC16's refusal survives the
     # widening rather than being quietly traded away for it.
     waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
-    with pytest.raises(NoTestTargetError) as excinfo:
-        terminal_test_scope(waves, repo_root=tmp_path)
-    assert "machine-load-norm.md" in str(excinfo.value)
+    # The point of these cases is that nothing resolves. That now reads as an
+    # empty scope rather than a refusal (the doc is prose), which is a weaker
+    # signal, so assert the mapper directly too.
+    assert terminal_test_scope(waves, repo_root=tmp_path) == []
+    assert (
+        _map_written_path_to_test_target(
+            "docs/wiki/machine-load-norm.md", repo_root=tmp_path
+        )
+        is None
+    )
 
 
 def test_terminal_test_scope_is_not_the_same_union_as_commit_pathspec():
@@ -427,3 +443,59 @@ def test_terminal_test_scope_is_not_the_same_union_as_commit_pathspec():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- The AC16 discriminator: an authoring omission vs a fact about the surface ---
+# Two repos hit the original all-or-nothing refusal independently (doe-claude-em
+# 2026-08-18, example-retrieval-repo-ue-addon-em 2026-08-20). These four pin the split that
+# replaced it, including the mixed case that must still refuse.
+
+
+def test_terminal_test_scope_refuses_an_uncovered_python_path():
+    # The omission AC16 exists for: a row writes code and names no test.
+    # The author CAN fix this, and a wave that proves nothing about the code
+    # it wrote is exactly what must not emit.
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
+    with pytest.raises(NoTestTargetError) as excinfo:
+        terminal_test_scope(waves)
+    assert "nonexistent_module.py" in str(excinfo.value)
+    assert "testable surfaces with no target" in str(excinfo.value)
+
+
+def test_terminal_test_scope_refuses_a_wave_mixing_prose_with_an_uncovered_module():
+    # Prose wave-mates do not excuse an uncovered .py. A wave is not "doc-only"
+    # because most of it is docs -- one testable surface with no target is
+    # still an omission, and the whole wave refuses.
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "docs/wiki/dispatch-emit.md",
+                    "coordinator_core/ops/dispatch_emit/nonexistent_module.py",
+                ],
+            )
+        ]
+    ]
+    with pytest.raises(NoTestTargetError) as excinfo:
+        terminal_test_scope(waves)
+    assert "nonexistent_module.py" in str(excinfo.value)
+
+
+def test_terminal_test_scope_is_empty_for_a_spine_that_writes_only_prose():
+    # The example-retrieval-repo-ue-addon repro: the plan's stated product deliverable
+    # was a write-up chunk, which the original cut made unexecutable.
+    waves = [
+        [_wave_row("C6", ["state/audits/ue-cpp-embedding-ab/RESULTS-samples.md"])],
+        [_wave_row("C11", ["state/audits/ue-cpp-embedding-ab/RESULTS.md"])],
+    ]
+    assert terminal_test_scope(waves) == []
+
+
+def test_a_prose_spine_does_not_swallow_the_zero_contribution_refusal():
+    # Regression: the widening keys on "every unmapped path is non-testable".
+    # A spine whose rows all declare `writes: []` has NO unmapped path, which
+    # vacuously satisfies that -- it must still refuse, never read as prose.
+    waves = [[_wave_row("C1", [])], [_wave_row("C2", [])]]
+    with pytest.raises(NoTestTargetError):
+        terminal_test_scope(waves)

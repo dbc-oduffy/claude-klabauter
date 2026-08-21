@@ -1409,11 +1409,7 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
     drops it — this is the check that catches a cascade that did not fire, not
     the primary fix.
 
-    Join key: `deliverable_id`, routed through `deliverable_equivalence.
-    canonicalize()` (C6b/AC11) — was previously exact-string match mirroring
-    `deliverable_cascade.py`'s own then-uncanonicalized discipline; that
-    module is converted by the same chunk, so this belt-and-braces check
-    stays consistent with the primary mechanism it backstops.
+    Join key: `deliverable_id`, exact-string match.
 
     Read-only — never writes, never raises. Returns {"path": <str>, "title":
     <str>} for the first matching implemented plan found, or None when
@@ -1429,10 +1425,6 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
         entries = sorted(plans_dir.iterdir())
     except OSError:
         return None
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    equivalence_map = load_equivalence_map(worktree)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     for path in entries:
         if path.suffix != ".md" or not path.is_file():
             continue
@@ -1443,7 +1435,7 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
         if not fm:
             continue
         plan_did = fm.get("deliverable_id")
-        if not isinstance(plan_did, str) or canonicalize(plan_did.strip(), equivalence_map) != canonical_deliverable_id:
+        if not isinstance(plan_did, str) or plan_did.strip() != deliverable_id:
             continue
         if fm.get("status") != "implemented":
             continue

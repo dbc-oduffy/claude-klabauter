@@ -6,25 +6,34 @@ Purpose: shared minting helper for all four authoring surfaces
 (coordinator-doc-new, roadmap-planning, handoff, spinoff) so identity is
 minted identically everywhere. Three mutually-exclusive paths:
   carry — existing deliverable_id supplied -> echo it unchanged (never re-mint)
-  stub  — stub_id supplied -> emit "dlv-<stub_id>" (D1: reuse stub identity)
+  stub  — stub_id supplied -> mint "dlv-<stub_id>-<6hex>" (DR-346 §8: the
+          6-hex suffix restores the uniqueness property the plan/handoff form
+          already had and the bare roadmap-stub form never did)
   slug  — slug supplied -> mint "dlv-<slug>-<6hex>" (uniqueness, not crypto)
 
 Logs which path was taken to stderr ("carry" / "mint-from-stub" /
 "mint-from-slug") — callers/tests grep this.
 
 Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3a
+Spec backlink: DR-346 § 8 (opaque machine-derived token; retires bare
+`dlv-<stub_id>`, which carried no random component and could not
+distinguish a legitimate carry from a same-named collision)
 Port of: mint-deliverable-id.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec:
     (shell-doc-ok: the recipe below quotes the bash oracle's own parameter
     expansion verbatim, so the shell spelling is the accurate one.)
 
-    - The slug path's 6-hex suffix is derived from slug + wall-clock seconds +
-      pid + a random component, mirroring the bash oracle's
-      `${SLUG}|$(date +%s)|$$|${RANDOM}` -> sha1 -> first 6 hex chars. This is
-      NOT cryptographically unique — matching the bash script's own documented
-      caveat ("Uniqueness is the goal; this is not cryptographic.") — do not
-      "fix" this into a stronger uniqueness guarantee mid-port.
+    - The slug and stub paths' 6-hex suffix is derived from the input value
+      (slug or stub_id) + wall-clock seconds + pid + a random component,
+      mirroring the bash oracle's `${SLUG}|$(date +%s)|$$|${RANDOM}` -> sha1
+      -> first 6 hex chars. This is NOT cryptographically unique — matching
+      the bash script's own documented caveat ("Uniqueness is the goal; this
+      is not cryptographic.") — do not "fix" this into a stronger uniqueness
+      guarantee mid-port.
+    - Bare `dlv-<stub_id>` (no suffix) is RETIRED per DR-346 §8. Existing
+      records minted under the old stub path are NOT backfilled — this is a
+      mint-time change only, per DR-346's explicit no-backfill ruling.
     - Exactly one of deliverable_id / stub_id / slug must be non-empty;
       zero or more-than-one is a usage error (exit 1 in the CLI form / raises
       ValueError from the library form), mirroring the bash script's
@@ -68,7 +77,9 @@ def mint(
         return deliverable_id, "carry"
 
     if stub_id:
-        return f"dlv-{stub_id}", "mint-from-stub"
+        hash_input = f"{stub_id}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
+        six_hex = _sha1_hex(hash_input)[:6]
+        return f"dlv-{stub_id}-{six_hex}", "mint-from-stub"
 
     hash_input = f"{slug}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
     six_hex = _sha1_hex(hash_input)[:6]
@@ -81,7 +92,7 @@ Purpose: Shared minting helper for all four authoring surfaces (coordinator-doc-
          roadmap-planning, handoff, spinoff) so identity is minted identically everywhere.
          Three paths:
            carry      — --deliverable-id supplied → echo it unchanged (never re-mint)
-           stub       — --stub-id supplied → emit "dlv-<stub_id>" (D1: reuse stub identity)
+           stub       — --stub-id supplied → mint "dlv-<stub_id>-<6hex>" (DR-346 §8: opaque suffix)
            slug       — --slug supplied → mint "dlv-<slug>-<6hex>" (uniqueness not crypto)
          Logs which path was taken to stderr ("carry" / "mint-from-stub" / "mint-from-slug").
 Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3a

@@ -92,6 +92,9 @@ import pytest
 
 from coordinator_core.spawn_policy import SpawnParseError, is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
+from coordinator_core.spawn_policy.spawn_names import (
+    SPAWN_NAMES_BY_MODULE as _SPAWN_NAMES_BY_MODULE,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -106,12 +109,12 @@ _GATE_SCOPE_DIRS: tuple[str, ...] = ("",)
 #: Spawn function names, keyed by the module they must resolve to. `os.system`
 #: and `os.popen` can never carry `creationflags=` (no such parameter exists
 #: on either), so any reachable call is unconditionally bare -- flagged unless
-#: exempted, same as an unsuppressed `subprocess` call.
-_SPAWN_NAMES_BY_MODULE: dict[str, set[str]] = {
-    "subprocess": {"run", "Popen", "check_output", "call", "check_call"},
-    "os": {"system", "popen"},
-    "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
-}
+#: exempted, same as an unsuppressed `subprocess` call. Sourced from
+#: `coordinator_core.spawn_policy.spawn_names` (moved there 2026-08-21, DR-345
+#: widening) so `nudge_windows_subprocess_popup.py`'s per-call-site AST path
+#: can import the identical table rather than re-deriving it -- see that
+#: module's own docstring. The `_SPAWN_NAMES_BY_MODULE` name is kept as the
+#: import alias so nothing below this line changes.
 
 #: Back-compat alias: some call sites/tests still refer to the subprocess-only
 #: name set directly.
@@ -390,6 +393,47 @@ _STANDING_GATE_FAMILIES: frozenset[str] = frozenset({"subprocess"})
 _ALL_FAMILIES: frozenset[str] = frozenset(_SPAWN_NAMES_BY_MODULE)
 
 
+def _bare_spawns_in_file(
+    relpath: str,
+    file_path: pathlib.Path,
+    families: frozenset[str] = _STANDING_GATE_FAMILIES,
+) -> list[BareSpawnSite]:
+    """Single-file half of the collector: parse `file_path` and return its
+    bare (unsuppressed) spawn sites, `relpath`-keyed for `_EXEMPT_CALL_SITES`
+    lookup.
+
+    Factored out of `find_bare_hot_path_spawns` so a caller that already has
+    a specific file in hand (a pinned population, not a directory to walk)
+    can get real per-file coverage without paying that function's directory
+    walk -- see `_REPO_ROOT_PY_FILES`'s docstring for why the walk is
+    disproportionate for that caller.
+    """
+    source = file_path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=str(file_path))
+    except SyntaxError as exc:
+        raise SpawnParseError(relpath, str(exc)) from exc
+
+    resolver = _SubprocessImportResolver()
+    resolver.visit(tree)
+    if not resolver.module_aliases and not resolver.function_aliases:
+        return []
+
+    module_no_console_names = _collect_no_console_names(tree.body)
+    source_lines = source.splitlines()
+    visitor = _BareSpawnVisitor(source_lines, resolver, module_no_console_names, families)
+    visitor.visit(tree)
+
+    violations: list[BareSpawnSite] = []
+    for lineno, enclosing, family in visitor.sites:
+        if (relpath, lineno) in _EXEMPT_CALL_SITES:
+            continue
+        violations.append(
+            BareSpawnSite(path=relpath, lineno=lineno, enclosing=enclosing, family=family)
+        )
+    return violations
+
+
 def find_bare_hot_path_spawns(
     root: pathlib.Path,
     scope_dirs: tuple[str, ...] = _GATE_SCOPE_DIRS,
@@ -414,27 +458,7 @@ def find_bare_hot_path_spawns(
         if is_test_tree_site(relpath):
             continue
 
-        source = file_path.read_text(encoding="utf-8")
-        try:
-            tree = ast.parse(source, filename=str(file_path))
-        except SyntaxError as exc:
-            raise SpawnParseError(relpath, str(exc)) from exc
-
-        resolver = _SubprocessImportResolver()
-        resolver.visit(tree)
-        if not resolver.module_aliases and not resolver.function_aliases:
-            continue
-
-        module_no_console_names = _collect_no_console_names(tree.body)
-        source_lines = source.splitlines()
-        visitor = _BareSpawnVisitor(source_lines, resolver, module_no_console_names, families)
-        visitor.visit(tree)
-        for lineno, enclosing, family in visitor.sites:
-            if (relpath, lineno) in _EXEMPT_CALL_SITES:
-                continue
-            violations.append(
-                BareSpawnSite(path=relpath, lineno=lineno, enclosing=enclosing, family=family)
-            )
+        violations.extend(_bare_spawns_in_file(relpath, file_path, families))
 
     return violations
 
@@ -699,10 +723,77 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
     "coordinator/bin": 110,
     "coordinator/lib": 13,
     "coordinator/scripts": 2,
-    "coordinator/tests": 0,
+    # `coordinator/tests` is deliberately ABSENT (was present, removed on
+    # review 2026-08-21). Every path under a `tests/` directory is filtered by
+    # `is_test_tree_site` AFTER the walk, so the entry was structurally
+    # incapable of ever being non-zero — it read as coverage while providing
+    # none, which is the same dishonesty as the unwalked roots this baseline
+    # exists to fix. Test-tree exemption is the gate's design, applied
+    # uniformly (`coordinator_core/**/tests/**` is exempt too), so this is not
+    # a gap left open.
     "dist": 0,
     "scripts": 0,
 }
+
+#: Top-level `.py` files, which no root key above reaches — a baseline key is a
+#: DIRECTORY and `find_bare_hot_path_spawns` walks recursively, so there is no
+#: key that means "the repo root, non-recursively".
+#:
+#: Covered by POPULATION *and* by content, at two different costs. Scoping
+#: `find_bare_hot_path_spawns` at `REPO_ROOT` to reach these two files
+#: measured **6969ms CPU** — it enumerates every `.py` in the repo before the
+#: scope filter applies, versus 1281ms for all six directory roots combined.
+#: That is disproportionate for a fast-tier gate under this repo's load norm,
+#: and "make the work cheaper" beats widening the budget -- but the fix is a
+#: cheaper walk, not giving up on content coverage: `_bare_spawns_in_file`
+#: parses exactly these two named files directly (no directory walk at all),
+#: measured sub-millisecond. `test_top_level_py_files_have_no_bare_spawn`
+#: below uses it, so an *existing* pinned file gaining a bare spawn later is
+#: caught same as a new file arriving.
+#:
+#: The population pin still earns its place alongside that: a new top-level
+#: `.py` file is invisible to every baseline root (none of them reach
+#: `REPO_ROOT` non-recursively) and invisible to the content check above
+#: (which only scans names already in this set), so nothing catches its
+#: *arrival* without this assertion forcing a decision about it. Found in
+#: review 2026-08-21; `conftest.py` is loaded by every pytest run, so this
+#: surface is genuinely hot even though both files are currently clean.
+_REPO_ROOT_PY_FILES: frozenset[str] = frozenset(
+    {"conftest.py", "scratch_check_forwarders.py"}
+)
+
+
+def test_top_level_py_population_is_pinned():
+    """A new top-level `.py` file must be a decision, never a silent arrival.
+
+    Not a spawn check — a POPULATION check, for the one surface no baseline
+    key can reach. See `_REPO_ROOT_PY_FILES` for why this is not a walk.
+    """
+    found = {p.name for p in REPO_ROOT.glob("*.py")}
+    assert found == set(_REPO_ROOT_PY_FILES), (
+        "top-level .py population changed — added: "
+        f"{sorted(found - set(_REPO_ROOT_PY_FILES))}, removed: "
+        f"{sorted(set(_REPO_ROOT_PY_FILES) - found)}. No baseline root reaches "
+        "the repo root non-recursively, so a new file here is uncovered by "
+        "every gate leg. Either console-suppress its spawns and add it to "
+        "_REPO_ROOT_PY_FILES, or move it under a covered root."
+    )
+
+
+def test_top_level_py_files_have_no_bare_spawn():
+    """Content check for the pinned population itself -- catches a bare spawn
+    landing in an EXISTING root file (`conftest.py` gaining one later), which
+    the population pin above cannot: it only checks the filename set, not
+    what's inside. Direct per-file parse, not a walk -- see
+    `_REPO_ROOT_PY_FILES`'s docstring for the cost this avoids.
+    """
+    violations: list[BareSpawnSite] = []
+    for name in sorted(_REPO_ROOT_PY_FILES):
+        file_path = REPO_ROOT / name
+        if not file_path.is_file():
+            continue
+        violations.extend(_bare_spawns_in_file(name, file_path))
+    assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
 def test_bare_spawn_outside_coordinator_core_only_ever_shrinks():

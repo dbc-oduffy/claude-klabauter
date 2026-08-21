@@ -130,9 +130,12 @@ def default_record(session_id: str) -> Dict[str, Any]:
         # When a pickup adopts an artifact, the session's work belongs to THAT
         # baton from then on, and this record stops being the live one:
         # `closed_at` stamps when, `closed_into` names the artifact it is now
-        # an ancestor of. First-wins, like `created_at` — a later adoption in
-        # the same session never re-closes an already-closed journal, so the
-        # pair always names the adoption that actually ended it.
+        # an ancestor of. Each field is independently first-wins, like
+        # `created_at` — a later adoption in the same session never
+        # overwrites an already-set `closed_at` or `closed_into`. The two
+        # are set together by every current caller, but this primitive does
+        # not enforce that pairing: a caller passing only one non-`None`
+        # field can leave the other unset (see `merge_baton`'s docstring).
         #
         # Deliberately NOT `promoted_to`: that field means "this record was
         # scaffolded into a handoff under state/handoffs/", a corpus artifact
@@ -313,11 +316,17 @@ def merge_baton(
     ``None`` without that being indistinguishable from "leave it alone".
 
     ``closed_at``/``closed_into`` take the same sentinel but are FIRST-WINS on
-    a non-``None`` value: a journal already carrying a closure keeps it, so a
-    session that adopts a second artifact does not re-point the closure at the
-    later adoption. Passing an explicit ``None`` still clears either field —
+    a non-``None`` value, EACH INDEPENDENTLY of the other: a journal already
+    carrying a value in either field keeps it, so a session that adopts a
+    second artifact does not re-point that field at the later adoption.
+    Passing an explicit ``None`` still clears either field on its own —
     reopening is deliberate and possible, it just is not what a repeated
-    adoption does by accident.
+    adoption does by accident. This primitive does not enforce that the two
+    fields move together: a caller passing only one of them non-``None`` can
+    leave the record with one set and the other still ``None``. The sole
+    current caller (``pickup_assemble._adopt_into_baton``) always passes both
+    together, and any caller stamping a closure is expected to do the same;
+    callers wanting an atomicity guarantee must enforce it themselves.
 
     List fields (``adopted_artifacts``, ``minted_artifacts``, ``commits``) are
     DEDUP-EXTENDED, not
@@ -365,10 +374,11 @@ def merge_baton(
             record["intent"] = intent
         if promoted_to is not _UNSET:
             record["promoted_to"] = promoted_to
-        # First-wins: an already-closed journal is never re-closed, so the
-        # pair names the adoption that actually ended it rather than the
-        # last one to run. An explicit None still clears both (the same
-        # escape `promoted_to` has), so a caller can reopen deliberately.
+        # First-wins, independently per field: an already-set closed_at (or
+        # closed_into) is never overwritten by a later adoption. An explicit
+        # None still clears whichever field is passed (the same escape
+        # `promoted_to` has), so a caller can reopen deliberately. Callers
+        # are expected to pass both together; nothing here enforces that.
         if closed_at is not _UNSET:
             if closed_at is None or record.get("closed_at") is None:
                 record["closed_at"] = closed_at

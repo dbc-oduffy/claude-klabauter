@@ -30,6 +30,7 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
     main,
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
+from coordinator_core.testing.sh_interpreter import require_sh_interpreter
 
 # Declared, not excused: this file spawns real `git` and `sh` processes
 # because the tests are deliberately BEHAVIORAL -- they execute the emitted
@@ -98,7 +99,7 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["/bin/sh", str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
     )
 
 
@@ -1176,7 +1177,7 @@ def test_hook_sh_syntax_is_valid(tmp_path, monkeypatch):
     assert main([str(meta)]) == 0
 
     result = subprocess.run(
-        ["/bin/sh", "-n", str(_hook_path(meta))], capture_output=True, text=True
+        [require_sh_interpreter(), "-n", str(_hook_path(meta))], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
 

@@ -1344,6 +1344,63 @@ def _argv_expr_splices(argv: ast.expr, target_names: set[str]) -> bool:
     return False
 
 
+def _argv_accumulates_loop_target(
+    loop: ast.AST | None,
+    call: ast.Call,
+    target_names: set[str],
+    bindings: dict[str, ast.expr] | None,
+) -> bool:
+    """Discriminator 7's ACCUMULATION leg: argv is built up by `.extend()`/`.append()` inside a
+    NESTED loop over the outer loop's target, then spawned once -- so the single call carries
+    the whole group, exactly like the `base + chunk` splice the concatenation leg already reads.
+
+    The splice leg cannot see this spelling. `_loop_expr_bindings` resolves the argv name to its
+    `ast.Assign` RHS, and here that RHS is the BARE PREFIX (`argv = ["git", "restore",
+    "--staged", "--"]`) with the batch arriving afterwards through mutation; no `Starred` element
+    and no `BinOp(Add)` operand ever names the loop target, so `_argv_expr_splices` declines by
+    construction. Measured cost of not having it: `ops/fleet/_common.py::
+    _resync_main_index_for_moves` and `::_resync_main_index_for_reaps`, whose bounded
+    `_argv_group_chunks` loops are the 2026-08-21 FIX for a Windows `WinError 206` argv overflow
+    -- the collector flagged the remedy it recommends, discriminator 4's own stated failure mode
+    one spelling over.
+
+    Not a widening of the bare-`Name` decline `_argv_splices_loop_target` documents. Four
+    conjuncts, all structural: the argv name is locally bound to an argv-shaped RHS inside this
+    loop (so it is built per iteration, not carried in from outside); a nested `for` iterates
+    something naming the outer target; that nested loop mutates THIS name via `extend`/`append`;
+    and the mutation's arguments name the nested loop's own target, so what lands in argv is the
+    per-item payload rather than a constant. A nested loop over an unrelated collection, or one
+    that appends only invariants, still declines."""
+    if loop is None or not target_names or not call.args:
+        return False
+    argv = call.args[0]
+    if not isinstance(argv, ast.Name):
+        return False
+    if not bindings or argv.id not in bindings:
+        return False
+    for inner in ast.walk(loop):
+        if inner is loop or not isinstance(inner, (ast.For, ast.AsyncFor)):
+            continue
+        if not (_names_in(inner.iter) & target_names):
+            continue
+        inner_targets = _loop_target_names(inner.target)
+        if not inner_targets:
+            continue
+        for sub in ast.walk(inner):
+            if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)):
+                continue
+            grower = sub.func
+            if not (
+                isinstance(grower.value, ast.Name)
+                and grower.value.id == argv.id
+                and grower.attr in ("extend", "append")
+            ):
+                continue
+            if any(_names_in(arg) & inner_targets for arg in sub.args):
+                return True
+    return False
+
+
 # --------------------------------------------------------------------------
 # Repo-wide, one-hop function index (routes b/c/d/e)
 # --------------------------------------------------------------------------
@@ -2950,7 +3007,13 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         #: (`_loop_expr_bindings`), for discriminator 7's one-hop resolution of a call that
         #: passes a local (`cmd = base + batch; run(cmd)`) rather than the splice itself.
         self.call_expr_bindings: dict[tuple[int, int], dict[str, ast.expr]] = {}
+        #: (lineno, col_offset) -> the NEAREST enclosing qualifying loop NODE, for discriminator
+        #: 7's accumulation leg (`_argv_accumulates_loop_target`), which reads the loop's own
+        #: nested structure rather than a name map derived from it. Recorded rather than
+        #: re-derived: the collector has no other handle on which loop marked a call.
+        self.call_loop_node: dict[tuple[int, int], ast.AST] = {}
         self._loop_expr_bindings_stack: list[dict[str, ast.expr]] = []
+        self._loop_node_stack: list[ast.AST] = []
         self._loop_retry_stack: list[bool] = []
         self._loop_taint_stack: list[frozenset[str]] = []
         self._loop_argv0_bindings_stack: list[dict[str, ast.expr]] = []
@@ -3013,8 +3076,10 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         # collector can pair it with the call-level half. See `_is_retry_loop`.
         self._loop_retry_stack.append(_is_retry_loop(node))
         self._loop_expr_bindings_stack.append(_loop_expr_bindings(node))
+        self._loop_node_stack.append(node)
         for stmt in node.body:
             self.visit(stmt)
+        self._loop_node_stack.pop()
         self._loop_expr_bindings_stack.pop()
         self._loop_retry_stack.pop()
         self._loop_target_stack.pop()
@@ -3112,6 +3177,8 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
                 self.call_loop_is_retry[key] = self._loop_retry_stack[-1]
             if self._loop_expr_bindings_stack:
                 self.call_expr_bindings[key] = self._loop_expr_bindings_stack[-1]
+            if self._loop_node_stack:
+                self.call_loop_node[key] = self._loop_node_stack[-1]
         self.generic_visit(node)
 
 
@@ -3130,6 +3197,54 @@ def _call_callee_name(call: ast.Call) -> str | None:
 
 def _resolve_runner_shaped_arg_name(value: ast.expr) -> str | None:
     return value.id if isinstance(value, ast.Name) else None
+
+
+def _name_is_locally_bound_data(fn: ast.AST | None, name: str) -> bool:
+    """True when `name` is bound inside `fn` to something that provably is NOT a callable, so a
+    runner-shaped IDENTIFIER at a call site there cannot denote a runner.
+
+    Route-d resolution precision, not a discriminator: this is the same defect route f already
+    fixed on its own leg (see the `default_name` scoping comment in the collector). Route d
+    matches a bare `Name` argument by PREFIX -- `run`, `git`, `spawn` -- and then confirms it
+    repo-wide against `index.direct_spawn_funcs`. Neither half asks what the identifier is bound
+    to HERE, so an ordinary local holding a string collides with any same-named spawner anywhere
+    in the scanned tree. Both live instances are that exact shape and neither has anything to
+    batch:
+
+      `block_subagent_commit._fold_template_is_bounded` -- `all(int(run) <= W for run in
+      re.findall(r"\\d+", template))`; `run` is a DIGIT RUN, the callee is the builtin `int`.
+      `fix_concrete_path_citations.fenced_line_numbers` -- `run = m.group(1) if m else ""`;
+      `run` is a fence's backtick run, the callee is the builtin `len`.
+
+    Two decisive binding shapes, both structural and both narrow enough to leave the real
+    injected-runner sites standing:
+
+      ITERATION TARGET -- a `for`/comprehension target is the loop's per-item value. Nothing in
+      this codebase iterates a collection OF runners and injects the element.
+      CONSTANT-BEARING RHS -- an assignment whose right-hand side can evaluate to a non-`None`
+      literal. `run = m.group(1) if m else ""` declines on the `""` branch. The real seam idiom
+      `run_git = run_git or default_run_git` (`consolidate_assemble.brief`, reached on route d
+      and the site two frozen inventory rows depend on) has no literal leaf and survives, as
+      does any plain `run = _run` alias.
+
+    A parameter binding is deliberately NOT a decline: the injectable-runner seam this route
+    exists to see is spelled exactly that way."""
+    if fn is None:
+        return False
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.For, ast.AsyncFor)) and name in _loop_target_names(node.target):
+            return True
+        if isinstance(node, ast.comprehension) and name in _loop_target_names(node.target):
+            return True
+        if isinstance(node, ast.Assign) and any(
+            name in _loop_target_names(target) for target in node.targets
+        ):
+            if any(
+                isinstance(leaf, ast.Constant) and leaf.value is not None
+                for leaf in ast.walk(node.value)
+            ):
+                return True
+    return False
 
 
 def _find_injected_runner_name(call: ast.Call) -> str | None:
@@ -3352,6 +3467,17 @@ def find_unbatched_per_item_spawns(
                 loop_visitor.call_expr_bindings.get(key),
             ):
                 continue
+            # Discriminator 7, accumulation leg: the same "one call carries the whole group"
+            # property, spelled as mutation of a locally-built argv inside a nested loop over
+            # the outer target rather than as a concatenation at the call. Separate predicate,
+            # same suppression point, so it is discovered and pinned like every other.
+            if _argv_accumulates_loop_target(
+                loop_visitor.call_loop_node.get(key),
+                node,
+                loop_visitor.call_loop_targets.get(key, set()),
+                loop_visitor.call_expr_bindings.get(key),
+            ):
+                continue
             route: str | None = None
 
             # route a-direct: the call itself is a recognized spawn. Both halves are
@@ -3395,7 +3521,18 @@ def find_unbatched_per_item_spawns(
             if route is None:
                 # route d-injected: a runner-shaped argument resolves to ANY direct spawner.
                 runner_name = _find_injected_runner_name(node)
-                if runner_name is not None and runner_name in index.direct_spawn_funcs:
+                # `_name_is_locally_bound_data`: route d's own scoping leg, the counterpart of
+                # route f's import check below. The repo-wide `direct_spawn_funcs` lookup is
+                # load-bearing and stays (see `_write_route_d_injected_runner_bare_name_
+                # collision`), so the collision is refused at the identifier instead: a name
+                # bound HERE to a loop item or a literal is not the runner it collides with.
+                if (
+                    runner_name is not None
+                    and runner_name in index.direct_spawn_funcs
+                    and not _name_is_locally_bound_data(
+                        index.func_defs.get((relpath, enclosing.split(".")[0])), runner_name
+                    )
+                ):
                     route = "d-injected"
 
             if route is None and callee is not None:
@@ -4060,15 +4197,18 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   (`cmd = log_cmd_base + revision_args + ["--"] + batch`) and passes THAT, so the
         #   matcher saw a bare `Name` and declined by design. Implementing the widening as
         #   written would have retired nothing. Read the code, not the ledger.
-        #   route-d name collision (1): `_fold_template_is_bounded`'s comprehension variable is
-        #   named `run` because it holds a regex digit-RUN. Route d resolves that bare name to
-        #   an unrelated module-level `run` that spawns. The callee is the builtin `int`, which
-        #   reaches no spawn by any route.
-        (
-            'coordinator_core/bash_guards/block_subagent_commit.py',
-            '_fold_template_is_bounded',
-            'int',
-        ),
+        #   route-d name collision (1): RETIRED 2026-08-21 by `_name_is_locally_bound_data`,
+        #   route d's own scoping leg -- the disposition this row's own note demanded (a
+        #   mechanically-decidable class gets a matcher, not a ledger entry). The note stood
+        #   correct: `_fold_template_is_bounded`'s comprehension variable is named `run` because
+        #   it holds a regex digit-RUN, route d resolved that bare name to an unrelated
+        #   module-level spawner, and the callee is the builtin `int`. What decides it is the
+        #   BINDING at the call site, not the name: an identifier bound here to a loop item or
+        #   to a literal cannot denote the runner it collides with. Measured: this key plus
+        #   `fix_concrete_path_citations.fenced_line_numbers -> len` (the same collision, bound
+        #   by `run = m.group(1) if m else ""`, which reached the gate after this inventory was
+        #   frozen), zero collateral -- `consolidate_assemble.brief`'s
+        #   `run_git = run_git or default_run_git` has no literal leaf and still resolves.
         #   range-base re-key (1): flagged at a site whose own loop was already resolved
         #   upstream; recorded MISCLASSIFIED by C3 against the source, not the ledger.
         (
@@ -4298,6 +4438,10 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
         "test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local",
         "test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target",
     ),
+    "_argv_accumulates_loop_target": (
+        "test_discriminator_argv_accumulation_declines_a_nested_loop_over_another_collection",
+        "test_discriminator_argv_accumulation_declines_an_invariant_payload",
+    ),
     #: Discriminator 10's condition is the retry-loop flag AND this name-overlap test; the flag
     #: is set in the visitor and pinned under `_is_retry_loop`, so the overlap half is pinned by
     #: the same three tests -- they are what fails if either half stops discriminating.
@@ -4497,21 +4641,26 @@ def test_burn_down_known_preexisting_amplification_sites():
     2026-08-08-git-amplification-gate-known-sites.md`.
 
     THE BURN-DOWN IS PARTIAL, NOT COMPLETE, and `designed_red` STAYS for that reason. Wave 4
-    (2026-08-19) took the inventory 94 -> 14 and every one of the 79 it cleared carries a
-    recorded disposition, but 14 keys remain and this assertion is NOT yet a standing
-    `violations == []`. A reader six months out must not mistake this for a weakened test, and
-    must not mistake the shrunk inventory for a finished one. The 15 break down as:
+    (2026-08-19) took the inventory 94 -> 14, then the same day's adversarial re-verification
+    returned 22 keys it had exempted on claims that did not survive being read at the call site;
+    2026-08-21 retired one more to a discriminator. 28 keys remain and this assertion is NOT yet
+    a standing `violations == []`. A reader six months out must not mistake this for a weakened
+    test, and must not mistake the shrunk inventory for a finished one. They break down as:
 
       4  OPEN     -- a real batch primitive exists and was declined on cost, not on principle.
                     C-review overturned all four from EXEMPT (`branch_reachable`,
                     `check_schema_drift_advisory`, `check_destructive_rm`, `orphan_branch_
                     sweep::main -> _run`). Each is genuinely fixable work.
-     10  MISCLASSIFIED -- collector false positives awaiting a DISCRIMINATOR, not a fix. See
-                    `_KNOWN_SITES` for the four mechanically-decidable classes and what each
-                    would retire.
+     19  OVERTURNED -- 13 REFUTED (a working batch primitive was named at the call site) plus
+                    6 NOT PROVEN (the governing rationale is not evidenced there). Debt in the
+                    same sense as OPEN; per-key evidence is cited inline in `_KNOWN_SITES`.
+      5  MISCLASSIFIED -- collector false positives awaiting a DISCRIMINATOR, not a fix. See
+                    `_KNOWN_SITES` for the mechanically-decidable classes and what each would
+                    retire, and for the three (retry-loop, discriminator-7 gap, route-d name
+                    collision) that have already been retired exactly that way.
 
-    So only the 4 OPEN rows are amplification debt in the original sense. The other 10 are a
-    collector-precision backlog. Closing this test means disposing all 14;
+    So 23 rows are amplification debt in the original sense. The other 5 are a
+    collector-precision backlog. Closing this test means disposing all 28;
     `_KNOWN_SITES` shrinking to `frozenset()` is what flips the marker off.
 
     Why `designed_red`, not gated: burning these down is a follow-up workstream, not this
@@ -5002,6 +5151,135 @@ def test_discriminator_argv_spliced_chunk_not_flagged(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
+
+
+def test_discriminator_argv_accumulated_over_chunk_not_flagged(tmp_path):
+    """Discriminator 7, accumulation leg: argv is a bare prefix list grown by `.extend()` in a
+    nested loop over the chunk, then spawned once. The real shape at `ops/fleet/_common.py::
+    _resync_main_index_for_moves`, whose bounded chunking is itself the fix for a Windows argv
+    overflow -- the splice leg cannot see it because the assignment RHS carries only the prefix."""
+    fixture = tmp_path / "disc_accumulate.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def resync(groups):\n"
+        "    for chunk in _chunks(groups):\n"
+        "        argv = ['git', 'restore', '--staged', '--']\n"
+        "        for _payload, tokens in chunk:\n"
+        "            argv.extend(tokens)\n"
+        "        subprocess.run(argv, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_discriminator_argv_accumulation_declines_a_nested_loop_over_another_collection(tmp_path):
+    """Negative pin for the accumulation leg. The nested loop iterates a collection that has
+    nothing to do with the outer target, so argv carries loop-invariant flags and the outer walk
+    is still one spawn per item -- the leg must key on the nested iterable NAMING the outer
+    target, never on "there is a nested loop that grows argv"."""
+    fixture = tmp_path / "disc_accumulate_unrelated.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def resync(paths, flags):\n"
+        "    for path in paths:\n"
+        "        argv = ['git', 'add', '--']\n"
+        "        for flag in flags:\n"
+        "            argv.extend(flag)\n"
+        "        argv.append(path)\n"
+        "        subprocess.run(argv, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["resync"]
+
+
+def test_discriminator_argv_accumulation_declines_an_invariant_payload(tmp_path):
+    """Second negative pin: the nested loop DOES iterate the outer target, but what it pushes
+    into argv is a constant, so no per-item payload is carried and the call is still one spawn
+    per outer item. Without the "mutation arguments name the nested target" conjunct this shape
+    would suppress, which is the widen-until-silent failure `_DISCRIMINATOR_PINS` exists for."""
+    fixture = tmp_path / "disc_accumulate_invariant.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def resync(groups):\n"
+        "    for chunk in groups:\n"
+        "        argv = ['git', 'log']\n"
+        "        for _item in chunk:\n"
+        "            argv.append('--oneline')\n"
+        "        subprocess.run(argv, cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["resync"]
+
+
+def test_route_d_declines_a_runner_shaped_name_bound_to_a_loop_item(tmp_path):
+    """Route-d resolution precision (`_name_is_locally_bound_data`), iteration-target leg. A
+    comprehension variable spelled `run` because it holds a digit RUN collides by prefix with an
+    unrelated module-level spawner, and route d resolves the collision repo-wide. The callee is
+    the builtin `int`, which reaches no spawn by any route. Real shape:
+    `block_subagent_commit._fold_template_is_bounded`."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    (tmp_path / "fold.py").write_text(
+        "import re\n"
+        "\n"
+        "def bounded(template, width, items):\n"
+        "    for item in items:\n"
+        "        if not all(int(run) <= width for run in re.findall(r'\\\\d+', template)):\n"
+        "            return False\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_route_d_declines_a_runner_shaped_name_bound_to_a_literal(tmp_path):
+    """Same predicate, constant-bearing-RHS leg. `run = m.group(1) if m else ''` can evaluate to
+    a string, so the identifier does not denote the same-named spawner it collides with. Real
+    shape: `fix_concrete_path_citations.fenced_line_numbers`."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    (tmp_path / "fences.py").write_text(
+        "def fenced(lines, pattern):\n"
+        "    inside = set()\n"
+        "    for lineno, line in enumerate(lines, start=1):\n"
+        "        m = pattern.match(line)\n"
+        "        run = m.group(1) if m else ''\n"
+        "        if run and len(run) >= 3:\n"
+        "            inside.add(lineno)\n"
+        "    return inside\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert violations == []
+
+
+def test_route_d_still_resolves_an_or_default_runner_binding(tmp_path):
+    """The pin that keeps `_name_is_locally_bound_data` from swallowing route d whole. The
+    injectable-seam idiom rebinds its own parameter (`run_git = run_git or default_run_git`,
+    `consolidate_assemble.brief`) -- a local assignment, but one with no literal leaf and no
+    iteration target, so the site stays reported. A predicate that declined here would silence
+    the sites two frozen inventory rows depend on."""
+    _write_route_d_injected_runner_bare_name_collision(tmp_path)
+    (tmp_path / "brief.py").write_text(
+        "def default_runner(argv, cwd):\n"
+        "    return None\n"
+        "\n"
+        "def worktree_is_dirty(run_git, path):\n"
+        "    return run_git(['status', '--porcelain'], path)\n"
+        "\n"
+        "def brief(worktrees, run_git=None):\n"
+        "    run_git = run_git or default_runner\n"
+        "    for wt in worktrees:\n"
+        "        worktree_is_dirty(run_git, wt)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["brief"]
 
 
 def test_discriminator_argv_spliced_chunk_not_flagged_through_wrapper(tmp_path):

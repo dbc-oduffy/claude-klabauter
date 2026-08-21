@@ -194,15 +194,63 @@ def test_promote_refuses_on_closed_at_alone(tmp_path, monkeypatch):
     because the target happens to be unreadable."""
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-closed2")
-    monkeypatch.setattr(
-        promote_mod, "_scaffold_via_doc_new", _fake_scaffold("state/handoffs/nope.md")
-    )
+    calls = []
+
+    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        calls.append(1)
+        fake = _fake_scaffold("state/handoffs/nope.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _counting_fake)
     store.merge_baton("sid-closed2", cwd=str(repo), closed_at="2026-08-21T12:00:00Z")
 
     result = _promote(session_id="sid-closed2", cwd=str(repo))
 
+    # Review: reviewer (P2 #3) — assert the guard's structural effect
+    # (refusal + no scaffold + no stamp), not just message prose.
     assert result["exit_code"] == 1
     assert "an adopted artifact" in result["error"]
+    assert not calls, "closed_at alone must never reach the scaffolder"
+    assert store.read_baton("sid-closed2", cwd=str(repo))["promoted_to"] is None
+
+
+def test_promote_returns_existing_path_when_promoted_then_closed(tmp_path, monkeypatch):
+    """A record can legitimately end up BOTH promoted_to AND closed_at/
+    closed_into (this session promoted first, then a later pickup adopted a
+    different artifact from the same session and closed the journal). The
+    promoted_to idempotence branch runs first and returns the existing
+    artifact cleanly -- no re-scaffold, no refusal -- because no new artifact
+    is created and the existing one is unaffected by the later closure.
+
+    Review: reviewer (P3 #1) -- pins the branch-order guarantee the module
+    docstring/comment claims but this diff left uncovered."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-promoted-then-closed")
+    calls = []
+
+    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        calls.append(1)
+        fake = _fake_scaffold("state/handoffs/2026-08-21-already-promoted.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _counting_fake)
+
+    first = _promote(session_id="sid-promoted-then-closed", cwd=str(repo))
+    assert first["exit_code"] == 0
+    assert len(calls) == 1
+
+    store.merge_baton(
+        "sid-promoted-then-closed",
+        cwd=str(repo),
+        closed_at="2026-08-21T12:00:00Z",
+        closed_into="state/handoffs/the-picked-up-baton.md",
+    )
+
+    second = _promote(session_id="sid-promoted-then-closed", cwd=str(repo))
+    assert second["exit_code"] == 0
+    assert second["already_promoted"] is True
+    assert second["handoff_path"] == first["handoff_path"]
+    assert len(calls) == 1, "the promoted_to branch must return before reaching the scaffolder again"
 
 
 def test_promote_still_works_on_an_open_journal(tmp_path, monkeypatch):

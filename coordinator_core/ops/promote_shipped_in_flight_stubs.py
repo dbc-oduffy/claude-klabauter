@@ -430,17 +430,6 @@ async def _run_promotions(handoffs_dir: Path, repo_root_path: Path) -> _Promotio
         if not deliverable_id:
             continue
 
-        # Join key canonicalized (C6b/AC11): `_rollup_derive` queries commits
-        # by an exact `Resolves: <id>` trailer match -- routing the stub's
-        # own read-side value through canonicalize() means two forked legs
-        # of one workstream query the SAME rollup state instead of two
-        # independently-tracked (and possibly disagreeing) ones. Does NOT
-        # touch `rollup_derive.py`'s own commit-trailer comparison, which is
-        # out of this chunk's write set.
-        from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-        deliverable_id = canonicalize(deliverable_id, load_equivalence_map(repo_root_path))
-
         roadmap_id = _fm_field(stub_abs, "roadmap_id")
 
         token, shas = _rollup_derive(deliverable_id)

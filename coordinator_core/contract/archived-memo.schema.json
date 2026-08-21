@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/archived-memo.schema.json",
   "x-schema-name": "archived-memo",
-  "x-schema-version": "1.6.0",
+  "x-schema-version": "1.7.0",
   "x-bump-class": "nested-field-additive",
-  "x-bump-note": "1.5.0 -> 1.6.0 catches the constant up to a shape drift: commit 0bf6d576e added `sent_by` to both emitted schemas without moving MEMO_SCHEMA_VERSION off 1.5.0, so the emitter stamped two different shapes with one version string until this bump (DoE-claude 2026-08-17 cross-repo memo, DR-097 § 3). Purely additive: one new optional property, never required — no previously-valid memo becomes invalid. 1.4.0 -> 1.5.0 added the append-only supersede-disposition field quartet (`disposition_superseded`, `superseding_note`, `superseding_realized_by`, `superseded_at`) to both schemas, plus the `_memo_cf_disposition_superseded_requires_companions` cross-field rule — records that an already-actioned memo's disposition was later reversed WITHOUT overwriting the original decision/actioned_note/realized_by (coordinator_core.ops.memo_transition._handle_supersede). Purely additive: four new optional properties, never required — no previously-valid memo carries `disposition_superseded` at all, so none becomes invalid. 1.3.0 -> 1.4.0 added `superseded_by` to the archived-memo schema (previously declared only on cross-repo-memo, while the archived corpus has always carried it on memos superseded before archival). Purely additive: one new optional property, never required — no previously-valid archived memo becomes invalid (debt 2026-07-28-archived-memo-schema-omits-superseded-by-1d8a0735e39a.yaml). (1.2.0 -> 1.3.0 added `space` as a new optional field and widened `supersedes` from a bare string to string-or-list, both in service of mechanical inbox-blitz bucketing (a sibling repo's 2026-07-28 proposal). Purely additive: no previously-valid memo becomes invalid — a string-valued `supersedes` still validates under the widened oneOf. 1.0.0 -> 1.2.0 adopted campaign_id and in_reply_to, commit 5140d176.)",
+  "x-bump-note": "1.6.0 -> 1.7.0 (gate-closure-signal-contract, cross-repo/inbox/2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, ruled by eng-director state/subagent-share/f6ed9dc2-6fc9-4804-9952-27e684f5f573/coordinatoreng-director-ceecede2.md) declares the optional `discharges` object — our half of the two-part contract whose receiving half landed on the vendored plan-tasks.schema.json 1.10.0 `external_gate[].closure_key`. A discharging repo stamps this block on an ORDINARY cross-repo memo (no new `kind:` enum member — a four-site cross-repo lockstep on the kind vocabulary was deliberately declined; the waiting repo finds a discharge by the block, never by `kind`) to let the waiting repo machine-match its own `external_gate.closure_key` and propose (never itself perform) the `cleared: true` flip. Presence-triggered completeness, in the pattern `scoped_to` already sets: supply `discharges` and all three of `closure_key`/`evidence`/`landed_at` are required; omit it entirely and nothing fires. `closure_key` repeats the SAME two-member `kind` enum as plan-tasks.schema.json 1.10.0's `external_gate[].closure_key` (`deliverable` | `memo-thread`) — the two must agree, a divergence here is the desync the whole contract exists to prevent, so this module does not re-derive or re-typed the members' rationale, only cites the vendored schema as the enum's source. `evidence` reuses `realized_by`'s validated shape (plan path, 7-64 hex SHA, or the sentinel 'inline') rather than coining a second evidence vocabulary. Classified nested-field-additive: one new OPTIONAL top-level object property, no change to any existing required set — every memo valid under 1.6.0 stays valid. 1.5.0 -> 1.6.0 catches the constant up to a shape drift: commit 0bf6d576e added `sent_by` to both emitted schemas without moving MEMO_SCHEMA_VERSION off 1.5.0, so the emitter stamped two different shapes with one version string until this bump (DoE-claude 2026-08-17 cross-repo memo, DR-097 § 3). Purely additive: one new optional property, never required — no previously-valid memo becomes invalid. 1.4.0 -> 1.5.0 added the append-only supersede-disposition field quartet (`disposition_superseded`, `superseding_note`, `superseding_realized_by`, `superseded_at`) to both schemas, plus the `_memo_cf_disposition_superseded_requires_companions` cross-field rule — records that an already-actioned memo's disposition was later reversed WITHOUT overwriting the original decision/actioned_note/realized_by (coordinator_core.ops.memo_transition._handle_supersede). Purely additive: four new optional properties, never required — no previously-valid memo carries `disposition_superseded` at all, so none becomes invalid. 1.3.0 -> 1.4.0 added `superseded_by` to the archived-memo schema (previously declared only on cross-repo-memo, while the archived corpus has always carried it on memos superseded before archival). Purely additive: one new optional property, never required — no previously-valid archived memo becomes invalid (debt 2026-07-28-archived-memo-schema-omits-superseded-by-1d8a0735e39a.yaml). (1.2.0 -> 1.3.0 added `space` as a new optional field and widened `supersedes` from a bare string to string-or-list, both in service of mechanical inbox-blitz bucketing (a sibling repo's 2026-07-28 proposal). Purely additive: no previously-valid memo becomes invalid — a string-valued `supersedes` still validates under the widened oneOf. 1.0.0 -> 1.2.0 adopted campaign_id and in_reply_to, commit 5140d176.)",
   "x-generated-by": "coordinator_core.contract.emit_memo_schema.emit_schemas",
   "applies_to": "cross-repo/archive/*.md",
   "description": "Archived cross-repo memo — outbound memos relayed and archived at cross-repo/archive/. GENERATED PROJECTION, not hand-vendored — see cross-repo-memo.schema.json's description for the ownership note. Spec backlink: docs/plans/2026-06-23-deliverable-type-schema-taxonomy.md § C1b; pln-take-ownership-of-the-cross-re-ac97ef § C5.",
@@ -142,6 +142,49 @@
     "superseded_at": {
       "type": "string",
       "description": "Timestamp the disposition reversal was recorded. Required by cross-field rule when disposition_superseded=true."
+    },
+    "discharges": {
+      "type": "object",
+      "description": "OPTIONAL — our half of the gate-closure-signal-contract (cross-repo/inbox/2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, ruled by eng-director state/subagent-share/f6ed9dc2-6fc9-4804-9952-27e684f5f573/coordinatoreng-director-ceecede2.md). Stamped on an ORDINARY cross-repo memo by the discharging repo — no `kind: discharge` enum member was minted (a four-site cross-repo lockstep on the kind vocabulary is real coordination cost the ruling declined to pay); a waiting repo finds a discharge by this block's presence, never by `kind`. The waiting repo matches `closure_key` against its own `external_gate[].closure_key` (plan-tasks.schema.json 1.10.0) and may PROPOSE the `cleared: true` flip with a citation — it never performs it from this block alone. Presence-triggered completeness, in the pattern `scoped_to` already sets: supply `discharges` and all three members (`closure_key`, `evidence`, `landed_at`) are required; omit it entirely and nothing fires.",
+      "required": [
+        "closure_key",
+        "evidence",
+        "landed_at"
+      ],
+      "properties": {
+        "closure_key": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "deliverable",
+                "memo-thread"
+              ],
+              "description": "Which identity namespace `id` is drawn from. The SAME two-member enum as the vendored plan-tasks.schema.json 1.10.0's `external_gate[].closure_key.kind` — the two must agree; a divergence here is the desync the whole contract exists to prevent. See that schema's field description (coordinator_core/frontmatter/schemas/plan-tasks.schema.json) for the member rationale and the four named exclusions, not re-typed here."
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The identity value, in the namespace `kind` names. Interpreted within the discharging (sending) repo — ids are minted per-repo with no repo qualifier."
+            }
+          }
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Where the discharging work landed. Reuses `realized_by`'s validated shape (a plan path, commit SHA of 7-64 hex chars, or the sentinel 'inline') rather than coining a second evidence vocabulary — see this schema's `realized_by` property for the shape."
+        },
+        "landed_at": {
+          "type": "string",
+          "format": "date",
+          "description": "Date the discharging work landed (YYYY-MM-DD)."
+        }
+      }
     }
   }
 }

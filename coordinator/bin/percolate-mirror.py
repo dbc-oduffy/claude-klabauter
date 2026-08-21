@@ -453,7 +453,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         with _round._round_held_lock(
-            Path(repo_root), holder_label=f"percolate-mirror:{Path(mirror_root).name}"
+            Path(repo_root),
+            holder_label=f"percolate-mirror:{Path(mirror_root).name}",
+            timeout=_round._round_lock_wait_secs(),
         ):
             preflight_rc = _round._preflight_dest_reconcile(args, repo_root)
             if preflight_rc is not None:
@@ -585,12 +587,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _round._EXIT_OK
     except _round._RoundLockTimeout as exc:
         print(
-            f"percolate-mirror: could not acquire the per-destination lock for "
-            f"'{repo_root}' (another round or mirror publish is running against "
-            f"this dest) — {exc}",
+            f"percolate-mirror: {_round._lock_busy_message(repo_root, exc)}",
             file=sys.stderr,
         )
-        return _round._EXIT_FAIL
+        return _round._EXIT_LOCK_BUSY
 
 
 if __name__ == "__main__":

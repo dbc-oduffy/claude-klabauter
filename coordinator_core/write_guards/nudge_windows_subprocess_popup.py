@@ -107,6 +107,27 @@ Negative-spec:
     or the precise detector silently stops seeing a target the coarse one
     still names. Pinned by
     ``TestAnalyzerContract::test_ast_targets_stay_in_lockstep_with_the_regex_alternation``.
+  - KNOWN RESIDUE, per DR-345 Decision 1 (b) (2026-08-21) — after widening
+    ``_ast_spawn_kind`` to the shared ``SPAWN_NAMES_BY_MODULE`` universe, two
+    conveyance shapes still let a no-op flag reach an unrecognized call while
+    the AST view reports ``conclusive``, because the closing sweep in
+    ``_analyze_py_call_sites`` matches by literal AST IDENTIFIER
+    (``ast.Attribute.attr`` / ``ast.Name.id``), not by resolved value:
+      1. **Import alias.** ``from subprocess import DETACHED_PROCESS as DP``
+         then ``my_popen(argv, DP)`` — the use-site identifier is ``DP``, not
+         a member of ``_AST_NO_OP_FLAG_NAMES``, so the sweep does not see it.
+      2. **``getattr``-by-string.** ``x = getattr(subprocess,
+         "DETACHED_PROCESS", 0)`` then ``my_popen(argv, x)`` — the flag name
+         is an ``ast.Constant`` string the sweep's ``Attribute``/``Name``
+         ``isinstance`` branches never inspect, and the use-site identifier
+         ``x`` carries no flag-shaped name either.
+    Both require the flag to first reach an UNRECOGNIZED callable (a local
+    wrapper, not a member of ``SPAWN_NAMES_BY_MODULE``) — resolving either
+    would require binding-value tracking (resolving what a `Name` is bound
+    to, transitively) that this module's static, per-node AST walk does not
+    attempt anywhere else, and widening the spawn-name universe (b) cannot
+    close a hole whose defect is upstream of spawn-call recognition entirely.
+    Not fixed here — considered and left open on that basis; see DR-345.
   - Does NOT replicate the reference hook's claude-klabauter fast-path re-dispatch —
     see the async-seam note above.
   - The git exemption (reference hook code-reviewer F3: "git always spawns
@@ -150,6 +171,8 @@ import ast
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+from coordinator_core.spawn_policy.spawn_names import SPAWN_NAMES_BY_MODULE
 
 CLASS = "advisory"  # DR-077 part 2 — was "hard-deny"; the class no longer blocks.
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -600,6 +623,13 @@ _AST_CONSOLE_TARGET_NAMES = frozenset(
     {"powershell.exe", "netstat.exe", "python.exe", "cmd.exe", "git.exe", "git"}
 )
 
+#: The no-op creationflags spellings, as AST IDENTIFIERS rather than as text —
+#: the identifier twin of ``_PY_NO_OP_SUPPRESSION_RE``'s alternation. Keep the
+#: two in lockstep; the regex reads a creationflags expression's source, this
+#: set finds a bare reference anywhere in the tree, and a spelling added to one
+#: alone goes unseen by the other.
+_AST_NO_OP_FLAG_NAMES = frozenset({"DETACHED_PROCESS", "CREATE_NEW_CONSOLE"})
+
 #: Per-call-site verdicts from ``_analyze_py_call_sites``.
 _AST_FIRE = "fire"
 _AST_CLEAN = "clean"
@@ -650,11 +680,32 @@ def _ast_argv0_names(node: ast.AST) -> Tuple[Optional[List[str]], bool]:
 def _ast_spawn_kind(func: ast.AST) -> Optional[str]:
     """Name the spawn form a call node uses, or None if it is not one.
 
-    Parity with ``_PY_SUBPROCESS_CALL_RE`` is deliberate and load-bearing:
-    this function must recognize exactly the forms that regex matches, no
-    fewer. A form the regex sees and this does not is a site the precise
-    detector silently skips while the coarse one still fires — survivable. A
-    form this sees and the regex does not is a widening, also fine.
+    Recognition is WIDER than ``_PY_SUBPROCESS_CALL_RE`` by design, per
+    DR-345 Decision 1 (b): this function positively recognizes the full
+    qualified-attribute (``module.func(``) spawn-name universe the standing
+    bare-hot-path-spawn gate polices (``coordinator_core.spawn_policy.
+    spawn_names.SPAWN_NAMES_BY_MODULE`` — the SAME table, imported, not
+    re-derived), not only the two ``subprocess`` forms and the one ``os``
+    form the regex matches. Before this widening, ``subprocess.call(...)``,
+    ``subprocess.check_call(...)``, ``subprocess.check_output(...)``, and
+    ``os.popen(...)`` were invisible to BOTH detectors at once — outside the
+    regex alternation AND outside this function's old recognized set — so an
+    unsuppressed console-target call through any of them evaded the guard
+    entirely, not merely evaded the precise leg while the coarse leg kept
+    its say. A form the regex sees and this does not remains survivable (the
+    coarse leg still fires); a form this sees and the regex does not is a
+    pure widening — see the module's own negative-spec.
+
+    Deliberately NOT resolving import/module ALIASES (``import subprocess as
+    sp`` then ``sp.Popen(...)``, or ``from subprocess import Popen`` then a
+    bare ``Popen(...)``): that is a materially bigger feature (the standing
+    gate's own ``_SubprocessImportResolver``) than "recognize the full
+    spawn-NAME universe," and a bare-name widening for common generic names
+    like ``run``/``call`` risks misclassifying an unrelated same-named
+    function repo-wide — a cost the qualified-attribute widening does not
+    carry. Named as residue in the module's negative-spec, not silently
+    dropped.
+
     Recognizing FEWER than the regex here AND trusting an AST "clean" verdict
     is the combination that would re-open the blind spot this detector exists
     to close, which is why ``_analyze_py_call_sites`` reports ``conclusive``
@@ -662,20 +713,12 @@ def _ast_spawn_kind(func: ast.AST) -> Optional[str]:
     """
     if isinstance(func, ast.Attribute):
         if isinstance(func.value, ast.Name):
-            if func.value.id == "subprocess" and func.attr in ("run", "Popen"):
-                return "subprocess"
-            if func.value.id == "os" and func.attr == "system":
-                return "os.system"
-            if func.value.id == "asyncio" and func.attr in (
-                "create_subprocess_exec",
-                "create_subprocess_shell",
-            ):
-                return "asyncio"
+            module = func.value.id
+            names = SPAWN_NAMES_BY_MODULE.get(module)
+            if names is not None and func.attr in names:
+                return module
         return None
-    if isinstance(func, ast.Name) and func.id in (
-        "create_subprocess_exec",
-        "create_subprocess_shell",
-    ):
+    if isinstance(func, ast.Name) and func.id in SPAWN_NAMES_BY_MODULE["asyncio"]:
         return "asyncio"
     return None
 
@@ -771,12 +814,79 @@ def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
     fires = False
     saw_call = False
     complete = True
+    #: id()s of every sub-node of a ``creationflags=`` expression this walk
+    #: actually inspected — the accounting that lets the no-op-flag sweep below
+    #: tell "I checked this one" from "this one reached a spawn behind my back".
+    accounted: set = set()
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         kind = _ast_spawn_kind(node.func)
         if kind is None:
+            # An UNRECOGNIZED call carrying ``creationflags=`` is a spawn this
+            # walk cannot account for, and it forfeits ``conclusive`` for the
+            # whole file.
+            #
+            # Without this, ``conclusive`` claimed "I have seen everything
+            # relevant here" on the strength of a strict SUBSET of call shapes,
+            # while the leg it retires (``_PY_NO_OP_SUPPRESSION_RE``) is a
+            # whole-file search with no shape restriction at all. Found in
+            # review 2026-08-21, with a repro that is ordinary style, not an
+            # adversarial construction:
+            #
+            #     subprocess.run(["cmd.exe", "/c", "dir"], creationflags=0x08000000)
+            #     from subprocess import Popen
+            #     Popen(["python.exe", "s.py"], creationflags=subprocess.DETACHED_PROCESS)
+            #
+            # The bare ``Popen`` is invisible to ``_ast_spawn_kind`` (and to
+            # ``_PY_SUBPROCESS_CALL_RE``, so per-call parity was never
+            # violated), yet the clean ``subprocess.run`` above it earned
+            # ``conclusive`` and silenced the DETACHED_PROCESS the second call
+            # genuinely carries. The guard went QUIET where it previously
+            # fired — the one direction this module's negative-spec forbids.
+            #
+            # Keyed on the ``creationflags`` kwarg rather than on a wider
+            # call-name list so it closes the hole for EVERY unrecognized
+            # shape at once — ``subprocess.call``, ``check_output``, a
+            # ``from subprocess import Popen`` bare name, an aliased
+            # ``import subprocess as sp`` — instead of chasing them one at a
+            # time and reopening it on the next spelling nobody enumerated.
+            # A ``**`` splat counts too (``kw.arg is None``), and closing on it
+            # is what makes this check COMPLETE rather than merely
+            # repro-shaped. Integration review 2026-08-21 defeated the
+            # literal-kwarg-only version with one syntax step:
+            #
+            #     subprocess.run(["notepad.exe"], creationflags=...CREATE_NO_WINDOW...)
+            #     flags = {"creationflags": subprocess.DETACHED_PROCESS}
+            #     subprocess.call(["cmd.exe", "/c", "dir"], **flags)
+            #
+            # At review time ``subprocess.call`` was outside ``_ast_spawn_kind``'s
+            # set, so this exact repro forfeited via the branch below rather
+            # than being analyzed directly. DR-345 Decision 1 (b) (2026-08-21)
+            # widened ``_ast_spawn_kind`` to recognize the qualified
+            # ``subprocess.call``/``check_call``/``check_output`` forms, so a
+            # LITERAL ``creationflags=`` keyword on one of those now goes
+            # through the RECOGNIZED branch below and is read directly rather
+            # than forfeiting here — this repro's own ``flags = {...}`` +
+            # ``**flags`` splat still lands in the recognized branch's own
+            # ``has_splat`` forfeit (a splat is never resolved to a literal
+            # value regardless of which branch handles it), so the verdict is
+            # unchanged; only the accounting PATH changed. The
+            # ``flags = {...}`` binding is itself an ``ast.Dict`` the
+            # ``ast.Call``-only walk never visits, so no literal
+            # ``creationflags=`` keyword exists anywhere on the call node for
+            # either branch to see directly — the splat is what carries it.
+            # ``functools.partial(...)`` and ``dict(creationflags=...)`` were
+            # already caught only because both are themselves Calls carrying
+            # the literal keyword; a dict LITERAL is not.
+            #
+            # After this, an unrecognized call with neither a splat nor a
+            # literal ``creationflags`` cannot convey creationflags at all, so
+            # there is no remaining shape by which one reaches a spawn while
+            # the file still reads conclusive.
+            if any(kw.arg in ("creationflags", None) for kw in node.keywords):
+                complete = False
             continue
         saw_call = True
 
@@ -793,10 +903,11 @@ def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
         ):
             continue
 
-        # os.system takes no kwargs at all: a console-target command routed
-        # through it is unsuppressable by construction, not merely
-        # unsuppressed here.
-        if kind == "os.system":
+        # os.system/os.popen take no `creationflags` kwarg at all (neither
+        # signature carries one): a console-target command routed through
+        # either is unsuppressable by construction, not merely unsuppressed
+        # here. See spawn_names.py's own negative-spec for this fact.
+        if kind == "os":
             fires = True
             continue
 
@@ -815,11 +926,41 @@ def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
             fires = True
             continue
 
+        accounted.update(id(sub) for sub in ast.walk(creationflags))
         if _ast_creationflags_opaque(creationflags):
             complete = False
             continue
         if _PY_NO_OP_SUPPRESSION_RE.search(_ast_expr_source(creationflags)):
             fires = True
+
+    # A no-op flag REFERENCE the walk never inspected forfeits conclusiveness.
+    #
+    # This is the structural close for the whole family, after two
+    # repro-shaped patches were each defeated by the next syntax over. The
+    # surviving case was a flag handed positionally to an unrecognized
+    # callable, which carries no `creationflags` kwarg and no splat at all:
+    #
+    #     subprocess.run(["notepad.exe"], creationflags=...CREATE_NO_WINDOW...)
+    #     def my_popen(argv, cflags): return _do_spawn(argv, cflags)
+    #     my_popen(["cmd.exe", "/c", "dir"], subprocess.DETACHED_PROCESS)
+    #
+    # Keyed on the AST IDENTIFIER (`ast.Attribute.attr` / `ast.Name.id`), never
+    # on the text: that is exactly what keeps the mirror-defect fix alive. A
+    # prose mention — `FLAG_DOC = "DETACHED_PROCESS is a no-op"` — is an
+    # `ast.Constant`, not a reference, so it still does NOT condemn a file whose
+    # real spawns are all suppressed. A text scan cannot draw that line, which
+    # is why the earlier token-counting shape was rejected.
+    if complete:
+        for sub in ast.walk(tree):
+            if isinstance(sub, ast.Attribute):
+                referenced = sub.attr in _AST_NO_OP_FLAG_NAMES
+            elif isinstance(sub, ast.Name):
+                referenced = sub.id in _AST_NO_OP_FLAG_NAMES
+            else:
+                continue
+            if referenced and id(sub) not in accounted:
+                complete = False
+                break
 
     if fires:
         return _AST_FIRE, complete and saw_call

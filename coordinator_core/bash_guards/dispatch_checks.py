@@ -5951,6 +5951,60 @@ def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
 
 
 
+def _bt_python3_invocation_cache_path() -> str:
+    """On-disk location for `_bt_python3_invocation`'s cross-process cache.
+    Prefers claude-klabauter's own `state/cache/` (this repo's disk-truth substrate,
+    never `~/.claude` -- a plane this repo owns none of, see CLAUDE.md
+    § What this repo is); falls back to the OS temp dir if `state/` cannot
+    be created (read-only checkout, permissions), matching the fail-open
+    discipline `_bt_python3_invocation` itself already promises."""
+    import tempfile
+
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        state_dir = repo_root / "state" / "cache"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return str(state_dir / "bt-python3-invocation-cache.json")
+    except OSError:
+        return os.path.join(tempfile.gettempdir(), "coordinator-bt-python3-invocation-cache.json")
+
+
+def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:
+    """Build the cache key this advisory's resolution actually depends on.
+
+    Mirrors `pyresolve._machine_local_get`'s own in-process memo, which keys
+    on ``(key, resolved impl path)`` rather than the lookup key alone --
+    the impl path already folds in every env var that steers *which*
+    `_machine_local.py` gets consulted. This cross-process cache widens that
+    same idea to cover every input `resolve_python_bin(prefer_windowless=
+    False)` can observe: the resolved impl path PLUS its mtime+size (so an
+    edited/rebuilt `_machine_local.py` invalidates the entry even though its
+    path string is unchanged), and the four env vars that steer or
+    short-circuit which store is read (`MACHINE_LOCAL_IMPL`, `CLAUDE_HOME`,
+    `COORDINATOR_SETTINGS_HOME`, `COORDINATOR_PYTHON`).
+
+    Returns ``None`` (never cache) on `pyresolve` import failure -- the same
+    condition `_bt_python3_invocation` itself falls open to `"python3"` on."""
+    try:
+        from coordinator_core.pyresolve import _machine_local_impl
+    except ImportError:
+        return None
+    impl = _machine_local_impl()
+    try:
+        st = os.stat(impl)
+        impl_sig: Optional[List[Any]] = [st.st_mtime_ns, st.st_size]
+    except OSError:
+        impl_sig = None
+    return [
+        impl,
+        impl_sig,
+        os.environ.get("MACHINE_LOCAL_IMPL", ""),
+        os.environ.get("CLAUDE_HOME", ""),
+        os.environ.get("COORDINATOR_SETTINGS_HOME", ""),
+        os.environ.get("COORDINATOR_PYTHON", ""),
+    ]
+
+
 def _bt_python3_invocation() -> str:
     """Resolve the shell-ready interpreter prefix (e.g. ``python3``, or on a
     python.org Windows install with no `python3.exe` on PATH, ``py -3`` or an
@@ -5990,7 +6044,37 @@ def _bt_python3_invocation() -> str:
     own `except ImportError` (builtin name only, never unbound) guarantees
     `PythonPinInvalid` is bound by the time the second block's `except`
     clause can ever reference it.
+
+    CROSS-PROCESS CACHE. This fires on the fleet's highest-firing advisory,
+    so the resolution below is memoized to `_bt_python3_invocation_cache_
+    path()` keyed by `_bt_python3_invocation_cache_key()` (see that
+    function's docstring for exactly what the key covers). The read/write
+    wraps the two try/except blocks below WITHOUT touching them -- a cache
+    miss or any read failure falls straight through to the same live
+    resolution this function has always performed, and a write failure is
+    swallowed the same way: this helper's fail-open discipline is load-
+    bearing and applies identically to the cache path. The write is an
+    atomic replace (`os.replace` from a pid-suffixed temp file in the same
+    directory), never a truncate-then-write -- at 50-70 concurrent sessions
+    a torn write from a truncate is the norm, not an edge case, and a torn
+    or unreadable cache file must fall through to live resolution rather
+    than ever raise or return garbage.
     """
+    cache_path = _bt_python3_invocation_cache_path()
+    cache_key = _bt_python3_invocation_cache_key()
+    if cache_key is not None:
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fh:
+                cached = json.load(fh)
+            if isinstance(cached, dict) and cached.get("key") == cache_key:
+                cached_value = cached.get("value")
+                if isinstance(cached_value, str) and cached_value:
+                    return cached_value
+        except (OSError, ValueError):
+            # Missing, torn, or unreadable cache -- fall through to live
+            # resolution below, same as any other cache miss.
+            pass
+
     try:
         from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
     except ImportError:
@@ -6001,7 +6085,20 @@ def _bt_python3_invocation() -> str:
         return "python3"
     if not python_bin:
         return "python3"
-    return " ".join(shlex.quote(tok) for tok in (python_bin, *python_args))
+    result = " ".join(shlex.quote(tok) for tok in (python_bin, *python_args))
+
+    if cache_key is not None:
+        try:
+            tmp_path = "%s.%d.tmp" % (cache_path, os.getpid())
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump({"key": cache_key, "value": result}, fh)
+            os.replace(tmp_path, cache_path)
+        except OSError:
+            # Best-effort cache write -- a failure here just means the next
+            # firing resolves live again, not a correctness issue.
+            pass
+
+    return result
 
 
 def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:

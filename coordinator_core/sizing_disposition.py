@@ -50,7 +50,33 @@ _PLAN_DELIVERABLE_RE = re.compile(r"""^deliverable_id:\s*["']?([^"'\s]+)""", re.
 _NULL_SENTINELS = frozenset({"null", "~"})
 
 
-def _real_id(value: object) -> Optional[str]:
+def _sizing_object_within_root(root: Path, sizing_ref: str) -> bool:
+    """`True` iff `sizing_ref` is a file, resolves under `root`, and is not
+    an absolute path.
+
+    `sizing_object` is a repo-relative FK, but `Path.__truediv__` does not
+    enforce that: an absolute right-hand operand REPLACES the left entirely
+    (the left operand is discarded outright when the right is absolute),
+    and a `..`-laden relative one walks straight past `root`'s boundary.
+    Either shape lets a `sizing_object` value naming ANY file that happens
+    to exist on disk — not a sizing artifact at all — earn `sized`.
+    Rejecting an absolute `sizing_ref` up front, then requiring the resolved
+    path to sit under `root`, closes both legs.
+    """
+    if Path(sizing_ref).is_absolute():
+        return False
+    candidate = root / sizing_ref
+    try:
+        resolved = candidate.resolve()
+        resolved_root = root.resolve()
+    except OSError:
+        return False
+    if not (resolved == resolved_root or resolved_root in resolved.parents):
+        return False
+    return candidate.is_file()
+
+
+def real_id(value: object) -> Optional[str]:
     """`value` stripped, iff it is a non-empty string naming a real id.
 
     Both legs of this module's join must apply it, and the failure when
@@ -71,6 +97,7 @@ def _real_id(value: object) -> Optional[str]:
     if not stripped or stripped.lower() in _NULL_SENTINELS:
         return None
     return stripped
+
 
 #: The three values of the axis, in precedence order.
 SIZING_DISPOSITION_VALUES: tuple[str, ...] = ("execution", "sized", "unsized")
@@ -115,7 +142,7 @@ def _resolve_plan_by(
             if head is None:
                 continue
             match = pattern_re.search(head)
-            if match and _real_id(match.group(1)) == wanted:
+            if match and real_id(match.group(1)) == wanted:
                 return candidate.relative_to(root).as_posix()
     return None
 
@@ -165,20 +192,26 @@ def resolve_plan_by_deliverable(
 
 
 def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
-    """`(field, plan_id)` pairs the baton cites, `origin_plan_id` before
-    `plan_ids`. The singular is the single-plan case's field and the plural
-    its fan-in sibling; neither supersedes the other, and a record may carry
-    either, both, or neither."""
+    """`(field, plan_id)` pairs the baton cites -- `origin_plan_id` ONLY.
+
+    DR-346 §5 (Correction, C3 2026-08-21): `plan_ids` is a FAN-IN AUDIT
+    list, never a plan FK, and reading it as one was the live defect that
+    section names -- `2026-08-21-guards-under-the-brightline.md` carried no
+    `origin_plan_id` and resolved `execution` SOLELY through a `plan_ids`
+    entry, a fabricated citation exactly like the `"null"`-string one
+    `real_id`'s own docstring fixes above. `plan_ids` keeps its write side
+    (`resolve_lineage`'s `_ordered_unique` and `baton_assemble/apply.py ::
+    baton-stamp-carried-ids`, both DR-346-threshold-gated at >=2 distinct
+    ids as of this same change) as a pure audit trail; it is never joined
+    into a citation here.
+
+    Negative-spec: does NOT read `fm.get("plan_ids")`. A future reintroduction
+    of that read is the exact regression `test_plan_ids_is_still_read_as_a_
+    citation_dr346` pins against."""
     cited: list[tuple[str, str]] = []
-    origin = _real_id(fm.get("origin_plan_id"))
+    origin = real_id(fm.get("origin_plan_id"))
     if origin:
         cited.append(("origin_plan_id", origin))
-    plural = fm.get("plan_ids")
-    if isinstance(plural, list):
-        for entry in plural:
-            real = _real_id(entry)
-            if real:
-                cited.append(("plan_ids", real))
     return cited
 
 
@@ -219,9 +252,10 @@ def compute_sizing_disposition(
 
     A `deliverable_id` that matches NO plan is not a citation and does not
     reach the `warning` arm: a spinoff minting its own fresh key is the
-    ordinary case, not a dangling pointer. Only `origin_plan_id`/`plan_ids`/
+    ordinary case, not a dangling pointer. Only `origin_plan_id`/
     `sizing_object` — fields whose whole purpose is to point elsewhere — earn
-    a warning when they fail to resolve.
+    a warning when they fail to resolve (`plan_ids` is never a citation at
+    all -- see `cited_plan_fks`'s own DR-346 §5 note).
 
     Negative-spec: this emits a FACT, never a gate. It contributes no
     judgment point, blocks no directive, and never enters `gates.coast` —
@@ -240,7 +274,7 @@ def compute_sizing_disposition(
                 "warning": None,
             }
 
-    deliverable_id = _real_id(fm.get("deliverable_id"))
+    deliverable_id = real_id(fm.get("deliverable_id"))
     if deliverable_id:
         inherited = resolve_plan_by_deliverable(root, deliverable_id, self_path=self_path)
         if inherited:
@@ -252,7 +286,7 @@ def compute_sizing_disposition(
 
     sizing_raw = fm.get("sizing_object")
     sizing_ref = sizing_raw.strip() if isinstance(sizing_raw, str) and sizing_raw.strip() else None
-    if sizing_ref and (root / sizing_ref).is_file():
+    if sizing_ref and _sizing_object_within_root(root, sizing_ref):
         return {"value": "sized", "basis": f"sizing_object={sizing_ref}", "warning": None}
 
     dangling = [f"{field}={plan_id}" for field, plan_id in cited]

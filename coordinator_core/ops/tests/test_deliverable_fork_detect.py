@@ -24,10 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.deliverable_equivalence import (
-    _reset_deliverable_ledger_cache,
-    _reset_equivalence_map_cache,
-)
+from coordinator_core.ops.deliverable_equivalence import _reset_deliverable_ledger_cache
 from coordinator_core.ops.deliverable_fork_detect import (
     _handler,
     detect_slug_prefix_fork_families,
@@ -36,10 +33,8 @@ from coordinator_core.ops.deliverable_fork_detect import (
 
 @pytest.fixture(autouse=True)
 def _reset_memo():
-    _reset_equivalence_map_cache()
     _reset_deliverable_ledger_cache()
     yield
-    _reset_equivalence_map_cache()
     _reset_deliverable_ledger_cache()
 
 

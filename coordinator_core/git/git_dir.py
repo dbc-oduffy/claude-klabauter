@@ -125,6 +125,42 @@ def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
         # in both, the common dir is the same literal join.
         return dot_git
 
+    return common_dir_from_gitdir(private_gitdir, dot_git)
+
+
+def common_dir_from_gitdir(
+    private_gitdir: Union[str, Path], fallback: Union[str, Path]
+) -> Path:
+    """Resolve the git COMMON dir from an ALREADY-RESOLVED private gitdir,
+    without spawning `git` and without needing the repo toplevel.
+
+    Split out of `resolve_git_common_dir` (which keeps calling it, with
+    `fallback=<repo_root>/.git`, so that function's behaviour is unchanged
+    for every existing caller). The split exists because a caller that
+    already HOLDS a private gitdir should not have to re-derive a toplevel
+    to get a common dir: `resolve_git_common_dir` takes a repo ROOT and
+    computes `<repo_root>/.git` itself, so reaching it from a gitdir means
+    paying a `git rev-parse --show-toplevel` spawn purely to throw the
+    answer away.
+
+    That spawn is not merely wasteful, it is a CORRECTNESS hazard on this
+    box. `subagent_sandbox.engine.resolve_git_root` documents `None` as
+    fail-open for "not a git repo, git missing, transient spawn error", and
+    under the documented load norm (`docs/wiki/machine-load-norm.md`) the
+    transient case is routine. A consumer that reads that `None` as a
+    negative answer rather than as "unresolved" inverts its own verdict --
+    which is exactly the live 2026-08-21 defect where the cross-repo write
+    bump denied a session a write to its OWN repo (bug-backlog row
+    `2026-08-21-foreign-write-guard-denies-own-repo-push-on-unresolved-target-root`).
+    Callers holding a gitdir reach a common dir through here instead, and
+    the failure mode cannot arise.
+
+    `fallback` is returned only on `OSError` reading the `commondir` file --
+    the caller names it because the right degraded answer differs by call
+    site (`resolve_git_common_dir` wants its literal `<repo_root>/.git`
+    join; a gitdir-holding caller wants the gitdir itself).
+    """
+    private_gitdir = Path(private_gitdir)
     try:
         commondir_file = private_gitdir / "commondir"
         if commondir_file.is_file():
@@ -157,6 +193,6 @@ def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
                     common_dir = Path(os.path.normpath(private_gitdir / common_dir))
                 return common_dir
     except OSError:
-        return dot_git
+        return Path(fallback)
 
     return private_gitdir

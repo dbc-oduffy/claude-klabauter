@@ -21,15 +21,6 @@ matching the all-abandoned-group conditional that gates before this path.
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — SECTION 8.16.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C3
 
-Fork-equivalence canonicalization (C4b, 2026-08-01): ``_compute_map`` and ``stamp`` both
-canonicalize each record's raw ``deliverable_id`` via
-``coordinator_core.ops.deliverable_equivalence.canonicalize`` before using it as a
-join/group key. This is a JOIN-KEY TRANSFORM ONLY — the emitted ``deliverable_status``
-field's shape and the write-back target are unchanged; the value becomes correct across a
-declared fork because both legs now group under one canonical key. No record's own
-``deliverable_id`` field is ever mutated by this module.
-Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b)
-
 sedge-03 s1 review follow-on evidence note (AC6/AC9, 2026-08-11): AC6's five-zombie check
 against the live `state/cockpit-emission.json` corpus was performed as a one-off manual
 run at implementation time, not by a standing automated test at that point — the five real
@@ -59,8 +50,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
-
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 
 # --------------------------------------------------------------------------- phase derivation
 # Mirror the jq ``def handoff_phase / plan_phase / roadmap_phase`` functions.
@@ -206,21 +195,12 @@ def _compute_map(
     handoffs: list[dict],
     plans: list[dict],
     roadmaps: list[dict],
-    equivalence_map: Optional[dict[str, str]] = None,
     bridged_ids: Optional[set[str]] = None,
 ) -> dict[str, str]:
     """Build a deliverable_id → deliverable_status map from the three entity arrays.
 
     Parity: the jq pipeline that merges phase lists per deliverable_id, applies the
     precedence logic, and emits a ``from_entries`` object.
-
-    ``equivalence_map`` (C4b): ``{loser_id: winner_id}`` from
-    ``deliverable_equivalence.load_equivalence_map`` — every raw ``deliverable_id`` is
-    canonicalized via ``canonicalize()`` before becoming a group key, so both legs of a
-    declared fork group under one key. ``None``/``{}`` (no declared entries) reproduces
-    today's raw-comparison behaviour — every id groups under itself. Join-key transform
-    only: the returned map is still keyed by canonical id, never written back onto any
-    record's own ``deliverable_id`` field.
 
     ``bridged_ids`` (sedge-03, Resolution 2 Step A): an optional caller-supplied
     ``set[str]``, populated in place with every canonical deliverable id whose group was
@@ -245,7 +225,6 @@ def _compute_map(
     scope for this stub (``envelope.py`` is not touched here) and is a named, bounded
     follow-on, not an implied completion.
     """
-    equivalence_map = equivalence_map or {}
     # Collect (deliverable_id, phase) pairs — skip records with null deliverable_id.
     pairs: list[tuple[str, str]] = []
     # Group-level liveness partition (sedge-03 Resolution 2 Step A). Per-group data needed
@@ -288,7 +267,7 @@ def _compute_map(
     all_continued: dict[str, bool] = {}
 
     for r in handoffs:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         if dlv is None:
             continue
         phase = _handoff_phase(r)
@@ -303,14 +282,14 @@ def _compute_map(
         all_continued[dlv] = all_continued.get(dlv, True) and is_continued
 
     for r in plans:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         if dlv is not None:
             pairs.append((dlv, _plan_phase(r)))
             # Plan rows are live-only per `_TYPE_TO_GLOB` — ipso facto a live carrier.
             has_live_carrier[dlv] = True
             all_continued[dlv] = False
     for r in roadmaps:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         if dlv is not None:
             pairs.append((dlv, _roadmap_phase(r)))
             # Roadmap rows are live-only per `_TYPE_TO_GLOB` — ipso facto a live carrier.
@@ -373,15 +352,11 @@ def stamp(
     Call after shipped_sha enrichment (§1.5) so that ``_handoff_phase`` can read the
     enriched ``shipped_sha`` field on handoffs.
 
-    ``worktree_root`` (C4b): defaults to ``Path.cwd()`` — the process-cwd-as-repo-root
+    ``worktree_root``: defaults to ``Path.cwd()`` — the process-cwd-as-repo-root
     convention already used elsewhere in this codebase (e.g. ``backlog_grind_assemble.apply``,
     ``ops.deferral_detect_orphan_memo``) for spawn-per-call entry points that receive no
-    explicit repo root from their caller. This module's sole caller, ``envelope.emit``,
-    threads ``ctx.repo_root`` through explicitly; the fallback exists only for direct/test
-    callers that omit it. Loads C3b's declared fork-equivalence artifact via
-    ``deliverable_equivalence.load_equivalence_map`` and canonicalizes each record's raw
-    ``deliverable_id`` at the lookup point only — the written-back ``deliverable_status``
-    field's shape is unchanged; no record's own ``deliverable_id`` is mutated.
+    explicit repo root from their caller. Unused by this function's own logic; kept for
+    call-site signature stability.
 
     ``bridged_ids`` (sedge-03 s1 review follow-on): optional caller-supplied ``set[str]``,
     threaded straight through to ``_compute_map`` and populated in place with every
@@ -389,15 +364,13 @@ def stamp(
     ``stamp`` (i.e. ``envelope.emit``) passes this yet -- wiring the emit envelope to
     collect and surface it is a named follow-on, out of scope here.
     """
-    root = worktree_root if worktree_root is not None else Path.cwd()
-    equivalence_map = load_equivalence_map(root)
-    dlv_map = _compute_map(handoffs, plans, roadmaps, equivalence_map, bridged_ids)
+    dlv_map = _compute_map(handoffs, plans, roadmaps, bridged_ids)
     for r in handoffs:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         r["deliverable_status"] = dlv_map.get(dlv) if dlv is not None else None
     for r in plans:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         r["deliverable_status"] = dlv_map.get(dlv) if dlv is not None else None
     for r in roadmaps:
-        dlv = canonicalize(r.get("deliverable_id"), equivalence_map)
+        dlv = r.get("deliverable_id")
         r["deliverable_status"] = dlv_map.get(dlv) if dlv is not None else None

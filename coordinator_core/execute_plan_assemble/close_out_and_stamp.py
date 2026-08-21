@@ -67,7 +67,7 @@ stamping bug this module's docstring already records elsewhere -- see
 for an ordinary, correctly-stamped plan, whose `execution_authorized_sha`
 is a `canonical_body_sha` content hash, never a real git object); (2) the
 earliest commit anywhere in `HEAD`'s own history carrying a `Deliverable-
-Id` trailer that canonicalizes equal to this plan's own `deliverable_id`
+Id` trailer that equals this plan's own `deliverable_id` exactly
 (`_first_deliverable_commit_range_base`) -- deliberately NOT bounded by
 `origin/main` at all. Widening the RANGE this far is safe specifically
 BECAUSE the `Deliverable-Id:` exact-equality join below (see § Deliverable
@@ -294,30 +294,15 @@ cross-repo sha.
 
 Deliverable-Id equivalence join (2026-08-04, `state/deliverable-equivalence.
 yaml` wiring -- `docs/plans/2026-08-03-scope-guard-peer-claim-release.md`
-C7's fork closure): a genuine fork -- the SAME plan minting two
-`deliverable_id` values (e.g. a spinoff handoff and its plan re-minting
-instead of carrying, `_mint_deliverable_id_from_slug`'s randomness making
-the collision certain, never a hash artifact) -- was previously invisible
-to `_committed_chunk_shas`'s exact-equality join: a chunk's commit could
-carry the "other" leg's id forever and never join. `_committed_chunk_shas`
-and `_deliverable_id_near_miss_diagnostics` now canonicalize BOTH sides of
-their `Deliverable-Id:` comparison through `coordinator_core.ops.
-deliverable_equivalence.canonicalize()` against the declared map at
-`state/deliverable-equivalence.yaml` -- the SAME mechanism already wired
-into eight other readers (`ops/commit_anchors.py` et al; this module was a
-genuine coverage gap, its earlier audit scoped its grep to `coordinator_
-core/ops/` only and this module lives outside that directory). This is a
-JOIN-KEY transform ONLY, applied at the two exact-equality comparison
-points named above -- it does NOT widen chunk-id SUBJECT matching (the
-`Deliverable-Id`-scoped subject match itself, and the false-positive
-incident this module's docstring already records for why unscoped subject
-matching must never return, are both untouched -- canonicalizing a
-known-equivalent deliverable KEY is a different thing from unscoping the
-subject match), and it does NOT write a canonicalized value back to any
-artifact (the plan's own `deliverable_id:` frontmatter is read and compared
-as-is; only the in-memory comparison value is canonicalized). A pair absent
-from the map behaves exactly as before this fix -- the map is `{loser:
-winner}`, and `canonicalize()` returns any unrecognised id unchanged.
+C7's fork closure; collapsed 2026-08-20, evidence F-1): a genuine fork --
+the SAME plan minting two `deliverable_id` values (e.g. a spinoff handoff
+and its plan re-minting instead of carrying, `_mint_deliverable_id_from_
+slug`'s randomness making the collision certain, never a hash artifact) --
+was previously invisible to `_committed_chunk_shas`'s exact-equality join:
+a chunk's commit could carry the "other" leg's id forever and never join.
+The equivalence-map indirection this required has been collapsed: exact
+`Deliverable-Id:` string equality is now the join, with no canonicalization
+step and no declared-map lookup.
 
 Plan-side disposition_ref evidence -- a SECOND, independently-verified
 evidence path (2026-08-04, `docs/plans/2026-08-03-klabauter-rows-relocate-
@@ -425,7 +410,6 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NOT_ATTEMPTED,
     run_commit_pipeline,
 )
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_close_origin_stub import _handler as _close_origin_stub_handler
@@ -1584,9 +1568,9 @@ def _first_deliverable_commit_range_base(
     """The exclusive lower bound of "every commit this repo's `HEAD` history
     carries for THIS plan's own deliverable" -- the earliest (oldest, via
     `--reverse`) commit anywhere in `HEAD`'s ancestry whose `Deliverable-Id`
-    trailer canonicalizes (via `deliverable_equivalence.canonicalize()`, the
-    same join-key transform every other chunk-evidence reader already uses)
-    equal to `deliverable_id`. Returns that commit's OWN PARENT sha (so the
+    trailer equals `deliverable_id` exactly (no canonicalization step; see
+    this module's docstring § Deliverable-Id equivalence join for the
+    2026-08-20 collapse). Returns that commit's OWN PARENT sha (so the
     earliest chunk commit itself stays INSIDE the `<base>..HEAD` range this
     function's caller builds), `""` when that earliest commit is a root
     commit with no parent (the whole history is this deliverable's own, so
@@ -1608,7 +1592,9 @@ def _first_deliverable_commit_range_base(
     docstring § Deliverable scoping and its own 2026-07-27 false-positive
     incident for why an UNSCOPED subject-match widening would be dangerous;
     this widening is scoped by deliverable identity, never by subject shape
-    alone, so it does not reintroduce that incident.
+    alone, so it does not reintroduce that incident. (The parenthetical
+    "post-canonicalization" above is now vestigial phrasing only -- the join
+    itself is plain exact-equality, per the 2026-08-20 collapse.)
 
     Queries `_deliverable_log_records` with `full_sha=True` (Review:
     code-reviewer -- Finding 2): the matched commit's sha feeds straight into
@@ -1620,12 +1606,10 @@ def _first_deliverable_commit_range_base(
     query_ok, records = _deliverable_log_records(repo_root, ["--reverse", "HEAD"], full_sha=True)
     if not query_ok:
         return None
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     for commit_sha, _subject, trailer_value in records:
         if not trailer_value:
             continue
-        if canonicalize(trailer_value, equivalence_map) != canonical_deliverable_id:
+        if trailer_value != deliverable_id:
             continue
         parent_result = _run_git(["rev-parse", "--verify", "--quiet", f"{commit_sha}^"], repo_root)
         parent_sha = (parent_result.stdout or "").strip()
@@ -1659,8 +1643,8 @@ def _chunk_evidence_log_range(
          -- see `_plan_execution_authorized_sha`'s own docstring for why
          this rung is a no-op for an ordinary, correctly-stamped plan.
       2. The earliest commit anywhere in `HEAD`'s history carrying a
-         `Deliverable-Id` trailer that canonicalizes equal to this plan's
-         own `deliverable_id` (`_first_deliverable_commit_range_base`) --
+         `Deliverable-Id` trailer that equals this plan's own
+         `deliverable_id` exactly (`_first_deliverable_commit_range_base`) --
          NOT `origin/main`-bounded, which is the load-bearing widening this
          fix exists for. Safe because the Deliverable-Id join, not the
          range, is what scopes evidence to THIS plan (see that function's
@@ -2031,20 +2015,12 @@ def _committed_chunk_shas(
     is ever added -- the conservative choice documented in this module's
     docstring, not a silent fallback to unscoped subject-matching.
 
-    Join-key canonicalization (2026-08-04, `state/deliverable-equivalence.
-    yaml` wiring): both sides of the equality check -- the plan's own
+    Join-key equality (collapsed 2026-08-20, evidence F-1; formerly a
+    `state/deliverable-equivalence.yaml`-backed canonicalization of both
+    sides, 2026-08-04): both sides of the equality check -- the plan's own
     `deliverable_id` and each commit's `Deliverable-Id` trailer value --
-    are passed through `coordinator_core.ops.deliverable_equivalence.
-    canonicalize()` before comparison, so a declared fork pair (one
-    `deliverable_id` re-minted for the same underlying work, per DR-207
-    D1) still joins. This is a JOIN-KEY transform only, applied at the
-    existing exact-equality comparison point -- it does NOT widen chunk-id
-    subject matching (see this module's docstring § "Deliverable scoping"
-    and the 2026-07-27 false-positive incident that section records; that
-    scoping is untouched) and it does NOT write a canonicalized value back
-    to any artifact (`deliverable_equivalence.py`'s own negative-spec). A
-    pair absent from the map canonicalizes to itself, i.e. today's raw
-    comparison, unchanged.
+    are compared by plain string equality, with no canonicalization step
+    and no declared-map lookup.
 
     `plan_text` (range-fix, 2026-08-07) is forwarded verbatim to
     `_chunk_evidence_log_lines`/`_chunk_evidence_log_range` as the range-
@@ -2106,9 +2082,6 @@ def _committed_chunk_shas(
             ),
         )
 
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-
     committed: set[str] = set()
     committed_shas: dict[str, str] = {}
     trailered_commit_count = 0
@@ -2123,8 +2096,7 @@ def _committed_chunk_shas(
         trailer_value = parts[2].strip() if len(parts) > 2 else ""
         if trailer_value:
             trailered_commit_count += 1
-        canonical_trailer_value = canonicalize(trailer_value, equivalence_map) if trailer_value else trailer_value
-        if not deliverable_id or canonical_trailer_value != canonical_deliverable_id:
+        if not deliverable_id or trailer_value != deliverable_id:
             continue
         subject_chunk_ids = _extract_chunk_ids(subject, spine_ids)
         if not subject_chunk_ids:
@@ -2239,15 +2211,10 @@ def _deliverable_id_near_miss_diagnostics(
     static `^C\\d`-only shape gate, also surfaces a near-miss for a plan
     whose real spine ids are not `C`-prefixed.
 
-    Join-key canonicalization (2026-08-04, `state/deliverable-equivalence.
-    yaml` wiring): the exclusion at the `trailer_value == deliverable_id`
-    check below is canonicalized through the same `deliverable_equivalence.
-    canonicalize()` map `_committed_chunk_shas` now joins on, so a trailer
-    value that is a DECLARED fork of `deliverable_id` (i.e. already joins
-    as real evidence over there) is correctly excluded here too, rather
-    than still being reported as a near-miss candidate after the join
-    that resolves it. Join-key transform only -- see `_committed_chunk_
-    shas`'s own docstring for the full negative-spec this mirrors.
+    Join-key equality (collapsed 2026-08-20, evidence F-1): the exclusion
+    at the `trailer_value == deliverable_id` check below is plain string
+    equality against the same value `_committed_chunk_shas` joins on, with
+    no canonicalization step and no declared-map lookup.
 
     Returns a list of `{"deliverable_id": str, "commit_count": int}` dicts,
     one per DISTINCT near-miss trailer value, sorted by `commit_count`
@@ -2268,9 +2235,6 @@ def _deliverable_id_near_miss_diagnostics(
     if not query_ok:
         return []
 
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-
     counts: dict[str, int] = {}
     for line in log_lines:
         parts = line.split("\t", 2)
@@ -2278,7 +2242,7 @@ def _deliverable_id_near_miss_diagnostics(
             continue
         subject = parts[1]
         trailer_value = parts[2].strip()
-        if not trailer_value or canonicalize(trailer_value, equivalence_map) == canonical_deliverable_id:
+        if not trailer_value or trailer_value == deliverable_id:
             continue
         subject_ids = _extract_chunk_ids(subject, missing_chunk_ids)
         if not any(
@@ -2367,10 +2331,9 @@ def _hyphen_range_subject_diagnostics(
          subject" just because a `-` is present at all.
       5. Deliverable-Id-scoped exactly like the real join (see this
          module's docstring § Deliverable scoping): a candidate commit only
-         counts here when its own `Deliverable-Id` trailer canonicalizes
-         (via `deliverable_equivalence.canonicalize()`, the SAME map/seam
-         `_committed_chunk_shas` already joins on) EQUAL to this plan's own
-         `deliverable_id` -- never a mismatch, unlike the sibling near-miss
+         counts here when its own `Deliverable-Id` trailer equals this
+         plan's own `deliverable_id` exactly -- never a mismatch, unlike
+         the sibling near-miss
          diagnostic, which looks for the OPPOSITE (a candidate value that
          does NOT match). A hyphen-range subject that genuinely belongs to
          a DIFFERENT plan reusing the same short spine-id shape (`C1`..`C4`
@@ -2402,9 +2365,6 @@ def _hyphen_range_subject_diagnostics(
     if not query_ok:
         return []
 
-    equivalence_map = load_equivalence_map(repo_root)
-    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
-
     offenders: list[dict[str, Any]] = []
     for line in log_lines:
         parts = line.split("\t", 2)
@@ -2414,7 +2374,7 @@ def _hyphen_range_subject_diagnostics(
         trailer_value = parts[2].strip()
         if not trailer_value:
             continue
-        if canonicalize(trailer_value, equivalence_map) != canonical_deliverable_id:
+        if trailer_value != deliverable_id:
             continue
 
         match = _CHUNK_SUBJECT_RE.match(subject)

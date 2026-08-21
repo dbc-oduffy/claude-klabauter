@@ -79,7 +79,7 @@ Negative-spec (hard-won):
   - Does NOT limit the divergence check to staged docs/plans/*.md files — a routine
     pathspec (one plan file plus the handoffs it spawned) checks `deliverable_id`
     across the WHOLE staged set (`_staged_deliverable_ids_diverge`); two or more
-    distinct canonicalized values omits Plan-Id/Deliverable-Id/Resolves together
+    distinct values omits Plan-Id/Deliverable-Id/Resolves together
     (staff-eng review finding 1, C7B — the confident-wrong-edge gap).
 """
 
@@ -96,7 +96,6 @@ from typing import Dict, List, Optional, Sequence
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _parse_frontmatter, _read_meta
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 logger = logging.getLogger(__name__)
@@ -354,7 +353,7 @@ def _staged_deliverable_ids_diverge(
     worktree_root: Path, scope_paths: Optional[Sequence[str]] = None
 ) -> bool:
     """True when the staged set (this commit's own pathspec) carries TWO OR
-    MORE distinct (canonicalized) `deliverable_id` values across ALL staged
+    MORE distinct `deliverable_id` values across ALL staged
     artifacts, not just staged docs/plans/*.md files.
 
     Staff-eng review finding 1 (critical): `_resolve_plan_from_diff` only
@@ -368,8 +367,7 @@ def _staged_deliverable_ids_diverge(
     `Resolves:` rides the same resolver and is gated on the same check.
 
     Reuses `commit_trailers._read_deliverable_id_from_frontmatter` for
-    extraction and `deliverable_equivalence.canonicalize` for the ambiguity
-    check -- the SAME leaf-read and equivalence join
+    extraction -- the SAME leaf-read
     `commit_trailers._resolve_deliverable_id_from_paths` (the sibling
     producer already brought to this posture) uses for exactly this class
     of check, not a second copy of the resolution logic.
@@ -384,15 +382,13 @@ def _staged_deliverable_ids_diverge(
     if not staged:
         return False
 
-    equivalence_map = load_equivalence_map(worktree_root)
     found: Dict[str, str] = {}
     for rel_path in staged:
         deliverable_id = _read_deliverable_id_from_frontmatter(worktree_root / rel_path)
         if deliverable_id:
             found[rel_path] = deliverable_id
 
-    canonical_values = {canonicalize(v, equivalence_map) for v in found.values()}
-    return len(canonical_values) > 1
+    return len(set(found.values())) > 1
 
 
 def _resolve_plan_from_governing_slug(
@@ -542,25 +538,17 @@ def _has_staged_completion_entry(
     Spec backlink: DoE-claude:pln-baton-spine-information-integr-d3e1d7
     § A1 (b) — stamp Resolves: at the completion event, not on every commit.
 
-    Both sides of the equality check below are canonicalized through the declared
-    fork-equivalence map (state/deliverable-equivalence.yaml) so a completion entry
-    resolving to one leg of a declared fork still satisfies a `deliverable_id`
-    naming the other leg. Read-only comparison — the trailer this gates on is
-    always stamped with the caller's RAW `deliverable_id` (see `_handler`'s
-    `Resolves:` trailer), never this canonicalized value.
+    Read-only comparison — the trailer this gates on is always stamped with
+    the caller's RAW `deliverable_id` (see `_handler`'s `Resolves:` trailer).
     """
     if not deliverable_id:
         return False
-    equivalence_map = load_equivalence_map(worktree_root)
-    deliverable_id = canonicalize(deliverable_id, equivalence_map)
     staged = _staged_files(worktree_root, scope_paths)
     if staged is None:
         return False
     for path in staged:
         if path and _COMPLETION_ENTRY_RE.match(path):
-            entry_dlv_id = canonicalize(
-                _completion_entry_deliverable_id(worktree_root, path), equivalence_map
-            )
+            entry_dlv_id = _completion_entry_deliverable_id(worktree_root, path)
             if entry_dlv_id is not None and entry_dlv_id == deliverable_id:
                 return True
     return False

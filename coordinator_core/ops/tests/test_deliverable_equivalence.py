@@ -1,25 +1,18 @@
 """
 coordinator_core.ops.tests.test_deliverable_equivalence
 
-Unit tests for the shared deliverable-id equivalence read-model module
-(coordinator_core/ops/deliverable_equivalence.py) — the C4a module half of AC6, plus
-AC12's idempotence-by-construction.
+Unit tests for the close-out ledger loader/validator, corpus seeder and dual-read
+helper in coordinator_core/ops/deliverable_equivalence.py.
 
-Coverage:
-  (i)    none_passthrough        — canonicalize(None, ...) returns None (None-safe).
-  (ii)   unknown_id_passthrough  — an id absent from the equivalence map is returned
-                                   unchanged (absence is never a silent merge).
-  (iii)  known_loser_maps        — a declared loser id maps to its declared winner.
-  (iv)   missing_artifact_empty  — no state/deliverable-equivalence.yaml on disk ->
-                                   load_equivalence_map returns {} -> every id
-                                   canonicalizes to itself.
-  (v)    memoization              — the artifact is read at most once per process;
-                                   editing the file after the first load does not
-                                   change what a second call returns.
-  (vi)   idempotence              — canonicalize(canonicalize(x, m), m) == canonicalize(x, m)
-                                   for both a known-loser id and a passthrough id.
+CONDEMNED AND REMOVED (2026-08-21, C1g,
+docs/plans/2026-08-20-the-close-ceremony-stops-paying-for-the-join.md): this file used
+to also cover the module's fork-equivalence read-model (`load_equivalence_map` +
+`canonicalize()`, C4a's AC6/AC12). Both functions were deleted along with every test
+that existed only to pin their behaviour — see `state/kill-ledger.md` for the kill
+record. What remains here covers the surviving symbols only.
 
-Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC12)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (historical; the map this
+section covered is gone)
 """
 
 from __future__ import annotations
@@ -36,12 +29,9 @@ from coordinator_core.ops.deliverable_equivalence import (
     DeliverableLedgerValidationError,
     _normalize_extracted_deliverable_id,
     _reset_deliverable_ledger_cache,
-    _reset_equivalence_map_cache,
-    canonicalize,
     dual_read_deliverable_id,
     dual_read_deliverable_ids_for_corpus,
     load_deliverable_ledger,
-    load_equivalence_map,
     seed_deliverable_ledger_rows,
     validate_deliverable_ledger_rows,
 )
@@ -49,16 +39,14 @@ from coordinator_core.ops.deliverable_equivalence import (
 
 @pytest.fixture(autouse=True)
 def _reset_memo():
-    """Clear the module-scope memo before and after each test.
+    """Clear the module-scope ledger memo before and after each test.
 
     Required because pytest shares one interpreter across tests, unlike the
     spawn-per-call production model this memo is designed for (see
-    _reset_equivalence_map_cache's own docstring).
+    _reset_deliverable_ledger_cache's own docstring).
     """
-    _reset_equivalence_map_cache()
     _reset_deliverable_ledger_cache()
     yield
-    _reset_equivalence_map_cache()
     _reset_deliverable_ledger_cache()
 
 
@@ -92,414 +80,6 @@ def _write_artifact(worktree_root: Path, entries: list[dict]) -> Path:
     )
     return artifact_path
 
-
-def test_none_passthrough():
-    """canonicalize(None, ...) is None-safe: returns None regardless of map contents."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    assert canonicalize(None, equivalence_map) is None
-
-
-def test_unknown_id_passthrough():
-    """An id with no declared equivalence entry canonicalizes to itself (no silent merge)."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    assert canonicalize("dlv-unrelated", equivalence_map) == "dlv-unrelated"
-
-
-def test_known_loser_maps_to_winner():
-    """A declared loser id canonicalizes to its declared winner."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    assert canonicalize("dlv-loser", equivalence_map) == "dlv-winner"
-    # The winner itself is untouched — it is not a loser in this map.
-    assert canonicalize("dlv-winner", equivalence_map) == "dlv-winner"
-
-
-def test_missing_artifact_returns_empty_map(tmp_path):
-    """No state/deliverable-equivalence.yaml on disk -> load_equivalence_map returns {}.
-
-    A missing artifact is NOT an error (C3b has not landed yet in this wave) — every
-    id then canonicalizes to itself, matching today's raw-comparison behaviour.
-    """
-    worktree_root = tmp_path
-    equivalence_map = load_equivalence_map(worktree_root)
-    assert equivalence_map == {}
-    assert canonicalize("dlv-anything", equivalence_map) == "dlv-anything"
-
-
-def test_known_loser_end_to_end(tmp_path):
-    """A fixture-built artifact resolves through load_equivalence_map + canonicalize."""
-    _write_artifact(
-        tmp_path,
-        [{"loser": "dlv-sat-01-old", "winner": "dlv-sat-01", "evidence": "creation order"}],
-    )
-    equivalence_map = load_equivalence_map(tmp_path)
-    assert equivalence_map == {"dlv-sat-01-old": "dlv-sat-01"}
-    assert canonicalize("dlv-sat-01-old", equivalence_map) == "dlv-sat-01"
-    assert canonicalize("dlv-sat-01", equivalence_map) == "dlv-sat-01"
-    assert canonicalize("dlv-unrelated", equivalence_map) == "dlv-unrelated"
-
-
-def test_memoization_reads_artifact_at_most_once_per_mtime(tmp_path):
-    """load_equivalence_map memoizes on (worktree_root, artifact mtime) — repeat
-    calls against an UNCHANGED artifact reuse the memo, but a rewrite (which bumps
-    mtime) busts the entry rather than serving stale pre-rewrite data (C5 P2 fix).
-    """
-    _write_artifact(
-        tmp_path,
-        [{"loser": "dlv-a-old", "winner": "dlv-a", "evidence": "first read"}],
-    )
-    first = load_equivalence_map(tmp_path)
-    assert first == {"dlv-a-old": "dlv-a"}
-
-    # A repeat call against the same (root, mtime) reuses the memoized map.
-    repeat = load_equivalence_map(tmp_path)
-    assert repeat == first
-
-    # Rewrite the artifact with different contents; the mtime-keyed memo DOES
-    # observe this — the fix this test guards is exactly that a rewrite must not
-    # keep serving the pre-rewrite map.
-    _write_artifact(
-        tmp_path,
-        [{"loser": "dlv-b-old", "winner": "dlv-b", "evidence": "second read, observed"}],
-    )
-    second = load_equivalence_map(tmp_path)
-    assert second == {"dlv-b-old": "dlv-b"}
-
-
-def test_idempotence_known_loser(tmp_path):
-    """canonicalize(canonicalize(x, m), m) == canonicalize(x, m) for a known loser id."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    once = canonicalize("dlv-loser", equivalence_map)
-    twice = canonicalize(once, equivalence_map)
-    assert once == "dlv-winner"
-    assert twice == once
-
-
-def test_idempotence_passthrough():
-    """canonicalize(canonicalize(x, m), m) == canonicalize(x, m) for a passthrough id."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    once = canonicalize("dlv-unrelated", equivalence_map)
-    twice = canonicalize(once, equivalence_map)
-    assert once == "dlv-unrelated"
-    assert twice == once
-
-
-def test_idempotence_none():
-    """canonicalize(canonicalize(None, m), m) == None."""
-    equivalence_map = {"dlv-loser": "dlv-winner"}
-    once = canonicalize(None, equivalence_map)
-    twice = canonicalize(once, equivalence_map)
-    assert once is None
-    assert twice is None
-
-
-# Review: coordinatorcode-reviewer-67ffaa7e Finding 3 — the defensive branches added to
-# guard against a hand-authored/malformed artifact had zero coverage. The cases below
-# target the branches most likely to fire on a real authoring mistake.
-
-
-def test_unparsable_yaml_falls_back_to_empty_map(tmp_path, caplog):
-    """A present-but-unparsable artifact degrades to {} with a logged WARNING, not a raise."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = state_dir / "deliverable-equivalence.yaml"
-    artifact_path.write_text("entries: [this is: not, valid: yaml: at all", encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-    assert canonicalize("dlv-anything", equivalence_map) == "dlv-anything"
-    assert any(
-        "could not read/parse" in record.message for record in caplog.records
-    )
-
-
-def test_duplicate_loser_keeps_first_seen_and_warns(tmp_path, caplog):
-    """A duplicate `loser` keeps the FIRST mapping and logs a WARNING, per C3b's
-    uniqueness obligation."""
-    _write_artifact(
-        tmp_path,
-        [
-            {"loser": "dlv-dup", "winner": "dlv-first-winner", "evidence": "first"},
-            {"loser": "dlv-dup", "winner": "dlv-second-winner", "evidence": "second"},
-        ],
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-dup": "dlv-first-winner"}
-    assert any("duplicate loser id" in record.message for record in caplog.records)
-
-
-def test_transitive_chain_warns_but_resolves_only_one_level(tmp_path, caplog):
-    """A winner that also appears as a loser (a transitive chain) is not the loader's
-    to walk — it must warn, not raise, and canonicalize() resolves only one level."""
-    _write_artifact(
-        tmp_path,
-        [
-            {"loser": "dlv-a-old", "winner": "dlv-a-mid", "evidence": "first hop"},
-            {"loser": "dlv-a-mid", "winner": "dlv-a-final", "evidence": "second hop"},
-        ],
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-a-old": "dlv-a-mid", "dlv-a-mid": "dlv-a-final"}
-    # One level only — the loader does not walk the chain to dlv-a-final.
-    assert canonicalize("dlv-a-old", equivalence_map) == "dlv-a-mid"
-    assert any("transitive chain" in record.message for record in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# Retraction-as-observation widening (2026-08-14) — pln-retraction-as-observation-for-
-# 1500a9 § AC4/AC5/AC6/AC8/AC9. Extends the retained fixture at scratchpad/eqfix/
-# (duplicate-loser -> first-seen-wins, chain -> warns-and-stops-at-one-level, unknown
-# id -> passthrough), which verified this plan's premise before any code changed.
-# ---------------------------------------------------------------------------
-
-
-def test_latest_adjudicated_at_wins_on_duplicate_loser(tmp_path, caplog):
-    """Two rows sharing a `loser`, both stamped: the LATER `adjudicated_at` wins, and
-    this is no longer treated as an artifact defect — no WARNING fires (AC4)."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-earlier-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-later-winner",
-                "adjudicated_at": "2026-08-02T00:00:00+00:00",
-            },
-        ],
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-dup": "dlv-later-winner"}
-    assert not any(
-        "duplicate loser" in record.message.lower() for record in caplog.records
-    )
-
-
-def test_latest_adjudicated_at_wins_regardless_of_row_order(tmp_path):
-    """The later-stamped row wins even when it is listed FIRST in the artifact — this
-    is adjudicated-time resolution, not artifact-order resolution."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-later-winner",
-                "adjudicated_at": "2026-08-02T00:00:00+00:00",
-            },
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-earlier-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-        ],
-    )
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-dup": "dlv-later-winner"}
-
-
-def test_inversion_pin_first_seen_no_longer_wins(tmp_path):
-    """PIN: this exact fixture resolved to the FIRST-seen winner before this widening
-    (see test_duplicate_loser_keeps_first_seen_and_warns, which reproduces the old
-    behaviour for UNSTAMPED rows) and resolves to the LATEST-adjudicated winner now
-    that both rows carry `adjudicated_at`. A future refactor that quietly restores
-    first-seen-wins for stamped rows must fail this test."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-first-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-second-winner",
-                "adjudicated_at": "2026-08-02T00:00:00+00:00",
-            },
-        ],
-    )
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    # NOT dlv-first-winner (the pre-widening answer) — dlv-second-winner, because it
-    # carries the later adjudicated_at.
-    assert equivalence_map == {"dlv-dup": "dlv-second-winner"}
-
-
-def test_retraction_removes_mapping(tmp_path):
-    """A row with `retracted_at` removes its `loser`'s mapping entirely —
-    canonicalize(loser, map) returns the loser unchanged, as for an id never mapped
-    (AC5)."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-was-mapped",
-                "winner": "dlv-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-                "retracted_at": "2026-08-02T00:00:00+00:00",
-            },
-        ],
-    )
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-    assert canonicalize("dlv-was-mapped", equivalence_map) == "dlv-was-mapped"
-
-
-def test_retraction_withdraws_a_previously_live_mapping(tmp_path):
-    """A live row installs a mapping; a later-processed retraction row for the SAME
-    loser withdraws it — the map ends up with no entry for that loser, not the live
-    row's winner."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-live-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-live-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-                "retracted_at": "2026-08-03T00:00:00+00:00",
-            },
-        ],
-    )
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-    assert canonicalize("dlv-dup", equivalence_map) == "dlv-dup"
-
-
-def test_missing_stamp_tie_break_warns_and_keeps_installed(tmp_path, caplog):
-    """Two rows share a `loser`; one lacks `adjudicated_at`. This is the documented
-    AMBIGUOUS case (AC6) — it must not resolve silently. The already-installed row
-    (first-processed) is kept, and a WARNING fires naming the ambiguity."""
-    _write_artifact(
-        tmp_path,
-        [
-            {"loser": "dlv-dup", "winner": "dlv-unstamped-winner"},
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-stamped-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-        ],
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-dup": "dlv-unstamped-winner"}
-    assert any(
-        "ambiguous duplicate loser id" in record.message for record in caplog.records
-    )
-
-
-def test_missing_stamp_tie_break_fires_regardless_of_which_row_lacks_it(tmp_path, caplog):
-    """Same ambiguous case, with the UNSTAMPED row arriving second — still warns,
-    still keeps the already-installed (first-processed, stamped) row."""
-    _write_artifact(
-        tmp_path,
-        [
-            {
-                "loser": "dlv-dup",
-                "winner": "dlv-stamped-winner",
-                "adjudicated_at": "2026-08-01T00:00:00+00:00",
-            },
-            {"loser": "dlv-dup", "winner": "dlv-unstamped-winner"},
-        ],
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-dup": "dlv-stamped-winner"}
-    assert any(
-        "ambiguous duplicate loser id" in record.message for record in caplog.records
-    )
-
-
-@pytest.mark.parametrize(
-    "artifact_text",
-    [
-        pytest.param("just: a\nstring: not-a-dict-of-entries\n", id="parsed_not_dict"),
-        pytest.param("- not\n- a\n- dict\n", id="parsed_is_list_not_dict"),
-        pytest.param("entries: not-a-list\n", id="entries_not_a_list"),
-    ],
-)
-def test_malformed_top_level_shapes_degrade_to_empty_map(tmp_path, artifact_text):
-    """Non-dict `parsed`, or `entries` present but not a list, both degrade to {}."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "deliverable-equivalence.yaml").write_text(artifact_text, encoding="utf-8")
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-
-
-def test_non_dict_entry_is_skipped_with_warning(tmp_path, caplog):
-    """A non-dict entry in `entries` is skipped with a WARNING, not a raise."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "deliverable-equivalence.yaml").write_text(
-        "entries:\n  - just-a-string\n", encoding="utf-8"
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-    assert any("non-mapping entry" in record.message for record in caplog.records)
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        pytest.param({"winner": "dlv-winner"}, id="missing_loser"),
-        pytest.param({"loser": "  ", "winner": "dlv-winner"}, id="blank_loser"),
-        pytest.param({"loser": "dlv-loser"}, id="missing_winner"),
-        pytest.param({"loser": "dlv-loser", "winner": "  "}, id="blank_winner"),
-    ],
-)
-def test_missing_or_blank_loser_or_winner_is_skipped_with_warning(tmp_path, caplog, entry):
-    """An entry with a missing/blank `loser` or `winner` is skipped with a WARNING."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    lines = ["entries:", "  - evidence: 'test fixture'"]
-    for key, value in entry.items():
-        lines.append(f"    {key}: {value!r}")
-    (state_dir / "deliverable-equivalence.yaml").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8"
-    )
-
-    with caplog.at_level("WARNING"):
-        equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {}
-    assert any(
-        "missing/invalid" in record.message for record in caplog.records
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -576,22 +156,6 @@ def test_load_deliverable_ledger_unparsable_yaml_returns_empty_list(tmp_path, ca
     # implied "and it warns"; assert the warning was actually emitted, not just
     # the return value.
     assert any("could not read/parse" in record.message for record in caplog.records)
-
-
-def test_load_equivalence_map_unaffected_by_ledger_block(tmp_path):
-    """Additive-compatibility pin: an artifact carrying BOTH `entries:` and `ledger:`
-    still yields the same {loser: winner} map from load_equivalence_map as one with
-    only `entries:` — the ledger block must not change the fork-equivalence loader's
-    behaviour at all."""
-    _write_artifact_with_ledger(
-        tmp_path,
-        [{"loser": "dlv-old", "winner": "dlv-new", "evidence": "test"}],
-        [_well_formed_row()],
-    )
-
-    equivalence_map = load_equivalence_map(tmp_path)
-
-    assert equivalence_map == {"dlv-old": "dlv-new"}
 
 
 def test_deliverable_ledger_memoization_reads_at_most_once_per_mtime(tmp_path):
@@ -722,42 +286,18 @@ def _write_ledger_only(worktree_root: Path, ledger_rows: list[dict]) -> Path:
     return artifact_path
 
 
-def test_loaded_equivalence_map_carries_all_19_entries():
-    """AC1, read per the completion-notes reading: AC1's literal wording asks to
-    compare the SEED's row count to 19, but the seed's row count is a corpus-
-    derived deduped count with no reason to equal 19 (winners absorb multiple
-    losers — research corpus §0). AC1's real intent — that the map DRIVING the
-    seed carries all 19 declared entries, not the stale "14" — is discharged
-    directly here against the real repo artifact.
-
-    NOTE: this test intentionally reads the real on-disk
-    state/deliverable-equivalence.yaml rather than a tmp_path fixture, so its
-    pass/fail is coupled to future edits of that production ledger file — any
-    addition/removal of an entries: row will break this test with no code
-    change. If that happens, update the literal 19 below to match the new
-    entry count."""
-    repo_root = Path(__file__).resolve().parents[3]
-    equivalence_map = load_equivalence_map(repo_root)
-    assert len(equivalence_map) == 19
-
-
-def test_seed_known_fork_loser_seeds_as_its_winner(tmp_path):
-    """AC3: a known fork-loser id seeds under its declared WINNER, never its own
-    raw id."""
+def test_seed_seeds_under_the_artifact_s_own_raw_id(tmp_path):
+    """Post-C1g pin: `seed_deliverable_ledger_rows` no longer routes a raw id through
+    any fork-equivalence map (that mechanism was removed 2026-08-21) — every seeded
+    row's `deliverable_id` is the artifact's own raw frontmatter value, unchanged."""
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
-    _write_handoff(handoffs_dir / "2026-01-01_000000_example.md", "dlv-loser-example")
-
-    _write_artifact(
-        tmp_path,
-        [{"loser": "dlv-loser-example", "winner": "dlv-winner-example", "evidence": "test"}],
-    )
+    _write_handoff(handoffs_dir / "2026-01-01_000000_example.md", "dlv-raw-example")
 
     rows = seed_deliverable_ledger_rows(tmp_path)
 
     seeded_ids = {row["deliverable_id"] for row in rows}
-    assert "dlv-winner-example" in seeded_ids
-    assert "dlv-loser-example" not in seeded_ids
+    assert "dlv-raw-example" in seeded_ids
 
 
 def test_seed_rows_pass_validate_deliverable_ledger_rows(tmp_path):
@@ -881,7 +421,7 @@ def test_dual_read_raises_on_divergent_ledger_and_frontmatter(tmp_path, caplog):
 
     with caplog.at_level("WARNING"):
         with pytest.raises(DeliverableDualReadMismatchError, match="mismatch"):
-            dual_read_deliverable_id(tmp_path, str(artifact), {})
+            dual_read_deliverable_id(tmp_path, str(artifact))
 
     # This must be a raise, never a mere warning (departure from
     # ownership_index.build_ownership_index's WARN precedent, per AC6) — pin
@@ -920,7 +460,7 @@ def test_batch_wrapper_collects_mismatch_without_aborting_the_walk(tmp_path):
     )
 
     results, errors = dual_read_deliverable_ids_for_corpus(
-        tmp_path, [str(good_path), str(bad_path)], {}
+        tmp_path, [str(good_path), str(bad_path)]
     )
 
     assert results[str(good_path)] == ("dlv-good", "hit")
@@ -948,7 +488,7 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
             )
         ],
     )
-    result, outcome = dual_read_deliverable_id(tmp_path, str(fm_only), {})
+    result, outcome = dual_read_deliverable_id(tmp_path, str(fm_only))
     assert outcome == "genuine_miss"
     assert result == "dlv-fm-only"
 
@@ -957,7 +497,7 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
     (tmp_path / "state" / "deliverable-equivalence.yaml").write_text(
         "not: [valid: yaml: at all", encoding="utf-8"
     )
-    result2, outcome2 = dual_read_deliverable_id(tmp_path, str(fm_only), {})
+    result2, outcome2 = dual_read_deliverable_id(tmp_path, str(fm_only))
     assert outcome2 == "ledger_unreadable"
     assert result2 == "dlv-fm-only"
 
@@ -977,7 +517,7 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
         ],
     )
     _reset_deliverable_ledger_cache()
-    result3, outcome3 = dual_read_deliverable_id(tmp_path, str(no_fm), {})
+    result3, outcome3 = dual_read_deliverable_id(tmp_path, str(no_fm))
     assert outcome3 == "hit"
     assert result3 == "dlv-hit-value"
 
@@ -1114,11 +654,14 @@ import re as _re
 
 
 def _census_predecessor_successor_pairs():
-    """Re-derive the 24 (predecessor canonical id, successor canonical id) pairs
-    from the census table via canonicalize()/load_equivalence_map — never
-    hard-coded, per the plan's Anti-scope."""
+    """Re-derive the 24 (predecessor id, successor id) pairs from the census table —
+    never hard-coded, per the plan's Anti-scope.
+
+    Historical note (pre-2026-08-21): these ids used to be routed through
+    `canonicalize()`/`load_equivalence_map` before comparison. That mechanism was
+    removed by C1g (see `deliverable_equivalence.py`'s module docstring); every id
+    here is now the census table's own raw id, compared directly."""
     repo_root = Path(__file__).resolve().parents[3]
-    equivalence_map = load_equivalence_map(repo_root)
 
     census_path = (
         repo_root / "state" / "audits" / "2026-08-06-archive-side-zombie-census.md"
@@ -1152,9 +695,7 @@ def _census_predecessor_successor_pairs():
 
         pred_raw, _ = _raw_and_canonical(cells[2])
         succ_raw, _ = _raw_and_canonical(cells[4])
-        pred_canonical = canonicalize(pred_raw, equivalence_map)
-        succ_canonical = canonicalize(succ_raw, equivalence_map)
-        pairs.append((pred_canonical, succ_canonical))
+        pairs.append((pred_raw, succ_raw))
 
     return pairs
 

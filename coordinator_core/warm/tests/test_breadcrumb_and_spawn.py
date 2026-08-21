@@ -200,7 +200,60 @@ def test_should_spawn_false_when_young_and_alive(tmp_path: Path, monkeypatch: py
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 0.5))
     _write_started_at(tmp_path, pid=999, stable_epoch=111, started_at=started_at)
     monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: True)
     assert breadcrumb.should_spawn(tmp_path, now=now) is False
+
+
+def test_should_spawn_true_when_pid_alive_but_pipe_is_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE FIX this pins: a young, alive-by-PID breadcrumb must NOT
+    debounce a respawn when the pipe itself proves dead -- a process can
+    be alive and wedged (accepting no new connections) while its
+    breadcrumb still reads as young and alive by pid alone. Proving the
+    PIPE, not the PROCESS, is what should_spawn's own docstring now
+    describes."""
+    now = 2_000_000_000.0
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 0.5))
+    _write_started_at(tmp_path, pid=999, stable_epoch=111, started_at=started_at)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: False)
+    assert breadcrumb.should_spawn(tmp_path, now=now) is True
+
+
+def test_should_spawn_false_when_pipe_field_missing_falls_back_to_pid_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No recorded pipe to prove -- the debounce falls back to the
+    pid-only answer that predates this check, rather than crashing or
+    treating absence as "dead"."""
+    path = breadcrumb.breadcrumb_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = 2_000_000_000.0
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 0.5))
+    record = {
+        "pid": 999,
+        "stable_pid_start_epoch": 111,
+        "engine_sha": "x",
+        "started_at": started_at,
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    assert breadcrumb.should_spawn(tmp_path, now=now) is False
+
+
+def test_pipe_is_alive_fails_open_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off Windows, or on any unanticipated ctypes failure, the probe must
+    fail OPEN (True) -- a caller that cannot evaluate liveness gets the
+    pid-only answer that predates this check, never a wrongly-triggered
+    respawn or a propagated exception."""
+    import ctypes as _ctypes
+
+    def _raise(*args, **kwargs):
+        raise OSError("no such DLL on this platform")
+
+    monkeypatch.setattr(_ctypes, "WinDLL", _raise, raising=False)
+    assert breadcrumb._pipe_is_alive(r"\\.\pipe\fake") is True
 
 
 def test_should_spawn_true_when_young_but_dead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -466,6 +519,7 @@ def test_successors_debounce_survives_a_predecessor_exit(tmp_path: Path, monkeyp
     breadcrumb survived at all.
     """
     monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, **kw: True)
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: True)
 
     breadcrumb.write_breadcrumb(
         pipe="pipe-T1", pid=1111, stable_pid_start_epoch=1, engine_sha="aaa",

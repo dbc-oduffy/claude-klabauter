@@ -309,6 +309,73 @@ def _build_staff_eng_review_doc_text(
     )
 
 
+def _append_lens_frontmatter_keys(frontmatter_text: str, lens_keys: str) -> str:
+    """Splice ``lens_keys`` in immediately before ``_frontmatter``'s closing
+    delimiter, without editing ``_frontmatter`` itself (CONTRACT.md pin: its
+    emitted field names and order are a wire shape with external consumers).
+    ``_frontmatter`` always returns a string ending in the literal
+    ``"---\n\n"`` -- this appends strictly AFTER the seven pinned keys and
+    before that closing ``---``, per AC2/AC3."""
+    marker = "---\n\n"
+    assert frontmatter_text.endswith(marker)
+    return frontmatter_text[: -len(marker)] + lens_keys + marker
+
+
+#: DoE-claude coordinator/agents/plan-coverage-checker.md \u00a7 Sidecar Format
+#: skeleton (## Plan Coverage Verification through the tenth ### heading),
+#: copied byte-exact -- see _build_plan_coverage_check_doc_text's docstring.
+_PLAN_COVERAGE_CHECK_SKELETON = '## Plan Coverage Verification\n\n**Plan:** <path>\n**Verdict:** COMPLETE | INCOMPLETE | BLOCKED-SURFACE-TO-PM | SCOPE-MISMATCH | DEGRADED\n**Sub-label:** INCOMPLETE — Mechanical: N, Judgment: M  *(INCOMPLETE only; omit otherwise)*\n**Oracle items:** N (source: <heading|table|ratified problem-set:`<path>`|inline ratified problem-set|sizing object:`<path>`>)\n**Slate items:** M\n**Missed:** X | **Ambiguous:** A | **OOS-weak:** Y | **Hedges:** Z | **Unratified-deferrals:** U | **Malformed-rows:** R | **Missing-writes:** V | **Open-on-landed:** O | **Substrate-drift:** W | **Deferral-args:** G | **Spine-emittability:** E | **Vehicle-in-anti-scope:** H | **Unregistered-hooks:** K\n**Advisory:** <finding line if applicable, else omit>\n\n### Missed audit items (no slate entry, no architectural OOS)\n\n*Action: one of the three resolutions in § Identity (add-to-slate | architectural-OOS | oracle-was-wrong).*\n\n### Ambiguous audit items (signal-partial — informational only)\n\n*Action: "verify covered or promote to explicit slate citation" — plus the reason (stopword-only overlap OR uncited consolidation). Never gates INCOMPLETE.*\n\n### Weak OOS / hedges (appetite-based deferrals)\n\n*Action: "promote to slate OR rewrite OOS reason as architectural" — quote ±5 lines of context.*\n\n### Task-spine: unratified deferrals and malformed rows\n\n*Action: LEGACY → "PM ratifies (pm_approved: true) OR EM moves the row back into scope." GOVERNED → **"ask the PM to approve the `<grouping>` grouping (or supply the missing pm_utterance/disposition_detail) — never set a field yourself, approval is a PM act."** Malformed row → "author fixes the required field(s)." Zero/>1 spine blocks → FAIL-LOUD note, verdict DEGRADED.*\n\n**Deferral-argument lenses** (`case_against` vacuity; >4 candidate cuts): see `docs/wiki/plan-coverage-checker.md` § Lens 2b checks 3–4 — a cut counts as candidate while `open`, not only once closed. Emit above as **Deferral-args**.\n\n### Task-spine: rows missing declared writes\n\n*Action: "author adds `writes:` — the row\'s `surface:` plus its body name the write targets."*\n\n### Task-spine: open rows on landed plans (resolution-completeness)\n\n*Action: "EM resolves via `plan_tasks.mutate resolve` (PM approval if disposition is non-`coded`) OR investigates why it was missed."*\n\n### Spine emittability (would `dispatch.emit` refuse this spine — AC9)\n\n*Action: "add a `writes:` path with a co-located test, OR architecturally justify why this row ships with no test coverage" — quote the offending row `id`s (the engine-defect case is Advisory-only, see Phase 3.7).*\n\n### Substrate drift (in-repo paths/symbols cited that don\'t match disk)\n\n*Action: "amend plan to current substrate OR explain drift" — plus current disk state (file absent / symbol not found within ±50 lines).*\n\n### Anti-scope vehicle-naming (Phase 4.5, Lens 4)\n\n*Action: the tripwire token and correction from Phase 4.5.*\n\n### Hook registration liveness (Phase 4.6, Lens 5)\n\n*Action: "amend plan to a currently-registered hook, or confirm with the EM whether the citation is stale" — plus the on-disk existence note and roster citation.*'
+
+
+def _build_plan_coverage_check_doc_text(
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    plan_path: Optional[str] = None,
+) -> str:
+    """``"plan-coverage-check"``: the plan-coverage-checker lens's sidecar
+    skeleton (docs/plans/2026-08-21-the-provisioner-writes-the-sidecar-
+    skeleton.md, C1) -- reached only via the plan-derivable leg's lens-wins
+    rule in ``_provision`` (AC4), never through the ordinary ``type``
+    string axis a caller might set directly.
+
+    The lens owns the plan-sidecar's body the same way it already owns its
+    path (``_PLAN_DERIVABLE_LENS``): ``_PLAN_COVERAGE_CHECK_SKELETON`` above
+    -- the ``## Plan Coverage Verification`` section, its ten ``### ``
+    findings headings, and the thirteen-bucket counts line -- is copied
+    BYTE-EXACT from DoE-claude's ``coordinator/agents/plan-coverage-
+    checker.md`` \u00a7 Sidecar Format -- never retyped or paraphrased,
+    since a near-miss classifies the sidecar DEGRADED. A DoE-side edit to
+    that section is a drift this module does NOT auto-follow (no runtime
+    dependency on the sibling checkout); re-sync the constant by hand when
+    DoE's \u00a7 Sidecar Format changes.
+
+    Lens-owned frontmatter keys (``title``/``created``/``author``/``kind``/
+    ``plan``) are appended AFTER the seven pinned ``_frontmatter`` keys via
+    ``_append_lens_frontmatter_keys`` -- ``_frontmatter`` itself is never
+    edited (AC2). ``status:`` stays the pinned ``open`` (AC3): a completion
+    claim is the agent's to make, never the scaffolder's. ``plan_path`` is
+    the raw, already-repo-relative payload value (not the sanitized
+    filesystem stem used for the path leaf) -- ``Path(...).stem`` is used
+    only for the human-facing ``title:`` slug, never for anything
+    filesystem-facing here.
+    """
+    created = spawned_at[:10] if spawned_at else ""
+    plan_slug = Path(plan_path).stem if plan_path else ""
+    lens_keys = (
+        f"title: Plan Coverage Check \u2014 {plan_slug}\n"
+        f"created: {created}\n"
+        "author: plan-coverage-checker\n"
+        "kind: plan-coverage-check\n"
+        f"plan: {plan_path or ''}\n"
+    )
+    frontmatter = _append_lens_frontmatter_keys(
+        _frontmatter(agent_type, spawned_at, lead_session_id), lens_keys
+    )
+    return frontmatter + _PLAN_COVERAGE_CHECK_SKELETON + "\n\n" + _exit_interview_section()
+
+
 #: Template registry keyed by explicit ``type`` value. Reached only when a
 #: payload/CLI invocation actually names a ``type`` -- an ABSENT ``type``
 #: key never touches this registry (see ``_build_doc_text`` below), which
@@ -319,6 +386,7 @@ _TEMPLATE_REGISTRY: Dict[str, Callable[[str, str, Optional[str]], str]] = {
     "review-findings": _build_review_findings_doc_text,
     "assessment": _build_assessment_doc_text,
     "staff-eng-review": _build_staff_eng_review_doc_text,
+    "plan-coverage-check": _build_plan_coverage_check_doc_text,
 }
 
 
@@ -327,6 +395,8 @@ def _build_doc_text(
     spawned_at: str,
     doc_type: Optional[str] = None,
     lead_session_id: Optional[str] = None,
+    *,
+    plan_path: Optional[str] = None,
 ) -> str:
     """Dispatch to the type-keyed template registry, or the frozen legacy
     run-report shape when ``doc_type`` is ``None`` (payload carried no
@@ -335,10 +405,19 @@ def _build_doc_text(
     raising, consistent with this module's fail-open posture.
     ``lead_session_id`` (SUBSUME: the requesting EM's session id) is
     optional here purely so existing low-level callers that predate this
-    field keep working unmodified -- ``_provision`` always supplies it."""
+    field keep working unmodified -- ``_provision`` always supplies it.
+
+    ``plan_path`` is a keyword-only addition (the provisioner writes the
+    plan-coverage-check sidecar skeleton, C1): threaded through ONLY to
+    ``"plan-coverage-check"``'s builder, which needs it for the lens-owned
+    ``plan:`` frontmatter key -- every other registry entry keeps the exact
+    3-positional-arg call shape it always had, so this addition cannot
+    disturb their dispatch or the legacy no-type path above."""
     if not doc_type:
         return _build_run_report_legacy_doc_text(agent_type, spawned_at, lead_session_id)
     builder = _TEMPLATE_REGISTRY.get(doc_type, _build_run_report_doc_text)
+    if doc_type == "plan-coverage-check":
+        return builder(agent_type, spawned_at, lead_session_id, plan_path=plan_path)
     return builder(agent_type, spawned_at, lead_session_id)
 
 
@@ -578,6 +657,7 @@ def _provision_plan_derivable_doc(
     agent_type: str,
     doc_type: Optional[str],
     session_id: str,
+    plan_path: Optional[str] = None,
 ) -> str:
     """Write (or idempotently reuse) the deterministic plan-derivable
     sidecar for one of the four G2 emitters; return its repo-relative path.
@@ -598,7 +678,9 @@ def _provision_plan_derivable_doc(
 
     doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
     spawned_at = datetime.now(timezone.utc).isoformat()
-    doc_text = _build_doc_text(agent_type, spawned_at, doc_type, lead_session_id=session_id)
+    doc_text = _build_doc_text(
+        agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
+    )
 
     try:
         with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
@@ -653,7 +735,16 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     if lens is not None and plan_path and git_root:
         plan_stem = _resolve_plan_sidecar_stem(str(plan_path))
         if plan_stem is not None:
-            doc_type = payload.get("type") or None
+            # AC4 -- lens-wins rule: a registered lens-named template wins
+            # over payload["type"] on THIS leg only. Narrow by construction:
+            # only a lens name that is actually a _TEMPLATE_REGISTRY key
+            # takes this branch, so today only "plan-coverage-check" is
+            # affected -- the other four lenses keep resolving whatever
+            # type the payload supplies, exactly as before.
+            if lens in _TEMPLATE_REGISTRY:
+                doc_type = lens
+            else:
+                doc_type = payload.get("type") or None
             return _provision_plan_derivable_doc(
                 git_root=git_root,
                 plan_stem=plan_stem,
@@ -661,6 +752,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
                 agent_type=agent_type,
                 doc_type=doc_type,
                 session_id=str(session_id),
+                plan_path=str(plan_path),
             )
 
     sanitized_session_id = _sanitize_segment(str(session_id))

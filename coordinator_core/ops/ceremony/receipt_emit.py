@@ -79,7 +79,6 @@ from typing import Any, Optional
 # generator_provenance.py reserves for MUTATES rather than GENERATES.
 MUTATES = ["state/ceremony/**/*.json"]
 
-from coordinator_core.engine_version import resolve_engine_dirty, resolve_engine_sha
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.ops.ceremony.receipt_schema import (
     CEREMONY_RECEIPT_DIR,
@@ -87,6 +86,7 @@ from coordinator_core.ops.ceremony.receipt_schema import (
     make_receipt,
 )
 from coordinator_core.session import scope as session_scope
+from coordinator_core.wire_paths import rel_id
 
 # ---------------------------------------------------------------------------
 # Sentinel — returned by read_receipt when the file is absent
@@ -342,13 +342,6 @@ def emit_receipt(
     # --- derive op_tail from the D-node ledger (NOT stored independently) ---
     op_tail = compute_op_tail(ctx.nodes, phase=tail_phase)
 
-    # --- resolve engine self-version (C2) — None when unresolvable, graceful-absent ---
-    engine_sha = resolve_engine_sha()
-    # engine_sha alone does not prove the code that ran matches that commit's
-    # tree (this working tree is dirty essentially continuously) — resolve the
-    # dirty discriminator alongside it so a receipt can carry both.
-    engine_dirty = resolve_engine_dirty()
-
     # --- build receipt dict ---
     receipt = make_receipt(
         ceremony=ctx.ceremony,
@@ -367,16 +360,6 @@ def emit_receipt(
         # ctx is rebuilt via PipelineContext.from_dict(), which round-trips this
         # field, so the same line covers both callers.
         applicable_node_ids=ctx.applicable_node_ids,
-        # C2 — thread the resolved engine self-version SHA through so both
-        # phase-1 and phase-2 receipts carry the SHA of the coordinator_core
-        # copy that produced them.  None (unresolvable) is graceful-absent —
-        # make_receipt only sets the key when engine_sha is truthy.
-        engine_sha=engine_sha,
-        # thread the resolved engine dirty-flag through so both phase-1 and
-        # phase-2 receipts carry it.  None (unresolvable) is graceful-absent —
-        # make_receipt only sets the key when engine_dirty is not None
-        # (False is a meaningful, real finding and must still be emitted).
-        engine_dirty=engine_dirty,
         # C3 — thread the C1 scoping verdict through so both phase-1 and
         # phase-2 receipts carry it; phase-2's ctx is rebuilt via
         # PipelineContext.from_dict(), which round-trips these fields, so the
@@ -406,13 +389,11 @@ def emit_receipt(
     # so declaration is skipped rather than guessed.
     if sid and repo_root is not None:
         try:
-            rel_path = out_path.relative_to(repo_root)
+            rel_path = rel_id(out_path, repo_root)
         except ValueError:
             pass
         else:
-            session_scope.touch_written_path(
-                sid, str(rel_path).replace(os.sep, "/"), str(repo_root)
-            )
+            session_scope.touch_written_path(sid, rel_path, str(repo_root))
 
     return out_path, op_tail
 

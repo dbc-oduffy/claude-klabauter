@@ -155,6 +155,20 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # transcript_path + agent_id; repo_root is unused (always None). Same
     # "none" class as ping / the other repo_root-less hooks.* ops here.
     "hooks.subagent_arrival_check":          "none",
+    # hooks.cater_subagent_start — no repo state accessed: its handler takes
+    # `repo_root=None` and never reads it; every path it touches is derived
+    # from the caller-supplied SubagentStart payload (`compose_catering(params,
+    # cwd=field(params, "cwd"))`). Same "none" class as subagent_arrival_check
+    # directly above, on the same repo_root-is-unused basis.
+    # Verdict read off the handler, not defaulted by omission — the coverage
+    # gate refuses a default and it is right to. Entry added 2026-08-21 by the
+    # handoffs-and-spinoffs-minimal baton (session 5f04d5b5), NOT its author:
+    # the op shipped registered in `_registry_map.py` without a scope entry,
+    # and `op_scope_coverage_gate` is repo-wide, so the omission blocked
+    # `scoped_git_commit` for every session on the branch. Owning baton:
+    # state/handoffs/2026-08-21-catering-rides-subagentstart.md — its author
+    # should override this verdict if catering ever grows a repo-state read.
+    "hooks.cater_subagent_start":            "none",
     "hooks.nudge_unauthorized_handoff":      "none",
     # hooks.nudge_named_agent_report_delivery — no repo state accessed at all: reads
     # only the caller-supplied tool_name/tool_input params and returns an advisory
@@ -368,6 +382,21 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # worktree the same way. Without this entry dispatch resolves repo_root=None
     # and the op fails outright, exactly as the comment above describes.
     "handoff.discharge_criteria":            "common_dir",
+    # handoff.author_lint — keyed on git_common_dir, same class as the two
+    # entries above: it resolves the identical target set (a live
+    # state/handoffs/*.md or its archive-follow sibling) via
+    # main_worktree_root(common_dir). Read-only, but the key scope governs
+    # WHERE it looks, not what it may touch — without this entry dispatch
+    # resolves repo_root=None and the op returns its exit-2 refusal on every
+    # call, which reads as "indeterminate" forever rather than as a wiring bug.
+    "handoff.author_lint":                   "common_dir",
+    # handoff.append_session_ledger — keyed on git_common_dir, inheriting
+    # handoff.correct_body's key-scope class by construction, same reasoning
+    # as handoff.discharge_criteria immediately above: a bounded wrapper that
+    # delegates its entire write to that op's handler, resolving the
+    # identical target set and deriving worktree the same way. Without this
+    # entry dispatch resolves repo_root=None and the op fails outright.
+    "handoff.append_session_ledger":         "common_dir",
     # handoff.propagate — keyed on git_common_dir, same class as
     # handoff.correct_body/handoff.stamp: single-file target under the
     # main-worktree-rooted state/handoffs/ tree, handler derives worktree via
@@ -1447,6 +1476,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # per-session implicit repo state (no common_dir/show_top resolution).
     # Spec: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1
     "gate.validate_invocable":                  "none",
+    # gate_liveness.resolve — "show_top": reads THIS worktree's own
+    # cross-repo/inbox/ and cross-repo/archive/ corpus (per-worktree, not
+    # the shared common_dir state/ tree) to scan for discharges: blocks.
+    # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C1
+    "gate_liveness.resolve":                    "show_top",
+    # gate_liveness.reconcile — "show_top": same scan corpus as
+    # gate_liveness.resolve (this worktree's own cross-repo/inbox/ and
+    # cross-repo/archive/), plus writes back into this worktree's own
+    # docs/plans/ spine (F0-contained) — never a shared common_dir path.
+    # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2
+    "gate_liveness.reconcile":                  "show_top",
     # eol.census / eol.audit_producers / eol.repair — "none": DECISION, not the
     # closest-fitting default. All three take an explicit `target_root` wire
     # param naming the tree to scan/repair; the injected repo_root/caller's own
@@ -1458,6 +1498,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "eol.census":                               "none",
     "eol.audit_producers":                      "none",
     "eol.repair":                               "none",
+    # "show_top", not "none": _op_census_report reads repo_root and forwards it
+    # to census(repo_root=...), which resolves the corpus it walks from that
+    # root. The census is per-worktree by construction — its own emitted
+    # disposition carries the corpus root and module count it was computed over,
+    # and its ratchet assertions REFUSE when the root is not the one the frozen
+    # figures were taken against. "none" would key a linked worktree's census to
+    # the wrong corpus silently, which is the failure the refusal exists to stop.
+    # Spec: docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md § C6
+    "op_census.report":                         "show_top",
 }
 
 # ---------------------------------------------------------------------------

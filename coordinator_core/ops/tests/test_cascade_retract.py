@@ -26,23 +26,6 @@ import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_op side effect
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    """`deliverable_equivalence.load_equivalence_map` memoizes per-process,
-    keyed to the FIRST `worktree_root` it is ever called with (see that
-    function's own docstring) -- this file's tests each use a fresh
-    `tmp_path` repo, so without a reset between tests the second test onward
-    would silently read an EARLIER test's equivalence map for an unrelated
-    root (C6b/AC11 -- cascade_retract.py now calls `load_equivalence_map` via
-    its own join-key canonicalization). Mirrors the same fixture in
-    `coordinator_core/ops/ceremony/tests/test_commit_scoped.py`.
-    """
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py

@@ -186,23 +186,10 @@ def test_sequential_not_concurrent_same_result_regardless_of_python_scheduling(
     assert _additional_context(first[1]) == _additional_context(second[1])
 
 
-def test_module_is_eagerly_imported_by_the_hooks_package() -> None:
-    """`@register_op` only runs if something imports the module, and the shim
-    reaches the op through the registry, never by importing it directly.
-
-    Every other test in this file imports `cater_subagent_start` at module
-    scope, which registers the op as an import side effect -- so they stay
-    green even when nothing on the real path imports it. This asserts the
-    registration is reachable the way the shim reaches it: via the package's
-    own eager-import list. Caught this shipped inert -- the op was absent from
-    `_EAGER_HOOK_MODULES`, so a live `dispatch_ops_from_hook` relay would have
-    missed the registry and returned "method not found" for every dispatch.
-
-    List membership, not a spawn or an import probe: fast tier, no process.
-    """
-    from coordinator_core.hooks import _EAGER_HOOK_MODULES
-
-    assert "coordinator_core.hooks.cater_subagent_start" in _EAGER_HOOK_MODULES, (
-        "cater_subagent_start is missing from _EAGER_HOOK_MODULES, so "
-        f"{OP_NAME!r} never registers on the path the SubagentStart shim uses"
-    )
+# test_module_is_eagerly_imported_by_the_hooks_package lived here. It asserted
+# list membership for this ONE module; that is now covered for EVERY hooks
+# module declaring @register_op by
+# tests/test_eager_hook_modules_covers_every_register_op.py, which additionally
+# resolves the declarations from source with `ast` rather than relying on this
+# file's own module-scope import. Deleted rather than left alongside it: two
+# guards over the same invariant drift, and the narrower one goes.

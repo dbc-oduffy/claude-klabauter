@@ -246,11 +246,16 @@ def census(
                     ts = entry.get("ts")
                     if not isinstance(site, str) or not isinstance(ts, (int, float)):
                         # A row we cannot place in time is counted, never
-                        # merely skipped: an undatable row is treated as
-                        # in-window rather than dropped, so a torn line (a
+                        # merely skipped: an undatable row lands in
+                        # `undatable_rows`, not `total_reads`/
+                        # `reads_in_window` -- it is preserved, not folded
+                        # into the main counters. A reader asking "has any
+                        # site read the fallback" must check
+                        # `unparsable_rows` and `undatable_rows` alongside
+                        # `reads_in_window`, because a torn line (a
                         # concurrent append, an encoding error, a disk-full
-                        # truncation) can never understate a live stale-pin
-                        # signal by silently vanishing from the counters.
+                        # truncation) can carry a live stale-pin signal that
+                        # neither main counter reflects.
                         report["undatable_rows"] += 1
                         continue
                     report["total_reads"] += 1

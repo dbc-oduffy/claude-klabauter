@@ -134,6 +134,63 @@ consult `warm.client._op_may_mutate` itself (it never parses the method
 out of its own request), so this is its entire, deliberately conservative
 substitute.
 
+### The read is bounded — and its bound is a refusal, not a fall-through
+
+Until 2026-08-21 the door's step 8 was a bare blocking `ReadFile` loop on a
+synchronous handle. Against a warm server that ACCEPTS a connection and then
+never answers it, `door.exe` blocked **forever** — observed on this box, not
+theorised: a resident server sat with zero live `_worker_loop` threads
+(accepting and enqueueing, nothing dequeueing), and a batched K=20
+process-time run of `door.exe ping` against it produced not one result in
+over seven minutes, twice. `warm/client.py` has always given up at 2s; a
+door with no deadline at all is strictly worse than the path it replaces,
+which is why installing this binary as the operator surface was blocked on
+the gap.
+
+**Mechanism: overlapped I/O plus `WaitForSingleObject`** (see the "BOUNDED
+PIPE I/O" block in `door.c` for the full argument). The two alternatives
+were rejected on the merits, not by default: `SetNamedPipeHandleState`'s
+`nCollectDataTimeout` bounds how long a client buffers OUTBOUND bytes for a
+REMOTE server and bounds no read on any handle; a timed `PeekNamedPipe` loop
+polls, burning CPU under the load norm and adding the ~15.6ms scheduler tick
+to every fast-path round trip — twice the door's entire measured 7.8ms
+success cost, to guard a failure that almost never fires. Overlapped I/O
+costs nothing on the fast path and one blocked, zero-CPU thread on the slow
+one.
+
+**Two deadlines, because there are two questions:**
+
+- `DOOR_WRITE_DEADLINE_MS` = **2000**, on the write. Deliberately the same
+  number as `client.py :: READ_DEADLINE_SECS`, asked for the same reason
+  ("is the server alive enough to take my bytes?"). A frame not fully
+  landed within it is one the server's `_parse_frame` cannot dispatch, so
+  this expiry is **pre-delivery** and falls through exactly like a refused
+  connection. Delivery is judged by BYTE COUNT, never by which branch
+  reported it — a write that completed while the cancel was in flight is
+  still delivered.
+- `DOOR_READ_DEADLINE_MS` = **40000**, on the read. Deliberately *not*
+  `READ_DEADLINE_SECS`: that 2s is a liveness probe the Python client can
+  afford to abandon because it knows the method and asks `_op_may_mutate`
+  whether going cold is safe. This door never parses the method out of its
+  own request, so it can never make that call — its only post-delivery move
+  is `emit_indeterminate`, which FAILS the invocation. A deadline shorter
+  than the server's own budget would manufacture `-32004` refusals for ops
+  the server was going to answer. So it is sized as the client's OTHER
+  deadline, the mutation arm (`_mutation_deadline_for` →
+  `ipc._timeout_for`), whose maximum over every op is the global runaway
+  guard `ipc.DISPATCH_TIMEOUT_SECS` (30s; `ceremony.*` clamps below it),
+  plus `cc_invoke.py::_op_timeout_ceiling`'s own MARGIN (10s) — the
+  identical `max(FLOOR, engine_budget + MARGIN)` = 40s ceiling the COLD
+  client already applies to an op whose budget it cannot narrow. Warm and
+  cold therefore agree on how long an operator waits before being told
+  something is wrong.
+
+The read deadline bounds the DOOR, never the engine — the server does not
+stop when it expires — which is exactly why expiry is `emit_indeterminate`
+and never a fall-through. Coverage:
+`coordinator_core/warm/tests/test_door_read_deadline.py` (cadence-tiered;
+stub pipes only, no live warm server).
+
 No retry, no backoff, no spawn logic lives here. If the server is not up,
 the Python client already owns spawning one — that is what the fallback
 call reaches.

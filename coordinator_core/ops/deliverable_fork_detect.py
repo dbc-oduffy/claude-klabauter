@@ -5,7 +5,7 @@ operation (C7).
 Purpose: `deliverable_equivalence.seed_deliverable_ledger_rows` has zero production
 callers — every fork minted after the frozen 2026-08-01 audit
 (`state/deliverable-equivalence.yaml`, 19 hand-adjudicated rows) is invisible to
-`canonicalize()` permanently, including this incident's third id (the 40/42/45
+that map permanently, including this incident's third id (the 40/42/45
 triple — see this module's plan's own § Problem). This op gives the seeder its first
 live caller: it reads the seeded rows' canonical ids and clusters THOSE ids by
 slug-prefix family (the `…fence-inve-fc3678` / `…fence-invent-903224` /
@@ -14,14 +14,13 @@ different lengths before the mint-time hash suffix), surfacing a candidate fork
 family for a human to adjudicate.
 
 STRUCTURAL BOUNDARY (staff-eng-063f0261 finding 6): this module is deliberately
-separate from `deliverable_equivalence.py`, the module that owns
-`load_equivalence_map`, the ledger loader, and the seeder — the only module in the
-repo already carrying the equivalence map's write-shape knowledge in scope. This
-module:
+separate from `deliverable_equivalence.py`, the module that owns the ledger loader
+and the seeder — the only module in the repo already carrying the ledger's
+write-shape knowledge in scope. This module:
 
-  - imports `seed_deliverable_ledger_rows` and `canonicalize` from
-    `deliverable_equivalence.py` READ-SIDE ONLY, and never references
-    `state/deliverable-equivalence.yaml`'s path or any writer of it;
+  - imports `seed_deliverable_ledger_rows` from `deliverable_equivalence.py`
+    READ-SIDE ONLY, and never references `state/deliverable-equivalence.yaml`'s
+    path or any writer of it;
   - imports the slug-prefix-family clustering predicate from
     `coordinator_core.ops.slug_prefix_family` (C4's module) rather than
     re-deriving the string-prefix/truncation-length/hash logic a second time
@@ -53,10 +52,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.deliverable_equivalence import (
-    canonicalize,
-    seed_deliverable_ledger_rows,
-)
+from coordinator_core.ops.deliverable_equivalence import seed_deliverable_ledger_rows
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.slug_prefix_family import cluster_slug_prefix_families
 
@@ -67,14 +63,9 @@ def detect_slug_prefix_fork_families(worktree_root: Path) -> List[Dict[str, Any]
     """Detect slug-prefix fork families among `seed_deliverable_ledger_rows`'s
     OUTPUT ids.
 
-    Two of this incident's 40/42/45 triple are already declared equivalent in
-    `state/deliverable-equivalence.yaml`, so `canonicalize()` already collapses
-    them into one seeded row; that collapse is NOT what this function detects
-    (it is the map's own, already-correct behaviour). What `canonicalize()`
-    cannot see is a NEW, undeclared prefix collision among the seeded rows'
-    canonical ids themselves — this function clusters those canonical ids by
-    `cluster_slug_prefix_families` (the shared C4/C7 predicate) to surface
-    exactly that shape.
+    This function clusters `seed_deliverable_ledger_rows`'s output ids by
+    `cluster_slug_prefix_families` (the shared C4/C7 predicate) to surface an
+    undeclared prefix collision among those ids.
 
     Returns a list of `{"family": [<ids>], "evidence_paths": [<repo-relative
     paths>]}` dicts, one per detected family (2+ members), sorted by family.
@@ -91,12 +82,7 @@ def detect_slug_prefix_fork_families(worktree_root: Path) -> List[Dict[str, Any]
     rows = seed_deliverable_ledger_rows(worktree_root)
     evidence_by_id: Dict[str, List[str]] = {}
     for row in rows:
-        # seed_deliverable_ledger_rows already routed every raw id through
-        # canonicalize() against the full equivalence map — re-canonicalizing
-        # against an EMPTY map here is a no-op by construction (identity),
-        # and asserts the row's id is genuinely the seeder's stable output
-        # rather than a raw id that slipped through unrouted.
-        canonical_id = canonicalize(row["deliverable_id"], {})
+        canonical_id = row["deliverable_id"]
         raw_evidence = str(row.get("evidence_source") or "")
         paths = [p.strip() for p in raw_evidence.split(";") if p.strip()]
         evidence_by_id.setdefault(canonical_id, []).extend(paths)

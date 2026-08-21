@@ -84,8 +84,9 @@ full breakdown and the plan-level disposition this needs.
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.hooks._envelope import context_only, no_advisory
@@ -98,6 +99,7 @@ from coordinator_core.subagent_sandbox.engine import (
 )
 from coordinator_core.subagent_sandbox.provision_report import (
     _provision,
+    _sanitize_segment,
     assemble_contract_blocks_for_payload,
 )
 
@@ -116,6 +118,19 @@ SIDECAR_PATH_MARKER_PREFIX = "sidecar_path: "
 #: Same marker as `enforce-agent-dispatch-mode.py :: _compose_sidecar_miss_
 #: text` -- AC5's partial-catering clause tests this exact line.
 SIDECAR_MISS_MARKER = "sidecar_provisioning: missed"
+
+#: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`
+#: (AC9 amendment) -- the pointer a spilled-blocks companion file leaves in
+#: `additionalContext` in place of the inlined blocks text.
+BLOCKS_COMPANION_MARKER_PREFIX = "blocks_path: "
+
+#: Composed-TOTAL char cap (AC9 amendment), measured against the documented
+#: ~10,000-char `additionalContext` cliff (spike-verdict
+#: 2026-08-21-subagentstart-additionalcontext-caters-a-workflow-spawn.md).
+#: `coordinator:staff-eng` (11 `contract_blocks`, the widest row on disk)
+#: measured ~31,913 composed chars against this cap -- 10 of 33 catered
+#: types were over it (module docstring § AC9).
+ADDITIONAL_CONTEXT_CHAR_CAP = 10_000
 
 #: Snippet path, relative to the coordinator-claude plugin root, in either
 #: of its two known on-disk shapes (see `_resolve_role_append_snippet_path`).
@@ -151,6 +166,78 @@ def _compose_sidecar_miss_text() -> str:
         "definition names, persist your findings there as normal, and say "
         "in them that provisioning missed.\n" + SIDECAR_MISS_MARKER
     )
+
+
+def _compose_blocks_pointer_text(blocks_rel_path: str) -> str:
+    """Short pointer for a spilled-blocks companion file (AC9 amendment) --
+    same machine-readable marker shape as `_compose_sidecar_offer_text`, own
+    line, newline-preceded. Deliberately terse: the whole point of spilling
+    is a deterministically small `additionalContext`."""
+    return (
+        "These contract blocks are your dispatch contract -- reading the "
+        "file below is expected, not optional.\n"
+        + BLOCKS_COMPANION_MARKER_PREFIX
+        + blocks_rel_path
+    )
+
+
+def _resolve_blocks_companion_path(
+    payload: Dict[str, Any], cwd: Optional[str], sidecar_path: str
+) -> Optional[Tuple[Path, str]]:
+    """Resolve the on-disk path (and its repo-relative string) for a
+    spilled contract-blocks companion file. Anchored in the SAME per-session
+    share directory `_provision` already resolves (`state/subagent-share/
+    <session_id>/`) -- never re-derives that directory by hand.
+
+    When a sidecar was provisioned this dispatch, its own path already
+    carries a collision-safe discriminator (either the caller's
+    `provision_key` or `_provision`'s own random nonce) -- reuse that exact
+    stem with a `.blocks.md` suffix so the companion file sits beside the
+    sidecar under the identical discriminator, without minting a second one.
+    When no sidecar was provisioned this dispatch (ineligible type, or a
+    provisioning miss), derive the same session-keyed directory `_provision`
+    uses and mint an independent nonce-suffixed name -- the 2026-08-15
+    concurrent-same-type incident is exactly what a nonce exists to prevent.
+    """
+    git_root = resolve_git_root(cwd)
+    if not git_root:
+        return None
+    session_id = payload.get("session_id") or None
+    if not session_id:
+        return None
+    sanitized_session_id = _sanitize_segment(str(session_id))
+    if sanitized_session_id is None:
+        return None
+
+    session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+
+    if sidecar_path:
+        sidecar_leaf = Path(sidecar_path).name
+        stem = sidecar_leaf[:-3] if sidecar_leaf.endswith(".md") else sidecar_leaf
+        leaf_name = f"{stem}.blocks.md"
+    else:
+        leaf_name = f"blocks-{secrets.token_hex(4)}.md"
+
+    session_dir.mkdir(parents=True, exist_ok=True)
+    companion_path = session_dir / leaf_name
+    return companion_path, f"state/subagent-share/{sanitized_session_id}/{leaf_name}"
+
+
+def _spill_blocks_to_companion(
+    payload: Dict[str, Any], cwd: Optional[str], sidecar_path: str, injected_blocks: str
+) -> Optional[str]:
+    """Write `injected_blocks` to its companion file and return the
+    resulting repo-relative path, or `None` on any failure. Callers wrap
+    this in their own try/except (AC9's fail-open contract) -- this
+    function itself does not swallow exceptions, so a caller can tell a
+    resolution/write failure apart from "nothing to spill"."""
+    resolved = _resolve_blocks_companion_path(payload, cwd, sidecar_path)
+    if resolved is None:
+        return None
+    companion_path, rel_path = resolved
+    with open(companion_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(injected_blocks)
+    return rel_path
 
 
 def _resolve_role_append_snippet_path() -> Optional[Path]:
@@ -273,13 +360,35 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     except Exception:
         role_append = ""
 
+    blocks_leg_text = ("\n\n" + injected_blocks) if injected_blocks else ""
+
     parts: list[str] = []
+    blocks_idx = -1
     if sidecar_text:
         parts.append(sidecar_text)
-    if injected_blocks:
-        parts.append("\n\n" + injected_blocks)
+    if blocks_leg_text:
+        blocks_idx = len(parts)
+        parts.append(blocks_leg_text)
     if role_append:
         parts.append("\n\n" + role_append)
+
+    # AC9 amendment -- threshold, not a switch: measure the composed TOTAL
+    # (all three legs, the shape the harness actually sees) and spill the
+    # blocks leg to a companion file only when that total would exceed the
+    # cap. A type already under the cap keeps its blocks inline, byte-
+    # identical to today (AC1).
+    if injected_blocks and sum(len(p) for p in parts) > ADDITIONAL_CONTEXT_CHAR_CAP:
+        try:
+            blocks_rel_path = _spill_blocks_to_companion(
+                payload, cwd, sidecar_path, injected_blocks
+            )
+        except Exception:
+            blocks_rel_path = None
+        if blocks_rel_path:
+            parts[blocks_idx] = "\n\n" + _compose_blocks_pointer_text(blocks_rel_path)
+        # A resolution/write failure falls back to the inline blocks leg
+        # already sitting in `parts[blocks_idx]` -- today's behaviour, over
+        # cap but never worse, never silent, never raised (AC9 fail-open).
 
     return "".join(parts)
 

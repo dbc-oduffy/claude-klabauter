@@ -1026,10 +1026,168 @@ static int parse_response_envelope(
  * main
  * ========================================================================= */
 
-/* Returns 1 iff every byte of `data` was written. On a partial or failed
- * write the caller has NOT delivered a parseable frame -- the server's own
- * `_parse_frame` cannot dispatch a truncated JSON line, so a partial write
- * is safe to treat the same as never having connected at all. */
+/* =========================================================================
+ * BOUNDED PIPE I/O
+ *
+ * WHY THIS EXISTS. Until 2026-08-21, step 8 below was a bare blocking
+ * `ReadFile` loop on a synchronous handle: against a warm server that
+ * ACCEPTS a connection and then never answers it, `door.exe` blocked
+ * forever. Not hypothetical -- a resident server on this box was observed
+ * with zero live `_worker_loop` threads, enqueueing connections nothing
+ * ever dequeued, and a K=20 batched measurement of `door.exe ping` against
+ * it produced not one result in over seven minutes. The Python client this
+ * door exists to outrun has always had a deadline
+ * (`warm/client.py :: READ_DEADLINE_SECS`) and gives up at 2s; a door with
+ * none is strictly worse than the path it replaces, which is why the
+ * install of this binary as the operator surface was blocked on this.
+ *
+ * MECHANISM: overlapped I/O plus `WaitForSingleObject`, chosen over the
+ * two alternatives rather than by default.
+ *   - `SetNamedPipeHandleState` is the wrong knob entirely. Its
+ *     `nMaxCollectionCount`/`nCollectDataTimeout` pair governs how long a
+ *     client BUFFERS OUTBOUND bytes before transmitting them to a REMOTE
+ *     server, and is ignored outright for a local pipe. It bounds no read
+ *     on any handle, local or otherwise.
+ *   - a timed `PeekNamedPipe` loop polls. It burns CPU on a box already
+ *     carrying ~50 concurrent sessions (CLAUDE.md's load norm: "the load
+ *     is us"), and its real resolution is the scheduler tick -- ~15.6ms,
+ *     measured, `coordinator_core/benchmarks/process_time.py` -- which
+ *     would be added to EVERY fast-path round trip, twice this door's
+ *     entire measured 7.8ms success cost, paid to guard a failure that
+ *     almost never fires.
+ * Overlapped I/O costs nothing on the fast path (the wait returns the
+ * instant the server answers; there is no polling interval to round up
+ * to) and costs one blocked, zero-CPU thread on the slow one. Both
+ * deadlines below are three orders of magnitude above that ~15.6ms tick
+ * floor, so both are numbers the kernel can actually honour rather than
+ * precision the scheduler would round away.
+ * ========================================================================= */
+
+/* PRE-delivery bound, applied to the write. Deliberately the same 2s
+ * `warm/client.py :: READ_DEADLINE_SECS` uses, because it is asked for the
+ * same reason: "is the server alive enough to take my bytes?" A frame that
+ * has not FULLY landed within it is, by `write_frame_bounded`'s contract
+ * below, one the server's own `_parse_frame` cannot dispatch -- so this
+ * expiry falls through exactly like a refused connection does, and
+ * inherits the client's liveness number because it is the client's
+ * liveness question. */
+#define DOOR_WRITE_DEADLINE_MS 2000
+
+/* POST-delivery bound, applied to the read. Deliberately NOT
+ * `READ_DEADLINE_SECS`. That 2s is a LIVENESS PROBE the Python client can
+ * afford to abandon because it knows the method and asks `_op_may_mutate`
+ * whether going cold is safe. This door never parses the method out of its
+ * own request (module docstring) and so can never make that call: its only
+ * post-delivery move is `emit_indeterminate`, which FAILS the invocation
+ * outright. A deadline shorter than the server's own budget would
+ * therefore manufacture -32004 refusals for ops the server was going to
+ * answer correctly -- strictly worse than waiting.
+ *
+ * So this is sized as the client's OTHER deadline: the mutation arm,
+ * `_mutation_deadline_for` -> `ipc._timeout_for(method)`, whose MAXIMUM
+ * over every op is the global runaway guard `ipc.DISPATCH_TIMEOUT_SECS`
+ * (30s; `ceremony.*` clamps BELOW it at `CEREMONY_BUDGET_SECS` and needs
+ * no separate row here). Past that guard the server stops waiting on its
+ * own and answers with an error envelope, so 30s is the ceiling on how
+ * long a DISPATCHED request can legitimately stay silent. The +10s is
+ * `cc_invoke.py::_op_timeout_ceiling`'s own MARGIN, which makes this the
+ * identical `max(FLOOR, engine_budget + MARGIN)` = 40s ceiling the COLD
+ * client has always applied to an op whose budget it cannot narrow. Warm
+ * and cold therefore agree on how long an operator waits before being told
+ * something is wrong, rather than the door inventing a third number.
+ *
+ * This bounds the DOOR, never the engine: the server does not stop when
+ * this expires. That is exactly why the expiry is `emit_indeterminate` and
+ * never a fall-through. */
+#define DOOR_READ_DEADLINE_MS 40000
+
+/* Milliseconds left of `total_ms` since `started_ticks`, floored at 0.
+ * `GetTickCount64` (not `GetTickCount`) so no 49-day wrap arithmetic
+ * exists here to get wrong. */
+static DWORD remaining_ms(ULONGLONG started_ticks, DWORD total_ms) {
+    ULONGLONG elapsed = GetTickCount64() - started_ticks;
+    if (elapsed >= (ULONGLONG)total_ms) return 0;
+    return (DWORD)((ULONGLONG)total_ms - elapsed);
+}
+
+/* Waits for one ALREADY-ISSUED overlapped operation to finish, or for
+ * `timeout_ms` to expire. `started_ok`/`started_err` are `ReadFile`'s or
+ * `WriteFile`'s own return value and `GetLastError()`, captured by the
+ * caller before anything else could clobber the thread's error state.
+ *
+ * Returns 1 (completed), 0 (deadline expired) or -1 (failed). In EVERY
+ * case `*transferred` is filled with the byte count that actually crossed.
+ * That is load-bearing on the write side, not bookkeeping: an operation
+ * cancelled at the deadline may still have completed in the race, and this
+ * door's delivery invariant turns on how many bytes really landed, never
+ * on which branch reported it.
+ *
+ * On any non-completing exit this cancels the I/O and then BLOCKS until
+ * the cancel retires it. That final wait is not optional: `ov` and the
+ * buffer it points at are the caller's stack frame, and the kernel may
+ * still be writing into both until the operation is genuinely off the
+ * queue. */
+static int await_overlapped(HANDLE h, OVERLAPPED *ov, BOOL started_ok,
+                            DWORD started_err, DWORD timeout_ms,
+                            DWORD *transferred) {
+    *transferred = 0;
+    if (started_ok) {
+        return GetOverlappedResult(h, ov, transferred, FALSE) ? 1 : -1;
+    }
+    if (started_err != ERROR_IO_PENDING) return -1;
+
+    DWORD waited = WaitForSingleObject(ov->hEvent, timeout_ms);
+    if (waited == WAIT_OBJECT_0) {
+        return GetOverlappedResult(h, ov, transferred, FALSE) ? 1 : -1;
+    }
+
+    CancelIoEx(h, ov);
+    GetOverlappedResult(h, ov, transferred, TRUE);
+    return (waited == WAIT_TIMEOUT) ? 0 : -1;
+}
+
+/* Sends the request frame on the OVERLAPPED pipe handle under
+ * `DOOR_WRITE_DEADLINE_MS`. Returns 1 iff EVERY byte was written -- which
+ * is what "delivered" means, and the only return value the caller may read
+ * as having crossed the delivery line.
+ *
+ * A short, failed, or timed-out write leaves a truncated frame the
+ * server's own `_parse_frame` cannot dispatch, so it stays safe to treat
+ * exactly like never having connected at all -- the same contract the
+ * synchronous `write_all` carried before this handle became overlapped,
+ * unchanged by the deadline. The verdict is taken from the byte count, not
+ * from which branch produced it, precisely because a cancel can lose the
+ * race against a completing write. */
+static int write_frame_bounded(HANDLE h, HANDLE ev, const char *data, size_t len) {
+    ULONGLONG started = GetTickCount64();
+    size_t off = 0;
+    while (off < len) {
+        DWORD budget = remaining_ms(started, DOOR_WRITE_DEADLINE_MS);
+        if (budget == 0) return 0;
+
+        OVERLAPPED ov;
+        ZeroMemory(&ov, sizeof(ov));
+        ov.hEvent = ev;
+        ResetEvent(ev);
+
+        BOOL ok = WriteFile(h, data + off, (DWORD)(len - off), NULL, &ov);
+        DWORD err = GetLastError();
+        DWORD written = 0;
+        int state = await_overlapped(h, &ov, ok, err, budget, &written);
+        off += written;
+        if (state == 1 && written > 0) continue;
+        return off == len;
+    }
+    return 1;
+}
+
+/* Returns 1 iff every byte of `data` was written. Used for the STDOUT and
+ * STDERR handles, which are synchronous and are never the pipe -- the
+ * pipe's own write goes through `write_frame_bounded` above. On a partial
+ * or failed write the caller has NOT delivered a parseable frame -- the
+ * server's own `_parse_frame` cannot dispatch a truncated JSON line, so a
+ * partial write is safe to treat the same as never having connected at
+ * all. */
 static int write_all(HANDLE h, const char *data, size_t len) {
     size_t off = 0;
     while (off < len) {
@@ -1259,10 +1417,24 @@ int main(void) {
     if (pn_len < 0) { return fall_through_and_free(argc, wargv, engine_root_w); }
 
     /* ---- 5. connect -- no retry, no wait: busy or absent both mean
-     * "fall through", per the safety property. ---- */
+     * "fall through", per the safety property.
+     *
+     * `FILE_FLAG_OVERLAPPED` is what makes both deadlines below possible
+     * (see the BOUNDED PIPE I/O block's mechanism note): a synchronous
+     * handle has no way to abandon a `ReadFile` that never returns. It
+     * changes nothing about the protocol or the framing -- only who is
+     * allowed to stop waiting. ---- */
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                               OPEN_EXISTING, 0, NULL);
+                               OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
+        return fall_through_and_free(argc, wargv, engine_root_w);
+    }
+
+    /* One manual-reset event, reused by both the write and the read. Its
+     * creation failing is pre-delivery doubt like any other. */
+    HANDLE pipe_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (pipe_event == NULL) {
+        CloseHandle(pipe);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
@@ -1271,6 +1443,7 @@ int main(void) {
      *  "params":{"argv":[...],"cwd":"..."},"_engine_token":"..."} */
     buf_t req;
     if (!buf_init(&req, 4096)) {
+        CloseHandle(pipe_event);
         CloseHandle(pipe);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
@@ -1315,51 +1488,92 @@ int main(void) {
          * lifetime ends at request-build time regardless of outcome), so
          * this re-parses argv fresh via `do_fallback` rather than passing
          * a stale/NULL pointer `fall_through` would dereference. */
+        CloseHandle(pipe_event);
         CloseHandle(pipe);
         free(req.data);
         goto do_fallback;
     }
 
     /* ---- 7. write the request -- THE DELIVERY LINE ----
-     * `write_all` returning 1 means every byte left this process into the
-     * pipe's buffer. From that point on the server may already be
+     * `write_frame_bounded` returning 1 means every byte left this process
+     * into the pipe's buffer. From that point on the server may already be
      * executing the request, and this door's OWN safety invariant (see
      * `emit_indeterminate`'s docstring, mirroring `warm.client`'s
      * `_try_warm_dispatch_inner`) applies: never fall through again,
      * except for the specific error codes `is_provably_undispatched`
-     * recognises as proof the op never ran. A write failure/partial write
-     * is the one exception -- see `write_all`'s own docstring -- and stays
-     * pre-delivery, falling through exactly like `!req_ok` above. */
-    int delivered = write_all(pipe, req.data, req.len);
+     * recognises as proof the op never ran. A write failure, partial
+     * write, or `DOOR_WRITE_DEADLINE_MS` expiry is the one exception --
+     * see `write_frame_bounded`'s own docstring -- and stays pre-delivery,
+     * falling through exactly like `!req_ok` above. The deadline does not
+     * soften that line: the function reports full delivery by BYTE COUNT,
+     * so a write that completed while the cancel was in flight is still
+     * correctly counted as delivered. */
+    int delivered = write_frame_bounded(pipe, pipe_event, req.data, req.len);
     free(req.data);
     if (!delivered) {
+        CloseHandle(pipe_event);
         CloseHandle(pipe);
         goto do_fallback;
     }
 
-    /* ---- 8. read one newline-terminated line back ----
+    /* ---- 8. read one newline-terminated line back, under
+     * `DOOR_READ_DEADLINE_MS` ----
      * Every failure from here on is POST-DELIVERY: `emit_indeterminate`,
-     * never `goto do_fallback`. */
+     * never `goto do_fallback`. The deadline is one budget across the
+     * WHOLE line, not per `ReadFile`, so a server dribbling one byte at a
+     * time cannot walk the door past the ceiling a chunk at a time. */
     buf_t resp;
-    if (!buf_init(&resp, 4096)) { CloseHandle(pipe); return emit_indeterminate("out of memory reading the response"); }
+    if (!buf_init(&resp, 4096)) {
+        CloseHandle(pipe_event); CloseHandle(pipe);
+        return emit_indeterminate("out of memory reading the response");
+    }
+    ULONGLONG read_started = GetTickCount64();
     for (;;) {
+        DWORD budget = remaining_ms(read_started, DOOR_READ_DEADLINE_MS);
         char chunk[4096];
         DWORD got = 0;
-        BOOL ok = ReadFile(pipe, chunk, sizeof(chunk), &got, NULL);
-        if (!ok || got == 0) {
-            free(resp.data); CloseHandle(pipe);
-            return emit_indeterminate("connection closed or read failed after delivery");
+        int state = 0;
+
+        if (budget > 0) {
+            OVERLAPPED ov;
+            ZeroMemory(&ov, sizeof(ov));
+            ov.hEvent = pipe_event;
+            ResetEvent(pipe_event);
+            BOOL ok = ReadFile(pipe, chunk, sizeof(chunk), NULL, &ov);
+            DWORD err = GetLastError();
+            state = await_overlapped(pipe, &ov, ok, err, budget, &got);
         }
-        if (!buf_append(&resp, chunk, got)) {
-            free(resp.data); CloseHandle(pipe);
+
+        if (got > 0 && !buf_append(&resp, chunk, got)) {
+            free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
             return emit_indeterminate("out of memory reading the response");
         }
-        if (memchr(chunk, '\n', got) != NULL) break;
+        if (got > 0 && memchr(chunk, '\n', got) != NULL) break;
+
+        if (state != 1 || got == 0) {
+            free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
+            if (state == 1 || state == -1) {
+                return emit_indeterminate(
+                    "connection closed or read failed after delivery");
+            }
+            /* The deadline, not the peer: the server accepted this request
+             * and has said nothing since. It is very likely still running
+             * it, which is the whole reason this is a refusal and not a
+             * retry. */
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "no response within %us of delivery -- the door stopped "
+                     "waiting, the engine did not stop working",
+                     (unsigned)(DOOR_READ_DEADLINE_MS / 1000u));
+            return emit_indeterminate(detail);
+        }
+
         if (resp.len > (16u << 20)) { /* 16MB sanity ceiling -- malformed */
-            free(resp.data); CloseHandle(pipe);
+            free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
             return emit_indeterminate("response exceeded the sanity size ceiling");
         }
     }
+    CloseHandle(pipe_event);
     CloseHandle(pipe);
 
     {

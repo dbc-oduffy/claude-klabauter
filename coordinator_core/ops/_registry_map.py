@@ -52,6 +52,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
     "artifact.emit":                          "coordinator_core.ops.artifact_emit",
+    "emission.publish":                       "coordinator_core.ops.emission_publish",
+    "op_census.report":                       "coordinator_core.ops.op_census_report",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
     # import. This package-level
@@ -83,6 +85,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_fabrication_check":       "coordinator_core.hooks",
     "hooks.receiver_state_sensor":            "coordinator_core.hooks",
     "hooks.subagent_sidecar_fill_check":      "coordinator_core.hooks",
+    "hooks.cater_subagent_start":             "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "emit.cadence":                           "coordinator_core.ops.emit_cadence",
     "goal.append":                            "coordinator_core.ops.goal_append",
@@ -98,6 +101,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",
     "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
+    "gate_liveness.resolve":                  "coordinator_core.ops.gate_liveness.resolve",
+    "gate_liveness.reconcile":                "coordinator_core.ops.gate_liveness.reconcile",
     "memo.fate_backfill":                     "coordinator_core.ops.memo_fate_backfill",
     "updatedocs.gates":                       "coordinator_core.ops.updatedocs_gates",
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
@@ -112,6 +117,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.normalize":                      "coordinator_core.ops.handoff_normalize",
     "handoff.correct_body":                   "coordinator_core.ops.handoff_correct_body",
     "handoff.discharge_criteria":             "coordinator_core.ops.handoff_discharge_criteria",
+    "handoff.author_lint":                     "coordinator_core.ops.handoff_author_lint",
+    "handoff.append_session_ledger":           "coordinator_core.ops.handoff_append_session_ledger",
     "handoff.propagate":                      "coordinator_core.ops.propagate_body",
     "plan.propagate":                         "coordinator_core.ops.propagate_body",
     "goal.match_candidates":                  "coordinator_core.ops.goals_match",

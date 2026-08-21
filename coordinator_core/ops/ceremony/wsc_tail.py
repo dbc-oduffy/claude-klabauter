@@ -1082,6 +1082,48 @@ def _append_named_tail_failures(
         )
 
 
+def _review_trail_stage_paths(
+    review_trail_result: dict, worktree_root: Path
+) -> list[str]:
+    """Recover the worktree-relative paths of the review-trail records a
+    ``write_review_trail``/``write_review_trail_many`` call just wrote, so the
+    caller can fold them into the ceremony commit's explicit pathspec.
+
+    Without this, `review_trail.write` lands its records in the worktree AFTER
+    the caller assembled `stage_paths`, so nothing ever `git add`s them and the
+    ceremony commit cannot carry them: a pathspec commit naming an untracked
+    path fails with git's `pathspec ... did not match any file(s) known to git`,
+    which reads as "the file is gone" and is not. The records then survive on
+    disk as permanent untracked residue and the audit evidence for a
+    partitioned review never becomes durable. Same fold-in shape, and the same
+    reason, as the roadmap-callout render's `roadmap_stub_index_paths` above.
+
+    The `acted` entries are `"{OP_REVIEW_TRAIL}:{out_path}"` with an ABSOLUTE
+    `out_path`; on Windows that path carries its own drive-letter colon, so the
+    op prefix is stripped by length rather than by splitting on ``":"``.
+
+    Negative-spec: never stages a record written outside `worktree_root` (the
+    `REVIEW_TRAIL_OUTPUT_ROOT` test-isolation route) — such a path is not
+    committable here and is skipped, not guessed at. Never raises: a
+    best-effort tail op's result shape is not a contract this function may
+    hard-fail the ceremony on.
+    """
+    prefix = f"{tail_ops.OP_REVIEW_TRAIL}:"
+    staged: list[str] = []
+    for entry in review_trail_result.get("acted") or []:
+        text = str(entry)
+        if not text.startswith(prefix):
+            continue
+        out_path = text[len(prefix):].strip()
+        if not out_path:
+            continue
+        try:
+            staged.append(rel_id(Path(out_path).resolve(), worktree_root.resolve()))
+        except (ValueError, OSError):
+            continue
+    return staged
+
+
 async def _run_precommit_tail(
     common_dir: Path,
     worktree_root: Path,
@@ -1213,6 +1255,9 @@ async def _run_precommit_tail(
                 b_adjudication_present=b_adjudication_present,
                 partition_mandatory=partition_mandatory,
             )
+        extra_stage_paths.extend(
+            _review_trail_stage_paths(results[tail_ops.OP_REVIEW_TRAIL], worktree_root)
+        )
 
     # Join (C6): every other pre-commit step above has now run; await the
     return results, extra_stage_paths

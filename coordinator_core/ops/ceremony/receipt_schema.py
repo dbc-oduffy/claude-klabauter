@@ -298,8 +298,6 @@ def make_receipt(
     op_tail: dict[str, Any] | None = None,
     sid: str | None = None,
     applicable_node_ids: list[str] | None = None,
-    engine_sha: str | None = None,
-    engine_dirty: bool | None = None,
     scoping_method: str | None = None,
     foreign_commit_count: int | None = None,
 ) -> dict[str, Any]:
@@ -325,30 +323,12 @@ def make_receipt(
     ctx.applicable_node_ids so the persisted receipt carries the field; the
     default of None exists only for hand-crafted / pre-existing receipt callers.
 
-    engine_sha (OPTIONAL/additive, C2 — coordinator_core.engine_version): the
-    resolved git HEAD SHA of the coordinator_core copy that produced this
-    receipt, per resolve_engine_sha().  Omitted (key absent) when the caller
-    passes None — a receipt with and without this field both validate; same
-    graceful-absent posture as sid.  (Review: code-reviewer — trimmed the
-    why-None-happens detail out of this pure-data module; resolve_engine_sha()'s
-    own docstring in engine_version.py is the single source of truth for its
-    failure modes.)
-
-    engine_dirty (OPTIONAL/additive — coordinator_core.engine_version): whether
-    the coordinator_core copy that produced this receipt had a dirty engine
-    source tree at emit time, per resolve_engine_dirty().  Omitted (key absent)
-    when the caller passes None — a receipt with and without this field both
-    validate.  Note engine_dirty=False is a meaningful, real finding ("the
-    engine source was clean") and is still emitted, so the emission check below
-    is `is not None`, not truthiness — same None-vs-value convention
-    foreign_commit_count uses (0 is a real finding too).
-
     scoping_method / foreign_commit_count (OPTIONAL/additive, C3 — wsc
     concurrent-tree race fix): the C1 analyze_session_scoping() verdict,
     threaded through by the caller from PipelineContext.scoping_method /
     .foreign_commit_count.  Omitted (key absent) when the caller passes None
     — a receipt with and without these fields both validate; same
-    graceful-absent posture as sid/engine_sha.  foreign_commit_count is
+    graceful-absent posture as sid.  foreign_commit_count is
     written even when 0 (a genuine "zero foreign commits observed" verdict
     is a real finding, not an absence) — the None/omitted-vs-0 distinction is
     what makes 0 unambiguous, same convention applicable_node_ids uses for
@@ -373,10 +353,6 @@ def make_receipt(
         receipt["sid"] = sid
     if applicable_node_ids is not None:
         receipt["applicable_node_ids"] = list(applicable_node_ids)
-    if engine_sha:
-        receipt["engine_sha"] = engine_sha
-    if engine_dirty is not None:
-        receipt["engine_dirty"] = engine_dirty
     if scoping_method:
         receipt["scoping_method"] = scoping_method
     if foreign_commit_count is not None:
@@ -401,8 +377,6 @@ _REQUIRED_TOP_FIELDS: tuple[str, ...] = (
 _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
     "applicable_node_ids",
     "sid",
-    "engine_sha",
-    "engine_dirty",
     "scoping_method",
     "foreign_commit_count",
 )
@@ -412,13 +386,6 @@ _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
 # but-typed-when-present posture, documented just below).
 # `sid` (review-integrator 2026-07-08 Finding 5) is additive for the same reason:
 # legacy/pre-Finding-5 receipts never carried it and must still validate clean.
-# `engine_sha` (C2, coordinator_core.engine_version) is additive for the same
-# reason: pre-C2 receipts never carried it and must still validate clean.
-# `engine_dirty` (coordinator_core.engine_version) is additive for the same
-# reason: pre-existing receipts never carried it and must still validate
-# clean.  It is bool-checked only when present; engine_dirty=False is a real
-# finding and still validates (same None-vs-value posture as
-# foreign_commit_count's None-vs-0).
 # `scoping_method` / `foreign_commit_count` (C2, wsc concurrent-tree race fix)
 # are additive for the same reason: pre-C2 receipts never carried them and must
 # still validate clean.  scoping_method is enum-checked (VALID_SCOPING_METHODS)
@@ -508,16 +475,6 @@ def validate(receipt: dict[str, Any]) -> list[str]:
     if "sid" in receipt:
         if not isinstance(receipt["sid"], str) or not receipt["sid"]:
             errors.append("sid must be a non-empty string when present")
-
-    # --- engine_sha (optional, additive — C2) ---
-    if "engine_sha" in receipt:
-        if not isinstance(receipt["engine_sha"], str):
-            errors.append("engine_sha must be a str when present")
-
-    # --- engine_dirty (optional, additive — coordinator_core.engine_version) ---
-    if "engine_dirty" in receipt:
-        if not isinstance(receipt["engine_dirty"], bool):
-            errors.append("engine_dirty must be a bool when present")
 
     # --- scoping_method (optional, additive — C2, wsc concurrent-tree race fix) ---
     if "scoping_method" in receipt:

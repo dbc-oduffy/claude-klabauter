@@ -15,6 +15,9 @@ import pytest
 
 from coordinator_core.ops import detect_staged_rollback as _dsr
 from coordinator_core.ops.detect_staged_rollback import (
+    EXIT_BOTH_FINDINGS,
+    EXIT_MASS_DELETION_FINDING,
+    EXIT_ROLLBACK_FINDING,
     MASS_DELETION_ABS_FLOOR,
     MASS_DELETION_OVERRIDE_ENV,
     MASS_DELETION_RATIO_THRESHOLD,
@@ -136,7 +139,7 @@ def test_single_file_deep_match_fires(tmp_path):
     assert [s.subject for s in candidates[0].skipped] == ["c4", "c3", "c2"]
 
     rc = main([str(repo)], env=_env())
-    assert rc == 1
+    assert rc == EXIT_ROLLBACK_FINDING
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +348,7 @@ def test_ratio_at_or_above_production_threshold_fires(tmp_path):
     assert finding.ratio >= MASS_DELETION_RATIO_THRESHOLD
 
     rc = main([str(repo)], env=_env())
-    assert rc == 1
+    assert rc == EXIT_MASS_DELETION_FINDING
 
 
 def test_ratio_matching_historical_legitimate_prune_does_not_fire(tmp_path):
@@ -384,7 +387,7 @@ def test_absolute_floor_fires_independent_of_ratio(tmp_path, monkeypatch):
     assert finding.ratio < MASS_DELETION_RATIO_THRESHOLD
 
     rc = main([str(repo)], env=_env())
-    assert rc == 1
+    assert rc == EXIT_MASS_DELETION_FINDING
 
 
 def test_mass_deletion_should_fire_boundary_at_production_floor():
@@ -435,14 +438,18 @@ def test_mass_deletion_override_zero_value_still_blocks(tmp_path):
     _stage_delete(repo, names[:9])
 
     rc = main([str(repo)], env=_env(**{MASS_DELETION_OVERRIDE_ENV: "0"}))
-    assert rc == 1
+    assert rc == EXIT_MASS_DELETION_FINDING
 
 
 def test_mass_deletion_check_independent_of_rollback_check(tmp_path):
     """A commit that fires the mass-deletion check but has NO rollback
     candidates (nothing staged matches an older blob — every staged path is
     a pure deletion) must still block, and the rollback override must not
-    accidentally suppress it."""
+    accidentally suppress it. Exit code EXIT_MASS_DELETION_FINDING (not
+    EXIT_ROLLBACK_FINDING/EXIT_BOTH_FINDINGS) is itself the proof: the two
+    checks' outcomes are signalled independently, which is what lets a
+    wrapper (`install_claude_klabauter_precommit_hook`) scope a bypass to the check
+    that actually fired instead of conflating the two under one exit code."""
     repo = _init_repo(tmp_path / "independent")
     names = [f"f{i}.txt" for i in range(10)]
     _commit_many(repo, names)
@@ -451,5 +458,65 @@ def test_mass_deletion_check_independent_of_rollback_check(tmp_path):
     assert find_rollback_candidates(str(repo)) == []
 
     rc = main([str(repo)], env=_env(**{OVERRIDE_ENV: "1"}))
-    assert rc == 1
+    assert rc == EXIT_MASS_DELETION_FINDING
+
+
+def test_both_checks_firing_and_unresolved_returns_the_combined_code(tmp_path):
+    """Both checks fire in the SAME commit and neither is overridden — the
+    aggregate EXIT_BOTH_FINDINGS code, distinct from either check firing
+    alone."""
+    repo = _init_repo(tmp_path / "both-fire")
+    # Mass-fixture setup FIRST, and staged BEFORE the rollback fixture's own
+    # commits: `_commit_many`'s bare `git commit` commits the WHOLE index, so
+    # doing it after `a/b/c.txt` were already staged (as an earlier revision
+    # of this test did) silently swept their staged rollback content into an
+    # unrelated commit, leaving nothing staged to detect (0 candidates, not
+    # 3). `_commit_file` below is scoped (`-- name`), so it never touches
+    # whatever this leg already staged for deletion.
+    #
+    # 100 mass-fixture files plus the 3 rollback-fixture files below (103
+    # tracked total) — deleting 95 of the 100 clears the 0.90 ratio
+    # threshold against that combined total (95/103 ~= 0.922), unlike a
+    # smaller fixture sized only against the mass-deletion files alone.
+    names = [f"f{i}.txt" for i in range(100)]
+    _commit_many(repo, names)
+    _stage_delete(repo, names[:95])
+
+    for name in ("a.txt", "b.txt", "c.txt"):
+        _commit_file(repo, name, "v1\n", f"{name} c1")
+        _commit_file(repo, name, "v2\n", f"{name} c2")
+        _stage_file(repo, name, "v1\n")
+
+    assert len(find_rollback_candidates(str(repo))) == 3
+    mass_finding = find_mass_deletion(str(repo))
+    assert mass_finding is not None
+    assert mass_finding.ratio >= MASS_DELETION_RATIO_THRESHOLD
+
+    rc = main([str(repo)], env=_env())
+    assert rc == EXIT_BOTH_FINDINGS
+
+
+def test_both_checks_firing_resolved_by_only_one_override_returns_the_other(tmp_path):
+    """When both checks fire but only ONE override is set, the resolved
+    check drops out and the exit code reflects exactly the check still
+    blocking — never the aggregate code, and never 0."""
+    repo = _init_repo(tmp_path / "both-fire-one-resolved")
+    # Same ordering (mass fixture staged BEFORE the rollback fixture's own
+    # commits) and same 103-tracked-total sizing as the sibling "both fire"
+    # test above — see that test's comment for why either detail wrong
+    # breaks this fixture.
+    names = [f"f{i}.txt" for i in range(100)]
+    _commit_many(repo, names)
+    _stage_delete(repo, names[:95])
+
+    for name in ("a.txt", "b.txt", "c.txt"):
+        _commit_file(repo, name, "v1\n", f"{name} c1")
+        _commit_file(repo, name, "v2\n", f"{name} c2")
+        _stage_file(repo, name, "v1\n")
+
+    rc_rollback_overridden = main([str(repo)], env=_env(**{OVERRIDE_ENV: "1"}))
+    assert rc_rollback_overridden == EXIT_MASS_DELETION_FINDING
+
+    rc_mass_overridden = main([str(repo)], env=_env(**{MASS_DELETION_OVERRIDE_ENV: "1"}))
+    assert rc_mass_overridden == EXIT_ROLLBACK_FINDING
 

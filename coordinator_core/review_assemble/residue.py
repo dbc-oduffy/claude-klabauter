@@ -65,6 +65,14 @@ precedence ladder, explicit beats inferred:
      caller's behalf.
 
 Negative-spec:
+  - Does NOT import `coordinator_core.pickup_assemble` for its
+    `resolve_repo_root` helper — that module is 12,000+ lines and measured
+    at 443.8ms to import for one function, against this module's other
+    engine imports at 40-58ms. This module re-homes an equivalent
+    `resolve_repo_root(start=None)` locally (same `git rev-parse
+    --show-toplevel` resolution and `None`-on-failure contract), so
+    `residue.py` sits at the interpreter floor rather than inheriting that
+    cliff. See `coordinator_core/benchmarks/process_time.py`.
   - Does NOT copy `pickup_assemble`'s forked `_emit` (that implementation
     predates the shared `contract/decision_object` library) — this module
     routes exclusively through `coordinator_core.contract.decision_object.
@@ -106,7 +114,6 @@ from coordinator_core.contract.residue_segments import (
     load_segments,
     select_segments,
 )
-from coordinator_core.pickup_assemble import resolve_repo_root
 from coordinator_core.resolve_coordinator_clone import (
     ResolveCoordinatorCloneError,
     resolve_content_root,
@@ -158,6 +165,34 @@ def _residue_dir(content_root: Path) -> Path:
     """Resolve the one true residue directory relative to *content_root*:
     ``<content-root>/skills/review/residue``."""
     return content_root / _RESIDUE_SEGMENT_DIR
+
+
+def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Resolve the enclosing git worktree root for *start* (default cwd).
+
+    A module-local re-home of `pickup_assemble.resolve_repo_root` — that
+    module is 12,000+ lines and measured at 443.8ms to import for this one
+    function; this module's other engine imports are 40-58ms. Same
+    `git rev-parse --show-toplevel` resolution, same "returncode != 0 (incl.
+    not-a-worktree) -> None" contract, using this module's own `_NO_CONSOLE`
+    subprocess posture rather than `pickup_assemble`'s `_run_git`.
+    """
+    cwd = start or Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    out = result.stdout.strip()
+    return Path(out) if out else None
 
 
 def _diff_is_nonempty(repo_root: Path) -> bool:

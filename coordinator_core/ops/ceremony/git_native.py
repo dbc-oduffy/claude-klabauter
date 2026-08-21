@@ -1418,7 +1418,7 @@ class DeliverableIdAssertionConflictError(RuntimeError):
 
 
 def _check_deliverable_id_precedence(
-    msg_text: str, deliverable_id: str, equivalence_map: Optional[dict] = None
+    msg_text: str, deliverable_id: str
 ) -> bool:
     """PM ruling (2), `docs/plans/2026-08-10-a-commit-trailer-that-names-
     the-session.md` chunk C7a: the precedence between an explicit caller-
@@ -1452,10 +1452,7 @@ def _check_deliverable_id_precedence(
     if existing is None:
         return True
 
-    from coordinator_core.ops.deliverable_equivalence import canonicalize
-
-    equivalence_map = equivalence_map or {}
-    if canonicalize(existing, equivalence_map) == canonicalize(deliverable_id, equivalence_map):
+    if existing == deliverable_id:
         return False
 
     raise DeliverableIdAssertionConflictError(
@@ -2455,12 +2452,8 @@ def _commit_scoped_private_index(
         # resolved value, so this raise site is opt-in (staff-eng review
         # finding 4).
         if deliverable_id:
-            from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
-
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-            if _check_deliverable_id_precedence(
-                msg_text_before, deliverable_id, equivalence_map=load_equivalence_map(root)
-            ):
+            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
         if trailer_args:
@@ -3040,12 +3033,8 @@ def commit_scoped(
         # single `interpret-trailers` call below never sees a trailer name
         # it would need to replace.
         if deliverable_id:
-            from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
-
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-            if _check_deliverable_id_precedence(
-                msg_text_before, deliverable_id, equivalence_map=load_equivalence_map(root)
-            ):
+            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
         if trailer_args:

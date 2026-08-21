@@ -40,7 +40,6 @@ import pytest
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.fleet import migrate_handoff_vocabulary as mig
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -52,15 +51,6 @@ _GIT_ENV = {
     "GIT_COMMITTER_NAME": "test",
     "GIT_COMMITTER_EMAIL": "t@t",
 }
-
-
-@pytest.fixture(autouse=True)
-def _reset_equivalence_cache():
-    """See migrate_handoff_vocabulary's own test module for why this reset is
-    required (load_equivalence_map's documented per-process memoization)."""
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:

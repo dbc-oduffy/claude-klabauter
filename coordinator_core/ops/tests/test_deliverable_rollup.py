@@ -42,7 +42,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import coordinator_core.ops.deliverable_equivalence as _equivalence_mod
 import coordinator_core.ops.deliverable_rollup as _rollup_mod
 from coordinator_core.ops.deliverable_rollup import _handler, _scan_artifacts_by_deliverable_id
 
@@ -278,24 +277,6 @@ class RollupRepo:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def write_equivalence_map(self, entries: list) -> Path:
-        """Write state/deliverable-equivalence.yaml with the given ``entries`` list.
-
-        Purpose: builds the C3b-authored fork-equivalence fixture locally, per this
-        chunk's (C4c) explicit instruction not to depend on the real artifact's
-        contents (authored concurrently by C3b). Each entry is a dict with
-        ``loser``/``winner``/``evidence`` keys, matching C3b's declared schema.
-        """
-        path = self.root / "state" / "deliverable-equivalence.yaml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lines = ["entries:"]
-        for entry in entries:
-            lines.append(f"  - loser: {entry['loser']}")
-            lines.append(f"    winner: {entry['winner']}")
-            lines.append(f"    evidence: {entry.get('evidence', 'test fixture')!r}")
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return path
-
     def snapshot_paths(self) -> set:
         """Return the set of all file paths currently present under self.root.
 
@@ -360,12 +341,6 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     the resolution branch entirely — producing false passes or false failures depending
     on fixture order.
 
-    Also resets `deliverable_equivalence`'s own `load_equivalence_map` per-process memo
-    (C4c wiring): without this, the first test in the session to call the rollup handler
-    would pin the (empty, since tmp_path has no state/deliverable-equivalence.yaml)
-    equivalence map for every subsequent test, including ones that write their own
-    fixture equivalence artifact via `RollupRepo.write_equivalence_map`.
-
     The fixture also:
     - Unsets CLAUDE_KLABAUTER_ROOT so existing tests use worktree-local fallback by default
       (matching the pre-C1 behaviour: tests that write initiatives into rollup_repo.root
@@ -375,7 +350,6 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
       non-None registry result override this with their own monkeypatch/mock.
     """
     _rollup_mod._reset_central_root_cache()
-    _equivalence_mod._reset_equivalence_map_cache()
 
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: None)
@@ -384,7 +358,6 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Post-test cleanup (safety net for tests that mutate globals without monkeypatch).
     _rollup_mod._reset_central_root_cache()
-    _equivalence_mod._reset_equivalence_map_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -1516,74 +1489,13 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_false(
 
 
 # ---------------------------------------------------------------------------
-# (vii) fork-equivalence join (AC6b, first half) — sat-01's declared fork pair
+# (vii) no fork-equivalence join — F-1 collapse: raw ids never merge
 # ---------------------------------------------------------------------------
 
 
-def test_fork_equivalence_join_symmetric_on_both_legs(rollup_repo: RollupRepo) -> None:
-    """AC6b: querying with EITHER leg of a declared fork pair returns the identical
-    artifacts_matched / advances_initiatives — the join must not be direction-dependent.
-
-    Uses sat-01's own declared fork pair (dlv-sat-01 / dlv-sat-01-sovereign-tracker-
-    substrate-locke-02c8bc) as the fixture, per the chunk's instruction. The equivalence
-    map is built locally in this fixture (C3b's real artifact is authored concurrently
-    and may not exist) via RollupRepo.write_equivalence_map.
-    """
-    winner_id = "dlv-sat-01"
-    loser_id = "dlv-sat-01-sovereign-tracker-substrate-locke-02c8bc"
-
-    rollup_repo.write_equivalence_map(
-        [{"loser": loser_id, "winner": winner_id, "evidence": "artifact-creation order"}]
-    )
-
-    # One artifact carries the winning leg, another carries the losing leg — each with
-    # its own (distinct) initiative FK, so the union is observable on both queries.
-    rollup_repo.write_plan(
-        "2026-07-06-sat-01-winner-leg.md",
-        deliverable_id=winner_id,
-        initiative="sat-01-winner-initiative",
-    )
-    rollup_repo.write_handoff(
-        "2026-07-01-sat-01-loser-leg.md",
-        deliverable_id=loser_id,
-        initiative="sat-01-loser-initiative",
-    )
-    rollup_repo.write_initiative(
-        "sat-01-winner-initiative", label="Sat-01 Winner Initiative", status="active"
-    )
-    rollup_repo.write_initiative(
-        "sat-01-loser-initiative", label="Sat-01 Loser Initiative", status="active"
-    )
-
-    result_via_winner = _handler({"deliverable_id": winner_id}, repo_root=rollup_repo.common_dir)
-    _equivalence_mod._reset_equivalence_map_cache()
-    result_via_loser = _handler({"deliverable_id": loser_id}, repo_root=rollup_repo.common_dir)
-
-    # Both queries see the union of artifacts under both legs of the declared fork.
-    assert result_via_winner["artifacts_matched"] == 2
-    assert result_via_loser["artifacts_matched"] == 2
-    assert result_via_winner["artifacts_matched"] == result_via_loser["artifacts_matched"]
-
-    winner_initiative_ids = {i["id"] for i in result_via_winner["advances_initiatives"]}
-    loser_initiative_ids = {i["id"] for i in result_via_loser["advances_initiatives"]}
-    assert winner_initiative_ids == loser_initiative_ids == {
-        "sat-01-winner-initiative",
-        "sat-01-loser-initiative",
-    }
-
-    # deliverable_id on the wire is the echoed query param, NOT canonicalized — this is
-    # a join-key transform only, never a field-level rewrite of the response's own echo.
-    assert result_via_winner["deliverable_id"] == winner_id
-    assert result_via_loser["deliverable_id"] == loser_id
-
-
 def test_fork_equivalence_absent_entry_does_not_silently_merge(rollup_repo: RollupRepo) -> None:
-    """A deliverable_id with NO declared equivalence entry canonicalizes to itself —
-    two genuinely-unrelated ids must never be merged just because an (unrelated)
-    equivalence map exists in the tree."""
-    rollup_repo.write_equivalence_map(
-        [{"loser": "dlv-unrelated-loser", "winner": "dlv-unrelated-winner", "evidence": "n/a"}]
-    )
+    """Two genuinely-unrelated ids must never be merged — there is no
+    equivalence-map mechanism left to consult (F-1 collapse)."""
     rollup_repo.write_plan("2026-07-06-a.md", deliverable_id="dlv-alpha", initiative=None)
     rollup_repo.write_plan("2026-07-06-b.md", deliverable_id="dlv-beta", initiative=None)
 

@@ -193,7 +193,16 @@ def _validate_interpreter(path: str) -> bool:
     A ``False`` result is cached too, deliberately: ``resolve_python_bin`` turns a
     ``False`` here into ``PythonPinInvalid`` on every call regardless, so memoizing
     it does not convert a hard failure into a silent success -- it just avoids
-    re-spawning to re-derive the same hard failure."""
+    re-spawning to re-derive the same hard failure.
+
+    Skips the spawn entirely when ``path`` IS ``sys.executable``: we are
+    demonstrably running inside that interpreter right now, which is a
+    strictly stronger proof than a successful ``-c 'import sys'`` probe of a
+    separate process could ever provide. A strict subset of the existing
+    contract, not a widened one -- every other path still probes exactly as
+    before."""
+    if path == sys.executable:
+        return True
     if path in _validate_cache:
         return _validate_cache[path]
     try:

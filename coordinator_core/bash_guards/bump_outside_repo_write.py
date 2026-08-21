@@ -697,11 +697,21 @@ def check_bump_outside_repo_write(
     Checked in order:
       1. `bump_applies` (C2) -- the fleet-recovery hatch and anchor
          resolvability.
-      2. `session_anchor_has_git_repo` -- if the SESSION's own anchor has NO
+      2. APPLICABILITY BEFORE ROOT RESOLUTION (C3, docs/plans/2026-08-21-
+         guards-under-the-brightline.md): every write-sink candidate this
+         command carries is extracted from the PARSED command alone --
+         `_iter_write_sink_candidates` never spawns a subprocess -- and if
+         that yields nothing (`echo hello`, `git status --short`, any
+         command with no write sink at all), this guard returns `None`
+         BEFORE `session_anchor_has_git_repo`/`resolve_gitdir` ever runs a
+         `git` subprocess. A command with a write sink still pays the git
+         spawn(s) exactly as before; only the no-write-sink case is now
+         short-circuited ahead of resolution.
+      3. `session_anchor_has_git_repo` -- if the SESSION's own anchor has NO
          git repo, this guard never bumps at all, regardless of target (§
          "Where the bump does not fire", second bullet; see module
          docstring).
-      3. Per candidate: skip anything that DOES resolve to a git root (not
+      4. Per candidate: skip anything that DOES resolve to a git root (not
          this guard's concern), skip anything under an always-allowed root
          (AC9), then bump on the first remaining candidate, unless the
          marker (checked against the session's own anchor gitdir) already
@@ -737,6 +747,14 @@ def check_bump_outside_repo_write(
     if not bump_applies(session_id, cwd=cwd, env=env):
         return None
 
+    # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- decide from the parsed
+    # command alone, no subprocess, whether this command has a write sink at
+    # all. `echo hello`/`git status --short` never reach the git spawns
+    # below.
+    candidates = list(_iter_write_sink_candidates(cmd, cwd))
+    if not candidates:
+        return None
+
     if not session_anchor_has_git_repo(session_id, cwd=cwd, env=env):
         return None
 
@@ -753,9 +771,7 @@ def check_bump_outside_repo_write(
     anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
     effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
 
-    for candidate_index, (target_dir, _label, raw_target) in enumerate(
-        _iter_write_sink_candidates(cmd, cwd)
-    ):
+    for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
         probe_dir = _nearest_existing_ancestor(target_dir)
         if probe_dir is None:
             # No existing ancestor at all -- cannot resolve a git root
@@ -894,20 +910,6 @@ def _check_bump_outside_repo_write_powershell(
     if not bump_applies(session_id, cwd=cwd, env=env):
         return None
 
-    if not session_anchor_has_git_repo(session_id, cwd=cwd, env=env):
-        return None
-
-    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
-    if not anchor:
-        return None
-    anchor_gitdir = resolve_gitdir(anchor)
-    if anchor_gitdir is None:
-        return None
-
-    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
-    anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
-    effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
-
     segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="bump-outside-repo-write")
     if segments is None:
         # SILENT already recorded by `resolve_segments_for_dialect` itself
@@ -918,6 +920,10 @@ def _check_bump_outside_repo_write_powershell(
     effective_cwd = cwd or os.getcwd()
     matched_any_cmdlet = False
     cwd_unresolved = False
+    # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- collected here, from the
+    # parsed command alone (no subprocess), and checked for emptiness below
+    # BEFORE `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns.
+    candidates: List[Tuple[str, str]] = []
 
     for tokens, _pipe_before in segments:
         if not tokens:
@@ -983,55 +989,7 @@ def _check_bump_outside_repo_write_powershell(
                 # Untranslatable -- fail open, no verdict for this
                 # candidate (this guard family's FAIL OPEN posture).
                 continue
-            probe_dir = _nearest_existing_ancestor(target_dir)
-            if probe_dir is None:
-                continue
-            target_gitdir = resolve_gitdir(probe_dir)
-            if target_gitdir is not None:
-                continue
-
-            if _target_is_always_allowed(probe_dir, anchor_git_root_str, effective_sid, env=env):
-                continue
-
-            if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
-                continue
-
-            agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, anchor_git_root_str)
-            sandbox_root = (
-                _sandbox_root(anchor_git_root_str, effective_sid) if agent_class == AGENT_CLASS_SUBAGENT else ""
-            )
-
-            destination_class = (
-                DESTINATION_PUBLISH
-                if target_is_publish_destination(target_dir, env=env)
-                else DESTINATION_FOREIGN
-            )
-            destination_owner = (
-                publish_destination_owner(target_dir, env=env)
-                if destination_class == DESTINATION_PUBLISH
-                else ""
-            )
-
-            record_applicability_event(
-                session_id,
-                repo=anchor_git_root_str,
-                target=target_dir,
-                agent_class=agent_class,
-                cwd=cwd,
-            )
-
-            message = render_bump_message(
-                agent_class=agent_class,
-                target_repo="no git repo (%s)" % target_dir,
-                session_repo=anchor_git_root_str,
-                gitdir=anchor_gitdir,
-                session_id=effective_sid,
-                sandbox_root=sandbox_root,
-                destination_class=destination_class,
-                destination_owner=destination_owner,
-                raw_target=raw_target if raw_target != target_dir else "",
-            )
-            return _deny(message)
+            candidates.append((target_dir, raw_target))
 
     if not matched_any_cmdlet and not cwd_unresolved:
         record_silent(
@@ -1042,5 +1000,77 @@ def _check_bump_outside_repo_write_powershell(
             "other PowerShell shape are declined rather than guessed at "
             "(see this function's own docstring)",
         )
+
+    # APPLICABILITY BEFORE ROOT RESOLUTION (C3) -- no candidate at all means
+    # no write sink was parsed out of this command; return before
+    # `session_anchor_has_git_repo`/`resolve_gitdir` ever spawns a `git`
+    # subprocess.
+    if not candidates:
+        return None
+
+    if not session_anchor_has_git_repo(session_id, cwd=cwd, env=env):
+        return None
+
+    anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
+    if not anchor:
+        return None
+    anchor_gitdir = resolve_gitdir(anchor)
+    if anchor_gitdir is None:
+        return None
+
+    agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
+    anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
+    effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
+
+    for target_dir, raw_target in candidates:
+        probe_dir = _nearest_existing_ancestor(target_dir)
+        if probe_dir is None:
+            continue
+        target_gitdir = resolve_gitdir(probe_dir)
+        if target_gitdir is not None:
+            continue
+
+        if _target_is_always_allowed(probe_dir, anchor_git_root_str, effective_sid, env=env):
+            continue
+
+        if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
+            continue
+
+        agent_class = resolve_agent_class(payload if isinstance(payload, dict) else {}, anchor_git_root_str)
+        sandbox_root = (
+            _sandbox_root(anchor_git_root_str, effective_sid) if agent_class == AGENT_CLASS_SUBAGENT else ""
+        )
+
+        destination_class = (
+            DESTINATION_PUBLISH
+            if target_is_publish_destination(target_dir, env=env)
+            else DESTINATION_FOREIGN
+        )
+        destination_owner = (
+            publish_destination_owner(target_dir, env=env)
+            if destination_class == DESTINATION_PUBLISH
+            else ""
+        )
+
+        record_applicability_event(
+            session_id,
+            repo=anchor_git_root_str,
+            target=target_dir,
+            agent_class=agent_class,
+            cwd=cwd,
+        )
+
+        message = render_bump_message(
+            agent_class=agent_class,
+            target_repo="no git repo (%s)" % target_dir,
+            session_repo=anchor_git_root_str,
+            gitdir=anchor_gitdir,
+            session_id=effective_sid,
+            sandbox_root=sandbox_root,
+            destination_class=destination_class,
+            destination_owner=destination_owner,
+            raw_target=raw_target if raw_target != target_dir else "",
+        )
+        return _deny(message)
 
     return None

@@ -65,7 +65,7 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KIND
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
 # single-literal-source discipline.
 # ---------------------------------------------------------------------------
-MEMO_SCHEMA_VERSION = "1.6.0"
+MEMO_SCHEMA_VERSION = "1.7.0"
 
 #: Generator-provenance declaration: emit_schemas() writes both of these
 #: fixed tracked artifacts to this module's own directory by default.
@@ -101,6 +101,31 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
+    "1.6.0 -> 1.7.0 (gate-closure-signal-contract, cross-repo/inbox/"
+    "2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, ruled by "
+    "eng-director state/subagent-share/f6ed9dc2-6fc9-4804-9952-27e684f5f573/"
+    "coordinatoreng-director-ceecede2.md) declares the optional `discharges` "
+    "object — our half of the two-part contract whose receiving half landed "
+    "on the vendored plan-tasks.schema.json 1.10.0 `external_gate[]."
+    "closure_key`. A discharging repo stamps this block on an ORDINARY "
+    "cross-repo memo (no new `kind:` enum member — a four-site cross-repo "
+    "lockstep on the kind vocabulary was deliberately declined; the waiting "
+    "repo finds a discharge by the block, never by `kind`) to let the "
+    "waiting repo machine-match its own `external_gate.closure_key` and "
+    "propose (never itself perform) the `cleared: true` flip. Presence-"
+    "triggered completeness, in the pattern `scoped_to` already sets: supply "
+    "`discharges` and all three of `closure_key`/`evidence`/`landed_at` are "
+    "required; omit it entirely and nothing fires. `closure_key` repeats the "
+    "SAME two-member `kind` enum as plan-tasks.schema.json 1.10.0's "
+    "`external_gate[].closure_key` (`deliverable` | `memo-thread`) — the two "
+    "must agree, a divergence here is the desync the whole contract exists "
+    "to prevent, so this module does not re-derive or re-typed the members' "
+    "rationale, only cites the vendored schema as the enum's source. "
+    "`evidence` reuses `realized_by`'s validated shape (plan path, 7-64 hex "
+    "SHA, or the sentinel 'inline') rather than coining a second evidence "
+    "vocabulary. Classified nested-field-additive: one new OPTIONAL "
+    "top-level object property, no change to any existing required set — "
+    "every memo valid under 1.6.0 stays valid. "
     "1.5.0 -> 1.6.0 catches the constant up to a shape drift: commit "
     "0bf6d576e added `sent_by` to both emitted schemas without moving "
     "MEMO_SCHEMA_VERSION off 1.5.0, so the emitter stamped two different "
@@ -288,6 +313,85 @@ _SUPERSEDED_AT_DESCRIPTION = (
     "Timestamp the disposition reversal was recorded. Required by "
     "cross-field rule when disposition_superseded=true."
 )
+
+_DISCHARGES_DESCRIPTION = (
+    "OPTIONAL — our half of the gate-closure-signal-contract (cross-repo/"
+    "inbox/2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, "
+    "ruled by eng-director state/subagent-share/f6ed9dc2-6fc9-4804-9952-"
+    "27e684f5f573/coordinatoreng-director-ceecede2.md). Stamped on an "
+    "ORDINARY cross-repo memo by the discharging repo — no `kind: "
+    "discharge` enum member was minted (a four-site cross-repo lockstep on "
+    "the kind vocabulary is real coordination cost the ruling declined to "
+    "pay); a waiting repo finds a discharge by this block's presence, never "
+    "by `kind`. The waiting repo matches `closure_key` against its own "
+    "`external_gate[].closure_key` (plan-tasks.schema.json 1.10.0) and may "
+    "PROPOSE the `cleared: true` flip with a citation — it never performs "
+    "it from this block alone. Presence-triggered completeness, in the "
+    "pattern `scoped_to` already sets: supply `discharges` and all three "
+    "members (`closure_key`, `evidence`, `landed_at`) are required; omit it "
+    "entirely and nothing fires."
+)
+
+_DISCHARGES_CLOSURE_KEY_KIND_DESCRIPTION = (
+    "Which identity namespace `id` is drawn from. The SAME two-member enum "
+    "as the vendored plan-tasks.schema.json 1.10.0's `external_gate[]."
+    "closure_key.kind` — the two must agree; a divergence here is the "
+    "desync the whole contract exists to prevent. See that schema's field "
+    "description (coordinator_core/frontmatter/schemas/plan-tasks.schema."
+    "json) for the member rationale and the four named exclusions, not "
+    "re-typed here."
+)
+
+_DISCHARGES_CLOSURE_KEY_ID_DESCRIPTION = (
+    "The identity value, in the namespace `kind` names. Interpreted within "
+    "the discharging (sending) repo — ids are minted per-repo with no repo "
+    "qualifier."
+)
+
+_DISCHARGES_EVIDENCE_DESCRIPTION = (
+    "Where the discharging work landed. Reuses `realized_by`'s validated "
+    "shape (a plan path, commit SHA of 7-64 hex chars, or the sentinel "
+    "'inline') rather than coining a second evidence vocabulary — see this "
+    "schema's `realized_by` property for the shape."
+)
+
+_DISCHARGES_LANDED_AT_DESCRIPTION = (
+    "Date the discharging work landed (YYYY-MM-DD)."
+)
+
+_DISCHARGES_PROPERTY: dict[str, Any] = {
+    "type": "object",
+    "description": _DISCHARGES_DESCRIPTION,
+    "required": ["closure_key", "evidence", "landed_at"],
+    "properties": {
+        "closure_key": {
+            "type": "object",
+            "required": ["kind", "id"],
+            "additionalProperties": False,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["deliverable", "memo-thread"],
+                    "description": _DISCHARGES_CLOSURE_KEY_KIND_DESCRIPTION,
+                },
+                "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": _DISCHARGES_CLOSURE_KEY_ID_DESCRIPTION,
+                },
+            },
+        },
+        "evidence": {
+            "type": "string",
+            "description": _DISCHARGES_EVIDENCE_DESCRIPTION,
+        },
+        "landed_at": {
+            "type": "string",
+            "format": "date",
+            "description": _DISCHARGES_LANDED_AT_DESCRIPTION,
+        },
+    },
+}
 
 _SUPERSEDES_PROPERTY: dict[str, Any] = {
     "oneOf": [
@@ -590,6 +694,7 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
                 "type": "string",
                 "description": _SUPERSEDED_AT_DESCRIPTION,
             },
+            "discharges": _DISCHARGES_PROPERTY,
         },
     }
 
@@ -708,6 +813,14 @@ def _build_archived_memo_schema() -> dict[str, Any]:
                 "type": "string",
                 "description": _SUPERSEDED_AT_DESCRIPTION,
             },
+            # Declared on BOTH projections, not cross-repo-memo alone: the
+            # discharge reader's binding rule is to scan inbox AND archive,
+            # because the boot sweep moves actioned memos and an actioned
+            # discharge memo is still the discharge record. Omitting it here
+            # would leave the block undeclared on exactly the population the
+            # reader is required to read, and would restate the 1.5.0->1.6.0
+            # shape drift this constant's own bump-note records.
+            "discharges": _DISCHARGES_PROPERTY,
         },
     }
 

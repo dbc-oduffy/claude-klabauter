@@ -24,7 +24,6 @@ from typing import List
 
 import pytest
 
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 
 # Declared, not excused: the "commit.anchors" op reads Plan/Plan-Id/Deliverable-Id
 # trailers off real STAGED DIFF content and asserts it performs no git writes
@@ -635,78 +634,6 @@ class TestResolvesCompletionTrailer:
             "deliverable, must never stamp Resolves for plan A's"
         )
 
-    def test_declared_fork_pair_still_emits_resolves_raw(self, tmp_repo) -> None:
-        """C13 (AC16/AC17) — manifest row #2, `_has_staged_completion_entry`.
-
-        A completion entry resolving to plan B's raw deliverable_id must still
-        gate `Resolves:` for plan A's commit when the pair is a DECLARED fork
-        (state/deliverable-equivalence.yaml). Un-canonicalized raw equality
-        would silently miss this and omit Resolves at the real completion
-        event. The stamped value itself must be plan A's RAW id, never the
-        canonicalized one — canonicalize() is confined to the boolean gate's
-        comparison, the trailer write path stays untouched (AC17's writer
-        pin: canonicalization must never leak into what lands on disk).
-        """
-        state_dir = tmp_repo / "state"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "deliverable-equivalence.yaml").write_text(
-            "entries:\n"
-            "  - loser: dlv-other-plan-xyz999\n"
-            "    winner: dlv-test-plan-abc456\n"
-            "    evidence: test\n",
-            encoding="utf-8",
-        )
-        _git(["add", "state/deliverable-equivalence.yaml"], tmp_repo)
-        _reset_equivalence_map_cache()
-
-        plan_dir = tmp_repo / "docs" / "plans"
-        plan_dir.mkdir(parents=True)
-
-        # Plan B — already committed, the LOSER leg of the declared pair.
-        other_plan_frontmatter = textwrap.dedent("""\
-            ---
-            title: "Other Plan"
-            created: 2026-07-05
-            author: test
-            status: draft
-            plan_id: "pln-other-plan-def789"
-            deliverable_id: "dlv-other-plan-xyz999"
-            ---
-
-            # Other Plan
-            """)
-        other_plan_file = plan_dir / "2026-07-05-other-plan.md"
-        other_plan_file.write_text(other_plan_frontmatter)
-        _git(["add", str(other_plan_file)], tmp_repo)
-        _git(["commit", "-m", "add other plan"], tmp_repo)
-
-        # Plan A — staged in THIS commit, the WINNER leg.
-        plan_file = plan_dir / "2026-07-04-test-plan.md"
-        plan_file.write_text(self._PLAN_FRONTMATTER)
-        _git(["add", str(plan_file)], tmp_repo)
-
-        # Completion entry staged alongside plan A, but its `chain:` names
-        # plan B — the loser leg of the declared pair.
-        completed_dir = tmp_repo / "archive" / "completed" / "2026-08"
-        completed_dir.mkdir(parents=True)
-        entry_file = completed_dir / "2026-08-01-other-plan-abc123.md"
-        entry_file.write_text(
-            "---\ntitle: \"Done\"\ncreated: 2026-08-01\n"
-            "chain: \"2026-07-05-other-plan\"\n---\n\nDone.\n"
-        )
-        _git(["add", str(entry_file)], tmp_repo)
-
-        try:
-            trailers = self._call(tmp_repo)
-        finally:
-            _reset_equivalence_map_cache()
-
-        assert trailers.get("Deliverable-Id") == "dlv-test-plan-abc456"
-        assert trailers.get("Resolves") == "dlv-test-plan-abc456", (
-            "declared fork pair must still gate Resolves, stamped with plan "
-            "A's RAW id — never a canonicalized alias"
-        )
-
     def test_mid_flight_commit_omits_resolves(self, tmp_repo) -> None:
         """(b) A mid-flight commit — plan staged, Deliverable-Id: resolvable,
         but NO completion entry staged — does NOT carry `Resolves:`. This is
@@ -1098,7 +1025,6 @@ class TestSharedIndexScoping:
     """
 
     def _setup(self, tmp_path: Path):
-        _reset_equivalence_map_cache()
         _init_repo(tmp_path)
         (tmp_path / "docs" / "plans").mkdir(parents=True)
         (tmp_path / "docs" / "plans" / "peer-plan.md").write_text(
@@ -1195,7 +1121,6 @@ class TestStagedArtifactDivergenceOmitsIds:
         `deliverable_id`s (the PM's headline case) → ZERO `Deliverable-Id:`
         lines on the resulting commit — Plan-Id: and Resolves: omitted too,
         since all three ride the same resolver."""
-        _reset_equivalence_map_cache()
         plan_dir = tmp_repo / "docs" / "plans"
         plan_dir.mkdir(parents=True)
         plan_file = plan_dir / "2026-07-04-test-plan.md"
@@ -1235,7 +1160,6 @@ class TestStagedArtifactDivergenceOmitsIds:
     def test_staged_handoffs_agreeing_with_plan_still_emit_deliverable_id(self, tmp_repo) -> None:
         """The guard must not over-fire: staged handoffs that all agree with
         the plan's own `deliverable_id` (the ordinary case) still stamp."""
-        _reset_equivalence_map_cache()
         plan_dir = tmp_repo / "docs" / "plans"
         plan_dir.mkdir(parents=True)
         plan_file = plan_dir / "2026-07-04-test-plan.md"

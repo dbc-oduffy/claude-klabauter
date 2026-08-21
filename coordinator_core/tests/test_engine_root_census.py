@@ -140,11 +140,26 @@ def test_census_never_raises_on_a_corrupt_series(sink):
     assert report["total_reads"] == 1
     assert report["sites"]["ok.site"]["count"] == 1
 
-    # A torn line and an undatable row are counted, never silently dropped
-    # -- see the in-loop comment in `census()` for why an undatable row
-    # cannot be treated as merely absent.
+    # A torn line and an undatable row are preserved in their own buckets,
+    # not folded into `total_reads`/`reads_in_window` -- see the in-loop
+    # comment in `census()`. A reader must check these buckets alongside
+    # `reads_in_window`, since a live signal can hide in a torn row that
+    # neither main counter reflects.
     assert report["unparsable_rows"] == 1
     assert report["undatable_rows"] == 1
+
+
+def test_days_since_last_computes_the_real_elapsed_gap(sink):
+    """`days_since_last` must compute a real, non-None value off an actual
+    recorded read, not just report None on an empty sink -- the only case
+    the rest of the suite otherwise exercises."""
+    engine_root_census.record_fallback_read(
+        "a.site", sink_root=sink, now=_NOW - (30 * _DAY)
+    )
+    report = _census(sink)
+
+    assert report["days_since_last"] is not None
+    assert report["days_since_last"] == pytest.approx(30.0)
 
 
 def test_sites_are_reported_per_site(sink):

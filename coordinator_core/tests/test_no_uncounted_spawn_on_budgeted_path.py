@@ -49,6 +49,22 @@ outlived the counter. The old text named that fragility and then left it unmeasu
 callee derived from the AST (13 of 13 are `subprocess.run`), and every companion test re-run under
 a stack-recording `subprocess.run` wrapper to see which sites actually execute.
 
+OPRO-03 FOLLOW-UP (2026-08-21): the site left standing after C6 drained `_LEGITIMIZED_SITES` to
+empty -- `ceremony.scoped_git_commit`'s reachable set is NOT static, and `_replay_post_commit_
+auto_push` being wired into `commit_scoped`'s private-index (diverged-path) branch put a NEW site
+(`auto_push._detach_and_run`) on it, reachable only under the op's default `push_mode="deferred"`
+shape, which none of the four then-existing `test_commit_e2e_spawn_budget.py` fixtures exercised.
+That site spawns via `subprocess.Popen`, not `run` -- the FIRST site this gate has ever flagged
+that neither `_GLOBAL_SUBPROCESS_RUN` NOR the seam counter could see regardless of reachability,
+since it is the first genuinely `Popen`-only spawn on any budgeted op's reached set. Closed by
+route 3 (a counter that can see it) plus route 1 (a fixture that takes the branch): a new
+`_GLOBAL_SUBPROCESS_SPAWN` counter constant widens `_count_op_spawns_both_ways` to also watch
+`subprocess.Popen`, scoped to the one recognised auto-push-respawn argv shape so it never
+intercepts `subprocess.run`'s own internal `Popen` calls; `test_deferred_diverged_commit_reaches_
+detached_push_spawn_count_matches_budget` plants the diverged-path-under-`deferred` precondition
+and measures the site executing directly. `_GLOBAL_SUBPROCESS_RUN`'s own pin stays unwidened --
+see `_MECHANISM_PINS`.
+
 REUSE FROM `spawn_policy`, UNMODIFIED (pinned API, `tasks/shell-spawn-regrowth-gate/
 PINNED-API.md`): `sites_in_source`, `is_test_tree_site`, `DEFAULT_EXCLUDE`, `SpawnParseError`,
 `discover_source_files`. Not extending `SpawnSite`.
@@ -218,6 +234,8 @@ import typing
 
 import pytest
 
+from coordinator_core.op_census import spawn_bearing_ops
+from coordinator_core.spawn_policy.detect import site_key
 from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     _GATE_SCOPE_ROOTS,
     _REPO_ROOT,
@@ -295,8 +313,17 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
 #: `os.posix_spawn`, or `asyncio.create_subprocess_exec` call is invisible). The mechanism hole is
 #: what `_MECHANISM_PIN` closes below; the routing strength is what makes this shape admissible at
 #: all, and the reason the pre-2026-08-19 text's blanket refusal of it was wrong.
+#:
+#: `GLOBAL_SUBPROCESS_SPAWN` (opro-03 follow-up, 2026-08-21) -- the same routing-agnostic shape,
+#: WIDENED to also substitute the `subprocess.Popen` module attribute: `auto_push._detach_and_run`'s
+#: Windows respawn leg spawns via `Popen`, never `run`, so the run-only counter could never see it
+#: regardless of reachability. A NEW counter constant rather than widening `_GLOBAL_SUBPROCESS_RUN`
+#: in place, so sites already legitimized under the narrower run-only counter keep their narrower
+#: guarantee -- a future `run` -> `Popen` edit at one of THOSE sites still fails the pin, because
+#: their own mechanism-pin entry (`_MECHANISM_PINS` below) never grew.
 _SEAM = "seam"
 _GLOBAL_SUBPROCESS_RUN = "global-subprocess-run"
+_GLOBAL_SUBPROCESS_SPAWN = "global-subprocess-spawn"
 
 #: For a `_GLOBAL_SUBPROCESS_RUN` legitimation, the dotted spawn callee the counter patches. Every
 #: spawn call in the legitimized site's enclosing function must be exactly this
@@ -309,6 +336,20 @@ _GLOBAL_SUBPROCESS_RUN = "global-subprocess-run"
 #: enclosing function's FULL callee set rather than one ordinal-matched call, so both an in-place
 #: mechanism swap and an added second spawn of a different mechanism fail it.
 _MECHANISM_PIN = "subprocess.run"
+
+#: Per-counter mechanism pin, keyed on the counter constant a `_Legitimation.counter` names.
+#: `_GLOBAL_SUBPROCESS_RUN` stays pinned to `subprocess.run` ALONE -- unwidened, per the note
+#: above. `_GLOBAL_SUBPROCESS_SPAWN` admits both `subprocess.run` and `subprocess.Popen` because
+#: that is what its own companion counter actually watches (`test_commit_e2e_spawn_budget.py`'s
+#: `_count_op_spawns_both_ways`, widened 2026-08-21) -- not a loosening, an honest description of
+#: a counter that watches two mechanisms. `test_legitimized_site_mechanism_pins_hold` checks
+#: SUBSET membership against the mapped pin, not equality against a single string, which is a
+#: pure generalization of the prior exact-match check for every singleton pin already in this
+#: dict (`found <= pin and found` is `found == pin` whenever `pin` has exactly one member).
+_MECHANISM_PINS: dict[str, frozenset[str]] = {
+    _GLOBAL_SUBPROCESS_RUN: frozenset({_MECHANISM_PIN}),
+    _GLOBAL_SUBPROCESS_SPAWN: frozenset({"subprocess.run", "subprocess.Popen"}),
+}
 
 
 class _Legitimation(typing.NamedTuple):
@@ -585,6 +626,37 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "(`_chunk_evidence_log_range`'s merge-base plus two `_deliverable_log_records` "
         "queries), under the exact-equality counter of "
         "`test_first_call_with_one_sibling_spawn_count_matches_budget`.",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/hooks/auto_push.py",
+        "_detach_and_run",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The site put on this op's reachable set by `_replay_post_commit_auto_push` being wired
+        # into `commit_scoped`'s private-index (diverged-path) branch -- NOT new from the
+        # popup-guard/CREATE_NO_WINDOW work (verified: `git show d1feabb8c^:coordinator_core/
+        # hooks/auto_push.py` has the identical `Popen` call and identical callers). Reached only
+        # when `suppress_post_commit_auto_push` is False, i.e. the op's default `push_mode=
+        # "deferred"` -- never on the `sync`/`never` shapes the other four `test_commit_e2e_
+        # spawn_budget.py` fixtures exercise, which is why this was the ONLY site left standing
+        # after opro-03 C6 emptied every other reachable bypass. Spawns via `subprocess.Popen`
+        # (the Windows leg of `_detach_and_run`; POSIX forks instead and never reaches this
+        # line), which the run-only `_GLOBAL_SUBPROCESS_RUN` counter structurally cannot see
+        # regardless of reachability -- closed by widening the op's counter to also watch
+        # `Popen`, not by rerouting the spawn (see `_GLOBAL_SUBPROCESS_SPAWN`'s own docstring for
+        # why a second counter, not a loosened pin).
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-21: `test_deferred_diverged_commit_reaches_detached_push_"
+        "spawn_count_matches_budget` wraps `auto_push._detach_and_run` via `monkeypatch.setattr` "
+        "and asserts the wrapper fired (`detach_calls['n'] >= 1`), against a fixture whose sole "
+        "diverged path (staged v2, worktree v3) routes `commit_scoped` down the hookless "
+        "private-index branch under the op's default `push_mode='deferred'`. A DIRECT call "
+        "measurement of the enclosing function, not an inference from the Popen count alone. "
+        "Counted by `op_total_deferred_diverged_detach` (28) against that shape's own seam "
+        "figure (20, exact equality).",
     ),
     (
         "ops.discover_working_repos",
@@ -988,24 +1060,34 @@ def test_legitimized_site_mechanism_pins_hold():
     `_SEAM` entries are deliberately exempt from the pin: a function-OBJECT substitution wraps the
     name, so it keeps counting whatever the body spawns with. Their hole is routing, not mechanism,
     and no static pin addresses it -- the seven open `ceremony.scoped_git_commit` bypasses are that
-    hole, and they are on the gate's red list rather than papered over here."""
+    hole, and they are on the gate's red list rather than papered over here.
+
+    Checked against `_MECHANISM_PINS`, keyed on `leg.counter`, not a single hardcoded string
+    (opro-03 follow-up, 2026-08-21): `_GLOBAL_SUBPROCESS_SPAWN` widens the pin to admit BOTH
+    `subprocess.run` and `subprocess.Popen`, because its own companion counter
+    (`test_commit_e2e_spawn_budget.py::_count_op_spawns_both_ways`) watches both -- see that
+    dict's own docstring. The comparison is SUBSET membership (`found <= pin`), which is a pure
+    generalization of the old exact-equality check: for every singleton pin already in the dict
+    (`_GLOBAL_SUBPROCESS_RUN`), `found <= pin and found` means exactly `found == pin`, so no
+    existing `_GLOBAL_SUBPROCESS_RUN` entry's guarantee is loosened by this generalization."""
     drifted: list[str] = []
     for (_op_key, relpath, enclosing, _argv0, _ordinal), leg in _LEGITIMIZED_SITES.items():
-        if leg.counter != _GLOBAL_SUBPROCESS_RUN:
+        pin = _MECHANISM_PINS.get(leg.counter)
+        if pin is None:
             continue
         found = _spawn_callees_in_function(relpath, enclosing.split(".")[0])
         if not found:
             drifted.append(
                 f"  {relpath}::{enclosing} -- legitimized against a global "
-                f"`{_MECHANISM_PIN}` counter, but no recognised spawn call remains in that "
+                f"{sorted(pin)} counter, but no recognised spawn call remains in that "
                 f"function. Stale exemption: remove it, or re-earn it for whatever replaced it."
             )
-        elif found != {_MECHANISM_PIN}:
+        elif not found <= pin:
             drifted.append(
-                f"  {relpath}::{enclosing} -- legitimized against a global `{_MECHANISM_PIN}` "
+                f"  {relpath}::{enclosing} -- legitimized against a global {sorted(pin)} "
                 f"counter, but this function now spawns via {sorted(found)}. That counter does "
                 f"not see those, so the site is no longer counted while its exemption says it is. "
-                f"Route it back through `{_MECHANISM_PIN}`, or re-legitimize it against a counter "
+                f"Route it back through {sorted(pin)}, or re-legitimize it against a counter "
                 f"that actually observes the new mechanism ({leg.counted_by})."
             )
     assert not drifted, (
@@ -1301,3 +1383,313 @@ def test_legitimized_site_suppresses_a_reachable_violation(tmp_path):
     key = (site.path, site.enclosing, site.argv0, site.ordinal)
     filtered = _on_path_spawn_sites(reached, spawn_sites_by_file, {key})
     assert filtered == []
+
+
+# --------------------------------------------------------------------------
+# COMPLETENESS GUARD (C2, docs/plans/2026-08-21-the-census-that-cannot-miss-
+# an-op.md). Everything above this line is the C-13 ROT guard: it proves an
+# ENROLLED op's counted set stays counted. It has no opinion on an op that was
+# NEVER enrolled -- that op is not under-measured, it is invisible, and that
+# is the defect this section closes.
+#
+# `coordinator_core.op_census.spawn_bearing_ops` is the EVIDENCE layer (op
+# registry -> owning module -> "does this module contain a spawn site,"
+# module granularity, deliberately coarser than the function-level BFS
+# above -- see that module's own docstring for why). The verdicts below —
+# which unenrolled op's evidence is or is not accounted for — stay here, per
+# hard constraint 9: op_census/ produces evidence, never verdicts.
+# --------------------------------------------------------------------------
+
+
+#: Real drift, found by this chunk's own divergence guard, not manufactured
+#: for demonstration: `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP`
+#: is missing `hooks.cater_subagent_start` (274 live ops vs 273 fast-path
+#: entries, measured 2026-08-21). `_registry_map.py` is a hand-maintained
+#: PERFORMANCE OPTIMIZATION per its own docstring ("a stale/incomplete map
+#: degrades to today's correctness, never to a broken dispatch") and is
+#: outside this chunk's declared write scope (`state/dispatch-briefs/
+#: 2026-08-21-the-census-that-cannot-miss-an-op/C2.md`'s `writes:` list does
+#: not include it) — the fix is a one-line addition to that module's
+#: `OP_MODULE_MAP`, mirroring its existing `hooks.*` entries, left to a
+#: follow-up chunk that owns that file. `designed_red`: this test's failure
+#: output IS the worklist (a single named op), never gated on by the fast
+#: tier, and it is the demonstration that the divergence guard this chunk
+#: was required to add actually catches something real on first light.
+@pytest.mark.designed_red
+def test_registry_fast_path_matches_live_registry():
+    """The divergence guard hard constraint 7 (amended) / PM Ruling 3-B
+    require: `_registry_map.py::OP_MODULE_MAP` (the fast path) must agree
+    with `ipc._REGISTRY` (the authoritative source, populated by importing
+    `coordinator_core.ops`) on the full op-name set. Deriving a completeness
+    gate from the fast path alone would relocate this plan's own
+    invisibility hole one layer down -- this test is what keeps that from
+    happening silently: the moment the two disagree, this fails loudly
+    instead of the gap sitting unnoticed the way `hooks.cater_subagent_start`
+    did until this chunk measured it."""
+    divergence = spawn_bearing_ops.registry_divergence()
+    assert divergence.agrees, (
+        "the fast-path op-name map (_registry_map.py::OP_MODULE_MAP) and the "
+        "live op registry (ipc._REGISTRY, via `import coordinator_core.ops`) "
+        "disagree -- a stale/incomplete fast-path map degrades silently to "
+        "today's dispatch correctness per that module's own docstring, but "
+        "MUST NOT degrade this completeness gate's own fidelity:\n"
+        f"  only in live registry (missing from the fast-path map): "
+        f"{sorted(divergence.only_in_live)}\n"
+        f"  only in fast-path map (registry no longer knows this op): "
+        f"{sorted(divergence.only_in_fast_path)}"
+    )
+
+
+def _live_unenrolled_spawn_site_keys():
+    """`(site_key -> {op_name, ...})` for every spawn site belonging to a
+    live op that is NOT a key of `_BUDGETED_ENTRYPOINTS` -- the population
+    `_FROZEN_UNENROLLED_SPAWN_SITES` below freezes. Module-granularity
+    evidence (`spawn_bearing_ops.ops_with_spawn_evidence`), not the
+    function-level BFS the rot guard above uses for its own nine entrypoints
+    -- see that module's docstring for why that coarser predicate is the
+    deliberate choice here."""
+    live_ops = spawn_bearing_ops.live_registry_op_names()
+    entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live_ops)
+    evidence = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints)
+    enrolled = set(_BUDGETED_ENTRYPOINTS.keys())
+
+    keys_to_ops: dict[tuple[str, str, str, int], set[str]] = {}
+    for op_name, sites in evidence.items():
+        if op_name in enrolled:
+            continue
+        for site in sites:
+            keys_to_ops.setdefault(site_key(site), set()).add(op_name)
+    return keys_to_ops
+
+
+#: The current unenrolled population, FROZEN as a declared inventory keyed
+#: at spawn-site granularity (`spawn_policy.site_key` -- the same four-tuple
+#: `_KNOWN_SITES`/`_LEGITIMIZED_SITES` already use), never per-op: keying
+#: this per op would silence an inventoried op's FUTURE spawns forever (an
+#: op admitted today stops tripping anything it grows tomorrow), which is
+#: the exact hand-maintained-list-under-a-new-name failure this chunk exists
+#: to avoid. Measured 2026-08-21 via `_live_unenrolled_spawn_site_keys()`
+#: against the live tree: 76 of 274 live ops carry module-granularity spawn
+#: evidence and are not a key of `_BUDGETED_ENTRYPOINTS`; their spawn sites
+#: collapse to 149 distinct `site_key`s (module-granularity evidence
+#: naturally produces MORE distinct sites than the nine-op rot guard's
+#: function-level BFS does, per that predicate's own over-report bias).
+#: Ratchets down from here, `_KNOWN_SITES`' 149 -> 94 -> 14 shape is the
+#: precedent -- draining this list (by enrolling the op with a real
+#: `op_total_*` pin, or by deleting a spawn that never needed to exist, per
+#: the rot guard's own four-route disposition above) is future chunks' work,
+#: never this one's job to do wholesale.
+_FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
+    {
+        ("coordinator_core/goals/reassess_krs.py", "_gather_signal", "<dynamic>", 0),
+        ("coordinator_core/hooks/context_pressure_precompact.py", "_run_git", "git", 0),
+        ("coordinator_core/hooks/subagent_fabrication_check.py", "_git_porcelain_for_paths", "git", 0),
+        ("coordinator_core/hooks/track_touched_files.py", "_ensure_session_dir", "git", 0),
+        ("coordinator_core/hooks/track_touched_files.py", "_ensure_session_dir", "git", 1),
+        ("coordinator_core/install/clone_sibling_repo.py", "clone_idempotent", "git", 0),
+        ("coordinator_core/install/prereq_probe.py", "_check_windows_terminal_presence", "winget", 0),
+        ("coordinator_core/install/prereq_probe.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "gh", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "git", 3),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "git", 4),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "git", 5),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "glab", 1),
+        ("coordinator_core/install/prereq_probe.py", "probe_clone_auth", "ssh", 2),
+        ("coordinator_core/install/prereq_probe.py", "probe_gh", "gh", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_gh", "gh", 1),
+        ("coordinator_core/install/prereq_probe.py", "probe_gh", "gh", 2),
+        ("coordinator_core/install/prereq_probe.py", "probe_git", "git", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 1),
+        ("coordinator_core/install/prereq_probe.py", "probe_git_lfs", "git", 2),
+        ("coordinator_core/install/prereq_probe.py", "probe_longpaths", "git", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_node", "node", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_pwsh", "powershell", 1),
+        ("coordinator_core/install/prereq_probe.py", "probe_pwsh", "pwsh", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_python", "<dynamic>", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_shell_login_env", "<dynamic>", 1),
+        ("coordinator_core/install/prereq_probe.py", "probe_shell_login_env", "dscl", 0),
+        ("coordinator_core/install/prereq_probe.py", "probe_uv", "uv", 0),
+        ("coordinator_core/install/prereq_probe.py", "shell_login_env_reconstruction_source", "zsh", 0),
+        ("coordinator_core/ops/app_session.py", "_launch", "<dynamic>", 0),
+        ("coordinator_core/ops/bootstrap_repo.py", "_git._invoke", "<dynamic>", 0),
+        ("coordinator_core/ops/bootstrap_repo.py", "_which_git", "git", 0),
+        ("coordinator_core/ops/bootstrap_repo.py", "main", "<dynamic>", 0),
+        ("coordinator_core/ops/bootstrap_repo.py", "main", "git", 1),
+        ("coordinator_core/ops/cartography_churn.py", "_git_ls_files", "<dynamic>", 0),
+        ("coordinator_core/ops/cartography_churn.py", "_git_name_only", "<dynamic>", 0),
+        ("coordinator_core/ops/cascade_retract.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/ceremony/update_docs_scan.py", "_phase1_git_log_window", "git", 0),
+        ("coordinator_core/ops/changelog_ops.py", "_batch_resolve_commits", "git", 0),
+        ("coordinator_core/ops/changelog_ops.py", "_get_hostname", "<dynamic>", 0),
+        ("coordinator_core/ops/changelog_ops.py", "_git_log_for_date", "git", 0),
+        ("coordinator_core/ops/commit_anchors.py", "_read_meta_from_staged", "git", 0),
+        ("coordinator_core/ops/commit_anchors.py", "_staged_files", "git", 0),
+        ("coordinator_core/ops/completion_ops.py", "_canonicalize_stored_shas", "git", 0),
+        ("coordinator_core/ops/copy_plugin_template.py", "_run_pytest", "<dynamic>", 0),
+        ("coordinator_core/ops/create_github_remote.py", "_gh", "gh", 0),
+        ("coordinator_core/ops/create_github_remote.py", "_git", "git", 0),
+        ("coordinator_core/ops/create_github_remote.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_batch_git_ignored_names", "git", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_batch_is_untracked_dirs", "git", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_delete_path", "rm", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_delete_paths_batch", "rm", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_is_git_ignored", "git", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_is_inside_git_work_tree", "git", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "_is_untracked", "git", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "sweep_toolchain_caches", "<dynamic>", 0),
+        ("coordinator_core/ops/cruft_sweep.py", "sweep_toolchain_caches", "<dynamic>", 1),
+        ("coordinator_core/ops/cutover_gate.py", "_git_cat_file_batch_check", "git", 0),
+        ("coordinator_core/ops/cutover_gate.py", "_run_pytest_batch", "<dynamic>", 0),
+        ("coordinator_core/ops/cutover_gate.py", "resolve_cutover_schema", "git", 0),
+        ("coordinator_core/ops/deliverable_rollup.py", "_machine_local_get", "<dynamic>", 0),
+        ("coordinator_core/ops/detect_changed_dependency_manifests.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/distill_apply_disposal.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/draft_plan_aging.py", "_batch_git_commit_epochs", "git", 0),
+        ("coordinator_core/ops/draft_plan_aging.py", "_git_commit_epoch", "git", 0),
+        ("coordinator_core/ops/draft_plan_aging.py", "_has_recent_real_work_commit", "git", 0),
+        ("coordinator_core/ops/ensure_python3_exe_shim.py", "_classify_python3", "python3", 0),
+        ("coordinator_core/ops/eol/census.py", "_check_attr_eol_text", "git", 0),
+        ("coordinator_core/ops/eol/census.py", "_dirty_paths", "git", 0),
+        ("coordinator_core/ops/eol/repair.py", "_index_blobs", "git", 0),
+        ("coordinator_core/ops/fleet/archive_handoffs.py", "_shipped_in_resolvable", "git", 0),
+        ("coordinator_core/ops/fleet/archive_plans.py", "_plan_worktree_dirty", "git", 0),
+        ("coordinator_core/ops/fleet/archive_plans.py", "_plan_worktree_dirty_batch", "git", 0),
+        ("coordinator_core/ops/fleet/archive_shipped_handoffs.py", "_sha_reachable", "git", 0),
+        ("coordinator_core/ops/fleet/memo_send.py", "_commit_delivered_memo", "git", 0),
+        ("coordinator_core/ops/fleet/memo_send.py", "_commit_delivered_memo", "git", 1),
+        ("coordinator_core/ops/fleet/memo_send.py", "_commit_delivered_memo", "git", 2),
+        ("coordinator_core/ops/fleet/memo_send.py", "_commit_delivered_memo", "git", 3),
+        (
+            "coordinator_core/ops/fleet/memo_send.py",
+            "_commit_delivered_memo._unstage_delivered_memo",
+            "git",
+            0,
+        ),
+        ("coordinator_core/ops/fleet/memo_send.py", "_git_check_ignore", "git", 0),
+        (
+            "coordinator_core/ops/fleet/memo_send.py",
+            "_verify_scoped_to_sha_resolvable._rev_parse",
+            "git",
+            0,
+        ),
+        ("coordinator_core/ops/hibernate_machine.py", "_run_binary", "<dynamic>", 0),
+        ("coordinator_core/ops/hibernate_machine.py", "hibernate", "pmset", 0),
+        ("coordinator_core/ops/hibernate_machine.py", "hibernate", "shutdown", 1),
+        ("coordinator_core/ops/hibernate_machine.py", "hibernate", "systemctl", 2),
+        ("coordinator_core/ops/merge_branch_into_workstream.py", "_git", "git", 0),
+        ("coordinator_core/ops/merge_quiet_activity_gate.py", "_head_commit_epoch_seconds", "git", 0),
+        ("coordinator_core/ops/orphan_branch_sweep.py", "_git", "git", 0),
+        ("coordinator_core/ops/orphan_branch_sweep.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/orphan_branch_sweep.py", "main", "gh", 1),
+        ("coordinator_core/ops/orphan_branch_sweep.py", "main", "git", 0),
+        ("coordinator_core/ops/percolate_check_inverse_drift.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/percolate_ci_smoke_check.py", "run_ci_smoke_check", "<dynamic>", 0),
+        ("coordinator_core/ops/percolate_identity_check.py", "run_identity_check", "<dynamic>", 0),
+        ("coordinator_core/ops/plan_capture_persist.py", "invoke_coordinator_doc_new", "<dynamic>", 0),
+        ("coordinator_core/ops/plan_suggest_completion_steps.py", "_git", "<dynamic>", 0),
+        ("coordinator_core/ops/plan_suggest_completion_steps.py", "_plan_touching_shas", "git", 0),
+        ("coordinator_core/ops/plan_suggest_completion_steps.py", "_plan_touching_shas_batch", "git", 0),
+        ("coordinator_core/ops/plan_suggest_completion_steps.py", "_resolve_range_shas", "git", 0),
+        ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "git", 0),
+        ("coordinator_core/ops/propagate_body.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/queue_append.py", "_machine_local_get", "<dynamic>", 0),
+        ("coordinator_core/ops/record_history.py", "_is_git_worktree", "git", 0),
+        ("coordinator_core/ops/record_history.py", "_run_git_log_pass", "git", 0),
+        ("coordinator_core/ops/release_tagging.py", "_gh", "gh", 0),
+        ("coordinator_core/ops/release_tagging.py", "_git", "git", 0),
+        ("coordinator_core/ops/release_tagging.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_get", "<dynamic>", 0),
+        ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_set", "<dynamic>", 0),
+        ("coordinator_core/ops/resolve_swept_baton.py", "_archiving_commit", "git", 0),
+        ("coordinator_core/ops/review_trail_readjudication_report.py", "_full_range_shas", "git", 0),
+        ("coordinator_core/ops/review_trail_readjudication_report.py", "_resolve_repo_root", "git", 0),
+        ("coordinator_core/ops/review_trail_readjudication_report.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/review_trail_write.py", "_git_runner", "<dynamic>", 0),
+        ("coordinator_core/ops/review_trail_write.py", "_reject_empty_sha_range", "git", 0),
+        ("coordinator_core/ops/review_trail_write.py", "_reject_empty_sha_range", "git", 1),
+        ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha", "git", 0),
+        ("coordinator_core/ops/run_pip_audit.py", "_run_pip_audit", "<dynamic>", 0),
+        ("coordinator_core/ops/run_pre_ci_hooks.py", "_run_pre_ci_hooks", "<dynamic>", 0),
+        ("coordinator_core/ops/run_semgrep_scan.py", "_diff_scoped_files", "git", 0),
+        ("coordinator_core/ops/run_semgrep_scan.py", "_run_semgrep", "semgrep", 0),
+        ("coordinator_core/ops/run_shellcheck_sweep.py", "_lint_one_file", "shellcheck", 0),
+        ("coordinator_core/ops/run_shellcheck_sweep.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/session/boot_sweep.py", "_commit_consumed_metadata", "git", 0),
+        ("coordinator_core/ops/session/boot_sweep.py", "_commit_consumed_metadata", "git", 1),
+        ("coordinator_core/ops/session/boot_sweep.py", "_commit_consumed_metadata", "git", 2),
+        ("coordinator_core/ops/session/boot_sweep.py", "_commit_consumed_metadata", "git", 3),
+        ("coordinator_core/ops/session/guard_settings_integrity.py", "evaluate_settings_integrity", "git", 0),
+        ("coordinator_core/ops/session/resolve_chain_terminal_disposition.py", "_run_git", "git", 0),
+        ("coordinator_core/ops/session_baton_promote.py", "_scaffold_via_doc_new", "<dynamic>", 0),
+        ("coordinator_core/ops/tracker/push_suggestion.py", "_commit_envelope", "git", 0),
+        ("coordinator_core/ops/tracker/push_suggestion.py", "_commit_envelope._run", "git", 0),
+        ("coordinator_core/ops/updatedocs_gates.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/verify_fix_files_changed.py", "_changed_files", "git", 0),
+        ("coordinator_core/orientation/regenerate_cache.py", "_find_uproject", "<dynamic>", 0),
+        ("coordinator_core/orientation/regenerate_cache.py", "_git", "git", 0),
+        ("coordinator_core/orientation/regenerate_cache.py", "_machine_local_get", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/drift.py", "_run_git", "git", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "_fetch_machine_json", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "_py_ident", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "_whoami_importable", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p10", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p2", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p20", "bash", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p3", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p4", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p6", "<dynamic>", 0),
+        ("coordinator_core/plugin_health/sentinel.py", "probe_p6s", "<dynamic>", 0),
+    }
+)
+
+#: The high-water ceiling `_FROZEN_UNENROLLED_SPAWN_SITES` itself may never
+#: exceed -- pinned to the exact size measured at freeze time (2026-08-21).
+#: Matches `_KNOWN_SITES`' own 149 -> 94 -> 14 ratchet shape: this number
+#: only ever goes down, by draining an entry via one of the rot guard's own
+#: four routes (enroll it, delete the spawn, etc.) and lowering this
+#: constant to match. A hand-edit that adds an entry to the frozenset above
+#: without also being unable to lower this constant is exactly the "silence
+#: an op's future spawns forever" failure this section's own comment warns
+#: against -- this assertion is what makes that a test failure instead of a
+#: silent expansion.
+_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 149
+
+
+def test_unenrolled_spawn_bearing_ops_are_declared_in_the_frozen_inventory():
+    """THE defect this chunk exists to close, made structural: every spawn
+    site belonging to a live op that is not a key of `_BUDGETED_ENTRYPOINTS`
+    must already be a member of `_FROZEN_UNENROLLED_SPAWN_SITES`. A NEW
+    unenrolled spawner -- an op added to the registry after this freeze,
+    reachable from spawn evidence, and never enrolled -- produces a site key
+    this frozenset does not contain, and fails loudly here instead of being
+    invisible the way `ceremony.wsc_tail` was until an EM hand-built a probe
+    while chasing an unrelated flaky KPI (this plan's own worked example)."""
+    keys_to_ops = _live_unenrolled_spawn_site_keys()
+    undeclared = sorted(set(keys_to_ops) - _FROZEN_UNENROLLED_SPAWN_SITES)
+    assert not undeclared, (
+        f"{len(undeclared)} spawn site(s) belong to a live op that is neither enrolled in "
+        "_BUDGETED_ENTRYPOINTS nor declared in _FROZEN_UNENROLLED_SPAWN_SITES -- an op that "
+        "spawns and was never enrolled is invisible, which is the defect this gate exists to "
+        "close. Enroll the op with a real op_total_* pin, delete the spawn, or (if this is a "
+        "genuinely new-but-still-open gap) add the site_key to "
+        "_FROZEN_UNENROLLED_SPAWN_SITES and raise _FROZEN_UNENROLLED_INVENTORY_HIGH_WATER to "
+        "match -- never silently:\n"
+        + "\n".join(
+            f"  {k} (op: {sorted(keys_to_ops[k])})" for k in undeclared
+        )
+    )
+
+
+def test_frozen_unenrolled_inventory_is_monotonically_non_growing():
+    """The frozen inventory ratchets DOWN, never up -- the real assertion
+    behind the `_KNOWN_SITES`-precedent comment above the frozenset, not
+    prose. Draining an entry (enrolling the op, or deleting the spawn) is
+    always allowed and welcome; growing the frozenset without also lowering
+    `_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER` to match is not."""
+    assert len(_FROZEN_UNENROLLED_SPAWN_SITES) <= _FROZEN_UNENROLLED_INVENTORY_HIGH_WATER, (
+        f"_FROZEN_UNENROLLED_SPAWN_SITES grew to {len(_FROZEN_UNENROLLED_SPAWN_SITES)} entries, "
+        f"past its high-water ceiling of {_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER}. This "
+        "inventory must ratchet down, matching _KNOWN_SITES' own 149 -> 94 -> 14 shape -- "
+        "raising the ceiling to buy a green is exactly the regrowth this test exists to refuse."
+    )

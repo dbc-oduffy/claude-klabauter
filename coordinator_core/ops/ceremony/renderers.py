@@ -1062,18 +1062,6 @@ def _join_plans_to_handoffs(
     archive_index = _index_handoffs_by_basename(root / "archive" / "handoffs", root)
     handoff_dir = root / "state" / "handoffs"
     deliverable_index = _index_handoffs_by_field(root, "deliverable_id")
-    # Join key canonicalized (C6b/AC11) -- a declared fork pair's raw ids
-    # are re-keyed onto the same canonical winner so a plan carrying one
-    # leg still joins a handoff declaring the other.
-    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
-
-    _renderers_equivalence_map = load_equivalence_map(root)
-    _canonical_deliverable_index: dict[str, list[tuple[str, str]]] = {}
-    for _raw_did, _entries in deliverable_index.items():
-        _canonical_deliverable_index.setdefault(
-            canonicalize(_raw_did, _renderers_equivalence_map), []
-        ).extend(_entries)
-    deliverable_index = _canonical_deliverable_index
 
     joined: list[dict] = []
     for record in plan_records:
@@ -1117,9 +1105,7 @@ def _join_plans_to_handoffs(
 
         if resolution_state not in ("live", "archived") and deliverable_id:
             match, ambiguous_count = _resolve_deliverable_match(
-                deliverable_index.get(
-                    canonicalize(deliverable_id, _renderers_equivalence_map), []
-                )
+                deliverable_index.get(deliverable_id, [])
             )
             if match:
                 match_path, match_state = match
