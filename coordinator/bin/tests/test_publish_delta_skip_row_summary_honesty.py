@@ -147,6 +147,7 @@ def test_delta_skipped_row_reported_separately_and_not_as_succeeded(monkeypatch,
     named in the summary line itself, distinct from both succeeded and
     failed."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     rc = publish.main([",".join(_ROW_NAMES), "--delta"])

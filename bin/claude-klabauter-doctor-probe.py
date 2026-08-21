@@ -335,10 +335,27 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
 
     Tries three rungs in order; the first hit wins.
     """
-    # Rung 1 — env var (idempotency gate: already exported by a parent shell)
+    # Rung 1 — env var (idempotency gate: already exported by a parent shell).
+    #
+    # C23: this rung read the RETIRED name and nothing else, so it went dark
+    # the moment C14 stopped anything exporting it — an operator with only
+    # COORDINATOR_ENGINE_ROOT set got no rung-1 hit at all and fell silently
+    # through to the registry ladder. In a DOCTOR PROBE that is worse than
+    # ordinary: the tool whose job is diagnosing a misresolved root was itself
+    # misresolving it, and reporting rung 2's answer as though rung 1 had
+    # nothing to say.
+    #
+    # The retired name is kept as an explicit second rung rather than dropped:
+    # this is a diagnostic run against boxes in unknown states, including ones
+    # mid-migration, and a probe that cannot see a stale pin cannot report it.
+    # It is reported under its own source string so the operator sees WHICH
+    # name answered.
+    val = os.environ.get("COORDINATOR_ENGINE_ROOT", "").strip()
+    if val:
+        return Path(val), "env COORDINATOR_ENGINE_ROOT"
     val = os.environ.get("CLAUDE_KLABAUTER_ROOT", "").strip()
     if val:
-        return Path(val), "env CLAUDE_KLABAUTER_ROOT"
+        return Path(val), "env CLAUDE_KLABAUTER_ROOT (RETIRED — set COORDINATOR_ENGINE_ROOT)"
 
     # Rung 2 — machine-local registry (authoritative coordinator-side path).
     # Read in-process via coordinator_core.machine_resolver.registry_get (a

@@ -419,6 +419,103 @@ class TestGitTargetPolicing:
         assert guard.check(payload) is None
 
 
+class TestDetachedProcessIsNotSuppression:
+    """DETACHED_PROCESS is an AMPLIFIER, and the guard used to bless it.
+
+    `_PY_SUPPRESSION_RE` accepts the presence of a `creationflags` kwarg as
+    proof of suppression. But `creationflags` carrying DETACHED_PROCESS leaves
+    the child with NO console, so every console-subsystem descendant allocates
+    its own console WITH a window -- the opposite of suppression. Win32 ignores
+    CREATE_NO_WINDOW whenever DETACHED_PROCESS is set, so the belt-and-braces
+    spelling is a no-op too; measured 2026-08-21, both forms produced 6 visible
+    console windows across 3 spawns versus 0 without DETACHED_PROCESS
+    (state/audits/2026-08-21-detached-process-console-window-storm.md).
+
+    Same defect class as the `-WindowStyle Hidden` blessing: a guard accepting
+    a spelling that does not work.
+    """
+
+    def test_bare_detached_process_is_flagged(self):
+        content = (
+            'import subprocess\n'
+            'subprocess.Popen(\n'
+            '    ["git", "push"],\n'
+            '    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "spawn.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_detached_process_ored_with_create_no_window_is_still_flagged(self):
+        """The load-bearing case -- this spelling LOOKS suppressed and is not.
+
+        Two live engine sites shipped exactly this and passed the guard.
+        """
+        content = (
+            'import subprocess\n'
+            'flags = 0\n'
+            'flags |= getattr(subprocess, "DETACHED_PROCESS", 0)\n'
+            'flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)\n'
+            'flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)\n'
+            'subprocess.Popen(["git", "push"], creationflags=flags)\n'
+        )
+        payload = _payload("Write", {"file_path": "spawn.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_create_new_console_is_flagged(self):
+        content = (
+            'import subprocess\n'
+            'subprocess.Popen(\n'
+            '    ["git", "push"],\n'
+            '    creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NO_WINDOW,\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "spawn.py", "content": content})
+        result = guard.check(payload)
+        assert result is not None
+        assert _is_advisory_envelope(result)
+
+    def test_correct_windowless_form_still_clears(self):
+        """The disqualifier must not make the guard unsatisfiable.
+
+        This is the shape the three fixed sites now carry; if this ever starts
+        failing, the guard is demanding something no caller can spell.
+        """
+        content = (
+            'import subprocess\n'
+            'flags = 0\n'
+            'flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)\n'
+            'flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)\n'
+            'subprocess.Popen(["git", "push"], creationflags=flags)\n'
+        )
+        payload = _payload("Write", {"file_path": "spawn.py", "content": content})
+        assert guard.check(payload) is None
+
+    def test_prose_mentioning_detached_process_does_not_disqualify(self):
+        """A docstring explaining the rule must not trip it.
+
+        The disqualifier runs on the triple-quote-stripped scope for exactly
+        this reason -- otherwise every negative-spec documenting the ban would
+        flag its own correctly-suppressed file.
+        """
+        content = (
+            'import subprocess\n'
+            '"""Never use DETACHED_PROCESS here: it leaves the child\n'
+            'console-less and its descendants allocate windowed consoles.\n'
+            '"""\n'
+            'subprocess.Popen(\n'
+            '    ["git", "push"],\n'
+            '    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),\n'
+            ')\n'
+        )
+        payload = _payload("Write", {"file_path": "spawn.py", "content": content})
+        assert guard.check(payload) is None
+
+
 class TestSuppressionDocstringProseFalseNegative:
     """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
     review finding [P2] -- ``_PY_SUPPRESSION_RE`` searched raw content, so a

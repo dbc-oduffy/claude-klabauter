@@ -211,6 +211,32 @@ _PY_CONSOLE_TARGET_RE = re.compile(
 _PY_SUPPRESSION_RE = re.compile(
     r"creationflags[\"']?\s*[:=]|CREATE_NO_WINDOW|no_console_creationflags\(\)"
 )
+#: LOAD-BEARING DISQUALIFIER — widen, never narrow.
+#:
+#: ``_PY_SUPPRESSION_RE`` above accepts the mere PRESENCE of a ``creationflags``
+#: kwarg as proof of suppression. That is too generous in one specific,
+#: measured way: ``creationflags`` carrying ``DETACHED_PROCESS`` (or
+#: ``CREATE_NEW_CONSOLE``) does not suppress anything — it AMPLIFIES. Win32
+#: documents ``CREATE_NO_WINDOW`` as IGNORED whenever either of those is set,
+#: so even the belt-and-braces spelling
+#: ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`` behaves as
+#: bare ``DETACHED_PROCESS``: the child gets NO console, and every
+#: console-subsystem descendant it spawns therefore allocates its own console
+#: WITH a window.
+#:
+#: This is the same defect class as ``_PS1_SUPPRESSION_RE``'s ``-WindowStyle
+#: Hidden`` note — a guard blessing a spelling that does not work — and it had
+#: the same consequence: two live engine sites carried the no-op combination,
+#: passed this guard, and flashed. Measured 2026-08-21: 6 visible console
+#: windows across 3 spawns for both the bare and the ``| CREATE_NO_WINDOW``
+#: forms, versus 0 once ``DETACHED_PROCESS`` was dropped.
+#:
+#: Applied to the same triple-quote-stripped scope as ``_PY_SUPPRESSION_RE``, so
+#: a docstring explaining this rule (including this module's own) does not
+#: disqualify a genuinely-suppressed file.
+#:
+#: Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
+_PY_NO_OP_SUPPRESSION_RE = re.compile(r"DETACHED_PROCESS|CREATE_NEW_CONSOLE")
 #: Triple-quoted string spans (``"""..."""`` / ``'''...'''``), matched
 #: non-greedy across newlines. Applied ONLY ahead of ``_PY_SUPPRESSION_RE``
 #: (see ``_should_deny_sh_or_py``) — never ahead of ``_PY_SUBPROCESS_CALL_RE``
@@ -540,6 +566,12 @@ def _should_deny_sh_or_py(file_path: str, content: str) -> bool:
         # call-site/console-target search -- see _strip_triple_quoted_strings.
         suppression_scope = _strip_triple_quoted_strings(content)
         if not _PY_SUPPRESSION_RE.search(suppression_scope):
+            return True
+        # A creationflags value carrying DETACHED_PROCESS/CREATE_NEW_CONSOLE is
+        # not suppression at all -- Win32 ignores CREATE_NO_WINDOW alongside
+        # either, leaving the child console-less and its whole subtree
+        # allocating windowed consoles. See _PY_NO_OP_SUPPRESSION_RE.
+        if _PY_NO_OP_SUPPRESSION_RE.search(suppression_scope):
             return True
 
     if file_path.endswith(".sh"):

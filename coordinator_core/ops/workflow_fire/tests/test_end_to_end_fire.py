@@ -128,11 +128,13 @@ def _git(args: list, cwd: Path) -> subprocess.CompletedProcess:
 
 def _seed_scratch_repo(tmp_path: Path) -> Path:
     """Build a throwaway git repo with one Python module and its co-located
-    test file, both committed -- the synthetic spine's ``writes:`` target
-    and the terminal test scope's required co-located test file (``pathspec.
-    _map_written_path_to_test_target`` needs a real ``tests/test_<stem>.py``
-    on disk to resolve a runnable test target, else the emit step refuses
-    with ``NoTestTargetError``)."""
+    test file, both committed -- the synthetic spine's ``writes:`` target and
+    a runnable terminal test scope. Committing the test file is what makes
+    this fixture exercise the on-disk resolution rung specifically:
+    ``pathspec._map_written_path_to_test_target`` would also resolve a
+    ``tests/test_<stem>.py`` the spine merely DECLARES, so a fixture that
+    declared it without writing it would emit green while proving nothing
+    about the tree."""
     repo_dir = tmp_path / "scratch-repo"
     repo_dir.mkdir()
     _git(["init", "-q"], repo_dir)

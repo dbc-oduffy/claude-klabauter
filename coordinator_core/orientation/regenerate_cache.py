@@ -200,6 +200,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.hooks.auto_push import (
@@ -242,7 +243,6 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 
 
 def _claude_home() -> str:
@@ -293,10 +293,11 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _claude_klabauter_root() -> Optional[str]:
-    """Resolve the claude-klabauter repo root: CLAUDE_KLABAUTER_ROOT env, else machine-local registry.
+    """Resolve the claude-klabauter repo root: COORDINATOR_ENGINE_ROOT env (via the
+    accessor), else machine-local registry.
 
-    ``CLAUDE_KLABAUTER_ROOT`` is a property of a CALLING process. This module's op
-    (``orientation.regenerate_cache``) is warm-servable, so trusting the raw
+    The engine-root env var is a property of a CALLING process. This module's
+    op (``orientation.regenerate_cache``) is warm-servable, so trusting the raw
     read there would name the SPAWNER's root rather than the current
     caller's when repo_root is the meta-repo (see
     ``queue_append._output_root_override``'s docstring for the full hazard
@@ -305,7 +306,7 @@ def _claude_klabauter_root() -> Optional[str]:
     served route, which falls through to the machine-local registry lookup
     instead.
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() == op_latency.IN_PROCESS:
         return override
     val = _machine_local_get("repos.claude_klabauter")
@@ -316,20 +317,21 @@ def _claude_klabauter_root_unresolved_detail() -> str:
     """Diagnostic detail for a `_claude_klabauter_root()` miss (F12, staff-eng review
     2026-08-20) -- same shape as `coordinator_core.ops.queue_append`'s
     sibling helper. Names the missing registry key explicitly, and
-    distinguishes "genuinely unset" from "CLAUDE_KLABAUTER_ROOT is set but discarded
-    under warm serving" (the latter otherwise reads as a silent no-write: the
-    env var IS present, just not the current caller's -- see `_claude_klabauter_root`'s
-    own docstring on the warm-server hazard).
+    distinguishes "genuinely unset" from "COORDINATOR_ENGINE_ROOT is set but
+    discarded under warm serving" (the latter otherwise reads as a silent
+    no-write: the env var IS present, just not the current caller's -- see
+    `_claude_klabauter_root`'s own docstring on the warm-server hazard).
 
     No fallback rung is added here -- a wrong root writing into a stranger's
     tree is worse than a skipped write (accepted as-is; direction-class per
     the review). This only makes the miss diagnosable.
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() != op_latency.IN_PROCESS:
         return (
-            f"repos.claude_klabauter not set in machine-local registry; CLAUDE_KLABAUTER_ROOT "
-            f"env var IS set ({override!r}) but discarded under warm serving "
+            f"repos.claude_klabauter not set in machine-local registry; "
+            f"COORDINATOR_ENGINE_ROOT env var IS set ({override!r}) but "
+            f"discarded under warm serving "
             f"(execution_route={op_latency.execution_route()!r} != IN_PROCESS) -- a "
             "warm-served process inherits its SPAWNER's environment, not the "
             "current caller's, so trusting it here risks writing into a stranger's "
@@ -337,7 +339,7 @@ def _claude_klabauter_root_unresolved_detail() -> str:
             "/path/to/claude-klabauter"
         )
     if not override:
-        return "no CLAUDE_KLABAUTER_ROOT env, no repos.claude_klabauter machine-local entry"
+        return "no COORDINATOR_ENGINE_ROOT env, no repos.claude_klabauter machine-local entry"
     return "repos.claude_klabauter not set in machine-local registry"
 
 

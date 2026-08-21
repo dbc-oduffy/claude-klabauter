@@ -114,6 +114,11 @@ import json
 import logging
 import os
 
+from coordinator_core.engine_root import (
+    coordinator_engine_root_env,
+    engine_source_root as _engine_source_root,
+    is_published_engine_mirror as _is_published_engine_mirror,
+)
 from coordinator_core.telemetry import op_latency
 import re
 import subprocess
@@ -156,7 +161,6 @@ _SUBPROCESS_TIMEOUT_SECS = 15
 
 # Env var overrides for test isolation.
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
@@ -769,12 +773,13 @@ def _claude_klabauter_root() -> Optional[str]:
     """Resolve the claude-klabauter repo root.
 
     Resolution chain:
-        1. ``CLAUDE_KLABAUTER_ROOT`` env var — trusted as-is, but ONLY when this process is
-           the one the caller ran in (see below).
+        1. ``COORDINATOR_ENGINE_ROOT`` env var (via the accessor) — trusted
+           as-is, but ONLY when this process is the one the caller ran in
+           (see below).
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
 
-    ``CLAUDE_KLABAUTER_ROOT`` is a property of a CALLING process, same as
+    The engine-root env var is a property of a CALLING process, same as
     ``QUEUE_APPEND_OUTPUT_ROOT`` (see ``_output_root_override``'s docstring for the
     full warm-server hazard). Under the warm engine this op executes in a
     long-lived server process whose environment was inherited from whichever
@@ -788,30 +793,71 @@ def _claude_klabauter_root() -> Optional[str]:
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() == op_latency.IN_PROCESS:
-        return override
+        return _refuse_published_mirror(override)
+    # Rung 1.5: the transform-proof key. Under the publish identifier
+    # transform the registry key in Rung 2 below is rewritten to name the
+    # published mirror, so the published engine resolves "the central repo"
+    # to itself and this write is lost. `engine.source_root` contains no repo
+    # token and survives publish intact, so the mirror-run engine reaches the
+    # live tree here rather than falling through to a refusal. Absent on a
+    # consumer install, where Rung 2 is already correct.
+    source_root = _engine_source_root()
+    if source_root:
+        return source_root
     val = _machine_local_get("repos.claude_klabauter")
-    return val if val else None
+    return _refuse_published_mirror(val) if val else None
+
+
+def _refuse_published_mirror(root: str) -> str:
+    """Refuse a resolved root that is the published engine mirror.
+
+    This op does NOT route through ``coordinator_core.state_root``, so it does
+    not inherit that module's published-mirror guard — it resolves its own root
+    and writes to it directly. Under the publish identifier transform the
+    registry key this resolver reads is rewritten to name the mirror, so the
+    published engine resolves "the central repo" to ITSELF and central-scope
+    entries land in a gitignored build artifact: exit 0, plausible printed
+    path, content readable by nobody. Two entries were lost that way before
+    anyone noticed, and only because one happened to trip an unrelated guard.
+
+    Raising ``_ClaudeKlabauterUnresolvable`` degrades through the op's existing
+    skip-with-reason path, so the caller gets the remediation instead of a
+    write it will never find again.
+
+    Spec backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
+    Inventory: state/audits/2026-08-21-transform-resolved-writer-inventory.md
+    """
+    if not _is_published_engine_mirror(root):
+        return root
+    raise _ClaudeKlabauterUnresolvable(
+        f"queue-append resolved its target repo to the PUBLISHED engine mirror "
+        f"('{root}'), not a live working tree — refusing to write a queue entry "
+        f"into a build artifact, where it would be gitignored and lost. "
+        f"Remediate: run this from a live working-tree checkout, or set the "
+        f"engine-root environment variable to one."
+    )
 
 
 def _claude_klabauter_root_unresolved_detail() -> str:
     """Diagnostic detail for a `_claude_klabauter_root()` miss (F12, staff-eng review
     2026-08-20) -- names the missing registry key explicitly, and
-    distinguishes "genuinely unset" from "CLAUDE_KLABAUTER_ROOT is set but discarded
-    under warm serving" (the latter reads as a silent no-write otherwise: the
-    env var IS present, just not the current caller's, per `_claude_klabauter_root`'s
-    own docstring on the warm-server hazard).
+    distinguishes "genuinely unset" from "COORDINATOR_ENGINE_ROOT is set but
+    discarded under warm serving" (the latter reads as a silent no-write
+    otherwise: the env var IS present, just not the current caller's, per
+    `_claude_klabauter_root`'s own docstring on the warm-server hazard).
 
     No fallback rung is added here -- a wrong root writing into a stranger's
     tree is worse than a skipped write (accepted as-is; direction-class per
     the review). This only makes the skip diagnosable.
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() != op_latency.IN_PROCESS:
         return (
-            f"repos.claude_klabauter not set in machine-local registry; CLAUDE_KLABAUTER_ROOT "
-            f"env var IS set ({override!r}) but discarded under warm serving "
+            f"repos.claude_klabauter not set in machine-local registry; "
+            f"COORDINATOR_ENGINE_ROOT env var IS set ({override!r}) but discarded "
+            f"under warm serving "
             f"(execution_route={op_latency.execution_route()!r} != IN_PROCESS) -- a "
             "warm-served process inherits its SPAWNER's environment, not the "
             "current caller's, so trusting it here risks writing into a stranger's "
@@ -819,7 +865,7 @@ def _claude_klabauter_root_unresolved_detail() -> str:
             "/path/to/claude-klabauter"
         )
     if not override:
-        return "repos.claude_klabauter not set in machine-local registry and CLAUDE_KLABAUTER_ROOT env var not set"
+        return "repos.claude_klabauter not set in machine-local registry and COORDINATOR_ENGINE_ROOT env var not set"
     return "repos.claude_klabauter not set in machine-local registry"
 
 

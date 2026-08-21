@@ -146,8 +146,37 @@ _PROMPT_TEMPLATE = (
 #: Windows console-subprocess discipline: guards a bare CREATE_NO_WINDOW
 #: reference that would raise ValueError on macOS/Linux.
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
 _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+#: negative-spec -- DETACHED_PROCESS MUST NOT be used on this spawn path. It is
+#: deliberately absent as a symbol, not merely unused: the regression guard
+#: `coordinator_core/tests/test_no_detached_process_spawn.py` forbids the name
+#: outright in live engine code, so there is nothing to accidentally re-OR in.
+#:
+#: DETACHED_PROCESS gives the child NO console. `claude.exe` is a
+#: console-subsystem binary, so every descendant of a detached fire -- each
+#: hook interpreter, each `git` probe -- has no console to inherit and
+#: allocates its OWN `conhost.exe`, WITH a visible window. A fired run
+#: therefore became a window factory: one flash per descendant spawn, at
+#: roughly 20 spawns per tool call, for the whole life of the driver session.
+#:
+#: CREATE_NO_WINDOW instead gives the child a console that HAS no window, and
+#: that windowless console is inherited by the entire subtree -- so one flag on
+#: the root spawn silences every descendant.
+#:
+#: Do NOT "fix" this by ORing the two together. Win32 documents CREATE_NO_WINDOW
+#: as IGNORED when combined with DETACHED_PROCESS or CREATE_NEW_CONSOLE, and
+#: that combination was measured here as indistinguishable from bare
+#: DETACHED_PROCESS -- 6 console windows across 3 spawns, versus 0 for
+#: CREATE_NO_WINDOW alone. Two sibling sites carried exactly that
+#: no-op spelling and read as suppressed while flashing.
+#:
+#: Detached LIFETIME is unaffected and was measured, not assumed: Windows does
+#: not reap children on parent exit, so a CREATE_NO_WINDOW child outlives a
+#: hard-killed parent identically to a DETACHED_PROCESS one. Ctrl-C isolation
+#: is carried by CREATE_NEW_PROCESS_GROUP, which is unchanged.
+#:
+#: Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
 
 #: The fired driver runs the Workflow tool as a background task and, by
 #: default, terminates any still-running background work after 600s --
@@ -830,7 +859,7 @@ def fire_workflow(
         "env": build_fire_env(),
     }
     if sys.platform == "win32":
-        popen_kwargs["creationflags"] = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
+        popen_kwargs["creationflags"] = _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
 

@@ -93,7 +93,7 @@ def test_resolve_state_root_meta_repo_routes_to_claude_klabauter(tmp_path, monke
     fake_claude_klabauter.mkdir()
 
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(fake_claude_klabauter))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(fake_claude_klabauter))
 
     resolved = mod._resolve_state_root(str(fake_home))
     assert os.path.realpath(resolved) == os.path.realpath(str(fake_claude_klabauter / "state"))

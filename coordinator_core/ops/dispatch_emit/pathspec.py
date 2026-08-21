@@ -19,10 +19,12 @@ directory, or shells out to git status. Concretely, this module never calls
 ``os.walk``, ``glob.glob``, ``Path.glob``/``Path.rglob``/``Path.iterdir``,
 or any ``subprocess`` function. The two places this module DOES touch disk
 (``is_concrete_surface``'s no-suffix branch, ``_map_written_path_to_test_
-target``'s co-located-test-file check) each probe only fully-derived
-candidate paths with ``Path.is_file()`` — targeted existence checks on
-paths derived from what the caller already named, never a directory
-listing. That distinction matters: an existence check on a known path
+target``'s test-file check) each probe only fully-derived candidate paths
+with ``Path.is_file()`` — targeted existence checks on paths derived from
+what the caller already named, never a directory listing. The mapper walks
+a ladder of such candidates rather than one, which changes the number of
+probes and nothing else: each remains a named path derived from the
+caller's own input. That distinction matters: an existence check on a known path
 cannot discover anything the spine didn't already declare, so it can never
 smuggle tree-survey back in.
 
@@ -48,22 +50,39 @@ runs. ``terminal_test_scope`` therefore maps each written path through
 ``_map_written_path_to_test_target`` (an uncovered path maps to nothing)
 rather than returning the written-path union itself.
 
-This package's own convention — the one this module encodes because no
-repo-wide "locate a module's tests" helper exists — is the co-located
-``tests/test_<stem>.py`` file next to the written path (see
-``spine_read.py`` -> ``tests/test_spine_read.py``, ``wave_map.py`` ->
-``tests/test_wave_map.py``, this very module -> ``tests/test_pathspec.py``).
-A path with no such file present maps to nothing.
+The convention this module encodes, because no repo-wide "locate a
+module's tests" helper exists, is a ``tests/test_<stem>.py`` file named for
+the written path (see ``spine_read.py`` -> ``tests/test_spine_read.py``,
+``wave_map.py`` -> ``tests/test_wave_map.py``, this very module ->
+``tests/test_pathspec.py``). A path with no such file present maps to
+nothing.
 
-The derivation is by STEM, not by suffix: a data fixture whose driver test
-is named for it (``engine-root-conformance.json`` ->
-``tests/test_engine_root_conformance.py``) resolves the same way a module
-does, so a config-only row alone in its wave is emittable rather than
-refused on a surface that is in fact covered. What it must never become is
-resolution by directory proximity, or by scanning test bodies for a
-citation of the written path — that looser cut resolves a wiki doc to an
-unrelated test that merely names it in an assertion message. An uncovered
-doc still maps to nothing, and a row writing only such paths still refuses.
+Three properties of that derivation are load-bearing, and each exists
+because its absence broke a real spine:
+
+  - It is by STEM, not by suffix. A data fixture whose driver test is named
+    for it (``engine-root-conformance.json`` ->
+    ``tests/test_engine_root_conformance.py``) resolves the same way a
+    module does, so a config-only row alone in its wave is emittable rather
+    than refused on a surface that is in fact covered.
+  - The ``tests/`` directory is sought at every ancestor of the written
+    path, not only the immediate one, so a repo keeping one flat test
+    directory resolves under the same rule as a repo co-locating tests per
+    package. Without it a flat-layout repo resolved NOTHING here and had to
+    substitute this module's private bindings from outside.
+  - A written path that IS a test file is its own target, and a candidate
+    the spine declares in ``writes:`` counts as resolved before it exists.
+    Together these are what let a row deliver a test, or a module together
+    with the test covering it, without emission refusing on a surface the
+    spine itself promises.
+
+What the derivation must never become is resolution by directory
+proximity, or by scanning test bodies for a citation of the written path —
+that looser cut resolves a wiki doc to an unrelated test that merely names
+it in an assertion message. Note that the ancestor walk above is NOT that:
+it widens where a stem-named test may live, never what counts as a match.
+An uncovered doc still maps to nothing, and a row writing only such paths
+still refuses.
 
 ## The sharp edge AC16 exists for
 
@@ -416,20 +435,83 @@ def _normalized_test_name(stem: str) -> str:
     return f"test_{stem.replace('-', '_')}.py"
 
 
-def _map_written_path_to_test_target(path: str, *, repo_root: Path | None = None) -> str | None:
+def _is_test_file(path: PurePosixPath) -> bool:
+    return path.name.startswith("test_") and path.suffix == ".py"
+
+
+def _candidate_test_targets(candidate: PurePosixPath) -> list[PurePosixPath]:
+    """Every stem-derived candidate for ``candidate``, nearest first.
+
+    ``tests/test_<stem>.py`` is probed at each ancestor directory from the
+    written path outward, then the sibling ``test_<stem>.py``. The ancestor
+    walk is what lets ONE rule serve both layouts in the fleet: a repo that
+    co-locates tests beside each package (this one — ``coordinator_core/
+    ops/dispatch_emit/tests/``) hits on the first rung, and a repo that
+    keeps a single flat test directory (DoE-claude's ``coordinator/tests/``,
+    holding the tests for ``coordinator/bin/`` and ``coordinator/lib/``
+    alike) hits on a later one. Before this, a flat layout resolved nothing
+    here and had to be supplied by substituting a private binding in this
+    module from outside the repo.
+
+    Widening WHERE a stem-named test may live is not resolution by
+    proximity, and that is the distinction a future reader will blur: the
+    matcher is unchanged — a candidate counts only if a test named for this
+    exact stem sits at it. Nothing resolves for being merely nearby, and
+    nothing is discovered by listing a directory (module docstring's
+    negative spec). The cost of the longer ladder is a stem collision across
+    unrelated trees — a root ``tests/test_foo.py`` about something else can
+    claim a ``docs/foo.md`` that no closer candidate covers — which is the
+    same stem-name contract the co-located rung always ran on, just reaching
+    further.
+    """
+    test_name = _normalized_test_name(candidate.stem)
+    targets = [
+        parent / "tests" / test_name
+        for parent in (candidate.parent, *candidate.parent.parents)
+    ]
+    targets.append(candidate.parent / test_name)
+    return targets
+
+
+def _map_written_path_to_test_target(
+    path: str,
+    *,
+    repo_root: Path | None = None,
+    declared: frozenset[str] = frozenset(),
+) -> str | None:
     """Map one written path to its runnable test target, or ``None``.
 
-    Encodes this package's own co-located ``tests/test_<stem>.py``
-    convention (``spine_read.py`` -> ``tests/test_spine_read.py``, and so
-    on) — no repo-wide "locate a module's tests" helper exists to defer to.
-    A path with no such file present maps to ``None`` — a single, targeted
-    ``Path.is_file()`` probe per derived candidate, never a directory
-    listing (see module docstring's negative spec).
+    Encodes the ``tests/test_<stem>.py`` convention (``spine_read.py`` ->
+    ``tests/test_spine_read.py``, and so on) — no repo-wide "locate a
+    module's tests" helper exists to defer to. A path with no such file
+    present maps to ``None`` — a single, targeted ``Path.is_file()`` probe
+    per derived candidate, never a directory listing (see module
+    docstring's negative spec).
 
     The same stem derivation runs for a data fixture as for a module. A
     driver test bound to ``engine-root-conformance.json`` is named for that
     fixture, so a config-only row resolves to it and becomes emittable
     instead of refusing emission on a surface that IS covered.
+
+    A written path that IS a test file is its own target, ahead of any
+    derivation: a row whose deliverable is a new test is the row whose test
+    target is knowable with certainty, and deriving instead asks for
+    ``test_test_<stem>.py`` and refuses a test-only row on the one surface
+    it definitionally covers.
+
+    ``declared`` is the spine's own union of ``writes:`` paths, and a
+    candidate it names counts as resolved without existing on disk yet. The
+    spine is authoritative about what will exist by the time the terminal
+    test phase runs, and the shape this serves is the ordinary one: a row
+    writing a module together with the test that covers it. Judged against
+    the tree alone that test does not exist at emission time, so the row
+    mapped to nothing and a spine of only such rows refused — emission
+    failing precisely on new work that carries its own coverage. The
+    tradeoff is emit-time optimism: a spine declaring a test path it never
+    writes still emits, and the terminal phase's actual run, not this
+    derivation, is what catches that. Optimism about a path the spine itself
+    declared is the right direction to fail in; refusing a correctly
+    authored spine is not.
 
     Negative spec (DoE improvement-queue entry
     ``2026-08-20-engine-s-map-written-path-to-test-target-72c8a48a56c7``): a
@@ -442,11 +524,13 @@ def _map_written_path_to_test_target(path: str, *, repo_root: Path | None = None
     empty terminal scope.
     """
     candidate = PurePosixPath(path)
+    if _is_test_file(candidate):
+        return candidate.as_posix()
     root = repo_root or _REPO_ROOT
-    test_name = _normalized_test_name(candidate.stem)
-    for target in (candidate.parent / "tests" / test_name, candidate.parent / test_name):
-        if (root / target).is_file():
-            return target.as_posix()
+    for target in _candidate_test_targets(candidate):
+        posix = target.as_posix()
+        if posix in declared or (root / target).is_file():
+            return posix
     return None
 
 
@@ -464,6 +548,15 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     non-Python written path drops out rather than landing in the scope
     verbatim (staff review correction; see module docstring § Pathspec vs
     test scope).
+
+    The whole spine's declared writes are passed to each mapping as
+    ``declared``, so a candidate this spine will write counts as resolved
+    before it exists on disk — see that function's docstring for why the
+    spine, not the worktree, is authoritative at emission time. The union is
+    whole-spine rather than per-row on purpose: a row writing a module and a
+    LATER row writing the test that covers it is one deliverable split
+    across two rows, and scoping the union per-row would resolve it only
+    when a single row happened to declare both.
     """
     all_rows = [row for wave in waves for row in wave]
     declares_writes = [row for row in all_rows if row.writes is not UNDECLARED]
@@ -477,11 +570,14 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     for row in all_rows:
         written_paths.extend(_declared_paths(row))
     written_paths = _dedupe(written_paths)
+    declared = frozenset(written_paths)
 
     targets: list[str] = []
     unmapped: list[str] = []
     for path in written_paths:
-        target = _map_written_path_to_test_target(path, repo_root=repo_root)
+        target = _map_written_path_to_test_target(
+            path, repo_root=repo_root, declared=declared
+        )
         if target is None:
             unmapped.append(path)
         else:

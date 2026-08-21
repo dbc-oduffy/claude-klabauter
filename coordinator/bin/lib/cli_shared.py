@@ -52,6 +52,42 @@ from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 CLAUDE_HOME_ENV = "CLAUDE_HOME"
+
+# C23 AC13-style bootstrap carve-out (named exception, mirrors
+# coordinator/bin/lib/cc_invoke.py's own AC13 note) -- this constant and
+# claude_klabauter_root() below are NOT routed through
+# coordinator_core.engine_root.coordinator_engine_root_env. This module is
+# DoE-resident CLI plumbing (see module docstring) consumed by the legacy
+# State-1 CLIs (coordinator-queue-append, coordinator-lesson-promote,
+# coordinator-harvest-deferrals, regen-cockpit-schema, klabauter-channel) --
+# scripts that must keep working in an environment where `coordinator_core`
+# is not yet pip-installed and is not necessarily on `sys.path` (the
+# published-mirror/State-1-fallback case DR-210 requires stays live
+# indefinitely). `claude_klabauter_root()` IS the primitive those callers use to find
+# where `coordinator_core` even lives; importing the accessor here would be
+# the same chicken-and-egg `cc_invoke.py`'s own AC13 rung exists to avoid.
+# PRECEDENCE HERE DELIBERATELY DIVERGES FROM THE ACCESSOR, AND SAYING SO IS
+# THE POINT. `coordinator_engine_root_env` reads the retired name only to
+# report it as retired and NEVER returns it (C14). This site still ANSWERS
+# from it when the new name is unset. That is not the same rule, and a
+# hand-duplicate that claims parity it does not have is worse than no
+# duplicate -- the two would disagree only in the skew case nobody exercises
+# until it breaks on the commit hot path.
+#
+# Why the divergence is kept: this is the primitive the State-1 fallback CLIs
+# use to locate `coordinator_core` at all. Dropping the retired rung here
+# cannot degrade to a slower path, only to a dead one, and DR-210 keeps that
+# fallback live indefinitely. Every in-tree exporter now sets BOTH names
+# (scripts/setup.py x2, append-goal-event, regen-cockpit-schema, cc_invoke
+# exports the new name only), so this rung should already be unreachable in
+# practice.
+#
+# CONDITION FOR REMOVING IT -- not a date, a measurement:
+# `coordinator_core.engine_root_census.census()` reporting
+# `evidences_absence: True` over a full window. That verdict became reachable
+# on a cleanly-converged box at ee1ea0f2d9b2 (C24); before that it could never
+# return True and could not have discharged this.
+COORDINATOR_ENGINE_ROOT_ENV = "COORDINATOR_ENGINE_ROOT"
 CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 
 # Bounded retry attempts before write_path_excl fails loud.
@@ -166,7 +202,17 @@ def claude_klabauter_root() -> str | None:
     """Resolve the claude-klabauter repo root, mirroring coordinator-claude-klabauter-root.sh (AC1).
 
     Resolution chain:
-      1. CLAUDE_KLABAUTER_ROOT env var — if non-empty, trusted as-is (§4b idempotency gate).
+      1. COORDINATOR_ENGINE_ROOT env var — if non-empty, trusted as-is (§4b
+         idempotency gate). CLAUDE_KLABAUTER_ROOT is read too, but ONLY as a fallback
+         when the new name is unset — C14 closed coordinator_engine_root_env's
+         dual-read window, and this bootstrap-carve-out site (see the
+         CLAUDE_KLABAUTER_ROOT_ENV declaration above) duplicates that same precedence by
+         hand rather than importing the accessor.
+
+         C23: fixed a dark bug here -- this rung previously read ONLY
+         CLAUDE_KLABAUTER_ROOT_ENV, so a caller that had migrated to
+         COORDINATOR_ENGINE_ROOT (and never set the retired name) got NO
+         override rung at all and silently fell through to rung 2.
       2. machine-local get repos.claude_klabauter — delegates to the §4c discovery ladder.
       3. Returns None when unresolvable — callers degrade gracefully (AC13).
 
@@ -176,7 +222,9 @@ def claude_klabauter_root() -> str | None:
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
     """
-    override = os.environ.get(CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = os.environ.get(COORDINATOR_ENGINE_ROOT_ENV, "").strip()
+    if not override:
+        override = os.environ.get(CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
     if override:
         return override
     val = machine_local_get("repos.claude_klabauter")

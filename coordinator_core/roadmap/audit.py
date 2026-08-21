@@ -117,6 +117,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, settings_home
+from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
@@ -138,7 +139,6 @@ _ROADMAP_BATON_KIND_WHERE = "kind in ({})".format(
 # ---------------------------------------------------------------------------
 
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 
 
 def _claude_home() -> str:
@@ -206,7 +206,7 @@ def _claude_klabauter_root_pointer_file() -> Optional[str]:
 
 
 def _claude_klabauter_root() -> Optional[str]:
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override:
         return override
     val = _claude_klabauter_root_pointer_file()

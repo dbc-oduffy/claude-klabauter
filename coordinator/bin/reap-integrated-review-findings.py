@@ -151,6 +151,7 @@ import cc_invoke  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)
 
+from coordinator_core.engine_root import coordinator_engine_root_env  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
@@ -401,13 +402,18 @@ def _reap_seam_present() -> Tuple[bool, str]:
     kwarg used to make unnecessary by pinning the transport to THIS resolver's
     answer (dropped by C16/C28 --
     docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md).
+
+    C23: the override check reads through the C10/C14 accessor instead of the
+    two engine-root env var names directly -- the retired ``CLAUDE_KLABAUTER_ROOT`` no
+    longer answers there (C14 closed the dual-read window), so a second,
+    separate check of it here would only ever screen a value the transport's
+    own resolution (``cc_invoke``'s rung 1) already ignores.
     """
     if os.environ.get("COORDINATOR_FORCE_LEGACY", "") == "1":
         return False, ""
-    for _var in ("COORDINATOR_ENGINE_ROOT", "CLAUDE_KLABAUTER_ROOT"):
-        _override = os.environ.get(_var, "")
-        if _override and not cc_invoke._seam_present(_override):
-            return False, ""
+    _override = coordinator_engine_root_env(__name__) or ""
+    if _override and not cc_invoke._seam_present(_override):
+        return False, ""
     try:
         claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
     except RuntimeError:

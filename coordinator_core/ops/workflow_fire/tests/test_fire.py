@@ -470,7 +470,16 @@ def test_fire_workflow_child_env_is_not_narrowed(repo, script, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_win32_spawn_uses_detached_process_group_flags(repo, script, monkeypatch):
+def test_win32_spawn_uses_no_window_process_group_flags(repo, script, monkeypatch):
+    """The fired driver spawns WINDOWLESS, never DETACHED.
+
+    DETACHED_PROCESS would leave `claude.exe` with no console, so every
+    descendant it spawns -- hook interpreters, `git` probes -- would allocate
+    its own WINDOWED console. CREATE_NO_WINDOW gives it a windowless console
+    the whole subtree inherits. Asserting DETACHED_PROCESS is ABSENT is the
+    load-bearing half: ORing the two is a no-op, because Win32 ignores
+    CREATE_NO_WINDOW whenever DETACHED_PROCESS is set.
+    """
     _patch_plugin_dir(monkeypatch)
     monkeypatch.setattr(fire, "sys", SimpleNamespace(platform="win32"))
     captured = {}
@@ -485,8 +494,9 @@ def test_win32_spawn_uses_detached_process_group_flags(repo, script, monkeypatch
     fire.fire_workflow(str(script), cwd=str(repo))
 
     assert "creationflags" in captured
-    assert captured["creationflags"] & fire._DETACHED_PROCESS
+    assert captured["creationflags"] & fire._CREATE_NO_WINDOW
     assert captured["creationflags"] & fire._CREATE_NEW_PROCESS_GROUP
+    assert not captured["creationflags"] & getattr(subprocess, "DETACHED_PROCESS", 0)
     assert "start_new_session" not in captured
 
 

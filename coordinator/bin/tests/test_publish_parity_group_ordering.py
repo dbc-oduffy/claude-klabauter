@@ -125,6 +125,7 @@ def test_mains_preflight_refuses_the_synthetic_inverted_table(monkeypatch, tmp_p
         for name in (publish._KLABAUTER_PARITY_EMITTER_ROW, *publish._KLABAUTER_PARITY_ENTRYPOINT_ROWS)
     ]
 
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )

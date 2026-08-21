@@ -241,14 +241,23 @@ def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
     # Declares writes: (passes AC10's literal wording) but every path is a
     # doc, so no test target exists -- must refuse (AC16), not report an
     # empty scope as green.
+    #
+    # This fixture previously paired CONTRACT.md with coordinator/bin/
+    # coordinator-doc-new.py. That script is NOT uncovered -- coordinator/
+    # tests/test_coordinator_doc_new.py is named for it -- and it only sat in
+    # a doc-only fixture because the mapper probed the immediate parent alone
+    # and could not reach this repo's own flat test directory. The fixture
+    # encoded a limitation of the derivation rather than a property of the
+    # paths; once the ancestor walk landed, it asserted a refusal that had
+    # stopped being correct. Both paths named here are genuinely uncovered.
     waves = [
         [_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])],
-        [_wave_row("C2", ["coordinator/bin/coordinator-doc-new.py"])],
+        [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
     ]
     with pytest.raises(NoTestTargetError) as excinfo:
         terminal_test_scope(waves)
     assert "CONTRACT.md" in str(excinfo.value)
-    assert "coordinator-doc-new" in str(excinfo.value)
+    assert "dispatch-emit.md" in str(excinfo.value)
 
 
 def test_terminal_test_scope_drops_doc_paths_but_keeps_mapped_ones():
@@ -311,6 +320,89 @@ def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path
         'def test_x():\n    assert True, "docs/wiki/machine-load-norm.md"\n',
         encoding="utf-8",
     )
+    waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
+    with pytest.raises(NoTestTargetError) as excinfo:
+        terminal_test_scope(waves, repo_root=tmp_path)
+    assert "machine-load-norm.md" in str(excinfo.value)
+
+
+def test_terminal_test_scope_resolves_a_flat_test_directory_at_an_ancestor(tmp_path):
+    # A repo keeping ONE flat test directory has no tests/ beside the written
+    # path. Probing only the immediate parent resolved nothing for the whole
+    # layout, which is what forced an outside caller to substitute this
+    # module's private bindings rather than configure it.
+    driver = tmp_path / "coordinator/tests/test_emit_dispatch_workflow.py"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C1", ["coordinator/bin/emit-dispatch-workflow.py"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator/tests/test_emit_dispatch_workflow.py"]
+
+
+def test_terminal_test_scope_prefers_the_nearest_stem_named_test(tmp_path):
+    # The ancestor walk is nearest-first: a co-located test wins over a
+    # same-stem test further out, so widening the ladder cannot silently
+    # redirect a repo that already resolved co-located.
+    for rel in (
+        "coordinator/bin/tests/test_emit_dispatch_workflow.py",
+        "coordinator/tests/test_emit_dispatch_workflow.py",
+    ):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C1", ["coordinator/bin/emit-dispatch-workflow.py"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator/bin/tests/test_emit_dispatch_workflow.py"]
+
+
+def test_terminal_test_scope_maps_a_written_test_file_to_itself(tmp_path):
+    # A row whose deliverable IS a new test knows its own target with
+    # certainty. Deriving instead asks for test_test_<stem>.py, which can
+    # never exist, and refuses a test-only row on the one surface it
+    # definitionally covers. The file is deliberately NOT created on disk:
+    # the row is writing it.
+    waves = [[_wave_row("C1", ["coordinator_core/ops/tests/test_new_surface.py"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator_core/ops/tests/test_new_surface.py"]
+
+
+def test_terminal_test_scope_resolves_a_test_this_spine_has_yet_to_write(tmp_path):
+    # The ordinary shape of new work: a row writing a module together with the
+    # test covering it. Judged against the tree alone that test does not exist
+    # at emission time, so the module mapped to nothing and emission refused
+    # precisely on work that carries its own coverage. The spine, not the
+    # worktree, is authoritative about what will exist by the terminal phase.
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "coordinator_core/ops/brand_new.py",
+                    "coordinator_core/ops/tests/test_brand_new.py",
+                ],
+            )
+        ]
+    ]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator_core/ops/tests/test_brand_new.py"]
+
+
+def test_terminal_test_scope_resolves_a_declared_test_written_by_a_later_row(tmp_path):
+    # The declared union is whole-spine, not per-row: a module and the test
+    # covering it are one deliverable even when split across two rows, and a
+    # per-row union would resolve it only when one row declared both.
+    waves = [
+        [_wave_row("C1", ["coordinator_core/ops/brand_new.py"])],
+        [_wave_row("C2", ["coordinator_core/ops/tests/test_brand_new.py"])],
+    ]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["coordinator_core/ops/tests/test_brand_new.py"]
+
+
+def test_declared_optimism_does_not_resolve_a_path_nobody_declares(tmp_path):
+    # Optimism is bounded by the spine's own declaration. An undeclared,
+    # non-existent candidate stays unresolved, so AC16's refusal survives the
+    # widening rather than being quietly traded away for it.
     waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
     with pytest.raises(NoTestTargetError) as excinfo:
         terminal_test_scope(waves, repo_root=tmp_path)

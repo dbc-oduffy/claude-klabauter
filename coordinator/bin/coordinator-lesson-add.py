@@ -52,6 +52,8 @@ from cc_invoke import require_engine_on_path  # noqa: E402
 # bootstrap as coordinator/bin/record-platform-outcome (5850fb170).
 require_engine_on_path(__file__)
 
+from coordinator_core.engine_root import coordinator_engine_root_env  # noqa: E402
+
 # Mirrors coordinator-queue-append._QUEUE_APPEND_OUTPUT_ROOT_ENV for test isolation.
 # When set, the dedup scan looks under <QUEUE_APPEND_OUTPUT_ROOT>/state/lessons/
 # (matching where coordinator-queue-append writes when this env var is set).
@@ -65,9 +67,6 @@ _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
 # test_coordinator_lesson_add_meta_routing.py imports it externally
 # (`_cli_mod._CLAUDE_HOME_ENV`) for env-isolation setup/teardown. Kept.
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
-
-# Mirrors coordinator-queue-append._CLAUDE_KLABAUTER_ROOT_ENV for test isolation and §4b gate.
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 
 # Mirrors coordinator-queue-append._MACHINE_LOCAL_IMPL_ENV for test isolation.
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
@@ -123,14 +122,15 @@ def _claude_klabauter_root():
     """Resolve the claude-klabauter repo root, returning None when unresolvable.
 
     Resolution chain:
-      1. CLAUDE_KLABAUTER_ROOT env var — trusted as-is (§4b idempotency gate).
+      1. COORDINATOR_ENGINE_ROOT env var, via the accessor — trusted as-is
+         (§4b idempotency gate).
       2. machine-local get repos.claude_klabauter.
       3. Returns None when unresolvable (caller degrades gracefully).
 
     Mirrors coordinator-queue-append._claude_klabauter_root().
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override:
         return override
     val = _machine_local_get("repos.claude_klabauter")

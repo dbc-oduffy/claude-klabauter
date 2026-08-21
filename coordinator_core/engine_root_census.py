@@ -84,13 +84,38 @@ settings-home resolver reads, so a suite run writes into its own tmp dir.
 Verified 2026-08-20 by running the accessor suite and confirming the live
 series stayed absent.
 
+C24 -- THE WATCH-START SENTINEL. Code review 2026-08-20 caught the defect
+one layer down: `observed_days` was measured from `series_first_ts`, the
+first RECORDED READ, so a box that never had a stale pin never created the
+series and `series_present` stayed False forever -- `evidences_absence`
+could never become True on a box that converged cleanly, which is the same
+failure mode this module's own docstring warned about ("a future zero would
+be indistinguishable from no emission was captured"), recurring in the
+guard built to remove it. `ensure_watch_start()` fixes this with a SIBLING
+FILE (`watch_start_path()`), not a row in the jsonl series: a sentinel row
+would need every reader of the series to recognize and skip it, and getting
+that wrong either counts it as a read (inverting the fix) or drops it into
+`unparsable_rows`/`undatable_rows` (tripping the corruption guard below for
+a reason that isn't corruption). A separate file makes both failure modes
+structurally unreachable. The clock starts at whichever happens first --
+`record_fallback_read` (using that read's own timestamp, so a box that DID
+see a stale pin keeps its `observed_days` measured from the earliest read)
+or `census()` itself (using its own call time, so a box that never sees a
+stale pin still starts a clock the first time anyone asks for a verdict).
+Creation is `O_CREAT | O_EXCL` -- lock-free, race-safe: the loser of a
+concurrent create just reads the winner's timestamp back.
+
 Negative-spec:
     - Never imports anything under `coordinator_core.ops`.
     - Never spawns a subprocess and never takes a lock.
     - Never truncates or rewrites the series -- strictly append-only.
     - Never raises out of `record_fallback_read()` for any reason.
-    - `evidences_absence` is NEVER True on a series younger than the
-      window, however quiet that series is.
+    - `evidences_absence` is NEVER True on a watch younger than the
+      window, however quiet that watch has been.
+    - The watch-start sentinel is NEVER counted in `total_reads`,
+      `reads_in_window`, or `sites`, and NEVER lands in `unparsable_rows`
+      or `undatable_rows` -- it lives in a separate file from the series,
+      so the series-parsing loop never sees it at all.
     - Does not decide N. C14's exit picks the window; this module reports
       against whatever window it is handed and echoes it back in the
       report so a reader cannot lose track of which N was asked.
@@ -122,6 +147,82 @@ def series_path(sink_root: Optional[Path] = None) -> Path:
     return root / "telemetry" / "engine-root-fallback-census.jsonl"
 
 
+def watch_start_path(sink_root: Optional[Path] = None) -> Path:
+    """Resolve the watch-start sentinel file.
+
+    A SIBLING FILE, deliberately not a row inside the jsonl series (C24).
+    The series-parsing loop in `census()` has no `kind` discriminator and
+    was never meant to need one; a sentinel that lived as a row would
+    require every future reader to remember to skip it, and getting that
+    wrong either counts the sentinel as a read (inverts the fix -- the sink
+    would then never evidence absence) or drops it into
+    `unparsable_rows`/`undatable_rows` (trips the 2026-08-20 corruption
+    guard and blocks the verdict for a reason that isn't corruption). A
+    separate file makes both failure modes structurally unreachable instead
+    of relying on every reader remembering a rule.
+    """
+    root = Path(sink_root) if sink_root is not None else settings_home()
+    return root / "telemetry" / "engine-root-fallback-census.watch-start.json"
+
+
+def ensure_watch_start(
+    sink_root: Optional[Path] = None, now: Optional[float] = None
+) -> Optional[float]:
+    """Idempotently start the observation clock; return its timestamp.
+
+    THE BUG THIS FIXES (C24): `observed_days` was measured from
+    `series_first_ts` -- the timestamp of the first RECORDED READ. A box
+    that converged cleanly never calls `record_fallback_read`, so the
+    series file never exists, `series_present` stays False forever, and
+    `evidences_absence` can never become True. That is the module
+    docstring's own stated failure mode ("a future zero would be
+    indistinguishable from no emission was captured") recurring one layer
+    down, in the successor state of the guard written to prevent it.
+
+    The fix is a clock that starts the first time ANYTHING asks, not the
+    first time something goes wrong. Two call sites reach this, and
+    whichever runs first wins:
+      - `record_fallback_read`, using the timestamp of that read -- so a
+        box that DID see a stale pin keeps the same `observed_days` this
+        module always reported (measured from the earliest read), not a
+        clock that resets to "now" every time a report is pulled.
+      - `census()`, using its own report time -- so a box that never sees
+        a stale pin still starts a clock the first time anyone asks for a
+        verdict, which is what makes the verdict reachable at all on a box
+        that converged cleanly and is the whole point of this function.
+
+    Atomic, lock-free creation: `os.O_CREAT | os.O_EXCL` either wins (this
+    call is first) or loses (another process already created it -- this
+    machine runs 50-70 concurrent sessions and several can race this at
+    once) -- the loser reads the winner's timestamp back. No
+    read-modify-write, no lock; same append-only-file philosophy as the
+    series itself, just applied to a create instead of an append.
+
+    Never raises: an unwritable sink degrades to `None` ("not observing"),
+    which keeps `evidences_absence` False -- the safe direction, matching
+    every other failure mode in this module.
+    """
+    try:
+        path = watch_start_path(sink_root)
+        os.makedirs(path.parent, exist_ok=True)
+        ts = now if now is not None else time.time()
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, json.dumps({"ts": ts}).encode("utf-8"))
+            finally:
+                os.close(fd)
+            return ts
+        except FileExistsError:
+            pass
+        with open(path, "r", encoding="utf-8") as fh:
+            existing = json.loads(fh.read())
+        existing_ts = existing.get("ts")
+        return existing_ts if isinstance(existing_ts, (int, float)) else None
+    except Exception:
+        return None
+
+
 def record_fallback_read(
     site: str,
     *,
@@ -144,6 +245,13 @@ def record_fallback_read(
     """
     try:
         ts = now if now is not None else time.time()
+        # Best-effort: start the watch clock at this read's own timestamp, so
+        # a box that DOES see a stale pin keeps `observed_days` measured from
+        # the earliest read rather than reset to whenever a report happens to
+        # be pulled. If another process already started the clock (a census
+        # call, or an earlier read), this is a no-op -- see
+        # `ensure_watch_start`'s docstring for the race.
+        ensure_watch_start(sink_root, now=ts)
         entry: Dict[str, object] = {"site": site, "ts": ts}
         if root_value:
             entry["root"] = root_value
@@ -165,36 +273,49 @@ def census(
     sink_root: Optional[Path] = None,
     now: Optional[float] = None,
 ) -> dict:
-    """Read-only report answering C14 item 4 against disk evidence.
+    """Read-only-over-the-series report answering C14 item 4 against disk
+    evidence. (Not read-only overall -- see `watch_start_ts` below.)
 
     Returns a dict carrying, at minimum:
 
-      series_present     -- does the sink exist at all
-      series_first_ts    -- oldest observation, None if never
+      series_present     -- has the watch started (C24: sentinel present),
+                            NOT "does the jsonl data file exist". A box that
+                            never records a read never creates the jsonl,
+                            but calling `census()` at all starts the watch
+                            clock, so this can still become True.
+      watch_start_ts      -- when the clock started (C24 sentinel), None
+                            only if the sink could not be written at all.
+      series_first_ts    -- oldest RECORDED READ, None if there has never
+                            been one. Distinct from `watch_start_ts`: a
+                            quiet series has a watch start but no reads.
       series_last_ts     -- newest observation, None if never
-      observed_days      -- how long the series has been watching. Measured
-                            from `series_first_ts`, because that is the
-                            earliest moment the sink can attest to; a sink
-                            that exists but is empty has observed nothing
-                            it can prove, so this is 0.0.
-      total_reads        -- rows in the series
+      observed_days      -- how long the watch has been running. Measured
+                            from `watch_start_ts` (C24), NOT from
+                            `series_first_ts` -- the latter was the module's
+                            original defect: a box that never recorded a
+                            read never started a clock, so `evidences_absence`
+                            could never become True on a box that converged
+                            cleanly. See `ensure_watch_start`'s docstring.
+      total_reads        -- rows in the series (the sentinel is never one)
       reads_in_window    -- rows with ts inside the last `window_days`
       sites              -- per-site {count, first_ts, last_ts}
       days_since_last    -- quiet stretch, None if never observed
       window_days        -- echoed back, so the N asked cannot be lost
       evidences_absence  -- the ONLY field C14's exit should read
 
-    `evidences_absence` is True iff the series exists, has been observing
+    `evidences_absence` is True iff the watch has started, has been running
     for at least the full window, and saw zero reads inside it. All three
     conjuncts are load-bearing; see the module docstring's series-age note
     for why the middle one exists.
 
     Never raises: a missing, unreadable, or corrupt series degrades to
     "never observed" -- which yields `evidences_absence: False`, not a
-    false clear.
+    false clear. A watch-start write that itself fails (unwritable sink)
+    degrades the same way, via `ensure_watch_start`'s own guard.
     """
     report: dict = {
         "series_present": False,
+        "watch_start_ts": None,
         "series_first_ts": None,
         "series_last_ts": None,
         "observed_days": 0.0,
@@ -208,74 +329,91 @@ def census(
         "evidences_absence": False,
     }
 
-    # Inside the guard: `series_path` reaches `_settings_home.settings_home()`,
-    # which can raise on a box with no resolvable settings home. This function
-    # promises never to raise, and that promise was previously broken here --
-    # `record_fallback_read`'s guard covered the write side only.
-    try:
-        path = series_path(sink_root)
-        if not path.is_file():
-            return report
-    except Exception:
+    at = now if now is not None else time.time()
+
+    # C24: start (or read back) the watch clock unconditionally -- this is
+    # what makes the verdict reachable on a box that never records a single
+    # read. `ensure_watch_start` never raises; a failure here degrades to
+    # `watch_start_ts is None`, which leaves `series_present` False, the
+    # safe direction.
+    watch_start_ts = ensure_watch_start(sink_root, now=at)
+    if watch_start_ts is None:
         return report
     report["series_present"] = True
+    report["watch_start_ts"] = watch_start_ts
+    report["observed_days"] = max(0.0, (at - watch_start_ts) / _SECONDS_PER_DAY)
 
-    at = now if now is not None else time.time()
     window_start = at - (window_days * _SECONDS_PER_DAY)
     sites: Dict[str, dict] = {}
 
+    # The jsonl data file itself is optional -- a quiet box has a watch
+    # start but no reads, and never creates it. `evidences_absence` still
+    # needs computing in that case (a quiet box is exactly the shape it
+    # exists to detect), so a missing/unreadable file falls through to the
+    # finalize step below rather than returning early. `series_path` reaches
+    # `_settings_home.settings_home()`, which can raise on a box with no
+    # resolvable settings home; that must not propagate either.
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    report["unparsable_rows"] += 1
-                    continue
-                if not isinstance(entry, dict):
-                    report["unparsable_rows"] += 1
-                    continue
-                site = entry.get("site")
-                ts = entry.get("ts")
-                if not isinstance(site, str) or not isinstance(ts, (int, float)):
-                    # A row we cannot place in time is counted, never merely
-                    # skipped. The earlier reasoning here -- "skipping can
-                    # never manufacture absence" -- was WRONG, and the test
-                    # pinned the wrong behaviour with it. Skipping lowers
-                    # `reads_in_window` WITHOUT lowering `observed_days` when
-                    # the surviving rows are older, so one torn line (a
-                    # concurrent append, an encoding error, a disk-full
-                    # truncation) that was the only in-window read flips
-                    # `evidences_absence` from False to True. An undatable row
-                    # is treated as in-window until proven otherwise, which is
-                    # the fail-safe direction for a detector whose whole job is
-                    # evidencing absence.
-                    report["undatable_rows"] += 1
-                    continue
-                report["total_reads"] += 1
-                if ts >= window_start:
-                    report["reads_in_window"] += 1
-                if report["series_first_ts"] is None or ts < report["series_first_ts"]:
-                    report["series_first_ts"] = ts
-                if report["series_last_ts"] is None or ts > report["series_last_ts"]:
-                    report["series_last_ts"] = ts
-                rec = sites.setdefault(
-                    site, {"count": 0, "first_ts": ts, "last_ts": ts}
-                )
-                rec["count"] += 1
-                rec["first_ts"] = min(rec["first_ts"], ts)
-                rec["last_ts"] = max(rec["last_ts"], ts)
-    except OSError:
-        return report
+        path = series_path(sink_root)
+        has_series = path.is_file()
+    except Exception:
+        has_series = False
+
+    if has_series:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        report["unparsable_rows"] += 1
+                        continue
+                    if not isinstance(entry, dict):
+                        report["unparsable_rows"] += 1
+                        continue
+                    site = entry.get("site")
+                    ts = entry.get("ts")
+                    if not isinstance(site, str) or not isinstance(ts, (int, float)):
+                        # A row we cannot place in time is counted, never merely
+                        # skipped. The earlier reasoning here -- "skipping can
+                        # never manufacture absence" -- was WRONG, and the test
+                        # pinned the wrong behaviour with it. Skipping lowers
+                        # `reads_in_window` WITHOUT lowering `observed_days` when
+                        # the surviving rows are older, so one torn line (a
+                        # concurrent append, an encoding error, a disk-full
+                        # truncation) that was the only in-window read flips
+                        # `evidences_absence` from False to True. An undatable row
+                        # is treated as in-window until proven otherwise, which is
+                        # the fail-safe direction for a detector whose whole job is
+                        # evidencing absence.
+                        report["undatable_rows"] += 1
+                        continue
+                    report["total_reads"] += 1
+                    if ts >= window_start:
+                        report["reads_in_window"] += 1
+                    if (
+                        report["series_first_ts"] is None
+                        or ts < report["series_first_ts"]
+                    ):
+                        report["series_first_ts"] = ts
+                    if (
+                        report["series_last_ts"] is None
+                        or ts > report["series_last_ts"]
+                    ):
+                        report["series_last_ts"] = ts
+                    rec = sites.setdefault(
+                        site, {"count": 0, "first_ts": ts, "last_ts": ts}
+                    )
+                    rec["count"] += 1
+                    rec["first_ts"] = min(rec["first_ts"], ts)
+                    rec["last_ts"] = max(rec["last_ts"], ts)
+        except OSError:
+            pass
 
     report["sites"] = sites
-    if report["series_first_ts"] is not None:
-        report["observed_days"] = max(
-            0.0, (at - report["series_first_ts"]) / _SECONDS_PER_DAY
-        )
     if report["series_last_ts"] is not None:
         report["days_since_last"] = max(
             0.0, (at - report["series_last_ts"]) / _SECONDS_PER_DAY

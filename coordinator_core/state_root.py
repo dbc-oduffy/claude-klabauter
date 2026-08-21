@@ -112,6 +112,8 @@ from typing import List, Optional
 from coordinator_core.artifact_subject import Subject, classify, remediation_message
 from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.engine_root import (
+    _RESOLUTION_UNVERIFIED_ENV_LITERAL,
+    classify_env_resolved_root,
     coordinator_engine_root,
     coordinator_engine_root_with_class,
     published_engine_mirror_path,
@@ -181,11 +183,20 @@ def _claude_klabauter_state() -> str:
     ``coordinator_engine_root_with_class()`` (not the class-less
     ``coordinator_engine_root()``) specifically so this check is possible;
     the ``RESOLUTION_LIVE_WORKING_TREE`` path below returns byte-identical to
-    the prior class-less resolution."""
+    the prior class-less resolution.
+
+    An ``unverified-env`` class means the resolver took its free environment
+    rung and did not establish which tree the path is (see
+    ``engine_root._RESOLUTION_UNVERIFIED_ENV_LITERAL``). This is a state
+    WRITE, so it pays ``classify_env_resolved_root()`` to find out rather
+    than inheriting the rung's convenient assumption — that assumption is
+    what let writers file into the mirror while this guard read as armed."""
     try:
         claude_klabauter_root, resolution_class = coordinator_engine_root_with_class()
     except RuntimeError as exc:
         raise StateRootError(str(exc)) from exc
+    if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:
+        resolution_class = classify_env_resolved_root(claude_klabauter_root)
     if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
         raise StateRootError(
             "coordinator_state_root: engine-subject state resolved to a "
@@ -366,6 +377,8 @@ def print_map() -> str:
     # Review: code-reviewer.
     try:
         engine_root, resolution_class = coordinator_engine_root_with_class()
+        if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:
+            resolution_class = classify_env_resolved_root(engine_root)
         if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
             sys.stderr.write(
                 "coordinator_state_root --print-map: engine root resolved to a "

@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.repo_root import show_toplevel
 
 DAY_THRESHOLD = 5
@@ -79,7 +80,6 @@ _SHA_EXTRACT_RE = re.compile(r"commit ([a-f0-9]{5,40})")
 _WEEK_STARTING_RE = re.compile(r"^\*\*Week starting:\*\*")
 _DATE_EXTRACT_RE = re.compile(r"\*\* *(\d{4}-\d{2}-\d{2})")
 
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 _STATE_ROOT_OVERRIDE_ENV = "CWS_TEST_STATE_ROOT"
 
@@ -131,8 +131,9 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _claude_klabauter_root() -> Optional[str]:
-    """Resolve the claude-klabauter repo root: CLAUDE_KLABAUTER_ROOT env, else machine-local, else None."""
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    """Resolve the claude-klabauter repo root: COORDINATOR_ENGINE_ROOT env (via the
+    accessor), else machine-local, else None."""
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override:
         return override
     return _machine_local_get("repos.claude_klabauter")

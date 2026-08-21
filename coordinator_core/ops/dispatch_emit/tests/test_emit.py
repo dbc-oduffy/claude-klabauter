@@ -873,7 +873,7 @@ def test_reviewers_for_tier_raises_on_unknown_tier_key():
 
 def _mirror_repo_test_targets(tmp_path):
     """Mirror JUST enough of the real repo layout under ``tmp_path`` for
-    ``pathspec.terminal_test_scope``'s co-located-test-file check to resolve
+    ``pathspec.terminal_test_scope``'s stem-named-test check to resolve
     the two write paths ``_FIXTURE_PLAN`` declares (``spine_read.py``,
     ``wave_map.py``) -- so a ``repo_root=tmp_path`` sizing-citation test can
     exercise ``emit_script`` end to end without touching the real repo tree.

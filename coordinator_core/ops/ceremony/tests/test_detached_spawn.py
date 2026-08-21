@@ -10,8 +10,9 @@ Coverage:
                                          no `creationflags` kwarg.
   (b) windows_uses_detached_flags     -- with `os.fork` monkeypatched away (simulating
                                          Windows), Popen is called with `creationflags`
-                                         carrying DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-                                         | CREATE_NO_WINDOW, and no `start_new_session` kwarg.
+                                         carrying CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                                         and NOT DETACHED_PROCESS, and no `start_new_session`
+                                         kwarg.
                                          Runs unconditionally on darwin too -- the whole
                                          point is not skipping the Windows leg just because
                                          the test host isn't Windows.
@@ -73,11 +74,14 @@ def test_windows_uses_detached_flags(repo_root: str, monkeypatch: pytest.MonkeyP
     _, kwargs = mock_popen.call_args
     assert "start_new_session" not in kwargs
     expected = (
-        getattr(subprocess, "DETACHED_PROCESS", 0)
-        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
     assert kwargs["creationflags"] == expected
+    # Load-bearing: ORing DETACHED_PROCESS back in is a no-op suppression, not a
+    # stronger one -- Win32 ignores CREATE_NO_WINDOW when DETACHED_PROCESS is set,
+    # and the child's descendants then each allocate a WINDOWED console.
+    assert not kwargs["creationflags"] & getattr(subprocess, "DETACHED_PROCESS", 0)
 
 
 @pytest.mark.parametrize("has_fork", [True, False])

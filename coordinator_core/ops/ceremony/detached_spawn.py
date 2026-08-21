@@ -131,12 +131,26 @@ def _resolve_python_exe() -> str | None:
 def _windows_detached_flags() -> int:
     """Compose the Windows-only detached-process creation flags.
 
-    Mirrors `auto_push._windows_detached_flags` verbatim: DETACHED_PROCESS |
-    CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, each looked up via `getattr` so the module
+    Mirrors `auto_push._windows_detached_flags` verbatim: CREATE_NEW_PROCESS_GROUP |
+    CREATE_NO_WINDOW, each looked up via `getattr` so the module
     still imports cleanly on POSIX (where these constants don't exist on `subprocess`).
+
+    negative-spec -- DETACHED_PROCESS MUST NOT be reintroduced here, and ORing it with
+    CREATE_NO_WINDOW is NOT a middle ground: Win32 documents CREATE_NO_WINDOW as IGNORED
+    whenever DETACHED_PROCESS or CREATE_NEW_CONSOLE is also set. This function carried
+    exactly that combination and so read as console-suppressed while behaving as bare
+    DETACHED_PROCESS -- measured as 6 visible `conhost.exe` windows across 3 spawns,
+    versus 0 once DETACHED_PROCESS was dropped.
+
+    DETACHED_PROCESS leaves the child with no console, so every descendant allocates its
+    own WINDOWED one; CREATE_NO_WINDOW gives it a WINDOWLESS console that the whole
+    subtree inherits. Detached lifetime is unaffected and was measured, not assumed --
+    see this module's `spawn_detached` docstring, whose outlive-the-parent contract this
+    change preserves.
+
+    Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
     """
     flags = 0
-    flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
     flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return flags
@@ -180,8 +194,9 @@ def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None 
     Deliberate isolation boundary -- MUST NOT be converted to an in-process
     call, ever, under any future refactor of this arm. Mechanism: detached
     lifetime -- the entire point of this function is that the child MUST
-    outlive the parent process (start_new_session on POSIX / DETACHED_PROCESS
-    on Windows, stdio redirected to DEVNULL). An in-process call cannot
+    outlive the parent process (start_new_session on POSIX / an own-process-group,
+    windowless spawn on Windows -- see `_windows_detached_flags` for why that is
+    NOT DETACHED_PROCESS, stdio redirected to DEVNULL). An in-process call cannot
     outlive the interpreter that made it: the parent process exiting (or the
     caller's own process being reaped) would take the "detached" work down
     with it, defeating the reason this function exists. See

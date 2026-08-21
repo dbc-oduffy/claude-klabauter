@@ -228,11 +228,19 @@ def _derive_row(rows: Dict, row_name: str, source_subdir: str, portable_text: st
                     f"from disk — a silent drop here breaks a cross-repo consumer "
                     f"with no failing test in this repo"
                 )
-        missing_directory_granular = sorted(_DIRECTORY_GRANULAR_NAMES - classified)
+        missing_directory_granular = sorted(
+            _DIRECTORY_GRANULAR_NAMES - set(include_root)
+        )
         if missing_directory_granular:
             raise GeneratorError(
-                f"'{row_name}': AC9 directory-granular name(s) missing from "
-                f"'deny'/'include_root' entirely: {missing_directory_granular}"
+                f"'{row_name}': AC9 directory-granular name(s) not present in "
+                f"'include_root' — {missing_directory_granular} must be INCLUDED "
+                f"at directory granularity, not merely classified (a whole-entry "
+                f"'deny' does not satisfy AC9): roughly 30 sibling-visible modules "
+                f"ship today only because these entries are coarse, including "
+                f"sixteen hook handlers on every session's hot path — siblings "
+                f"resolve the engine root and import 'coordinator_core.*' in "
+                f"their own process: {missing_directory_granular}"
             )
 
     idx, row_line = _existing_row_line(portable_text, row_name)

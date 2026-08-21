@@ -155,7 +155,7 @@ def _ensure_engine_on_path() -> str | None:
     """Put the claude-klabauter checkout on ``sys.path`` so ``coordinator_core`` imports.
 
     Memoizing wrapper over ``cc_invoke.ensure_engine_on_path`` — that function
-    owns the ladder (``CLAUDE_KLABAUTER_ROOT`` env → self-location walk-up → settings-home
+    owns the ladder (env var → self-location walk-up → settings-home
     pointer file → machine-local ``repos.claude_klabauter``), so a hand-set
     ``PYTHONPATH`` is never a prerequisite of this CLI and the ordering cannot
     drift away from the ~26 sibling entrypoints resolving through the same seam.
@@ -184,7 +184,7 @@ def _ensure_engine_on_path() -> str | None:
     through ``cc_invoke._resolve_claude_klabauter_root`` (registry-only, no
     self-location rung) or not at all.
 
-    Negative-spec: does NOT export ``CLAUDE_KLABAUTER_ROOT`` into ``os.environ`` — child
+    Negative-spec: does NOT export the engine root into ``os.environ`` — child
     processes run their own resolution through the same ladder.
     """
     global _CLAUDE_KLABAUTER_ROOT_RESOLVED
@@ -555,7 +555,7 @@ def _stamp_completion_scaffold_liveness(repo_root: str | None) -> None:
     other `--type`). Mirrors `sweep-terminal-plans.py::_import_housekeeping_seam` /
     `_stamp_archive_sweeps_liveness` verbatim: this trampoline's own `__file__` lives
     inside the claude-klabauter checkout, but `repo_root` here is the CALLER's repo (may be a
-    sibling repo), so the seam is imported via the resolved CLAUDE_KLABAUTER_ROOT rather than a
+    sibling repo), so the seam is imported via the resolved engine root rather than a
     relative import. Never raises -- a liveness-stamp failure must not surface as a
     scaffold failure.
 
@@ -589,7 +589,7 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
     invariant is about the DESTINATION directory, not the type label.
 
     Degrades gracefully (skips the check, no exit) when ``repo_root`` cannot
-    be resolved (no git repo, CLAUDE_KLABAUTER_ROOT unconfigured) or when
+    be resolved (no git repo, the engine root unconfigured) or when
     ``coordinator_core`` cannot be imported — matches this file's existing
     graceful-skip convention for un-migrated installs (see
     ``_resolve_state_root``'s docstring) rather than hard-failing every
@@ -752,7 +752,7 @@ def _resolve_state_root(central: bool = False) -> str | None:
     docs/plans/2026-07-16-bash-clean-slate-residual-migration.md) from the
     sibling lib/ directory (relative to this script's bin/ location) as a
     subprocess and captures its stdout. Returns None on any failure
-    (CLAUDE_KLABAUTER_ROOT not configured, git unavailable, lib absent).
+    (the engine root not configured, git unavailable, lib absent).
 
     Placement law spec backlink:
         docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C10 / AC7
@@ -1020,6 +1020,63 @@ def _resolve_from_repo() -> str:
     # em_id_for_root fires even when the machine-local keys enumeration omits it.
     paths_dict.setdefault("repos.doe_claude", _machine_local_get("repos.doe_claude"))
     return _em_id_for_root(root, paths_dict)
+
+
+def _resolve_session_display_name() -> str | None:
+    """Resolve THIS session's human-readable harness name (e.g.
+    `claude-klabauter-76`), or `None` when it can't be resolved.
+
+    Reads `coordinator_core.session.harness_registry.self_record()` — the O(1)
+    single-file read of this process's own registry record, keyed off
+    `CLAUDE_PID` — and takes its `name` field directly. That name is the
+    harness's own per-session identity (`slug(basename(cwd)) + "-" +
+    one-random-byte-hex`, see `coordinator_core.session.reachability`'s module
+    docstring), generated independently of whether cross-session messaging is
+    bound, so it is present far more often than a `SendMessage`-ready
+    `name [ref]` address would be (that bracketed form additionally requires
+    `messaging_socket_path`, which is off by default — see
+    `harness_registry.self_record`'s own docstring, "44/44 records on this box
+    omit the field"). The bracketed ref exists to disambiguate CONCURRENT live
+    peers for messaging, not to identify one session for a durable-file stamp;
+    the bare name is already session-specific and traces back through
+    `ListAgents`/registry history.
+
+    Shared by two callers with two different degrade conventions, so this
+    function itself never fabricates a fallback — that decision belongs to
+    the caller: `_resolve_plan_author` (a required field — falls back to the
+    repo-level `_resolve_from_repo()` identity) and the `authoring_session:`
+    UUID's inline-comment annotation on handoff/spinoff (optional — simply
+    omits the comment when this returns `None`).
+    """
+    try:
+        _ensure_engine_on_path()
+        from coordinator_core.session import harness_registry as _harness_registry
+    except Exception:  # noqa: BLE001 -- engine seam absent; degrade to no display name
+        return None
+    try:
+        self_info = _harness_registry.self_record()
+    except Exception:  # noqa: BLE001 -- registry read failed; degrade to no display name
+        return None
+    if self_info is None:
+        return None
+    _sid, record = self_info
+    return record.name or None
+
+
+def _resolve_plan_author() -> str:
+    """Stamp a plan's `author:` with the MINTING SESSION's own resolvable
+    name (e.g. `claude-klabauter-76`), not the repo-wide EM role string
+    `_resolve_from_repo()` returns.
+
+    Thin wrapper over `_resolve_session_display_name()` with a required-field
+    fallback: when that resolver returns `None` (registry seam unavailable,
+    `CLAUDE_PID` doesn't resolve, or the record carries no `name`), falls back
+    to `_resolve_from_repo()` — today's repo-level EM identity. Honest
+    degrade: it never fabricates a session number, it reuses the same
+    deterministic-but-coarser identity the field already carried before this
+    change.
+    """
+    return _resolve_session_display_name() or _resolve_from_repo()
 
 
 # ---------------------------------------------------------------------------
@@ -2041,6 +2098,14 @@ def _scaffold_handoff(
         lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in plan_ids)
     _authoring_session = _resolve_session_id()
     if _authoring_session != "em-unknown":
+        # Readable-name annotation (2026-08-20 extension): the id above is a
+        # machine-joinable UUID, opaque to a human skimming the file. The
+        # display name is a YAML trailing COMMENT, not a new field -- it
+        # changes no schema shape, so it degrades to nothing (not a stray
+        # placeholder) when unresolvable rather than blocking the id itself.
+        _display_name = _resolve_session_display_name()
+        if _display_name:
+            lines.append(f"# minted by {_display_name}")
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session)}")
     lines.extend([
         "---",
@@ -2212,6 +2277,22 @@ def _scaffold_spinoff(
     _ini = _yaml_quote(initiative) if initiative else "null"
     _category = category if category else "infra"
     _validate_category(_category)
+    # 2026-08-20 extension: was a hand-typed literal 'PLACEHOLDER' -- the EM
+    # had to Edit in their own session id after every spinoff scaffold. Same
+    # resolver + precedence chain _scaffold_handoff already uses for this
+    # field (COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID).
+    # Kept PLACEHOLDER as the fallback (not omit-the-key, unlike the handoff
+    # arm) -- this function's own established convention for a genuinely
+    # unresolvable required-by-convention field, matching `workstream` beside
+    # it, which this change does not touch.
+    _authoring_session_value = _resolve_session_id()
+    if _authoring_session_value != "em-unknown":
+        _display_name = _resolve_session_display_name()
+        _authoring_session_line = (
+            f"# minted by {_display_name}\n" if _display_name else ""
+        ) + f"authoring_session: {_yaml_quote(_authoring_session_value)}"
+    else:
+        _authoring_session_line = "authoring_session: PLACEHOLDER"
     # Spinoff takes no blocker input at all, so this is always the empty-
     # blocked_by leg of C1's derive_readiness (docs/plans/2026-08-19-gate-
     # notes-are-advisory-blocked-by-derives-readiness.md § C3) -- one
@@ -2239,7 +2320,7 @@ def _scaffold_spinoff(
         f"category: {_category}",
         f"summary: {_yaml_quote(placeholder_summary)}",
         f"pickup_ready: {_pickup_ready}",
-        "authoring_session: PLACEHOLDER",
+        _authoring_session_line,
         "workstream: PLACEHOLDER",
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
@@ -2298,6 +2379,7 @@ def _scaffold_roadmap_baton(
     category: str | None = None,
     handoff_id: str | None = None,
     gate_dependency: str | None = None,
+    sizing_object: str | None = None,
 ) -> str:
     """Generate validator-clean roadmap-baton frontmatter + canonical section skeleton.
 
@@ -2322,6 +2404,15 @@ def _scaffold_roadmap_baton(
 
     deliverable_id is auto-minted from stub_id when not supplied (D1: roadmap stubs
     reuse stub identity → dlv-<stub_id>). initiative is D9 present-as-null.
+
+    sizing_object is emitted as a real frontmatter key, mirroring the `plan` arm.
+    A roadmap arrives THROUGH the sizing lobby and every stub is assigned its own
+    `loe:` at mint, so a roadmap baton IS sized work — the FK simply went
+    unwritten, which left PM-ratified stubs reading `unsized` to
+    `coordinator_core.sizing_disposition` and would have bounced them back to the
+    lobby to re-make a size that already existed. The literal string "null" (from
+    --no-sizing-object) emits an explicit `sizing_object: null` — the checkable
+    declaration of absence, never a silent omission.
 
     handoff_id (lvv-01/C1) is the new durable-link stable ID (hnd-<slug>-<6hex>) —
     roadmap-baton was excluded from the handoff-id-minting doc_type tuple at C1
@@ -2372,6 +2463,11 @@ def _scaffold_roadmap_baton(
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
     ]
+    if sizing_object:
+        if sizing_object == "null":
+            lines.append("sizing_object: null")
+        else:
+            lines.append(f"sizing_object: {_yaml_quote(sizing_object)}")
     # awaiting_gate requires at least one of gate_dependency (deprecated),
     # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
     # --gate-dependency writes the deprecated field as before; otherwise the
@@ -4626,7 +4722,8 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         default=None,
         metavar="PATH",
         help=(
-            "(plan) Path to the state/sizings/<id>.yaml this plan was sized against. "
+            "(plan, roadmap-baton) Path to the state/sizings/<id>.yaml this record was "
+            "sized against. "
             "When supplied, must resolve on disk (relative to the repo root) — the "
             "scaffolder fails loud and writes no file otherwise. When omitted, the "
             "commented-optional-key skeleton is unchanged. Route a missing sizing "
@@ -4639,10 +4736,12 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         dest="no_sizing_object",
         action="store_true",
         help=(
-            "(plan) The sanctioned declaration that this plan has no sizing object — "
+            "(plan, roadmap-baton) The sanctioned declaration that this record has no "
+            "sizing object — "
             "not a bypass. Emits an explicit sizing_object: null frontmatter key. "
             "Exactly one of --sizing-object / --no-sizing-object is required for "
-            "--type plan; a missing sizing object is produced via coordinator:sizing, "
+            "--type plan and --type roadmap-baton; a missing sizing object is "
+            "produced via coordinator:sizing, "
             "never invented. "
             "Spec: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md, chunk C1"
         ),
@@ -5191,7 +5290,13 @@ def main() -> None:
     # here, at write time, rather than left for the sweep to catch after the fact.
     # Spec: docs/plans/2026-08-06-plan-sizing-citation-gate.md § AC3
     # Spec: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md, chunk C1
-    if doc_type == "plan":
+    # roadmap-baton is held to the SAME bar as plan, and for the same reason:
+    # a roadmap arrives through the sizing lobby with a per-stub `loe:`, so the
+    # sizing answer always exists at mint — depending on a skill step to
+    # remember the flag is exactly the "the operator remembers" discharge this
+    # repo does not accept. Cross-repo ask: cross-repo/inbox/2026-08-20-doe-
+    # claude-em-pickup-brief-should-emit-the-sizing-disposition.md (follow-on).
+    if doc_type in ("plan", "roadmap-baton"):
         if args.sizing_object and args.no_sizing_object:
             print(
                 "error: --sizing-object and --no-sizing-object are mutually "
@@ -5202,11 +5307,11 @@ def main() -> None:
             sys.exit(1)
         if not args.sizing_object and not args.no_sizing_object:
             print(
-                "error: --type plan requires an explicit sizing answer — neither "
-                "--sizing-object nor --no-sizing-object was supplied. Produce the "
-                "sizing object first via coordinator:sizing, then re-run with the "
-                "resolved path, or pass --no-sizing-object if this plan genuinely "
-                "has none.",
+                f"error: --type {doc_type} requires an explicit sizing answer — "
+                "neither --sizing-object nor --no-sizing-object was supplied. "
+                "Produce the sizing object first via coordinator:sizing, then "
+                "re-run with the resolved path, or pass --no-sizing-object if "
+                "this record genuinely has none.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -5274,10 +5379,12 @@ def main() -> None:
     if doc_type == "memo":
         from_id = args.from_repo if args.from_repo else _resolve_from_repo()
 
-    # Resolve author (for plan) — repo identity, not a hardcoded central-EM literal (D1 authorship).
+    # Resolve author (for plan) — the MINTING SESSION's own name (e.g.
+    # claude-klabauter-76), not a repo-wide EM role string, and never the
+    # hardcoded central-EM literal this replaced (D1 authorship).
     plan_author: str = ""
     if doc_type == "plan":
-        plan_author = _resolve_from_repo()
+        plan_author = _resolve_plan_author()
 
     # Resolve deliverable-spine fields (handoff, spinoff, roadmap-baton, plan) — C3b.
     # Session context inheritance: DELIVERABLE_ID env var is the mechanism by which the
@@ -5452,6 +5559,18 @@ def main() -> None:
                     )
                 return _mint_deliverable_id(slug=slug), "mint-from-slug"
 
+            # Chain-root legibility: when no rung carries an id, the cascade
+            # mints from a slug, and its own fallback basis is the DATE
+            # (`<YYYYMMDD>-handoff`) — an id naming the day, not the work, so
+            # two unrelated chain roots scaffolded in one session both read as
+            # `dlv-<today>-handoff-<hex>`. Hand it this handoff's own title
+            # slug instead, matching the shape the degradation fallback below
+            # already mints (`_mint_deliverable_id_from_title`). A placeholder
+            # title yields nothing, so the date fallback still stands rather
+            # than baking a placeholder into a durable id — same refusal
+            # `_mint_deliverable_id_from_title` makes, same reason.
+            _hnd_work_slug = None if _is_placeholder_title(title) else _slug_from_title(title)
+
             try:
                 _resolved_deliverable_id, _hnd_carried_initiative = (
                     resolve_deliverable_and_initiative(
@@ -5460,6 +5579,7 @@ def main() -> None:
                         _claimed_plan_path,
                         _predecessor_path,
                         slug_suffix="handoff",
+                        work_slug=_hnd_work_slug,
                     )
                 )
             except (DroppedDeliverableJoinError, DivergentDeliverableIdError) as _hnd_carry_exc:
@@ -5666,6 +5786,7 @@ def main() -> None:
             category=args.category,
             handoff_id=_resolved_handoff_id,
             gate_dependency=args.gate_dependency,
+            sizing_object=("null" if args.no_sizing_object else args.sizing_object),
         )
     elif doc_type == "goal-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None
@@ -5860,7 +5981,7 @@ def main() -> None:
                         if _op.startswith(_rr + os.sep) or _op == _rr:
                             _anchored_repo_root = _repo_root_for_relpath
                 else:
-                    # Seam unresolvable (e.g. CLAUDE_KLABAUTER_ROOT not configured on this machine).
+                    # Seam unresolvable (e.g. the engine root not configured on this machine).
                     # Degrade gracefully: fall back to repo-root anchoring so the CLI keeps
                     # working on un-migrated installs. This matches AC13's graceful-skip pattern.
                     _repo_root = _current_repo_root()
@@ -5964,6 +6085,22 @@ def main() -> None:
                     if not content.endswith("\n"):
                         fh.write("\n")
                 declare_write(out_path)
+                # The reverse edge is a SECOND file this invocation wrote, on
+                # the calling session's behalf, outside the Edit/Write hot path
+                # that fires `hooks.track_touched_files`. Undeclared, it carries
+                # no `touched.txt` claim at all: `session.scope.compute_scope`
+                # then sees it only through the Step-2 mtime fallback, routes it
+                # to `mtime_only`, and Step 4(c) withholds it from `my_scope` —
+                # so `safe-commit-offer` reports "nothing to commit" over a file
+                # this CLI just dirtied, and the next peer's commit sweeps it.
+                # Declared HERE, not at the write above, for two reasons: the
+                # edge write precedes the collection opening, and it is reverted
+                # when the plan write raises — a declaration inside the `except`
+                # path's blast radius would claim a path that no longer differs
+                # from HEAD. `is not None` (never truthiness): a sizing whose
+                # pre-mutation text was empty is still a landed write.
+                if _sizing_reverse_old_text is not None:
+                    declare_write(_sizing_abs_path)
         else:
             with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(content)

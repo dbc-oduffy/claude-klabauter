@@ -60,10 +60,15 @@ _cli_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _loader.exec_module(_cli_mod)
 
 # Env vars this suite isolates (never leaked into the real process or across tests).
+# "CLAUDE_KLABAUTER_ROOT" and "COORDINATOR_ENGINE_ROOT" are bare literals, not
+# `_cli_mod` attributes: C23 routed `_claude_klabauter_root()` through
+# `coordinator_engine_root_env`, which deleted the module-local
+# `_CLAUDE_KLABAUTER_ROOT_ENV` constant these tests used to import.
 _ENV_VARS = (
     _cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV,
     _cli_mod._CLAUDE_HOME_ENV,
-    _cli_mod._CLAUDE_KLABAUTER_ROOT_ENV,
+    "CLAUDE_KLABAUTER_ROOT",
+    "COORDINATOR_ENGINE_ROOT",
     _cli_mod._MACHINE_LOCAL_IMPL_ENV,
 )
 
@@ -94,9 +99,11 @@ def meta_repo_home(tmp_path, monkeypatch):
 
 
 def test_claude_klabauter_resolvable_routes_to_claude_klabauter_state_lessons(meta_repo_home, tmp_path_factory, monkeypatch):
-    """Sub-case (a): CLAUDE_KLABAUTER_ROOT set → _lessons_dir() routes to <CLAUDE_KLABAUTER_ROOT>/state/lessons."""
+    """Sub-case (a): COORDINATOR_ENGINE_ROOT set → _lessons_dir() routes to
+    <COORDINATOR_ENGINE_ROOT>/state/lessons (C23: the retired CLAUDE_KLABAUTER_ROOT no
+    longer answers, per C14)."""
     fake_claude_klabauter = os.path.realpath(str(tmp_path_factory.mktemp("claude-klabauter")))
-    monkeypatch.setenv(_cli_mod._CLAUDE_KLABAUTER_ROOT_ENV, fake_claude_klabauter)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", fake_claude_klabauter)
 
     assert os.environ.get(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV) is None, (
         "precondition: QUEUE_APPEND_OUTPUT_ROOT must be unset so it doesn't short-circuit"
@@ -111,9 +118,9 @@ def test_claude_klabauter_resolvable_routes_to_claude_klabauter_state_lessons(me
 
 
 def test_claude_klabauter_unresolvable_falls_back_to_git_root_with_warning(meta_repo_home, monkeypatch):
-    """Sub-case (b): CLAUDE_KLABAUTER_ROOT unset AND machine-local resolution disabled →
-    _claude_klabauter_root() returns None → falls back to <git-root>/state/lessons and
-    emits a stderr warning.
+    """Sub-case (b): COORDINATOR_ENGINE_ROOT unset AND machine-local resolution
+    disabled → _claude_klabauter_root() returns None → falls back to <git-root>/state/lessons
+    and emits a stderr warning.
     """
     fake_home = meta_repo_home
     # Point MACHINE_LOCAL_IMPL at a path that does not exist, so
@@ -128,8 +135,8 @@ def test_claude_klabauter_unresolvable_falls_back_to_git_root_with_warning(meta_
     assert os.environ.get(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV) is None, (
         "precondition: QUEUE_APPEND_OUTPUT_ROOT must be unset so it doesn't short-circuit"
     )
-    assert os.environ.get(_cli_mod._CLAUDE_KLABAUTER_ROOT_ENV) is None, (
-        "precondition: CLAUDE_KLABAUTER_ROOT must be unset for this sub-case"
+    assert os.environ.get("COORDINATOR_ENGINE_ROOT") is None, (
+        "precondition: COORDINATOR_ENGINE_ROOT must be unset for this sub-case"
     )
 
     captured_err = io.StringIO()

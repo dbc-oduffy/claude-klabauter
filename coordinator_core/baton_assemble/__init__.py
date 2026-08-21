@@ -3689,14 +3689,17 @@ def _build_judgment_points(
                     "authorized",
                     ["d5"],
                     guidance=(
-                        "Authorization is either a literal invocation -- the PM typing "
-                        "`/handoff` (or the skill name) for this workstream by name, not an "
-                        "intent-shaped remark like \"you can hand that off\" -- or the "
-                        "plan→execute discriminator: review-integration is done AND the "
-                        "plan carries `execution_authorized_at`, which authorizes independent "
-                        "of any conversational trigger. Absent one of those two, this "
-                        "disposition does not apply -- surface the gap rather than assuming "
-                        "consent from context."
+                        "Authorization is an act, never a stamp to go looking for. It is a "
+                        "literal invocation -- the PM typing `/handoff` (or the skill name) "
+                        "for this workstream by name, not an intent-shaped remark like "
+                        "\"you can hand that off\" -- or, on an execution baton, the handover "
+                        "itself: being handed the baton via `/pickup` IS the PM's "
+                        "authorization for the plan it carries, as invoking `/execute-plan` "
+                        "is for that plan. Do not treat `execution_authorized_at` as a "
+                        "precondition -- it is minted AT execute time, so its absence on a "
+                        "not-yet-executed plan is by design and is not a gap. Absent an "
+                        "authorizing act, this disposition does not apply -- surface the gap "
+                        "rather than assuming consent from context."
                     ),
                 )
             ],

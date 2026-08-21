@@ -398,3 +398,106 @@ def test_main_subject_missing_arg_rc1(stub_peers, capsys):
     rc = sr.main(["--central", "--subject"])
     assert rc == 1
     assert "--subject requires an argument" in capsys.readouterr().err
+
+
+# --- Published-mirror guard: the unverified-env rung (2026-08-21) -----------
+#
+# Regression cover for a guard that read as armed and was not. `_claude_klabauter_state()`
+# has always refused a `resolved-engine` class, but the resolver's free
+# environment rung classified every env hit `live-working-tree` outright, so the
+# refusal never fired for the case that actually occurs: a co-located box where
+# the warm server exports the published mirror's own root into the environment.
+# Two working files were lost into the mirror that way before anyone noticed.
+#
+# Backlinks:
+#   state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
+#   state/audits/2026-08-21-transform-resolved-writer-inventory.md
+
+
+def test_unverified_env_class_resolves_to_mirror_and_is_refused(monkeypatch):
+    """An env-resolved root that IS the mirror must refuse, not resolve."""
+    monkeypatch.setattr(
+        sr, "coordinator_engine_root_with_class",
+        lambda: ("/repos/publish-mirror", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
+    )
+    monkeypatch.setattr(
+        sr, "classify_env_resolved_root",
+        lambda root: sr._RESOLUTION_RESOLVED_ENGINE_LITERAL,
+    )
+    with pytest.raises(sr.StateRootError) as exc:
+        sr._claude_klabauter_state()
+    assert "PUBLISHED engine mirror" in str(exc.value)
+
+
+def test_unverified_env_class_resolving_live_still_writes(monkeypatch):
+    """The same rung, when the path is NOT the mirror, must behave as before."""
+    monkeypatch.setattr(
+        sr, "coordinator_engine_root_with_class",
+        lambda: (_CLAUDE_KLABAUTER, sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
+    )
+    monkeypatch.setattr(
+        sr, "classify_env_resolved_root",
+        lambda root: "live-working-tree",
+    )
+    assert sr._claude_klabauter_state() == _state(_CLAUDE_KLABAUTER)
+
+
+def test_unverified_env_class_is_never_passed_through_unclassified(monkeypatch):
+    """The literal itself must never reach the mirror comparison.
+
+    If a future edit drops the classify call, the class falls through as
+    `unverified-env`, compares unequal to `resolved-engine`, and the guard goes
+    silent again -- the exact original defect. Asserting the classifier is
+    consulted is what makes that regression fail here rather than in the mirror.
+    """
+    seen = []
+    monkeypatch.setattr(
+        sr, "coordinator_engine_root_with_class",
+        lambda: ("/repos/whatever", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
+    )
+
+    def _spy(root):
+        seen.append(root)
+        return "live-working-tree"
+
+    monkeypatch.setattr(sr, "classify_env_resolved_root", _spy)
+    sr._claude_klabauter_state()
+    assert seen == ["/repos/whatever"]
+
+
+def test_print_map_refuses_mirror_reached_through_the_env_rung(
+    stub_peers, monkeypatch, capsys
+):
+    """--print-map applies the same resolution, not just `_claude_klabauter_state()`."""
+    monkeypatch.setattr(
+        sr, "coordinator_engine_root_with_class",
+        lambda: ("/repos/publish-mirror", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
+    )
+    monkeypatch.setattr(
+        sr, "classify_env_resolved_root",
+        lambda root: sr._RESOLUTION_RESOLVED_ENGINE_LITERAL,
+    )
+    rc = sr.main(["--print-map"])
+    assert rc == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["subjects"]["engine"] is None
+    assert "PUBLISHED engine mirror" in out.err
+
+
+def test_engine_source_root_refuses_a_key_pointed_at_the_mirror(monkeypatch):
+    """A misconfigured key must not launder the mirror into a 'correct' answer."""
+    from coordinator_core import engine_root as er
+
+    monkeypatch.setattr(er, "is_published_engine_mirror", lambda root: True)
+
+    class _Shim:
+        @staticmethod
+        def _ml_dir():
+            return "/ml"
+
+        @staticmethod
+        def _registry_value(ml_dir, key):
+            return "/repos/publish-mirror"
+
+    monkeypatch.setattr(er, "_load_shim", lambda: _Shim)
+    assert er.engine_source_root() is None

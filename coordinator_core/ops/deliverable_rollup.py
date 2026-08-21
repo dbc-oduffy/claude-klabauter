@@ -84,6 +84,7 @@ from typing import Dict, List, Optional, Set
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.dag import _parse_frontmatter, _read_meta
+from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
@@ -97,7 +98,6 @@ logger = logging.getLogger(__name__)
 # cross-module shared-helper extraction is out of scope — see improvement-queue).
 # ---------------------------------------------------------------------------
 
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 # Review: code-reviewer — subprocess timeout bound so a hung registry script
@@ -149,15 +149,16 @@ def _claude_klabauter_root() -> Optional[str]:
     """Resolve the claude-klabauter repo root.
 
     Resolution chain:
-        1. ``CLAUDE_KLABAUTER_ROOT`` env var — trusted as-is, but ONLY when this process is
-           the one the caller ran in (see below).
+        1. ``COORDINATOR_ENGINE_ROOT`` env var (via the accessor) — trusted
+           as-is, but ONLY when this process is the one the caller ran in
+           (see below).
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
 
-    ``CLAUDE_KLABAUTER_ROOT`` is a property of a CALLING process. Under the warm engine
-    this op executes in a long-lived server process whose environment was
-    inherited from whichever session happened to spawn it, so trusting the raw
-    read under warm serving would name the SPAWNER's root rather than the
+    The engine-root env var is a property of a CALLING process. Under the warm
+    engine this op executes in a long-lived server process whose environment
+    was inherited from whichever session happened to spawn it, so trusting the
+    raw read under warm serving would name the SPAWNER's root rather than the
     current caller's — the write exits 0, prints a normal path, and lands
     nowhere the caller can see (see ``queue_append._output_root_override``'s
     docstring for the same hazard on the sibling op). ``execution_route() ==
@@ -168,10 +169,11 @@ def _claude_klabauter_root() -> Optional[str]:
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() == op_latency.IN_PROCESS:
-        # Review: code-reviewer — expand ~ and shell vars so users setting CLAUDE_KLABAUTER_ROOT=~/X/...
-        # get the correct absolute path instead of a literal tilde that won't resolve.
+        # Review: code-reviewer — expand ~ and shell vars so users setting
+        # COORDINATOR_ENGINE_ROOT=~/X/... get the correct absolute path
+        # instead of a literal tilde that won't resolve.
         return os.path.expanduser(os.path.expandvars(override))
     val = _machine_local_get("repos.claude_klabauter")
     return val if val else None

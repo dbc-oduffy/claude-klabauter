@@ -1814,10 +1814,30 @@ def _windows_detached_flags() -> int:
     """Compose the Windows-only detached-process creation flags, shared by
     both respawn-Popen call sites (see `_resolve_python_exe`'s docstring for
     why this is factored out rather than duplicated).
+
+    negative-spec -- DETACHED_PROCESS MUST NOT be reintroduced here, and
+    ORing it with CREATE_NO_WINDOW is NOT a middle ground: Win32 documents
+    CREATE_NO_WINDOW as IGNORED whenever DETACHED_PROCESS or
+    CREATE_NEW_CONSOLE is also set. This function carried exactly that
+    combination and therefore read as console-suppressed while behaving as
+    bare DETACHED_PROCESS -- measured as 6 visible `conhost.exe` windows
+    across 3 spawns, versus 0 once DETACHED_PROCESS was dropped.
+
+    The mechanism is inheritance, and it is why one flag fixes a whole
+    subtree: DETACHED_PROCESS leaves the child with no console, so every
+    descendant (`git`, each hook interpreter) allocates its own WINDOWED
+    console. CREATE_NO_WINDOW gives the child a WINDOWLESS console, which
+    descendants inherit and never need to reallocate.
+
+    Detached lifetime is preserved and was measured, not assumed -- Windows
+    does not reap children on parent exit, so the respawned child still
+    outlives a hard-killed parent. Ctrl-C isolation stays with
+    CREATE_NEW_PROCESS_GROUP.
+
+    Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
     """
     subprocess = _subprocess()
     flags = 0
-    flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
     flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return flags

@@ -1891,8 +1891,18 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     always derived from the script's own on-disk location."""
     if args.claude_klabauter_root:
         return Path(args.claude_klabauter_root), "--claude-klabauter-root flag"
+    # C23: this consulted the RETIRED name only, so it went dark when C14
+    # stopped anything exporting it — an operator with only
+    # COORDINATOR_ENGINE_ROOT set silently got git-root auto-discovery
+    # instead of their explicit pin, and the installer then provisioned
+    # against whichever tree it happened to be sitting in. The retired name
+    # stays as a second rung because this is an INSTALLER: it runs against
+    # boxes that have not been migrated yet, which is precisely the
+    # population that still exports the old spelling.
+    if os.environ.get("COORDINATOR_ENGINE_ROOT"):
+        return Path(os.environ["COORDINATOR_ENGINE_ROOT"]), "COORDINATOR_ENGINE_ROOT env var"
     if os.environ.get("CLAUDE_KLABAUTER_ROOT"):
-        return Path(os.environ["CLAUDE_KLABAUTER_ROOT"]), "CLAUDE_KLABAUTER_ROOT env var"
+        return Path(os.environ["CLAUDE_KLABAUTER_ROOT"]), "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
     return repo_root, "git-root auto-discovery"
 
 

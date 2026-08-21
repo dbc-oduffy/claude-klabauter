@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir
+from coordinator_core.win_portability import same_path
 
 #: Wall-clock bound on the Rung 2 `machine-local` subprocess. This resolver is
 #: reached from PreToolUse hook paths, so an unbounded wait blocks an interactive
@@ -272,6 +273,32 @@ _SHIM_PATH = Path(__file__).resolve().parent.parent / "coordinator" / "lib" / "r
 #: if the shim's constant value ever changes, this one must change with it.
 _RESOLUTION_LIVE_WORKING_TREE_LITERAL = "live-working-tree"
 
+#: Rung 1's honest answer. An environment hit resolves a PATH for free, but it
+#: carries no evidence about WHICH tree that path is: the engine-root variable
+#: is inherited from whichever process exported it, and on a co-located box the
+#: warm server exports the published mirror's own root into the environment it
+#: serves from. Classifying that as `live-working-tree` — as this rung did
+#: until 2026-08-21 — is an unchecked assertion, and it silently defeated
+#: `state_root.py`'s published-mirror guard for every writer routed through it
+#: (state/audits/2026-08-21-transform-resolved-writer-inventory.md).
+#:
+#: The fix is NOT to run the gate here: that would cost a shim load plus a
+#: registry read on a rung whose whole purpose is to be free, on a hot path
+#: every engine import pays. Instead the rung reports that it does not know,
+#: and the only two consumers that branch on the class — both in
+#: `state_root.py`, both on the state-WRITE path, neither hot — pay for
+#: `classify_env_resolved_root()` at the moment the answer actually matters.
+#: Every other caller in the tree discards the class (`_cls`,
+#: `_resolution_class`) and is unaffected by this value.
+_RESOLUTION_UNVERIFIED_ENV_LITERAL = "unverified-env"
+
+#: The mirror-side answer `classify_env_resolved_root()` returns. Hardcoded
+#: rather than imported from the shim for the same reason as the literal
+#: above it: value is contract, and if the shim's constant changes this must
+#: change with it. Kept identical to `state_root.py`'s own copy of this
+#: string, which is the only consumer that compares against it.
+_RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
+
 #: Review: code-reviewer — sanctioned path-load consumer surface. This
 #: wrapper's Cheap-short-circuit step (see `coordinator_engine_root_with_class`
 #: step 2 below) reaches into the shim's underscore-prefixed helpers
@@ -430,6 +457,104 @@ def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
     )
 
 
+#: The registry key naming the LIVE engine source tree. Deliberately NOT
+#: repo-named: the publish transform rewrites repo identifiers, so a key like
+#: `repos.claude_klabauter` becomes `repos.claude_klabauter` in the published
+#: engine and resolves that engine to ITSELF -- the mechanism that lost two
+#: working files into the mirror (state/bug-backlog/2026-08-20-central-scope-
+#: queue-entries-land-in-the-6a0c80dedc44.yaml). None of `engine`, `source` or
+#: `root` is a repo token, so this spelling survives publish byte-identical.
+#: The mirror shipping its own `coordinator_core/engine_root.py` under that
+#: exact name is the standing proof.
+_ENGINE_SOURCE_ROOT_KEY = "engine.source_root"
+
+
+def engine_source_root() -> Optional[str]:
+    """The live engine SOURCE tree, resolved through a transform-proof key.
+
+    Answers a different question from `coordinator_engine_root()`. That one
+    asks "which engine is THIS process running?" — and for a process running
+    out of the published mirror, the mirror is the correct answer. This asks
+    "where does engine-owned working substrate belong?", whose answer is the
+    live source tree no matter which copy of the engine is asking.
+
+    Returns None when the key is unregistered, which is the normal state on a
+    consumer install: there is one engine repo, it is a real checkout, and the
+    existing repo-named ladder already resolves it correctly. Callers fall
+    back to that ladder rather than treating None as an error.
+
+    NEGATIVE SPEC — do not put this on `coordinator_engine_root()`'s ladder.
+    Import resolution, `sys.path` setup and the warm-serving hot path all want
+    the engine that is actually executing; substituting the source tree there
+    would make a published engine import a different tree than the one it
+    shipped from. This key is for WRITE routing only.
+    """
+    try:
+        shim = _load_shim()
+        value = shim._registry_value(shim._ml_dir(), _ENGINE_SOURCE_ROOT_KEY)
+    except Exception:
+        return None
+    value = (value or "").strip()
+    if not value or is_published_engine_mirror(value):
+        # A key pointed at the mirror is the very confusion this exists to
+        # end; refuse to launder it into a "correct" answer.
+        return None
+    return value
+
+
+def is_published_engine_mirror(root: str) -> bool:
+    """True when ``root`` IS the registered published engine mirror.
+
+    The one predicate for "am I about to treat a build artifact as a working
+    tree". Resolves the mirror via `published_engine_mirror_path()` (registered
+    AND on-disk usable AND stamped) and compares with
+    `win_portability.same_path`, this plane's single path-equality primitive —
+    a junction hop to the same directory must compare equal, which a
+    normcase/realpath comparison can miss on Windows.
+
+    Fail-open: no registered mirror, or an unreadable registry, means there is
+    no mirror to confuse this root with, so the answer is False. Callers use
+    this to REFUSE, and a refusal invented out of an unrelated registry hiccup
+    would be worse than the read it is guarding.
+    """
+    mirror = published_engine_mirror_path()
+    if not mirror:
+        return False
+    return same_path(root, mirror)
+
+
+def classify_env_resolved_root(root: str) -> str:
+    """Resolve the class Rung 1 deliberately does not compute.
+
+    `coordinator_engine_root_with_class()`'s Rung 1 returns
+    `_RESOLUTION_UNVERIFIED_ENV_LITERAL` because an environment hit proves a
+    path and nothing else. This pays the cost that rung refuses to: it asks
+    whether that path IS the published engine mirror, via
+    `published_engine_mirror_path()` — the same "registered and on-disk
+    usable" check the full gate uses, so this does not re-derive the
+    `repos.claude_klabauter` read (see this module's docstring,
+    "single-implementation property").
+
+    Call this ONLY where the distinction changes behaviour — in practice the
+    state-WRITE path in `state_root.py`. It costs a shim load; putting it
+    back on the resolution hot path is the exact regression Rung 1 exists to
+    avoid.
+
+    NEGATIVE SPEC — this is a mirror check, not a working-tree proof. A path
+    that is not the published mirror classifies as a live working tree, which
+    is the answer Rung 1 asserted unconditionally before; the change is that
+    the mirror case is now excluded rather than assumed away. No registered
+    mirror means no mirror to confuse this root with, so a single-tree box
+    keeps the live-tree answer by construction rather than by luck. Fail-open
+    on an unreadable registry, inheriting `published_engine_mirror_path()`'s
+    contract: the guard's job is to catch the mirror, not to make every
+    registry hiccup unwritable.
+    """
+    if is_published_engine_mirror(root):
+        return _RESOLUTION_RESOLVED_ENGINE_LITERAL
+    return _RESOLUTION_LIVE_WORKING_TREE_LITERAL
+
+
 def coordinator_engine_root_with_class() -> Tuple[str, str]:
     """Resolve the claude-klabauter root AND the DR-132 resolution class alongside it.
 
@@ -442,10 +567,12 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
     HOT-PATH SHAPE (do not "simplify" away — see plan § C4 wrapper half):
       1. Rung 1 (`CLAUDE_KLABAUTER_ROOT` env var) — `coordinator_engine_root()`'s
          existing free rung, re-checked here so this function never runs
-         the gate ahead of it. Classifies as `RESOLUTION_LIVE_WORKING_TREE`:
-         it is the SAME resolution `coordinator_engine_root()` already
-         performs today, just with a class label attached; it predates and
-         is unaffected by the two-tier gate.
+         the gate ahead of it. Resolves the SAME path
+         `coordinator_engine_root()` already returns today, and classifies
+         it `_RESOLUTION_UNVERIFIED_ENV_LITERAL` — an env hit proves a path
+         and nothing about which tree it is. Callers that need the
+         distinction call `classify_env_resolved_root()`; see that constant's
+         comment for why the check is not run here.
       2. Cheap short-circuit: if `repos.claude_klabauter` (the published
          engine mirror key) is not registered at all, the gate's step 1/3
          (published-engine branches) can never fire — skip straight to the
@@ -496,7 +623,7 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
         "engine_root.coordinator_engine_root_with_class"
     ) or ""
     if existing:
-        return existing, _RESOLUTION_LIVE_WORKING_TREE_LITERAL
+        return existing, _RESOLUTION_UNVERIFIED_ENV_LITERAL
 
     shim = _load_shim()
     ml_dir = shim._ml_dir()

@@ -111,6 +111,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.daily_day import local_day as _coordinator_local_day
+from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.win_portability import no_console_creationflags, same_path
 
 
@@ -118,7 +119,6 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _GIT_TIMEOUT = 20
 
-_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _claude_klabauter_root() -> Optional[str]:
-    override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    override = (coordinator_engine_root_env(__name__) or "").strip()
     if override:
         return override
     return _machine_local_get("repos.claude_klabauter")

@@ -115,10 +115,16 @@ def test_central_root_parity() -> None:
     """For queue_scope='central', legacy CLI and native op must resolve the SAME
     root directory, for BOTH improvement-queue and lessons schemas.
 
-    Both functions are pointed at the same fake CLAUDE_KLABAUTER_ROOT via env var override
-    so the assertion is independent of the actual machine-local registry state —
+    Both functions are pointed at the same fake root via env var override so
+    the assertion is independent of the actual machine-local registry state —
     this test must pass identically on a fresh clone with no `repos.claude_klabauter`
-    entry set.
+    entry set. Two DIFFERENT env vars are set to the same value (C23): the
+    legacy CLI (untouched, out of C23's scope) still reads `CLAUDE_KLABAUTER_ROOT`
+    directly, while the native op (C23) now routes exclusively through
+    `coordinator_core.engine_root.coordinator_engine_root_env`, which answers
+    only from `COORDINATOR_ENGINE_ROOT` — the retired `CLAUDE_KLABAUTER_ROOT` no longer
+    answers there (C14 closed that window). Both must still be set for this
+    parity check to exercise the override rung on both sides.
     """
     name = (
         "coordinator-queue-append._output_path == "
@@ -126,8 +132,10 @@ def test_central_root_parity() -> None:
     )
 
     prior_claude_klabauter_root = os.environ.get("CLAUDE_KLABAUTER_ROOT")
+    prior_engine_root = os.environ.get("COORDINATOR_ENGINE_ROOT")
     prior_output_root = os.environ.get("QUEUE_APPEND_OUTPUT_ROOT")
     os.environ["CLAUDE_KLABAUTER_ROOT"] = _FAKE_CLAUDE_KLABAUTER_ROOT
+    os.environ["COORDINATOR_ENGINE_ROOT"] = _FAKE_CLAUDE_KLABAUTER_ROOT
     os.environ.pop("QUEUE_APPEND_OUTPUT_ROOT", None)
     try:
         legacy_mod = _load_legacy_cli_module()
@@ -162,6 +170,10 @@ def test_central_root_parity() -> None:
             os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
         else:
             os.environ["CLAUDE_KLABAUTER_ROOT"] = prior_claude_klabauter_root
+        if prior_engine_root is None:
+            os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
+        else:
+            os.environ["COORDINATOR_ENGINE_ROOT"] = prior_engine_root
         if prior_output_root is None:
             os.environ.pop("QUEUE_APPEND_OUTPUT_ROOT", None)
         else:

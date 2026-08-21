@@ -408,6 +408,7 @@ class TestArgvParityGateMainWiring:
         _write_unaccepted_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
         rc = publish.main([])
         # Exit 2, not 1: this row's bytes DID land (`process_target`
@@ -425,6 +426,7 @@ class TestArgvParityGateMainWiring:
         _write_clean_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
         rc = publish.main([])
         assert rc == 0
@@ -440,6 +442,7 @@ class TestArgvParityGateMainWiring:
         _write_unaccepted_tree(repo_root)
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("engine-row", repo_root))
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
         rc = publish.main(["engine-row"])
         assert rc == 2
@@ -453,6 +456,7 @@ class TestArgvParityGateMainWiring:
         _write_unaccepted_tree(repo_root)  # would fail loudly if the leg fired
 
         _wire_main_preconditions(monkeypatch, setup_dir=setup_dir, rows=_single_row("t", repo_root))
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
         rc = publish.main(["--dry-run"])
         assert rc == 0

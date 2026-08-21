@@ -160,6 +160,7 @@ def test_clean_round_names_percolate_push_with_resolved_target(monkeypatch, tmp_
     """A clean round (>=1 succeeded, 0 failed, not dry-run) must name the
     sanctioned next step so a committed-but-unpushed mirror is never
     silently left for a human to discover."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path)
 
     rc = publish.main([_ROW_NAMES[0]])
@@ -173,6 +174,7 @@ def test_clean_round_names_percolate_push_with_resolved_target(monkeypatch, tmp_
 
 def test_dry_run_does_not_print_next_step(monkeypatch, tmp_path, capsys):
     """Nothing landed under --dry-run, so the nudge must stay silent."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path)
 
     publish.main([_ROW_NAMES[0], "--dry-run"])
@@ -191,6 +193,7 @@ def test_dry_run_does_not_print_next_step(monkeypatch, tmp_path, capsys):
 def test_failed_row_does_not_print_next_step(monkeypatch, tmp_path, capsys):
     """A failed row makes the round PARTIAL — push-or-not is an EM judgment
     call, not a default this line should nudge."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, fail_row=True)
 
     publish.main([_ROW_NAMES[0]])
@@ -218,6 +221,7 @@ def test_mirror_rows_collapse_to_one_line_naming_the_mirror_key(
     sub-rows nobody should invoke -- the exact noise the message register
     forbids."""
     mirror_rows = ["klab-bin", "klab-lib", "klab"]
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(
         monkeypatch,
         tmp_path,
@@ -246,6 +250,7 @@ def test_non_mirror_rows_keep_their_own_lines(monkeypatch, tmp_path, capsys):
     """Grouping is by dest, not a blanket collapse: two rows that share no
     mirror sigil are two distinct destinations and each still needs its own
     push."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows=["solo-a", "solo-b"], sigils={})
 
     publish.main([])

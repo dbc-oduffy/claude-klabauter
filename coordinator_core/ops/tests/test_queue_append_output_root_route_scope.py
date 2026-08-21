@@ -71,3 +71,77 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, "")
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert queue_append._output_root_override() is None
+
+
+# --- Published-mirror refusal (2026-08-21) ---------------------------------
+#
+# Sibling hazard to this module's subject. `QUEUE_APPEND_OUTPUT_ROOT` sends a
+# write somewhere the caller cannot see; the publish identifier transform does
+# the same thing without anyone setting a variable, by rewriting the registry
+# key this op reads so the PUBLISHED engine resolves "the central repo" to
+# itself. Confirmed lost: two working files, gitignored in the mirror, exit 0.
+#
+# Backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
+
+
+def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch):
+    from coordinator_core.ops import queue_append as qa
+
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
+
+    with pytest.raises(qa._ClaudeKlabauterUnresolvable) as exc:
+        qa._claude_klabauter_root()
+    assert "PUBLISHED engine mirror" in str(exc.value)
+
+
+def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch):
+    from coordinator_core.ops import queue_append as qa
+
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
+
+    assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
+
+
+def test_env_override_route_is_also_refused(monkeypatch):
+    """The env rung is guarded too -- it is the rung the warm server poisons."""
+    from coordinator_core.ops import queue_append as qa
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
+    monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
+    monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
+
+    with pytest.raises(qa._ClaudeKlabauterUnresolvable):
+        qa._claude_klabauter_root()
+
+
+def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
+    """The published engine's own Rung 2 names the mirror; Rung 1.5 must win.
+
+    This is the whole point of `engine.source_root`. Simulating the mirror-run
+    engine means making the repo-named lookup return the mirror, which is what
+    the publish transform does to that key.
+    """
+    from coordinator_core.ops import queue_append as qa
+
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
+
+    assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
+
+
+def test_absent_transform_proof_key_falls_through_to_the_repo_named_rung(monkeypatch):
+    """A consumer install has no such key and must keep today's behaviour."""
+    from coordinator_core.ops import queue_append as qa
+
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
+
+    assert qa._claude_klabauter_root() == "/repos/claude-klabauter"

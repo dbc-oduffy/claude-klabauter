@@ -162,6 +162,7 @@ def test_gate_declined_row_is_not_counted_succeeded(monkeypatch, tmp_path, capsy
     never "Rows succeeded" — and the succeeded count must never disagree with
     `totals.processed`."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     rc = publish.main([",".join(_ROW_NAMES)])
@@ -181,6 +182,7 @@ def test_gate_declined_row_exits_non_zero(monkeypatch, tmp_path):
     isolation.py` asserts for a raising row, extended to the non-raising
     gate-decline path."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     rc = publish.main([",".join(_ROW_NAMES)])
@@ -198,6 +200,7 @@ def test_gate_declined_row_exits_non_zero_under_dry_run_too(monkeypatch, tmp_pat
     fixture's `_SKIPPED_ROW` models) independently of `--dry-run`, so the
     exit code must agree with the row summary in preview mode too."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     rc = publish.main([",".join(_ROW_NAMES), "--dry-run"])
@@ -212,6 +215,7 @@ def test_all_rows_actually_publish_still_succeed_and_exit_zero(monkeypatch, tmp_
     """Sanity counterpart — the happy path (every row actually advances
     `totals.processed`) is unaffected by this fix."""
     rows_reached: list = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
 
     def fake_process_target_all_ok(target, setup_dir, totals, **kwargs):

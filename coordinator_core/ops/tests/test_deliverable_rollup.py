@@ -868,7 +868,7 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(central_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(central_root))
 
     # --- DoE-style scan worktree: plan carries FK, NO local state/initiatives/ ---
     rollup_repo.write_plan(
@@ -953,8 +953,8 @@ def test_ac3_coincident_dir_realpath_equivalence(
     from coordinator_core.ops.deliverable_rollup import _central_initiatives_dir
     from coordinator_core.ops.fleet._common import main_worktree_root
 
-    # Point CLAUDE_KLABAUTER_ROOT at the scan worktree root — the coincident case.
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(rollup_repo.root))
+    # Point COORDINATOR_ENGINE_ROOT at the scan worktree root — the coincident case.
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(rollup_repo.root))
 
     worktree_root = main_worktree_root(rollup_repo.common_dir)
 
@@ -1077,8 +1077,8 @@ def test_ac9_no_warn_on_coincident_case(
     The WARN is guarded to the unresolvable-root fallback branch only; a successful
     central resolution (step 1 or 2 in the precedence chain) must not trigger it.
     """
-    # Coincident case: point CLAUDE_KLABAUTER_ROOT at the scan worktree root.
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(rollup_repo.root))
+    # Coincident case: point COORDINATOR_ENGINE_ROOT at the scan worktree root.
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(rollup_repo.root))
 
     rollup_repo.write_plan(
         "2026-07-06-ac9-no-warn.md",

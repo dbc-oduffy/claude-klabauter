@@ -160,6 +160,7 @@ def test_row_failure_still_runs_end_of_run_gates(monkeypatch, tmp_path, capsys):
     """The core fix: a failing row must NOT short-circuit past the
     end-of-run gates — they still run this same round, over whatever
     successfully synced."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     identity_calls, entrypoint_calls = _wire_common_fakes(
         monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True
     )
@@ -177,6 +178,7 @@ def test_row_failure_plus_gate_failure_both_reported_same_round(monkeypatch, tmp
     """A round with BOTH a failing row AND an independent gate defect must
     report both in the SAME round — this is the exact waste the fix closes
     (six rounds to discover six sequential single-defect classes)."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=False, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_one_fails)
 
@@ -192,6 +194,7 @@ def test_row_failure_plus_gate_failure_both_reported_same_round(monkeypatch, tmp
 def test_three_failing_rows_report_all_three_not_one(monkeypatch, tmp_path, capsys):
     """Row-level aggregation (pre-existing, pinned here alongside the new
     gate aggregation): every failing row is named, not just the first."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
 
     def fake_process_target_all_fail(target, setup_dir, totals, **kwargs):
@@ -211,6 +214,7 @@ def test_three_failing_rows_report_all_three_not_one(monkeypatch, tmp_path, caps
 def test_single_failing_row_exit_code_and_message_unchanged(monkeypatch, tmp_path, capsys):
     """A lone failing row, every gate clean, still refuses exactly as
     before this fix: exit 1, "Rows FAILED" naming it."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_one_fails)
 
@@ -226,6 +230,7 @@ def test_no_row_failure_gate_failure_still_exits_2(monkeypatch, tmp_path, capsys
     """Sanity counterpart, unchanged from before this fix: every row
     succeeds, but a gate fails — exit 2 (not 1), since bytes landed but
     verification did not complete."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=False, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_all_ok)
 
@@ -239,6 +244,7 @@ def test_no_row_failure_gate_failure_still_exits_2(monkeypatch, tmp_path, capsys
 
 def test_all_clean_still_exits_0(monkeypatch, tmp_path):
     """Happy path is unaffected by the reordering."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, identity_ok=True, entrypoint_ok=True)
     monkeypatch.setattr(publish, "process_target", _fake_process_target_all_ok)
 

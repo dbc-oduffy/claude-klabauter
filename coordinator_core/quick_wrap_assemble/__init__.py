@@ -117,6 +117,7 @@ from coordinator_core.ops.session.safe_commit_offer import auto_commit_session_a
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.session import session_facts
 from coordinator_core.session_baton.store import merge_baton
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Locally scoped exit codes — NOT inherited from a sibling assembler. Built through the
 #: shipped `extend_exit_codes` factory because `ExitCodeBase` is deliberately final;
@@ -139,7 +140,11 @@ def _git_out(args: list[str], cwd: Path) -> str:
     a fact this assembler cannot read degrades that fact to `null`/`unknown`, it never
     takes down the close ceremony. `--no-optional-locks` because this repo is a shared
     worktree with a dozen concurrent sessions and a read must never contend for
-    `.git/index.lock`."""
+    `.git/index.lock`.
+
+    `no_console_creationflags()` because this runs on the close-ceremony hot path:
+    `git.exe` is a console-subsystem binary, so an unsuppressed spawn allocates a
+    `conhost.exe` window that flashes and steals keyboard focus on Windows."""
     try:
         proc = subprocess.run(
             ["git", "--no-optional-locks", *args],
@@ -147,6 +152,7 @@ def _git_out(args: list[str], cwd: Path) -> str:
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, ValueError):
         return ""
