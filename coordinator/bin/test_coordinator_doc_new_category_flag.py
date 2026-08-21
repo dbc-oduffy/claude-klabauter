@@ -92,11 +92,23 @@ def _invoke(doc_type: str, out_path: str, extra_args: list[str]) -> tuple[int, s
         *_REQUIRED_ARGS.get(doc_type, []),
         *extra_args,
     ]
+    # The spinoff scaffolder refuses fail-loud when no session id resolves
+    # (COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID all
+    # unset), so an ambient-env-dependent child would pass under an interactive
+    # session and fail wherever the fleet runs this suite without one. Pin the
+    # highest-precedence rung to a literal so the category assertions below
+    # exercise category handling and never the session-resolution arm.
+    #
+    # Negative-spec: does NOT assert anything about the resolved session id --
+    # that property is owned by
+    # tests/test_coordinator_doc_new_spinoff_resolvable_fields.py.
+    env = {**os.environ, "COORDINATOR_SESSION_ID": "test-category-flag-session"}
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
         **no_console_creationflags(),
     )
     return result.returncode, (result.stdout or "") + (result.stderr or "")
@@ -172,3 +184,53 @@ def test_unknown_category_fails_loud_naming_legal_values() -> None:
                 raise AssertionError(f"{name}: " + (f"error output does not name all legal values; missing: {missing}. "
                     f"Output: {combined.strip()[:500]}"))
 
+
+
+def test_spinoff_resolvable_fields_never_scaffold_as_placeholder() -> None:
+    """Standing gate: a spinoff scaffolded THROUGH THE CLI never emits
+    `PLACEHOLDER` in a field the engine can resolve.
+
+    This property already shipped once (2026-08-20) and silently stopped
+    working: a stale-buffer full-file commit reverted it 33 seconds later, the
+    scaffolder went back to emitting `authoring_session: PLACEHOLDER`, and the
+    publish pipeline faithfully mirrored the reverted file. Nothing was red for
+    a full day; the EM hand-edited the field after every spinoff instead.
+
+    Asserted through the subprocess surface deliberately. The in-process
+    sibling gate
+    (`tests/test_coordinator_doc_new_spinoff_resolvable_fields.py`) covers the
+    emitter's own branching, but an in-process green is exactly the signal that
+    hid the original incident -- only spawning the CLI proves the bytes on disk
+    still resolve the field.
+
+    Negative-spec: asserts only that these fields are ABSENT-or-real, never
+    which session id or workstream resolves -- the values are environment-
+    dependent by construction, and pinning them would make this gate a
+    fixture-parity test rather than a placeholder gate. `workstream` is
+    legitimately omitted when this session holds no baton carrying one, so its
+    absence is a pass; a `PLACEHOLDER` value is not.
+    """
+    with tempfile.TemporaryDirectory(prefix="coordinator-doc-new-spinoff-gate-") as tmpdir:
+        out_path = os.path.join(tmpdir, "spinoff-resolvable-fields.md")
+        try:
+            rc, combined = _invoke("spinoff", out_path, [])
+        except subprocess.TimeoutExpired:
+            raise AssertionError("spinoff scaffold invocation timed out after 60s")
+        if rc != 0:
+            raise AssertionError(f"spinoff scaffold exited {rc}, expected 0. Output: {combined.strip()[:500]}")
+        if not os.path.isfile(out_path):
+            raise AssertionError(f"spinoff scaffold exited 0 but {out_path} was not written")
+        with open(out_path, "r", encoding="utf-8") as f:
+            body = f.read()
+        for field in ("authoring_session", "workstream"):
+            offenders = [
+                line for line in body.splitlines()
+                if line.startswith(f"{field}:") and "PLACEHOLDER" in line
+            ]
+            if offenders:
+                raise AssertionError(
+                    f"spinoff scaffolded through the CLI emitted a placeholder in the "
+                    f"engine-resolvable field {field!r}: {offenders[0]!r}. The engine "
+                    f"knows this value; a scaffold must never hand it back to the EM to "
+                    f"type in. Output head: {body[:300]!r}"
+                )

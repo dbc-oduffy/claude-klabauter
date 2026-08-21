@@ -182,6 +182,8 @@ class ScaffoldSpinoffAuthoringSessionTest(unittest.TestCase):
             _cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"
         ), mock.patch.object(
             _cli, "_resolve_session_display_name", return_value="claude-klabauter-51"
+        ), mock.patch.object(
+            _cli, "_resolve_spinoff_workstream", return_value=None
         ):
             content = _cli._scaffold_spinoff(title="t", branch="b")
         self.assertIn(
@@ -191,21 +193,30 @@ class ScaffoldSpinoffAuthoringSessionTest(unittest.TestCase):
         )
         self.assertNotIn("authoring_session: PLACEHOLDER", content)
 
-    def test_falls_back_to_placeholder_when_session_id_unresolvable(self):
+    def test_unresolvable_session_id_fails_loud_not_placeholder(self):
+        """2026-08-21: the 'em-unknown' arm now refuses the scaffold outright
+        (sys.exit 1) instead of degrading to a hand-typed 'PLACEHOLDER' --
+        see test_coordinator_doc_new_spinoff_resolvable_fields.py for the
+        dedicated coverage of this contract."""
         with mock.patch.object(_cli, "_resolve_session_id", return_value="em-unknown"):
-            content = _cli._scaffold_spinoff(title="t", branch="b")
-        self.assertIn("authoring_session: PLACEHOLDER", content)
+            with self.assertRaises(SystemExit) as ctx:
+                _cli._scaffold_spinoff(title="t", branch="b")
+        self.assertEqual(ctx.exception.code, 1)
 
-    def test_workstream_placeholder_is_untouched(self):
-        """Non-regression: this change scopes to authoring identity only --
-        `workstream` (a different, non-identity field) still hand-fills."""
+    def test_workstream_resolves_off_the_held_baton(self):
+        """2026-08-21: `workstream` is no longer a hand-typed placeholder --
+        it resolves via `_resolve_spinoff_workstream` (dedicated coverage in
+        test_coordinator_doc_new_spinoff_resolvable_fields.py)."""
         with mock.patch.object(
             _cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"
         ), mock.patch.object(
             _cli, "_resolve_session_display_name", return_value="claude-klabauter-51"
+        ), mock.patch.object(
+            _cli, "_resolve_spinoff_workstream", return_value="my-workstream"
         ):
             content = _cli._scaffold_spinoff(title="t", branch="b")
-        self.assertIn("workstream: PLACEHOLDER", content)
+        self.assertIn('workstream: "my-workstream"', content)
+        self.assertNotIn("workstream: PLACEHOLDER", content)
 
 
 if __name__ == "__main__":
@@ -228,7 +239,8 @@ class AuthoringSessionStaysMachineReadableTest(unittest.TestCase):
 
     def _emit(self):
         with mock.patch.object(_cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"), \
-             mock.patch.object(_cli, "_resolve_session_display_name", return_value="claude-klabauter-51"):
+             mock.patch.object(_cli, "_resolve_session_display_name", return_value="claude-klabauter-51"), \
+             mock.patch.object(_cli, "_resolve_spinoff_workstream", return_value=None):
             return _cli._scaffold_spinoff(title="t", branch="b")
 
     def test_authoring_session_line_carries_no_inline_comment(self):

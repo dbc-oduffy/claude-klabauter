@@ -77,6 +77,27 @@ class OpClass(enum.Enum):
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
     "ping": OpClass.COMPUTE_ONLY,
+    # invoke.from_argv — MUTATING (fail-closed default, DR-208 § Classification
+    # correctness discipline): a generic CLI-argv-to-op dispatcher
+    # (ops/invoke_from_argv.py::_invoke_from_argv) — its whole purpose is to
+    # run WHATEVER op the caller's argv names, including MUTATING ones, so it
+    # cannot itself be affirmed COMPUTE_ONLY under the five-question test; its
+    # own effective write-semantics are exactly those of the dispatched op.
+    # Not an HTTP-exposed surface either way — reachable only over the same
+    # ungated warm-server pipe the whole CLI already trusts (no privilege
+    # escalation beyond what a caller could already do via
+    # `python -m coordinator_core.invoke <argv...>` cold).
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  Depends
+    #      entirely on the dispatched op — assume yes.
+    #   2. Writes into rag's relational store?                                 No, itself;
+    #      inherits the dispatched op's answer.
+    #   3. Opens any file for write (including sentinel creation)?             No, itself;
+    #      inherits the dispatched op's answer.
+    #   4. Mutates shared mutable state outside its own module?                No, itself
+    #      (repo_root is unused — see the handler's own docstring).
+    #   5. Persistent state changes observable across process boundaries?      Depends
+    #      entirely on the dispatched op — assume yes.
+    "invoke.from_argv": OpClass.MUTATING,
     # cutover.gate — COMPUTE_ONLY: the cutover state machine's read-only
     # coverage verdict (ops/cutover_gate.py::_cutover_gate) — re-derives a
     # cutover record's consumer set at call time and evaluates the two-way

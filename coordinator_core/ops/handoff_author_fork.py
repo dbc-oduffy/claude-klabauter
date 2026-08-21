@@ -198,6 +198,22 @@ PROVENANCE_FIELD_MAP: Dict[str, Dict] = {
 _WORKSTREAM_SLUG_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
+class AmbiguousOriginHandoffError(RuntimeError):
+    """Raised by ``_resolve_origin_handoff`` when a session holds MORE THAN
+    ONE live claim among ``state/handoffs/*.md`` and claim recency does not
+    disambiguate them (see that function's docstring, "Multi-match
+    disambiguation" section, for the full contract).
+
+    Mirrors the module's existing fail-loud discipline for provenance-
+    critical ambiguity (the ``OSError`` raised on an unreadable
+    ``handoffs_dir`` — see ``_resolve_origin_handoff``'s own "Raises"
+    section): both ``_handler`` and ``_handle_stamp`` catch this and
+    surface it as an explicit ``_err(...)`` reply rather than silently
+    picking a candidate (defect B — see
+    ``state/handoffs/2026-08-21-scaffold-knows-the-session.md`` spec 4).
+    """
+
+
 def _resolution_reason_text(reason: str, ranked_count: int) -> str:
     """Render a ``ResolutionReason`` value into the human-readable prefix of a
     ``degraded``/``needs_disambiguation`` reason string — the wording is
@@ -384,6 +400,25 @@ def _stamp_fork_provenance(fm_text: str, provenance: Dict[str, object]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_claim_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
+    """Parse a ``claimed_at`` frontmatter scalar into a comparable, aware
+    ``datetime``. ``None`` on absence or any unparseable shape — degrade,
+    never raise; the caller treats "cannot parse" identically to "cannot
+    disambiguate" (see ``_resolve_origin_handoff``'s multi-match section).
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def _resolve_origin_handoff(
     handoffs_dir: Path,
     session_id: Optional[str],
@@ -402,10 +437,38 @@ def _resolve_origin_handoff(
     mirror-only ``claimed_by``/``consumed_by`` read means this site now finds
     the origin baton even when only the ledger still holds the claim. This
     function's own search semantics (non-recursive ``iterdir()`` over
-    ``state/handoffs/`` only, first match wins) are unchanged; only the claim
-    read is delegated. A dead ledger holder degrades to the mirror (or
-    "none") per ``resolve_claim_state``'s own contract — never surfaced as
+    ``state/handoffs/`` only) are unchanged; only the claim read is
+    delegated. A dead ledger holder degrades to the mirror (or "none") per
+    ``resolve_claim_state``'s own contract — never surfaced as
     ``source == "ledger"`` for a dead session.
+
+    Multi-match disambiguation (defect B —
+    ``state/handoffs/2026-08-21-scaffold-knows-the-session.md`` spec 4).
+    THE SELECTION RULE THIS REPLACED: every handoff in ``state/handoffs/``
+    was scanned in ``sorted()`` (lexicographic-by-filename, i.e. date-then-
+    time-then-uuid) order, and the FIRST file whose resolved claim holder
+    matched ``session_id`` won — silently, with no signal that a second (or
+    third) live claim existed. A session that held an orphaned scaffold
+    (left behind by an errored ``baton-assemble apply`` — see
+    ``baton_assemble.apply``'s pipeline-error cleanup) alongside its real
+    held baton could have the orphan's filename sort first and win, stamping
+    a spinoff's ``origin_handoff`` at the wrong file.
+
+    This function now collects EVERY candidate whose resolved claim holder
+    equals ``session_id`` before deciding:
+      - Zero matches  → ``(None, None)`` (unchanged — graceful-absent).
+      - One match     → that candidate (unchanged behaviour).
+      - >1 matches    → disambiguate on claim recency: each candidate's own
+        ``resolve_claim_state(...).claimed_at`` is parsed
+        (``_parse_claim_timestamp``) and the single most-recently-claimed
+        candidate wins — the newest claim is the one the session most
+        plausibly means "the baton I currently hold" (an orphan from an
+        earlier, failed run predates the session's real, current claim).
+        If any candidate's ``claimed_at`` is missing/unparseable, or the top
+        two candidates tie exactly, recency does NOT decide — this raises
+        ``AmbiguousOriginHandoffError`` rather than silently picking one
+        (matches this function's own existing fail-loud-on-provenance-
+        critical-ambiguity discipline; see the OSError case below).
 
     Returns ``(origin_handoff, origin_handoff_id)``:
       - ``origin_handoff``    — the repo-relative path ``state/handoffs/<basename>``
@@ -440,12 +503,15 @@ def _resolve_origin_handoff(
         dir → ``glob()`` yields an empty iterator, no exception), which made the
         previous ``except OSError: return None, None`` here dead code for the
         exact permission-denied case it existed to guard.
+
+        AmbiguousOriginHandoffError — see "Multi-match disambiguation" above.
     """
     if not session_id:
         return None, None
     if not handoffs_dir.is_dir():
         return None, None
     md_files = sorted(p for p in handoffs_dir.iterdir() if p.suffix == ".md" and p.is_file())
+    candidates: List[Dict[str, object]] = []
     for hfile in md_files:
         # Review: code-reviewer (Finding 1) -- before routing the claim read
         # through resolve_claim_state, EVERY unreadable candidate file was
@@ -474,29 +540,67 @@ def _resolve_origin_handoff(
         # costs a cached-dict lookup, not a subprocess spawn.
         claim_state = resolve_claim_state(hfile, repo_root=repo_root)
         claimed_by = claim_state.holder
-        if claimed_by and claimed_by == session_id:
-            try:
-                text = hfile.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                # Review: code-reviewer (Finding 2) -- route through the module
-                # logger instead of a raw print, matching the discipline used
-                # elsewhere in this file for per-item skip-and-continue failures.
-                _LOG.warning(
-                    "handoff.author_fork: skipping unreadable candidate file %s: %s",
-                    hfile, sys.exc_info()[1],
-                )
-                continue
-            # C2: origin_handoff_id is derived from THIS SAME file/text — never a
-            # separate lookup — so it can never disagree with origin_handoff.
-            handoff_id = extract_frontmatter_scalar(text, "handoff_id") or None
+        if not (claimed_by and claimed_by == session_id):
+            continue
+        try:
+            text = hfile.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # Review: code-reviewer (Finding 2) -- route through the module
+            # logger instead of a raw print, matching the discipline used
+            # elsewhere in this file for per-item skip-and-continue failures.
+            _LOG.warning(
+                "handoff.author_fork: skipping unreadable candidate file %s: %s",
+                hfile, sys.exc_info()[1],
+            )
+            continue
+        # C2: origin_handoff_id is derived from THIS SAME file/text — never a
+        # separate lookup — so it can never disagree with origin_handoff.
+        handoff_id = extract_frontmatter_scalar(text, "handoff_id") or None
+        candidates.append({
             # Path shape, not a bare stem: "state/handoffs/" is a literal prefix,
             # not derived from handoffs_dir -- this function only ever reads the
             # live directory, and the id index keys on this same logical prefix
             # (archived records included). Built with an explicit forward slash
             # (never os.path.join/Path string coercion) so the emitted path never
             # picks up backslashes on Windows.
-            return "state/handoffs/" + hfile.name, handoff_id
-    return None, None
+            "path": "state/handoffs/" + hfile.name,
+            "handoff_id": handoff_id,
+            "claimed_at": claim_state.claimed_at,
+        })
+
+    if not candidates:
+        return None, None
+    if len(candidates) == 1:
+        only = candidates[0]
+        return only["path"], only["handoff_id"]  # type: ignore[return-value]
+
+    parsed = [(c, _parse_claim_timestamp(c["claimed_at"])) for c in candidates]  # type: ignore[arg-type]
+    # Filtered (not just checked) so the sort key below is `datetime`, never
+    # `datetime | None` — a static type checker cannot narrow `parsed`'s
+    # element type across the `any(...)` + raise below, and an untimestamped
+    # candidate sorting against a timestamped one is exactly the live shape
+    # (an orphan scaffold's claim predates the session's real held baton) so
+    # this must never reach `sorted()` un-narrowed.
+    timed = [(c, ts) for c, ts in parsed if ts is not None]
+    if len(timed) != len(parsed):
+        raise AmbiguousOriginHandoffError(
+            f"handoff.author_fork: session {session_id!r} holds {len(candidates)} live "
+            f"claims among state/handoffs/*.md ({[c['path'] for c in candidates]}) and at "
+            "least one candidate has a missing/unparseable claimed_at -- claim recency "
+            "cannot disambiguate; refusing to silently pick one as origin_handoff."
+        )
+    ranked = sorted(timed, key=lambda pair: pair[1], reverse=True)
+    newest_ts = ranked[0][1]
+    runner_up_ts = ranked[1][1]
+    if newest_ts == runner_up_ts:
+        raise AmbiguousOriginHandoffError(
+            f"handoff.author_fork: session {session_id!r} holds {len(candidates)} live "
+            f"claims among state/handoffs/*.md ({[c['path'] for c in candidates]}) with tied "
+            f"claimed_at ({newest_ts.isoformat()}) -- claim recency cannot disambiguate; "
+            "refusing to silently pick one as origin_handoff."
+        )
+    winner = ranked[0][0]
+    return winner["path"], winner["handoff_id"]  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -706,6 +810,8 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
             )
         except OSError as exc:
             return _err(f"cannot enumerate {handoffs_dir} to resolve origin_handoff: {exc}")
+        except AmbiguousOriginHandoffError as exc:
+            return _err(str(exc))
         if not origin_handoff_id:
             origin_handoff_id = resolved_handoff_id
 
@@ -996,6 +1102,12 @@ async def _handler(
         # A silently-swallowed enumeration failure here would write a fork with
         # falsely-null origin_handoff/origin_handoff_id provenance.
         return _err(f"cannot enumerate {handoffs_dir} to resolve origin_handoff: {exc}")
+    except AmbiguousOriginHandoffError as exc:
+        # Fail loud (provenance-critical, defect B) — see the "Multi-match
+        # disambiguation" section of _resolve_origin_handoff's docstring. A
+        # silently-picked candidate here would author the fork with
+        # origin_handoff pointing at the WRONG baton rather than the right one.
+        return _err(str(exc))
 
     # --- origin_plan_id disambiguation ---
     origin_plan_id: Optional[str]

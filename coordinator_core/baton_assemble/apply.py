@@ -1940,6 +1940,61 @@ def _scoped_commit(repo_root: Path, artifact_rel_path: str, kind: str, basename:
     return apply_base.scoped_commit(repo_root, artifact_rel_path, message, _run_git)
 
 
+def _cleanup_orphan_on_commit_pipeline_error(root: Path, artifact_rel_path: str) -> None:
+    """Removes the just-scaffolded (and, for spinoff, already-stamped)
+    successor artifact when `_scoped_commit` raises AFTER every directive
+    (including d3's `handoff.author_fork` stamp) has already landed on disk.
+
+    THE GAP THIS CLOSES (spec 5,
+    `state/handoffs/2026-08-21-scaffold-knows-the-session.md`). `_D1_
+    COMPENSATORS` (`_compensate_d1_scaffold`) only fires from `apply_base
+    .execute_directives`'s own `except Exception` branch -- i.e. only when a
+    LATER DIRECTIVE raises (`APPLY_EXIT_PARTIAL_MUTATION`), never when every
+    directive succeeds (`APPLY_EXIT_OK`) and the failure happens afterward,
+    in `apply()`'s own commit step (`apply_base.scoped_commit` raises
+    `RuntimeError` on a failed `git add`/`git commit`). That failure mode
+    left the scaffold fully written and stamped -- unclaimed by git (never
+    staged, so `git status` shows it untracked) -- exactly the "unclaimed,
+    untracked artifact" defect B's incident describes: a second `apply` run
+    later found it via `handoff.author_fork`'s claim scan and mis-derived
+    provenance from it.
+
+    WHY THIS SHAPE, NOT "make the scaffold write the last step" (spec 5's
+    other offered option). d1 (the scaffold write) must run FIRST --
+    `handoff.author_fork`'s stamp mode and every other directive in this
+    module's `_CLI_DISPATCH` operate ON the file d1 creates; reordering
+    would mean inventing a way for those directives to stage their writes
+    against a file that does not yet exist on disk. Cleaning up the one
+    artifact this run created, on the one path that can strand it after
+    every directive already succeeded, is the smaller and less invasive
+    change.
+
+    Unlike `_compensate_d1_scaffold`, this is NOT gated on
+    `_is_pristine_generator_scaffold` -- by the time `_scoped_commit` runs,
+    every directive (including d3's provenance stamp) has already succeeded,
+    so the file legitimately carries real content the pristine-scaffold
+    predicate would treat as "operator work" and refuse to delete. That
+    guard exists to protect content a HUMAN added between runs; nothing
+    human-authored can have touched this file within a single `apply()`
+    call, so deleting it unconditionally here is safe -- it is exactly what
+    this run itself just wrote, and it was never staged or committed.
+
+    Best-effort, matching `_compensate_d1_scaffold`'s own posture: any
+    failure removing the file (already gone, permission error, etc.) is a
+    silent no-op -- this runs as a REACTION to an already-failed commit
+    step, and must never mask or replace the original commit error the
+    caller re-raises after calling this.
+    """
+    if not artifact_rel_path:
+        return
+    target = root / artifact_rel_path
+    try:
+        if target.is_file():
+            target.unlink()
+    except OSError:
+        pass
+
+
 def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
     """Record a just-minted baton's own path into THIS session's
     `baton.json` (`session_baton.store.merge_baton`, `minted_artifacts` --
@@ -2178,9 +2233,18 @@ def apply(
 
         commits = _collect_directive_commits(report)
         if exit_code in (APPLY_EXIT_OK, apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT):
-            report["commit_sha"] = _scoped_commit(
-                root, committed_artifact_path, kind, basename, report.get("landed", [])
-            )
+            try:
+                report["commit_sha"] = _scoped_commit(
+                    root, committed_artifact_path, kind, basename, report.get("landed", [])
+                )
+            except Exception:
+                # Spec 5 (state/handoffs/2026-08-21-scaffold-knows-the-session.md):
+                # every directive already landed on disk at this point -- a
+                # commit-step failure here must not strand the just-scaffolded
+                # successor as an unclaimed, untracked orphan. See
+                # `_cleanup_orphan_on_commit_pipeline_error`'s own docstring.
+                _cleanup_orphan_on_commit_pipeline_error(root, committed_artifact_path)
+                raise
             if report["commit_sha"]:
                 commits.append(
                     {

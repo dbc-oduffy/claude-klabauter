@@ -2233,6 +2233,75 @@ def _scaffold_recovery(
     return "\n".join(lines)
 
 
+def _resolve_spinoff_workstream() -> str | None:
+    """READ-ONLY resolve of a spinoff's `workstream` off the baton this
+    session currently holds.
+
+    Locates the held baton via `coordinator_core.ops.handoff_author_fork.
+    _resolve_origin_handoff` -- the same ledger-first claim-holder scan that
+    op uses to populate `origin_handoff` on a fork -- then reads that
+    baton's own `workstream:` frontmatter scalar via
+    `coordinator_core.ops._fm_util.extract_frontmatter_scalar`. Read-only:
+    calls neither module's mutating surface, and does not import or touch
+    anything else in `handoff_author_fork` beyond this one resolver.
+
+    Degrades to None (never a hardcoded default) when: the engine is
+    unresolvable, no repo root resolves, no session id resolves
+    (`_resolve_session_id() == "em-unknown"`), no baton is currently held by
+    this session, or the held baton has no `workstream:` field -- matching
+    this file's graceful-skip convention for engine-touching seams
+    (`_ensure_engine_on_path`). The caller (`_scaffold_spinoff`) omits the
+    `workstream:` key entirely on None rather than emitting a placeholder --
+    per state/handoffs/2026-08-21-scaffold-knows-the-session.md ("either
+    derive it or stop pretending it is required").
+    """
+    _ensure_engine_on_path()
+    try:
+        from coordinator_core.ops.handoff_author_fork import (  # noqa: PLC0415
+            _resolve_origin_handoff,
+        )
+        from coordinator_core.ops._fm_util import extract_frontmatter_scalar  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 -- best-effort; unresolvable engine degrades to None
+        return None
+    session_id = _resolve_session_id()
+    if session_id == "em-unknown":
+        return None
+    repo_root_str = _current_repo_root()
+    if not repo_root_str:
+        return None
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    worktree_root = _Path(repo_root_str)
+    handoffs_dir = worktree_root / "state" / "handoffs"
+    try:
+        origin_handoff, _origin_handoff_id = _resolve_origin_handoff(
+            handoffs_dir, session_id, repo_root=worktree_root
+        )
+    except OSError:
+        return None
+    except RuntimeError:
+        # `_resolve_origin_handoff` refuses fail-loud (AmbiguousOriginHandoffError,
+        # a RuntimeError) when this session holds several live claims that claim
+        # recency cannot rank. That refusal is provenance-critical for
+        # `handoff.author_fork`, which STAMPS origin_handoff -- it is not critical
+        # here, where the only consequence is one derived, optional field.
+        #
+        # Negative-spec: does NOT re-raise and does NOT pick a candidate. The
+        # ambiguity is surfaced by the op that writes provenance; degrading to
+        # omit-the-key matches this helper's every other unresolvable arm rather
+        # than turning a scaffold into a traceback. Caught as RuntimeError, not by
+        # importing the concrete class -- this CLI reaches coordinator_core through
+        # a best-effort seam that is allowed to be absent.
+        return None
+    if not origin_handoff:
+        return None
+    try:
+        text = (worktree_root / origin_handoff).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return extract_frontmatter_scalar(text, "workstream") or None
+
+
 def _scaffold_spinoff(
     title: str,
     branch: str,
@@ -2247,7 +2316,19 @@ def _scaffold_spinoff(
 
     Produces a conformant spinoff (kind: spinoff) against the handoff schema.
     Spinoffs use the same schema as session-handoffs; kind discriminates the body dialect.
-    Authoring-session and workstream are included as conventional spinoff fields.
+
+    authoring_session (2026-08-21) is stamped from `_resolve_session_id()` --
+    same resolver + precedence chain `_scaffold_handoff` uses for the same
+    field. Unresolvable (the resolver's own 'em-unknown' fallback sentinel)
+    is refused fail-loud (sys.exit 1) rather than degrading to a hand-typed
+    'PLACEHOLDER' the EM had to Edit in afterward -- a prior silent degrade
+    that let a since-fixed resolver regression go unnoticed for a full day
+    (state/handoffs/2026-08-21-scaffold-knows-the-session.md).
+
+    workstream (2026-08-21) is resolved read-only off the baton this session
+    currently holds via `_resolve_spinoff_workstream` (see its docstring).
+    Omitted entirely (not a placeholder) when nothing resolves -- matching
+    `_scaffold_handoff`'s own omit-the-key convention for `authoring_session`.
 
     deliverable_id and initiative are D9 present-as-null: emitted as 'null' when
     not supplied. deliverable_id is auto-inherited from DELIVERABLE_ID env var or
@@ -2277,22 +2358,31 @@ def _scaffold_spinoff(
     _ini = _yaml_quote(initiative) if initiative else "null"
     _category = category if category else "infra"
     _validate_category(_category)
-    # 2026-08-20 extension: was a hand-typed literal 'PLACEHOLDER' -- the EM
-    # had to Edit in their own session id after every spinoff scaffold. Same
-    # resolver + precedence chain _scaffold_handoff already uses for this
-    # field (COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID).
-    # Kept PLACEHOLDER as the fallback (not omit-the-key, unlike the handoff
-    # arm) -- this function's own established convention for a genuinely
-    # unresolvable required-by-convention field, matching `workstream` beside
-    # it, which this change does not touch.
+    # 2026-08-21 extension: the 'em-unknown' arm used to degrade to a
+    # hand-typed literal 'PLACEHOLDER' the EM had to Edit in after every
+    # spinoff scaffold -- a silent degrade that let a since-fixed resolver
+    # regression go unnoticed for a full day (state/handoffs/2026-08-21-
+    # scaffold-knows-the-session.md). This field is a machine-trustworthy
+    # fact or nothing: `coordinator_core.baton_assemble
+    # ._adopt_prior_attempt_scaffold_path` gates cross-authorship adoption on
+    # it (see `_scaffold_handoff`'s docstring), so an unresolvable session id
+    # now fails the scaffold loudly instead of authoring a fact-shaped field
+    # that isn't one.
     _authoring_session_value = _resolve_session_id()
-    if _authoring_session_value != "em-unknown":
-        _display_name = _resolve_session_display_name()
-        _authoring_session_line = (
-            f"# minted by {_display_name}\n" if _display_name else ""
-        ) + f"authoring_session: {_yaml_quote(_authoring_session_value)}"
-    else:
-        _authoring_session_line = "authoring_session: PLACEHOLDER"
+    if _authoring_session_value == "em-unknown":
+        print(
+            "coordinator-doc-new: --type spinoff could not resolve the authoring "
+            "session id (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / "
+            "CLAUDE_CODE_SESSION_ID all unset). authoring_session must be a "
+            "machine-trustworthy fact, not a hand-typed placeholder -- set one "
+            "of those env vars and retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _display_name = _resolve_session_display_name()
+    _authoring_session_line = (
+        f"# minted by {_display_name}\n" if _display_name else ""
+    ) + f"authoring_session: {_yaml_quote(_authoring_session_value)}"
     # Spinoff takes no blocker input at all, so this is always the empty-
     # blocked_by leg of C1's derive_readiness (docs/plans/2026-08-19-gate-
     # notes-are-advisory-blocked-by-derives-readiness.md § C3) -- one
@@ -2321,10 +2411,23 @@ def _scaffold_spinoff(
         f"summary: {_yaml_quote(placeholder_summary)}",
         f"pickup_ready: {_pickup_ready}",
         _authoring_session_line,
-        "workstream: PLACEHOLDER",
+    ]
+    # 2026-08-21 extension (same baton as authoring_session above): 'workstream'
+    # used to hand-type a literal 'PLACEHOLDER' unconditionally. It is now
+    # resolved off the baton this session currently holds
+    # (_resolve_spinoff_workstream, read-only) when possible; when nothing
+    # resolves, the key is OMITTED entirely rather than re-emitting a
+    # placeholder -- "either derive it or stop pretending it is required"
+    # (state/handoffs/2026-08-21-scaffold-knows-the-session.md § 2), the same
+    # omit-the-key convention `_scaffold_handoff` already uses for its own
+    # `authoring_session` arm.
+    _resolved_workstream = _resolve_spinoff_workstream()
+    if _resolved_workstream:
+        lines.append(f"workstream: {_yaml_quote(_resolved_workstream)}")
+    lines.extend([
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
-    ]
+    ])
     if handoff_id:
         lines.append(f"handoff_id: {_yaml_quote(handoff_id)}")
     if origin_handoff_id:
