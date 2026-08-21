@@ -155,6 +155,76 @@ def test_second_promote_call_returns_existing_path_no_rescaffold(tmp_path, monke
 
 
 # ---------------------------------------------------------------------------
+# Closed journals — the consumer of session_baton.store's closed_at/closed_into.
+# Spec backlink: docs/plans/2026-08-21-a-pickup-closes-the-baton-it-was-born-with.md
+# ---------------------------------------------------------------------------
+
+
+def test_promote_refuses_a_closed_journal(tmp_path, monkeypatch):
+    """A journal a pickup already closed is that baton's ancestor, not a
+    promotion candidate — promoting it would advertise the same work twice."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-closed")
+    calls = []
+
+    def _counting_fake(title, branch, cwd, category=None, summary=None, gated_predicate=None):
+        calls.append(1)
+        fake = _fake_scaffold("state/handoffs/2026-08-21-should-not-exist.md")
+        return fake(title, branch, cwd, category=category, summary=summary, gated_predicate=gated_predicate)
+
+    monkeypatch.setattr(promote_mod, "_scaffold_via_doc_new", _counting_fake)
+    store.merge_baton(
+        "sid-closed",
+        cwd=str(repo),
+        closed_at="2026-08-21T12:00:00Z",
+        closed_into="state/handoffs/the-picked-up-baton.md",
+    )
+
+    result = _promote(session_id="sid-closed", cwd=str(repo))
+
+    assert result["exit_code"] == 1
+    assert "state/handoffs/the-picked-up-baton.md" in result["error"]
+    assert not calls, "a closed journal must never reach the scaffolder"
+    assert store.read_baton("sid-closed", cwd=str(repo))["promoted_to"] is None
+
+
+def test_promote_refuses_on_closed_at_alone(tmp_path, monkeypatch):
+    """Either half of the pair is enough. A record carrying a closure stamp
+    with no target is still closed — it must not fall through to a scaffold
+    because the target happens to be unreadable."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-closed2")
+    monkeypatch.setattr(
+        promote_mod, "_scaffold_via_doc_new", _fake_scaffold("state/handoffs/nope.md")
+    )
+    store.merge_baton("sid-closed2", cwd=str(repo), closed_at="2026-08-21T12:00:00Z")
+
+    result = _promote(session_id="sid-closed2", cwd=str(repo))
+
+    assert result["exit_code"] == 1
+    assert "an adopted artifact" in result["error"]
+
+
+def test_promote_still_works_on_an_open_journal(tmp_path, monkeypatch):
+    """The guard is positive-match only: an ordinary open journal, and one
+    whose closure was explicitly cleared, both promote exactly as before."""
+    repo = _make_repo(tmp_path)
+    _ensure_session_dir(repo, "sid-open")
+    monkeypatch.setattr(
+        promote_mod, "_scaffold_via_doc_new", _fake_scaffold("state/handoffs/2026-08-21-open.md")
+    )
+    store.merge_baton(
+        "sid-open", cwd=str(repo), closed_at="2026-08-21T12:00:00Z", closed_into="x.md"
+    )
+    store.merge_baton("sid-open", cwd=str(repo), closed_at=None, closed_into=None)
+
+    result = _promote(session_id="sid-open", cwd=str(repo))
+
+    assert result["exit_code"] == 0
+    assert result["handoff_path"] == "state/handoffs/2026-08-21-open.md"
+
+
+# ---------------------------------------------------------------------------
 # Param validation
 # ---------------------------------------------------------------------------
 

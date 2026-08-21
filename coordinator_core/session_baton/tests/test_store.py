@@ -366,6 +366,93 @@ def test_adopt_into_baton_does_not_clobber_an_already_titled_baton(tmp_path, mon
     assert record["adopted_artifacts"] == ["state/handoffs/h2.md"]
 
 
+# ---------------------------------------------------------------------------
+# Journal closure — a pickup ends the birth baton's life as the live record.
+# Spec backlink: docs/plans/2026-08-21-a-pickup-closes-the-baton-it-was-born-with.md
+# ---------------------------------------------------------------------------
+
+
+def test_default_record_is_born_open_not_closed(tmp_path):
+    """A journal is NOT born resolved. `closed_at`/`closed_into` exist on the
+    skeleton so every reader can `.get()` them, and both are null until an
+    adoption actually ends the journal."""
+    record = store.default_record("sid-open")
+    assert record["closed_at"] is None
+    assert record["closed_into"] is None
+
+
+def test_adopt_into_baton_closes_the_journal_into_the_adopted_artifact(
+    tmp_path, monkeypatch
+):
+    repo = _make_repo(tmp_path)
+    sid = "sid-close"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/picked-up.md", None)
+
+    record = store.read_baton(sid, cwd=str(repo))
+    assert record["closed_into"] == "state/handoffs/picked-up.md"
+    assert record["closed_at"]  # an ISO stamp, not an empty string
+
+
+def test_second_adoption_does_not_re_close_the_journal(tmp_path, monkeypatch):
+    """First-wins. A session adopting twice keeps the closure naming the
+    adoption that actually ended the journal — the later artifact still
+    accrues to `adopted_artifacts`, but it does not re-point the closure."""
+    repo = _make_repo(tmp_path)
+    sid = "sid-close2"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/first.md", None)
+    first = store.read_baton(sid, cwd=str(repo))
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/second.md", None)
+    second = store.read_baton(sid, cwd=str(repo))
+
+    assert second["closed_into"] == "state/handoffs/first.md"
+    assert second["closed_at"] == first["closed_at"]
+    assert second["adopted_artifacts"] == [
+        "state/handoffs/first.md",
+        "state/handoffs/second.md",
+    ]
+
+
+def test_closure_mints_nothing_under_state_handoffs(tmp_path, monkeypatch):
+    """The negative-spec that separates this from promotion: closing a journal
+    writes inside `.git/` and nowhere else. No corpus artifact is created, so
+    nothing new can be offered as pickup-able work."""
+    repo = _make_repo(tmp_path)
+    sid = "sid-close3"
+    _ensure_session_dir(repo, sid)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+    before = _all_paths(repo)
+    pickup_assemble._adopt_into_baton(repo, "state/handoffs/picked-up.md", None)
+    written = _all_paths(repo) - before
+
+    assert written, "the closure must actually write the baton record"
+    for path in written:
+        assert ".git" in path.parts, f"wrote outside .git/: {path}"
+    assert not (repo / "state" / "handoffs").exists()
+
+
+def test_closed_fields_are_explicitly_clearable(tmp_path):
+    """Reopening is deliberate and possible — first-wins guards against an
+    accidental re-close, not against a caller that means it."""
+    repo = _make_repo(tmp_path)
+    sid = "sid-reopen"
+    _ensure_session_dir(repo, sid)
+
+    store.merge_baton(sid, cwd=str(repo), closed_at="2026-08-21T00:00:00Z",
+                      closed_into="state/handoffs/h.md")
+    store.merge_baton(sid, cwd=str(repo), closed_at=None, closed_into=None)
+
+    record = store.read_baton(sid, cwd=str(repo))
+    assert record["closed_at"] is None
+    assert record["closed_into"] is None
+
+
 def test_adopt_into_baton_survives_frontmatter_less_artifact(tmp_path, monkeypatch):
     """Fail-open posture: a malformed/frontmatter-less adopted artifact
     still adopts (the fan-in edge lands) without raising, and simply

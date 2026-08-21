@@ -32,6 +32,20 @@ Negative-spec:
     - read_revalidated is shape-neutral (any compute_fn returning any value),
       not specific to frontmatter.
     - This module is stdlib-only (hashlib, pathlib, typing). No third-party deps.
+
+Persisted tier (op_census/C1, additive, opt-in):
+    read_disk_revalidated is a SECOND entry point, additive to this same module
+    rather than a second cache module (staff-eng Finding 0 / Ruling 1: op_census
+    grows cache.py, it does not stand up a parallel cache). It shares
+    compute_stamp with read_revalidated but keeps a fully separate storage path
+    (a caller-owned `index` dict, never `_REVALIDATED_CACHE`) — an existing
+    caller of read_revalidated/compute_stamp (envelope.py's content-hash stamp)
+    is untouched: same signature, same in-process dict, same cost, unchanged.
+
+    read_disk_revalidated does no disk I/O of its own beyond compute_stamp's
+    read of `path` itself — loading/saving `index` to/from a persistence file
+    is the CALLER's job (op_census/module_summary.py), keeping this module
+    free of any opinion on where or how a summary index is serialized.
 """
 
 from __future__ import annotations
@@ -40,7 +54,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, Tuple
 
-__all__ = ["compute_stamp", "read_revalidated"]
+__all__ = ["compute_stamp", "read_revalidated", "read_disk_revalidated"]
 
 # ---------------------------------------------------------------------------
 # Bounded module-level cache: (str(path), stamp) → Any
@@ -49,7 +63,11 @@ __all__ = ["compute_stamp", "read_revalidated"]
 # ---------------------------------------------------------------------------
 
 _REVALIDATED_CACHE: Dict[Tuple[str, str], Any] = {}
-_MAX_CACHE: int = 512
+
+# NEGATIVE SPEC: kept in lockstep with dag._MAX_FRONTMATTER_CACHE — a corpus-wide
+# consumer that rescans more paths than the cap evicts each entry before the next
+# pass revisits it, a ~100% miss rate. See that constant for the measured cliff.
+_MAX_CACHE: int = 4096
 
 
 def compute_stamp(path: "str | Path") -> str:
@@ -117,4 +135,53 @@ def read_revalidated(path: "str | Path", compute_fn: Callable[[Path], Any]) -> A
             del _REVALIDATED_CACHE[k]
 
     _REVALIDATED_CACHE[cache_key] = result
+    return result
+
+
+def read_disk_revalidated(
+    path: "str | Path",
+    compute_fn: Callable[[Path], Any],
+    index: Dict[str, Tuple[str, Any]],
+) -> Any:
+    """Return a cached-or-freshly-computed value for path, keyed by content-hash,
+    against a caller-owned `index` dict rather than this module's own
+    `_REVALIDATED_CACHE`.
+
+    `index` is `{path_str: (stamp, value)}` — typically loaded from a disk
+    file by the caller before the first call and saved back after the last
+    one; this function only reads and mutates the dict it is given, never
+    touching disk itself and never touching `_REVALIDATED_CACHE`. Two
+    independent revalidation tiers, same content-hash primitive
+    (compute_stamp), zero shared storage — additive to this module per
+    Ruling 1, not a second cache module.
+
+    Args:
+        path: File path to read and cache under.
+        compute_fn: Callable that receives a Path and returns the (ideally
+            JSON-serializable, if the caller persists `index` to disk as
+            JSON) parsed value. Called only on a cache miss (stamp absent
+            from `index`, or present under a different stamp).
+        index: Caller-owned {path_str: (stamp, value)} dict, mutated in place
+            on a miss.
+
+    Returns:
+        The (possibly index-cached) result of compute_fn.
+
+    Raises:
+        OSError: propagated from compute_stamp if the file cannot be read.
+
+    Negative-spec: unbounded by construction — `index` carries no eviction
+    policy analogous to `_MAX_CACHE`. A caller persisting `index` across a
+    corpus of unbounded size owns its own retention policy (e.g. dropping
+    entries for paths no longer present on disk); this function will happily
+    grow `index` without limit.
+    """
+    path_str = str(Path(path))
+    stamp = compute_stamp(path_str)
+    entry = index.get(path_str)
+    if entry is not None and entry[0] == stamp:
+        return entry[1]
+
+    result = compute_fn(Path(path_str))
+    index[path_str] = (stamp, result)
     return result

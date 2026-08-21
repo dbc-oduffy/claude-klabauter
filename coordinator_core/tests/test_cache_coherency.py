@@ -298,3 +298,46 @@ class TestAC13MicroBenchmark:
             f"{per_file_budget_ms * 5:.0f}ms < 10ms SLA. "
             f"On slow CI: widen per_file_budget_ms with a documented justification."
         )
+
+
+class TestEnvelopeCallPathUnchangedByPersistedTier:
+    """Pin (op_census C1, PM Ruling 3-C / hard constraint 8): envelope.py's
+    existing `cache.compute_stamp` content-hash call path must stay pure
+    in-memory, unchanged semantics and cost, after cache.py grows the
+    persisted `read_disk_revalidated` tier. envelope.py never calls
+    `read_disk_revalidated` and never touches an on-disk index — only
+    `compute_stamp` (no caching at all) and `_REVALIDATED_CACHE` (via
+    `read_revalidated`, unused by envelope.py today) exist on its path.
+    """
+
+    def test_envelope_uses_compute_stamp_not_disk_revalidated(self):
+        import ast
+        from coordinator_core.ops.emit import envelope as envelope_mod
+
+        source = Path(envelope_mod.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        called_attrs = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "cache"
+        }
+        assert called_attrs == {"compute_stamp"}, (
+            f"envelope.py's cache.* call surface changed to {called_attrs!r} -- "
+            "expected only compute_stamp. The persisted tier (read_disk_revalidated) "
+            "must stay opt-in and unused by this existing caller."
+        )
+
+    def test_compute_stamp_still_pure_no_caching(self, tmp_path: Path):
+        """compute_stamp itself does not consult or populate any cache --
+        unchanged behaviour regardless of the new persisted tier existing
+        alongside it in the same module."""
+        f = tmp_path / "x.txt"
+        f.write_bytes(b"v1")
+        s1 = compute_stamp(f)
+        f.write_bytes(b"v2")
+        s2 = compute_stamp(f)
+        assert s1 != s2
+        assert _REVALIDATED_CACHE == {}

@@ -67,6 +67,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # emit.cadence — sequences backlog.record then artifact.emit over the same common_dir
     # key (derives main_worktree_root(common_dir) exactly like its two sub-ops).
     "emit.cadence":                          "common_dir",
+    # emission.publish — TRANSPORTS the artifact artifact.emit produced, so it must key on
+    # the same scope that produced it: it resolves main_worktree_root(repo_root) and reads
+    # state/cockpit-emission.json off the main-worktree-rooted state/ tree, exactly as
+    # artifact_emit._artifact_emit does. "show_top" would key per-worktree and let a linked
+    # worktree publish a different (or absent) artifact than the one the emit ops wrote;
+    # "none" would deny the handler the repo_root it needs to find the artifact at all.
+    # It is a WRITE (outbound, to cockpit's sink) but writes nothing repo-local, so the
+    # scope question is purely about which tree it READS from — that is the common dir.
+    "emission.publish":                      "common_dir",
     # workflow.fire / workflow.fire_status — the fire registry and its logs live
     # under <git-common-dir>/coordinator-sessions/workflow-fires (fire.py::_registry_dir
     # walks from the envelope's repo_root), so every linked worktree of a repo must

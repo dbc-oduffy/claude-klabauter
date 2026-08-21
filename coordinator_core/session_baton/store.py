@@ -125,6 +125,22 @@ def default_record(session_id: str) -> Dict[str, Any]:
         "minted_artifacts": [],
         "commits": [],
         "promoted_to": None,
+        # Closure. A journal is not born resolved and is never pickup-able —
+        # it is live for as long as the session is the thing accruing work.
+        # When a pickup adopts an artifact, the session's work belongs to THAT
+        # baton from then on, and this record stops being the live one:
+        # `closed_at` stamps when, `closed_into` names the artifact it is now
+        # an ancestor of. First-wins, like `created_at` — a later adoption in
+        # the same session never re-closes an already-closed journal, so the
+        # pair always names the adoption that actually ended it.
+        #
+        # Deliberately NOT `promoted_to`: that field means "this record was
+        # scaffolded into a handoff under state/handoffs/", a corpus artifact
+        # this closure never mints. A closed journal stays a JSON file in
+        # `.git/`; closing it is a fact about the record, not a promotion of
+        # it.
+        "closed_at": None,
+        "closed_into": None,
     }
 
 
@@ -280,6 +296,8 @@ def merge_baton(
     minted_artifacts: Optional[List[str]] = None,
     commits: Optional[List[str]] = None,
     promoted_to: Any = _UNSET,
+    closed_at: Any = _UNSET,
+    closed_into: Any = _UNSET,
 ) -> Optional[Dict[str, Any]]:
     """Read-modify-write merge of ``sid``'s baton record. Idempotent and
     safe to call repeatedly for the same session (a mint op's second call
@@ -293,6 +311,13 @@ def merge_baton(
     rather than defaulting every kwarg to ``None``: ``promoted_to`` is
     nullable by design and a caller must be able to explicitly (re)set it to
     ``None`` without that being indistinguishable from "leave it alone".
+
+    ``closed_at``/``closed_into`` take the same sentinel but are FIRST-WINS on
+    a non-``None`` value: a journal already carrying a closure keeps it, so a
+    session that adopts a second artifact does not re-point the closure at the
+    later adoption. Passing an explicit ``None`` still clears either field —
+    reopening is deliberate and possible, it just is not what a repeated
+    adoption does by accident.
 
     List fields (``adopted_artifacts``, ``minted_artifacts``, ``commits``) are
     DEDUP-EXTENDED, not
@@ -340,6 +365,16 @@ def merge_baton(
             record["intent"] = intent
         if promoted_to is not _UNSET:
             record["promoted_to"] = promoted_to
+        # First-wins: an already-closed journal is never re-closed, so the
+        # pair names the adoption that actually ended it rather than the
+        # last one to run. An explicit None still clears both (the same
+        # escape `promoted_to` has), so a caller can reopen deliberately.
+        if closed_at is not _UNSET:
+            if closed_at is None or record.get("closed_at") is None:
+                record["closed_at"] = closed_at
+        if closed_into is not _UNSET:
+            if closed_into is None or record.get("closed_into") is None:
+                record["closed_into"] = closed_into
         if adopted_artifacts:
             existing = list(record.get("adopted_artifacts") or [])
             for entry in adopted_artifacts:

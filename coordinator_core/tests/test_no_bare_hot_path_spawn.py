@@ -677,9 +677,31 @@ def test_gate_ignores_an_unrelated_dot_run_call(tmp_path):
 #: capture-vs-passthrough call, not a sweep. The ratchet makes the population
 #: visible and stops it growing while that burn-down proceeds. Sizing and
 #: rationale: `docs/decisions/DR-345-console-popup-guard-fires-per-call-site-and-keeps-whole-file-scope.md`.
+#: COVERAGE IS THE POINT: every source root holding `.py` files that the
+#: standing `coordinator_core` leg does not walk appears here, including the
+#: roots currently at ZERO. A zero entry is not filler -- it is what makes a
+#: first bare spawn landing in `dist/` or `scripts/` fail immediately instead
+#: of starting a new invisible population. Listing only the roots that happened
+#: to be dirty would rebuild, one level up, the exact blind spot this ratchet
+#: was added to close.
+#:
+#: Derived by enumerating every directory containing `.py` files and
+#: subtracting the roots a gate leg already walks -- not by listing the roots
+#: that looked interesting. `archive/`, `state/`, `tasks/`, `docs/` and
+#: `cross-repo/` are prose/ephemera corpora, not source roots, and are out of
+#: scope by the same reasoning `DEFAULT_EXCLUDE` uses.
 _UNWALKED_ROOT_BASELINE: dict[str, int] = {
-    "coordinator/bin": 112,
+    "bin": 0,
+    # 112 -> 110, 2026-08-21: coordinator-prepare-commit-msg.py, a LIVE
+    # prepare-commit-msg hook spawning git from the console-less Bash-tool
+    # parent, is the highest-value site in this population and is now fully
+    # suppressed at all three of its spawns.
+    "coordinator/bin": 110,
     "coordinator/lib": 13,
+    "coordinator/scripts": 2,
+    "coordinator/tests": 0,
+    "dist": 0,
+    "scripts": 0,
 }
 
 
@@ -692,6 +714,13 @@ def test_bare_spawn_outside_coordinator_core_only_ever_shrinks():
     the same commit; a ratchet that silently accepts a lower number stops being
     evidence of anything.
     """
+    missing = [r for r in _UNWALKED_ROOT_BASELINE if not (REPO_ROOT / r).is_dir()]
+    assert not missing, (
+        "baseline names source root(s) that no longer exist: "
+        + ", ".join(missing)
+        + ". A renamed or deleted root must be re-derived here, not dropped -- "
+        "a stale key silently stops covering wherever its files went."
+    )
     measured = {
         root: len(find_bare_hot_path_spawns(REPO_ROOT / root))
         for root in _UNWALKED_ROOT_BASELINE

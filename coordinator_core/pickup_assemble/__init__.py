@@ -3960,7 +3960,22 @@ def _adopt_into_baton(
     if not sid:
         return
 
-    kwargs: dict[str, Any] = {"adopted_artifacts": [artifact_path]}
+    kwargs: dict[str, Any] = {
+        "adopted_artifacts": [artifact_path],
+        # The journal closes here. A session's birth baton is live only while
+        # the session is the thing accruing work; once a pickup adopts an
+        # artifact, that artifact is what the work belongs to, and this record
+        # is its ancestor rather than a second live claimant. `closed_at`/
+        # `closed_into` are first-wins in the store, so a second adoption in
+        # the same session leaves the closure naming the one that ended it.
+        #
+        # No artifact is minted and nothing under `state/handoffs/` is touched:
+        # closure is a fact about the JSON record, which is why it rides the
+        # `merge_baton` call already being made here rather than promoting the
+        # journal into the corpus. The store write is the whole cost.
+        "closed_at": _session_core.now_iso(),
+        "closed_into": artifact_path,
+    }
     if fm:
         try:
             already_titled = bool(read_baton(sid, cwd=str(repo_root)).get("title"))

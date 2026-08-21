@@ -75,6 +75,13 @@ Negative-spec:
       calls it too eagerly costs nothing beyond the no-op read.
     - Does NOT re-promote. A second call for an already-promoted session
       returns the existing ``promoted_to`` path without touching disk again.
+    - Does NOT promote a CLOSED journal. A record carrying ``closed_at``/
+      ``closed_into`` (stamped by ``pickup_assemble._adopt_into_baton`` when a
+      pickup adopts an artifact) has already deferred its session's work to the
+      adopted baton and is that baton's ancestor; promoting it would advertise
+      the same work twice. Refuses with ``exit_code: 1``, naming the target it
+      closed into. Distinct from ``promoted_to``: that field means "already
+      scaffolded", this pair means "never should be".
     - Does NOT raise on a scaffold or baton-merge failure — matches the
       baton store's fail-open posture (D-A/D-B): an advisory record and its
       promotion must never crash a ceremony tail or a pickup flow. Failures
@@ -305,6 +312,22 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
             "handoff_path": existing,
             "already_promoted": True,
         }
+
+    # A CLOSED journal is not promotable. `closed_at`/`closed_into`
+    # (session_baton.store) mean a pickup already adopted an artifact, so the
+    # session's work belongs to THAT baton and this record is its ancestor —
+    # scaffolding a second corpus artifact out of it would advertise the same
+    # work twice and hand `closed_into`'s target a sibling it never named.
+    # Refuses rather than no-ops: unlike the `promoted_to` branch above, which
+    # returns the artifact the caller asked for, there is no path here that
+    # satisfies the request, and every earning-event caller is fail-open, so a
+    # loud refusal costs a caller nothing and tells a reader why.
+    closed_into = record.get("closed_into")
+    if record.get("closed_at") or closed_into:
+        return _err(
+            "session_baton.promote: this session's journal closed into "
+            f"{closed_into or 'an adopted artifact'}; promote that baton, not the journal"
+        )
 
     resolved_title = title or record.get("title") or f"Session {session_id}"
     resolved_cwd = cwd if cwd is not None else "."

@@ -193,6 +193,35 @@ _HYPHEN_RANGE_SUBJECT_RE = re.compile(
 )
 
 
+def _no_console_creationflags() -> dict:
+    """Console-suppression kwargs for every spawn in this hook.
+
+    Deliberately does NOT import
+    ``coordinator_core.win_portability.no_console_creationflags``, which is the
+    engine primitive the rest of the fleet splats. This file is a
+    ``prepare-commit-msg`` hook: it runs on EVERY commit, on the interactive hot
+    path the brightline polices, and it currently imports no engine module at
+    all. Pulling ``coordinator_core`` in to fetch a two-line mapping would put
+    an engine import on the commit path to buy nothing the stdlib does not
+    already give, and would add an ImportError failure mode to a hook whose one
+    hard rule is never to block a commit. The returned mapping is byte-identical
+    to the primitive's, and is the same fallback shape
+    ``coordinator/bin/append-plan-session.py`` already ships for the
+    engine-unresolvable case.
+
+    THE CATCH this file already satisfies, carried so a new call site does not
+    lose it: a spawn passing these flags and NO ``stdin=``/``stdout=``/
+    ``stderr=``/``capture_output=`` silently loses the child's output on
+    Windows -- CPython sets ``STARTF_USESTDHANDLES`` only when at least one is
+    given, so without it the child binds its handles to the fresh window-less
+    console instead of the parent's. Every spawn in this file wires
+    ``capture_output=True``. A new one must too, or use passthrough kwargs.
+    """
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 def _resolve_git_dir() -> str:
     """Resolve the current repo's git-dir via ONE ``git rev-parse --git-dir``
     subprocess call. Returns ``""`` on any failure (git missing, not a repo,
@@ -205,6 +234,7 @@ def _resolve_git_dir() -> str:
             capture_output=True,
             text=True,
             timeout=15,
+            **_no_console_creationflags(),
         )
         return (out.stdout or "").strip()
     except Exception:
@@ -352,15 +382,13 @@ def _resolve_staged_paths(timeout: float = 10.0) -> list:
         )
         return []
     try:
-        from coordinator_core.win_portability import no_console_creationflags
-
         out = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
             capture_output=True,
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
+            **_no_console_creationflags(),
         )
     except Exception as exc:
         sys.stderr.write(
@@ -874,6 +902,7 @@ def main(argv: list) -> int:
             ["git", "interpret-trailers", "--no-divider", "--in-place", *trailer_args, commit_msg_file],
             capture_output=True,
             timeout=15,
+            **_no_console_creationflags(),
         )
     except Exception:
         pass
