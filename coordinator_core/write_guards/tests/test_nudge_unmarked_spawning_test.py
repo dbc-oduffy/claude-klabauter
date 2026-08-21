@@ -147,19 +147,44 @@ def test_guard_fires_through_engine_evaluate_payload_json():
         )
     )
     skipped: list[str] = []
-    result = write_guards_engine.evaluate_payload_json(payload_text, skipped_out=skipped)
+    # `aggregate=True`, not the first-wins default: this asserts THIS guard is
+    # reachable, and the default shape returns only the highest-priority
+    # advisory. The fixture below spawns `['git', 'status']`, which legitimately
+    # also trips nudge_windows_subprocess_popup (priority 110 vs this guard's
+    # 191) — under first-wins that masks this guard and the assertion becomes a
+    # statement about guard priorities rather than about reachability.
+    results = write_guards_engine.evaluate_payload_json(
+        payload_text, skipped_out=skipped, aggregate=True
+    )
     assert not skipped, f"write_guards module(s) failed to import: {skipped}"
-    assert result is not None
-    assert _is_advisory_envelope(result)
-    text = result["hookSpecificOutput"]["additionalContext"]
-    assert "test_thing" in text
+    assert isinstance(results, list) and results
+    assert all(_is_advisory_envelope(r) for r in results)
+    texts = [r["hookSpecificOutput"]["additionalContext"] for r in results]
+    assert any("test_thing" in t for t in texts), (
+        f"this guard did not fire through the production seam; advisories seen: {texts}"
+    )
 
-    # Control: a marked file, same seam, must not fire.
+    # Control: a marked file, same seam, must not fire THIS guard.
+    #
+    # Deliberately not `is None`. The fixture spawns `['git', 'status']`, which
+    # legitimately trips nudge_windows_subprocess_popup — a different guard,
+    # correctly firing, and not this test's subject. Asserting global silence
+    # would make this control a hostage to every other guard's behaviour on an
+    # unrelated property of the fixture.
     control_payload_text = json.dumps(
         _payload(
             "Write",
             {"file_path": "/repo/coordinator_core/tests/test_thing.py", "content": _MARKED_SPAWN_TEST},
         )
     )
-    control_result = write_guards_engine.evaluate(json.loads(control_payload_text))
-    assert control_result is None
+    control_results = write_guards_engine.evaluate_payload_json(
+        control_payload_text, aggregate=True
+    )
+    control_texts = [
+        r["hookSpecificOutput"]["additionalContext"]
+        for r in (control_results or [])
+        if _is_advisory_envelope(r)
+    ]
+    assert not any("test_thing" in t for t in control_texts), (
+        f"a MARKED spawning test still tripped this guard; advisories: {control_texts}"
+    )

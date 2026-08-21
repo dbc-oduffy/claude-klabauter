@@ -1259,32 +1259,46 @@ async def _resync_main_index_for_moves(
     # resolves its pathspec against cwd like any other `-- <path>`
     # form here, so (unlike `--cacheinfo`'s legacy 3-arg path slot)
     # no relativization is needed.
-    argv = ["git", "restore", "--staged", "--"]
-    for move in relevant_moves:
-        argv.append(str(move.src))
-        argv.append(str(move.dst))
+    # Batched, but BOUNDED (2026-08-21): one spawn per argv chunk, still never
+    # one per move. Windows caps a command line at 32767 characters and these
+    # are absolute paths, so an unbounded batch is not merely large but
+    # unrunnable — a 169-rename sweep died `FileNotFoundError: [WinError 206]`
+    # here, after the archival commit had landed, leaving exactly the staged
+    # residue this function exists to clear. See `_ARGV_PATHSPEC_BUDGET`; the
+    # sibling drift-check and restage spawns are chunked the same way.
+    #
+    # A chunk that fails is annotated against the moves IT covered, not the
+    # whole batch, and the remaining chunks still run: each chunk is
+    # independent index hygiene over a disjoint path set, so stopping early
+    # would leave residue nothing else clears.
+    for chunk in _argv_group_chunks(
+        [(m, (str(m.src), str(m.dst))) for m in relevant_moves]
+    ):
+        argv = ["git", "restore", "--staged", "--"]
+        for _move, tokens in chunk:
+            argv.extend(tokens)
 
-    restore_err = await run_git(argv, cwd=worktree_root, env=env)
-    if restore_err is None:
-        return
+        restore_err = await run_git(argv, cwd=worktree_root, env=env)
+        if restore_err is None:
+            continue
 
-    reason = f"restore-staged-failed: {restore_err}"
-    _LOG.error(
-        "archive_and_commit: main-index resync FAILED after %d attempts"
-        " for batch of %d move(s): %s (main index may be dirty — AC10)",
-        _INDEX_RETRY_MAX_ATTEMPTS, len(relevant_moves), reason,
-    )
-    for move in relevant_moves:
-        item = acted_by_id.get(move.candidate_id)
-        if item is not None:
-            item["index_resync_failed"] = reason
-        await asyncio.to_thread(
-            _persist_index_resync_failure,
-            worktree_root=worktree_root,
-            candidate_id=move.candidate_id,
-            reason=reason,
-            op_label="archive_and_commit",
+        reason = f"restore-staged-failed: {restore_err}"
+        _LOG.error(
+            "archive_and_commit: main-index resync FAILED after %d attempts"
+            " for batch of %d move(s): %s (main index may be dirty — AC10)",
+            _INDEX_RETRY_MAX_ATTEMPTS, len(chunk), reason,
         )
+        for move, _tokens in chunk:
+            item = acted_by_id.get(move.candidate_id)
+            if item is not None:
+                item["index_resync_failed"] = reason
+            await asyncio.to_thread(
+                _persist_index_resync_failure,
+                worktree_root=worktree_root,
+                candidate_id=move.candidate_id,
+                reason=reason,
+                op_label="archive_and_commit",
+            )
 
 
 async def _resync_main_index_for_reaps(
@@ -1353,11 +1367,39 @@ async def _resync_main_index_for_reaps(
     if not relevant:
         return
 
-    argv = ["git", "update-index", "--remove", "--"] + [str(p) for p, _cid in relevant]
-    remove_err = await run_git(argv, cwd=worktree_root, env=env)
-    if remove_err is None:
-        return
+    # Bounded batching — see the same block in _resync_main_index_for_moves for
+    # why an unbounded argv is unrunnable on Windows, and why a failed chunk
+    # neither sinks the remaining chunks nor is attributed beyond its own paths.
+    for chunk in _argv_group_chunks(
+        [((path, candidate_id), (str(path),)) for path, candidate_id in relevant]
+    ):
+        argv = ["git", "update-index", "--remove", "--"]
+        for _payload, tokens in chunk:
+            argv.extend(tokens)
+        remove_err = await run_git(argv, cwd=worktree_root, env=env)
+        if remove_err is None:
+            continue
+        await _annotate_reap_resync_failure(
+            [payload for payload, _tokens in chunk],
+            reaped_by_id,
+            remove_err=remove_err,
+            worktree_root=worktree_root,
+        )
 
+
+async def _annotate_reap_resync_failure(
+    relevant: List[Tuple[Path, str]],
+    reaped_by_id: dict,
+    *,
+    remove_err: str,
+    worktree_root: Path,
+) -> None:
+    """Record a persistently-failed reap index-resync against every path it covered.
+
+    Split out of `_resync_main_index_for_reaps` when that call was chunked: the
+    annotation is now per-chunk rather than per-batch, and inlining it in the
+    chunk loop buried the loop's control flow.
+    """
     reason = f"remove-failed: {remove_err}"
     _LOG.error(
         "rm_and_commit: main-index resync remove FAILED after %d attempts"
@@ -1388,29 +1430,47 @@ async def _resync_main_index_for_reaps(
 _ARGV_PATHSPEC_BUDGET = 24000
 
 
+def _argv_group_chunks(groups: list, budget: int = _ARGV_PATHSPEC_BUDGET) -> list:
+    """Split `(payload, tokens)` groups into batches each short enough for one spawn.
+
+    A group's tokens are never split across two chunks: the index resyncs pass a
+    move's src AND dst in one pathspec, and a chunk that carried only half of a
+    pair would resync half a rename -- the exact residue shape
+    `_resync_main_index_for_moves` exists to close. Keeping the pair whole also
+    makes a chunk failure attributable to exactly the items that chunk covered.
+
+    A single group longer than `budget` still gets its own chunk rather than
+    being dropped -- an over-long pathspec is git's error to report, not this
+    helper's to swallow.
+    """
+    chunks: list = []
+    current: list = []
+    size = 0
+    for group in groups:
+        _payload, tokens = group
+        span = sum(len(t) + 1 for t in tokens)
+        if current and size + span > budget:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(group)
+        size += span
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _argv_path_chunks(paths: list, budget: int = _ARGV_PATHSPEC_BUDGET) -> list:
     """Split `paths` into groups each short enough to survive one spawn.
 
     Chunking is semantics-preserving for all three call sites: the drift check
     unions its per-chunk output into one set that is then membership-tested per
     move, and the restage add / reset are all-or-error over the same path set
-    either way. A single path longer than `budget` still gets its own chunk
-    rather than being dropped -- an over-long single path is git's error to
-    report, not this helper's to swallow.
+    either way.
     """
-    chunks: list = []
-    current: list = []
-    size = 0
-    for path in paths:
-        token = str(path)
-        if current and size + len(token) + 1 > budget:
-            chunks.append(current)
-            current, size = [], 0
-        current.append(token)
-        size += len(token) + 1
-    if current:
-        chunks.append(current)
-    return chunks
+    return [
+        [tokens[0] for _payload, tokens in chunk]
+        for chunk in _argv_group_chunks([(p, (str(p),)) for p in paths], budget)
+    ]
 
 
 async def archive_and_commit(

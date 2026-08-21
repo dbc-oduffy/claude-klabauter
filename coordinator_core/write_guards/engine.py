@@ -280,12 +280,41 @@ def evaluate_payload_json(
     policy_path: Optional[str] = None,
     cwd: Optional[str] = None,
     skipped_out: Optional[List[str]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Parse a PreToolUse JSON payload string and evaluate. Unparseable → ALLOW (None)."""
+    aggregate: bool = False,
+) -> Optional[Dict[str, Any] | List[Dict[str, Any]]]:
+    """Parse a PreToolUse JSON payload string and evaluate. Unparseable → ALLOW (None).
+
+    `aggregate` is forwarded verbatim to `evaluate()`; see its docstring for the
+    two return shapes. Default `False` keeps every existing caller
+    byte-identical: the FIRST matching advisory, evaluation stopping there.
+
+    Why this parameter exists here at all, and why its ABSENCE was dangerous.
+    This is the entry point the out-of-repo PreToolUse dispatchers call — they
+    have no access to `evaluate()`. Until 2026-08-21 the keyword stopped at
+    `evaluate()`, so a caller doing the obvious thing
+    (`evaluate_payload_json(raw, aggregate=True)`) got `TypeError: unexpected
+    keyword argument`. In a dispatcher that wraps this call in a fail-open
+    `except Exception`, that TypeError disables EVERY guard for that event --
+    hard-denies included -- and the result is indistinguishable from a clean
+    allow. A silent total-bypass, triggered by a caller asking for MORE
+    checking. Caught in review by doe-claude-em before it shipped.
+
+    negative-spec -- if a future signature change makes this delegate to a
+    callee with different keywords, forward them explicitly like this rather
+    than leaving a caller to discover the gap through a swallowed TypeError.
+    A parameter that exists on the inner function and not on the seam callers
+    actually reach is a trap, not an encapsulation.
+    """
     try:
         payload = json.loads(payload_text)
     except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict):
         return None
-    return evaluate(payload, policy_path=policy_path, cwd=cwd, skipped_out=skipped_out)
+    return evaluate(
+        payload,
+        policy_path=policy_path,
+        cwd=cwd,
+        skipped_out=skipped_out,
+        aggregate=aggregate,
+    )

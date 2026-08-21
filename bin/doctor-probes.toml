@@ -71,13 +71,13 @@ id = "claude-klabauter.root.resolve"
 cluster = "registry"
 weight = "standard"
 interactivity = "assert"
-fix = "machine-local set repos.claude_klabauter <path> (or export CLAUDE_KLABAUTER_ROOT=<path>)"
+fix = "machine-local set repos.claude_klabauter <path> (or export COORDINATOR_ENGINE_ROOT=<path>)"
 symptom_keywords = ["CLAUDE_KLABAUTER_ROOT unresolvable", "machine-local key missing", "repos.claude_klabauter absent", "path not found", "coordinator_core dir missing"]
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_claude_klabauter_root"
 required = true
 severity_if_fail = "error"
-remediation = "Run python3 scripts/setup.py to register repos.claude_klabauter, or: export CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter"
+remediation = "Run python3 scripts/setup.py to register repos.claude_klabauter, or: export COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter"
 
 [[probe]]
 id = "claude-klabauter.root.pointer"
@@ -118,7 +118,7 @@ cluster = "registry"
 weight = "standard"
 interactivity = "assert"
 fix = "machine-local set repos.claude_klabauter <resolved-root>"
-symptom_keywords = ["repos.claude_klabauter not registered", "machine-local key absent", "CLAUDE_KLABAUTER_ROOT unresolved", "cc_invoke dispatch fails to resolve CLAUDE_KLABAUTER_ROOT"]
+symptom_keywords = ["repos.claude_klabauter not registered", "machine-local key absent", "CLAUDE_KLABAUTER_ROOT unresolved", "cc_invoke dispatch fails to resolve CLAUDE_KLABAUTER_ROOT", "CLAUDE_KLABAUTER_ROOT is set but is NO LONGER HONOURED"]
 # triage=false: this probe checks the machine-local registry key, which is a
 # coordinator-soft-dep surface. On coordinator-absent installs the key is not
 # needed and the probe SKIPs-as-advisory. Running it in triage on those machines

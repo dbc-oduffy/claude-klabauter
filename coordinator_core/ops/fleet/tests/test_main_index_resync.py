@@ -725,3 +725,176 @@ def test_reap_sink_write_failure_does_not_fail_the_op(monkeypatch):
     assert item["index_resync_failed"] == (
         "remove-failed: index.lock still held after retries"
     )
+
+
+# ---------------------------------------------------------------------------
+# Part 4 — argv-cap chunking (2026-08-21). The 2026-08-19 batching folded the
+# whole sweep into ONE argv; on Windows a command line over 32767 characters is
+# not merely large but unrunnable, and a 169-rename sweep died here with
+# `FileNotFoundError: [WinError 206]` AFTER the archival commit had landed —
+# leaving exactly the staged residue this resync exists to clear. These pin the
+# bound: many calls, each under the cap, never one call per item.
+# ---------------------------------------------------------------------------
+
+
+def _long_name(i: int) -> str:
+    """A realistic long archive filename — the live corpus averages ~100 chars."""
+    return f"{i:04d}-a-fairly-long-handoff-slug-of-the-shape-this-corpus-actually-holds.md"
+
+
+def test_moves_resync_splits_an_over_cap_batch_and_keeps_every_argv_runnable():
+    worktree_root = Path("/repo")
+    moves = [
+        Move(
+            src=worktree_root / "state" / "handoffs" / _long_name(i),
+            dst=worktree_root / "archive" / "handoffs" / "2026-08" / _long_name(i),
+            candidate_id=f"state/handoffs/{_long_name(i)}",
+        )
+        for i in range(400)
+    ]
+    acted_by_id = {m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves}
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) > 1, "an over-cap batch must be split across spawns"
+    assert len(fake.calls) < len(moves), "chunking must not degrade to one spawn per move"
+
+    seen: List[str] = []
+    for call in fake.calls:
+        argv = call["argv"]
+        assert argv[:4] == ["git", "restore", "--staged", "--"]
+        assert len(" ".join(argv)) < 32767, "every chunk must fit a Windows command line"
+        seen.extend(argv[4:])
+
+    expected: List[str] = []
+    for m in moves:
+        expected.append(str(m.src))
+        expected.append(str(m.dst))
+    assert seen == expected, "chunking must lose no path and reorder none"
+    for m in moves:
+        assert "index_resync_failed" not in acted_by_id[m.candidate_id]
+
+
+def test_moves_resync_never_splits_a_src_dst_pair_across_two_chunks():
+    """A chunk carrying only half a rename would resync half the index entry —
+    the residue shape this function exists to close."""
+    worktree_root = Path("/repo")
+    moves = [
+        Move(
+            src=worktree_root / "state" / "handoffs" / _long_name(i),
+            dst=worktree_root / "archive" / "handoffs" / "2026-08" / _long_name(i),
+            candidate_id=f"state/handoffs/{_long_name(i)}",
+        )
+        for i in range(400)
+    ]
+    acted_by_id = {m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves}
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    for call in fake.calls:
+        paths = call["argv"][4:]
+        assert len(paths) % 2 == 0
+        for src, dst in zip(paths[0::2], paths[1::2]):
+            assert Path(src).name == Path(dst).name
+
+
+def test_moves_resync_chunk_failure_annotates_only_that_chunk_and_runs_the_rest(monkeypatch):
+    """Post-commit index hygiene: a failed chunk must not sink the chunks after
+    it, and must not be attributed to moves it never named."""
+    worktree_root = Path("/repo")
+    moves = [
+        Move(
+            src=worktree_root / "state" / "handoffs" / _long_name(i),
+            dst=worktree_root / "archive" / "handoffs" / "2026-08" / _long_name(i),
+            candidate_id=f"state/handoffs/{_long_name(i)}",
+        )
+        for i in range(400)
+    ]
+    acted_by_id = {m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves}
+    # The durable bug-backlog sink is not under test here and would write one
+    # record per annotated item; the annotation itself is what these pin.
+    monkeypatch.setattr(
+        "coordinator_core.ops.fleet._common._persist_index_resync_failure",
+        lambda **kwargs: None,
+    )
+    fake = _FakeRunGit(results=["index.lock held"])
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) > 1, "later chunks must still run after an early failure"
+    failed_srcs = set(fake.calls[0]["argv"][4:])
+    for m in moves:
+        annotated = "index_resync_failed" in acted_by_id[m.candidate_id]
+        assert annotated is (str(m.src) in failed_srcs)
+
+
+def test_reaps_resync_splits_an_over_cap_batch_and_keeps_every_argv_runnable():
+    worktree_root = Path("/repo")
+    paths = [worktree_root / "state" / "handoffs" / _long_name(i) for i in range(400)]
+    reaped_by_id = {
+        f"state/handoffs/{_long_name(i)}": {"id": f"state/handoffs/{_long_name(i)}", "reaped": True}
+        for i in range(400)
+    }
+    fake = _FakeRunGit()
+
+    _run(
+        _resync_main_index_for_reaps(
+            paths, reaped_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) > 1
+    assert len(fake.calls) < len(paths)
+
+    seen: List[str] = []
+    for call in fake.calls:
+        argv = call["argv"]
+        assert argv[:4] == ["git", "update-index", "--remove", "--"]
+        assert len(" ".join(argv)) < 32767
+        seen.extend(argv[4:])
+    assert seen == [str(p) for p in paths]
+    for candidate_id in reaped_by_id:
+        assert "index_resync_failed" not in reaped_by_id[candidate_id]
+
+
+def test_reaps_resync_chunk_failure_annotates_only_that_chunk_and_runs_the_rest(monkeypatch):
+    worktree_root = Path("/repo")
+    paths = [worktree_root / "state" / "handoffs" / _long_name(i) for i in range(400)]
+    reaped_by_id = {
+        f"state/handoffs/{_long_name(i)}": {"id": f"state/handoffs/{_long_name(i)}", "reaped": True}
+        for i in range(400)
+    }
+    # The durable bug-backlog sink is not under test here and would write one
+    # record per annotated item; the annotation itself is what these pin.
+    monkeypatch.setattr(
+        "coordinator_core.ops.fleet._common._persist_index_resync_failure",
+        lambda **kwargs: None,
+    )
+    fake = _FakeRunGit(results=["index.lock held"])
+
+    _run(
+        _resync_main_index_for_reaps(
+            paths, reaped_by_id, worktree_root=worktree_root, env={}, run_git=fake,
+        )
+    )
+
+    assert len(fake.calls) > 1
+    failed_paths = set(fake.calls[0]["argv"][4:])
+    for path in paths:
+        candidate_id = f"state/handoffs/{path.name}"
+        annotated = "index_resync_failed" in reaped_by_id[candidate_id]
+        assert annotated is (str(path) in failed_paths)

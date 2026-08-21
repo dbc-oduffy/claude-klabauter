@@ -88,7 +88,6 @@ Spec backlink: coordinator_core/invoke/__main__.py (this file) — chunk C5 rema
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
 import io
 import json
@@ -510,6 +509,21 @@ def main() -> None:
     #    supplied a served response, so this whole cold-dispatch block —
     #    unchanged from before C15 — is skipped entirely on a warm hit.
     if response is None:
+        # Deferred, not module-level: `asyncio` costs 40.4ms of process time to
+        # import (measured, `-X importtime`, 2026-08-21) — more than the whole
+        # interpreter start minus `site`, and larger than any other single
+        # component of the client-side door cost. It is reachable ONLY here, on
+        # the cold branch. Importing it at module scope charged every warm hit
+        # for an event loop it never constructs, which is the exact class of
+        # defect the 2026-08-19 warm-preamble post-mortem records
+        # (`warm/client.py :: spawn_detached`) reappearing at a different site.
+        #
+        # Negative-spec: this module's docstring permits module-level stdlib
+        # imports. That rule is the wrong axis and does not license moving this
+        # back — provenance is not cheapness. What belongs at module scope on
+        # this path is what a warm hit executes, and nothing else.
+        import asyncio
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         # Stdout is the JSON-RPC transport this process's caller (cc_invoke and

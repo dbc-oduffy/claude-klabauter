@@ -401,11 +401,12 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
         pass
 
     return None, (
-        "Cannot resolve CLAUDE_KLABAUTER_ROOT via (1) CLAUDE_KLABAUTER_ROOT env var, "
+        "Cannot resolve the engine root via (1) COORDINATOR_ENGINE_ROOT env var "
+        "(or the retired CLAUDE_KLABAUTER_ROOT, reported separately if set), "
         "(2) machine-local get repos.claude_klabauter, "
         "(3) git-root auto-discovery from bin/ parent. "
         "Remediation: run scripts/setup.py to register repos.claude_klabauter, "
-        "or: export CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter"
+        "or: export COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter"
     )
 
 
