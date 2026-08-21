@@ -1426,7 +1426,7 @@ def _locator_axis_export() -> dict[str, str]:
 def _build_subprocess_env(claude_klabauter_root: str) -> dict[str, str]:
     """Build the subprocess env for a coordinator_core.invoke spawn.
 
-    Passes os.environ through, sets CLAUDE_KLABAUTER_ROOT, and prepends it to PYTHONPATH only if
+    Passes os.environ through, sets COORDINATOR_ENGINE_ROOT, and prepends it to PYTHONPATH only if
     not already present (idempotency fence — mirrors _cc_resolve_deps() in the shell
     transport). Shared by cc_invoke(), cc_invoke_bare(), and the op-budget dump spawn.
 
@@ -1630,8 +1630,8 @@ def _raise_on_process_failure(
             """
             lines = [
                 f"cc_invoke: engine will not import/start (op={op}, rc={rc})",
-                "  ImportError — verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation:",
-                f"    CLAUDE_KLABAUTER_ROOT={claude_klabauter_root!r}",
+                "  ImportError — verify COORDINATOR_ENGINE_ROOT and coordinator_core installation:",
+                f"    engine root={claude_klabauter_root!r}",
                 f"    ImportError token seen on: {token_origin}",
             ]
             if token_origin == "stdout":
@@ -1935,7 +1935,7 @@ def cc_invoke(
             f"cc_invoke: params is not JSON-serializable (op={op}): {exc}"
         ) from exc
 
-    # Build subprocess env: pass through os.environ, set CLAUDE_KLABAUTER_ROOT, prepend PYTHONPATH.
+    # Build subprocess env: pass through os.environ, set COORDINATOR_ENGINE_ROOT, prepend PYTHONPATH.
     # Mirrors _cc_resolve_deps() PYTHONPATH idempotency check in the shell transport.
     env = _build_subprocess_env(claude_klabauter_root)
 
@@ -2226,13 +2226,13 @@ def _state1_remediation_message(
         "no bash fallback under the big-bang cutover.\n"
         f"{root_line}"
         "  Resolution ladder (in order):\n"
-        "    1. CLAUDE_KLABAUTER_ROOT environment variable\n"
+        "    1. COORDINATOR_ENGINE_ROOT environment variable\n"
         "    2. <settings-home>/machine-local/.claude-klabauter-root pointer file\n"
         "    3. `machine-local get repos.claude_klabauter` registry entry\n"
         "    4. coordinator_core.invoke importable from the resolved root\n"
         "  Remediation: clone claude-klabauter as a sibling repo "
         "(git clone https://github.com/dbc-oduffy/claude-klabauter) and register it — "
-        "set $CLAUDE_KLABAUTER_ROOT, write the settings-home pointer file, or run "
+        "set $COORDINATOR_ENGINE_ROOT, write the settings-home pointer file, or run "
         "`machine-local set repos.claude_klabauter /path/to/claude-klabauter` — then retry. "
         "See docs/install/AGENT.md § Fail-loud claude-klabauter resolution, or run /coordinator:setup."
     )

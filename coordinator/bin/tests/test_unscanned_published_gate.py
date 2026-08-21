@@ -528,11 +528,53 @@ class TestLoadUnscannedExceptions:
         illustrative values. Note the path form -- destination-repo-root-
         relative (`bin/...`, not `coordinator/bin/...`), which is what
         `dispatch_end_of_run_unscanned_published_check` compares against; the
-        `coordinator/`-prefixed form would load fine and match nothing."""
+        `coordinator/`-prefixed form would load fine and match nothing.
+
+        Entry 3, `coordinator_core/warm/door/door.exe`, is the prebuilt
+        warm-door client (landed 2026-08-21 in 33abaf951). It differs in KIND
+        from entries 1 and 2: those are text files deliberately held back from
+        a transform that would corrupt them, whereas this is a compiled binary
+        with no text surface for the transform to visit at all -- "unscanned"
+        is the only possible outcome, not a routing decision. Ratified at EM
+        level on 2026-08-21 by claude-klabauter-em during the scaffold-resolution
+        close, when this check fail-closed every publish round on the box, with
+        the binary's own author (session 1c9c881e) confirming in writing both
+        load-bearing premises: that it is deliberately shipped prebuilt rather
+        than built downstream (the mirror is consumed by boxes with no C
+        toolchain, and the door sits on the invocation hot path), and that its
+        identity rides the sibling `door.exe.provenance.json` -- door.c's
+        SHA-256, compiler, version, verified by `build.py --verify` -- rather
+        than any in-band token a substitution pass would need to rewrite.
+
+        The authority splits in two, and the halves sit at different levels.
+        That a BINARY invocation surface may exist in the published set at all
+        is reported to be a PM decision of 2026-08-21 ("everything is on the
+        table ... we can even switch our invocation surface to Rust if that's
+        what it takes, or even goddamn binary itself"). That it ships PREBUILT
+        rather than built downstream, and that its identity rides a provenance
+        sidecar, are EM-level implementation of that authorised direction.
+
+        Attribution, so a reader can weigh it: the PM quote reaches this record
+        via the door's own author (session 1c9c881e) relaying it to
+        claude-klabauter-em during the 2026-08-21 close, not from a decision
+        record this test's author read. It is second-hand and marked as such --
+        an ADR or a `docs/decisions/` entry would retire the qualifier and is
+        worth writing if this list keeps growing. What is NOT second-hand: the
+        gate fail-closed every publish round on the box until this entry
+        landed, and the round then completed 9/9 with the mirror committing at
+        1a35ac6370fc.
+
+        For whoever generalises this: key the disposition on WHY a file is
+        unswept -- a binary artifact cannot carry in-band repo tokens, so
+        sweeping it is meaningless rather than merely skipped -- rather than on
+        a filename list. A POSIX twin of the door would hit this same gate, and
+        a list keyed on names re-litigates the same question per artifact until
+        it becomes the thing nobody dares prune."""
         loaded = publish._load_unscanned_exceptions()
         assert set(loaded) == {
             ".github/scripts/check-persona-names.py",
             "bin/depersonalize-identity.example.yaml",
+            "coordinator_core/warm/door/door.exe",
         }
         assert "AC4" in loaded[".github/scripts/check-persona-names.py"]
         assert "AC5" in loaded[".github/scripts/check-persona-names.py"]

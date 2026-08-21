@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.guard_memory_store_cap — advisory guard.
+"""coordinator_core.write_guards.guard_memory_store_cap — hard-deny guard.
 
 Discharges AC14 of DoE-claude's
 ``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md`` (chunk C12).
@@ -71,15 +71,64 @@ the one both the C12 spec's own worked example (the boot-payload plan's C8
 survivor rewrite landing before this guard arms) and its own body ask for
 by name ("a shrinking edit to an over-cap file is PERMITTED").
 
+Hard-deny amendment (DR-345, amending DR-277): this guard was advisory from
+C12 through DR-277's 2026-08-06 census. Advisory was read and ignored —
+Claude-klabauter's own store reached 213 body files against the 20-file cap
+this module now enforces, and a 26,718 B ``MEMORY.md`` against the 2,000 B
+cap, 13x over, silently truncated at load. That is DR-277's own **fourth
+structural rule** (a per-invocation gate whose harm scales with invocation
+count is not weakened by an advisory, it is erased by one) plus **carve-out
+1** (``MEMORY.md`` is doctrine loaded before review is possible — it
+auto-loads into every session's boot context). The deny envelope
+(``permissionDecision: "deny"`` / ``permissionDecisionReason``) is copied
+verbatim in shape from ``block_home_dir_memo_delivery.py`` — no new envelope
+shape invented.
+
+Fifth limit, added with the hard-deny flip: ``MAX_MEMORY_FILES = 20`` body
+files (excluding ``MEMORY.md`` itself) per project ``memory/`` dir, 1:1 with
+``MAX_MEMORY_MD_ROWS`` so the index and the store cannot disagree about how
+many memories exist. It fires ONLY on creation of a NEW body file (the
+resolved target does not yet exist on disk) when the directory already
+holds ``>= MAX_MEMORY_FILES`` such files — an edit/rewrite of an EXISTING
+body file always passes this cap, even at or over the limit, or a full store
+becomes permanently uneditable and the shrink-toward-compliance carve-out
+below can no longer walk it back. The deny names the two routes the PM
+ruled for: evict the oldest body file (by mtime — the cheapest correct
+candidate), or if it's worth keeping, write it to ``state/lessons/`` first,
+then delete it.
+
+What memory is FOR, and why the deny says so (PM ruling 2026-08-21). The
+agent reaching for memory is almost always obeying a durability instinct —
+*"that sounded important to the human, it must not be forgotten."* Durability
+is the one thing memory does not uniquely provide: ``state/lessons/`` is the
+durable, findable store, swept and routed by other processes, and it is
+AVAILABLE when someone reaches for it. What memory uniquely does is far
+narrower and strictly more dangerous — it is FORCE-READ, unbidden, by every EM
+at birth, and every one of them treats it as TRUE until somebody purges it.
+A wrong or expired memory is therefore not inert; it is actively believed,
+fleet-wide, for as long as it sits there.
+
+So the routing test the deny states is deliberately NOT "is this important."
+Everything an agent wants to save is important — that test admits everything,
+which is how this store reached 213 entries. The test is "must every EM
+believe this before it does anything at all," and almost nothing clears it.
+*"The percolate button runs the code it is meant to replace, we should fix
+that"* is a lesson: real, worth keeping, findable when reached for, and
+catastrophic as a boot-time assertion once it is fixed. *"This repo's commits
+refuse unless CLAUDE_KLABAUTER_ROOT is pinned"* is a memory: every EM hits it, before
+anything else works.
+
 Spec backlink: DoE-claude
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C12, AC14.
+  claude-klabauter ``state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md``,
+  ``docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md``.
 Sibling guards this module's idiom is copied from (DoE-claude repo, no
   ``.sh``/``.py`` reference hook of its own — C12 is a net-new guard, not a
   port):
   ``coordinator_core/write_guards/block_home_dir_memo_delivery.py`` (home
-  resolution + containment), ``coordinator_core/write_guards/
-  check_claude_md_size.py`` (post-edit content simulation + byte
-  measurement).
+  resolution + containment, and now the deny-envelope shape too),
+  ``coordinator_core/write_guards/check_claude_md_size.py`` (post-edit
+  content simulation + byte measurement).
 
 Negative-spec:
   - Does NOT extend ``guard_doctrine_surface_edits.py``'s protected-path
@@ -111,15 +160,19 @@ from coordinator_core.write_guards._case_fold_path import (
     strip_extended_length_prefix,
 )
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 121  # advisory-phase slot per docs/wiki/write-guard-priority-bands.md
+PRIORITY = 136  # hard-deny band; next free slot after bump_out_of_repo_tool_write (135)
 
 #: AC14's four numbers, verbatim.
 MAX_MEMORY_MD_BYTES = 2000
 MAX_MEMORY_MD_ROWS = 20
 MAX_ROW_CHARS = 100
 MAX_BODY_FILE_BYTES = 1500
+
+#: DR-345 — 1:1 with MAX_MEMORY_MD_ROWS so index and store cannot disagree
+#: about how many memories exist. Fires only on NEW body-file creation.
+MAX_MEMORY_FILES = 20
 
 _CLAUDE_DIRNAME = ".claude"
 _PROJECTS_DIRNAME = "projects"
@@ -311,11 +364,12 @@ def _index_rows(content: str) -> "List[str]":
     return [line for line in content.splitlines() if line.startswith("- ")]
 
 
-def _advise(reason: str) -> Dict[str, Any]:
+def _deny(reason: str) -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": f"Advisory: {reason}",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
     }
 
@@ -324,6 +378,17 @@ def _advise(reason: str) -> Dict[str, Any]:
 #: full rationale (why this order, not a semantic verdict) is the module
 #: docstring's job, not the deny message's.
 _EVICT_ORDER = "stale fact, then doctrine dup, then oldest"
+
+#: The memory-vs-lessons routing test, in the deny because that is the moment
+#: the wrong choice is being made (PM ruling 2026-08-21). An agent reaching for
+#: memory is usually acting on "this matters, it must not be forgotten" -- a
+#: durability instinct. Durability is what LESSONS give. What memory gives is
+#: something else, and strictly more dangerous: force-read, unbidden, by every
+#: EM at birth, and believed TRUE until someone purges it. So the test is not
+#: "is this important" (everything an EM wants to save is important) -- it is
+#: "must every EM believe this before it does anything." Almost nothing clears
+#: that bar. Kept to one clause per route so it survives the 220-byte cap.
+_ROUTING = "memory is force-read as TRUE every boot; a lesson is found when reached for"
 
 
 def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
@@ -337,7 +402,8 @@ def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
 def _deny_reason_rows(display: str, rows: "List[str]") -> str:
     return (
         f"[memory cap] {display}: {len(rows)} rows > {MAX_MEMORY_MD_ROWS} cap. "
-        f"No auto-trim -- evict a row yourself ({_EVICT_ORDER}), then retry."
+        f"{_ROUTING}. Not boot-critical -> state/lessons/. "
+        "Else evict a row."
     )
 
 
@@ -358,19 +424,63 @@ def _deny_reason_body(display: str, new_size: int) -> str:
 def _check_memory_md(new_content: str, new_size: int, display: str) -> Optional[Dict[str, Any]]:
     rows = _index_rows(new_content)
     if new_size > MAX_MEMORY_MD_BYTES:
-        return _advise(_deny_reason_bytes(display, new_size, rows))
+        return _deny(_deny_reason_bytes(display, new_size, rows))
     if len(rows) > MAX_MEMORY_MD_ROWS:
-        return _advise(_deny_reason_rows(display, rows))
+        return _deny(_deny_reason_rows(display, rows))
     overlong = [r for r in rows if len(r) > MAX_ROW_CHARS]
     if overlong:
-        return _advise(_deny_reason_row_length(display, overlong))
+        return _deny(_deny_reason_row_length(display, overlong))
     return None
 
 
 def _check_body_file(new_size: int, display: str) -> Optional[Dict[str, Any]]:
     if new_size > MAX_BODY_FILE_BYTES:
-        return _advise(_deny_reason_body(display, new_size))
+        return _deny(_deny_reason_body(display, new_size))
     return None
+
+
+def _body_file_count_and_oldest(mem_dir: Path) -> "Tuple[int, Optional[Path]]":
+    """Body files (excluding MEMORY.md) directly in ``mem_dir``, plus the
+    oldest by mtime -- the cheapest correct eviction candidate, per the PM
+    ruling this cap implements. A listing failure (dir vanished, permission
+    error) reads as zero, matching this module's fail-open posture -- it
+    only ever widens what passes, never narrows it."""
+    try:
+        files = [
+            p
+            for p in mem_dir.iterdir()
+            if p.is_file() and p.name.casefold() != _MEMORY_MD_FILENAME.casefold()
+        ]
+    except OSError:
+        return 0, None
+    if not files:
+        return 0, None
+    oldest = min(files, key=lambda p: p.stat().st_mtime)
+    return len(files), oldest
+
+
+def _deny_reason_file_count(dir_display: str, count: int, oldest_name: str) -> str:
+    return (
+        f"[memory cap] {dir_display}: {count}/{MAX_MEMORY_FILES} memories. "
+        f"{_ROUTING}. Not boot-critical -> state/lessons/. "
+        f"Else evict oldest: {oldest_name}."
+    )
+
+
+def _check_new_body_file_count(resolved: Path, display: str) -> Optional[Dict[str, Any]]:
+    """DR-345's fifth limit. Fires ONLY when the write would CREATE a new
+    body file -- an edit/rewrite of an EXISTING body file must always pass,
+    even at or over the cap, or a full store becomes permanently
+    uneditable and the shrink-toward-compliance carve-out can no longer
+    walk it back."""
+    if resolved.exists():
+        return None
+    count, oldest = _body_file_count_and_oldest(resolved.parent)
+    if count < MAX_MEMORY_FILES:
+        return None
+    dir_display = display.rsplit("/", 1)[0] + "/"
+    oldest_name = oldest.name if oldest is not None else "?"
+    return _deny(_deny_reason_file_count(dir_display, count, oldest_name))
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -397,6 +507,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if match is None:
             return None
         resolved, filename, display = match
+
+        if filename.casefold() != _MEMORY_MD_FILENAME.casefold():
+            count_deny = _check_new_body_file_count(resolved, display)
+            if count_deny is not None:
+                return count_deny
 
         try:
             new_content = _simulate(tool_name, tool_input, str(resolved))

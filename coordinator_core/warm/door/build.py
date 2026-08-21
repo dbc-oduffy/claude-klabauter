@@ -3,23 +3,34 @@
 Naked Python (3.11+), never bash, per CLAUDE.md's runtime-conventions rule
 -- this is automation, not a hand-run command.
 
-THE ENGINE ROOT IS NO LONGER BAKED INTO THE BINARY (2026-08-21 revision --
-see door.c's module docstring, "WHY THE ENGINE ROOT IS RESOLVED AT
-RUNTIME"). Baking it meant `door.exe` could only be produced BY compiling
-ON the target machine, which would make a C compiler an install-chain
-dependency on every box that installs coordinator -- unacceptable for a
-fleet install. This module now does two SEPARATE things that happen to
-share one CLI: `_compile()` produces a machine-independent `door.exe`
-(only the fallback Python interpreter path is baked into it, same
-convention `coordinator-invoke.cmd` uses for `__PYTHON_BIN__`), and
-`write_sidecar()` resolves ONE thing Python is good at and C is not
-(canonical path resolution: `Path(engine_root).resolve()` must byte-match
-`election.pipe_name`'s own clone-hash input) and writes it to a small
-text file next to the exe, read at door.exe's OWN runtime. `build()`
-still takes `engine_root` and still calls both, so a local build stays
-one command -- but a `door.exe` built once can now be copied to any box
-that gets its own `write_sidecar()` call (or, in principle, its own hand-
-written sidecar) with NO recompile.
+THE ENGINE ROOT IS RUNTIME-RESOLVED FOR PIPE DERIVATION, BAKED ONLY AS A
+LAST-RESORT FALLBACK (2026-08-21 revision, then corrected same day -- see
+door.c's module docstring, "WHY THE ENGINE ROOT IS RESOLVED AT RUNTIME"
+and `BUILD_ENGINE_ROOT_W`'s own comment). Baking it as the ONLY source
+meant `door.exe` could only be produced BY compiling ON the target
+machine -- unacceptable as an install-chain dependency. But the first fix
+for that (making the fallback need no engine root at all, via a bare
+`python -m coordinator_core.invoke`) was ITSELF a correctness regression:
+a bare `-m` resolves through this box's ambient editable-install pin,
+silently executing the LIVE working tree instead of a published engine
+(DR-315 §2 violated through a side door) -- caught before it shipped,
+verified directly rather than assumed. The engine root is therefore
+carried TWICE, for two different jobs: `resolve_engine_root()` (runtime,
+sidecar/env, door.c) is the ONLY source for pipe derivation, always
+preferred; `BUILD_ENGINE_ROOT_W` (baked here, at build time) is consulted
+by `fall_through()` ONLY when that runtime resolution fails, so a
+corrupted sidecar still has a correct engine to fall back to rather than
+silently picking up whatever the ambient interpreter happens to be pinned
+to. `_compile()` produces the binary (also baking the fallback Python
+interpreter path, same convention `coordinator-invoke.cmd` uses for
+`__PYTHON_BIN__`); `write_sidecar()` resolves ONE thing Python is good at
+and C is not (canonical path resolution: `Path(engine_root).resolve()`
+must byte-match `election.pipe_name`'s own clone-hash input) and writes
+it to a small text file next to the exe, read at door.exe's OWN runtime.
+`build()` calls both, so a local build stays one command -- a `door.exe`
+built once can still be copied to another box and repointed with a fresh
+`write_sidecar()` call and NO recompile; only the FALLBACK target changes
+if that copy is never given its own sidecar at all.
 """
 
 from __future__ import annotations
@@ -49,6 +60,7 @@ _PROVENANCE_SUFFIX = ".provenance.json"
 
 _PLACEHOLDERS = {
     "__PYTHON_BIN_W__": "python_bin_w",
+    "__BUILD_ENGINE_ROOT_W__": "engine_root_w",
 }
 
 
@@ -60,10 +72,22 @@ def _c_string_body(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _render(source: str, python_bin: Path) -> str:
+def _render(source: str, python_bin: Path, engine_root: Path) -> str:
+    """`engine_root` is baked as `BUILD_ENGINE_ROOT_W` -- see that macro's
+    own comment in door.c: a LAST-RESORT fallback script-path source, used
+    by `fall_through()` only when the runtime sidecar/env resolution
+    fails, never for pipe derivation (that stays entirely runtime,
+    per `resolve_engine_root()`). Baking it back in (2026-08-21
+    correctness fix) is deliberate, not a regression to the pre-sidecar
+    design: without SOME known-good root, a corrupted sidecar would have
+    no engine to fall back to at all, and the wrong prior fix for that gap
+    (`-m coordinator_core.invoke`, silently resolving the ambient live
+    tree) is exactly the defect this baking avoids reintroducing."""
     resolved_python = str(python_bin.resolve())
+    resolved_root = str(Path(engine_root).resolve())
     substitutions = {
         "__PYTHON_BIN_W__": _c_string_body(resolved_python),
+        "__BUILD_ENGINE_ROOT_W__": _c_string_body(resolved_root),
     }
     rendered = source
     for token, value in substitutions.items():
@@ -113,19 +137,30 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
         return f"(version probe failed: {exc!r})"
 
 
-def write_provenance(output_exe: Path, source_path: Path, kind: str, compiler_path: str) -> Path:
+def write_provenance(
+    output_exe: Path, source_path: Path, kind: str, compiler_path: str, engine_root: Path
+) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
     binary was built from plus the compiler and its version -- so a
     mismatch between the committed source and the committed binary is
     DETECTABLE BY ANYONE who reruns the build and compares, not a matter
     of taking anyone's word for it (PM ruling, 2026-08-21). Overwritten on
     every build; this is provenance for the CURRENT binary at that path,
-    never a history."""
+    never a history.
+
+    `engine_root` is recorded too -- since 2026-08-21 it is baked into the
+    binary as `BUILD_ENGINE_ROOT_W` (a per-build-machine default, see
+    door.c's own comment), so it is an INPUT `--verify` needs to
+    reproduce this exact binary, not incidental metadata. Without it,
+    `door.exe.provenance.json` would tell a verifier the source hash and
+    compiler but not the one other argument required to actually get a
+    MATCH."""
     provenance = {
         "door_c_sha256": _sha256_file(source_path),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "engine_root": str(Path(engine_root).resolve()),
     }
     provenance_path = output_exe.parent / (output_exe.name + _PROVENANCE_SUFFIX)
     provenance_path.write_text(
@@ -238,11 +273,24 @@ def build(
     compiler: str | None = None,
     output: Path | None = None,
 ) -> Path:
-    """Compiles `door.exe` (machine-independent -- no engine root baked
-    in) and writes its sidecar for `engine_root`, so a local build stays
-    one command. To ship the SAME compiled `door.exe` to another box,
-    copy it there and call `write_sidecar()` again for that box's own
-    engine root -- no recompile, no compiler needed on that box."""
+    """Compiles `door.exe` and writes its sidecar for `engine_root`, so a
+    local build stays one command. To ship the SAME compiled `door.exe`
+    to another box, copy it there and call `write_sidecar()` again for
+    that box's own engine root -- no recompile, no compiler needed on
+    that box.
+
+    `engine_root` IS also baked into the binary now, as
+    `BUILD_ENGINE_ROOT_W` -- see that macro's own comment in `door.c` and
+    `_render()`'s docstring here. This is narrower than the pre-2026-08-21
+    design this module used to have: it is consulted ONLY as a last-resort
+    fallback script-path source when the runtime sidecar/env-var
+    resolution fails, never for pipe derivation, which is unconditionally
+    runtime-resolved. Moving a shipped `door.exe` to point at a different
+    engine (a fresh `write_sidecar()` call, no rebuild) still works exactly
+    as before; the baked value only matters if that NEW sidecar later goes
+    missing or unreadable, in which case falling back to the ORIGINAL
+    build-time engine is still a correct, correctly-resolving choice --
+    never the ambient live-tree pin a bare `-m` would silently pick up."""
     engine_root = Path(engine_root)
     if not (engine_root / "coordinator_core" / "_engine_stamp").exists():
         raise SystemExit(
@@ -256,7 +304,7 @@ def build(
 
     kind, compiler_path = _find_compiler(compiler)
     source_text = _SOURCE.read_text(encoding="utf-8")
-    rendered = _render(source_text, python_bin)
+    rendered = _render(source_text, python_bin, engine_root)
 
     with tempfile.TemporaryDirectory() as tmp:
         generated = Path(tmp) / "door_generated.c"
@@ -264,7 +312,7 @@ def build(
         _compile(kind, compiler_path, generated, output)
 
     write_sidecar(output, engine_root)
-    write_provenance(output, _SOURCE, kind, compiler_path)
+    write_provenance(output, _SOURCE, kind, compiler_path, engine_root)
 
     return output
 
@@ -273,15 +321,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build the native warm-engine door (door.exe) and its engine-root "
-            "sidecar. The compiled binary is machine-independent; only the "
-            "sidecar this run writes ties it to `engine_root`."
+            "sidecar. `engine_root` is both written to the sidecar (the always- "
+            "preferred, runtime-resolved pipe-derivation source) and baked into "
+            "the binary as a last-resort fallback script-path root, used only "
+            "if a later sidecar goes missing or unreadable."
         )
     )
     parser.add_argument(
         "engine_root", type=Path,
         help=(
-            "Published engine root to point the sidecar at "
-            "(must carry coordinator_core/_engine_stamp)."
+            "Published engine root -- written to the sidecar AND baked as the "
+            "fallback default (must carry coordinator_core/_engine_stamp)."
         ),
     )
     parser.add_argument(

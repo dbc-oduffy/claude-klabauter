@@ -119,7 +119,7 @@ def main() -> None:
         print(f"install-sandbox-check: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         print(
             "  Remediation: this is a FAMILY-I (fresh-install) surface — on a cold machine "
-            "CLAUDE_KLABAUTER_ROOT may not yet be resolvable. Set CLAUDE_KLABAUTER_ROOT explicitly, or seed the "
+            "COORDINATOR_ENGINE_ROOT may not yet be resolvable. Set COORDINATOR_ENGINE_ROOT explicitly, or seed the "
             "repos.claude_klabauter machine-local registry key, then re-run.",
             file=sys.stderr,
         )

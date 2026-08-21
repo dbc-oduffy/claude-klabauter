@@ -2603,7 +2603,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
                 "broken or incomplete. Remediation:\n"
                 "  (a) reinstall the coordinator plugin via the marketplace,\n"
                 "  (b) verify CLAUDE_PLUGIN_ROOT resolves correctly (echo $CLAUDE_PLUGIN_ROOT),\n"
-                "  (c) verify CLAUDE_KLABAUTER_ROOT / repos.claude_klabauter resolves to a complete "
+                "  (c) verify COORDINATOR_ENGINE_ROOT / repos.claude_klabauter resolves to a complete "
                 "claude-klabauter checkout,\n"
                 "  (d) if this is a meta-repo dev checkout, confirm the missing dir is present.",
                 file=sys.stderr,

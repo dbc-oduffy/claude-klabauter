@@ -245,7 +245,7 @@ class TestRouteState1Remediation(unittest.TestCase):
 
         msg = str(ctx.exception)
         self.assertIn("test.op", msg)
-        self.assertIn("CLAUDE_KLABAUTER_ROOT environment variable", msg)
+        self.assertIn("COORDINATOR_ENGINE_ROOT environment variable", msg)
         self.assertIn(".claude-klabauter-root pointer file", msg)
         self.assertIn("repos.claude_klabauter", msg)
         self.assertIn("git clone https://github.com/dbc-oduffy/claude-klabauter", msg)
@@ -2223,8 +2223,31 @@ class RequireEngineVariantsTest(unittest.TestCase):
     def test_require_colocated_engine_on_path_agrees_with_resolve_colocated_deep(self) -> None:
         """coordinator/bin/lib/X.py — resolve_colocated's fixed parents[2] probe
         lands on coordinator/bin, not the checkout root, and misses; both the
-        wrapper and the raw call must fall through to _resolve_claude_klabauter_root the
-        same way."""
+        wrapper and the raw call must fall through the same way.
+
+        MIGRATED 2026-08-21. The AC here is AGREEMENT between the wrapper and
+        the raw call, never a particular root — but it was expressed as
+        `assertEqual(wrapper, expected)`, which can only be evaluated in the
+        regime where the fall-through RESOLVES. C6 stamp-gated the ladder both
+        of these fall through to, so on a hermetic box with no registry entry
+        both now raise instead, and the test could not even compute `expected`.
+        It had been red ever since, carried across sessions as `pre-existing`.
+
+        Comparing OUTCOMES rather than return values pins the property in
+        either regime: it stays honest if the ladder resolves again later, and
+        it fails loudly if the two ever diverge — which is the only thing this
+        test was ever asserting. Deliberately compares the exception's type and
+        first message line, not the type alone: two different resolution
+        failures raising the same class is exactly the divergence this would
+        otherwise wave through."""
+
+        def _outcome(call):
+            try:
+                return ("resolved", call())
+            except Exception as exc:  # noqa: BLE001 - the class is part of the comparison
+                first_line = str(exc).splitlines()[0] if str(exc) else ""
+                return ("raised", type(exc).__name__, first_line)
+
         with tempfile.TemporaryDirectory() as tmp:
             own = Path(tmp) / "own"
             settings_home = Path(tmp) / "settings-home"
@@ -2236,11 +2259,14 @@ class RequireEngineVariantsTest(unittest.TestCase):
             saved = list(sys.path)
             try:
                 with self._hermetic_env(settings_home):
-                    expected = _mod.resolve_colocated_claude_klabauter_root(str(deep))
-                    sys.path[:] = saved
-                    self.assertEqual(
-                        _mod.require_colocated_engine_on_path(str(deep)), expected
+                    raw = _outcome(
+                        lambda: _mod.resolve_colocated_claude_klabauter_root(str(deep))
                     )
+                    sys.path[:] = saved
+                    wrapped = _outcome(
+                        lambda: _mod.require_colocated_engine_on_path(str(deep))
+                    )
+                    self.assertEqual(raw, wrapped)
             finally:
                 sys.path[:] = saved
 
@@ -2415,7 +2441,7 @@ class TestNonzeroExitStdoutDiagnosis(unittest.TestCase):
         )
         text = str(exc)
         self.assertIn("engine will not import/start", text)
-        self.assertIn("CLAUDE_KLABAUTER_ROOT", text)
+        self.assertIn("COORDINATOR_ENGINE_ROOT", text)
         self.assertIn("No module named 'coordinator_core'", text)
 
     def test_non_json_stdout_is_recovered_and_capped(self) -> None:

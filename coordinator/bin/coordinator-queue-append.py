@@ -2047,7 +2047,7 @@ def main() -> None:
                 )
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
-                    "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
+                    "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
                     "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
@@ -2073,7 +2073,7 @@ def main() -> None:
                 )
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
-                    "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
+                    "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
                     "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
@@ -2085,7 +2085,7 @@ def main() -> None:
             )
             print(
                 "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
-                "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
+                "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
                 "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
@@ -2239,7 +2239,7 @@ def main() -> None:
         )
         print(
             "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
-            "  or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
+            "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
             "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )

@@ -230,15 +230,18 @@ else). This module has no code path that emits one.
 
 DoE-claude's ``skills/execute-plan/SKILL.md`` § Vehicle default QUALIFIES
 states that a Workflow ``agent()`` spawn is not an ``Agent`` tool call, so
-injected ``contract_blocks`` never arrive on that path, and that 33 of 34
-coordinator-typed agents carry a ``contract_blocks`` row — so a plan wave of
+injected ``contract_blocks`` never arrive on that path, and that 33 of 35
+coordinator-typed agents carry a ``contract_blocks`` row (git-commit-agent
+and atlas-clarity-reviewer carry no such row) — so a plan wave of
 coordinator-typed agents belongs on the ``Agent`` path today, not fired
 unattended as a Workflow script. Verified OPEN at DoE-claude HEAD
-(2026-08-14). Until that seam closes, the script this module emits is a
-durable machine-derived wave-map artifact an EM dispatches FROM via
-``Agent``, one phase at a time — not a script to run unattended. A future
-reader whose check shows the seam closed should DELETE this note rather than
-cement it, per the same qualifier in the upstream doctrine text.
+(2026-08-14). The seam is closable and the engine leg for it already exists
+here; it is not yet closed — catering arrives once DoE's cutover lands. Until
+then, the script this module emits is a durable machine-derived wave-map
+artifact an EM dispatches FROM via ``Agent``, one phase at a time — not a
+script to run unattended. A future reader whose check shows the seam closed
+should DELETE this note rather than cement it, per the same qualifier in the
+upstream doctrine text.
 
 Negative-spec:
   - Does NOT derive waves, pathspecs, or the terminal test scope — those are

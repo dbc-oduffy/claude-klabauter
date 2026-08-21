@@ -206,7 +206,7 @@ def _claude_klabauter_state() -> str:
             "identifiers) into a public repo and can strand or split a state "
             "corpus. Remediate: run from a live working-tree checkout of "
             "claude-klabauter (e.g. unset any published-mirror registration "
-            "for this session), or set CLAUDE_KLABAUTER_ROOT explicitly to a working "
+            "for this session), or set COORDINATOR_ENGINE_ROOT explicitly to a working "
             "tree."
         )
     return _state_of(claude_klabauter_root)

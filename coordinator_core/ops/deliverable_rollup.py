@@ -255,7 +255,7 @@ def _central_initiatives_dir(worktree_root: Path) -> Path:
             "(CLAUDE_KLABAUTER_ROOT unset and machine-local registry lookup returned None). "
             "Falling back to worktree-local state/initiatives/ — systemic "
             "misconfiguration may cause initiative FKs to resolve empty for "
-            "non-claude-klabauter worktrees. Set CLAUDE_KLABAUTER_ROOT or configure repos.claude_klabauter "
+            "non-claude-klabauter worktrees. Set COORDINATOR_ENGINE_ROOT or configure repos.claude_klabauter "
             "in the machine-local registry to resolve centrally."
         )
         _CENTRAL_ROOT_WARNED = True

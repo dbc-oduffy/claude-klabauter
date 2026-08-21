@@ -88,6 +88,29 @@ the DESTINATION tree and deletes whatever the source no longer has. An
 exclusion therefore becomes a DESTINATION DELETION on the following publish,
 not a one-time narrowing of what gets copied this run.
 
+**...with ONE exception, which is not a bug and must not be "fixed" here
+(2026-08-21).** A withdrawn TOP-LEVEL FILE is never deleted at the
+destination — not by `!`, not by `^`, not by dropping the name from the
+inclusion CSV. `publish_sync._sync_mirror_top_level_files` copies source
+files and deliberately runs no reverse sweep, because top-level files at a
+mirror destination are not target-owned by construction (the mirror repo's
+own `README.md`, `LICENSE`, and dotfiles live exactly there) — see that
+function's own negative spec. `sync_mirror`'s delete pass runs only INSIDE
+each subdirectory, and the orphan sweep only ever `rmtree`s top-level
+DIRECTORIES. So the three cases diverge:
+
+    nested path (`!ops/percolate_run.py`)   -> deleted next round
+    top-level directory (`^percolate`)      -> deleted next round
+    top-level file (`^publish.py`)          -> STRANDED, frozen forever
+
+The stranded copy keeps serving whatever it said the day it was withdrawn,
+and no round will ever refresh or remove it. Withdrawing a top-level file
+from a mirror row therefore owes a one-time reconciliation commit in the
+destination repo; the publish round cannot do it for you. Observed the
+expensive way: the 2026-08-20 bin-row deny left eight base CLIs frozen in
+`claude-klabauter/coordinator/bin/` for a day, one of them a publish driver
+that answered with superseded remediation text.
+
 
 ## Whole-entry deny (leading `^`)
 

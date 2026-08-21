@@ -436,7 +436,7 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
                 detail=source,
                 remediation=(
                     "Run scripts/setup.py to register repos.claude_klabauter, "
-                    "or set CLAUDE_KLABAUTER_ROOT=/path/to/claude-klabauter in the environment."
+                    "or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter in the environment."
                 ),
             ), None
 
@@ -3304,7 +3304,7 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
                     f"publish provenance unknown — could not resolve claude-klabauter's own git "
                     f"toplevel: {toplevel_result.stderr.strip()}"
                 ),
-                remediation="Verify CLAUDE_KLABAUTER_ROOT points at a git work tree.",
+                remediation="Verify COORDINATOR_ENGINE_ROOT points at a git work tree.",
                 required=False,
                 data={"record_path": str(record_path), "present": True},
             )

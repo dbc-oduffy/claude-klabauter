@@ -53,7 +53,7 @@ superseded B5 bar (the nine C2-C12 flips: `check_claude_md_size`,
 `block_priority_ledger_edit`,
 `block_em_hand_edit_pending_review_integration`,
 `nudge_prose_queue_creation`, `nudge_improvement_queue_write`,
-`guard_memory_store_cap`, `block_dev_repo_sentinel_write` -- disk-truth
+`block_dev_repo_sentinel_write` -- disk-truth
 wires and dev-side mirrors whose harm is reversible and
 individually-correctable, not the broken-control-plane, Windows-cost, or
 machine-exhaustion shape DR-277's three carve-outs reserve (Review:
@@ -61,6 +61,16 @@ coordinator:code-reviewer, 36bfdde30 follow-up -- "silent-and-total" was
 this same wrong paraphrase's own language, not DR-277's; see the corrected
 enumeration above). The guards remaining hard-deny below are the
 carve-out set DR-277 names, not a residual of the old bar.
+
+`guard_memory_store_cap` moved BACK to hard-deny 2026-08-21
+(`docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md`,
+amending DR-277). It cleared carve-out 1 (`MEMORY.md` auto-loads into
+every session's boot context, ahead of any review) and DR-277's own
+fourth structural rule (a per-invocation gate whose harm scales with
+invocation count is not weakened by an advisory, it is erased by one)
+once the advisory posture was observed, live, to admit 213 body files
+against its 20-file cap and a 26,718 B `MEMORY.md` against its 2,000 B
+cap.
 
 `bump_out_of_repo_tool_write` is hard-deny (moved from advisory by the bug
 fix `2026-08-10-cross-repo-write-boundary-denies-on-bash-b6fd16ed9ab9`) for
@@ -165,6 +175,7 @@ HARD_DENY_NAMES = [
     "block_worktree_sentinel_write",
     "bump_out_of_repo_tool_write",
     "guard_doctrine_surface_edits",
+    "guard_memory_store_cap",
     "guard_settings_json_write",
     "validate_frontmatter_schema_deny",
 ]
@@ -183,7 +194,6 @@ ADVISORY_NAMES = [
     "block_priority_ledger_edit",
     "check_claude_md_size",
     "guard_concrete_path_citations",
-    "guard_memory_store_cap",
     "nudge_baton_body_bar",
     "nudge_em_code_dispatch",
     "nudge_handoff_ac_shape",

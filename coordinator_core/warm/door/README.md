@@ -20,11 +20,15 @@ derive the warm server's named-pipe name exactly as
 knowledge of any op's semantics and does not parse the CLI surface — the
 server already owns argparse; the door only relays.
 
-**One compiled binary is machine-independent** — no engine root is baked
-into it. It reads its target engine root at runtime from a sidecar file
+**One compiled binary is machine-independent for the fast path.** Pipe
+derivation reads its target engine root at runtime from a sidecar file
 next to itself (see "Engine root resolution" below), so the SAME
 `door.exe` can be copied to any box and pointed at that box's own engine
-root with no recompile, no C compiler required there.
+root with no recompile, no C compiler required there. The FALLBACK
+target is also baked in at build time as a last-resort default, used only
+if that runtime sidecar is later missing/unreadable — see "Correctness:
+which engine the fallback executes" below for why, and why that is not a
+regression of the machine-independence property above.
 
 ## The safety property
 
@@ -33,12 +37,86 @@ no resolvable engine root, unreadable `_engine_stamp`, pipe not found,
 pipe busy, SID lookup failure, short read, malformed response, a response
 missing any of `stdout`/`stderr`/`exit_code`, or anything unanticipated
 BEFORE the request has been written to the pipe — it falls straight
-through to the existing Python entrypoint (`{python} -m
-coordinator_core.invoke`) with the **original argv, unchanged**, and
-propagates its exit code. Falling through is normal operation, not an
-error: the ordinary fallback path prints nothing. The only diagnostic
-this binary ever emits on its own is the one case where no Python
-interpreter is reachable at all.
+through to the existing Python entrypoint
+(`{engine_root}\coordinator\bin\coordinator-invoke.py`) with the
+**original argv, unchanged**, and propagates its exit code. Falling
+through is normal operation, not an error: the ordinary fallback path
+prints nothing. This binary emits a diagnostic on its own in exactly two
+cases: no Python interpreter is reachable at all, or (see "PM ruling:
+published engine or nothing" below) no published engine can be resolved
+by any means, in which case it refuses outright rather than spawning
+anything.
+
+### Correctness: which engine the fallback executes
+
+An earlier revision of this file had the fallback spawn `{python} -m
+coordinator_core.invoke` (bare module invocation) specifically so it
+would need no resolved engine root at all. **That was a correctness
+regression, caught before it shipped and fixed the same day.** Verified
+directly: a bare `-m` on this box resolves `coordinator_core` through the
+ambient editable-install pin (`sys.meta_path`), which points at the LIVE
+working tree — an unstamped, uncommitted, actively-edited checkout DR-315
+§2 rules is never an engine. Since the fast-path server is down for real
+stretches of time on this box (median server lifetime measured at 5.7
+minutes), the fallback is the COMMON path, not a rare corner — every
+fallen-through invocation would have silently executed ops out of
+whichever tree happened to be `pip install -e`'d, invisibly, since the
+output is identical either way.
+
+The fix: `fall_through()` spawns `coordinator-invoke.py` as a SCRIPT PATH,
+never a bare module. That script's own `cc_invoke.
+require_dispatch_engine_on_path()` call resolves `coordinator_core.
+__file__` correctly — verified directly, from inside the spawned child,
+with the warm server absent and from a neutral cwd — regardless of the
+ambient editable-install pin, because it resolves self-location-first
+(`resolve_colocated_claude_klabauter_root`'s own documented contract) rather than
+trusting whatever `sys.meta_path` hands it. See "Verification" below for
+the exact proof.
+
+`PYTHONPATH`/`CLAUDE_KLABAUTER_ROOT` env-var overrides do **not** fix a bare `-m`
+invocation: the editable-install finder's `sys.meta_path` entry is
+consulted before `sys.path` is, so it outranks both. Do not "fix" a
+future fallback-path change by reaching for either.
+
+### PM ruling: published engine or nothing
+
+The bar is stronger than "resolve the correct engine when possible" — a
+live op must **never** silently execute claude-klabauter (the live tree), full
+stop; the published engine, or a loud failure, are the only two
+acceptable outcomes. Quoting the ruling directly: *"I'd rather have a
+fail than a silent slow ... having a fallback to a 'claude-klabauter' system will
+confuse as well as fail, and keeping this loophole makes us blind to the
+true state of the engine."* Customers never have a claude-klabauter install at
+all, so a degrade-to-claude-klabauter fallback is not a safety net in the field —
+it is a local illusion this repo's own dev boxes are uniquely positioned
+to produce.
+
+`fall_through()`'s two possible roots are handled accordingly:
+
+- **Runtime-resolved** (`resolve_engine_root()`, sidecar/env) — already
+  validated (real `_engine_stamp`) before `fall_through()` ever sees it.
+- **`BUILD_ENGINE_ROOT_W`** (baked at build time, consulted ONLY when the
+  runtime resolution above failed) — this value is a **per-build-machine
+  default, not a portable or supported location**. Whatever engine root
+  happened to be on the box that last ran `build.py` is what ends up
+  baked into the committed binary; on any OTHER machine (a customer's,
+  or simply a box laid out differently) that path is meaningless. So
+  `fall_through()` validates it at runtime the same way the sidecar-
+  supplied root is validated (`is_valid_engine_root_w()`, real
+  `_engine_stamp`) before ever trusting it — and if it does NOT validate,
+  the door **refuses outright: no process is spawned at all**, a custom
+  message naming the remediation goes to stderr, and it exits nonzero.
+  This is deliberately not "let `CreateProcessW` spawn Python at a path
+  that turns out not to exist and let Python's own generic file-not-found
+  error be the failure" — that would still be a nonzero exit, but it
+  names no remediation and reads as a confusing error about a
+  `claude-klabauter`-shaped path nobody asked for.
+
+Verified directly (see "Verification" below): with no sidecar, no env
+override, and the baked default itself pointing at a since-deleted
+directory, the door prints its own clear refusal and exits 1 — no python
+process spawned, no partial output, nothing that could be mistaken for a
+real op's result.
 
 **Once the request has been fully written to the pipe, the door never
 falls through again** — the server may already be executing it, and
@@ -80,16 +158,16 @@ Either way, the result is validated against a real, non-empty
 `coordinator_core\_engine_stamp` before use (mirroring
 `warm.engine_root.is_engine_root`). Missing, unreadable, empty, or
 invalid in either case falls through silently — the same "no doubt
-survives" rule as everything else in the safety property.
-
-**Why the fallback needs no engine root at all**: it spawns `{python} -m
-coordinator_core.invoke <argv>` — module invocation, not a script path
-under an engine tree. Verified directly (2026-08-21): that command,
-run from an unrelated cwd with no engine-root argument anywhere, resolves
-and dispatches correctly, because `coordinator_core` is editable-installed
-into the fleet-hosted interpreter. This is what lets a missing/invalid
-sidecar fall through silently instead of being a second fatal case
-layered on top of "no pipe".
+survives" rule as everything else in the safety property, and this
+resolution failing does NOT become a second fatal case layered on top of
+"no pipe": `fall_through()` still has a correct engine root to spawn
+`coordinator-invoke.py` against, because it falls back further to
+`BUILD_ENGINE_ROOT_W` (the value baked at build time — see "Correctness:
+which engine the fallback executes" above). This resolved value (or its
+baked fallback) is used ONLY to build the fallback's script path; it
+plays no role in the pipe-derivation steps above, which already returned
+their own doubt-free "give up" verdict before `fall_through()` is ever
+called.
 
 ## Building
 
@@ -104,19 +182,29 @@ The live working tree (`X:\claude-klabauter`) is never a warm-server host
 
 This does two separate things that happen to share one command:
 
-- **Compiles `door.exe`**, machine-independent. Only the fallback Python
-  interpreter path (`__PYTHON_BIN_W__`, defaulting to `sys.executable` at
-  build time) is baked into the binary, the same way
-  `coordinator/bin/coordinator-invoke.cmd` bakes its own.
+- **Compiles `door.exe`**, using `engine_root` twice: once resolved into
+  `BUILD_ENGINE_ROOT_W`, the fallback's last-resort script-path root (see
+  "Correctness: which engine the fallback executes" above — this is
+  consulted only if a LATER sidecar goes missing/unreadable, never for
+  pipe derivation), and the fallback Python interpreter path
+  (`__PYTHON_BIN_W__`, defaulting to `sys.executable` at build time) —
+  both baked the same way `coordinator/bin/coordinator-invoke.cmd` bakes
+  its own `__PYTHON_BIN__`.
 - **Writes the sidecar** (`write_sidecar()`) next to the compiled binary,
   resolving `engine_root` once, in Python, so the clone-hash input the
   door's pipe-name derivation uses is byte-identical to what
   `election.pipe_name` computes — no C-side path-canonicalisation code
-  exists anywhere to drift out of sync with `Path.resolve()`.
+  exists anywhere to drift out of sync with `Path.resolve()`. This is the
+  ALWAYS-PREFERRED source for pipe derivation, checked before the baked
+  fallback is ever consulted.
 
 To ship the SAME compiled `door.exe` to a different box (or point it at a
 different engine root without recompiling), copy the binary and call
-`write_sidecar()` again there — no compiler needed on that box.
+`write_sidecar()` again there — no compiler needed on that box. Pipe
+derivation on that box then targets the NEW root immediately; only the
+fallback's last-resort default stays pinned to whatever `engine_root` the
+binary was originally compiled with, and only matters if that new
+sidecar is later lost.
 
 ### Reproducibility and provenance — `door.exe` is committed, and verifiable
 
@@ -136,15 +224,21 @@ version:
   "door_c_sha256": "...",
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (...)",
-  "built_at": "2026-08-21T11:49:29+00:00"
+  "built_at": "2026-08-21T11:49:29+00:00",
+  "engine_root": "X:\\claude-klabauter"
 }
 ```
+
+`engine_root` is recorded because it is now an INPUT to the build (baked
+as `BUILD_ENGINE_ROOT_W`, "PM ruling" above), not incidental metadata —
+see "What a MATCH does and does not prove" below for why that matters to
+`--verify`.
 
 A mismatch between that recorded hash and the current `door.c` is
 detectable with one `sha256sum door.c`, by anyone, without a compiler.
 
-**Two commands** to actually rebuild and verify, same compiler as the
-committed binary:
+**Two commands** to actually rebuild and verify, same compiler AND the
+same `<engine_root>` argument as the committed binary was built with:
 
 ```
 python coordinator_core/warm/door/build.py <engine_root>              # rebuild in place
@@ -157,6 +251,62 @@ which replaces the PE header's embedded build timestamp with a
 content-derived value. Verified directly (2026-08-21): without this flag,
 two back-to-back builds from byte-identical `door.c` differed in SHA-256;
 with it, they match exactly.
+
+**What a MATCH does and does not prove.** Since `engine_root` is baked
+into the binary now (`BUILD_ENGINE_ROOT_W`, "PM ruling" above), it is an
+INPUT to the build, not just a side artifact — two people on different
+boxes, or the same person passing two different `<engine_root>` values,
+will get two DIFFERENT binaries from byte-identical `door.c`, correctly
+(the baked default is meant to differ between boxes; that is the whole
+point of it being a per-build-machine default). So:
+
+- **MATCH** proves: this exact `door.c`, compiled by this exact
+  compiler+version, with this exact `<engine_root>` argument, produces
+  the exact bytes of the committed `door.exe`. It is a claim about
+  *reproducibility of the build*, not a claim that any two builds of this
+  source are interchangeable.
+- **MATCH does NOT prove**: that the committed binary's baked engine root
+  is correct for the box running the verification, or for any box other
+  than the one the committed binary was originally built on. Reproducing
+  the committed binary is not evidence the CONTENT of what got baked
+  into it (a specific path) is meaningful anywhere else.
+- **MISMATCH** with the SAME `<engine_root>` the committed binary was
+  built with is the actionable signal: either the source or the binary
+  drifted from each other, or the compiler differs from
+  `door.exe.provenance.json`'s recorded version. A MISMATCH from passing
+  a DIFFERENT `<engine_root>` than the committed binary used is expected
+  and proves nothing — check `door.exe.provenance.json`, not blind trial
+  and error, for what to pass.
+
+**Running `--verify` from a PUBLISHED MIRROR clone (e.g.
+`X:\claude-klabauter`) is safe, but a manual `sha256sum door.c` there is
+NOT — these are two different checks with two different answers, and
+conflating them reads as tampering that isn't there.** Percolate's
+publish content transform rewrites every `claude-klabauter`-shaped identifier
+(function names, env-var names) when this repo's files are synced to a
+mirror — confirmed directly (2026-08-21) against the mirror's own
+`cc_invoke.py`: the live tree's `resolve_colocated_claude_klabauter_root` ships
+there as `resolve_colocated_claude_klabauter_root`. `door.c` mentions
+`claude-klabauter`/`CLAUDE_KLABAUTER_ROOT` six times, but ONLY in comments — grepped and
+confirmed, none of the six touch an actual C identifier, macro, or
+string literal the compiler reads. Proved this doesn't matter to
+`--verify` empirically, not by assumption: built a copy of `door.c` with
+the same token rewrite pattern applied (`claude-klabauter` → `claude_klabauter`,
+`CLAUDE_KLABAUTER_ROOT` → `CLAUDE_KLABAUTER_ROOT`) and compiled it — the resulting
+binary was **byte-identical** to the committed `door.exe`, because
+`/Brepro` aside, comments never reach codegen. So a mirror-side
+`build.py --verify` (which rebuilds and hash-compares the COMPILED
+bytes, never the source text) still correctly reports MATCH. What does
+NOT survive the trip is `door.exe.provenance.json`'s recorded
+`door_c_sha256` field, which hashes the live tree's SOURCE TEXT
+including those six comment lines — a mirror-side `door.c` will legitimately
+hash differently there, and that is expected, not a sign anything is
+wrong. Trust `--verify`'s own compiled-byte comparison over a manual
+source hash on a mirror clone. This is current-state, not a guarantee:
+if a future edit ever puts a `claude-klabauter`-shaped token into actual code
+(rather than a comment), this safety would need re-proving, not assumed
+to still hold.
+
 `coordinator_core/install/door_install.py :: rebuild_and_verify_prebuilt()`
 is the same check, re-exported for callers already in that module.
 Neither runs automatically on every install (that would reintroduce a
@@ -224,6 +374,33 @@ down for an unrelated reason at measurement time):
 
 Well inside the PM's ~60ms bar and the standing gate's 200ms ceiling
 (`coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py`).
+
+**Fallback engine correctness** (2026-08-21, same session, after the
+above): proven with a temporary, opt-in debug print of the constructed
+fallback command line (added, exercised, then removed — never shipped),
+combined with a one-line, throwaway-only patch to an ISOLATED copy of
+`coordinator-invoke.py` (a hardlinked/copied clone beside
+`X:\claude-klabauter`, never the real published mirror or the live tree)
+printing `coordinator_core.__file__` from inside the spawned child. Run
+from a neutral cwd, with no warm server started for that isolated clone
+at all (forcing the fallback deterministically, without touching the real
+fleet server):
+
+```
+DOOR_DEBUG_CMDLINE (temporary): <python.exe> <isolated-root>\coordinator\bin\coordinator-invoke.py ping
+PROBE coordinator_core.__file__: X:\claude-klabauter\coordinator_core\__init__.py
+```
+
+The probe resolved to the REAL published mirror, not the isolated clone
+itself (that clone lacked a `pyproject.toml` self-location marker, so
+`require_dispatch_engine_on_path()`'s ladder fell through to its own
+registry rung) and, critically, **never** to the live working tree —
+confirming the fix holds via either resolution rung. Re-verified argv
+fidelity (a tricky op-name argument round-tripped exactly through the
+restored `coordinator-invoke.py` fallback), the missing-sidecar case
+(falls back to `BUILD_ENGINE_ROOT_W` and still reaches a correct
+`coordinator-invoke.py`), and the post-delivery refusal (unaffected by
+this fix, re-confirmed against the same fake-pipe-server harness).
 
 ## Install-chain wiring
 

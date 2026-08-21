@@ -88,6 +88,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core._settings_home import claude_config_dir
+from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._payload import field
+from coordinator_core.ipc import register_op
 from coordinator_core.subagent_sandbox.engine import (
     load_policy,
     resolve_effective_types,
@@ -97,6 +100,13 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _provision,
     assemble_contract_blocks_for_payload,
 )
+
+#: Op name the SubagentStart shim relays this leg under (C3). Registered here,
+#: not re-derived by the shim -- "no second registration" (plan Anti-scope):
+#: this rides the existing SubagentStart registration's dispatch_ops_from_hook
+#: call, ALONGSIDE "hooks.track_dispatched_agents" (the bookkeeping op), never
+#: as a standalone hooks.json entry of its own.
+OP_NAME = "hooks.cater_subagent_start"
 
 #: Same machine-readable marker shape as DoE's Agent-path hook (Concern
 #: B.3) -- consumer agents (`coordinator/agents/code-reviewer.md` § HARD
@@ -272,3 +282,45 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
         parts.append("\n\n" + role_append)
 
     return "".join(parts)
+
+
+@register_op(OP_NAME)
+async def _handler(params: dict, repo_root=None) -> dict:
+    """SubagentStart relay target (C3) -- registration only, no second hooks.json
+    entry (module docstring, "no second registration"). The existing SubagentStart
+    shim relays this op via `ipc.py :: dispatch_ops_from_hook` ALONGSIDE
+    `hooks.track_dispatched_agents`, bookkeeping op FIRST.
+
+    Order is load-bearing, not this handler's to enforce: `dispatch_ops_from_hook`
+    is sequential by contract, and `resolve_effective_types` (called inside
+    `compose_catering` -> `_resolve_sidecar_leg`) resolves a named dispatch's
+    `subagent_type` through a back-pointer into `dispatched-agents.txt` -- the
+    file the bookkeeping leg writes on this SAME event. Called before that write
+    lands, a named teammate's back-pointer read is a lookup-miss (empty string,
+    fail-open per `_read_backpointer_subagent_type`'s own contract) -- never an
+    error, just a silently worse catering result. This handler assumes its
+    caller places the bookkeeping op first, exactly as the module docstring and
+    the owning plan's chunk ordering direct; it does not (and cannot, from
+    inside a single relayed op) verify that its caller obeyed that ordering.
+
+    `params` IS the SubagentStart payload verbatim -- the same shape
+    `compose_catering` and `resolve_effective_types` already consume
+    (`agent_type`, `agent_id`, `cwd`, `session_id`), not a re-shaped subset.
+
+    Runs `compose_catering` off the event loop (`asyncio.to_thread`) --
+    `_provision`'s sidecar write and the role-append snippet read are both
+    synchronous file I/O, and this module's own async-handler-discipline peers
+    (`hooks.track_dispatched_agents`) hold the same rule for write-shaped work.
+
+    Returns a `context_only("SubagentStart", ...)` envelope when
+    `compose_catering` has something to say, `no_advisory()` (empty dict) when
+    it does not -- fail-open on every arm (AC5): `compose_catering` itself never
+    raises, so there is nothing for this handler to catch.
+    """
+    import asyncio
+
+    cwd = field(params, "cwd") or None
+    text = await asyncio.to_thread(compose_catering, params, cwd=cwd)
+    if not text:
+        return no_advisory()
+    return context_only("SubagentStart", text)

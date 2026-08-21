@@ -30,6 +30,17 @@
  * error, so the ordinary fallback path prints nothing -- see
  * `fall_through()`.
  *
+ * PM RULING (2026-08-21): a live op must never silently execute claude-klabauter
+ * (the live working tree) -- the published engine, or a loud failure, are
+ * the only two acceptable outcomes; a slow-but-working degrade to the
+ * wrong engine is worse than an outright error because it hides the
+ * engine's real state. This file's fallback satisfies that by construction
+ * (see `BUILD_ENGINE_ROOT_W`'s and `fall_through()`'s own comments): it
+ * spawns the SAME entrypoint (`coordinator-invoke.py`, via
+ * `cc_invoke.require_dispatch_engine_on_path()`) that already owns this
+ * policy for every other cold caller, rather than deriving a second
+ * answer to "which engine" in C.
+ *
  * WHY SHA-1 IS REIMPLEMENTED HERE rather than calling into bcrypt.dll:
  * loading a DLL neither already mapped into this process nor needed for
  * anything else on the fast path costs more than the ~50-line hash it
@@ -55,18 +66,38 @@
  * computation by construction, not by a parallel reimplementation of
  * `Path.resolve()`'s Windows semantics.
  *
- * WHY THE FALLBACK NEEDS NO ENGINE ROOT AT ALL: `fall_through()` spawns
- * `{python} -m coordinator_core.invoke <argv>` rather than a script path
- * under the engine tree. Verified directly (2026-08-21, this session):
- * `python -m coordinator_core.invoke ping`, run from an unrelated cwd with
- * no engine-root argument anywhere, resolves and dispatches correctly --
- * `coordinator_core` is editable-installed into the fleet-hosted
- * interpreter, so module resolution needs no engine-root hint, the same
- * way it needs none when an operator types that command by hand. This is
- * also why a missing/invalid sidecar can fall through SILENTLY (module
- * docstring's safety property) rather than being a second fatal case
- * layered on top of "no pipe": the fallback was never engine-root-
- * dependent to begin with, only the pipe-derivation fast path is.
+ * WHAT THE FALLBACK RUNS, AND WHY IT IS NEVER A BARE `-m`: `fall_through()`
+ * spawns `{python} {engine_root}\coordinator\bin\coordinator-invoke.py
+ * <argv>` -- a SCRIPT PATH, one whose own trampoline calls
+ * `cc_invoke.require_dispatch_engine_on_path()` to resolve the engine
+ * it runs against. An earlier revision of this file spawned a bare
+ * `python -m coordinator_core.invoke <argv>` instead, specifically so the
+ * fallback would need no resolved engine root at all -- that was a
+ * correctness regression, caught before it shipped: verified directly
+ * that a bare `-m` on this box resolves `coordinator_core` through the
+ * ambient editable-install `sys.meta_path` pin, which points at the LIVE
+ * working tree, not a published engine (DR-315 §2). Per PM ruling
+ * (2026-08-21): a live op must never silently fall back to executing
+ * claude-klabauter's live tree -- it must run the published engine, or fail loudly.
+ * Spawning the SCRIPT (not the bare module) is what buys that: the
+ * script's own self-location-first resolution
+ * (`resolve_colocated_claude_klabauter_root`'s contract) agrees with whatever root
+ * THIS file already validated as a real, stamped engine (see
+ * `resolve_engine_root()`/`BUILD_ENGINE_ROOT_W` below) -- it is never
+ * handed an unvalidated path to resolve from. `engine_root` -- from
+ * `resolve_engine_root()` when available, else `BUILD_ENGINE_ROOT_W` --
+ * is therefore load-bearing for the fallback, not optional the way the
+ * retired `-m` design needed it to be. If NEITHER source names a script
+ * that still exists on disk, `CreateProcessW` still succeeds (`python.exe`
+ * itself is a real binary) but the spawned interpreter fails to open the
+ * missing script and exits nonzero with its own "can't open file" message
+ * on stderr -- a loud failure, never a silent wrong-engine run, and never
+ * this file printing a success envelope for it. A missing/invalid sidecar
+ * therefore still falls through SILENTLY at THIS layer (module
+ * docstring's safety property is about the DOOR's own doubt, not about
+ * the entrypoint it hands off to) -- what happens next is the spawned
+ * `coordinator-invoke.py`'s own resolution and its own fail-loud
+ * contract, unchanged and un-duplicated here.
  *
  * The engine TOKEN, by contrast, is deliberately NOT cached anywhere
  * (baked or sidecar): it is a generation stamp over
@@ -86,12 +117,62 @@
 #include <string.h>
 
 /* ---- baked at build time by build.py (placeholder substitution, same
- * convention as coordinator/bin/coordinator-invoke.cmd's __PYTHON_BIN__).
- * The engine root is deliberately NOT among these any more -- see the
- * module docstring's "WHY THE ENGINE ROOT IS RESOLVED AT RUNTIME" note --
- * `resolve_engine_root()` below reads it from a sidecar file instead. */
+ * convention as coordinator/bin/coordinator-invoke.cmd's __PYTHON_BIN__). */
 #ifndef PYTHON_BIN_W
 #define PYTHON_BIN_W L"__PYTHON_BIN_W__"
+#endif
+
+/* THE FALLBACK ENGINE ROOT -- last-resort only, never the primary source.
+ * 2026-08-21 correctness fix: an earlier revision of this file had
+ * `fall_through()` spawn `{python} -m coordinator_core.invoke` (bare
+ * module invocation) specifically so the fallback would need no resolved
+ * engine root at all. That was WRONG: verified directly that a bare `-m`
+ * on this box resolves `coordinator_core` through the ambient editable-
+ * install's `sys.meta_path` finder, which pins to whichever live working
+ * tree this box's interpreter has editable-installed (abs-path-ok: this
+ * file cites no path of its own; the box-specific example lived only in
+ * an earlier prose draft) -- an unstamped, uncommitted, actively-edited
+ * checkout DR-315 §2 rules is never an engine. Every fallen-through
+ * invocation would silently have executed ops out of the wrong tree.
+ * `PYTHONPATH`/`CLAUDE_KLABAUTER_ROOT` env-var overrides do NOT fix this: the
+ * editable-install finder's `sys.meta_path` entry is consulted before
+ * `sys.path` is, so it outranks both -- verified this does not work
+ * before reaching for this macro instead.
+ *
+ * The actual fix: `fall_through()` spawns `coordinator-invoke.py`
+ * (verified directly, 2026-08-21: that script's own `cc_invoke.
+ * require_dispatch_engine_on_path()` call resolves `coordinator_core.
+ * __file__` correctly to WHEREVER THAT SCRIPT ITSELF LIVES ON DISK --
+ * self-location-first, `resolve_colocated_claude_klabauter_root`'s own contract --
+ * regardless of the ambient editable-install pin). So the door only needs
+ * a valid PATH to some `coordinator-invoke.py`, not a working env-var
+ * override.
+ *
+ * The primary path/pipe-derivation still comes from `resolve_engine_root()`
+ * (sidecar/env, module docstring) -- this macro is consulted by
+ * `fall_through()` ONLY when that runtime resolution failed (no sidecar,
+ * unreadable, invalid), so there is no OTHER known-good root to build a
+ * script path from. It is the engine root `build.py` was given at build
+ * time -- correct by construction on a fresh install (the same value gets
+ * written to the sidecar), and still a VALID, CORRECTLY-RESOLVING engine
+ * even after a later sidecar edit points this same binary elsewhere (just
+ * possibly not that later target) -- never the ambient live-tree pin.
+ *
+ * READ THIS BEFORE TRUSTING THE STRING YOU JUST FOUND IN THE BINARY: this
+ * is a PER-BUILD-MACHINE DEFAULT, not a portable or supported location --
+ * whatever path a specific box happened to build this binary against, an
+ * install-time hint and nothing more. The shipped, committed `door.exe`
+ * therefore carries whichever engine root the machine that ran
+ * `build.py` last had -- meaningless on any OTHER machine, customer or
+ * otherwise (customers have no claude-klabauter install at all, ever). This is why
+ * `fall_through()` (see its own comment) VALIDATES this value at runtime
+ * via `is_valid_engine_root_w()` before ever trusting it, and REFUSES
+ * outright -- no process spawned at all -- rather than attempting to
+ * launch a script at a path that turns out not to name a real engine on
+ * the machine actually running. Do not read this macro's baked value as
+ * a claim about where engines live in general. */
+#ifndef BUILD_ENGINE_ROOT_W
+#define BUILD_ENGINE_ROOT_W L"__BUILD_ENGINE_ROOT_W__"
 #endif
 
 /* Sidecar file this door reads its engine root from, in the SAME
@@ -422,14 +503,34 @@ static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len) {
     return buf;
 }
 
+/* True iff `root_w` carries a real, non-empty `coordinator_core\
+ * _engine_stamp` (mirroring `warm.engine_root.is_engine_root`'s own
+ * readable-and-non-empty check, reimplemented here rather than imported
+ * because this file has no Python to import from). Shared by
+ * `resolve_engine_root()` (validating the sidecar/env-supplied root) and
+ * `fall_through()` (validating `BUILD_ENGINE_ROOT_W` before trusting it
+ * as a last resort) -- ONE validation, not two that could drift, since a
+ * root failing this check is exactly the kind of doubt the safety
+ * property exists for regardless of which of the two sources produced
+ * it. */
+static int is_valid_engine_root_w(const wchar_t *root_w) {
+    wchar_t stamp_path[MAX_PATH * 2];
+    if (swprintf(stamp_path, MAX_PATH * 2, L"%s\\coordinator_core\\_engine_stamp", root_w) < 0) {
+        return 0;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA stamp_attrs;
+    if (!GetFileAttributesExW(stamp_path, GetFileExInfoStandard, &stamp_attrs) ||
+        (stamp_attrs.nFileSizeHigh == 0 && stamp_attrs.nFileSizeLow == 0)) {
+        return 0;
+    }
+    return 1;
+}
+
 /* Resolves the engine root this invocation should target: the env-var
  * override (`ENGINE_ROOT_ENV_OVERRIDE`) if set and non-empty, else the
- * sidecar file next to this executable. Validates the result carries a
- * real `coordinator_core\_engine_stamp` (mirroring
- * `warm.engine_root.is_engine_root`'s own readable-and-non-empty check,
- * reimplemented here rather than imported because this file has no
- * Python to import from) -- a sidecar pointing at a non-engine directory
- * is exactly the kind of doubt the safety property exists for.
+ * sidecar file next to this executable. Validates the result via
+ * `is_valid_engine_root_w()` -- a sidecar pointing at a non-engine
+ * directory is exactly the kind of doubt the safety property exists for.
  *
  * On success, fills `*out_w` (malloc'd wide string, for CreateFileW) and
  * `*out_u8`/`*out_u8_len` (malloc'd UTF-8 bytes, NOT NUL-assumed by the
@@ -459,14 +560,7 @@ static int resolve_engine_root(wchar_t **out_w, char **out_u8, size_t *out_u8_le
     wchar_t *root_w = utf8_to_wide(root_u8);
     if (!root_w) { free(root_u8); return 0; }
 
-    wchar_t stamp_path[MAX_PATH * 2];
-    if (swprintf(stamp_path, MAX_PATH * 2, L"%s\\coordinator_core\\_engine_stamp", root_w) < 0) {
-        free(root_u8); free(root_w);
-        return 0;
-    }
-    WIN32_FILE_ATTRIBUTE_DATA stamp_attrs;
-    if (!GetFileAttributesExW(stamp_path, GetFileExInfoStandard, &stamp_attrs) ||
-        (stamp_attrs.nFileSizeHigh == 0 && stamp_attrs.nFileSizeLow == 0)) {
+    if (!is_valid_engine_root_w(root_w)) {
         free(root_u8); free(root_w);
         return 0;
     }
@@ -542,20 +636,60 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
  * reachable at all, mirroring coordinator-invoke.cmd's own last-resort
  * message.
  *
- * Spawns `{PYTHON_BIN_W} -m coordinator_core.invoke <argv>` -- MODULE
- * invocation, not a script path under an engine tree -- so this function
- * needs no resolved engine root at all (module docstring's "WHY THE
- * FALLBACK NEEDS NO ENGINE ROOT" note has the verification). That is what
- * lets `main()` fall through unconditionally on a missing/invalid
- * engine-root sidecar rather than treating it as a second fatal case.
- * ========================================================================= */
+ * Spawns `{PYTHON_BIN_W} {engine_root}\coordinator\bin\coordinator-invoke.py
+ * <argv>` -- a SCRIPT PATH, deliberately never a bare `-m
+ * coordinator_core.invoke` module invocation (see `BUILD_ENGINE_ROOT_W`'s
+ * own comment for the incident this fixes: a bare `-m` resolves through
+ * this box's ambient editable-install pin, silently executing the LIVE
+ * working tree instead of a published engine -- DR-315 §2 violated
+ * through a side door). `engine_root_w` is the caller's already-resolved
+ * root (from `resolve_engine_root()`) when available, else
+ * `BUILD_ENGINE_ROOT_W` (the build-time fallback) -- either way this
+ * function itself performs no resolution of its own, matching the rest
+ * of this file's "resolve once, upstream" discipline. */
+static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+    const wchar_t *root = (engine_root_w != NULL) ? engine_root_w : BUILD_ENGINE_ROOT_W;
 
-static int fall_through(int argc, wchar_t **wargv) {
+    /* `engine_root_w`, when supplied, was already validated by
+     * `resolve_engine_root()` before this function ever saw it --
+     * re-checking it here would be redundant, not wrong, but this branch
+     * exists for the one case that was NEVER validated at runtime:
+     * `BUILD_ENGINE_ROOT_W` is a build-time string baked into the binary
+     * (see that macro's own comment) -- correct on the machine that built
+     * it, meaningless on any other. PM ruling (2026-08-21): a live op must
+     * execute the published engine or fail loudly -- NEVER degrade to
+     * "spawn whatever Python can import" (the exact `-m` hole already
+     * closed once). So when the caller supplied no resolved root AND the
+     * baked default does not itself validate, this function refuses
+     * outright -- no `CreateProcessW` call at all, not even one that
+     * would merely fail loudly by accident (a missing script produces
+     * Python's own generic "can't open file", which is a nonzero exit
+     * but names no remediation; this is the same failure with one that
+     * does). */
+    if (engine_root_w == NULL && !is_valid_engine_root_w(root)) {
+        fwprintf(stderr,
+            L"door: no published engine could be resolved (no sidecar/env "
+            L"override, and this binary's build-time default %s is not a "
+            L"valid engine root on this machine) -- refusing to run "
+            L"anything rather than guess. Remediation: reinstall the door "
+            L"(coordinator_core/install/door_install.py) against this "
+            L"machine's published engine, or set COORDINATOR_DOOR_ENGINE_ROOT.\n",
+            root);
+        return 1;
+    }
+
     buf_t cmdline;
     if (!buf_init(&cmdline, 4096)) return 1;
 
     if (!quote_arg_w(&cmdline, PYTHON_BIN_W)) return 1;
-    if (!buf_append_cstr(&cmdline, " -m coordinator_core.invoke")) return 1;
+    if (!buf_append(&cmdline, " ", 1)) return 1;
+
+    wchar_t script_path_w[MAX_PATH * 2];
+    if (swprintf(script_path_w, MAX_PATH * 2,
+                 L"%s\\coordinator\\bin\\coordinator-invoke.py", root) < 0) {
+        return 1;
+    }
+    if (!quote_arg_w(&cmdline, script_path_w)) return 1;
 
     for (int i = 1; i < argc; i++) {
         if (!buf_append(&cmdline, " ", 1)) return 1;
@@ -584,8 +718,9 @@ static int fall_through(int argc, wchar_t **wargv) {
         /* Genuinely fatal: not "fast path missed", but "no way at all to
          * reach the engine". This is the one case the ordinary "no
          * diagnostic on fallback" rule does not cover. */
-        fwprintf(stderr, L"door: no Python interpreter reachable "
-                          L"(tried %s) -- cannot fall through\n", PYTHON_BIN_W);
+        fwprintf(stderr, L"door: could not launch the fallback "
+                          L"(python=%s, script=%s) -- cannot fall through\n",
+                          PYTHON_BIN_W, script_path_w);
         return 127;
     }
 
@@ -600,16 +735,14 @@ static int fall_through(int argc, wchar_t **wargv) {
 /* `fall_through` reads `wargv[1..argc-1]` while building the fallback
  * command line -- `wargv` must stay ALIVE for the whole call, and this
  * wrapper is the only place in the file allowed to `LocalFree` it,
- * strictly AFTER `fall_through` returns. Every pre-delivery bailout in
- * `main` goes through this instead of its own `LocalFree`+`fall_through`
- * pair: that pairing previously freed `wargv` and then handed the dangling
- * pointer to `fall_through` anyway, a use-after-free that (observed
- * directly) corrupts exactly the argv content `fall_through` reads --
- * silently forwarding a WRONG command to the very fallback this door
- * exists to make safe. */
-static int fall_through_and_free(int argc, wchar_t **wargv) {
-    int rc = fall_through(argc, wargv);
+ * strictly AFTER `fall_through` returns (see `fall_through`'s own comment
+ * for the use-after-free incident that shape fixes). Also frees
+ * `engine_root_w` if non-NULL -- `free(NULL)` is a documented no-op, so
+ * this is safe to call whether or not `resolve_engine_root()` succeeded. */
+static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root_w) {
+    int rc = fall_through(argc, wargv, engine_root_w);
     LocalFree(wargv);
+    free(engine_root_w);
     return rc;
 }
 
@@ -1034,62 +1167,66 @@ int main(void) {
      * startup this build ends up linked against. */
     int argc = 0;
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (!wargv) return fall_through(1, NULL);
+    if (!wargv) return fall_through(1, NULL, NULL);
 
     /* ---- 0. engine root -- resolved at runtime, never baked. See
      * `resolve_engine_root`'s own docstring for the sidecar/env-var
-     * contract; any failure here is exactly the "no baked root" doubt
-     * the safety property already names, and falls through the same as
-     * every other one -- `fall_through` needs no engine root itself
-     * (module docstring). ---- */
+     * contract. On failure here `engine_root_w` stays NULL, which
+     * `fall_through`/`fall_through_and_free` treat as "use
+     * BUILD_ENGINE_ROOT_W" (see that macro's own comment) -- so this is
+     * exactly as safe to fall through as every other doubt, and NEVER
+     * degrades to the unconditional-`-m` shape this file used to have.
+     *
+     * `engine_root_w` is kept ALIVE for the rest of this function (not
+     * freed early once the pipe-derivation steps are done with it) --
+     * every fall-through exit point, including the `do_fallback` tail far
+     * below, needs it to build the correct script path. */
     wchar_t *engine_root_w = NULL;
     char *engine_root_u8 = NULL;
     size_t engine_root_u8_len = 0;
     if (!resolve_engine_root(&engine_root_w, &engine_root_u8, &engine_root_u8_len)) {
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, NULL);
     }
 
     /* ---- 1. SID ---- */
     wchar_t *sid_w = current_user_sid_w();
     if (!sid_w) {
-        free(engine_root_w); free(engine_root_u8);
-        return fall_through_and_free(argc, wargv);
+        free(engine_root_u8);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
     /* ---- 2. engine token: sha1("engine-stamp:" + stamp bytes)[:16] ---- */
     wchar_t stamp_path[MAX_PATH * 2];
     if (swprintf(stamp_path, MAX_PATH * 2, L"%s\\coordinator_core\\_engine_stamp",
                  engine_root_w) < 0) {
-        free(engine_root_w); free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        free(engine_root_u8); free(sid_w);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
-    free(engine_root_w); /* last use -- everything past here reads engine_root_u8 only */
-    engine_root_w = NULL;
 
     HANDLE stamp_h = CreateFileW(stamp_path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (stamp_h == INVALID_HANDLE_VALUE) {
         free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
     LARGE_INTEGER stamp_size;
     if (!GetFileSizeEx(stamp_h, &stamp_size) || stamp_size.QuadPart <= 0 ||
         stamp_size.QuadPart > (1 << 20)) {
         CloseHandle(stamp_h); free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
     size_t stamp_len = (size_t)stamp_size.QuadPart;
     unsigned char *stamp_bytes = (unsigned char *)malloc(stamp_len);
     if (!stamp_bytes) {
         CloseHandle(stamp_h); free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
     DWORD stamp_read = 0;
     BOOL stamp_ok = ReadFile(stamp_h, stamp_bytes, (DWORD)stamp_len, &stamp_read, NULL);
     CloseHandle(stamp_h);
     if (!stamp_ok || stamp_read != stamp_len) {
         free(stamp_bytes); free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
     buf_t token_input;
@@ -1097,7 +1234,7 @@ int main(void) {
         !buf_append_cstr(&token_input, "engine-stamp:") ||
         !buf_append(&token_input, (const char *)stamp_bytes, stamp_len)) {
         free(stamp_bytes); free(engine_root_u8); free(sid_w);
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
     free(stamp_bytes);
     char engine_token[17];
@@ -1119,21 +1256,24 @@ int main(void) {
     int pn_len = swprintf(pipe_name, 512, L"\\\\.\\pipe\\coordinator-core.%s.%hs.%hs",
                            sid_w, clone_hash, engine_token);
     free(sid_w);
-    if (pn_len < 0) { return fall_through_and_free(argc, wargv); }
+    if (pn_len < 0) { return fall_through_and_free(argc, wargv, engine_root_w); }
 
     /* ---- 5. connect -- no retry, no wait: busy or absent both mean
      * "fall through", per the safety property. ---- */
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
-        return fall_through_and_free(argc, wargv);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
     /* ---- 6. build the request ----
      * {"jsonrpc":"2.0","id":1,"method":"invoke.from_argv",
      *  "params":{"argv":[...],"cwd":"..."},"_engine_token":"..."} */
     buf_t req;
-    if (!buf_init(&req, 4096)) { CloseHandle(pipe); return fall_through_and_free(argc, wargv); }
+    if (!buf_init(&req, 4096)) {
+        CloseHandle(pipe);
+        return fall_through_and_free(argc, wargv, engine_root_w);
+    }
     int req_ok = 1;
     req_ok &= buf_append_cstr(&req,
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"invoke.from_argv\",\"params\":{\"argv\":[");
@@ -1234,6 +1374,10 @@ int main(void) {
         free(resp.data);
 
         if (success) {
+            /* Fast path succeeded -- `engine_root_w` was only ever needed
+             * for a fallback that is not happening; free it here (this
+             * process is about to exit regardless, but tidy is cheap). */
+            free(engine_root_w);
             HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
             HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
             if (rf.stdout_buf.len) write_all(hout, rf.stdout_buf.data, rf.stdout_buf.len);
@@ -1248,9 +1392,11 @@ int main(void) {
         if (have_error && is_provably_undispatched(error_code)) {
             /* This specific code proves the server never invoked a
              * handler for the delivered request -- safe to fall through,
-             * same as a pre-delivery failure. */
+             * same as a pre-delivery failure. `engine_root_w` stays alive
+             * for `do_fallback` below -- do not free it on this path. */
             goto do_fallback;
         }
+        free(engine_root_w); /* refusing, not falling through -- no further use */
         return emit_indeterminate(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"
@@ -1259,11 +1405,18 @@ int main(void) {
     }
 
 do_fallback: {
+        /* `wargv` was already `LocalFree`d above (its lifetime ends at
+         * request-build time regardless of outcome) -- re-parsed fresh
+         * here rather than reusing a stale pointer. `engine_root_w`, by
+         * contrast, was deliberately kept alive this whole function (see
+         * its declaration comment) and is still valid here -- this is
+         * its last use, freed below. */
         int fb_argc = 0;
         wchar_t **fb_argv = CommandLineToArgvW(GetCommandLineW(), &fb_argc);
-        if (!fb_argv) return 1;
-        int rc = fall_through(fb_argc, fb_argv);
+        if (!fb_argv) { free(engine_root_w); return 1; }
+        int rc = fall_through(fb_argc, fb_argv, engine_root_w);
         LocalFree(fb_argv);
+        free(engine_root_w);
         return rc;
     }
 }

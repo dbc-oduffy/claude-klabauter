@@ -7,12 +7,19 @@ guard's own envelope) -- every probe here goes through the REAL entrypoint,
 `coordinator_core.write_guards.engine.evaluate`, exactly as the DoE
 PreToolUse dispatcher calls it.
 
-Covers the write-side wave's nine C2-C12 hard-deny -> advisory flips
-(DR-277, docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md):
+Covers the write-side wave's hard-deny -> advisory flips (DR-277,
+docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md):
 block_cutover_phase_hand_edit, block_dev_repo_sentinel_write,
 block_em_hand_edit_pending_review_integration, block_priority_ledger_edit,
-check_claude_md_size, guard_memory_store_cap,
-nudge_improvement_queue_write, nudge_prose_queue_creation.
+check_claude_md_size, nudge_improvement_queue_write,
+nudge_prose_queue_creation.
+
+`guard_memory_store_cap` was one of the original nine C2-C12 flips covered
+here; it moved back to hard-deny 2026-08-21
+(`docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md`)
+and its probe was removed from this cohort -- see
+`coordinator_core/write_guards/tests/test_guard_memory_store_cap.py` for
+its (now deny-shaped) runtime coverage instead.
 
 Bash-side flips (see `test_ac5_bash_flip_runtime_probes.py` in
 `coordinator_core/bash_guards/tests/`) are covered separately, through
@@ -46,7 +53,6 @@ from coordinator_core.write_guards import block_dev_repo_sentinel_write
 from coordinator_core.write_guards import block_em_hand_edit_pending_review_integration
 from coordinator_core.write_guards import block_priority_ledger_edit
 from coordinator_core.write_guards import check_claude_md_size
-from coordinator_core.write_guards import guard_memory_store_cap
 from coordinator_core.write_guards import nudge_improvement_queue_write
 from coordinator_core.write_guards import nudge_prose_queue_creation
 from coordinator_core.claude_md_budget import DEV_REPO_SENTINEL, HARD_LIMIT_BYTES
@@ -201,21 +207,6 @@ class TestCheckClaudeMdSize:
         assert hso["additionalContext"]
 
 
-class TestGuardMemoryStoreCap:
-    def test_former_deny_now_advises_through_engine(self, monkeypatch, tmp_path):
-        home = tmp_path / "home"
-        mem = home / ".claude" / "projects" / "-Some-project" / "memory"
-        mem.mkdir(parents=True)
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
-        monkeypatch.delenv("CLAUDE_HOME", raising=False)
-        target = str(mem / "MEMORY.md")
-        content = "# Memory Index\n\n" + ("x" * 2100)
-        payload = {"tool_name": "Write", "tool_input": {"file_path": target, "content": content}}
-        out = engine.evaluate(payload)
-        _assert_advisory_not_deny(out, must_contain="cap")
-
-
 class TestNudgeImprovementQueueWrite:
     def test_former_deny_now_advises_through_engine(self):
         payload = {
@@ -260,7 +251,6 @@ class TestNudgeProseQueueCreation:
         (block_em_hand_edit_pending_review_integration, 115),
         (block_priority_ledger_edit, 114),
         (check_claude_md_size, 106),
-        (guard_memory_store_cap, 121),
         (nudge_improvement_queue_write, 120),
         (nudge_prose_queue_creation, 119),
     ],

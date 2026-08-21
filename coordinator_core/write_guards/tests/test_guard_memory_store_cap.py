@@ -68,7 +68,7 @@ class TestBytesLimit:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "cap" in result["hookSpecificOutput"]["additionalContext"]
+        assert "cap" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_at_or_under_2000_bytes_passes(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
@@ -84,7 +84,7 @@ class TestRowCountLimit:
         content = "# Memory Index\n\n" + _rows(21)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "rows" in result["hookSpecificOutput"]["additionalContext"]
+        assert "rows" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_20_rows_passes(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
@@ -101,7 +101,7 @@ class TestRowLengthLimit:
         content = "# Memory Index\n\n" + long_row
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "chars" in result["hookSpecificOutput"]["additionalContext"]
+        assert "chars" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_row_at_100_chars_passes(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
@@ -118,7 +118,7 @@ class TestBodyFileLimit:
         content = "x" * 1600
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "1500" in result["hookSpecificOutput"]["additionalContext"]
+        assert "1500" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_body_file_at_1500_bytes_passes(self, memory_dir):
         target = str(memory_dir / "some-lesson.md")
@@ -153,11 +153,13 @@ class TestShrinkTowardComplianceCarveOut:
             _edit_payload(str(target), old="y" * 2100, new="y" * 2100 + "z" * 500)
         )
         assert result is not None
-        # Review: coordinator:code-reviewer -- restore the negative assertion
-        # (deleted rather than inverted during the DR-277 flip) so a
-        # regression reintroducing "permissionDecision: deny" is caught.
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        assert "additionalContext" in result["hookSpecificOutput"]
+        # DR-345 flips this guard hard-deny; the previous negative assertion
+        # here pinned the ADVISORY shape on purpose (see the DR-277-flip
+        # comment this replaces). Per spec
+        # state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md, a
+        # deny is now the correct, intended result.
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
 class TestCaseVariedTargetDenied:
@@ -177,11 +179,10 @@ class TestCaseVariedTargetDenied:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        # Review: coordinator:code-reviewer -- restore the negative assertion
-        # (deleted rather than inverted during the DR-277 flip) so a
-        # regression reintroducing "permissionDecision: deny" is caught.
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        assert "additionalContext" in result["hookSpecificOutput"]
+        # DR-345 flips this guard hard-deny (see comment on the analogous
+        # shrink-carve-out assertion above).
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
     def test_case_varied_body_file_denied(self, memory_dir):
         home = memory_dir.parent.parent.parent.parent
@@ -191,8 +192,8 @@ class TestCaseVariedTargetDenied:
         content = "x" * 1600
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        assert "additionalContext" in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
 class TestDenyMessageNamesDisambiguatingSlug:
@@ -210,7 +211,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "-Some-project/memory/MEMORY.md" in reason
 
     def test_body_file_deny_names_project_slug(self, memory_dir):
@@ -218,7 +219,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
         content = "x" * 1600
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "-Some-project/memory/some-lesson.md" in reason
 
     def test_same_filename_in_different_project_slugs_is_distinguished(self, monkeypatch, tmp_path):
@@ -235,8 +236,8 @@ class TestDenyMessageNamesDisambiguatingSlug:
         result_a = guard.check(_write_payload(str(mem_a / "some-lesson.md"), content))
         result_b = guard.check(_write_payload(str(mem_b / "some-lesson.md"), content))
 
-        reason_a = result_a["hookSpecificOutput"]["additionalContext"]
-        reason_b = result_b["hookSpecificOutput"]["additionalContext"]
+        reason_a = result_a["hookSpecificOutput"]["permissionDecisionReason"]
+        reason_b = result_b["hookSpecificOutput"]["permissionDecisionReason"]
         assert reason_a != reason_b
         assert "-project-a" in reason_a
         assert "-project-b" in reason_b
@@ -275,11 +276,10 @@ class TestExtendedLengthPrefixAsymmetry:
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
-        # Review: coordinator:code-reviewer -- restore the negative assertion
-        # (deleted rather than inverted during the DR-277 flip) so a
-        # regression reintroducing "permissionDecision: deny" is caught.
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        assert "additionalContext" in result["hookSpecificOutput"]
+        # DR-345 flips this guard hard-deny (see comment on the analogous
+        # shrink-carve-out assertion above).
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
 class TestDenyMessageShape:
@@ -287,9 +287,84 @@ class TestDenyMessageShape:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(21)
         result = guard.check(_write_payload(target, content))
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "evict" in reason
-        assert "stale fact" in reason
-        assert "doctrine dup" in reason
-        assert "oldest" in reason
-        assert "auto-trim" in reason
+        # The memory-vs-lessons routing test replaced the eviction-ORDER
+        # detail here (PM ruling 2026-08-21): at the row cap the decision
+        # being made is "does this belong in memory at all", and the order
+        # to evict in is downstream of that. The order still ships on the
+        # byte-cap deny, which fires when the answer is already "yes".
+        assert "force-read" in reason
+        assert "TRUE" in reason
+        assert "lesson" in reason
+        assert "state/lessons/" in reason
+
+    def test_file_count_deny_names_the_routing_test_and_both_routes(self, memory_dir):
+        """The count cap is the moment the wrong choice gets made, so its
+        deny must carry the routing test AND both PM-named exits: the
+        lessons route for anything not boot-critical, and the oldest file
+        as the eviction candidate when it is."""
+        import os
+        import time
+        for i in range(guard.MAX_MEMORY_FILES):
+            f = memory_dir / f"mem-{i:02d}.md"
+            f.write_text("x", encoding="utf-8")
+            os.utime(f, (1000 + i, 1000 + i))
+        target = str(memory_dir / "brand-new-memory.md")
+        result = guard.check(_write_payload(target, "y"))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "force-read" in reason
+        assert "state/lessons/" in reason
+        assert "mem-00.md" in reason, "must name the OLDEST file by mtime"
+        assert len(reason.encode("utf-8")) <= 220, "220-byte guard prose cap"
+
+
+class TestFileCountCap:
+    """DR-345's fifth limit -- MAX_MEMORY_FILES = 20, fired ONLY on creation
+    of a NEW body file. An edit/rewrite of an existing body file must
+    always pass, or a full store becomes permanently uneditable (spec
+    state/tasks/2026-08-21-memory-cap-hard-deny-and-count-cap.md)."""
+
+    def _seed_body_files(self, memory_dir, n: int) -> None:
+        import os
+        import time
+
+        now = time.time()
+        for i in range(n):
+            p = memory_dir / f"body-{i}.md"
+            p.write_text("x", encoding="utf-8")
+            # Strictly increasing mtimes so body-0.md is unambiguously oldest.
+            stamp = now - (n - i) * 10
+            os.utime(p, (stamp, stamp))
+
+    def test_20_existing_plus_new_filename_denied_names_oldest(self, memory_dir):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+        target = str(memory_dir / "new-one.md")
+        result = guard.check(_write_payload(target, "y"))
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "body-0.md" in reason
+        assert f"{guard.MAX_MEMORY_FILES}/{guard.MAX_MEMORY_FILES}" in reason
+
+    def test_20_existing_plus_existing_filename_allowed(self, memory_dir):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+        target = str(memory_dir / "body-0.md")
+        result = guard.check(_write_payload(target, "y" * 5))
+        assert result is None
+
+    def test_19_existing_plus_new_filename_allowed(self, memory_dir):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
+        target = str(memory_dir / "new-one.md")
+        result = guard.check(_write_payload(target, "y"))
+        assert result is None
+
+    def test_memory_md_never_counted_as_body_file(self, memory_dir):
+        # 19 real body files + MEMORY.md (20 files total in the dir) --
+        # MEMORY.md must not count toward the body-file cap, so a 20th
+        # NEW body file is still admitted.
+        (memory_dir / "MEMORY.md").write_text("# Memory Index\n", encoding="utf-8")
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
+        target = str(memory_dir / "new-one.md")
+        result = guard.check(_write_payload(target, "y"))
+        assert result is None
