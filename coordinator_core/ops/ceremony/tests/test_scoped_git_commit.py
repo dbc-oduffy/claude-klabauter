@@ -200,11 +200,11 @@ def test_agree_branch_cas_refuses_when_peer_absorbs_the_stage_mid_call(tmp_path,
     _seed_file(repo, "file.txt", "base\nEM edit\n")
     _git(["add", "--", "file.txt"], repo)
 
-    real_diverging_paths = git_native.diverging_paths
+    real_state_read = git_native._v2_state_records_chunked
     landed = {"done": False}
 
-    def _racing_diverging_paths(paths, **kwargs):
-        result = real_diverging_paths(paths, **kwargs)
+    def _racing_state_read(paths, **kwargs):
+        result = real_state_read(paths, **kwargs)
         if not landed["done"]:
             landed["done"] = True
             # A real concurrent peer commits EXACTLY this call's own staged/
@@ -226,7 +226,10 @@ def test_agree_branch_cas_refuses_when_peer_absorbs_the_stage_mid_call(tmp_path,
             )
         return result
 
-    monkeypatch.setattr(git_native, "diverging_paths", _racing_diverging_paths)
+    # Hooked on the state read `commit_scoped()` actually calls -- it sits
+    # in the same window the old `diverging_paths()` hook used: after the
+    # Layer-1 CAS snapshot, before the agree branch's own `git add`.
+    monkeypatch.setattr(git_native, "_v2_state_records_chunked", _racing_state_read)
 
     head_before_call = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True

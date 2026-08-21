@@ -46,6 +46,24 @@ from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir
 
+# Two named bounds, not eight literals — the shape hitlist G7 prescribes, kept
+# module-local until `coordinator_core/git/run.py` lands and both can migrate
+# onto it. The split is the one that matters: a LOCAL git read is process
+# creation plus a plumbing query (`git --version` costs 25.3ms, DR-344 § 4), so
+# 2.0s is a runaway guard four times over; a REMOTE leg is a network round trip
+# that no rewrite of ours makes faster.
+#
+# DR-349 grants network no standing carve-out, and these are the sites that
+# owe the design answer rather than a wider number: P-19 reaches two
+# `ls-remote` legs and, on the no-version.txt path, a `fetch` — up to ~11s of
+# remote I/O inside one op. That is why they are named here instead of being
+# rounded up, and why the bound is 3/5 rather than the 30 this cluster's
+# siblings carried. Do NOT raise either constant; a breach is a finding about
+# where the probe runs, not about the number.
+_LOCAL_GIT_TIMEOUT_SECS: float = 2.0
+_REMOTE_GIT_TIMEOUT_SECS: float = 3.0
+_REMOTE_FETCH_TIMEOUT_SECS: float = 5.0
+
 _TAG_ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+-]{0,127}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _TAG_REF_RE = re.compile(r"refs/tags/(v[^^]*)$")
@@ -196,7 +214,7 @@ def _fetch_latest_release_tag(owner_repo: str, force_offline: bool) -> Optional[
     if force_offline:
         return None
     repo_url = f"https://github.com/{owner_repo}.git"
-    proc = _run(["git", "ls-remote", "--tags", repo_url, "refs/tags/v*"], timeout=3)
+    proc = _run(["git", "ls-remote", "--tags", repo_url, "refs/tags/v*"], timeout=_REMOTE_GIT_TIMEOUT_SECS)
     if proc is None or proc.returncode != 0 or not (proc.stdout or "").strip():
         return None
     tags = []
@@ -216,10 +234,10 @@ def _resolve_tag_sha(owner_repo: str, tag: str, force_offline: bool) -> Optional
     if force_offline:
         return None
     repo_url = f"https://github.com/{owner_repo}.git"
-    proc = _run(["git", "ls-remote", repo_url, f"refs/tags/{tag}^{{}}"], timeout=3)
+    proc = _run(["git", "ls-remote", repo_url, f"refs/tags/{tag}^{{}}"], timeout=_REMOTE_GIT_TIMEOUT_SECS)
     out = (proc.stdout or "") if proc is not None and proc.returncode == 0 else ""
     if not out.strip():
-        proc = _run(["git", "ls-remote", repo_url, f"refs/tags/{tag}"], timeout=3)
+        proc = _run(["git", "ls-remote", repo_url, f"refs/tags/{tag}"], timeout=_REMOTE_GIT_TIMEOUT_SECS)
         out = (proc.stdout or "") if proc is not None and proc.returncode == 0 else ""
     sha = _first_field(out)
     return sha if _SHA_RE.match(sha) else None
@@ -235,19 +253,19 @@ def _git_clone_behind_count(
     that as `offline`."""
     if force_offline:
         return None
-    fetch = _run(["git", "-C", install_root_str, "fetch", "-q"], timeout=5)
+    fetch = _run(["git", "-C", install_root_str, "fetch", "-q"], timeout=_REMOTE_FETCH_TIMEOUT_SECS)
     if fetch is None or fetch.returncode != 0:
         return None
 
     count_str = ""
     ref = ""
     count_proc = _run(
-        ["git", "-C", install_root_str, "rev-list", "--count", "HEAD..@{u}"], timeout=2
+        ["git", "-C", install_root_str, "rev-list", "--count", "HEAD..@{u}"], timeout=_LOCAL_GIT_TIMEOUT_SECS
     )
     if count_proc is not None and count_proc.returncode == 0 and count_proc.stdout.strip():
         count_str = count_proc.stdout.strip()
         ref_proc = _run(
-            ["git", "-C", install_root_str, "rev-parse", "--abbrev-ref", "@{u}"], timeout=2
+            ["git", "-C", install_root_str, "rev-parse", "--abbrev-ref", "@{u}"], timeout=_LOCAL_GIT_TIMEOUT_SECS
         )
         ref = (
             ref_proc.stdout.strip()
@@ -256,13 +274,13 @@ def _git_clone_behind_count(
         )
     else:
         origin_check = _run(
-            ["git", "-C", install_root_str, "rev-parse", "origin/main"], timeout=2
+            ["git", "-C", install_root_str, "rev-parse", "origin/main"], timeout=_LOCAL_GIT_TIMEOUT_SECS
         )
         if origin_check is None or origin_check.returncode != 0:
             return None
         count_proc = _run(
             ["git", "-C", install_root_str, "rev-list", "--count", "HEAD..origin/main"],
-            timeout=2,
+            timeout=_LOCAL_GIT_TIMEOUT_SECS,
         )
         if count_proc is None or count_proc.returncode != 0 or not count_proc.stdout.strip():
             return None
@@ -281,7 +299,7 @@ def _check_ancestry(install_root_str: str, local_sha: str, tag_sha: str) -> bool
         return False
     proc = _run(
         ["git", "-C", install_root_str, "merge-base", "--is-ancestor", local_sha, tag_sha],
-        timeout=2,
+        timeout=_LOCAL_GIT_TIMEOUT_SECS,
     )
     return proc is not None and proc.returncode == 0
 
@@ -291,12 +309,12 @@ def _local_describe_tag(install_root_str: str, local_sha: str) -> str:
     if Path(f"{install_root_str}/.git").exists():
         proc = _run(
             ["git", "-C", install_root_str, "describe", "--tags", "--exact-match", local_sha],
-            timeout=2,
+            timeout=_LOCAL_GIT_TIMEOUT_SECS,
         )
         if proc is not None and proc.returncode == 0 and proc.stdout.strip():
             return proc.stdout.strip()
         proc = _run(
-            ["git", "-C", install_root_str, "describe", "--tags", local_sha], timeout=2
+            ["git", "-C", install_root_str, "describe", "--tags", local_sha], timeout=_LOCAL_GIT_TIMEOUT_SECS
         )
         if proc is not None and proc.returncode == 0 and proc.stdout.strip():
             return proc.stdout.strip()
@@ -340,7 +358,7 @@ def release_currency_probe(
             return "source_is_live"
 
         is_worktree = _run(
-            ["git", "-C", root_str, "rev-parse", "--is-inside-work-tree"], timeout=2
+            ["git", "-C", root_str, "rev-parse", "--is-inside-work-tree"], timeout=_LOCAL_GIT_TIMEOUT_SECS
         )
         if is_worktree is not None and is_worktree.returncode == 0:
             behind = _git_clone_behind_count(root_str, force_offline)

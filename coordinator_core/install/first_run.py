@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.install._shared import env_overlay
+from coordinator_core.install.timeouts import PLATFORM_PACKAGE_INSTALL_SECS
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -109,7 +110,12 @@ EXIT_OK = 0
 EXIT_FAIL = 1
 
 _SHORT_TIMEOUT = 20
-_INSTALL_TIMEOUT = 900  # brew installs of large formulae (node) can be slow.
+
+# `brew install` of a large formula (node), which Homebrew compiles from
+# source when no bottle matches. A member of the named `install` timeout
+# family (DR-349 § Carve-outs) — the number and the membership test live in
+# `install/timeouts.py`.
+_INSTALL_TIMEOUT = PLATFORM_PACKAGE_INSTALL_SECS
 
 
 def _run(cmd: List[str], timeout: int = _SHORT_TIMEOUT, **kwargs) -> subprocess.CompletedProcess:
@@ -475,7 +481,32 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
 # publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
 # the unstamped fallback (Hard constraint 3), so a failure here must not
 # brick the rest of first-run/setup.py.
-_PUBLISH_TIMEOUT = 900  # a real percolate round over ~40 rows is not fast.
+# NOT a member of the `install` timeout family, and it must never be moved
+# there. `install/timeouts.py` admits only work we do not own; what this
+# bounds is `coordinator/bin/publish.py` — claude-klabauter's own compute — so it is
+# governed by DR-344's budget like any other op of ours, and the hitlist
+# (docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G11,
+# Exception 1) names it as the campaign's thesis in one line: an author
+# measured their own code at a large number, wrote the number down, and wrote
+# the excuse next to it ("a real percolate round over ~40 rows is not fast").
+#
+# MEASUREMENT that retires the excuse (2026-08-21, normal tier, warm):
+# `publish.py claude-klabauter-bin --dry-run` — the preview leg, which copies
+# nothing and skips every engine phase — cost **80.8s of process time** in the
+# parent alone, children uncounted. The real round is strictly more. So the
+# 900 was never buying a slow network; it was absorbing eighty-plus seconds of
+# our own CPU to preview forty rows, silently, on a box carrying 50-70 peers.
+#
+# WHAT THIS BUDGET IS INSTEAD. `provision_stamped_engine` is advisory at both
+# call sites: every failure path already prints a runnable remediation and the
+# install proceeds. So the honest question is not "how slow is publish.py"
+# (a defect report against that file, not a licence for this one) but "how
+# long may an advisory install step block an operator". The answer is a slice,
+# not a quarter-hour: on expiry the step prints the same one-line remediation
+# it prints for a non-zero exit, and the operator reaches a stamped engine by
+# running it. Raising this number does not fix anything — it re-buries the
+# 80.8s. The fix is in `publish.py`.
+_PUBLISH_ROUND_ADVISORY_BUDGET_SECS = 30
 _ENGINE_BUILD_SUBDIR = ("engine-build", "claude-klabauter")
 _KLABAUTER_MIRROR_REGISTRY_KEY = "repos.claude_klabauter"
 _KLABAUTER_MIRROR_PATH_REGISTRY_KEY = "publish.mirrors.claude_klabauter.path"
@@ -513,7 +544,9 @@ def _register_engine_key(key: str, value: str) -> bool:
     return True
 
 
-def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLISH_TIMEOUT) -> bool:
+def provision_stamped_engine(
+    claude_klabauter_root: Path, timeout: int = _PUBLISH_ROUND_ADVISORY_BUDGET_SECS
+) -> bool:
     """Ensure a registered, STAMPED engine root exists. Returns True iff one
     exists (already did, or was provisioned this call) — False is always
     advisory (a printed WARNING with a runnable remediation), never raised.
@@ -525,6 +558,14 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
     below) and `scripts/setup.py`'s `register_claude_klabauter_root` (claude-klabauter's
     own AUTHORITATIVE registration surface, which is where this reliably has
     a resolved `claude_klabauter_root` to work with).
+
+    The publish round is bounded by `_PUBLISH_ROUND_ADVISORY_BUDGET_SECS`, a
+    budget on how long an ADVISORY install step may block — deliberately not
+    an estimate of how long `publish.py` takes, and deliberately outside the
+    `install` timeout family. Expiry is a normal outcome here, not an error:
+    it prints the same runnable remediation the non-zero-exit path prints and
+    returns False, exactly as every other failure in this function does. See
+    that constant for the measurement and the reasoning.
     """
     from coordinator_core.machine_resolver import registry_get
     from coordinator_core._settings_home import settings_home
@@ -578,7 +619,20 @@ def provision_stamped_engine(claude_klabauter_root: Path, timeout: int = _PUBLIS
             capture_output=True,
             text=True,
         )
-    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
+    except subprocess.TimeoutExpired:
+        print(
+            f"[first-run] WARNING: the publish round did not finish inside its {timeout}s "
+            "advisory budget — this engine is not stamped. The round is over budget "
+            "(publish.py, measured at 80.8s of process time for a --dry-run preview alone).",
+            file=sys.stderr,
+        )
+        print(
+            "  Remediation: run the round yourself, unbounded: "
+            f"python coordinator/bin/publish.py {_KLABAUTER_MIRROR_ROW_NAME}",
+            file=sys.stderr,
+        )
+        return False
+    except (OSError, subprocess.SubprocessError) as exc:
         print(f"[first-run] WARNING: publish round failed to run: {exc}", file=sys.stderr)
         return False
 

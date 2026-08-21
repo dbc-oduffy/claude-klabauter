@@ -39,6 +39,8 @@ Wire params:
     timeout      (int, optional)          — per-dispatched-unit subprocess
                                              timeout in seconds; defaults to
                                              `coordinator_core.testing.run.DEFAULT_TIMEOUT`.
+                                             Clamped to `MAX_TIMEOUT_SECONDS`
+                                             (see "Timeout ceiling" below).
     jobs         (int, optional)          — `ThreadPoolExecutor` worker cap
                                              forwarded to `run_suites`; defaults
                                              to that module's own CPU-derived cap.
@@ -62,6 +64,30 @@ Reply fields (result object in JSON-RPC response):
     errors as a structured field, never an exception that would surface only as
     a transport-level failure (mirrors ops/cartography_churn.py's error-return
     convention).
+
+Timeout ceiling: `timeout` is clamped, silently via `min()`, to
+`MAX_TIMEOUT_SECONDS` (600).
+
+THIS OP IS A NAMED, ACKNOWLEDGED CARVE-OUT — not an oversight, and not a bound
+anyone should "tidy up" in either direction. It is excluded by PM ruling from the
+2s process regime and from the tight `ipc.CEREMONY_BUDGET_SECS`-matched
+lock-acquire ceilings the mutating ops carry (see ops/priority_set.py,
+ops/goal_kr_status.py), because it runs pytest and a real suite legitimately
+takes minutes per dispatched unit. Anyone reading 600 next to those 2.0s bounds
+and inferring a mistake should stop here: the difference is the point.
+
+Do NOT lower it toward the 2s regime — that regime governs our own compute, and
+this op's cost is a test suite's, not ours. Do NOT raise it either: the ceiling
+is a RUNAWAY bound, not a performance budget. It exists so a caller cannot park a
+test subprocess on a shared box indefinitely, never to make a suite finish
+faster.
+
+Why 600 specifically: the repo's own `coordinator.local.md` test commands
+(`fast_test_cmd` / `full_test_cmd`) already pass `--timeout=300` to pytest, and
+`DEFAULT_TIMEOUT` is likewise 300 — so 600 is 2x the value the repo itself treats
+as the outer edge of a legitimate per-unit run. No healthy suite reaches it; a
+run that does has a hung subprocess, which is a defect to fix, never a dial to
+raise. A caller may ask for LESS.
 
 Port source: none — net-new (DR-059 harness authoring).
 Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C5 (DEC-9)
@@ -97,6 +123,10 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.testing.collect import ALL_FAMILIES, Suite, discover
 from coordinator_core.testing.run import DEFAULT_TIMEOUT, SuiteResult, overall_ok, run_suites
+
+MAX_TIMEOUT_SECONDS: int = 600
+"""Hard runaway ceiling on the caller-supplied per-dispatched-unit subprocess
+timeout — see module docstring "Timeout ceiling"."""
 
 
 def _guard_target_root(target_root_raw: str) -> Optional[Path]:
@@ -197,7 +227,7 @@ def _testing_full_runner(params: dict, repo_root: Optional[Path] = None) -> dict
         families = ALL_FAMILIES
 
     timeout_raw = params.get("timeout")
-    timeout = int(timeout_raw) if timeout_raw else DEFAULT_TIMEOUT
+    timeout = min(int(timeout_raw) if timeout_raw else DEFAULT_TIMEOUT, MAX_TIMEOUT_SECONDS)
 
     jobs_raw = params.get("jobs")
     jobs = int(jobs_raw) if jobs_raw is not None else None

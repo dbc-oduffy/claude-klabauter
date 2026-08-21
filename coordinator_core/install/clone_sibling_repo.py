@@ -70,8 +70,9 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.install.timeouts import REPO_CLONE_SECS
 
-_CLONE_TIMEOUT_SECS = 300
+_CLONE_TIMEOUT_SECS = REPO_CLONE_SECS
 
 _TARGET_CLAUSE_INDEX = 0
 """Index of `WRITE_SURFACE`'s sole SHAPED clause (the caller-supplied clone
@@ -225,7 +226,7 @@ def _clone_idempotent(params: dict, repo_root: Optional[Path] = None) -> dict:
     for dispatch-shape consistency with scoped ops (same as `ping`).
 
     Plain sync `def`, not `async def`: the body calls a blocking
-    `subprocess.run(..., timeout=300)` (git clone). ipc.py's own
+    `subprocess.run(..., timeout=_CLONE_TIMEOUT_SECS)` (git clone). ipc.py's own
     register_op contract (AC-3 Gap-3) requires blocking I/O in a handler
     to either be sync (auto-offloaded to asyncio.to_thread by the engine)
     or explicitly wrapped in asyncio.to_thread if kept async — sync is the

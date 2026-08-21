@@ -79,6 +79,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -94,7 +95,8 @@ _STDERR_LOG_TAIL = 2000
 # since semgrep (an externally-invoked scanner over caller-supplied files)
 # can legitimately run far longer than a local `git diff`.
 _GIT_TIMEOUT_SECONDS = 30
-_SEMGREP_TIMEOUT_SECONDS = 300
+_SEMGREP_SITE = "coordinator_core/ops/run_semgrep_scan.py :: _run_semgrep"
+_SEMGREP_TIMEOUT_SECONDS = bound_for(_SEMGREP_SITE)
 
 
 def _diff_scoped_files(repo_root: Path, diff_base: str) -> List[str]:
@@ -188,7 +190,7 @@ def _run_semgrep(repo_root: Path, config: str, files: List[str]) -> List[dict]:
     except subprocess.TimeoutExpired as exc:
         raise ValueError(
             f"ci.run_semgrep_scan: semgrep timed out after "
-            f"{_SEMGREP_TIMEOUT_SECONDS}s (config={config!r})"
+            f"{_SEMGREP_TIMEOUT_SECONDS:.0f}s (config={config!r})"
         ) from exc
     if proc.returncode not in (0, 1):
         raise ValueError(

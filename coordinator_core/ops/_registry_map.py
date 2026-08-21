@@ -54,6 +54,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "artifact.emit":                          "coordinator_core.ops.artifact_emit",
     "emission.publish":                       "coordinator_core.ops.emission_publish",
     "op_census.report":                       "coordinator_core.ops.op_census_report",
+    "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
     # import. This package-level
@@ -154,6 +155,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
     "sizing.ship":                              "coordinator_core.ops.sizing_ship",
     "sizing.record_spike_verdict":              "coordinator_core.ops.sizing_spike_verdict",
+    "sizing.read_object_fields":                "coordinator_core.ops.read_sizing_object_fields",
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
@@ -195,6 +197,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.lineage_ancestry":               "coordinator_core.ops.handoff_lineage_ancestry",
     "plan.tasks.mutate":                      "coordinator_core.ops.plan_tasks_mutate",
     "plan.tasks.grouping_digest":             "coordinator_core.ops.plan_tasks_grouping_digest",
+    "plan.tasks.spine_drift_check":           "coordinator_core.ops.plan_tasks_spine_drift_check",
     "percolate.run":                          "coordinator_core.ops.percolate_run",
     "percolate.validate_store":               "coordinator_core.ops.percolate_validate",
     "engine.drift":                           "coordinator_core.ops.engine_drift",

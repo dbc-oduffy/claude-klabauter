@@ -156,7 +156,10 @@ import os
 from typing import Optional, Sequence, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.session.safe_commit_offer import compute_offer
+from coordinator_core.ops.session.safe_commit_offer import (
+    _MECHANISM_DISABLED,
+    compute_offer,
+)
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
 
@@ -311,6 +314,43 @@ def assert_paths_in_session_scope(
 
     if not paths:
         return False, "paths is empty"
+
+    if _MECHANISM_DISABLED:
+        # The ownership leg STANDS DOWN while auto-commit attribution is
+        # disabled (safe_commit_offer._MECHANISM_DISABLED, PM ruling
+        # 2026-08-21). This is a deliberate, named suspension of a safety
+        # property, not a fallback.
+        #
+        # Why it cannot simply ride the disabled offer: this function is
+        # fail-CLOSED by design, so an empty `safe_paths` denies EVERY path
+        # for EVERY session -- measured, not assumed. That bricks
+        # `coordinator:git-commit-agent`, the one dispatchable committer, for
+        # the whole fleet, and narrates the denial as "this call's claim reads
+        # were degraded (an unreadable peer/agent claim...)", which would be
+        # a false cause: nothing was unreadable, nothing was read at all.
+        #
+        # WHAT IS SUSPENDED, stated plainly so it is not discovered later: a
+        # dispatched committer can now commit a path another session owns.
+        # The guard's OTHER legs are untouched and still fire -- compound
+        # command, missing pathspec, and sweeping pathspec
+        # (`block_subagent_commit`'s LEG 1/2 and `_pathspec_element_is_
+        # sweeping`) -- so the unbounded-pathspec class this guard exists for
+        # is still blocked. What is lost is per-path peer-ownership
+        # attribution, which is exactly the thing the disabled mechanism was
+        # the only source of.
+        #
+        # Restoring it is IN SCOPE for the rebuild, not a follow-up: the
+        # rebuilt attribution path must serve this gate at a cost that fits
+        # the brightline, because this gate runs on the COMMIT HOT PATH --
+        # every dispatched-committer invocation paid the disabled mechanism's
+        # 73 processes and 5,609ms CPU, which is its own defect and is why
+        # narrowing the kill to spare this caller was not an option.
+        return True, (
+            "ownership-scope check STOOD DOWN: auto-commit attribution is "
+            "disabled pending rebuild (PM ruling 2026-08-21). Peer-ownership "
+            "is NOT being checked for this pathspec; sweeping/compound "
+            "pathspec legs still apply."
+        )
 
     try:
         offer = compute_offer(session_id, cwd)

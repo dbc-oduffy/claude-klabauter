@@ -84,6 +84,8 @@ def _agent_dir(repo, aid):
 
 
 class TestComputeOffer:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_own_touched_files_are_safe(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -94,6 +96,8 @@ class TestComputeOffer:
         assert offer["excluded"] == []
         assert offer["session_id"] == "mine"
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_other_session_file_excluded_with_owner_reason(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -108,6 +112,8 @@ class TestComputeOffer:
         assert "shared.py" not in offer["safe_paths"]
         assert {"path": "shared.py", "reason": "owned by session other"} in offer["excluded"]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_unclaimed_dirty_since_start_is_declined_not_adopted(self, tmp_path):
         """Prior name/assertion (`..._is_safe_not_excluded`) asserted the
         OLD mtime-fallback disposition: an uncontested dirty file with no
@@ -126,6 +132,8 @@ class TestComputeOffer:
         assert offer["safe_paths"] == []
         assert {"path": "orphan.py", "reason": "untouched by this session"} in offer["excluded"]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_orphan_before_session_start_excluded_untouched(self, tmp_path):
         import os
         import time
@@ -141,6 +149,8 @@ class TestComputeOffer:
         assert "old.py" not in offer["safe_paths"]
         assert {"path": "old.py", "reason": "untouched by this session"} in offer["excluded"]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_empty_scope_is_a_valid_result(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -169,6 +179,8 @@ class TestComputeOffer:
         with pytest.raises(ValueError):
             safe_commit_offer.compute_offer("", cwd=str(tmp_path))
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_unreadable_peer_touched_dedupes_to_one_excluded_entry(
         self, tmp_path, monkeypatch
     ):
@@ -253,6 +265,8 @@ class TestComputeOffer:
 
         assert "shared.py" not in offer["orphans"]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_genuine_uncontested_orphan_still_appears_filter_not_overbroad(
         self, tmp_path
     ):
@@ -456,6 +470,8 @@ class TestExactModeOnly:
         assert candidates == ["coordinator/kept.py"]
         assert not any(c.startswith("T ") or c.startswith("R ") for c in candidates)
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_mtime_fallback_orphan_adoption_is_now_declined_by_compute_scope(self, tmp_path):
         """Formerly `..._orphan_adoption_is_compute_scope_not_this_module`,
         which documented (did NOT "fix" -- PM-accepted collateral at the
@@ -641,6 +657,8 @@ class TestDirtyFilesUnderBatch:
 
 
 class TestAutoCommitSession:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_no_confirmation_step_lands_a_real_commit(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -693,6 +711,8 @@ class TestAutoCommitSession:
         assert result["error"] is None
         assert result["commit_failed"] is False
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_default_grouping_subject_stays_bounded_body_carries_the_list(self, tmp_path):
         """Regression guard for the enumerated-filenames-in-subject shape:
         the subject must stay short/bounded regardless of file count, and
@@ -734,6 +754,8 @@ class TestAutoCommitSession:
         assert report["groups"] == []
         assert report["excluded"] == []
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_explicit_groups_never_widen_past_safe_paths(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -770,6 +792,8 @@ class TestAutoCommitSession:
         )
         assert report["groups"] == []
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_all_dropped_group_is_recorded_in_dropped_groups(self, tmp_path):
         # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- the
         # all-excluded group above vanished from `groups`, `failed_groups`,
@@ -791,6 +815,8 @@ class TestAutoCommitSession:
             {"message": "all-excluded group", "named": 1, "matched": 0}
         ]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_partially_dropped_group_is_also_recorded(self, tmp_path):
         # A group losing 4 of 5 paths is the same silence in miniature --
         # must be recorded even though the group itself still commits.
@@ -824,6 +850,8 @@ class TestAutoCommitSession:
         report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
         assert report["dropped_groups"] == []
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_message_flag_produces_one_group(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -839,6 +867,8 @@ class TestAutoCommitSession:
         assert report["groups"][0]["message"] == "one subject"
         assert set(report["groups"][0]["paths"]) == {"a.py", "b.py"}
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_explicit_group_prose_reaches_the_commit_body(self, tmp_path):
         # Review: code-reviewer (Finding 4) — the explicit-`groups` branch of
         # auto_commit_session_async previously rebuilt each group without
@@ -872,6 +902,8 @@ class TestAutoCommitSession:
         report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
         assert report["failed_groups"] == []
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_commit_failure_surfaces_via_failed_groups_not_swallowed(self, tmp_path, monkeypatch):
         """2026-07-31 fix: `auto_commit_session_async` previously swallowed a
         genuine `commit_failed` group -- `_commit_group` only ever read
@@ -907,6 +939,8 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"]
         assert report["failed_groups"] == [report["groups"][0]]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_benign_already_committed_noop_group_does_not_cry_wolf(self, tmp_path, monkeypatch):
         """The ordinary already-committed no-op (`commit_failed: False`,
         `reason: "empty-commit-set"`) must stay quiet -- it must NOT appear
@@ -940,6 +974,8 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"] is None
         assert report["failed_groups"] == []
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_unregistered_handler_is_a_genuine_failure_not_a_quiet_noop(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -954,6 +990,8 @@ class TestAutoCommitSession:
         assert report["groups"][0]["commit_failed"] is True
         assert report["failed_groups"] == [report["groups"][0]]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_handler_level_validation_error_is_a_genuine_failure(self, tmp_path, monkeypatch):
         # Review: code-reviewer (Finding 2) — the `if not committed and error
         # and not commit_failed` defensive branch in `_commit_group` had no
@@ -978,6 +1016,8 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"] == "some validation error"
         assert report["failed_groups"] == [report["groups"][0]]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_reason_threaded_through_group_result(self, tmp_path, monkeypatch):
         # Review: code-reviewer (Finding 3) — `reason` (e.g.
         # "empty-commit-set") is computed by the op but was dropped before
@@ -1011,6 +1051,8 @@ class TestAutoCommitSession:
 
 
 class TestMain:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_dry_run_computes_without_committing(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1028,6 +1070,8 @@ class TestMain:
         ).stdout
         assert "a.py" in status  # NOT committed
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_message_flag_via_cli_commits(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1045,6 +1089,8 @@ class TestMain:
         ).stdout
         assert status == ""
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_groups_json_flag(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1085,6 +1131,8 @@ class TestMain:
         exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
         assert exit_code == 0
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_genuine_commit_failure_exits_4_and_logs_diagnostic(
         self, tmp_path, capsys, monkeypatch
     ):
@@ -1129,6 +1177,8 @@ class TestMain:
         exit_code = safe_commit_offer.main(["--bogus-flag"])
         assert exit_code == 2
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_declined_adoption_logs_diagnostic_and_stays_exit_0(self, tmp_path, capsys):
         # Review: code-reviewer (Finding 1) — `_log_excluded_diagnostic` is
         # the headline AC6 deliverable and had zero test coverage. A dirty
@@ -1156,6 +1206,8 @@ class TestMain:
         assert "orphan.py" in contents
         assert "untouched by this session" in contents
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_declined_adoption_preview_bound_enforced_on_written_log(self, tmp_path, capsys):
         # Review: code-reviewer (Finding 1) — proves the preview bound is
         # enforced on what is WRITTEN to the log, not merely on a rendered
@@ -1186,6 +1238,8 @@ class TestMain:
         present = [p for p in paths if p in contents]
         assert len(present) == safe_commit_offer._EXCLUDED_LOG_PREVIEW_COUNT
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_all_dropped_group_renders_named_matched_and_logs_and_stays_exit_0(
         self, tmp_path, capsys
     ):
@@ -1236,6 +1290,8 @@ class TestMain:
         assert "1 caller-supplied group(s) partially or fully dropped" in log_contents
         assert "all-excluded group — named 1 paths, 0 matched" in log_contents
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_dropped_groups_render_and_log_are_bounded(self, tmp_path, capsys):
         # Bounded-output guard: many dropped groups must still render (and
         # log) a bounded number of lines plus an "and N more group(s)" tail
@@ -1642,6 +1698,8 @@ def _make_memo_send_claude_home(tmp_path, receiver_repo):
 
 
 class TestMemoSendDeclaresOutboxWrites:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_sent_ledger_write_lands_in_compute_offer_safe_paths(
         self, tmp_path, monkeypatch
     ):
@@ -1733,6 +1791,8 @@ class TestDefaultGroupsInvokerFraming:
 
 
 class TestGroupsSuppliedPathIgnoresInvoker:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_explicit_groups_path_never_consults_invoker(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))

@@ -61,7 +61,7 @@ from functools import lru_cache
 
 from coordinator_core import session_attribution
 from coordinator_core.coverage import _get_handoff_consumed_by
-from coordinator_core.ipc import get_op_handler
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS, get_op_handler
 from coordinator_core.ops.session_commits import (
     resolve_session_commits as _resolve_session_commits_primitive,
 )
@@ -274,7 +274,12 @@ def _git_run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
             cwd=str(cwd),
             capture_output=True,
             text=True,
-            timeout=30,
+            # A subprocess bound wider than the op's own end-to-end budget is
+            # unreachable dead configuration -- the dispatch layer abandons the
+            # await before it could ever fire, and the process keeps occupying
+            # the box after the caller is gone. Deriving from the ceremony
+            # budget means it tightens automatically as the ratchet lowers.
+            timeout=CEREMONY_BUDGET_SECS,
             **no_console_creationflags(),
             stdin=subprocess.DEVNULL,
         )

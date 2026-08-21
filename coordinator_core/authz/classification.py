@@ -4247,6 +4247,23 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # safety gate. Do not read this entry as evidence the op is currently authz-gated.
     # Spec: docs/plans/2026-08-21-emission-publish-producer.md § C4 (AC14)
     "emission.publish": OpClass.MUTATING,
+    # op_census.breaches — COMPUTE_ONLY: the budget-breach view over the
+    # op-latency sink (ops/op_budget_breaches.py::_op_budget_breaches).
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Opens the newest op-latency generation read-only via
+    #      engine_report.iter_sink_entries and returns a computed aggregate.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      breach_summary is pure over the parsed rows and leaves them
+    #      unmodified (asserted by
+    #      telemetry/tests/test_breach_summary.py::
+    #      test_breach_summary_does_not_mutate_its_input_rows).
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      No subprocess, no network, no cache write -- unlike its
+    #      op_census.report sibling, which persists a module index.
+    "op_census.breaches": OpClass.COMPUTE_ONLY,
 })
 
 

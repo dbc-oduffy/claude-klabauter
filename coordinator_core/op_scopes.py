@@ -797,6 +797,33 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # against the wrong worktree.
     # Spec: coordinator_core/ops/sizing_spike_verdict.py docstring
     "sizing.record_spike_verdict":               "common_dir",
+    "sizing.read_object_fields":                 "common_dir",
+    "plan.tasks.spine_drift_check":              "common_dir",
+    # plan.tasks.spine_drift_check — `common_dir`, decided on converging
+    # evidence rather than left silent. The handler's
+    # `_plan_claim_holder_session_id` calls `git_common_dir(root)` and derives
+    # `plan_claim_dir(common_dir, ...)`; plan claims live in the git COMMON
+    # dir, shared across worktrees, so the op's state is keyed there. It also
+    # imports `main_worktree_root`, the same normalisation the sizing entries
+    # directly above cite for their own `common_dir` verdict.
+    #
+    # This verdict was previously left OPEN on purpose: an earlier session
+    # read the handler, saw two defensible readings (`show_top` vs
+    # `common_dir`), and filed both rather than guessing — on the principle
+    # that a verdict written by someone who does not know which answer holds
+    # converts a live question into permanent silence. That caution was
+    # right. It is discharged here by evidence, not by preference: two
+    # independent reads of the handler and the sibling precedent above all
+    # land on `common_dir`. If a later reader finds the claim-dir derivation
+    # has moved, this entry is the thing to re-check first.
+    # Spec: state/handoffs/2026-08-21_161715_the-census-that-cannot-miss-an-op.md
+    # sizing.read_object_fields — same scope class as sizing.ship/sizing.decline/
+    # sizing.record_spike_verdict above: the handler reads a main-worktree-rooted
+    # state/sizings/ (or archive/sizings/) file, derived via main_worktree_root
+    # (common_dir). Without this entry dispatch resolves repo_root=None and the
+    # handler raises rather than silently deriving against the wrong worktree.
+    # Spec: state/dispatch-briefs/2026-08-21-engine-half-of-the-roadmap-
+    # sprint-spine-split/C6.md
     # strang-11 B8 new ops — all keyed on git_common_dir: handlers derive worktree via
     # main_worktree_root(common_dir), matching the fleet.*/handoff.*/ceremony.* precedent.
     # Class-A ops (fleet.*) use archive_and_commit and read/write main-worktree-rooted paths.
@@ -1507,6 +1534,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # the wrong corpus silently, which is the failure the refusal exists to stop.
     # Spec: docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md § C6
     "op_census.report":                         "show_top",
+    # "show_top" for the same reason as op_census.report immediately above:
+    # _op_budget_breaches forwards repo_root to breach_report(), which resolves
+    # the op-latency sink from it. "none" would key a linked worktree's breach
+    # read to the wrong git common dir and report another tree's breaches as
+    # this one's.
+    "op_census.breaches":                       "show_top",
 }
 
 # ---------------------------------------------------------------------------

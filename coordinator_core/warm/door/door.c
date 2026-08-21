@@ -41,13 +41,14 @@
  * policy for every other cold caller, rather than deriving a second
  * answer to "which engine" in C.
  *
- * WHY SHA-1 IS REIMPLEMENTED HERE rather than calling into bcrypt.dll:
- * loading a DLL neither already mapped into this process nor needed for
- * anything else on the fast path costs more than the ~50-line hash it
- * would compute. `sha1_*` below is the well-known public-domain shape
- * (Steve Reid / Wei Dai lineage), operating on a byte buffer and emitting
- * a raw 20-byte digest; only the first 8 bytes (16 hex chars) of it are
- * ever used, matching Python's `hashlib.sha1(...).hexdigest()[:16]`.
+ * WHY SHA-1 IS HAND-ROLLED rather than calling into bcrypt.dll: loading a
+ * DLL neither already mapped into this process nor needed for anything else
+ * on the fast path costs more than the ~50-line hash it would compute.
+ * `sha1_hex16` is the well-known public-domain shape (Steve Reid / Wei Dai
+ * lineage), operating on a byte buffer and emitting a raw 20-byte digest;
+ * only the first 8 bytes (16 hex chars) of it are ever used, matching
+ * Python's `hashlib.sha1(...).hexdigest()[:16]`. It lives in `door_core.c`
+ * now, not below -- see the `#include "door_core.h"` note.
  *
  * WHY THE ENGINE ROOT IS RESOLVED AT RUNTIME FROM A SIDECAR FILE, not
  * baked into the binary: baking it (this file's own earlier shape) meant
@@ -115,6 +116,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* THE OS-AGNOSTIC HALF LIVES HERE, and used to live in this file. SHA-1,
+ * the growable `buf_t`, the JSON envelope reader, and -- the load-bearing
+ * one -- `is_provably_undispatched()` are shared verbatim with the POSIX
+ * door (`door_posix.c`) rather than existing as two copies that a future
+ * edit could silently desynchronise. That mattered most for the safety
+ * classification: it is the one function whose whole job is preventing the
+ * 2026-08-19 double-execution, and it must not be possible to fix it on one
+ * platform and not the other.
+ *
+ * `door_core.c` is compiled and linked alongside this file -- see
+ * `build.py :: _compile`, which passes the door directory as an include
+ * path and both sources to the compiler. */
+#include "door_core.h"
 
 /* ---- baked at build time by build.py (placeholder substitution, same
  * convention as coordinator/bin/coordinator-invoke.cmd's __PYTHON_BIN__). */
@@ -195,177 +210,12 @@
  * rebuild or a second sidecar file. */
 #define ENGINE_ROOT_ENV_OVERRIDE L"COORDINATOR_DOOR_ENGINE_ROOT"
 
-/* =========================================================================
- * SHA-1 -- public-domain shape, byte buffer in, 20-byte digest out.
- * ========================================================================= */
-
-typedef struct {
-    uint32_t state[5];
-    uint64_t bitlen;
-    unsigned char buf[64];
-    size_t buflen;
-} sha1_ctx;
-
-static uint32_t sha1_rol(uint32_t v, int bits) {
-    return (v << bits) | (v >> (32 - bits));
-}
-
-static void sha1_block(sha1_ctx *ctx, const unsigned char *p) {
-    uint32_t w[80];
-    int i;
-    for (i = 0; i < 16; i++) {
-        w[i] = ((uint32_t)p[i * 4] << 24) | ((uint32_t)p[i * 4 + 1] << 16) |
-               ((uint32_t)p[i * 4 + 2] << 8) | (uint32_t)p[i * 4 + 3];
-    }
-    for (i = 16; i < 80; i++) {
-        w[i] = sha1_rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
-    }
-
-    uint32_t a = ctx->state[0], b = ctx->state[1], c = ctx->state[2];
-    uint32_t d = ctx->state[3], e = ctx->state[4];
-
-    for (i = 0; i < 80; i++) {
-        uint32_t f, k;
-        if (i < 20) { f = (b & c) | ((~b) & d); k = 0x5A827999u; }
-        else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
-        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
-        else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
-        uint32_t tmp = sha1_rol(a, 5) + f + e + k + w[i];
-        e = d; d = c; c = sha1_rol(b, 30); b = a; a = tmp;
-    }
-
-    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c;
-    ctx->state[3] += d; ctx->state[4] += e;
-}
-
-static void sha1_init(sha1_ctx *ctx) {
-    ctx->state[0] = 0x67452301u; ctx->state[1] = 0xEFCDAB89u;
-    ctx->state[2] = 0x98BADCFEu; ctx->state[3] = 0x10325476u;
-    ctx->state[4] = 0xC3D2E1F0u;
-    ctx->bitlen = 0;
-    ctx->buflen = 0;
-}
-
-static void sha1_update(sha1_ctx *ctx, const unsigned char *data, size_t len) {
-    ctx->bitlen += (uint64_t)len * 8;
-    while (len > 0) {
-        size_t take = 64 - ctx->buflen;
-        if (take > len) take = len;
-        memcpy(ctx->buf + ctx->buflen, data, take);
-        ctx->buflen += take;
-        data += take;
-        len -= take;
-        if (ctx->buflen == 64) {
-            sha1_block(ctx, ctx->buf);
-            ctx->buflen = 0;
-        }
-    }
-}
-
-static void sha1_final(sha1_ctx *ctx, unsigned char out[20]) {
-    unsigned char pad = 0x80;
-    uint64_t bitlen = ctx->bitlen;
-    sha1_update(ctx, &pad, 1);
-    unsigned char zero = 0;
-    while (ctx->buflen != 56) sha1_update(ctx, &zero, 1);
-    unsigned char lenbuf[8];
-    for (int i = 0; i < 8; i++) lenbuf[i] = (unsigned char)(bitlen >> (56 - 8 * i));
-    /* append length directly -- bypass sha1_update's own bitlen accounting */
-    memcpy(ctx->buf + ctx->buflen, lenbuf, 8);
-    sha1_block(ctx, ctx->buf);
-    for (int i = 0; i < 5; i++) {
-        out[i * 4] = (unsigned char)(ctx->state[i] >> 24);
-        out[i * 4 + 1] = (unsigned char)(ctx->state[i] >> 16);
-        out[i * 4 + 2] = (unsigned char)(ctx->state[i] >> 8);
-        out[i * 4 + 3] = (unsigned char)(ctx->state[i]);
-    }
-}
-
-/* hexdigest()[:16] -- first 8 digest bytes as 16 lowercase hex chars,
- * NUL-terminated. `out` must be at least 17 bytes. */
-static void sha1_hex16(const unsigned char *data, size_t len, char out[17]) {
-    static const char *hexd = "0123456789abcdef";
-    sha1_ctx ctx;
-    unsigned char digest[20];
-    sha1_init(&ctx);
-    sha1_update(&ctx, data, len);
-    sha1_final(&ctx, digest);
-    for (int i = 0; i < 8; i++) {
-        out[i * 2] = hexd[(digest[i] >> 4) & 0xF];
-        out[i * 2 + 1] = hexd[digest[i] & 0xF];
-    }
-    out[16] = '\0';
-}
-
-/* =========================================================================
- * Growable byte buffer -- used for both the outbound JSON request and the
- * inbound response line.
- * ========================================================================= */
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} buf_t;
-
-static int buf_init(buf_t *b, size_t initial_cap) {
-    b->data = (char *)malloc(initial_cap);
-    if (!b->data) return 0;
-    b->len = 0;
-    b->cap = initial_cap;
-    return 1;
-}
-
-static int buf_reserve(buf_t *b, size_t extra) {
-    if (b->len + extra <= b->cap) return 1;
-    size_t new_cap = b->cap * 2;
-    while (new_cap < b->len + extra) new_cap *= 2;
-    char *grown = (char *)realloc(b->data, new_cap);
-    if (!grown) return 0;
-    b->data = grown;
-    b->cap = new_cap;
-    return 1;
-}
-
-static int buf_append(buf_t *b, const char *data, size_t len) {
-    if (!buf_reserve(b, len)) return 0;
-    memcpy(b->data + b->len, data, len);
-    b->len += len;
-    return 1;
-}
-
-static int buf_append_cstr(buf_t *b, const char *s) {
-    return buf_append(b, s, strlen(s));
-}
-
-/* Appends `s` (UTF-8 bytes, `len` of them) as a JSON string LITERAL body
- * -- i.e. the escaped content between the surrounding quotes, which the
- * caller adds separately. Handles the control characters and quote/
- * backslash escapes that argv/cwd content can plausibly carry; anything
- * else outside 0x20-0x7E is passed through as raw UTF-8 bytes, which is
- * valid inside a JSON string per RFC 8259 (only U+0000-U+001F, U+0022,
- * U+005C require escaping). */
-static int buf_append_json_escaped(buf_t *b, const char *s, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)s[i];
-        switch (c) {
-            case '"': if (!buf_append_cstr(b, "\\\"")) return 0; break;
-            case '\\': if (!buf_append_cstr(b, "\\\\")) return 0; break;
-            case '\n': if (!buf_append_cstr(b, "\\n")) return 0; break;
-            case '\r': if (!buf_append_cstr(b, "\\r")) return 0; break;
-            case '\t': if (!buf_append_cstr(b, "\\t")) return 0; break;
-            default:
-                if (c < 0x20) {
-                    char esc[8];
-                    snprintf(esc, sizeof(esc), "\\u%04x", c);
-                    if (!buf_append_cstr(b, esc)) return 0;
-                } else {
-                    if (!buf_append(b, (const char *)&c, 1)) return 0;
-                }
-        }
-    }
-    return 1;
-}
+/* SHA-1 (`sha1_hex16`) and the growable byte buffer (`buf_t`,
+ * `buf_append*`) now live in `door_core.c`, shared verbatim with the
+ * POSIX door. `sha1_hex16` is still byte-identical to Python's
+ * `hashlib.sha1(...).hexdigest()[:16]`; that property is now asserted by
+ * `door_core_selftest.c` against the published SHA-1 vectors rather than
+ * only argued in a comment. */
 
 /* =========================================================================
  * Wide <-> UTF-8, matching Python's own `str.encode("utf-8")`.
@@ -746,281 +596,11 @@ static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root
     return rc;
 }
 
-/* =========================================================================
- * Minimal JSON reader -- tailored to exactly the fixed envelope the
- * server emits (module docstring above). Depth-aware (skips nested
- * strings/objects/arrays correctly) so it never mistakes stdout CONTENT
- * that happens to contain the text `"error"` for a top-level error key.
- * ========================================================================= */
-
-typedef struct { const char *p, *end; } cursor_t;
-
-static void skip_ws(cursor_t *c) {
-    while (c->p < c->end && (*c->p == ' ' || *c->p == '\t' || *c->p == '\n' || *c->p == '\r')) c->p++;
-}
-
-/* Parses a JSON string starting at `c->p` (which must point at the
- * opening quote). On success advances `c->p` past the closing quote and,
- * if `out` is non-NULL, appends the UNESCAPED UTF-8 content to `out`.
- * Returns 0 on any malformed input. */
-static int parse_json_string(cursor_t *c, buf_t *out) {
-    if (c->p >= c->end || *c->p != '"') return 0;
-    c->p++;
-    while (c->p < c->end && *c->p != '"') {
-        unsigned char ch = (unsigned char)*c->p;
-        if (ch == '\\') {
-            c->p++;
-            if (c->p >= c->end) return 0;
-            char esc = *c->p;
-            char lit;
-            switch (esc) {
-                case '"': lit = '"'; break;
-                case '\\': lit = '\\'; break;
-                case '/': lit = '/'; break;
-                case 'n': lit = '\n'; break;
-                case 't': lit = '\t'; break;
-                case 'r': lit = '\r'; break;
-                case 'b': lit = '\b'; break;
-                case 'f': lit = '\f'; break;
-                case 'u': {
-                    if (c->p + 4 >= c->end) return 0;
-                    char hex[5] = { c->p[1], c->p[2], c->p[3], c->p[4], 0 };
-                    unsigned int cp = (unsigned int)strtoul(hex, NULL, 16);
-                    c->p += 4;
-                    /* Encode as UTF-8. Surrogate pairs (stdout/stderr are
-                     * plain text, astral chars are rare but possible) are
-                     * handled by re-entering on a trailing low surrogate. */
-                    if (cp >= 0xD800 && cp <= 0xDBFF &&
-                        c->p + 6 < c->end && c->p[1] == '\\' && c->p[2] == 'u') {
-                        char hex2[5] = { c->p[3], c->p[4], c->p[5], c->p[6], 0 };
-                        unsigned int low = (unsigned int)strtoul(hex2, NULL, 16);
-                        if (low >= 0xDC00 && low <= 0xDFFF) {
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-                            c->p += 6;
-                        }
-                    }
-                    unsigned char u8[4];
-                    int n;
-                    if (cp < 0x80) { u8[0] = (unsigned char)cp; n = 1; }
-                    else if (cp < 0x800) {
-                        u8[0] = (unsigned char)(0xC0 | (cp >> 6));
-                        u8[1] = (unsigned char)(0x80 | (cp & 0x3F));
-                        n = 2;
-                    } else if (cp < 0x10000) {
-                        u8[0] = (unsigned char)(0xE0 | (cp >> 12));
-                        u8[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
-                        u8[2] = (unsigned char)(0x80 | (cp & 0x3F));
-                        n = 3;
-                    } else {
-                        u8[0] = (unsigned char)(0xF0 | (cp >> 18));
-                        u8[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
-                        u8[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
-                        u8[3] = (unsigned char)(0x80 | (cp & 0x3F));
-                        n = 4;
-                    }
-                    if (out && !buf_append(out, (const char *)u8, (size_t)n)) return 0;
-                    c->p++;
-                    continue;
-                }
-                default: return 0;
-            }
-            if (out && !buf_append(out, &lit, 1)) return 0;
-            c->p++;
-        } else {
-            if (out && !buf_append(out, (const char *)&ch, 1)) return 0;
-            c->p++;
-        }
-    }
-    if (c->p >= c->end) return 0; /* unterminated string -- malformed */
-    c->p++; /* closing quote */
-    return 1;
-}
-
-/* Skips one JSON value of any type at `c->p`, leaving `c->p` just past
- * it. Used to walk past sibling members this reader does not care about,
- * without needing a general-purpose value model. */
-static int skip_json_value(cursor_t *c) {
-    skip_ws(c);
-    if (c->p >= c->end) return 0;
-    char ch = *c->p;
-    if (ch == '"') return parse_json_string(c, NULL);
-    if (ch == '{' || ch == '[') {
-        char close = (ch == '{') ? '}' : ']';
-        int depth = 1;
-        c->p++;
-        while (c->p < c->end && depth > 0) {
-            skip_ws(c);
-            if (c->p >= c->end) return 0;
-            if (*c->p == '"') {
-                if (!parse_json_string(c, NULL)) return 0;
-                continue;
-            }
-            if (*c->p == ch) depth++;
-            else if (*c->p == close) depth--;
-            c->p++;
-        }
-        return depth == 0;
-    }
-    /* number / true / false / null -- run to the next structural char */
-    while (c->p < c->end && *c->p != ',' && *c->p != '}' && *c->p != ']' &&
-           *c->p != ' ' && *c->p != '\t' && *c->p != '\n' && *c->p != '\r') {
-        c->p++;
-    }
-    return c->p > c->end ? 0 : 1;
-}
-
-static int parse_json_int(cursor_t *c, long *out) {
-    skip_ws(c);
-    const char *start = c->p;
-    if (c->p < c->end && *c->p == '-') c->p++;
-    while (c->p < c->end && *c->p >= '0' && *c->p <= '9') c->p++;
-    if (c->p == start) return 0;
-    *out = strtol(start, NULL, 10);
-    return 1;
-}
-
-typedef struct {
-    buf_t stdout_buf;
-    buf_t stderr_buf;
-    long exit_code;
-    int have_stdout, have_stderr, have_exit_code;
-} result_fields_t;
-
-/* Parses a `{"stdout":..., "stderr":..., "exit_code":...}` object
- * (member order not assumed) starting at `c->p` (which must be '{').
- * Unknown members are skipped, not rejected -- the server's envelope is
- * free to carry more fields than this door reads. */
-static int parse_result_object(cursor_t *c, result_fields_t *rf) {
-    skip_ws(c);
-    if (c->p >= c->end || *c->p != '{') return 0;
-    c->p++;
-    for (;;) {
-        skip_ws(c);
-        if (c->p >= c->end) return 0;
-        if (*c->p == '}') { c->p++; return 1; }
-        if (*c->p == ',') { c->p++; continue; }
-        buf_t key;
-        if (!buf_init(&key, 32)) return 0;
-        if (!parse_json_string(c, &key)) { free(key.data); return 0; }
-        skip_ws(c);
-        if (c->p >= c->end || *c->p != ':') { free(key.data); return 0; }
-        c->p++;
-        skip_ws(c);
-
-        int matched = 0;
-        if (key.len == 6 && memcmp(key.data, "stdout", 6) == 0) {
-            if (!parse_json_string(c, &rf->stdout_buf)) { free(key.data); return 0; }
-            rf->have_stdout = 1;
-            matched = 1;
-        } else if (key.len == 6 && memcmp(key.data, "stderr", 6) == 0) {
-            if (!parse_json_string(c, &rf->stderr_buf)) { free(key.data); return 0; }
-            rf->have_stderr = 1;
-            matched = 1;
-        } else if (key.len == 9 && memcmp(key.data, "exit_code", 9) == 0) {
-            if (!parse_json_int(c, &rf->exit_code)) { free(key.data); return 0; }
-            rf->have_exit_code = 1;
-            matched = 1;
-        }
-        free(key.data);
-        if (!matched) {
-            if (!skip_json_value(c)) return 0;
-        }
-    }
-}
-
-/* Parses a `{"code": <int>, "message": ...}` error object (member order
- * not assumed, "message" and any other member skipped) starting at
- * `c->p`. Fills `*code_out` only when a `code` member is present. */
-static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out) {
-    skip_ws(c);
-    if (c->p >= c->end || *c->p != '{') return 0;
-    c->p++;
-    for (;;) {
-        skip_ws(c);
-        if (c->p >= c->end) return 0;
-        if (*c->p == '}') { c->p++; return 1; }
-        if (*c->p == ',') { c->p++; continue; }
-        buf_t key;
-        if (!buf_init(&key, 16)) return 0;
-        if (!parse_json_string(c, &key)) { free(key.data); return 0; }
-        skip_ws(c);
-        if (c->p >= c->end || *c->p != ':') { free(key.data); return 0; }
-        c->p++;
-        skip_ws(c);
-        if (key.len == 4 && memcmp(key.data, "code", 4) == 0) {
-            free(key.data);
-            if (!parse_json_int(c, code_out)) return 0;
-            *have_code_out = 1;
-        } else {
-            free(key.data);
-            if (!skip_json_value(c)) return 0;
-        }
-    }
-}
-
-/* Top-level envelope reader.
- *
- * Returns 1 and fills `rf` iff this is a well-formed SUCCESS envelope
- * carrying all three result fields -- the fast path.
- *
- * Returns 0 for everything else, and additionally fills `*have_error_out`
- * / `*error_code_out` when the envelope carried a recognisable JSON-RPC
- * `error.code` (a malformed frame, or an error object with no `code`
- * member, leaves `*have_error_out` at 0). The caller uses that code, via
- * `is_provably_undispatched`, to decide between falling through (the code
- * proves the op never ran) and refusing (everything else, per the
- * post-delivery invariant in `emit_indeterminate`'s docstring) -- this
- * function itself makes no fall-through-vs-refuse decision. */
-static int parse_response_envelope(
-    const char *json, size_t len, result_fields_t *rf,
-    int *have_error_out, long *error_code_out
-) {
-    memset(rf, 0, sizeof(*rf));
-    *have_error_out = 0;
-    *error_code_out = 0;
-    if (!buf_init(&rf->stdout_buf, 256) || !buf_init(&rf->stderr_buf, 256)) return 0;
-
-    cursor_t c = { json, json + len };
-    skip_ws(&c);
-    if (c.p >= c.end || *c.p != '{') return 0;
-    c.p++;
-
-    int saw_result = 0;
-    for (;;) {
-        skip_ws(&c);
-        if (c.p >= c.end) return 0;
-        if (*c.p == '}') break;
-        if (*c.p == ',') { c.p++; continue; }
-
-        buf_t key;
-        if (!buf_init(&key, 32)) return 0;
-        if (!parse_json_string(&c, &key)) { free(key.data); return 0; }
-        skip_ws(&c);
-        if (c.p >= c.end || *c.p != ':') { free(key.data); return 0; }
-        c.p++;
-
-        if (key.len == 5 && memcmp(key.data, "error", 5) == 0) {
-            free(key.data);
-            /* A malformed error object still means "this was an error
-             * envelope, not a success" -- *have_error_out stays whatever
-             * parse_error_object managed to fill (possibly still 0, if it
-             * failed before reaching "code"), which correctly routes to
-             * the conservative refusal rather than a false "safe" verdict. */
-            parse_error_object(&c, error_code_out, have_error_out);
-            return 0;
-        }
-        if (key.len == 6 && memcmp(key.data, "result", 6) == 0) {
-            free(key.data);
-            if (!parse_result_object(&c, rf)) return 0;
-            saw_result = 1;
-            continue;
-        }
-        free(key.data);
-        if (!skip_json_value(&c)) return 0;
-    }
-
-    return saw_result && rf->have_stdout && rf->have_stderr && rf->have_exit_code;
-}
+/* The envelope reader (`parse_response_envelope` and its private
+ * helpers) now lives in `door_core.c`, shared verbatim with the POSIX
+ * door. It is depth-aware, so stdout CONTENT containing the text
+ * `"error"` is never mistaken for a top-level error key -- a case
+ * `door_core_selftest.c` covers explicitly. */
 
 /* =========================================================================
  * main
@@ -1200,79 +780,14 @@ static int write_all(HANDLE h, const char *data, size_t len) {
     return 1;
 }
 
-/* JSON-RPC error codes this door needs to name explicitly -- see
- * `_is_provably_undispatched` and `emit_indeterminate` below. */
-#define JSONRPC_PARSE_ERROR (-32700)
-#define JSONRPC_INVALID_REQUEST (-32600)
-#define JSONRPC_METHOD_NOT_FOUND (-32601)
-#define JSONRPC_ENGINE_SKEW (-32002)
-/* `server.py::UNTRUSTED_CALLER_ERROR` -- a request with no `_engine_token`
- * field at all. A correctly-built door NEVER sees this: every request it
- * sends carries a token computed the same way `compute_client_token` does
- * (this file's own step 2). It is handled anyway -- see this door's own
- * copy of the "unreachable today" argument in `is_provably_undispatched`'s
- * docstring below, which is the exact reasoning `_untrusted_caller_
- * response`'s own docstring says left this code's gap open in the first
- * place: a door binary built against an older/differently-derived engine
- * root, or any future caller of this same pipe protocol, can still reach
- * it, and "our own caller can't trigger this" is not the same claim as
- * "no caller can". */
-#define JSONRPC_UNTRUSTED_CALLER (-32003)
-/* Mirrors `coordinator_core.warm.client.WARM_DISPATCH_INDETERMINATE` --
- * same code, same meaning ("delivered, no usable answer, do not re-run"),
- * so a caller inspecting the error code sees one property, not two. */
-#define JSONRPC_WARM_DISPATCH_INDETERMINATE (-32004)
-
-/* True iff `code` is a JSON-RPC error this door can PROVE fired before the
- * server ever invoked an op handler -- i.e. the delivered request
- * demonstrably had no chance to mutate anything, so falling through and
- * re-running it cold cannot double-execute it. Sources, read from
- * `coordinator_core/ipc.py` and `warm/server.py` (never taken on faith):
- *
- *   -32700 PARSE_ERROR / -32600 INVALID_REQUEST: raised by
- *     `server.py::_parse_frame`, which runs BEFORE `dispatch()` is ever
- *     called (`_serve_one`'s `except _FrameError` branch returns without
- *     reaching the `dispatch(msg, ...)` line).
- *   -32601 METHOD_NOT_FOUND: raised by `ipc.py`'s registry-miss branch
- *     (~line 1608), which returns immediately on `get_op_handler(method)
- *     is None` -- no handler was looked up, let alone invoked.
- *   -32002 ENGINE_SKEW: `skew.evict_on_skew` responds and closes the
- *     listener BEFORE any dispatch, per `server.py::_serve_one`'s own
- *     ordering (mirrored by `warm.client`'s identical justification for
- *     treating this one code as safe to go cold on, post-delivery, even
- *     for a mutation).
- *   -32003 UNTRUSTED_CALLER_ERROR: `server.py::_serve_line` returns
- *     `_untrusted_caller_response(request_id)` at its `if client_token is
- *     None:` branch (~line 901-903), strictly BEFORE `version_state.
- *     is_skewed(client_token)` is ever called (~line 905) and long before
- *     `dispatch(...)` -- verified directly against that ordering, not
- *     assumed from the code's own docstring. This door can never legally
- *     produce this response (see the `JSONRPC_UNTRUSTED_CALLER` macro's
- *     own comment for why it is still handled).
- *
- * DELIBERATELY EXCLUDES -32602 INVALID_PARAMS, despite it superficially
- * reading as another "never reached the handler" code: `ipc.py`'s own
- * `_handler_exception_error` (~line 1466) ALSO emits INVALID_PARAMS for a
- * `CallerFacingValidationError` raised FROM INSIDE a handler that has
- * already started running -- so this code does not prove non-execution,
- * and is treated the same as every other unrecognised error below.
- * DELIBERATELY EXCLUDES -32603 INTERNAL_ERROR for the same reason: it is
- * `server.py`'s catch-all for an exception that escaped a handler already
- * in flight (`_serve_one`'s `except Exception as exc` around
- * `dispatch(...)`, ~line 921).
- *
- * `_op_may_mutate` (`warm/client.py`) is NOT available here and could not
- * be applied even if it were -- this door deliberately never parses the
- * method name out of its own request (module docstring: "does NOT parse
- * the CLI surface"), so it cannot look an op up in that table. This
- * function is therefore the door's entire safety net for the
- * distinction, and stays conservative on every code it does not
- * positively recognise. */
-static int is_provably_undispatched(long code) {
-    return code == JSONRPC_PARSE_ERROR || code == JSONRPC_INVALID_REQUEST ||
-           code == JSONRPC_METHOD_NOT_FOUND || code == JSONRPC_ENGINE_SKEW ||
-           code == JSONRPC_UNTRUSTED_CALLER;
-}
+/* The JSONRPC_* codes and `is_provably_undispatched()` -- the
+ * classification deciding whether a DELIVERED request may be re-run
+ * cold -- now live in `door_core.h`/`door_core.c`, shared verbatim with
+ * the POSIX door. That sharing is the point: it is the one function
+ * whose whole job is preventing the 2026-08-19 double-execution, and it
+ * must not be possible to fix it on one platform and not the other. The
+ * full source trail for every included and every DELIBERATELY EXCLUDED
+ * code (-32602 and -32603 in particular) is in `door_core.h`. */
 
 /* THE INVARIANT THIS FUNCTION EXISTS TO HOLD -- mirrors
  * `warm.client._try_warm_dispatch_inner`'s own "THE INVARIANT THIS BLOCK
@@ -1292,24 +807,11 @@ static int is_provably_undispatched(long code) {
 static int emit_indeterminate(const char *detail) {
     buf_t out;
     if (!buf_init(&out, 512)) return 1;
-    int ok = 1;
-    ok &= buf_append_cstr(&out,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32004,\"message\":\"");
-    ok &= buf_append_json_escaped(&out,
-        "warm dispatch indeterminate: door delivered this request to the "
-        "warm engine and did not get back a response it could prove was "
-        "safe to re-run. The op may have COMPLETED. Reconcile against "
-        "real state before re-running; the door will not re-execute a "
-        "delivered request. (",
-        strlen(
-            "warm dispatch indeterminate: door delivered this request to the "
-            "warm engine and did not get back a response it could prove was "
-            "safe to re-run. The op may have COMPLETED. Reconcile against "
-            "real state before re-running; the door will not re-execute a "
-            "delivered request. ("));
-    ok &= buf_append_json_escaped(&out, detail, strlen(detail));
-    ok &= buf_append_cstr(&out, ")\"}}\n");
-    if (ok) {
+    /* The envelope's BYTES are built in `door_core.c`; only the write of
+     * them is Windows-specific. That split is what keeps the two doors from
+     * drifting in what they tell an operator -- the message an operator has
+     * to act on should not depend on which platform refused. */
+    if (build_indeterminate_envelope(&out, detail)) {
         HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
         write_all(hout, out.data, out.len);
     }

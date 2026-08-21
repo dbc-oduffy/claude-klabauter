@@ -159,10 +159,15 @@ def test_warm_revalidate_process_time_within_budget(tmp_path: Path):
     Synthetic corpus, not the real ~475-file coordinator_core/ tree (real-tree
     timing would make this test's pass/fail depend on repo growth over time,
     not on op_census's own mechanism) — 40 small modules revalidated after a
-    cold build, budget generous relative to authoring-time measurement
-    against the real tree (well under 1ms/file on a warm SHA scan) so this
-    stays robust under § Load norm's shared-machine contention rather than
-    pinned to a tight figure that flakes under load.
+    cold build. Measures `time.process_time()`, never wall clock (CLAUDE.md
+    § The brightline: "Process time and spawn count, never wall clock — wall
+    clock measures peer load"), which is what actually makes this robust
+    under § Load norm's shared-machine contention: process time is unaffected
+    by peer scheduling pressure, so the bound can stay tight rather than
+    loose. (Review: staff-eng Finding 7 — the prior wall-clock measurement
+    called itself "the 500ms brightline," which is a different, unrelated
+    figure; this is a tight, process-time bound on a 40-file synthetic warm
+    revalidate.)
     """
     paths = []
     for i in range(40):
@@ -173,11 +178,11 @@ def test_warm_revalidate_process_time_within_budget(tmp_path: Path):
     index: dict = {}
     summarize_paths(paths, index=index)  # cold build, off the measured path
 
-    start = time.perf_counter()
+    start = time.process_time()
     summarize_paths(paths, index=index)  # warm revalidate
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    elapsed_ms = (time.process_time() - start) * 1000
 
-    assert elapsed_ms < 500, (
-        f"warm revalidate over {len(paths)} files took {elapsed_ms:.1f}ms, "
-        "exceeding the 500ms brightline"
+    assert elapsed_ms < 100, (
+        f"warm revalidate over {len(paths)} files took {elapsed_ms:.1f}ms of "
+        "process time, exceeding the tight synthetic-corpus budget"
     )

@@ -35,23 +35,20 @@ fallback marker IS present before `test_wedged_server...` asserts it is
 ABSENT. Without the first, the second proves nothing: an absent marker is
 equally consistent with a fixture that could never have produced one.
 
-KNOWN WEAKNESS, NAMED RATHER THAN HIDDEN. `_socket_path_for()` below
-DERIVES the socket path instead of asking production code for it, because
-there is no production POSIX binder to ask -- `server.py::main()` refuses to
-start off Windows and `election.py` has no POSIX branch. That is exactly the
-shape
+THE SOCKET PATH IS ASKED FOR, NOT MIRRORED. `_socket_path_for()` below
+calls `election.socket_path` -- the same helper `server._elect_unix_socket_
+endpoint` binds -- so the door and its peer cannot pick different paths and
+both stay green. It derived the path by hand until 2026-08-21, when no
+production POSIX binder existed to ask (`server.py::main()` refused to start
+off Windows and `election.py` had no POSIX branch); that was the shape
 `state/lessons/2026-08-05-coverage-that-builds-its-own-input-never-tests-the-
-door-production-uses.yaml` warns about: if the POSIX server picks a different
-path, these tests pass while the real door connects to nothing. **When the
-POSIX server lands, delete `_socket_path_for` and call the server's own path
-helper.** Until then this module tests the door against a convention, not
-against its peer, and that limitation is the single most important thing to
-know about it.
+door-production-uses.yaml` warns about, named here rather than hidden, and it
+is now closed. The recipe still lives in exactly one place -- if it moves
+again, it moves for both halves at once.
 """
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import socket
@@ -124,20 +121,29 @@ def _make_stub_engine_root(tmp_path: Path) -> Path:
 
 
 def _socket_path_for(runtime_base: Path, engine_root: Path) -> Path:
-    """Mirrors `door_posix.c`'s derivation -- see this module's docstring for
-    why deriving it here is a known weakness rather than a design choice.
+    """The path the POSIX server would bind for `engine_root`, from the
+    server's own helper.
 
-    The clone hash is `breadcrumb.svc_dir`'s own
-    (`sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]`) and the
-    token is `skew.compute_client_token`'s. Both Python sites are imported
-    or reproduced exactly; neither is re-invented with a different recipe."""
-    from coordinator_core.warm import skew
+    `election.socket_path` reads the runtime base out of the environment
+    (via `breadcrumb.svc_dir`), which is where `_run_door` puts it for the
+    door subprocess too -- so the base is set around the call and restored
+    rather than threaded through a second parameter the production helper
+    does not have. `door_posix.c` derives the same path in C; that C
+    derivation is what these tests exist to check, so nothing here may
+    reproduce it."""
+    from coordinator_core.warm import breadcrumb, election, skew
 
-    clone_hash = hashlib.sha1(
-        str(engine_root.resolve()).encode("utf-8")
-    ).hexdigest()[:16]
-    token = skew.compute_client_token(engine_root)
-    return runtime_base / "coordinator" / "warm" / clone_hash / f"{token}.sock"
+    prior = os.environ.get(breadcrumb.RUNTIME_BASE_ENV)
+    os.environ[breadcrumb.RUNTIME_BASE_ENV] = str(runtime_base)
+    try:
+        return election.socket_path(
+            skew.compute_client_token(engine_root), engine_clone=engine_root
+        )
+    finally:
+        if prior is None:
+            os.environ.pop(breadcrumb.RUNTIME_BASE_ENV, None)
+        else:
+            os.environ[breadcrumb.RUNTIME_BASE_ENV] = prior
 
 
 def _make_socket_dir(sock_path: Path) -> None:

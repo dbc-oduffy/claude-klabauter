@@ -8,11 +8,15 @@ of 273 ops (35%, measured 2026-08-21) — the rest MUST report `no_data`, never
 silently pass. See plan `docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md`
 § "The three-state rule".
 
-Process time is aggregated from real `op_latency.jsonl` telemetry (per-op
-p50/max over `kind="complete"` rows, 60.1ms measured over 28,117 rows) —
-`ipc.dispatch_message`'s `perf_start`/`perf_counter` site times only
-`_dispatch_message_impl`, i.e. server-side handler process time, which is
-exactly what this axis reports.
+This axis is aggregated from real `op_latency.jsonl` telemetry (per-op
+p50/max over `kind="complete"` rows, 60.1ms measured over 28,117 rows).
+`ipc.dispatch_message`'s `perf_start`/`perf_counter` site is SCOPED to
+`_dispatch_message_impl` — it times the server-side handler and nothing
+else — but `perf_counter` is a WALL CLOCK, and a narrow scope does not
+convert wall clock into process time. What this axis reports is handler-
+scoped elapsed wall time, which under § Load norm (~50 concurrent
+sessions) accrues time spent waiting for CPU that neighbouring sessions
+are using. See the negative spec below for what that costs.
 
 Invocation tax is NOT a field `op_latency.jsonl` carries per op — the sink
 measures server-side dispatch time only, never the client-side cost of
@@ -33,11 +37,33 @@ Negative-spec:
       import. `measure_invocation_tax_ms` has the child report its own
       `time.process_time()` instead (see `test_no_data_is_not_a_pass.py`'s
       regression guard).
-    - Never wall clock. `process_time_by_op` reads `elapsed_ms`, which is
-      itself server-side process time by construction of its writer
-      (`ipc.dispatch_message`), not this module's own self-measurement —
+    - CORRECTED 2026-08-21, recorded rather than swapped out. This block
+      previously read: "Never wall clock. `process_time_by_op` reads
+      `elapsed_ms`, which is itself server-side process time by
+      construction of its writer (`ipc.dispatch_message`)." That is FALSE.
+      `ipc.dispatch_message` computes `elapsed_ms` from `_time.perf_counter()`
+      — wall clock. The true half of the claim is that the site is scoped to
+      `_dispatch_message_impl`; the false half is reading that scope as a
+      clock type. Both halves appeared, so the module asserted the
+      falsehood twice (see § Process time above, corrected in the same pass).
+      It is recorded here because this is the SECOND wrong-value-producer in
+      this module's history — the `os.times()` note directly above is the
+      first — and the pattern is that the negative spec written to prevent
+      the class asserted a falsehood of the same class, two lines below the
+      note. A reader checking this axis reads that line and stops; one did.
+      Found by a peer audit (`claude-klabauter-05`) during the C-review of the
+      workstream that shipped it, not by this module's own tests.
+    - CONSEQUENCE, unresolved: under § Load norm an `over_bar` on this axis
+      can reflect peer load rather than the op's own cost, and the census
+      cannot tell the two apart. Per-op CPU attribution under async
+      concurrency is a real design question and is NOT a clock substitution:
+      `time.process_time()` in the server measures the WHOLE process's CPU,
+      so a delta taken across an `await` attributes concurrent ops' work to
+      whichever op is being timed, and `thread_time` does not separate async
+      ops sharing a thread. Do not "fix" this by swapping the clock.
       DR-344's load-independence requirement binds the CENSUS's own
-      self-assertion (see C6), not the shape of upstream telemetry.
+      self-assertion (see C6); what it does NOT do is license naming this
+      axis after a clock it does not use.
     - `no_data` never collapses into `under_bar`. `cleared_ops` dispatches
       the three `Disposition` states exhaustively with an explicit
       `RuntimeError` else-branch — no default branch — so a fourth state
@@ -98,10 +124,21 @@ class Disposition(enum.Enum):
 
 
 class NoDataReason(enum.Enum):
-    """Why an op reports `no_data` — staff-eng Finding 8."""
+    """Why an op reports `no_data` — staff-eng Finding 8.
+
+    `NOT_ESTABLISHED_UNDER_LOAD` (added alongside the module docstring's
+    2026-08-21 wall-clock correction): `process_time_by_op` reads
+    `elapsed_ms`, which is wall clock, not process time (see module
+    docstring). Under this repo's load norm, wall time accruing past
+    `PROCESS_TIME_BAR_MS` can reflect a busy neighbour, not the op's own
+    cost — a breach reading this axis cannot support is reported here as
+    "not established", never as `over_bar`. `under_bar` stays sound and
+    unaffected: elapsed wall time under the bar means the op's own CPU time
+    is certainly under it too."""
 
     NEVER_OBSERVED = "never_observed"
     NOT_IN_CURRENT_GENERATION = "not_in_current_generation"
+    NOT_ESTABLISHED_UNDER_LOAD = "not_established_under_load"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -169,6 +206,12 @@ def process_time_by_op(
     scope) to have appeared outside the current generation; an absent op in
     that set reports `NOT_IN_CURRENT_GENERATION` instead of
     `NEVER_OBSERVED`.
+
+    `elapsed_ms` is wall clock (module docstring), so a breach here is
+    reported as `NO_DATA`/`NOT_ESTABLISHED_UNDER_LOAD`, never `OVER_BAR` —
+    peer load alone can produce it, and this axis cannot tell the two
+    apart. `UNDER_BAR` stays sound: elapsed wall time under `bar_ms` means
+    the op's own process time is certainly under it too.
     """
     rotated = set(rotated_generation_ops) if rotated_generation_ops is not None else frozenset()
 
@@ -197,13 +240,21 @@ def process_time_by_op(
 
         p50 = statistics.median(values)
         mx = max(values)
-        disposition = Disposition.OVER_BAR if (p50 >= bar_ms or mx >= bar_ms) else Disposition.UNDER_BAR
-        results[op] = AxisResult(
-            disposition=disposition,
-            p50_ms=p50,
-            max_ms=mx,
-            sample_count=len(values),
-        )
+        if p50 >= bar_ms or mx >= bar_ms:
+            # Wall clock cannot support an OVER_BAR verdict (module
+            # docstring) -- report as not-established rather than a breach
+            # this axis is not sound to claim.
+            results[op] = AxisResult(
+                disposition=Disposition.NO_DATA,
+                no_data_reason=NoDataReason.NOT_ESTABLISHED_UNDER_LOAD,
+            )
+        else:
+            results[op] = AxisResult(
+                disposition=Disposition.UNDER_BAR,
+                p50_ms=p50,
+                max_ms=mx,
+                sample_count=len(values),
+            )
     return results
 
 

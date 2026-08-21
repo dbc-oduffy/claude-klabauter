@@ -38,16 +38,16 @@ Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — setup/guards, S
 Dual-purpose note (deliberate, not incidental): this module also hosts the
 ``check-shipped-on-main.sh`` port (``main()``, ``_CHECK_SHIPPED_HELP``, ``resolve_ref``,
 ``_commit_age_label`` below) because it reuses ``sha_on_origin_main`` /
-``check_origin_main_reachable`` / ``fetch_origin_main`` — the same ancestor-check
+``check_origin_main_reachable`` — the same ancestor-check
 helpers ``_stamp_shipped_sha`` already uses internally for envelope assembly. A reader
 grepping this file for cockpit-emission logic will also find that unrelated git-ancestor
 CLI; it lives here for helper reuse, not because it belongs to the section-registry
 pipeline. Review: code-reviewer — flagged as a placement-clarity gap (Finding 2).
 
-Public promotion (2026-07-25): the four ancestor-check helpers above were promoted from
+Public promotion (2026-07-25): the ancestor-check helpers above were promoted from
 private to public names so ``coordinator_core/ops/introspect/verify_shipped.py`` can import
 them as a second, cross-module consumer, rather than reaching across the underscore
-boundary. ``_check_origin_main_reachable``/``_fetch_origin_main``/``_sha_on_origin_main``
+boundary. ``_check_origin_main_reachable``/``_sha_on_origin_main``
 survive as private aliases (see just above ``_CHECK_SHIPPED_HELP``) purely because
 ``_stamp_node_shipped_sha`` and its test (``test_node_shipped_sha_stamp.py``) patch those
 exact underscore paths; ``_resolve_ref`` had no such caller and was renamed outright.
@@ -65,6 +65,16 @@ call — the same many-commits-against-ONE-ref batchable shape, not a records-lo
 the same tri-state contract. ``sha_on_origin_main`` itself is UNCHANGED and remains a public
 helper (other in-repo callers may still classify a single sha), but ``main()`` no longer calls
 it. Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C32.
+
+Timeout kill (2026-08-21, hitlist § G5): ``fetch_origin_main`` is DELETED, not retuned —
+a ``git fetch`` on an artifact-render path is the wrong mechanism at any bound, and its
+120 was the only honestly-sized number in the group, which is precisely why it did not
+belong here (`artifact.emit` max 56,646 ms, 33/72 non-ok). Every remaining git read in
+this module derives its bound from ``git.run``'s single local-plumbing budget instead of
+carrying one of the 60/120 house numbers; the two ``cat-file --batch-check`` sites feed
+stdin, so they spawn directly but take the same constant by import.
+Spec backlink: docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G5
+Decision backlink: docs/decisions/DR-349-one-budget-governs-every-constructed-op.md
 """
 
 from __future__ import annotations
@@ -81,6 +91,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
+from coordinator_core.git.run import (
+    LOCAL_PLUMBING_BUDGET_SECS,
+    git_ok,
+    git_out,
+    run_git,
+)
 from coordinator_core.ops.emit import validate
 from coordinator_core.ops.emit import enrich as _enrich
 from coordinator_core.ops.emit import deliverable_status as _deliverable_status
@@ -602,38 +618,28 @@ def _stamp_lma(record_groups: Sequence[list[dict]], repo_root: Path) -> None:
 
 
 def check_origin_main_reachable(repo_root: Path) -> bool:
-    """Return True when ``origin/main`` is locally reachable (no fetch; bash §1.5 amortised gate)."""
-    # Review: code-reviewer — bare git subprocess.run lacked the Windows-safe
-    # no-window/no-hang flag set the git_native._git() sibling module carries.
-    try:
-        rc = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "origin/main"],
-            capture_output=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        ).returncode
-        return rc == 0
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
+    """Return True when ``origin/main`` is locally reachable.
 
+    The whole of this module's ancestry story rests on what the LOCAL repo already
+    knows. When this returns False every caller below degrades — ``shipped_sha`` to
+    null, ``reachable_on_default_branch`` to null — and that degradation is the
+    contract, not a fallback to be papered over.
 
-def fetch_origin_main(repo_root: Path) -> None:
-    """Try fetching origin/main; failure is silently ignored (bash §1.5 offline degradation)."""
-    try:
-        subprocess.run(
-            ["git", "-C", str(repo_root), "fetch", "origin", "main", "--quiet"],
-            capture_output=True,
-            check=False,
-            timeout=120,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        # Offline degradation per the docstring contract above -- caller proceeds
-        # against whatever origin/main state is already locally known.
-        pass
+    Negative-spec:
+      - Does NOT fetch, and no caller may fetch on its behalf. ``fetch_origin_main``
+        (a ``git fetch origin main`` under a 120s bound) used to sit behind every
+        False here, putting a network leg on the render path of an artifact: the
+        observed failure mode was a two-minute stall inside a close ceremony, and
+        `artifact.emit` measured a 56,646 ms maximum with 33 of 72 invocations
+        non-ok. Emit renders what the repo knows; making the repo know more is a
+        different op's job, run off the interactive path. DR-349 grants network legs
+        no standing carve-out, and this one bought nothing an operator's own fetch
+        does not already buy. Ledger precedent: K-002.
+        Spec backlink: docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G5
+      - Does NOT raise. A missing git, a timeout, or a repo with no ``origin``
+        remote configured are all "not reachable", the same answer offline gives.
+    """
+    return git_ok(["-C", str(repo_root), "rev-parse", "origin/main"])
 
 
 def sha_on_origin_main(repo_root: Path, sha: str) -> Optional[bool]:
@@ -642,23 +648,14 @@ def sha_on_origin_main(repo_root: Path, sha: str) -> Optional[bool]:
     Returns True (on main), False (not on main), or None (sha unreachable / exit 2 equivalent).
     Parity: bash §1.5 ``check-shipped-on-main.sh <sha>`` exit 0/1/2 semantics.
     """
-    try:
-        rc = subprocess.run(
-            ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, "origin/main"],
-            capture_output=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        ).returncode
-        if rc == 0:
-            return True
-        if rc == 1:
-            return False
-        # Any other exit code (128 = bad object / unreachable) → treat as exit 2 (degrade all).
-        return None
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return None
+    result = run_git(["-C", str(repo_root), "merge-base", "--is-ancestor", sha, "origin/main"])
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    # Any other exit code (128 = bad object / unreachable), a timeout (-1), or a
+    # failed spawn (127) → treat as exit 2 (degrade all).
+    return None
 
 
 def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, Optional[bool]]:
@@ -685,24 +682,21 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
 
     Any subprocess failure (git absent, timeout, OSError, or an output line count mismatch)
     degrades every entry to None, matching ``sha_on_origin_main``'s own except-clause policy.
+
+    Both spawns are bounded by ``git.run``'s single local-plumbing budget rather than by
+    a per-site literal. The pair carried ``timeout=120`` each until 2026-08-21: that number
+    was sized for the 108-spawn per-record fan-out this function REPLACED, and survived the
+    collapse to two spawns because nobody revisited it — the general case § G5 of the
+    timeout hitlist names (the numbers outlive the defects that produced them). The
+    ``cat-file`` leg feeds stdin, which ``run_git`` deliberately wires to DEVNULL, so it
+    spawns directly and takes the same constant by import rather than by copy.
     """
     if not shas:
         return {}
     unique_shas = list(dict.fromkeys(shas))
 
-    try:
-        rev_list = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-list", "origin/main"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {sha: None for sha in unique_shas}
-    if rev_list.returncode != 0:
+    rev_list = run_git(["-C", str(repo_root), "rev-list", "origin/main"])
+    if not rev_list.ok:
         return {sha: None for sha in unique_shas}
     ancestor_set = set(rev_list.stdout.split())
 
@@ -718,7 +712,7 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=120,
+                timeout=LOCAL_PLUMBING_BUDGET_SECS,
                 **no_console_creationflags(),
             )
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -752,7 +746,6 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
 # would silently bypass the mock and spawn real git subprocesses. Do not rename this call site
 # without also updating that test's patch targets.
 _check_origin_main_reachable = check_origin_main_reachable
-_fetch_origin_main = fetch_origin_main
 _sha_on_origin_main = sha_on_origin_main
 _classify_shas_on_origin_main = classify_shas_on_origin_main
 
@@ -779,21 +772,7 @@ Exit codes:
 
 def resolve_ref(repo_root: Path, ref: str) -> Optional[str]:
     """``git rev-parse <ref>``, returning the resolved SHA or None if unresolvable."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", ref],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-        if proc.returncode != 0:
-            return None
-        return proc.stdout.strip()
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return None
+    return git_out(["-C", str(repo_root), "rev-parse", ref]) or None
 
 
 def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[str]]:
@@ -808,6 +787,10 @@ def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[
     --batch" batch form the plan's safe-primitive map names as known-correct; ``git
     rev-list``'s set-algebra batching trap does not apply here since each ref is resolved
     independently, not combined into a range.
+
+    Bounded by ``git.run``'s local-plumbing budget, taken by import rather than by copy.
+    This call feeds stdin, which ``run_git`` deliberately wires to DEVNULL, so it is one
+    of the two sites in this module that still spawns directly.
     """
     if not refs:
         return {}
@@ -818,7 +801,7 @@ def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            timeout=LOCAL_PLUMBING_BUDGET_SECS,
             **no_console_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -850,25 +833,16 @@ def _commit_age_labels_batch(repo_root: Path, shas: list[str]) -> dict[str, str]
     if not shas:
         return {}
     by_sha: dict[str, int] = {}
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "show", "--no-patch", "--format=%H%x09%ct"] + shas,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-        for line in proc.stdout.splitlines():
-            parts = line.split("\t")
-            if len(parts) == 2:
-                try:
-                    by_sha[parts[0]] = int(parts[1])
-                except ValueError:
-                    continue
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        by_sha = {}
+    proc = run_git(
+        ["-C", str(repo_root), "show", "--no-patch", "--format=%H%x09%ct", *shas]
+    )
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2:
+            try:
+                by_sha[parts[0]] = int(parts[1])
+            except ValueError:
+                continue
 
     result: dict[str, str] = {}
     for sha in shas:
@@ -893,18 +867,10 @@ def _commit_age_label(repo_root: Path, sha: str) -> str:
     § parity gate (faithfully reproduce pre-existing oracle quirks, don't repair mid-port).
     """
     now = int(datetime.now(timezone.utc).timestamp())
+    raw = git_out(["-C", str(repo_root), "log", "-1", "--format=%ct", sha])
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "-1", "--format=%ct", sha],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-        commit_ts = int(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else now
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+        commit_ts = int(raw) if raw else now
+    except ValueError:
         commit_ts = now
     age_secs = now - commit_ts
     if age_secs < 3600:
@@ -918,10 +884,15 @@ def main(argv: list[str]) -> int:
     """CLI entry — port of ``check-shipped-on-main.sh`` (git merge-base ancestor gate).
 
     Port of: check-shipped-on-main.sh (DoE b5a4192c, 2026-07-20).
-    Reuses ``sha_on_origin_main`` / ``check_origin_main_reachable`` / ``fetch_origin_main``,
-    the same amortised-fetch ancestor-check helpers ``_stamp_shipped_sha`` already exercises.
+    Reuses ``check_origin_main_reachable`` / ``classify_shas_on_origin_main``, the same
+    ancestor-check helpers ``_stamp_shipped_sha`` exercises for envelope assembly.
 
-    Negative-spec: read-only. Never modifies the repo.
+    Negative-spec: read-only. Never modifies the repo, and — since 2026-08-21 — never
+    contacts one either. An unreachable ``origin/main`` now exits 2 on the FIRST probe
+    instead of attempting a fetch and re-probing; the exit code, its stderr line, and
+    the tri-state per-commit contract are all unchanged, so a caller sees the same
+    answer it saw whenever the fetch failed or was unnecessary. See
+    ``check_origin_main_reachable``'s negative spec for why the fetch is gone.
     """
     verbose = False
     commits: list[str] = []
@@ -939,26 +910,13 @@ def main(argv: list[str]) -> int:
 
     repo_root = Path.cwd()
 
-    try:
-        inside = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-            check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        ).returncode == 0
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        inside = False
-    if not inside:
+    if not git_ok(["-C", str(repo_root), "rev-parse", "--is-inside-work-tree"]):
         print("check-shipped-on-main: not inside a git repository", file=sys.stderr)
         return 2
 
     if not check_origin_main_reachable(repo_root):
-        fetch_origin_main(repo_root)
-        if not check_origin_main_reachable(repo_root):
-            print("check-shipped-on-main: origin/main is not reachable", file=sys.stderr)
-            return 2
+        print("check-shipped-on-main: origin/main is not reachable", file=sys.stderr)
+        return 2
 
     if not commits:
         print(
@@ -1020,10 +978,14 @@ def _stamp_shipped_sha(handoffs: list[dict], repo_root: Path) -> None:
     """Stamp ``shipped_sha`` in-place on handoffs (bash § SECTION 1.5).
 
     For all distinct non-null ``shipped_in.sha`` values, one batched
-    ``classify_shas_on_origin_main`` call resolves ancestry against origin/main. Parity: one
-    amortised fetch if origin/main is not locally reachable; offline degradation (exit 2
-    equivalent → all shipped_sha stay null). Records with null ``shipped_in.sha`` receive null
-    (no change from collect() stub).
+    ``classify_shas_on_origin_main`` call resolves ancestry against origin/main. Offline
+    degradation (origin/main not locally reachable, or an exit-2 equivalent) leaves every
+    ``shipped_sha`` null. Records with null ``shipped_in.sha`` receive null (no change from
+    collect() stub).
+
+    Negative-spec: does NOT fetch. The bash oracle's "amortised fetch" arm is gone —
+    see ``check_origin_main_reachable``. A repo whose ``origin/main`` was never fetched
+    emits null here, which is what this field already meant in every offline case.
     """
     if not handoffs:
         return
@@ -1041,12 +1003,7 @@ def _stamp_shipped_sha(handoffs: list[dict], repo_root: Path) -> None:
     if not shas:
         return
 
-    # Amortised gate: check origin/main reachability; fetch once if needed (bash:503-514).
-    origin_ok = check_origin_main_reachable(repo_root)
-    if not origin_ok:
-        fetch_origin_main(repo_root)
-        origin_ok = check_origin_main_reachable(repo_root)
-    if not origin_ok:
+    if not check_origin_main_reachable(repo_root):
         # Offline degradation: all shipped_sha stay null (bash:515-518).
         return
 
@@ -1075,17 +1032,18 @@ def _stamp_node_shipped_sha(nodes: list[dict], repo_root: Path) -> None:
     dict (RoadmapDagNode has no ``shipped_in`` field; the assembler already exposes the SHA
     as a bare scalar, sourced from the ``shipped_in`` frontmatter key without the dict wrapper).
 
-    Collects distinct non-null ``shipped_sha`` values, runs the same amortised
-    origin/main fetch + merge-base ancestor-of check that ``_stamp_shipped_sha`` uses for
+    Collects distinct non-null ``shipped_sha`` values, runs the same origin/main
+    reachability gate + merge-base ancestor-of check that ``_stamp_shipped_sha`` uses for
     handoffs, and writes the verified-or-null value back to ``node['shipped_sha']``.
 
-    Offline degradation: if origin/main is unreachable after one fetch attempt, all
+    Offline degradation: if origin/main is not locally reachable, all
     ``shipped_sha`` values are set to null (same degradation policy as ``_stamp_shipped_sha``).
     On the handoff path, offline degradation leaves shipped_sha at null (already null in
     collect() stub); on the node path the initial value may be non-null (assembler carries
     the bare SHA), so the degradation must explicitly write null.
 
     Negative-spec:
+      - Does NOT fetch — see ``check_origin_main_reachable``'s negative spec.
       - Does NOT read or write a ``shipped_in`` dict on the node — RoadmapDagNode has no
         such field; no transient key is introduced (F3 — avoids stray non-contract field
         that Zod .object() would strip silently while disk-truth is wrong).
@@ -1108,12 +1066,7 @@ def _stamp_node_shipped_sha(nodes: list[dict], repo_root: Path) -> None:
     if not shas:
         return
 
-    # Amortised gate: check origin/main reachability; fetch once if needed.
-    origin_ok = _check_origin_main_reachable(repo_root)
-    if not origin_ok:
-        _fetch_origin_main(repo_root)
-        origin_ok = _check_origin_main_reachable(repo_root)
-    if not origin_ok:
+    if not _check_origin_main_reachable(repo_root):
         # Offline degradation: all shipped_sha → null (mirrors _stamp_shipped_sha policy).
         for node in nodes:
             node["shipped_sha"] = None
@@ -1138,8 +1091,8 @@ def _stamp_closure_reachability(records: list[dict], repo_root: Path) -> None:
     """Stamp ``reachable_on_default_branch`` in-place on commit_closures records (AC4).
 
     Mirrors ``_stamp_shipped_sha``'s discipline verbatim: dedupe distinct SHAs via a seen-set,
-    run ONE amortised ``origin/main`` reachability gate (``check_origin_main_reachable`` /
-    ``fetch_origin_main``), then ONE batched ``classify_shas_on_origin_main`` call (not a
+    run ONE ``origin/main`` reachability gate (``check_origin_main_reachable``, which does
+    not fetch — see its negative spec), then ONE batched ``classify_shas_on_origin_main`` call (not a
     per-record spawn) and degrade ALL records to ``null`` on the offline / exit-2-equivalent
     case. Unlike ``_stamp_shipped_sha`` (whose field is a SHA-or-null, not a proper tri-state),
     this stamps a genuine ``true``/``false``/``null`` tri-state — an indeterminate result
@@ -1160,12 +1113,7 @@ def _stamp_closure_reachability(records: list[dict], repo_root: Path) -> None:
     if not shas:
         return
 
-    # Amortised gate: check origin/main reachability; fetch once if needed.
-    origin_ok = check_origin_main_reachable(repo_root)
-    if not origin_ok:
-        fetch_origin_main(repo_root)
-        origin_ok = check_origin_main_reachable(repo_root)
-    if not origin_ok:
+    if not check_origin_main_reachable(repo_root):
         # Offline degradation: every record's reachability stays indeterminate (null),
         # never coerced to false.
         for r in records:

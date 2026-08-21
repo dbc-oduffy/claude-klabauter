@@ -53,6 +53,17 @@ returns ``Path``, never ``None`` — the ``Optional`` return type is kept only
 so a defensive caller does not have to change shape, not because resolution
 can actually fail in normal operation.
 
+Timeout ceiling: the ``timeout`` param is a lock-acquire wait on a
+one-file-per-target ledger entry, not compute. It is clamped silently, via
+``min()``, to ``MAX_LOCK_TIMEOUT_SECS`` (2.0s, matching
+``ipc.CEREMONY_BUDGET_SECS``) — well below ``locked_write.LOCK_TIMEOUT_SECS``
+(10s), which remains this op's DEFAULT and is therefore itself clamped. A lock
+that is not free within the ceremony budget on this box means the contended
+thing is the defect; waiting longer only moves who notices. A caller may ask for
+LESS time, never for more. An unbounded caller-supplied dial is the mechanism by
+which a failing op gets re-run with more time instead of fixed, on a box shared
+with ~50 concurrent sessions. This op never lets a caller raise it.
+
 This op does NOT git-commit — consistent with every other claude-klabauter mutation op.
 
 Registered as ``priority.set``, classified ``OpClass.MUTATING``
@@ -222,6 +233,13 @@ def _apply_priority_set(
 
 _SOURCES = ("op", "external-intent")
 
+MAX_LOCK_TIMEOUT_SECS: float = 2.0
+"""Hard ceiling on the caller-supplied lock-acquire wait — see module docstring
+"Timeout ceiling". Restated deliberately rather than imported from
+``ipc.CEREMONY_BUDGET_SECS``: a second independent literal is what makes a
+ceiling a ratchet, so loosening this op's bound has to be a decision taken
+here, not a side-effect of someone editing the ceremony budget."""
+
 
 def set_priority(
     target_id: str,
@@ -247,7 +265,9 @@ def set_priority(
                       priority. Optional; empty string permitted (schema does
                       not require it).
         note        — optional free-form note.
-        timeout     — max seconds to wait for the cross-process lock.
+        timeout     — max seconds to wait for the cross-process lock. Clamped
+                       to MAX_LOCK_TIMEOUT_SECS (module docstring "Timeout
+                       ceiling") — a caller may ask for less, never for more.
         source      — "op" (default, every direct caller) or "external-intent"
                       (C7, priority.drain ONLY — never pass this from any
                       other caller; it exists so priority.drain can stamp
@@ -314,7 +334,7 @@ def set_priority(
             source=source, source_repo=source_repo,
         ),
         repo_root=ledger_dir,
-        timeout=timeout,
+        timeout=min(float(timeout), MAX_LOCK_TIMEOUT_SECS),
         missing_ok=True,
     )
 
@@ -352,7 +372,11 @@ def _priority_set(params: dict, repo_root: Optional[Path] = None) -> dict:
     Optional params:
         set_by  (str) — identifier of the session/agent/person setting this.
         note    (str) — free-form note.
-        timeout (float) — max seconds to wait for the lock. Default: 10.0.
+        timeout (float) — max seconds to wait for the lock. Silently clamped to
+                          MAX_LOCK_TIMEOUT_SECS (2.0 — module docstring
+                          "Timeout ceiling"), which the 10.0 param default is
+                          itself subject to: 2.0s is the effective wait unless
+                          a caller asks for less.
 
     Returns: {target_id, target_kind, priority, set_by, source}.
 

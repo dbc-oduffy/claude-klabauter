@@ -44,6 +44,16 @@ predicate: status changed but provenance absent or stale => out-of-band edit.
 Idempotent: a second invocation rewrites both sibling lines in place rather
 than appending duplicates.
 
+Timeout ceiling: the `timeout` param is a lock-acquire wait, not compute. It is
+clamped silently, via `min()`, to `MAX_LOCK_TIMEOUT_SECS` (2.0s, matching
+`ipc.CEREMONY_BUDGET_SECS`) — well below `locked_write.LOCK_TIMEOUT_SECS` (10s),
+which remains this op's DEFAULT and is therefore itself clamped. A lock that is
+not free within the ceremony budget on this box means the contended thing is the
+defect; waiting longer only moves who notices. An unbounded caller-supplied dial
+is the mechanism by which a failing op gets re-run with more time instead of
+fixed, and every second spent holding it is a second of a box shared with ~50
+concurrent sessions. A caller may always ask for LESS.
+
 Negative-spec:
   - Does NOT touch `coordinator_core.ops.goal_append`'s per-machine JSONL event
     log (`goals-log.<machine>.jsonl`) — that is a distinct append-only writer for
@@ -63,6 +73,9 @@ Negative-spec:
   - Does NOT validate `status` against a fixed enum — the KR-status contract
     (`GoalKeyResultStatus.status` in contract/cockpit_schema/entities/goal.py) is
     typed as a bare `str`, so this op only rejects empty/whitespace-only values.
+  - Does NOT let a caller raise the lock-acquire wait above
+    `MAX_LOCK_TIMEOUT_SECS` (see "Timeout ceiling") — the `timeout` param is a
+    request for LESS time, never for more.
   - Does NOT project `status_source`/`status_set_at` onto the cockpit wire —
     `GoalKeyResultStatus` (contract/cockpit_schema/entities/goal.py) and the
     frozen `cockpit-contract` schema JSON are untouched by this change; that
@@ -83,6 +96,13 @@ from coordinator_core.locked_write import locked_rmw
 # Value written into a written/rewritten key_results[<id>].status_source line —
 # identifies THIS op as the writer (see module docstring "Write provenance").
 STATUS_SOURCE = "goal.set_kr_status"
+
+MAX_LOCK_TIMEOUT_SECS: float = 2.0
+"""Hard ceiling on the caller-supplied lock-acquire wait — see module docstring
+"Timeout ceiling". Restated deliberately rather than imported from
+`ipc.CEREMONY_BUDGET_SECS`: a second independent literal is what makes a
+ceiling a ratchet, so loosening this op's bound has to be a decision taken
+here, not a side-effect of someone editing the ceremony budget."""
 
 
 def _utc_now_stamp() -> str:
@@ -287,9 +307,9 @@ def set_kr_status(
                      locked_rmw to locate the lock sidecar (see locked_write.py).
                      Defaults to goal_file's parent directory, which is always
                      inside the repo that owns state/goals/.
-        timeout    — max seconds to wait for the cross-process lock (locked_rmw's
-                     LOCK_TIMEOUT_SECS default is 10s; overridable for callers
-                     with tighter/looser budgets).
+        timeout    — max seconds to wait for the cross-process lock. Clamped to
+                     MAX_LOCK_TIMEOUT_SECS (see module docstring "Timeout
+                     ceiling") — a caller may ask for less, never for more.
 
     Returns:
         {goal_file, kr_id, status} — the effective values written (or already
@@ -315,7 +335,7 @@ def set_kr_status(
         goal_file,
         lambda old_text: _apply_kr_status(old_text, kr_id, status),
         repo_root=lock_repo_root,
-        timeout=timeout,
+        timeout=min(float(timeout), MAX_LOCK_TIMEOUT_SECS),
         missing_ok=False,
     )
 
@@ -348,7 +368,11 @@ def _goal_set_kr_status(params: dict, repo_root: Optional[Path] = None) -> dict:
     Optional params:
         repo_root (str) — absolute path inside goal_file's git repo, used to
                           locate the lock sidecar. Default: goal_file's parent.
-        timeout   (float) — max seconds to wait for the lock. Default: 10.0.
+        timeout   (float) — max seconds to wait for the lock. Silently clamped
+                          to MAX_LOCK_TIMEOUT_SECS (2.0 — module docstring
+                          "Timeout ceiling"), which the 10.0 param default is
+                          itself subject to: 2.0s is the effective wait unless
+                          a caller asks for less.
 
     Returns: {goal_file, kr_id, status}.
 

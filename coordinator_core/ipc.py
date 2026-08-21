@@ -407,6 +407,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys as _sys
 import types as _types
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence
@@ -462,6 +463,15 @@ docstring for the ruling this enforces and `warm.skew.UnstampedEngineRootError`
 (-32005 is the next free app-code slot after WARM_DISPATCH_INDETERMINATE, -32004,
 `coordinator_core.warm.client`) for the sibling check on the warm axis this one
 extends to dispatch generally."""
+
+OP_SUSPENDED_ERROR = -32006
+"""`dispatch_message` refused because the op is TURNED OFF for blowing the 2s max bar
+-- see `coordinator_core.op_budget_suspension` for the ruling, the measured evidence
+per op, and the cold-measurement bar an op must clear to come back. Distinct from
+METHOD_NOT_FOUND: the op exists and would work, which is the problem. Distinct from
+a timeout: nothing ran, so nothing was paid for. A caller that degrades-to-skip on
+METHOD_NOT_FOUND should do the same here; a caller that RETRIES on either is wrong,
+since this recurs identically until the op is made fast or deleted."""
 
 
 # ---------------------------------------------------------------------------
@@ -785,9 +795,29 @@ _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 #
 # Spec backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 # ---------------------------------------------------------------------------
-DISPATCH_TIMEOUT_SECS: float = float(
-    os.environ.get("COORDINATOR_DISPATCH_TIMEOUT_SECS", "30")
-)
+# NARROW-ONLY ENV KNOB (2026-08-21, PM ruling). This constant is the built-in
+# default AND the ceiling `COORDINATOR_DISPATCH_TIMEOUT_SECS` is clamped against
+# in `_resolve_dispatch_timeout_secs()`. It is a bare literal on purpose: it used
+# to be `float(os.environ.get("COORDINATOR_DISPATCH_TIMEOUT_SECS", "30"))`, which
+# made the env var its own ceiling — `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` set
+# the module constant to 420 at import, and a clamp against it would have been a
+# clamp against nothing. Reading the env here is therefore the bypass, not a
+# convenience, and the read is gone.
+#
+# What the knob can still do: LOWER the guard, live, per request, with no restart
+# (`COORDINATOR_DISPATCH_TIMEOUT_SECS=0.5` for a fast-fail run resolves to 0.5).
+# What it can no longer do: raise it. An op that does not fit inside its guard is
+# an op with a defect; the remedy is to make the op cheaper — fewer spawns,
+# batched git, a warm path — never a larger number here or in the environment.
+# Re-running a failing op with more time is the behaviour this clamp exists to
+# make impossible, and it is impossible from any sibling repo too: the env is the
+# only surface a caller outside this process has.
+#
+# Assigning `ipc.DISPATCH_TIMEOUT_SECS` directly still moves both the default and
+# the ceiling together — that is the in-process test seam (several suites raise it
+# to exercise the timeout path), and it is not reachable by an operator, who has
+# the environment and nothing else.
+DISPATCH_TIMEOUT_SECS: float = 30.0
 
 
 def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> None:
@@ -797,8 +827,14 @@ def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> 
     real `COORDINATOR_DISPATCH_TIMEOUT_SECS` knob gets silent no-op today — the
     typo'd var is simply ignored and the caller has no idea why their timeout
     override never took effect. This scans the environment at import time and
-    warns on any near-miss so the caller sees "did you mean
-    COORDINATOR_DISPATCH_TIMEOUT_SECS?" instead of debugging a silent no-op.
+    warns on any near-miss so the caller is pointed at the real knob instead of
+    debugging a silent no-op.
+
+    Advisory only — this function never clamps anything, and it never offers the
+    knob as a way to buy an op more time: the real knob narrows and cannot widen
+    (see `DISPATCH_TIMEOUT_SECS`). Naming a var that "did not take effect" must
+    not read as "set the right one and your op gets its time back", because it
+    would not.
 
     Narrowed match (Review: code-reviewer F1) — a key only counts as a
     near-miss if it CONTAINS "COORDINATOR" AND ENDS WITH "_TIMEOUT" or
@@ -818,7 +854,8 @@ def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> 
         if "COORDINATOR" in upper and looks_like_timeout_knob and key != "COORDINATOR_DISPATCH_TIMEOUT_SECS":
             _log().warning(
                 "coordinator_core.ipc: env var %r is set but not a recognized engine "
-                "timeout knob — did you mean COORDINATOR_DISPATCH_TIMEOUT_SECS?",
+                "timeout knob. The only one is COORDINATOR_DISPATCH_TIMEOUT_SECS, and "
+                "it narrows the dispatch guard only — it cannot widen it.",
                 key,
             )
 
@@ -863,47 +900,169 @@ except Exception:
 # removed 2026-08-19 per state/kill-ledger.md K-007); that caller
 # now resolves via the ordinary global runaway-guard timeout like any unlisted op.
 #
-# ceremony.scoped_git_commit (2026-08-15, live incident: a ~2116-path publish commit
-# reached the engine and died with `op timed out after 30.0s`, dest HEAD unchanged, no
-# commit landed -- a genuine incomplete op, not the "timeout but the work landed" hazard
-# this file's own negative-spec above warns about). Re-added, NOT a regression of DEC-2's
-# rationale, for the same reason coverage.gate isn't one: DEC-2's three retired rows
-# (ceremony.wsc_commit/wsc_resolve/wsc_tail) are FIXED-cost bookkeeping ops with a
-# regression-tested sub-2s target (test_wsc_tail_parity.py) -- a widened cap there really
-# was masking a latency property that should instead be measured and enforced.
-# scoped_git_commit is structurally different: its cost scales with `len(paths)` (each
-# directory-shaped element alone spawns its own `git status` probe --
-# `scoped_git_commit.py::_directory_porcelain_lines` -- and `commit_pipeline`'s staging/
-# commit/push steps chunk large pathspecs into multiple `git` invocations rather than one
-# unbounded call, per the 2026-08-15 argv-length fixes 25268ed33/47e8defbb/96dee6478), so a
-# 2100-path commit is expected to take longer than a 12-path one BY DESIGN -- no "under Xs"
-# KPI bound is meaningful the way it is for wsc_tail's fixed-shape bookkeeping path.
-# Measured directly (bypassing IPC and the 30s runaway guard, calling
-# `scoped_git_commit._handler` in-process against a synthetic throwaway repo, to isolate the
-# op itself from any dispatch-layer effect -- never against this repo or the real publish
-# mirror) on this box on 2026-08-15: 3 trials, a fresh 2100-file synthetic git repo each
-# time, 53 `git` subprocess spawns per trial (stable across trials -- the chunking is
-# pathspec-count-driven, not random). Wall-clock: 25.7s, 36.6s, 40.9s -- two of three
-# samples ALREADY exceed the 30s default on this box's own ordinary contention, which is
-# itself direct evidence this is the same failure mode as the live incident, not a
-# hypothetical. 150.0s gives ~3.7x headroom over the measured 40.9s worst sample (same
-# ratio coverage.gate's precedent above used), sized against this repo's own load norm
-# (docs/wiki/machine-load-norm.md: 50-70 concurrent LLM sessions contending for the same
-# CPU/disk/process-spawn cost these 53 git subprocesses pay) rather than the isolated
-# single-session numbers alone -- the 25.7s-40.9s spread across three back-to-back trials
-# on an otherwise-idle-for-the-op tempdir already shows how much this box's ambient load
-# alone swings a fixed-shape workload; a 2100-path commit competing against the real load
-# norm has more headroom to lose, not less. Still bounded, not unlimited -- a genuinely
-# hung commit (e.g. a lock wait) still gets cancelled, just at a budget matched to a
-# pathspec-scaling op instead of one sized for a fixed-shape bookkeeping op.
+# ceremony.scoped_git_commit carried a 150.0s row here from 2026-08-15, sized at ~3.7x
+# headroom over a measured 40.9s worst sample for a ~2100-path publish commit. REVOKED
+# 2026-08-21 by the ceremony budget below. The measurement was honest; the conclusion
+# was not. That trial recorded 53 `git` subprocess spawns for one commit -- the spawn
+# count WAS the defect, and a cap sized to accommodate it is how the cost stayed
+# unexamined for six days. A budget is a choice, not a measurement: read against its
+# caller's end-to-end target (the close ceremony's 500ms, DR-344), a 150s per-op cap is
+# 300x the ceremony that invokes it, which makes the cap itself the finding. Sizing a
+# number against the load norm is what `docs/wiki/machine-load-norm.md` forbids outright
+# -- a loaded box raises the bar and never relaxes one.
+#
+# The reconcile-before-retry negative-spec above is UNAFFECTED and more load-bearing
+# now, not less: a tighter budget means callers reach it more often, and a client-side
+# timeout still never aborts server-side execution. Never blind-retry a timed-out
+# ceremony; reconcile against real repo state first.
 # ---------------------------------------------------------------------------
-_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {
-    "ceremony.scoped_git_commit": 150.0,
-}
+_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {}
+
+
+# ---------------------------------------------------------------------------
+# The ceremony budget -- a ratchet, not a tunable (2026-08-21, PM ruling)
+#
+# EVERY `ceremony.*` op is bounded at CEREMONY_BUDGET_SECS end-to-end. No per-op
+# exception, no env override, no future widening. The number may be LOWERED, never
+# raised: `coordinator_core/tests/test_ceremony_budget_ratchet.py` is the enforcement
+# and fails on any edit that lifts the constant, admits a widening override row for a
+# ceremony op, or lets the env knob out-resolve the ceiling.
+#
+# Why a ceiling rather than a table of per-op rows: a new ceremony op must be BORN
+# inside the budget, not admitted to it. A table binds only the ops someone remembered
+# to list, and "the next EM remembers to add a row" is not an artifact (CLAUDE.md
+# § North star). Prefix matching makes the correct path the default and leaves no shape
+# for an exception to take -- there is no row to add, so there is nothing to negotiate.
+#
+# Why 2s when the brightline is 500ms: 500ms is the end-to-end target the close ceremony
+# is held to (DR-344). This is the RUNAWAY guard around a single op -- already 4x that
+# target, deliberately generous so a breach is unambiguous evidence of a real defect
+# rather than a tight-cap artifact. It is a ceiling, never a target. An op that needs
+# all of it is an op with a problem.
+#
+# What this breaks, on purpose: a ceremony op whose real cost exceeds 2s now FAILS
+# instead of quietly occupying the box for the ~50 peers queued behind it. That failure
+# is the signal, and the remedy is always to make the op cheaper -- fewer spawns,
+# batched git, a warm path -- never to come back here and raise the number. A request
+# to widen it is denied by construction, not by review.
+#
+# Read docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md before touching this
+# number.
+# ---------------------------------------------------------------------------
+CEREMONY_BUDGET_SECS: float = 2.0
+
+#: Method-name prefix every ceremony op shares. Naming is the FIRST membership
+#: signal, deliberately: an allow-list would let an op dodge the budget by omission,
+#: and there is no row to forget to add. If it is called ceremony, it is budgeted as
+#: ceremony, registered or not.
+_CEREMONY_METHOD_PREFIX = "ceremony."
+
+#: Package path every ceremony op's implementation lives under. The SECOND membership
+#: signal, and the one that closes the rename bypass: the prefix test alone is dodged
+#: by `git mv`-free renaming — call `ceremony.scoped_git_commit` something else and the
+#: 2s ceiling silently becomes 30s, with no diff a reviewer would read as a budget
+#: change. Moving the implementation OUT of the ceremony package is a diff nobody
+#: mistakes for a rename.
+#:
+#: Not hypothetical: `review.snapshot_diff_and_head` and `commit.exec_bit_change`
+#: already live in this package under non-ceremony names and escaped the budget on
+#: name alone until this signal landed.
+_CEREMONY_PACKAGE_PREFIX = "coordinator_core.ops.ceremony."
+
+
+#: Ops implemented in the ceremony package but NAMED outside the `ceremony.` namespace.
+#: Each row exists because the op's name disagrees with where it lives, and the budget
+#: follows the implementation rather than the label — otherwise renaming an op is a
+#: working bypass of a rule whose whole premise is that it has none.
+#:
+#: This is a table, not a policy: the honest long-term fix is to rename these ops into
+#: the namespace they belong to, which nobody has done because an op name is a wire
+#: contract with every caller. Until then the row carries the budget.
+#:
+#: `test_ops_implemented_in_the_ceremony_package_are_ceremony_ops` is the drift guard —
+#: it walks the ops package live and fails when a ceremony-package op appears with
+#: neither a `ceremony.` name nor a row here. Adding the op to the package and
+#: forgetting this table is a red suite, not a silent escape.
+_CEREMONY_PACKAGE_ALIASES = frozenset({
+    "commit.exec_bit_change",          # coordinator_core.ops.ceremony.commit_exec_bit
+    "review.snapshot_diff_and_head",   # coordinator_core.ops.ceremony.snapshot_diff_and_head
+})
+
+
+def _owning_module_is_ceremony(method: str) -> bool:
+    """True when `method`'s implementation lives in the ceremony package.
+
+    Both lookups are strictly free — a dict `get` against tables already resident in
+    this process — and neither is allowed to trigger an import. `coordinator_core.ops`
+    costs ~420ms and 350 submodules to import; paying that inside a timeout resolver
+    on the dispatch hot path would breach the brightline outright
+    (`docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md`), so
+    `_registry_map` is consulted only when something else already loaded it.
+
+    Two independent sources, because each covers the other's blind spot:
+      - `_REGISTRY` carries the resolved handler's own `__module__`. On the dispatch
+        path this is always populated by the time `_timeout_for` runs — handler
+        resolution happens upstream in `dispatch_message` — so a renamed ceremony op
+        cannot reach `asyncio.wait_for` with the wrong budget.
+      - `OP_MODULE_MAP` is the static method->module table, which knows an op's owning
+        module without the op being registered. It makes the `--dump-op-timeouts`
+        projection exact for a renamed ceremony op in any process that has the ops
+        package loaded.
+
+    Returns False rather than raising if neither source is available; the caller falls
+    back to the name prefix, which is the pre-existing behaviour.
+    """
+    handler = _REGISTRY.get(method)
+    if handler is not None:
+        module = getattr(handler, "__module__", "")
+        if isinstance(module, str) and module.startswith(_CEREMONY_PACKAGE_PREFIX):
+            return True
+    registry_map = _sys.modules.get("coordinator_core.ops._registry_map")
+    op_module_map = getattr(registry_map, "OP_MODULE_MAP", None)
+    if isinstance(op_module_map, dict):
+        module = op_module_map.get(method)
+        if isinstance(module, str) and module.startswith(_CEREMONY_PACKAGE_PREFIX):
+            return True
+    return False
+
+
+def is_ceremony_method(method: str) -> bool:
+    """True when `method` falls under the ceremony budget.
+
+    Single source of truth for ceremony membership: `_timeout_for`, the
+    `--dump-op-timeouts` projection, and the ratchet test all route through this
+    rather than re-spelling the membership test and drifting apart.
+
+    Membership is a UNION of three signals, never an intersection. Any one of them
+    makes an op ceremony, so the budget is escaped only by an op that is neither named
+    ceremony, nor listed below, nor resolvable to the ceremony package — at which point
+    it is not a rename, it is a different op.
+
+    The frozenset is what makes this correct in a COLD process, and it is not
+    redundant with `_owning_module_is_ceremony`. That helper reads two tables that must
+    already be resident; it never imports, because importing
+    `coordinator_core.ops._registry_map` costs a measured 470ms and pulls 351 ops
+    submodules, which breaches DR-344's 500ms end-to-end brightline on its own. So in a
+    fresh interpreter — a `--dump-op-timeouts` spawn, a cold CLI invocation — both of
+    its sources miss and it returns False. Relying on it alone made membership
+    load-order dependent: the same op was budgeted or not depending on what else the
+    process happened to have imported, which is the silent escape this budget exists to
+    make impossible. The explicit table is O(1), import-free, and true everywhere.
+    `_owning_module_is_ceremony` is kept as a belt-and-braces catch for a
+    ceremony-package op that lands with no row here, on the warm dispatch path where
+    `_REGISTRY` is populated — but it is the backstop, not the guarantee.
+    """
+    if not isinstance(method, str):
+        return False
+    return (
+        method.startswith(_CEREMONY_METHOD_PREFIX)
+        or method in _CEREMONY_PACKAGE_ALIASES
+        or _owning_module_is_ceremony(method)
+    )
 
 
 def _resolve_dispatch_timeout_secs() -> float:
-    """Live, per-request read of the global runaway-guard timeout (C11).
+    """Live, per-request read of the global runaway-guard timeout, clamped narrow-only.
 
     Re-reads `COORDINATOR_DISPATCH_TIMEOUT_SECS` from `os.environ` on every
     call rather than trusting the import-time snapshot baked into the
@@ -914,28 +1073,66 @@ def _resolve_dispatch_timeout_secs() -> float:
     when the env var is absent or unparsable, so a caller that sets
     `ipc.DISPATCH_TIMEOUT_SECS` directly (as several tests do) keeps working
     identically to before.
+
+    The env-derived value is then `min()`-ed against `DISPATCH_TIMEOUT_SECS` —
+    the same one-directional shape the ceremony budget uses one level down. This
+    is THE seam, not one of several: `os.environ` is read here and nowhere else,
+    so every consumer downstream (`_timeout_for`, `warm.lifecycle`'s drain
+    ceiling, `--dump-op-timeouts`) inherits the ceiling without re-stating it,
+    and there is no path by which an unclamped env value reaches a caller.
+    Clamping one level up in `_timeout_for` instead would have left this
+    function as a public, unbounded second reading of the same knob.
+
+    Narrowing stays fully live: 0.5 resolves to 0.5. Widening is inert, not an
+    error — 420 resolves to the default, silently and identically to it, because
+    an operator who wanted more time is not entitled to it and a raised
+    exception here would land on the dispatch hot path.
     """
     raw = os.environ.get("COORDINATOR_DISPATCH_TIMEOUT_SECS")
     if raw is None:
         return DISPATCH_TIMEOUT_SECS
     try:
-        return float(raw)
+        requested = float(raw)
     except (TypeError, ValueError):
         return DISPATCH_TIMEOUT_SECS
+    return min(requested, DISPATCH_TIMEOUT_SECS)
 
 
 def _timeout_for(method: str) -> float:
-    """Per-op dispatch timeout: `_OP_TIMEOUT_OVERRIDES[method]` if listed, else
-    the global runaway-guard timeout, re-resolved per request (C11) via
-    `_resolve_dispatch_timeout_secs()` rather than the import-time constant.
-    `_OP_TIMEOUT_OVERRIDES` is NOT empty despite its "RETIRED (DEC-2)" framing
-    above — `ceremony.scoped_git_commit` (150s) is a live, load-bearing entry
-    and must keep resolving here unchanged. `coverage.gate`'s row was removed
-    (K-001, state/kill-ledger.md).
+    """Per-op dispatch timeout, with the ceremony budget applied as a hard ceiling.
+
+    Resolution order: `_OP_TIMEOUT_OVERRIDES[method]` if listed, else the global
+    runaway-guard timeout re-resolved per request (C11) via
+    `_resolve_dispatch_timeout_secs()` rather than the import-time constant. That
+    result is then CLAMPED to `CEREMONY_BUDGET_SECS` for any `ceremony.*` method.
+
+    The clamp is one-directional by construction — `min`, never `max`. A ceremony op
+    can resolve BELOW the budget (a future narrower row, or an operator dialling
+    `COORDINATOR_DISPATCH_TIMEOUT_SECS` down for a fast-fail run) but can never
+    resolve above it, no matter what an override row or the env knob says. That is
+    the whole point: the knob that would otherwise be the escape hatch is the one
+    thing the clamp is positioned after.
+
+    NON-ceremony ops are bounded too, one level up: `_resolve_dispatch_timeout_secs()`
+    clamps the env knob to `DISPATCH_TIMEOUT_SECS`, so an unlisted op resolves to at
+    most the built-in default no matter what the environment asks for. The two
+    ceilings are separate rules with separate rationales (DR-348 for the ceremony
+    budget, the narrow-only knob for the global guard) and neither subsumes the other:
+    a ceremony op is capped at 2s even where the global default is 30s, and lowering
+    the global default is a distinct change that does not touch this function.
+
+    `_OP_TIMEOUT_OVERRIDES` is empty (DEC-2 retired its three rows; `coverage.gate`
+    removed by K-001, state/kill-ledger.md; `ceremony.scoped_git_commit`'s 150s row
+    revoked 2026-08-21 by the budget). It is kept as a live table so a genuinely
+    justified NON-ceremony widening has somewhere to land.
     """
     if method in _OP_TIMEOUT_OVERRIDES:
-        return _OP_TIMEOUT_OVERRIDES[method]
-    return _resolve_dispatch_timeout_secs()
+        resolved = _OP_TIMEOUT_OVERRIDES[method]
+    else:
+        resolved = _resolve_dispatch_timeout_secs()
+    if is_ceremony_method(method):
+        return min(resolved, CEREMONY_BUDGET_SECS)
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -987,6 +1184,12 @@ from coordinator_core.op_scopes import (  # noqa: E402,F401
     WORKTREE_SCOPED_OPS,
     _OP_KEY_SCOPE,
 )
+
+# Module-scope rather than deferred into the dispatch hot path: this module imports
+# nothing but `typing`, so it costs no measurable import time, and the suspension
+# check runs on EVERY dispatch — a per-call import lookup would be the more expensive
+# of the two shapes.
+from coordinator_core import op_budget_suspension  # noqa: E402
 
 OP_TIMEOUT_OVERRIDES = _types.MappingProxyType(dict(_OP_TIMEOUT_OVERRIDES))
 
@@ -1530,6 +1733,10 @@ def get_op_handler(name: str) -> Optional[Callable]:
     via the public op key rather than accessing the op module's private handler
     function name directly.
     """
+    if op_budget_suspension.is_suspended(name):
+        raise op_budget_suspension.OpSuspendedError(
+            op_budget_suspension.refusal_message(name)
+        )
     handler = _REGISTRY.get(name)
     if handler is None:
         handler = _lazy_import_and_lookup(name)
@@ -1703,7 +1910,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     a JSON-RPC 2.0 result-or-error dict (NOT bytes).
 
     Validation precedence (spec-pinned — do NOT reorder):
-        jsonrpc version → params type → method string → registry lookup → handler invoke
+        jsonrpc version → params type → method string → op suspension →
+        registry lookup → handler invoke
 
     Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1 / C1b
 
@@ -1762,6 +1970,28 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             "error": {
                 "code": INVALID_REQUEST,
                 "message": "Invalid Request: 'method' must be a non-empty string",
+            },
+        }
+
+    # Step 4b: Refuse a SUSPENDED op (PM ruling 2026-08-21 — over 2s max is off).
+    #
+    # Positioned deliberately BEFORE the registry lookup below, not after: the lookup
+    # lazily imports the op's owning module, and for a suspended op that import buys
+    # nothing — the call is going to be refused either way. Refusing here makes a
+    # breach cost one dict lookup instead of a module import on a box running ~50
+    # concurrent sessions.
+    #
+    # Consequence, stated rather than discovered: this fires for EVERY caller,
+    # including the CLIs and hooks that wrap these ops. That is the ruling's intent —
+    # the op stops firing, and the failure is what surfaces who actually needed it.
+    if op_budget_suspension.is_suspended(method):
+        _log().debug("coordinator_core.ipc: refusing suspended op %r", method)
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "error": {
+                "code": OP_SUSPENDED_ERROR,
+                "message": op_budget_suspension.refusal_message(method),
             },
         }
 

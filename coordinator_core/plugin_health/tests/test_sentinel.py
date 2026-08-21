@@ -17,6 +17,7 @@ the double-suffix path cannot recur. These tests pin that shape.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -541,7 +542,6 @@ def test_call_native_main_system_exit_int_code_passes_through():
 @pytest.mark.parametrize(
     "probe_id, invoke",
     [
-        ("P-3", lambda tp: S.probe_p3("machine-local")),
         ("P-4", lambda tp: S.probe_p4("machine-local", tp / "sh_bin")),
         ("P-10", lambda tp: S.probe_p10("claude-home", tp / "sh_bin")),
     ],
@@ -595,16 +595,44 @@ def test_p4_still_reports_red_when_the_cli_actually_runs_and_fails(tmp_path, mon
     assert "exited 3" in note.message
 
 
-def test_p3_still_reports_amber_when_cli_runs_but_has_no_repo_keys(tmp_path, monkeypatch):
-    _as_nt(monkeypatch)
-    monkeypatch.setattr(
-        S.subprocess,
-        "run",
-        lambda argv, *_a, **_k: subprocess.CompletedProcess(argv, 0, stdout="core.x\n", stderr=""),
-    )
-    (note,) = S.probe_p3("machine-local")
+def test_p3_reports_amber_when_the_registry_declares_no_repo_keys():
+    (note,) = S.probe_p3(["coordinator.machine_slug", "core.x"])
     assert note.severity == "amber"
     assert "no repos.* keys" in note.message
+
+
+def test_p3_passes_when_a_repos_key_is_declared():
+    assert S.probe_p3(["core.x", "repos.doe_claude"]) == []
+
+
+def test_p3_stays_silent_when_there_is_no_registry_to_read():
+    """`None` is "no registry file exists", which is P-1/P-2's finding. P-3
+    must not convert it into "no repos.* keys populated" — a verdict about
+    data it never read."""
+    assert S.probe_p3(None) == []
+
+
+def test_p3_spawns_nothing(monkeypatch):
+    """G8 pin: P-3's question is about registry DATA, and the process this
+    probe runs in can parse the registry. Any subprocess here is the
+    interpreter-cold-start-per-lookup defect growing back."""
+    def _forbidden(*_a, **_k):
+        raise AssertionError("probe_p3 must not spawn a subprocess")
+
+    monkeypatch.setattr(S.subprocess, "run", _forbidden)
+    assert S.probe_p3(["repos.doe_claude"]) == []
+
+
+def test_registry_keys_returns_none_when_no_registry_file_exists(tmp_path):
+    assert S._registry_keys(tmp_path) is None
+
+
+def test_registry_keys_reads_the_registry_in_process(tmp_path, monkeypatch):
+    (tmp_path / "registry.toml").write_text(
+        'schema = 1\n\n[repos]\ndoe_claude = "/tmp/doe"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
+    assert "repos.doe_claude" in S._registry_keys(tmp_path)
 
 
 # --- Fix 3: P-13 plugin-root fallback chain ---
@@ -1126,3 +1154,59 @@ def test_subset_mode_separates_a_genuine_failure_from_a_concurrent_inconclusive(
     assert "Inconclusive (did not run): P-20" in joined
     assert "Failing: P-1 P-20" not in joined
     assert "P-20" not in joined.split("Failing:", 1)[1].split("\n", 1)[0]
+
+
+# ---------------------------------------------------------------------------
+# G8 — one budget for every spawn this suite makes
+# ---------------------------------------------------------------------------
+
+
+def test_probe_spawn_budget_derives_from_the_central_budget():
+    """DR-349 § Decision 1: a site does not carry a timeout, it derives its
+    bound from the budget. Pinned as an identity, not a value, so lowering
+    the central budget lowers this with it and no edit here is needed."""
+    from coordinator_core.ipc import CEREMONY_BUDGET_SECS
+
+    assert S._PROBE_SPAWN_BUDGET_SECS == CEREMONY_BUDGET_SECS
+
+
+def test_no_probe_spawn_carries_a_hand_typed_timeout():
+    """The recurrence guard, and the load-bearing half of this fix. Before
+    it, ten spawns here carried a literal 15 or 30 — two of the three house
+    numbers that make up 48% of every dial in the tree
+    (docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § headline).
+    A new probe that types its own number regrows the group, so fail on the
+    literal rather than on the number being large."""
+    source = Path(S.__file__).read_text(encoding="utf-8")
+    offenders = [
+        line.strip()
+        for line in source.splitlines()
+        if re.search(r"timeout\s*=\s*[0-9]", line)
+    ]
+    assert offenders == [], (
+        "sentinel.py spawns must derive from _PROBE_SPAWN_BUDGET_SECS, "
+        f"never a literal: {offenders}"
+    )
+
+
+def test_whoami_unrunnable_reports_inconclusive_not_a_red_import_failure():
+    """A spawn that never ran says nothing about whether coordinator_whoami
+    imports. Collapsing that into False made P-5 assert RED about an import
+    it never performed."""
+    (note,) = S.probe_p5(None, "python 3.11 at /usr/bin/python3", Path("/sh"))
+    assert note.severity == "amber"
+    assert note.message.startswith("inconclusive(")
+    assert "not importable" not in note.message
+
+    (note,) = S.probe_p6(None, "python3", [], "python 3.11")
+    assert note.message.startswith("inconclusive(")
+    (note,) = S.probe_p6s(None, "python3", [], "python 3.11")
+    assert note.message.startswith("inconclusive(")
+
+
+def test_whoami_observed_import_failure_is_still_red():
+    """Guardrail on the tri-state: False is an OBSERVED failure and must not
+    have been softened into an inconclusive along with None."""
+    (note,) = S.probe_p5(False, "python 3.11 at /usr/bin/python3", Path("/sh"))
+    assert note.severity == "red"
+    assert "not importable" in note.message

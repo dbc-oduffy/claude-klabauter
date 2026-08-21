@@ -208,7 +208,6 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
-from coordinator_core.ops import list_review_trail_records
 from coordinator_core.ops.session_commits import (
     resolve_session_commits as _resolve_session_commits_primitive,
 )
@@ -3443,7 +3442,7 @@ def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[
     return resolved_base
 
 
-def _list_review_trail_paths_for_root(root: Path) -> list[str]:
+def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[str]:
     """`list_review_trail_records.list_paths()`-equivalent, but honouring
     THIS caller's explicit `root` instead of that function's own cwd-or-
     `COORDINATOR_ROOT` resolution.
@@ -3457,8 +3456,30 @@ def _list_review_trail_paths_for_root(root: Path) -> list[str]:
     since every existing test monkeypatches `list_paths` itself rather than
     exercising this path.
 
-    Reuses that module's own `_collect` scanner (the actual `*.json`
-    directory walk) rather than re-implementing it — only the two
+    Review-trail floor scale fix (C11, docs/plans/2026-08-21-rebuild-the-
+    three-ceremony-assemblers.md): no longer reuses `list_review_trail_
+    records._collect` (a full `*.json` directory walk with no name filter).
+    `coordinator_core.ops.review_trail_write` names every record
+    `{TIMESTAMP}-{SESSION_ID[:8]}.json` (verified on disk) — this function
+    now takes an OPTIONAL `sid_short` (the caller's own `sid[:8]`) and, when
+    non-empty, pre-filters candidate filenames via `os.scandir` BEFORE any
+    file is opened: only an entry whose name contains `-{sid_short}` is
+    returned. `os.scandir` reads directory-entry metadata only (no `open()`
+    call per candidate), so this closes the "4,337 files, ~420-430ms"
+    corpus-scan cost this function's caller (`_resolve_review_brightline_
+    floor_kwargs`) used to pay on every mid-chain preview — the scan cost
+    now scales with THIS session's own candidate count, not the whole
+    corpus. `sid_short=""` (the empty default) preserves the prior
+    unfiltered behaviour for any other caller.
+
+    This is a NAME pre-filter only, never a substitute for the exact
+    `session_id`-field check the caller performs after loading each
+    candidate — an 8-char short-id collision between two different full
+    session ids is possible in principle, and the caller's own post-load
+    `record.get("session_id") == sid` check is the sole authority on
+    inclusion; this function only narrows what gets opened.
+
+    Reuses that module's own directory computation (only the two
     directory paths are computed here, and only for the direct-root case
     this caller always has (an explicit `root: Path`, never an env-override
     or meta-repo cwd): `_resolve_state_root()`'s own doc says a sibling-repo
@@ -3473,23 +3494,35 @@ def _list_review_trail_paths_for_root(root: Path) -> list[str]:
     Review: code-reviewer (P3) — cross-reference, not just prose: mirrors
     `list_review_trail_records.list_paths()`'s `live_dir`/`archive_dir`
     computation at `coordinator_core/ops/list_review_trail_records.py:275-280`
-    verbatim (same two directories, same `_collect` scanner below).
+    verbatim (same two directories, no re-implemented union logic).
     """
-    state_root = root / "state"
-    live_dir = str(state_root / "review-trail")
-    archive_dir = str(root / "archive" / "review-trail")
-    try:
-        records = (
-            list_review_trail_records._collect(live_dir)  # noqa: SLF001 - reusing the module's own scanner, not re-implementing it
-            + list_review_trail_records._collect(archive_dir)  # noqa: SLF001
-        )
-    except OSError:
-        # Mirrors `list_paths`'s own `ReviewTrailListError` degradation on a
-        # directory-scan failure — the caller here treats an empty list
-        # exactly like "no own records", falling through to `None`.
-        return []
-    records.sort(key=lambda r: r[0])
-    return [str(Path(fullpath)) for _basename, fullpath in records]
+    live_dir = root / "state" / "review-trail"
+    archive_dir = root / "archive" / "review-trail"
+    needle = f"-{sid_short}" if sid_short else ""
+    entries: list[tuple[str, str]] = []
+    for directory in (live_dir, archive_dir):
+        try:
+            with os.scandir(directory) as it:
+                for entry in it:
+                    name = entry.name
+                    if not name.endswith(".json"):
+                        continue
+                    if needle and needle not in name:
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    entries.append((name, entry.path))
+        except OSError:
+            # Mirrors `list_paths`'s own `ReviewTrailListError` degradation
+            # on a directory-scan failure (including a directory that does
+            # not exist yet) — the caller here treats an empty list exactly
+            # like "no own records", falling through to `None`.
+            continue
+    entries.sort(key=lambda pair: pair[0])
+    return [str(Path(fullpath)) for _basename, fullpath in entries]
 
 
 def _resolve_review_brightline_floor_kwargs(
@@ -3522,21 +3555,23 @@ def _resolve_review_brightline_floor_kwargs(
     widen the emitted range over commits this session never touched —
     forbidden by the plan's Anti-scope.
 
-    Review: code-reviewer (P2, 2026-08-08, scan cost) — this helper
-    `json.load`s every `*.json` under `state/review-trail/` and
-    `archive/review-trail/` (2,778 files measured on-disk today) on every
-    mid-chain close where `session_start_time` resolved, filtering by
-    `session_id` only AFTER the load. Accepted as-is, not optimised
-    speculatively: measured at ~0.07s for a full load, not currently a
-    budget breach for this ceremony op. No cheaper filter is available
-    without forking the live+archive union `list_review_trail_records`
-    already owns — `list_paths(date_prefix=...)` only trims by filename
-    DATE prefix, not `session_id`, and this caller has no independent
-    established filename<->session_id convention to filter on safely
-    (nothing else in this module relies on one). Revisit if the corpus
-    growth trend makes this scan measurably slow inside `brief()`'s
-    invocation budget — the fix then is threading `date_prefix` through
-    `_list_review_trail_paths_for_root`, not before.
+    Review: code-reviewer (P2, 2026-08-08, scan cost) — FIXED (C11,
+    docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): this
+    helper used to `json.load` every `*.json` under `state/review-trail/`
+    and `archive/review-trail/` unconditionally (2,778 files at ~0.07s when
+    first measured; 4,337 files at ~420-430ms by 2026-08-21 — a 6x cost rise
+    for 56% corpus growth, unexplained but no longer relevant once the scan
+    is filtered) on every mid-chain close where `session_start_time`
+    resolved, filtering by `session_id` only AFTER the load. Now filters at
+    the `os.scandir` name level FIRST, via `_list_review_trail_paths_for_
+    root(root, sid_short=sid[:8])` — `coordinator_core.ops.review_trail_
+    write` names every record `{TIMESTAMP}-{SESSION_ID[:8]}.json` (verified
+    on disk), so a plain substring match on the directory-entry NAME, before
+    any file is opened, narrows the candidate set to this session's own
+    records with zero backfill gap and no new producer/index. The exact
+    `session_id`-field check below is KEPT, unchanged, as the 8-char-
+    collision guard: the name filter only decides what gets opened, never
+    what gets included.
 
     Field-shape adapter: `resolve_mid_chain_review_scope` reads a record's
     floor via the `sha_range_head`/`head` keys — a shape NO record on this
@@ -3601,7 +3636,7 @@ def _resolve_review_brightline_floor_kwargs(
     uses unchanged."""
     if session_start_time is None:
         return None
-    paths = _list_review_trail_paths_for_root(root)
+    paths = _list_review_trail_paths_for_root(root, sid_short=sid[:8])
     own_records: list[dict[str, Any]] = []
     for path in paths:
         try:

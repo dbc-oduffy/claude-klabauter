@@ -69,12 +69,13 @@ Negative-spec:
       plan` therefore takes an explicit caller-supplied slug/path
       (`decisions["governing_plan_slug"]` / `["governing_plan_path"]`,
       the same key `build_directives` in `__init__.py` already consumes
-      for `d-claim-plan`) as the primary signal, falling back to a
-      disk-only ordered search only when neither is supplied — it does
-      NOT attempt to guess "the" governing plan among an unscoped
-      `docs/plans/` directory, which the census's own "search fixed
-      candidate paths in order" framing under-specifies for a repo
-      carrying hundreds of plan docs.
+      for `d-claim-plan`) as the primary signal, falling back only to the
+      baton's own stamped `governing_plan` path (R5/C5) when neither is
+      supplied — it does NOT attempt to guess "the" governing plan among
+      an unscoped `docs/plans/` directory, and NO join/scan/fixed-file
+      fallback is attempted at any price once both the explicit override
+      and the stamp are absent (C10, R1): absence is surfaced as a WARN
+      and the ceremony stops there, it does not search.
     - No `## Deviations` audit-table writing, no plan-body mutation of
       any kind — Step 2's ALLOWLIST reconcile and Step 2/2.4b's content
       updates are judgment-authored Edits the EM performs directly
@@ -83,24 +84,25 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
-
-from coordinator_core.workstream_complete import session_identity
 
 
 # ---------------------------------------------------------------------------
 # gates.governing_plan — Step 2 (locate) / Step 2.4 + 2.4b (predicate)
 # ---------------------------------------------------------------------------
 
-#: Disk-only fallback search order for Step 2's "actively search" list,
-#: restricted to the legs that are actually repo_root-resolvable (see the
-#: module Negative-spec above for why "session context (opened docs)" is
-#: excluded). `docs/plans/` is checked before `tasks/plans/` because it is
-#: this repo's canonical plan location (`CLAUDE.md § Key Files`).
+#: `docs/plans/<slug>.md` then `tasks/plans/<slug>.md` — checked for the two
+#: explicit EM-supplied overrides only (`decisions["governing_plan_slug"]`),
+#: never for a guess. `docs/plans/` first because it is this repo's
+#: canonical plan location (`CLAUDE.md § Key Files`). Also read directly by
+#: `__init__.py`'s own additional-governing-plan-slugs sweep — same-package
+#: sibling constant, do not rename without checking that call site (C10,
+#: docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md).
 _GOVERNING_PLAN_GLOB_DIRS = ("docs/plans", "tasks/plans")
-_GOVERNING_PLAN_FIXED_FILES = ("tasks/todo.md", "tasks/plan.md")
 
 #: The `decisions` keys this module's functions read — declared once so a
 #: caller (`__init__.py`'s `preflight.decisions_template` composition) can
@@ -168,77 +170,71 @@ def resolve_governing_plan_with_source(
     plan-gated directives with no trace (see `build_directives`'s
     `preflight["governing_plan_resolution"]`).
 
-    Precedence, highest first:
-      1. Caller-supplied `decisions["governing_plan_slug"]` (checked
-         against `docs/plans/<slug>.md` then `tasks/plans/<slug>.md`) —
-         see the module Negative-spec for why this explicit override is
-         the primary signal, not a guess.
-      2. Caller-supplied `decisions["governing_plan_path"]` (used
-         verbatim, resolved against `repo_root` if relative).
-      2.5. THE SESSION'S OWN commit-trailer `deliverable_id`s (C6, AC4 —
-         docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md
-         item 3), read via `session_identity.session_deliverable_ids` (C1)
-         off the caller-supplied `session_id`, joined against
-         `docs/plans/*.md` the same way leg 3.5 below joins — reusing
-         `_resolve_session_handoff_plan_by_deliverable_id` directly rather
-         than re-deriving the join. Placed ABOVE legs 3 and 3.5 on purpose:
-         those two read the CONSUMED HANDOFF's provenance, which is exactly
-         the mis-attributable input this plan's item 1 (Detector C) exists
-         to correct — a session's own commits are never mis-attributed to
-         a stranger the way a consumed handoff can be. Like leg 3.5, this
-         is non-terminal: a session with no `session_id` supplied, no
-         resolvable trailer, or CONFLICTING trailer values (more than one
-         distinct `deliverable_id` across its own commits) falls through to
-         leg 3 rather than guessing — there is no explicit plan name here
-         to have gotten wrong, so an unresolved join is simply silent,
-         exactly like leg 3.5's own contract.
-      3. The chain-terminal session's own consumed handoff's
-         `governing_plan:` frontmatter field, pre-extracted and passed in
-         as `handoff_governing_plan_field` by `__init__.py` (this module
-         has no handoff-reading concern of its own — see
-         `_read_consumed_handoff_text` / `_governing_plan_field_from_
-         consumed_handoff` there, including their archived-handoff
-         fallback). This is a genuinely disk-resolvable source, unlike
-         the "session context (opened docs)" leg the Negative-spec
-         excludes — it is the ceremony's own prior-session provenance
-         record, not a guess among an unscoped `docs/plans/` directory.
-      3.5. The chain-terminal session's own consumed handoff's
-         `deliverable_id` frontmatter field, pre-extracted and passed in
-         as `consumed_handoff_deliverable_id`, joined against the single
-         `docs/plans/*.md` carrying the SAME `deliverable_id` — composed,
-         never re-derived, from `__init__.py`'s own
-         `_resolve_session_handoff_plan_by_deliverable_id` (the identical
-         join `_evaluate_session_handoff_leg_a` already performs for leg
-         A's acceptance-criteria gate, imported here function-locally to
-         avoid a circular import against `__init__.py`, which imports this
-         module at module scope). This leg exists because leg 3 above is,
-         in practice, dead: a fleet-wide sweep found the `governing_plan:`
-         frontmatter field on 0 of 276 live handoffs, while `deliverable_id`
-         resolves for nearly all of them (see `_evaluate_session_handoff_
-         leg_a`'s own docstring, PM ruling R2, docs/plans/2026-08-04-
-         terminal-state-propagation-join-keys.md § C12) — the ceremony was
-         stamping "no governing plan" for almost every session, silently
-         dropping the plan-claim/stamp/harvest directives and leaving the
-         plan's baton-advancing `deliverable.cascade_terminal` cascade
-         unreachable. Terminal like every leg above it: an ambiguous join
-         (`_resolve_session_handoff_plan_by_deliverable_id` returns `None`
-         on zero OR more than one match — it does not guess) or a missing
-         `deliverable_id` falls through to leg 4, it never raises and
-         never fabricates a plan.
-      4. The fixed `tasks/todo.md` / `tasks/plan.md` candidates.
+    REBUILT (C10, docs/plans/2026-08-21-rebuild-the-three-ceremony-
+    assemblers.md): the former precedence ladder (leg 1, leg 2, leg 2.5,
+    leg 3.5) cost 680-943ms — leg 2.5 spawned git for the session's own
+    commit-trailer `deliverable_id`s then joined them against
+    `docs/plans/*.md`, and leg 3.5 joined the same way off the consumed
+    handoff's `deliverable_id`. Both are DELETED outright, not tuned: an
+    expensive fallback that can return a confident wrong answer is R1's
+    textbook violation, whatever it costs. So is the old leg 4 fixed-file
+    fallback (`tasks/todo.md` / `tasks/plan.md`) — a guess with no
+    explicit signal behind it.
 
-    Each of legs 1-3 is a terminal override once present: if the caller
-    (or the handoff) names a plan and it does not exist on disk, this
-    returns `None` immediately rather than falling through to a
-    lower-precedence source or a fixed fallback — Step 2.4's own text: "Do
-    NOT invent a plan to reconcile against," and an explicit-but-wrong
-    override should not silently resolve to some other plan the caller
-    didn't name. Legs 2.5 and 3.5 are the exception to "terminal once
-    present": an unresolved join (no `deliverable_id`, or one matching
-    zero/more-than-one plan) falls through rather than terminating,
-    because — unlike legs 1-3 — there is no explicit plan name here to
-    have gotten wrong; the absence of a join is simply silent, exactly
-    like the absence of any signal at all.
+    Precedence, highest first, no join, no scan, at any price:
+      1. Caller-supplied `decisions["governing_plan_slug"]` (checked
+         against `docs/plans/<slug>.md` then `tasks/plans/<slug>.md`) — an
+         explicit, O(1) override, never a guess.
+      2. Caller-supplied `decisions["governing_plan_path"]` (used
+         verbatim, resolved against `repo_root` if relative) — same
+         posture as leg 1.
+      3. THE BATON'S OWN STAMPED PLAN PATH (R5, C5): `governing_plan` is
+         now stamped at baton mint and carried across every successor hop
+         (`baton_assemble/apply.py :: _dispatch_handoff_carry_gate` /
+         `_dispatch_handoff_supersede_predecessor`), so the SAME
+         frontmatter field this leg has always read — pre-extracted and
+         passed in as `handoff_governing_plan_field` by `__init__.py`'s
+         `_governing_plan_field_from_consumed_handoff` — is now a reliable
+         write-time fact rather than the dead field a fleet-wide sweep
+         found on 0 of 276 live handoffs pre-C5. This is now the SOLE
+         disk-resolvable source; there is nothing below it to fall
+         through to. Source strings (`"handoff_frontmatter"` /
+         `"handoff_frontmatter_not_found"` / `"none"`) are UNCHANGED from
+         the pre-C10 leg-3 names — `test_workstream_complete.py` (out of
+         this chunk's `writes:` scope) asserts them verbatim; renaming
+         them would be the same caller-first hazard as a signature change.
+
+    Absent this leg's stamp with no explicit override either: return
+    `(None, "none")` — the plan did not travel to this continuation. The
+    caller surfaces that as a WARN (via `preflight[
+    "governing_plan_resolution"]["source"]`, already legible there) and
+    STOPS: no ladder, no join, no scan is attempted at any price, exactly
+    like every leg above.
+
+    Each leg is a terminal override once present: if the caller (or the
+    baton stamp) names a plan and it does not exist on disk, this returns
+    `None` immediately rather than falling through to a lower-precedence
+    source — Step 2.4's own text: "Do NOT invent a plan to reconcile
+    against," and an explicit-but-wrong override should not silently
+    resolve to some other plan the caller didn't name.
+
+    `consumed_handoff_deliverable_id` and `session_id` are accepted but no
+    longer consulted here — the deliverable_id-join legs they fed (2.5,
+    3.5) are gone. Both parameters are RETAINED, unused, purely so
+    `__init__.py`'s existing five-positional-arg call site (out of this
+    chunk's `writes:` scope — landing a signature change against an
+    out-of-scope caller is the caller-first hazard this plan's own
+    Anti-scope names) keeps working unchanged.
+
+    MISMATCH HANDLING (C6's reverse edge — "a plan records which baton
+    currently owns it"; docs/plans/2026-08-21-rebuild-the-three-ceremony-
+    assemblers.md § C6/C10): NOT implemented here. C6 (the plan-side
+    owner stamp this warn-and-continue check reads) is undelivered as of
+    this chunk — no write site, no field name, nothing on disk to compare
+    against. Wiring a comparison against a fabricated key would be silent
+    dead code at best and a wrong-answer warn at worst, which is exactly
+    what this rebuild exists to remove. Land once C6 specifies its own
+    stamp; do not re-derive the field name here.
     """
     slug = decisions.get(_KEY_GOVERNING_PLAN_SLUG)
     if slug:
@@ -257,27 +253,6 @@ def resolve_governing_plan_with_source(
             return GoverningPlan(slug=candidate.stem, path=candidate), "decisions_path"
         return None, "decisions_path_not_found"
 
-    if session_id:
-        identity = session_identity.session_deliverable_ids(repo_root, session_id)
-        if identity.ok and len(identity.deliverable_ids) == 1:
-            (own_deliverable_id,) = identity.deliverable_ids
-            # Function-local import: see the identical import below (leg
-            # 3.5) for why this cannot be a module-scope import.
-            from coordinator_core.workstream_complete import (
-                _resolve_session_handoff_plan_by_deliverable_id,
-            )
-
-            joined_plan_path = _resolve_session_handoff_plan_by_deliverable_id(
-                repo_root, own_deliverable_id
-            )
-            if joined_plan_path is not None:
-                return (
-                    GoverningPlan(slug=joined_plan_path.stem, path=joined_plan_path),
-                    "session_commit_trailer_join",
-                )
-        # Zero/ambiguous trailers, or an unresolved join, falls through —
-        # see leg 2.5's docstring paragraph above.
-
     handoff_value = _normalize_handoff_governing_plan_field(handoff_governing_plan_field)
     if handoff_value:
         candidate = Path(handoff_value)
@@ -287,26 +262,6 @@ def resolve_governing_plan_with_source(
             return GoverningPlan(slug=candidate.stem, path=candidate), "handoff_frontmatter"
         return None, "handoff_frontmatter_not_found"
 
-    deliverable_id_value = _normalize_handoff_governing_plan_field(consumed_handoff_deliverable_id)
-    if deliverable_id_value:
-        # Function-local import: `__init__.py` imports this module at module
-        # scope (`from coordinator_core.workstream_complete import
-        # directives_lessons_plan`), so a module-scope import in the other
-        # direction would be circular — same idiom `deliverable_cascade.
-        # _predicate_refusal` already uses for its own reverse-membership
-        # import of `ops.handoff_children`.
-        from coordinator_core.workstream_complete import (
-            _resolve_session_handoff_plan_by_deliverable_id,
-        )
-
-        joined_plan_path = _resolve_session_handoff_plan_by_deliverable_id(repo_root, deliverable_id_value)
-        if joined_plan_path is not None:
-            return GoverningPlan(slug=joined_plan_path.stem, path=joined_plan_path), "deliverable_id_join"
-
-    for fname in _GOVERNING_PLAN_FIXED_FILES:
-        candidate = repo_root / fname
-        if candidate.is_file():
-            return GoverningPlan(slug=candidate.stem, path=candidate), "fixed_fallback"
     return None, "none"
 
 
@@ -595,6 +550,38 @@ def lesson_capture_resolves_ids(decisions: dict[str, Any]) -> list[str]:
     return [d["id"] for d in build_lesson_capture_directives(decisions)]
 
 
+def _body_argv(body: str, add_id: str) -> list[str]:
+    """`--body TEXT` for a single-line body, `--body-file PATH` otherwise.
+
+    `coordinator-lesson-add` refuses a `--body` containing a newline and names
+    `--body-file` as the alternative, but this builder only ever emitted
+    `--body`. Every multi-line lesson therefore died at `argv_rejected`, which
+    is every lesson the corpus actually wants: the existing entries are
+    multi-paragraph by convention, and a one-line lesson is the rare shape, not
+    the normal one. The ceremony reported it honestly (exit 4,
+    `PARTIAL_MUTATION`) rather than silently dropping the capture, so the cost
+    was a hand-written YAML per session rather than a lost lesson -- but the
+    directive could not do the job it exists for.
+
+    Materialising a file here follows `directives_review.py`'s own precedent
+    (`tempfile.mkstemp` for a payload too large or too structured for argv)
+    rather than inventing a second convention. The file is written next to the
+    other session temporaries and named for the directive that consumes it, so
+    an orphan is attributable rather than anonymous.
+
+    Negative-spec: this does NOT re-wrap, strip, or normalise the body. The
+    bytes `coordinator-lesson-add` reads are the bytes the caller supplied --
+    a lesson body is prose whose paragraph breaks carry meaning, and a builder
+    that reflowed it would be editing content it does not own.
+    """
+    if "\n" not in body:
+        return ["--body", body]
+    fd, tmp_str = tempfile.mkstemp(prefix=f".{add_id}.body.", suffix=".md")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        handle.write(body)
+    return ["--body-file", tmp_str]
+
+
 def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str, Any]]:
     """Step 1 / Step 1.2's mechanical directive tail.
 
@@ -656,7 +643,7 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
             )
         add_args = [
             "--title", str(lesson["title"]),
-            "--body", str(lesson["body"]),
+            *_body_argv(str(lesson["body"]), add_id),
             "--scope", str(lesson["scope"]),
         ]
         for key, flag in _LESSON_OPTIONAL_FLAGS:

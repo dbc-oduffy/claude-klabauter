@@ -37,7 +37,24 @@ CRLF detector (SC1017) on every line. Ported natively as `str.replace("\\r",
 "")` on the file's in-memory content before handing a normalized COPY to
 shellcheck (via a temp file) — the tracked file on disk is never mutated.
 
+EXTERNAL-TOOL BUDGET: `shellcheck` is a named carve-out site
+(`coordinator_core/external_tool_budget.py`, § G9 of
+`docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md`), carved out at
+`Trigger.WEEKLY_GATE` — because of WHEN it fires, per DR-349 § Carve-outs, not
+because of what it costs. Moving this sweep onto the commit or session path
+would take the grant with it. Two bounds, not one: the per-file spawn keeps its
+30s, and the SWEEP is held to
+`EXTERNAL_TOOL_SWEEP_BUDGET_SECS` end-to-end. The second is the one this op
+previously lacked entirely — one bound per file with one spawn per file is
+`O(files)` with no ceiling, the self-raising shape DR-349 § Anti-patterns names
+as break-class. `run_shellcheck_sweep` stamps the deadline once and every spawn
+derives its bound from the remainder, so a wider `.sh` corpus cannot buy time.
+
 Negative-spec:
+    - Does NOT return a short `findings` list when the sweep deadline is
+      exhausted — it raises. A partial sweep is byte-identical to a clean one
+      in the frozen `{findings, files_checked}` contract, so "quietly stopped
+      early" and "found nothing" would be indistinguishable to every caller.
     - Does NOT shell out to `tr`, `sed`, `bash`, or any shell — CRLF
       normalization is a Python string op; the `sed` prefix-rewrite is a
       dict-field reassignment on parsed JSON.
@@ -69,11 +86,23 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.external_tool_budget import (
+    EXTERNAL_TOOL_SWEEP_BUDGET_SECS,
+    spawn_bound,
+    sweep_deadline,
+)
 from coordinator_core.ipc import register_op
 
 _GIT_TIMEOUT_SECONDS = 15
-_SHELLCHECK_TIMEOUT_SECONDS = 30
+_SHELLCHECK_SITE = "coordinator_core/ops/run_shellcheck_sweep.py :: _lint_one_file"
 _SHELLCHECK_DIALECT = "bash"
+
+_SWEEP_EXHAUSTED_MESSAGE = (
+    "ci.run_shellcheck_sweep: sweep exceeded its "
+    f"{EXTERNAL_TOOL_SWEEP_BUDGET_SECS:.0f}s aggregate budget — the sweep is over budget; "
+    "reduce the tracked .sh corpus or retire the sweep, and read `files_checked` against "
+    "`findings` to see how far it got"
+)
 
 _SHELLCHECK_NOT_FOUND_MESSAGE = (
     "ci.run_shellcheck_sweep: 'shellcheck' binary not found on PATH — "
@@ -118,10 +147,17 @@ def tracked_shell_files(repo_root: Path) -> List[str]:
     return sorted({path for path in stdout.splitlines() if path})
 
 
-def _lint_one_file(repo_root: Path, rel_path: str) -> List[dict]:
+def _lint_one_file(repo_root: Path, rel_path: str, deadline: float) -> List[dict]:
     """Lint a single tracked `.sh` file: read its content, CRLF-normalize a
     throwaway copy, run `shellcheck -f json` against the copy, and rewrite
     each finding's `file` field back to `rel_path` (repo-relative).
+
+    `deadline` is the sweep-wide monotonic deadline stamped once by
+    `run_shellcheck_sweep`, never a per-file allowance. This spawn's bound is
+    the smaller of the site's own bound and what is left of it, so N files
+    cannot buy N times the budget — the self-raising shape DR-349 names as
+    break-class, which this fan-out previously had in full (one 30s bound per
+    file, no ceiling on the sweep).
 
     Returns an empty list when the file cannot be read, or when shellcheck
     finds nothing / emits no parseable JSON. Raises RuntimeError when the
@@ -149,7 +185,7 @@ def _lint_one_file(repo_root: Path, rel_path: str) -> List[dict]:
                 ["shellcheck", "-s", _SHELLCHECK_DIALECT, "-f", "json", str(tmp_path)],
                 capture_output=True,
                 text=True,
-                timeout=_SHELLCHECK_TIMEOUT_SECONDS,
+                timeout=spawn_bound(_SHELLCHECK_SITE, deadline),
                 **no_console_creationflags(),
             )
         except FileNotFoundError as exc:
@@ -190,11 +226,21 @@ def _lint_one_file(repo_root: Path, rel_path: str) -> List[dict]:
 def run_shellcheck_sweep(repo_root: Path) -> dict:
     """Lint every git-tracked `.sh` file under `repo_root`. See module
     docstring for the full contract.
+
+    The deadline is stamped once here, before the first spawn, and every
+    per-file spawn derives its bound from the remainder. Exhausting it raises
+    RuntimeError rather than returning a short `findings` list: a sweep that
+    silently stopped early reads identical to a clean one, and the response
+    contract (`{findings, files_checked}`) is frozen, so there is no field a
+    partial result could honestly declare itself in.
     """
     files = tracked_shell_files(repo_root)
+    deadline = sweep_deadline()
     findings: List[dict] = []
     for rel_path in files:
-        findings.extend(_lint_one_file(repo_root, rel_path))
+        if spawn_bound(_SHELLCHECK_SITE, deadline) <= 0.0:
+            raise RuntimeError(_SWEEP_EXHAUSTED_MESSAGE)
+        findings.extend(_lint_one_file(repo_root, rel_path, deadline))
     return {"findings": findings, "files_checked": len(files)}
 
 

@@ -90,8 +90,19 @@ class _FakeVersionState:
         return self._skewed
 
 
-def _frame(*, id_, method="noop", extra=None) -> bytes:
+def _frame(*, id_, method="noop", extra=None, token="client-token") -> bytes:
+    """A frame from a TRUSTED caller by default.
+
+    `_engine_token` is stamped here because a request that omits the
+    field is refused with `UNTRUSTED_CALLER_ERROR` before `dispatch` is
+    ever reached, so a tokenless frame cannot exercise anything
+    downstream of the trust gate. Rejection itself is pinned by
+    `test_untrusted_caller_token.py`, which asks for that shape explicitly
+    with `token=None`.
+    """
     msg = {"jsonrpc": "2.0", "id": id_, "method": method, "params": {}}
+    if token is not None:
+        msg["_engine_token"] = token
     if extra:
         msg.update(extra)
     return (json.dumps(msg) + "\n").encode("utf-8")
@@ -1214,15 +1225,33 @@ def test_context_without_a_boot_token_disables_the_superseded_arm(tmp_path):
     assert ctx._token_is_stale() is False
 
 
-def test_main_binds_the_pipes_own_token_as_the_boot_token():
+def test_boot_binds_the_pipes_own_token_as_the_boot_token():
     """The predicate must compare against the token actually EMBEDDED in
     the pipe name this server owns. Pinned by source inspection because
-    `main()` is Windows-only and does not return before serving forever:
-    a refactor that recomputes a token for the context instead of passing
-    the elected one would let the two drift silently."""
-    source = inspect.getsource(server.main)
-    assert "boot_token=token" in source
-    assert "name = election.pipe_name(token" in source
+    the boot path binds a real pipe and does not return before serving
+    forever: a refactor that recomputes a token for the context instead of
+    passing the elected one would let the two drift silently.
+
+    TARGETS THE FUNCTIONS THAT HOLD THE CODE, NOT `main()`. This read
+    `inspect.getsource(server.main)` until 2026-08-21 and had been failing
+    since `main()` became a thin wrapper over `_run_guarded` (the STEP 0
+    crash-reporting guard) -- the invariant held the whole time, only the
+    literal-source target was stale. `election.pipe_name` then moved once
+    more, into `_elect_windows_pipe`, when the POSIX arm landed. A test
+    pinned to source has to be repointed whenever the source moves; that
+    is the cost of pinning something no live call can assert, and it is
+    still cheaper than the silent drift it catches.
+    """
+    boot = inspect.getsource(server._run_guarded)
+    assert "boot_token=token" in boot
+
+    windows_arm = inspect.getsource(server._elect_windows_pipe)
+    assert "name = election.pipe_name(token" in windows_arm
+    # The token the pipe name is built from and the token handed to the
+    # context must be the same object, not two derivations: one parameter,
+    # threaded from `_run_guarded`'s single `compute_client_token` call.
+    assert "token = skew.compute_client_token(repo_root)" in boot
+    assert boot.count("compute_client_token") == 1
 
 
 def test_evict_on_skew_drain_ordering_is_untouched_by_this_path():

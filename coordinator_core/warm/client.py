@@ -210,6 +210,12 @@ __all__ = [
 
 ERROR_PIPE_BUSY = 231
 
+#: POSIX errnos that mean "the server is up and cannot take this connection
+#: right now" -- never "the server is absent". They share ERROR_PIPE_BUSY's
+#: disposition exactly (go cold, never spawn); the split exists only because
+#: the two platforms report one condition through different fields.
+_CONTENDED_ERRNOS = frozenset({errno.EAGAIN, errno.ECONNABORTED, errno.ECONNRESET})
+
 #: Distinct from `coordinator_core.ipc.STRUCTURAL_PIN_ERROR` (-32001) on
 #: purpose -- that code is a cross-repo surface (cc_invoke pins it, DoE reads
 #: rc=2 off it) and MUST NOT move. `ENGINE_SKEW` crosses only our own pipe, so
@@ -243,17 +249,21 @@ READ_DEADLINE_SECS = 2.0
 #: A slow op is not a wedged server -- BUT this wait also runs inside the
 #: CALLER's own subprocess kill ceiling (`cc_invoke.py::_op_timeout_ceiling`,
 #: `max(FLOOR=10, engine_budget(op) + MARGIN=10)`), and a flat 120s here blew
-#: past that ceiling for every mutating op except `ceremony.scoped_git_commit`
-#: (the only entry in `ipc.py::_OP_TIMEOUT_OVERRIDES`, at 150s): every other
-#: op resolves to `ipc.DISPATCH_TIMEOUT_SECS` = 30s, giving the caller a ~40s
-#: ceiling, so this client was killed by its own parent long before a flat
-#: 120s wait could ever return the `WARM_DISPATCH_INDETERMINATE` envelope --
-#: the exact protection this deadline exists to guarantee, silently absent
-#: everywhere it was not the incident's own op (WARN, coordinator-code-reviewer
-#: sidecar dcf219af, SLICE 1). `_mutation_deadline_for` below derives the real
-#: wait per-op from `ipc._timeout_for` -- the same source of truth the
-#: caller's own ceiling is derived from -- so the wait stays inside that
-#: ceiling for every op, not just the one this incident concerned. This
+#: past that ceiling for every mutating op: `ipc.py::_OP_TIMEOUT_OVERRIDES` is
+#: now empty (`ceremony.scoped_git_commit`'s 150s row was revoked 2026-08-21 by
+#: the ceremony budget, `ipc.CEREMONY_BUDGET_SECS`), so every `ceremony.*` op
+#: resolves to that 2s ceiling and every other op to `ipc.DISPATCH_TIMEOUT_SECS`
+#: = 30s, giving the caller a ceiling well under 120s in either case, so this
+#: client was killed by its own parent long before a flat 120s wait could ever
+#: return the `WARM_DISPATCH_INDETERMINATE` envelope -- the exact protection
+#: this deadline exists to guarantee, silently absent everywhere it was not the
+#: incident's own op (WARN, coordinator-code-reviewer sidecar dcf219af, SLICE
+#: 1). `_mutation_deadline_for` below derives the real wait per-op from
+#: `ipc._timeout_for` -- the same source of truth the caller's own ceiling is
+#: derived from -- so the wait stays inside that ceiling for every op, not just
+#: the one this incident concerned. Deriving from that shared source of truth is
+#: also why this client needed no change of its own when the ceremony budget
+#: landed: `_mutation_deadline_for` inherits the 2s clamp automatically. This
 #: constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
 #: `DISPATCH_TIMEOUT_SECS` default, so it can never itself outlive an
 #: un-derivable op's caller ceiling.
@@ -475,11 +485,75 @@ def _spawn_once() -> None:
     spawn_detached(str(root), SERVER_ENTRY_SCRIPT)
 
 
-def _open_pipe(pipe: str):
-    """Open the client end of the warm pipe -- the spike's measured API,
-    no ctypes. Isolated as its own function so tests can monkeypatch the
-    transport without a real named pipe."""
-    return open(pipe, "r+b")
+#: How long a POSIX `connect()` may take before the server counts as
+#: CONTENDED rather than absent. Not a latency budget and not fitted to an
+#: observation: a listening `AF_UNIX` socket accepts in microseconds on the
+#: local machine, so the only thing this bounds is a FULL BACKLOG, which is
+#: the anti-storm table's "server up, contended -> go cold, never spawn"
+#: row. The Windows arm answers that question instantly (`ERROR_PIPE_BUSY`
+#: comes straight back from `open`); POSIX has no such immediate signal, so
+#: a blocking `connect` against a full backlog would wait instead of going
+#: cold -- and a wait is the one answer this seam must never give, since the
+#: whole point of the cold fallback is that it is bounded.
+CONNECT_DEADLINE_SECS = 0.25
+
+
+def _endpoint_name(token: str) -> str:
+    """This engine generation's endpoint: a named pipe on Windows, a unix
+    socket path everywhere else.
+
+    The socket arm asks `election.socket_path` rather than spelling the
+    shape, for the same reason `server._elect_unix_socket_endpoint` does:
+    it is the single production derivation, and the C door reproduces it
+    independently. A second Python copy would let the two drift while both
+    halves stayed green."""
+    if sys.platform == "win32":
+        return election.pipe_name(token)
+    return str(election.socket_path(token))
+
+
+def _open_pipe(endpoint: str):
+    """Open the client end of the warm endpoint. Isolated as its own
+    function so tests can monkeypatch the transport without a real named
+    pipe or socket -- a seam four other modules name by this exact
+    attribute, which is why it keeps the `_open_pipe` name now that it
+    opens either transport.
+
+    Windows: `open(pipe, "r+b")` -- the spike's measured API, no ctypes.
+
+    POSIX: an `AF_UNIX` connect handed to `makefile("rwb")`, which is the
+    SAME blocking `readline` / `write` / `flush` / `close` surface, so
+    nothing downstream of this call is platform-aware. `sock.close()`
+    immediately after `makefile` is the documented CPython idiom, not a
+    bug, and is the accept side's own (`server._wrap_socket`): the file
+    object holds its own reference to the fd, so the connection lives until
+    the caller's single `fh.close()` in its `finally`. Without it every
+    dispatch would leak a socket object.
+
+    `settimeout(None)` before `makefile` is load-bearing: a socket left
+    with a timeout gives a file object whose internal buffer is documented
+    as inconsistent if one fires, and read deadlines are `_PendingRead`'s
+    job on its own thread, never the socket's.
+
+    `socket` is imported here rather than at module scope for this module's
+    standing reason -- the Windows path must not pay an import it never
+    reaches."""
+    if sys.platform == "win32":
+        return open(endpoint, "r+b")
+
+    import socket
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(CONNECT_DEADLINE_SECS)
+        sock.connect(endpoint)
+        sock.settimeout(None)
+        io = sock.makefile("rwb")
+    except BaseException:
+        sock.close()
+        raise
+    sock.close()
+    return io
 
 
 #: Sentinel distinguishing "the deadline expired" from "the server sent an
@@ -675,7 +749,7 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     # between the two call sites within one preamble invocation. Computed
     # once and reused below.
     token = engine_token()
-    pipe = election.pipe_name(token)
+    pipe = _endpoint_name(token)
     request = {**msg, "_engine_token": token}
     caller_sid = _caller_session_id()
     if caller_sid:
@@ -688,13 +762,39 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     for attempt in range(2):
         try:
             fh = _open_pipe(pipe)
-        except FileNotFoundError:
+        except (FileNotFoundError, ConnectionRefusedError):
+            # ECONNREFUSED joins ENOENT because on POSIX the two are one
+            # outcome wearing two shapes: "no server". A unix socket's path
+            # OUTLIVES the process that bound it, so a hard-killed server
+            # leaves a corpse file that exists and refuses -- the same
+            # condition a missing named pipe reports as ENOENT on Windows.
+            # Reclaiming that corpse is the ELECTION's job under its flock
+            # (`election.reclaim_stale_socket`), never this client's: a
+            # client that unlinked on refusal would race a peer's live
+            # socket. Spawning is the correct and sufficient response, and
+            # `should_spawn` still rate-limits it.
             _spawn_once()
             return None
         except PermissionError:
             return None
+        except TimeoutError:
+            # `CONNECT_DEADLINE_SECS` expired -- the POSIX counterpart of
+            # ERROR_PIPE_BUSY below. A listening socket accepts immediately,
+            # so this is a full backlog: server up, contended. Go cold,
+            # never spawn (spawning here is the storm the table forbids).
+            # Raised by `settimeout`, which sets NO errno, so it cannot be
+            # classified by the `exc.errno` tests below.
+            return None
         except OSError as exc:
             if getattr(exc, "winerror", None) == ERROR_PIPE_BUSY:
+                return None
+            if exc.errno in _CONTENDED_ERRNOS:
+                # The same contended-server outcome reached without the
+                # deadline firing: a non-blocking-ish refusal from the
+                # accept queue (EAGAIN), or a connection the kernel set up
+                # and then dropped for backlog pressure (ECONNABORTED,
+                # ECONNRESET). Cold, never spawn -- same row as the two
+                # branches above.
                 return None
             if exc.errno == errno.EINVAL:
                 # A second, distinct contended-pipe outcome -- see the

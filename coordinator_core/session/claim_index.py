@@ -634,3 +634,83 @@ def lookup(
     result.edit_ts = result_edit_ts
 
     return result
+
+
+@dataclasses.dataclass
+class CommitSet:
+    """What one session is responsible for committing right now.
+
+    ``paths`` is the answer: repo-relative paths this session currently holds
+    a ``T`` claim on and NO other session does. Sorted, so a caller rendering
+    it twice gets the same order.
+
+    ``contested`` is every path this session holds that a peer ALSO holds. It
+    is deliberately NOT in ``paths`` -- a peer's path is not yours, so it is
+    not offered -- but it is named here so a caller can tell the operator WHY
+    something they edited is missing, rather than leaving them to wonder. That
+    distinction is the whole job: the answer exists to remove doubt, and a
+    silent omission reintroduces it.
+
+    ``complete`` mirrors ``_IndexState.complete``. False means the walk behind
+    this answer was aborted or could not fully enumerate, so ``paths`` may be
+    SHORT and ``contested`` may under-report. A caller must say so rather than
+    presenting a partial answer as the answer; ``abort_cause`` names why.
+    """
+
+    paths: List[str]
+    contested: Dict[str, List[str]]
+    complete: bool
+    abort_cause: Optional[str] = None
+
+
+def commit_set(
+    session_id: str,
+    sessions_dir: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> CommitSet:
+    """Answer "what belongs to me to commit?" for ``session_id``. NO git spawns.
+
+    This is a pure projection of :func:`rebuild`'s existing reverse index --
+    it enumerates nothing of its own and spawns no subprocess, so its cost is
+    exactly one index rebuild (measured 96.5ms best-of-3 over 41 touched.txt
+    files / 2487 T/R lines on a loaded box, zero ``subprocess.run`` calls).
+    The mechanism it replaces cost 73 processes and 5,609ms of CPU per call.
+
+    NEGATIVE SPEC -- dirtiness is not part of this answer, by PM ruling
+    (2026-08-21). "What belongs to me" and "what is dirty" are two different
+    questions and must not be fused: a path claimed here that no longer
+    differs from HEAD simply produces an empty commit, which
+    ``ceremony.scoped_git_commit`` reports as ``empty-commit-set`` and which
+    lands nothing. That is harmless. Paying a git spawn to pre-empt a harmless
+    no-op is precisely the trade that justified the mechanism this replaces --
+    do not reintroduce it here, however cheap the single call looks.
+
+    Agent fan-out needs no special handling: :func:`rebuild` already resolves
+    ``.agents/<aid>/em-session-id.txt`` back-pointers to the owning session, so
+    a path an agent touched on this session's behalf is already claimed BY this
+    session in the index.
+
+    Last-event-wins is likewise already applied (``_last_verb_per_path``): a
+    path this session touched and then RELEASED is absent from ``claims``, so
+    it is absent here. Committing a path releases its claim, which is why this
+    answers "still outstanding" rather than "ever touched" -- and why it is not
+    a history query.
+    """
+    state = rebuild(sessions_dir=sessions_dir, cwd=cwd)
+    mine: List[str] = []
+    contested: Dict[str, List[str]] = {}
+    for path, claimants in state.claims.items():
+        if session_id not in claimants:
+            continue
+        peers = [c for c in claimants if c != session_id]
+        if peers:
+            contested[path] = peers
+        else:
+            mine.append(path)
+    mine.sort()
+    return CommitSet(
+        paths=mine,
+        contested=contested,
+        complete=state.complete,
+        abort_cause=state.abort_cause,
+    )

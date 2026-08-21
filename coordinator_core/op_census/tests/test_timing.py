@@ -62,10 +62,16 @@ def test_process_time_by_op_under_bar():
     assert r.sample_count == 3
 
 
-def test_process_time_by_op_over_bar_on_max_even_if_p50_holds():
+def test_process_time_by_op_breach_on_max_reports_not_established_never_over_bar():
+    """`elapsed_ms` is wall clock (module docstring) -- a breach on either
+    p50 or max is reported as NO_DATA/NOT_ESTABLISHED_UNDER_LOAD, never
+    OVER_BAR, because peer load alone can produce it and this axis cannot
+    tell the two apart."""
     entries = [_row("op.a", 10.0), _row("op.a", 10.0), _row("op.a", PROCESS_TIME_BAR_MS + 1)]
     result = process_time_by_op(entries, ["op.a"])
-    assert result["op.a"].disposition is Disposition.OVER_BAR
+    r = result["op.a"]
+    assert r.disposition is Disposition.NO_DATA
+    assert r.no_data_reason is NoDataReason.NOT_ESTABLISHED_UNDER_LOAD
 
 
 def test_process_time_by_op_no_data_for_unobserved_op():

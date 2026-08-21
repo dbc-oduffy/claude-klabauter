@@ -75,7 +75,12 @@ def _git(repo_root: str, *args: str) -> str | None:
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
-            timeout=10,
+            # House value (`bash_guards.dispatch_checks._run_git`), not a local
+            # choice -- see the same note in `context_pressure_precompact._git`.
+            # This is a session-start detection read: a 10s bound here buys nothing
+            # a 2s bound does not, and costs eight extra seconds of a degraded box
+            # per session start. Expiry already degrades to None by design.
+            timeout=2.0,
             **no_console_creationflags(),
         )
     except Exception:

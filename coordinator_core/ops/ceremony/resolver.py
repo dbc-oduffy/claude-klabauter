@@ -59,6 +59,7 @@ from typing import Any
 
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.coverage import _get_handoff_consumed_by as get_handoff_consumed_by
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS
 from coordinator_core.ops.fleet._common import rel_id
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -233,7 +234,11 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
+            # A wider inner bound than the op's own end-to-end budget is
+            # unreachable -- the caller has already abandoned the await by
+            # then -- and only leaves this process running unsupervised.
+            # Deriving from the budget keeps it tracking the ratchet.
+            timeout=CEREMONY_BUDGET_SECS,
             **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:

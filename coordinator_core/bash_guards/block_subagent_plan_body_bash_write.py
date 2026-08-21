@@ -327,7 +327,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # (reference hook 96-167).
     # ------------------------------------------------------------------
     cwd = payload.get("cwd")
-    git_root = resolve_git_root(cwd)
 
     raw_agent_id = payload.get("agent_id") or ""
 
@@ -346,6 +345,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = cmd or ""
     if not cmd:
         return None
+
+    # Resolved HERE rather than beside `cwd` above, because
+    # `resolve_git_root` spawns `git rev-parse --show-toplevel` and every
+    # return path above this point discards the result unused -- an EM
+    # main-loop call (no `agent_id`) and an empty command both leave before
+    # the first reader below. Resolving eagerly charged that spawn to EVERY
+    # Bash and PowerShell tool call on the box, which at the load norm is
+    # the most-multiplied cost in the system (DR-344; measured at
+    # docs/research/2026-08-21-hot-path-guards-measured-in-process-time.md).
+    # Deferred, not memoized: `subagent_sandbox.engine.resolve_git_root`
+    # already memoizes per process, and the hook is a fresh process per
+    # call, so the only spawn this can save is one never made.
+    git_root = resolve_git_root(cwd)
 
     # Subagent-type lookup via back-pointer chain (reference hook 142-158).
     subagent_type = ""

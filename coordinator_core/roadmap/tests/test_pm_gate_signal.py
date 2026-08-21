@@ -122,6 +122,24 @@ def test_named_stakeholder_floor_surfaces_a_judgment_point_not_a_decision(
     assert "VP" in jp["matched_floor_terms"]
 
 
+def test_named_stakeholder_floor_terms_carry_no_peer_team_or_person_identity(
+    fragment: dict,
+) -> None:
+    """AC20's structural pin, mirroring DoE's ``test_supplied_fragments.py``:
+    asserts the floor's TERM LIST ITSELF carries no peer-team or person
+    identity, not just that one example string fails to fire. The behavioral
+    test above pins a single non-firing example; this pins the invariant it
+    relies on, so an upstream fragment edit that slips e.g. "coordinator-em"
+    into the floor fails here instead of passing silently."""
+    leg = next(
+        leg for leg in fragment["legs"] if leg["id"] == "named-stakeholder"
+    )
+    terms = leg["mechanical_floor"]["terms"]
+    for term in terms:
+        assert "-em" not in term, term
+        assert "project-" not in term, term
+
+
 def test_named_stakeholder_floor_does_not_fire_on_a_peer_team_mention(
     fragment: dict,
 ) -> None:

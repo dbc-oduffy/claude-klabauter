@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.ops import detect_staged_rollback as _dsr
 from coordinator_core.ops.detect_staged_rollback import (
     EXIT_BOTH_FINDINGS,
+    EXIT_CLEAN,
     EXIT_MASS_DELETION_FINDING,
     EXIT_ROLLBACK_FINDING,
     MASS_DELETION_ABS_FLOOR,
@@ -439,6 +440,46 @@ def test_mass_deletion_override_zero_value_still_blocks(tmp_path):
 
     rc = main([str(repo)], env=_env(**{MASS_DELETION_OVERRIDE_ENV: "0"}))
     assert rc == EXIT_MASS_DELETION_FINDING
+
+
+@pytest.mark.parametrize("value", ["false", "no", "off", "true", "yes", "2", " 1", "1 ", ""])
+def test_mass_deletion_override_arms_on_nothing_but_the_literal_1(tmp_path, value):
+    """Only ``"1"`` disarms the mass-deletion tripwire (PM-authorized
+    2026-08-21).
+
+    `false`/`no`/`off` are the load-bearing cases and the reason this exists:
+    under the previous `not in ("", "0")` comparator each of them ARMED the
+    override, so an operator spelling "leave the tripwire on" turned it off and
+    got no signal that they had. `true`/`yes`/`2` are the same comparator seen
+    from the other side, and the padded forms pin that no stripping happens —
+    a value is the arming value or it is not.
+
+    The tripwire's founding incident was an empty tree staged against 18,506
+    files, so the direction this fails in is the whole point: an unrecognized
+    value leaves the check ARMED.
+    """
+    repo = _init_repo(tmp_path / f"mass-override-{value.strip() or 'empty'}")
+    names = [f"f{i}.txt" for i in range(10)]
+    _commit_many(repo, names)
+    _stage_delete(repo, names[:9])
+
+    rc = main([str(repo)], env=_env(**{MASS_DELETION_OVERRIDE_ENV: value}))
+
+    assert rc == EXIT_MASS_DELETION_FINDING, (
+        f"{value!r} must not arm the override — only the literal '1' does"
+    )
+
+
+def test_mass_deletion_override_arms_on_the_literal_1(tmp_path):
+    """The counterpart to the above: the sanctioned value still works, so the
+    strictness is a narrowing and not an accidental removal of the override."""
+    repo = _init_repo(tmp_path / "mass-override-one")
+    names = [f"f{i}.txt" for i in range(10)]
+    _commit_many(repo, names)
+    _stage_delete(repo, names[:9])
+
+    rc = main([str(repo)], env=_env(**{MASS_DELETION_OVERRIDE_ENV: "1"}))
+    assert rc == EXIT_CLEAN
 
 
 def test_mass_deletion_check_independent_of_rollback_check(tmp_path):

@@ -229,7 +229,8 @@ def _run_gate_legs(
                 str(row_stdout_path),
                 "--source-dir",
                 source_dir,
-            ]
+            ],
+            timeout=_round._ROUND_SCAN_LEG_TIMEOUT_SECS,
         )
         if parse.returncode != 0:
             _round._print_step_failure("percolate-parse-dryrun", [], parse.stderr)
@@ -267,7 +268,7 @@ def _run_gate_legs(
         ]
         if peer_repos_file is not None:
             scan_cmd += ["--peer-repos-file", str(peer_repos_file)]
-        scan = _round._run(scan_cmd)
+        scan = _round._run(scan_cmd, timeout=_round._ROUND_SCAN_LEG_TIMEOUT_SECS)
         print(scan.stdout)
         if scan.returncode == 2:
             print(
@@ -297,7 +298,7 @@ def _run_gate_legs(
             source_dir,
             "--json",
         ]
-        drift = _round._run(drift_cmd)
+        drift = _round._run(drift_cmd, timeout=_round._ROUND_SCAN_LEG_TIMEOUT_SECS)
         if drift.returncode != 0:
             _round._print_step_failure("Step 2b (inverse-drift)", drift_cmd, drift.stderr)
             return _round._EXIT_FAIL
@@ -559,7 +560,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "--pathspec-from-file",
                         str(pathspec_file),
                     ],
-                    timeout=_round._PUBLISH_LEG_TIMEOUT_SECS,
+                    timeout=_round._COMMIT_LEG_TIMEOUT_SECS,
                 )
             print(commit.stdout.strip())
             if commit.returncode != 0:

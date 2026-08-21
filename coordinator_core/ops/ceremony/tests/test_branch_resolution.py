@@ -3851,6 +3851,75 @@ def test_c3_trailerless_large_range_scores_partition_mandatory(git_repo):
     assert errors == [], f"receipt failed validate(): {errors}"
 
 
+def test_c3_range_probe_timeout_forces_partition_mandatory_on_a_small_diff(git_repo, monkeypatch):
+    """Review: EM disposition on code-reviewer F1's live demonstration (the box-load
+    flake that hit test_c3_trailerless_large_range_scores_partition_mandatory above) —
+    a `_range_diff_loc`/`_range_commit_count`/`_range_touched_paths` TIMEOUT must force
+    PARTITION-MANDATORY, never silently clear the brightline.
+
+    Unlike the sibling test above, this one does NOT rely on a real `git` call actually
+    timing out (non-deterministic, box-load dependent) — it drives the exact `None`
+    contract those three functions return on a `_git_run` timeout (see their own
+    docstrings) directly, so the assertion holds regardless of this box's load at
+    the moment the suite runs. The diff itself is deliberately TINY (a few bytes,
+    one commit) — under every brightline threshold on its own — so a PARTITION-
+    MANDATORY verdict here can only be explained by the indeterminate-forces-review
+    rule, not by genuine size.
+    """
+    sid = "sess-c3-range-timeout-001"
+    time.sleep(1.1)
+    started_at = (
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
+    git_repo.seed_started_at(sid, started_at)
+    handoff_path = git_repo.seed_handoff("consumed-timeout.md", consumed_by=sid)
+    git_repo.seed_session_shape(
+        sid, pickup_happened=True, handoff="state/handoffs/consumed-timeout.md",
+    )
+    time.sleep(1.1)
+    handoff_path.write_text(
+        handoff_path.read_text(encoding="utf-8") + "\ntiny change\n", encoding="utf-8",
+    )
+    _commit(git_repo.root, "tiny trailerless work, no Session-Id trailer")
+
+    # Simulate the exact contract a _git_run TIMEOUT produces on these three
+    # helpers (None — see their docstrings) without needing a real 2s stall.
+    def _fake_timed_out_range_diff_loc(worktree_root, candidate_range, *, warnings=None):
+        if warnings is not None:
+            warnings.append("simulated timeout: _range_diff_loc")
+        return None
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.branch_resolution._range_diff_loc",
+        _fake_timed_out_range_diff_loc,
+    )
+
+    result = git_repo.invoke(sid)
+    assert result["exit_code"] == 0
+
+    resolved_state = result["resolved_state"]
+    assert resolved_state["scoping_method"] == SCOPING_METHOD_STARTED_AT_RANGE
+
+    b_pre_resolved = result["b_pre_resolved"]
+    # The diff is tiny, so without the timeout this would be single-reviewer-ok —
+    # PARTITION-MANDATORY here is only explainable by the indeterminate diff_loc.
+    assert b_pre_resolved["brightline_verdict"] == "PARTITION-MANDATORY"
+    # The coalesced field stays a real int (never None) — no comparison or JSON
+    # payload downstream ever sees the raw indeterminate value.
+    assert b_pre_resolved["diff_loc"] == 0
+
+    branches = {b["branch_id"]: b for b in resolved_state["resolved_branches"]}
+    review_wave_evidence = branches["review_wave_scale"]["evidence"]
+    assert review_wave_evidence["scoping_git_warnings"], (
+        "a timed-out range probe must leave a visible trail, not just a silent default"
+    )
+
+    receipt_path = git_repo.root / result["receipt_path"]
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    errors = validate(receipt)
+    assert errors == [], f"receipt failed validate(): {errors}"
+
+
 def test_c3_clean_trailer_session_keeps_session_id_trailer_method(git_repo):
     """A session whose commits carry a reliable Session-Id trailer keeps the
     existing grep-based scoping — SCOPING_METHOD_TRAILER — as the existing

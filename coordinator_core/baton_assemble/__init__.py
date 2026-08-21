@@ -44,7 +44,7 @@ that op is real and registered (mirrors handoff.stamp's shape; see its own
 module docstring), but it is VESTIGIAL in this specific calling context: d1
 (coordinator-doc-new) already scaffolds every new session-handoff with
 `handoff_phase: continuation` stamped unconditionally, and this brief's
-lineage resolution has no execution-phase/plan_path input to ever ask the
+lineage resolution has no execution-phase/governing_plan input to ever ask the
 op to stamp anything else -- a re-stamp of "continuation" onto a handoff
 that already carries "continuation" is always the op's own idempotent
 no-op. Emitting it here was dead weight that (via a SEPARATE bug --
@@ -54,7 +54,7 @@ registry was empty for it in a fresh process) surfaced as a hard abort
 ("unrecognized op 'handoff.stamp_phase'") rather than a harmless no-op.
 2026-07-25 break-class fix: removed the directive; the op remains fully
 registered/dispatchable for its real caller (an execution-authorization
-workflow supplying `phase="execution"` + `plan_path`, per
+workflow supplying `phase="execution"` + `governing_plan`, per
 docs/plans/2026-07-17-claude-klabauter-handoff-phase-execution-emit-leg.md), which
 is not this module.
 d1's `--out` (2026-07-27, bug backlog
@@ -2422,6 +2422,45 @@ def resolve_lineage(
                 predecessor_id = _fm_field(predecessor_fm, "handoff_id")
         lineage["predecessor"] = predecessor if predecessor not in ("none", None, "") else None
         lineage["predecessor_id"] = predecessor_id
+
+        # R5 (2026-08-21, rebuild-the-three-ceremony-assemblers plan C5): the
+        # baton's own plan path, stamped at mint and carried across the
+        # successor hop -- mirrors deliverable_id's carry-not-remint shape
+        # (this function's own "plan -> predecessor -> mint" order), but
+        # stores the PATH, not an id, matching `state/sizings/*.yaml`'s
+        # literal `plan:` field shape (the in-tree pattern this chunk copies,
+        # per its own dispatch brief -- do NOT invent a new mechanism).
+        #
+        # Precedence: a FRESH plan rung (the plan->execute trigger itself
+        # arriving as `artifact_path`, or this session's own currently-
+        # claimed plan) always wins over a carried value -- an active plan
+        # claim is never masked by a stale carry. Absent either fresh rung, a
+        # continuation baton (`artifact_path` IS the predecessor's own
+        # handoff record, `is_own_handoff_record`) carries the predecessor's
+        # own `governing_plan` frontmatter field forward unchanged -- `fm` is
+        # already that predecessor's frontmatter at this point in the
+        # function, so this is a read, not a second file open. That is the
+        # successor-hop carry this chunk's dispatch brief names as load-
+        # bearing (RULED, not a judgment point).
+        #
+        # Absent plan is the COMMON case and must be cheap and truthful: no
+        # search, no warning-on-absence-at-mint -- `None` when none of the
+        # three rungs supplies a value.
+        _governing_plan_raw: Optional[str] = None
+        if is_plan_input:
+            _governing_plan_raw = artifact_path or None
+        elif _plan_file:
+            _governing_plan_raw = _plan_file
+        elif is_own_handoff_record:
+            _carried_governing_plan = _fm_field(fm, "governing_plan")
+            _governing_plan_raw = (
+                _carried_governing_plan
+                if _carried_governing_plan not in (None, "", "none")
+                else None
+            )
+        lineage["governing_plan"] = (
+            _repo_relative_posix(_governing_plan_raw, root) if _governing_plan_raw else None
+        )
         # `predecessor_is_live` (2026-07-28, archive-aware resolution follow-
         # up): whether `lineage["predecessor"]` names a file under THIS
         # worktree's live `state/handoffs/` -- computed here (root-relative,
@@ -2598,6 +2637,17 @@ def resolve_lineage(
         lineage["origin_plan_id"] = _fm_field(fm, "plan_id")
         goal_raw = _fm_field(fm, "goal_id")
         lineage["origin_goal_id"] = [goal_raw] if goal_raw else None
+        # R5 governing-plan stamp, spinoff kind: the progenitor's own governing_plan is
+        # NOT carried onto a fork by default -- mirrors the 2026-08-05
+        # deliverable_id PM ruling this branch's own docstring section
+        # narrates (a fork mints fresh, it does not inherit). The one case
+        # that DOES produce a value is `artifact_path` itself BEING the plan
+        # document (the "stub -> plan -> mint" order's plan tier) -- i.e.
+        # `fm` carries `plan_id` and is not itself a handoff record.
+        if _fm_field(fm, "plan_id") and not origin_own_handoff_id:
+            lineage["governing_plan"] = artifact_path or None
+        else:
+            lineage["governing_plan"] = None
     else:
         raise ValueError(f"baton_assemble: unrecognized kind {kind!r} (expected one of {KINDS})")
 
@@ -2998,7 +3048,7 @@ def _build_divergent_deliverable_id_judgment_point(
 
 
 def _build_plan_no_ledger_claim_judgment_point(
-    plan_path: str, claim_error: str, root: Path
+    governing_plan: str, claim_error: str, root: Path
 ) -> dict[str, Any]:
     """PIN-3 `d6-plan-no-ledger-claim` -- surfaced by `brief()` when C4's
     plan-ness discriminator routes a `docs/plans/*.md` input through the
@@ -3037,7 +3087,7 @@ def _build_plan_no_ledger_claim_judgment_point(
     return build_untrusted_gate_judgment_point(
         id="d6-plan-no-ledger-claim",
         question=(
-            f"Plan input {plan_path!r} resolved no held handoff claim in the "
+            f"Plan input {governing_plan!r} resolved no held handoff claim in the "
             "durable claim ledger -- is this a legitimate REPLAY (this "
             "session resumed under a different session id, or the handoff "
             "claim was dropped by a separate flow), or was a claim NEVER "
@@ -3337,12 +3387,47 @@ def _build_directives(
             "already_satisfied": False,
         }
 
+    # d1c -- R5, governing-plan stamp at mint (2026-08-21, rebuild-the-three-
+    # ceremony-assemblers plan C5). Fires whenever `resolve_lineage` resolved
+    # a non-None `governing_plan` -- on BOTH a clean mint (`governing_plan` is never
+    # passed to `coordinator-doc-new`'s own flags -- `coordinator-doc-new.py`
+    # is out of this chunk's `writes:` scope -- so the frontmatter-direct
+    # writer d1b already uses is the only writer for it too) and a replay
+    # (the same writer's own idempotent read-back-equal short circuit
+    # converges it). Never gated on `d1_already_satisfied` the way d1b is:
+    # d1b is a replay-ONLY fallback for a union d1's own flags would
+    # otherwise have carried, but `governing_plan` is NEVER in d1's flags, so this
+    # is the sole write path for it on every mint, clean or replayed.
+    d1c_directive: Optional[dict[str, Any]] = None
+    _governing_plan_stamp = lineage.get("governing_plan")
+    if _governing_plan_stamp:
+        d1c_directive = {
+            "id": "d1c",
+            "cli": "baton-stamp-carried-ids",
+            "args": [
+                "--file",
+                d1_out,
+                f"--governing-plan={_repo_relative_posix(_governing_plan_stamp, root)}",
+            ],
+            "depends_on": ["d1"],
+            # Never `already_satisfied`: same idempotent-writer contract as
+            # d1b -- a read-back-equal value short-circuits with no write.
+            "already_satisfied": False,
+        }
+
     directives: list[dict[str, Any]] = []
     if d7_directive is not None:
         directives.append(d7_directive)
     directives.append(d1_directive)
     if d1b_directive is not None:
         directives.append(d1b_directive)
+    if d1c_directive is not None:
+        directives.append(d1c_directive)
+    _d2_depends_on = ["d1"]
+    if d1b_directive is not None:
+        _d2_depends_on.append("d1b")
+    if d1c_directive is not None:
+        _d2_depends_on.append("d1c")
     directives.append(
         {
             "id": "d2",
@@ -3366,11 +3451,12 @@ def _build_directives(
             # "threading is out of scope" caveat mis-stated the problem: the
             # value was already in scope.)
             "args": ["--file", d1_out],
-            # `d1b` (C3) lands between d1 and d2 when emitted, so d2 must not
-            # lint before it converges -- omitting it from `depends_on` would
-            # let d2 validate `d1_out` before the replay-path stamp writes,
-            # racing the very keys it exists to add.
-            "depends_on": ["d1", "d1b"] if d1b_directive is not None else ["d1"],
+            # `d1b` (C3) and `d1c` (R5) each land between d1 and d2 when
+            # emitted, so d2 must not lint before either converges --
+            # omitting one from `depends_on` would let d2 validate `d1_out`
+            # before that stamp writes, racing the very keys it exists to
+            # add.
+            "depends_on": _d2_depends_on,
             # Never `already_satisfied`: a lint MUTATES NOTHING, so it leaves no
             # residue a replay could skip, and re-running it on a resumed
             # artifact is the whole point (the scaffold may have been edited
@@ -3708,6 +3794,63 @@ def _build_judgment_points(
             reason="Judgment residue -- the EM/PM dialogue, never mechanically inferred.",
         ),
     ]
+    if kind == "spinoff":
+        # R6: the minter cannot know which plan or sizing a spinoff belongs
+        # to -- that is genuine EM/PM knowledge, never mechanically
+        # inferred and never offered as a scanned candidate list (a
+        # candidate list is a corpus walk wearing a helpful hat, which is
+        # what this plan exists to remove). Distinct from `origin_plan_id`
+        # above: that field is the ALREADY-resolved parent-provenance
+        # rung read off `artifact_path`'s own frontmatter; this judgment
+        # point is a forward-looking association the EM supplies for the
+        # freshly-minted spinoff itself. Narrow by ruling (F10 rejected):
+        # scoped to spinoff mint only, never widened onto the
+        # continuation/execution-handoff path, which carries its
+        # governing_plan/sizing forward deterministically instead (C5's
+        # carry leg).
+        #
+        # "none" is a first-class disposition, not an omission -- naming
+        # it here lets an EM answer "this spinoff carries no plan or
+        # sizing" as a cheap, TRUE recorded absence rather than leaving
+        # the question open (which would read as unknown, not answered).
+        points.append(
+            build_untrusted_gate_judgment_point(
+                id="j-spinoff-plan-sizing",
+                question=(
+                    "Does this spinoff belong to an existing plan and/or "
+                    "sizing object the EM already knows about?"
+                ),
+                dispositions=[
+                    build_disposition(
+                        "associate",
+                        [],
+                        guidance=(
+                            "Name the plan_id and/or sizing slug this spinoff "
+                            "belongs to via decision_note -- this is genuine "
+                            "EM/PM knowledge, never inferred from disk state "
+                            "and never offered as a scanned candidate list."
+                        ),
+                    ),
+                    build_disposition(
+                        "none",
+                        [],
+                        guidance=(
+                            "No plan or sizing is associated with this "
+                            "spinoff. A true, recorded absence -- cheap to "
+                            "answer, and distinct from leaving the question "
+                            "open."
+                        ),
+                    ),
+                ],
+                evidence=(
+                    "Which plan/sizing this spinoff belongs to is genuine "
+                    "EM/PM knowledge -- the minter cannot know it and must "
+                    "not scan for candidates (F10 rejected)."
+                ),
+                reason="Judgment residue -- never mechanically inferred from disk state.",
+                reportable=False,
+            )
+        )
     if kind == "handoff":
         points.append(
             build_untrusted_gate_judgment_point(

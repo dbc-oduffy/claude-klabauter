@@ -967,8 +967,19 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     the existing successor's content) and WITHOUT a `yaml.safe_load`/
     `yaml.dump` round-trip (which would reflow every unrelated key).
 
+    ALSO the SOLE writer of `governing_plan` on every mint, clean or replayed (R5,
+    2026-08-21, rebuild-the-three-ceremony-assemblers plan C5, via
+    `_build_directives`'s own `d1c` directive) -- unlike `deliverable_ids`/
+    `plan_ids`, `governing_plan` is never one of `coordinator-doc-new`'s flags at
+    all (that CLI is out of this chunk's `writes:` scope), so there is no
+    "d1's own flags would otherwise have carried it" case for this field to
+    fall back from; this directive is simply where it is written, always.
+    `--governing-plan=<path>` is a SCALAR flag (at most one occurrence takes
+    effect), not a repeated plural carrier like the two above.
+
     Args shape mirrors d1's own: `--file <path>` (required) plus zero or more
-    repeated `--deliverable-ids=<id>` / `--plan-ids=<id>` flags -- the same
+    repeated `--deliverable-ids=<id>` / `--plan-ids=<id>` flags, plus an
+    optional scalar `--governing-plan=<path>` -- the same
     flag names `_build_directives` already builds for d1, so `_build_directives`
     can hand this directive the identical per-id loop output.
 
@@ -1011,7 +1022,9 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     result is ever read as a plan FK.
     """
     from coordinator_core.frontmatter.primitives import (
+        insert_fm_field,
         insert_fm_field_raw,
+        read_fm_field_unquoted,
         read_fm_nested_field,
         rebuild,
         split_frontmatter,
@@ -1021,6 +1034,7 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     file_rel: Optional[str] = None
     deliverable_ids: list[str] = []
     plan_ids: list[str] = []
+    governing_plan: Optional[str] = None
     i = 0
     while i < len(args):
         arg = args[i]
@@ -1032,6 +1046,14 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             deliverable_ids.append(arg.split("=", 1)[1])
         elif arg.startswith("--plan-ids="):
             plan_ids.append(arg.split("=", 1)[1])
+        elif arg.startswith("--governing-plan="):
+            # R5 (2026-08-21, rebuild-the-three-ceremony-assemblers plan C5):
+            # a SCALAR carrier, unlike `--deliverable-ids`/`--plan-ids`
+            # (repeatable, plural) -- the baton's own plan path, stamped once
+            # at mint and carried across the successor hop by
+            # `resolve_lineage`'s own carry logic (`baton_assemble/
+            # __init__.py`), never re-derived here.
+            governing_plan = arg.split("=", 1)[1]
         i += 1
 
     if not file_rel:
@@ -1101,6 +1123,27 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             # MEASURED docstring note.
             fm = fm.replace(f"{key}: \n", f"{key}:\n", 1)
             _state["stamped"].append(key)
+
+        # R5 governing_plan -- a SCALAR stamp, not a block sequence, so it takes
+        # `insert_fm_field`'s own quoting/anchoring (never the raw block path
+        # the plural carriers above use) and its own idempotency check: an
+        # existing value equal to this run's resolved value is a no-op; a
+        # differing existing value raises rather than silently overwriting a
+        # recorded carry with a different one -- same conflict posture as
+        # the plural carriers.
+        if governing_plan:
+            existing_governing_plan = read_fm_field_unquoted(fm, "governing_plan")
+            if existing_governing_plan is not None:
+                if existing_governing_plan != governing_plan:
+                    raise MutateAbort(
+                        f"baton-stamp-carried-ids: {target_abs} already carries "
+                        f"governing_plan={existing_governing_plan!r}, which does not match "
+                        f"this run's resolved value {governing_plan!r} -- refusing to "
+                        "silently overwrite; resolve by hand"
+                    )
+            else:
+                fm = insert_fm_field(fm, "governing_plan", governing_plan)
+                _state["stamped"].append("governing_plan")
 
         if not _state["stamped"]:
             return old_text
@@ -1551,6 +1594,127 @@ def _compensate_d1_scaffold(
     target.unlink()
 
 
+def _stamp_plan_owner_back_edge(repo_root: Path) -> None:
+    """R5 reverse edge (2026-08-21, rebuild-the-three-ceremony-assemblers plan
+    C6): the PLAN records which baton currently owns it, stamped at the
+    baton-claims-plan moment -- this module's own `session_claims.claim_plan`
+    call site (the only place `apply.py` itself claims a plan; the initial
+    mint-time claim lives in `coordinator-doc-new.py`, out of this chunk's
+    `writes:` scope).
+
+    Reuses `_resolve_held_handoff_for_session` (the SAME resolver
+    `commit_ledger/resolve_owner.py` reuses for exactly this "which baton
+    does the current session hold" question) rather than trusting a
+    directive-supplied path -- do not invent a second resolution mechanism.
+    A standalone session (no held claim) has no baton to name as owner and
+    is a silent no-op, matching `resolve_owner_handoff_id`'s own
+    zero-held-claims posture.
+
+    The held baton's OWN `governing_plan` field (C5's forward edge, already
+    stamped at mint) names which plan this reverse edge targets -- read, not
+    re-derived. A baton holding no `governing_plan` has no plan to stamp an
+    owner onto and is a silent no-op.
+
+    KEY NAME `claimed_by_handoff` (repo-relative POSIX path to the owning
+    baton) -- distinct from the existing handoff-side `claimed_by` (a
+    SESSION id, per handoff.schema.json), which this is not: this is a
+    baton-to-baton back-edge stored on the PLAN, not a session identity.
+    `plan.schema.json` carries no top-level `additionalProperties: false`
+    (verified), so a record carrying this field before any schema entry
+    lands validates rather than failing, the same read-before-schema safety
+    C6's own `governing_plan` schema backfill documents.
+
+    CONTESTED-OWNERSHIP QUESTION: CLOSED (predecessor handoff's own
+    "Contested-plan behaviour" section, ratified by the PM) --
+    detect-and-warn, non-blocking, no claim protocol. A plan already naming
+    a DIFFERENT owning baton is overwritten (last-writer-wins) after a
+    stderr warning; it is never a raise. This is the deliberate opposite of
+    `_dispatch_baton_stamp_carried_ids`'s own `governing_plan` conflict
+    posture (which raises) -- that guards a single baton's own plan link
+    from silently changing; this guards nothing but records recency, by
+    design.
+
+    Best-effort, matching this module's other compensator/claim-adjacent
+    posture: any failure resolving the held baton, reading its frontmatter,
+    or writing the plan's frontmatter is swallowed here rather than raised
+    -- this back-edge is an optimization for C10's later single-file read,
+    never a load-bearing gate, and must never abort an otherwise-successful
+    claim/reclaim over a missing or malformed plan file.
+    """
+    # Imports are hoisted ABOVE the try deliberately. Inside it, an ImportError would
+    # reach `except (LockTimeout, MutateAbort, ...)` with those names unbound, and an
+    # exception raised while EVALUATING an except clause propagates out of the whole try
+    # statement -- the `except Exception` below would not catch it, so the handler that
+    # guarantees "never aborts a claim" would be the thing aborting it.
+    from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
+    from coordinator_core.frontmatter.primitives import (
+        insert_fm_field,
+        split_frontmatter,
+        rebuild,
+    )
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    try:
+        primary, _additional, _degraded = _resolve_held_handoff_for_session(
+            repo_root, allow_standalone=True
+        )
+        if not primary:
+            return
+
+        held_abs = repo_root / primary if not Path(primary).is_absolute() else Path(primary)
+        if not held_abs.is_file():
+            return
+        held_fm_text = split_frontmatter(held_abs.read_text(encoding="utf-8"))
+        if held_fm_text is None:
+            return
+        governing_plan = read_fm_field_unquoted(held_fm_text.fm_text, "governing_plan")
+        if not governing_plan:
+            return
+
+        plan_abs = repo_root / governing_plan if not Path(governing_plan).is_absolute() else Path(governing_plan)
+        if not plan_abs.is_file():
+            return
+
+        try:
+            held_rel = held_abs.relative_to(repo_root).as_posix()
+        except ValueError:
+            held_rel = str(held_abs)
+
+        def _mutate(old_text: str) -> str:
+            split = split_frontmatter(old_text)
+            if split is None:
+                raise MutateAbort(f"plan-owner-stamp: no parseable YAML frontmatter in {plan_abs}")
+            fm = split.fm_text
+            existing_owner = read_fm_field_unquoted(fm, "claimed_by_handoff")
+            if existing_owner == held_rel:
+                return old_text
+            if existing_owner:
+                print(
+                    f"baton-assemble apply: plan-owner-stamp -- {plan_abs} was owned by "
+                    f"{existing_owner!r}, now claimed by {held_rel!r}. Last-writer-wins; "
+                    "the outdated baton will warn on its own next read.",
+                    file=sys.stderr,
+                )
+                import re as _re
+
+                fm = _re.sub(r"(?m)^claimed_by_handoff:.*\n?", "", fm)
+            fm = insert_fm_field(fm, "claimed_by_handoff", held_rel)
+            return rebuild(split, fm)
+
+        locked_rmw(plan_abs, _mutate, repo_root=repo_root)
+    except (LockTimeout, MutateAbort, OSError, ValueError):
+        return
+    except Exception as exc:  # noqa: BLE001 -- best-effort back-edge, never blocks a claim
+        # `plan_abs` is bound inside the try, so it is NOT referenced here: a failure
+        # before that assignment would make this handler raise NameError, which is the
+        # same defect the hoisted imports above exist to avoid.
+        print(
+            f"baton-assemble apply: plan-owner-stamp skipped: {exc}",
+            file=sys.stderr,
+        )
+        return
+
+
 def _compensate_d5_release_claim(
     directive: dict[str, Any], repo_root: Path, detail: Optional[dict[str, Any]]
 ) -> None:
@@ -1616,6 +1780,7 @@ def _compensate_d5_release_claim(
     from coordinator_core.session import claims as session_claims
 
     session_claims.claim_plan(slug, cwd=str(repo_root))
+    _stamp_plan_owner_back_edge(repo_root)
 
 
 #: Registered into `apply_base.execute_directives`'s optional `compensators`

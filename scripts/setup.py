@@ -208,6 +208,25 @@ EXIT_INTERPRETER_UNSUPPORTED = 96
 # on macOS/Linux, where CREATE_NO_WINDOW does not exist.
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
+# This installer's over-a-minute bounds are members of the named `install`
+# timeout family (DR-349 § Carve-outs) and are read from it rather than
+# re-typed here, so the whole carve-out is auditable as one table. The import
+# is module-level and eager on purpose: this file always ships at
+# `<repo>/scripts/setup.py` in BOTH trees that invoke it (see the module
+# docstring's manifest backlink), and both carry `coordinator_core`. A tree
+# where it is absent cannot be installed by this script anyway — Responsibility
+# 4 is `import coordinator_core` — so failing here says the same thing sooner.
+# `coordinator_core.install.timeouts` itself is bare integers, importable long
+# before any dependency has been provisioned. The sub-minute probe bounds
+# scattered below stay literals: those are wedged-child guards on our own
+# fast checks, and admitting them here would blur what the family is for.
+if str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from coordinator_core.install.timeouts import (  # noqa: E402
+    PACKAGE_INSTALL_SECS,
+    PLATFORM_UNINSTALL_SECS,
+)
+
 HELP_TEXT = """\
 Claude-klabauter installer — sets up the coordinator control-plane engine.
 
@@ -533,9 +552,12 @@ def deps_importable(interpreter: str, import_names: list[str]) -> bool:
 
 
 def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
-    """Run a pip subprocess with a 600s timeout (matching ensure_venv.py's
-    `_install_deps` convention — Review: code-reviewer 2026-07-21 Finding 5,
-    P2: an unbounded pip subprocess can hang forever on a stalled network).
+    """Run a pip subprocess bounded by `PACKAGE_INSTALL_SECS`, the `install`
+    timeout family's member for one `pip install` (Review: code-reviewer
+    2026-07-21 Finding 5, P2: an unbounded pip subprocess can hang forever on
+    a stalled network). ensure_venv.py's `_install_deps` derives the same
+    member, so the two are one number rather than a convention two files
+    happen to share.
     `LC_ALL=C` is pinned so the PEP-668 substring match in `provision_deps`
     below stays valid regardless of the invoking environment's locale
     (Finding 10, nit). stderr is merged into stdout via `stderr=STDOUT`
@@ -549,7 +571,7 @@ def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        timeout=600,
+        timeout=PACKAGE_INSTALL_SECS,
         env=env,
         **_NO_CONSOLE,
     )
@@ -771,7 +793,7 @@ def _offer_homebrew_removal(
     try:
         proc = subprocess.run(
             ["brew", "uninstall", formula],
-            timeout=120,
+            timeout=PLATFORM_UNINSTALL_SECS,
             capture_output=True,
             text=True,
             **_NO_CONSOLE,
@@ -2986,7 +3008,7 @@ def provision_whoami_under_general_pin(
             [general, "-m", "pip", "install", "-e", f"{whoami_pkg}/"],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=PACKAGE_INSTALL_SECS,
             **_NO_CONSOLE,
         )
         if proc.returncode == 0:

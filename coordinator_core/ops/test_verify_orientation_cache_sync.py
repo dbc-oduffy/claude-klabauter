@@ -211,6 +211,8 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         ["- `state/audits/` — existing investigation records"],
         [],
         "",
+        [],
+        "",
     )
     cache_path = _write(tmp_path, output)
     violations, _ = verify(str(cache_path), str(tmp_path))

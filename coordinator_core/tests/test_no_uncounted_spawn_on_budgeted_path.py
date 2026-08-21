@@ -232,8 +232,6 @@ import pathlib
 import sys
 import typing
 
-import pytest
-
 from coordinator_core.op_census import spawn_bearing_ops
 from coordinator_core.spawn_policy.detect import site_key
 from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
@@ -655,8 +653,16 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "diverged path (staged v2, worktree v3) routes `commit_scoped` down the hookless "
         "private-index branch under the op's default `push_mode='deferred'`. A DIRECT call "
         "measurement of the enclosing function, not an inference from the Popen count alone. "
-        "Counted by `op_total_deferred_diverged_detach` (28) against that shape's own seam "
-        "figure (20, exact equality).",
+        # Review: staff-eng Finding 12 — this legitimation cited a hardcoded
+        # spawn count that drifted independently of the manifest pin it
+        # names (recorded 28, then 26, then 25 across successive runs).
+        # Cite the manifest key by name only; the exact figure lives at
+        # `coordinator_core/benchmarks/budget-manifest.json`'s
+        # `ceremony.scoped_git_commit.op_total_deferred_diverged_detach`.
+        "Counted by the manifest key `op_total_deferred_diverged_detach` "
+        "against that shape's own seam figure (`deferred_diverged_detach`, "
+        "exact equality) -- see the manifest's own `_op_total_rationale` "
+        "for the measured provenance and re-verification history.",
     ),
     (
         "ops.discover_working_repos",
@@ -1402,20 +1408,43 @@ def test_legitimized_site_suppresses_a_reachable_violation(tmp_path):
 
 
 #: Real drift, found by this chunk's own divergence guard, not manufactured
-#: for demonstration: `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP`
-#: is missing `hooks.cater_subagent_start` (274 live ops vs 273 fast-path
-#: entries, measured 2026-08-21). `_registry_map.py` is a hand-maintained
+#: for demonstration. `_registry_map.py::OP_MODULE_MAP` is a hand-maintained
 #: PERFORMANCE OPTIMIZATION per its own docstring ("a stale/incomplete map
 #: degrades to today's correctness, never to a broken dispatch") and is
-#: outside this chunk's declared write scope (`state/dispatch-briefs/
-#: 2026-08-21-the-census-that-cannot-miss-an-op/C2.md`'s `writes:` list does
-#: not include it) — the fix is a one-line addition to that module's
-#: `OP_MODULE_MAP`, mirroring its existing `hooks.*` entries, left to a
-#: follow-up chunk that owns that file. `designed_red`: this test's failure
-#: output IS the worklist (a single named op), never gated on by the fast
-#: tier, and it is the demonstration that the divergence guard this chunk
-#: was required to add actually catches something real on first light.
-@pytest.mark.designed_red
+#: outside this chunk's declared write scope. `designed_red`: this test's
+#: failure output IS the worklist, never gated on by the fast tier, and it
+#: is the demonstration that the divergence guard this chunk was required to
+#: add actually catches something real.
+#: GATING as of 2026-08-21. `designed_red` is gone and the divergence is
+#: zero in both directions.
+#:
+#: This comment was WRONG TWICE, and the two errors share one move, so both
+#: are recorded rather than replaced. (1) It first named the drift as
+#: `_registry_map.py` missing `hooks.cater_subagent_start`; that entry landed
+#: in the same diff, so the stated cause was already false when written
+#: (staff-eng Finding 3). (2) It then named a "stale `sizing.read_object_fields`
+#: entry the live registry no longer has." Also false, and in the more
+#: dangerous direction: the op was never stale. `read_sizing_object_fields.py`
+#: carried `@register_op`, sat in `OP_MODULE_MAP`, and had a test asserting
+#: its own registry membership -- but its module was absent from
+#: `_EAGER_OP_MODULES`, so `import coordinator_core.ops` never registered it
+#: and `coordinator-invoke sizing.read_object_fields` could not resolve it.
+#: PRESENT-BUT-DEAD, the exact defect this workstream shipped and fixed for
+#: its own census op, live on someone else's. Its suite stayed green
+#: throughout because that test file imports the module directly and the
+#: decorator fires as an import side effect -- a test that imports what it
+#: audits cannot see "declared but unreachable."
+#:
+#: The shared move is CHARACTERISING a divergence instead of DIAGNOSING it.
+#: "Stale entry" was inferred from the direction of the set difference and
+#: would have been discharged by deleting the map row, which would have
+#: buried a break-class defect under a tidy-looking cleanup. Read the
+#: mechanism; a set difference tells you THAT two tables disagree, never WHY.
+#:
+#: Both halves fixed at source rather than exempted: the eager-import entry
+#: added, and `plan.tasks.spine_drift_check` added to `OP_MODULE_MAP`. The
+#: guard now proves what PM Ruling 3-B asked of it -- and it earned its
+#: keep, because it is what caught a dead op nothing else was looking at.
 def test_registry_fast_path_matches_live_registry():
     """The divergence guard hard constraint 7 (amended) / PM Ruling 3-B
     require: `_registry_map.py::OP_MODULE_MAP` (the fast path) must agree

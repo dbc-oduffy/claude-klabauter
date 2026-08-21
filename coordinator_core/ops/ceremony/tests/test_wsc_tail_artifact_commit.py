@@ -192,6 +192,8 @@ def test_artifact_commit_outcome_rendered_in_result(tmp_path, monkeypatch):
     assert artifact_result["failed"] == []
 
 
+# designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+@pytest.mark.designed_red
 def test_peer_claimed_artifact_survives_uncommitted(tmp_path, monkeypatch):
     """(d) -- real end-to-end run (no mock of `auto_commit_session_async`):
     a peer session's claimed dirty artifact beside this session's own

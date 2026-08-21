@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.roadmap.cluster_scout import (
     Cluster,
     ClusterDispatchCapExceededError,
@@ -31,11 +32,10 @@ from coordinator_core.roadmap.cluster_scout import (
 )
 
 CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
-DOE_ROOT = CLAUDE_KLABAUTER_ROOT.parent / "DoE-claude"
 VENDORED_FRAGMENT = (
     CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "roadmap" / "fragments" / "cluster-scout-brief-fragment.json"
 )
-DOE_SOURCE_FRAGMENT = DOE_ROOT / "coordinator" / "contract" / "cluster-scout-brief-fragment.json"
+_DOE_FRAGMENT_RELPATH = "coordinator/contract/cluster-scout-brief-fragment.json"
 
 
 def _fragment() -> dict:
@@ -50,16 +50,18 @@ def test_vendored_fragment_exists_and_is_json() -> None:
     json.loads(VENDORED_FRAGMENT.read_text(encoding="utf-8"))
 
 
-@pytest.mark.skipif(
-    not DOE_SOURCE_FRAGMENT.is_file(),
-    reason="DoE-claude sibling clone not present at this box's expected path",
-)
 def test_vendored_fragment_is_byte_identical_to_doe_source() -> None:
     """AC17's fragment-verbatim pin, mirroring AC15/AC20: an unpinned second
     copy of a DoE-authored rule is the same defect class as the schema drift
     this plan avoids elsewhere."""
+    doe_root = read_doe_root_pointer()
+    if not doe_root:
+        pytest.skip("DoE-claude sibling root not resolvable on this machine")
+    doe_source_fragment = Path(doe_root) / _DOE_FRAGMENT_RELPATH
+    if not doe_source_fragment.is_file():
+        pytest.skip(f"DoE source fragment not found at {doe_source_fragment}")
     vendored = VENDORED_FRAGMENT.read_bytes()
-    source = DOE_SOURCE_FRAGMENT.read_bytes()
+    source = doe_source_fragment.read_bytes()
     assert vendored == source, (
         "coordinator_core/roadmap/fragments/cluster-scout-brief-fragment.json "
         "has drifted from DoE-claude's "
@@ -109,9 +111,8 @@ def test_solo_scout_dispatches_with_composed_brief() -> None:
     decisions = plan_cluster_dispatch(
         clusters, depth_disposition="solo-scout", excluded_clusters=[]
     )
-    assert decisions == [
-        decisions[0]
-    ]  # sanity: single decision
+    assert len(decisions) == 1
+    assert decisions[0].cluster_id == "c1"
     assert decisions[0].action == "dispatch"
     assert decisions[0].brief is not None
 

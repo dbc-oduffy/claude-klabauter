@@ -17,7 +17,7 @@ Public surface (pinned contract — do not change without updating consumers):
     class LockTimeout(Exception): ...
     class MutateAbort(Exception): ...
     LOCK_TIMEOUT_SECS: float = 10.0
-    CONTENDED_LOCK_WAIT_SECS: float = 180.0
+    CONTENDED_LOCK_WAIT_SECS: float = 180.0   # ceiling, narrow-only
     CONTENDED_LOCK_WAIT_ENV: str = "COORDINATOR_LOCK_WAIT_SECS"
 
     def contended_lock_wait_secs(default: float = CONTENDED_LOCK_WAIT_SECS) -> float: ...
@@ -49,6 +49,12 @@ Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1
                 an advisory lock across a whole operation rather than a single RMW).
 
 Negative-spec:
+  - Do NOT remove the upper clamp in ``contended_lock_wait_secs``, and do NOT
+    add a second env var that reaches past it. ``CONTENDED_LOCK_WAIT_SECS`` is
+    a ceiling, not a starting point: the env var and the ``default`` parameter
+    narrow it and nothing widens it. An op that needs a longer wait to succeed
+    is contending too hard, and the fix is fewer/shorter holds, not more
+    sleeping processes on a box already running 50-70 of them.
   - Do NOT use threading.Lock — must serialise ACROSS processes.
   - Do NOT place the lock file under target's directory — it must survive
     delete-and-replace of the target.
@@ -283,34 +289,53 @@ LOCK_TIMEOUT_SECS: float = 10.0
 #: protect anything — it converts one sleeping process into a fresh process
 #: per retry, and process creation is the cost the brightline actually counts
 #: (§ DR-344). Waiting is the cheap half; giving up early is the expensive one.
+#:
+#: It is a CEILING, not a starting point — see ``contended_lock_wait_secs``.
+#: Nothing at runtime resolves above it; the ratchet test pins that.
 CONTENDED_LOCK_WAIT_SECS: float = 180.0
 
-#: Per-invocation override for ``contended_lock_wait_secs()``. Named on the
-#: environment rather than passed down every call chain because the callers
-#: that need to raise it (a session that must land a specific commit in a
-#: mirror) are several process boundaries away from the acquire site.
+#: Per-invocation override for ``contended_lock_wait_secs()``, NARROWING ONLY.
+#: Named on the environment rather than passed down every call chain because
+#: the acquire site is several process boundaries away from the session that
+#: wants a shorter, fail-fast wait.
 CONTENDED_LOCK_WAIT_ENV: str = "COORDINATOR_LOCK_WAIT_SECS"
 
 
 def contended_lock_wait_secs(default: float = CONTENDED_LOCK_WAIT_SECS) -> float:
     """Resolve the contended-lock wait, honouring ``CONTENDED_LOCK_WAIT_ENV``.
 
-    A malformed or non-positive value falls back to *default* rather than
-    raising: the env var is an operator convenience on a hot path, and a
-    typo in it must not be the reason a publish round refuses to run.
+    The env var and the *default* parameter may both LOWER the wait; neither
+    can raise it above ``CONTENDED_LOCK_WAIT_SECS``. Both clamps are ``min``,
+    matching the shape at ``coordinator_core.ipc :: _timeout_for`` — the knob
+    that would otherwise be the escape hatch is the thing the clamp sits after.
 
-    Negative-spec: does NOT clamp an upper bound. A caller that asks to wait
-    an hour has decided that queueing beats respawning; that is the whole
-    point of the knob.
+    A malformed or non-positive value falls back to the ceiling rather than
+    raising: the env var is an operator convenience on a hot path, and a typo
+    in it must not be the reason a publish round refuses to run.
+
+    Why the direction is one-way (2026-08-21 PM ruling, DR-344 § the
+    brightline): the failure this closes is a session that hits contention,
+    exports a bigger number, and re-runs — so the box carries a process asleep
+    for as long as the number says, on a machine where 50-70 peers are already
+    queued behind it. A wait that must be raised to succeed is a contention
+    defect, not a dial position. Raising the ceiling is a PM-sized change to
+    ``CONTENDED_LOCK_WAIT_SECS`` itself, guarded by
+    ``coordinator_core/tests/test_contended_lock_wait_ratchet.py``.
     """
+    ceiling = min(default, CONTENDED_LOCK_WAIT_SECS)
     raw = os.environ.get(CONTENDED_LOCK_WAIT_ENV, "").strip()
     if not raw:
-        return default
+        return ceiling
     try:
         parsed = float(raw)
     except ValueError:
-        return default
-    return parsed if parsed > 0 else default
+        return ceiling
+    if not parsed > 0:
+        # `not parsed > 0` rather than `parsed <= 0`: `float("nan")` parses
+        # cleanly and fails BOTH comparisons, and `min(nan, ceiling)` returns
+        # the nan — an unorderable timeout handed straight to `_acquire_flock`.
+        return ceiling
+    return min(parsed, ceiling)
 
 
 class LockTimeout(Exception):

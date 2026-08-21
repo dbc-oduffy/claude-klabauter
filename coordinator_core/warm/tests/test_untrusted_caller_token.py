@@ -37,7 +37,7 @@ def test_tokenless_request_is_refused_not_silently_served():
         dispatch_calls.append(msg)
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
-    io_obj = _FakeIO([_frame(id_=1, method="ping")])  # no _engine_token at all
+    io_obj = _FakeIO([_frame(id_=1, method="ping", token=None)])  # token=None: no _engine_token at all
 
     server._handle_connection(
         io_obj,
@@ -64,7 +64,7 @@ def test_tokenless_request_does_not_evict_the_server():
     called, so a regression toward "treat missing as skewed" fails loudly
     rather than passing by accident.
     """
-    io_obj = _FakeIO([_frame(id_="x", method="ping")])
+    io_obj = _FakeIO([_frame(id_="x", method="ping", token=None)])
 
     server._handle_connection(
         io_obj,

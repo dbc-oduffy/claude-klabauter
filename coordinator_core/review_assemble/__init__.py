@@ -51,16 +51,24 @@ class _ReviewAssembleExitCode:
     TRANSPORT = 3
 
 
+#: The printed usage string's `--surface` value set, derived from
+#: `residue.EXPLICIT_SURFACES` (the caller-facing surface vocabulary) rather
+#: than a fourth hand-spelled copy -- three hand-synced literals is how the
+#: help text went stale after C2 added `roadmap` (Review: code-reviewer --
+#: C2 residual).
+_SURFACE_USAGE = "|".join(residue.EXPLICIT_SURFACES)
+
+
 def _usage() -> int:
     print(
-        "usage: review-assemble [brief] [--artifact <path>] [--surface plan|diff]",
+        f"usage: review-assemble [brief] [--artifact <path>] [--surface {_SURFACE_USAGE}]",
         file=sys.stderr,
     )
     return _ReviewAssembleExitCode.USAGE
 
 
 def _dispatch_brief(rest: list[str]) -> int:
-    """`brief [--artifact <path>] [--surface plan|diff]` — read-only, prints
+    """`brief [--artifact <path>] [--surface plan|diff|roadmap]` — read-only, prints
     the bare decision object as JSON on stdout. `--surface`, when given, is
     an already-resolved surface from the caller/engine (per
     `coordinator/skills/review/SKILL.md`) and takes HIGHEST precedence over
@@ -123,7 +131,7 @@ def main(argv: list[str]) -> int:
     needs no subcommand word at all.
     """
     if argv and argv[0] in ("--help", "-h"):
-        print("usage: review-assemble [brief] [--artifact <path>] [--surface plan|diff]")
+        print(f"usage: review-assemble [brief] [--artifact <path>] [--surface {_SURFACE_USAGE}]")
         return _ReviewAssembleExitCode.SUCCESS
     if argv and argv[0] in _SUBCOMMANDS:
         return _SUBCOMMANDS[argv[0]](argv[1:])

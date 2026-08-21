@@ -696,6 +696,88 @@ def _compute_ownership(
 # ---------------------------------------------------------------------------
 
 
+#: PM ruling 2026-08-21: this mechanism is OFF until it is rebuilt.
+#:
+#: Not a tactical guard, not a tunable, and deliberately not an env var --
+#: there is no override key and none is to be added. The rebuild removes this
+#: constant; nothing else may set it.
+#:
+#: What was measured (docs/research/spike-verdicts/2026-08-21-ceremony-tail-
+#: session-artifact-commit-cost.md): ONE `compute_offer` call created **73
+#: processes** and burned **5,609ms of kernel+user CPU**, and the close
+#: ceremony calls it twice per pass. 33 of its 35 `subprocess.run` calls were
+#: `git ls-files --full-name` over a single absolute `touched.txt` entry each,
+#: at a 1,411ms mean -- and 25 of 25 sampled entries were not under the
+#: worktree root at all, returning `None` and being dropped regardless. The
+#: op was spawning a git process per entry to be told, slowly, that a file on
+#: another drive is not in this repo.
+#:
+#: Against CLAUDE.md's brightline -- 500ms end-to-end, one process over 200ms
+#: needs a fix, >1s is deleted and rebuilt from first principles -- 5.6s of
+#: CPU across 73 processes is multiple kill-bar breaches at once, in the op
+#: every workstream in the fleet must pass through to close.
+#:
+#: NOT sanctioned as the fix: short-circuiting the out-of-tree case, passing
+#: `root=` to engage `normalize_touch_path`'s fast arm (measured: still
+#: spawns 25 of 25), or any other single-site patch. A tactical fix leaves
+#: every mechanism that produced this shape intact -- including the ones that
+#: let it reach production unmeasured. See § Rebuild pointer below.
+#:
+#: Blast radius, accepted by the PM when ruling: sessions no longer
+#: auto-commit their own artifacts. `ceremony.wsc_tail`'s
+#: `session_artifact_commit`, `/quick-wrap`'s close commit, the
+#: `safe-commit-offer` CLI, and the cadence auto-committer all now take their
+#: existing fail-open "could not attribute, committed nothing" arm. Work is
+#: committed explicitly instead. Nothing loses data: paths stay dirty on disk
+#: and surface in the next session's own dirty-tree read.
+#:
+#: Rebuild pointer: state/sizings/2026-08-21-the-ceremony-tail-must-close-in-
+#: two-seco.yaml (route=plan) and its `spike_amendments`.
+_MECHANISM_DISABLED = True
+
+#: Reason string surfaced through every disabled readout, so a caller
+#: rendering a degraded banner names the disable rather than implying a
+#: genuine claim-read failure.
+_DISABLED_REASON = (
+    "auto-commit attribution is DISABLED (PM ruling 2026-08-21): the mechanism "
+    "cost 73 processes and 5,609ms CPU per call and is off pending rebuild. "
+    "Nothing was committed and nothing was lost -- commit explicitly instead."
+)
+
+
+def _disabled_offer(session_id: str) -> SafeCommitOffer:
+    """The zero-spawn readout `compute_offer` returns while the mechanism is
+    disabled (`_MECHANISM_DISABLED`).
+
+    `indeterminate` and `ownership.degraded` are `True` because they are
+    LITERALLY true here, not as a convenient reuse of an existing enum: both
+    already mean "this call could not tell you who owns these paths", which
+    is exactly the state of a call that did not look. Every consumer of this
+    shape already has a tested fail-open arm for it --
+    `auto_commit_session_async`'s hardening (a) returns
+    `skipped_indeterminate` with no groups and no `ceremony.scoped_git_commit`
+    call at all, and `scope_report` narrates degraded reads rather than
+    trusting an empty `peer` bucket as "nobody else has claims".
+
+    Every bucket is empty rather than populated-but-unattributed: a disabled
+    call has NO candidate set, so claiming otherwise would invent a readout
+    it never computed.
+    """
+    return {
+        "session_id": session_id,
+        "safe_paths": [],
+        "excluded": [],
+        "orphans": [],
+        "indeterminate": True,
+        "ownership": {
+            "mine": [],
+            "peer": [],
+            "unattributed": [],
+            "degraded": True,
+        },
+    }
+
+
 def compute_offer(
     session_id: str,
     cwd: Optional[str] = None,
@@ -823,7 +905,17 @@ def compute_offer(
 
     Read-only: makes no git or ``touched.txt`` mutation. Raises
     ``ValueError`` if ``session_id`` is empty.
+
+    DISABLED 2026-08-21 -- see ``_MECHANISM_DISABLED`` above. Every arm
+    described in this docstring is the behaviour this function had when it
+    was measured at 73 processes and 5,609ms of CPU per call, and is the
+    behaviour the rebuild must restore. It is documentation of intent right
+    now, not of what runs.
     """
+    if not session_id:
+        raise ValueError("session_id is required")
+    if _MECHANISM_DISABLED:
+        return _disabled_offer(session_id)
     candidates = _resolve_agent_touched_candidates(session_id, cwd)
     if extra_candidates:
         seen = set(candidates)
@@ -1268,6 +1360,29 @@ async def auto_commit_session_async(
     staged then rolled back. Named in the returned ``outcome`` as
     ``conflicted_paths``.
     """
+    if _MECHANISM_DISABLED:
+        # PM ruling 2026-08-21 -- see `_MECHANISM_DISABLED`. Returned here,
+        # ahead of `compute_offer`, rather than riding its disabled offer down
+        # into hardening (a) below: that arm's detail says "this call's own
+        # claim reads were indeterminate", which would report a claim-read
+        # FAILURE for a call that deliberately never read anything. Same
+        # zero-commit, zero-group, non-raising shape as (a) -- only the
+        # narration differs, because the reason differs.
+        return {
+            "session_id": session_id,
+            "groups": [],
+            "excluded": [],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": OrderedDict(),
+            "outcome": {
+                "status": "skipped_degraded",
+                "detail": _DISABLED_REASON,
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
 

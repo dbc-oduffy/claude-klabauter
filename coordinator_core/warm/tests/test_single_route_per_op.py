@@ -113,24 +113,31 @@ def test_warm_server_declares_the_warm_server_route(monkeypatch):
 
 def test_route_is_declared_before_the_server_starts_accepting():
     """Pool workers inherit the environment AT SPAWN, so the declaration must
-    precede any dispatch -- `main()` is the only place that ordering holds.
+    precede any dispatch -- `_run_guarded` is the only place that ordering
+    holds.
 
-    Source-level because `main()` is Windows-only, binds a real pipe, and
-    never returns; the ordering it asserts is the whole reason the stamp
-    reaches a pool worker at all.
+    Source-level because the boot path binds a real endpoint and never
+    returns; the ordering it asserts is the whole reason the stamp reaches a
+    pool worker at all.
+
+    TARGETS `_run_guarded`, NOT `main()`. This parsed `inspect.getsource(
+    server.main)` until 2026-08-21 and had been failing since `main()` became
+    a thin wrapper around `_run_guarded` (the STEP 0 crash-reporting guard),
+    which is where both calls actually live. The ordering itself never
+    stopped holding -- only the function this test was reading.
     """
     import ast
     import inspect
 
     from coordinator_core.warm import server
 
-    tree = ast.parse(inspect.getsource(server.main))
+    tree = ast.parse(inspect.getsource(server._run_guarded))
     calls = [
         node.func.id
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     ]
-    assert "_declare_execution_route" in calls, "main() never declares its route"
+    assert "_declare_execution_route" in calls, "the boot path never declares its route"
     assert calls.index("_declare_execution_route") < calls.index("_ServerContext"), (
         "route must be declared before the server context that builds the dispatch pool"
     )

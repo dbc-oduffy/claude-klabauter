@@ -66,6 +66,21 @@ and a second copy is the failure mode this row is most likely to produce:
     from the request and shutdown-trigger paths below, and `flush()` runs
     from `_ctx_shutdown`.
 
+PLATFORMS -- Windows named pipe, POSIX unix socket, ADDED 2026-08-21.
+`main()` refused to start off Windows until that date, so a POSIX door had
+no server to talk to and no Mac could run any of this. The two transports
+now differ in exactly one boot step (`_elect_windows_pipe` /
+`_elect_unix_socket_endpoint`) and one accept layer (`serve_forever` /
+`serve_forever_unix`). EVERYTHING ELSE -- the queue, the bounded worker
+pool, `InFlightCounter`, the idle watchdog, the skew/eviction path, the
+breadcrumb, telemetry, the dispatch process pool -- is one implementation
+serving both, which is the property that keeps the POSIX arm from becoming
+a second, slowly-diverging server. Read `warm.election`'s own docstring
+before touching the POSIX election: POSIX has no
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, and the stale-socket reclaim that stands
+in for it is the one place the two platforms are not merely different but
+unequal in what the kernel guarantees.
+
 TRANSPORT MODEL -- synchronous, one OS thread per connection, not asyncio
 end to end. `warm.lifecycle`'s shutdown sequence is itself synchronous
 (`time.sleep`-based polling in `_wait_for_drain`), and the client's own
@@ -174,7 +189,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.telemetry import op_latency
@@ -197,6 +212,7 @@ __all__ = [
     "PENDING_LISTENER_POOL_SIZE",
     "WORKER_POOL_SIZE",
     "DISPATCH_PROCESS_POOL_SIZE",
+    "ACCEPTOR_POOL_SIZE",
     "UNTRUSTED_CALLER_ERROR",
     "main",
 ]
@@ -299,6 +315,24 @@ WORKER_POOL_SIZE = 30
 # `WORKER_POOL_SIZE` already names (C5's accept-and-queue chunk), it does not
 # add a second one on top of it.
 DISPATCH_PROCESS_POOL_SIZE = WORKER_POOL_SIZE
+
+# ACCEPTOR POOL SIZE -- the POSIX accept layer's own bound
+# (`_ServerContext._start_acceptor_pool`). Reuses
+# `PENDING_LISTENER_POOL_SIZE` rather than deriving a second number,
+# because it answers the same question that constant answers on Windows:
+# how many simultaneous arrivals should this server be able to take off
+# the kernel at once. It is NOT the same THING, and reading it as one
+# would misprice both. A Windows pending listener is a kernel pipe
+# instance plus a blocked thread, and its count caps how many clients can
+# connect at all before they see a busy error. A POSIX acceptor is only a
+# blocked thread: the kernel's own `listen()` backlog
+# (`election.UNIX_LISTEN_BACKLOG`, 128) is what caps simultaneous
+# arrivals, and this constant caps only how fast they are drained off it
+# into the shared queue. Sized alike because the load norm behind both is
+# the same one (docs/wiki/machine-load-norm.md's "as though 30 callers are
+# queued"); named separately because the cost per unit and the failure
+# mode at the bound are not.
+ACCEPTOR_POOL_SIZE = PENDING_LISTENER_POOL_SIZE
 
 
 class InFlightCounter:
@@ -1063,6 +1097,24 @@ def _wrap_handle(handle: int) -> Any:
     return os.fdopen(fd, "r+b")
 
 
+def _wrap_socket(conn: Any) -> Any:
+    """POSIX counterpart of `_wrap_handle`: an accepted unix-socket
+    connection as the SAME blocking file-object API `_handle_connection`
+    already drives (`readline` / `write` / `flush` / `close`).
+
+    `conn.close()` immediately after `makefile` is the documented CPython
+    idiom, not a bug: `socket.makefile` takes its own reference to the
+    underlying fd, so the socket stays open until the file object is
+    closed too. Dropping the socket object here is what makes
+    `_handle_connection`'s single `io.close()` in its `finally` release
+    the whole connection -- without it, every served request would leak a
+    socket object for the life of a resident server.
+    """
+    io = conn.makefile("rwb")
+    conn.close()
+    return io
+
+
 class _ServerContext:
     """Boot-scoped server state: the pipe name, the ACL identity, the
     version state constructed once, the in-flight counter every connection
@@ -1089,9 +1141,22 @@ class _ServerContext:
         version_state: "skew.ServerVersionState",
         engine_root: Optional[Path] = None,
         boot_token: Optional[str] = None,
+        listen_socket: Any = None,
+        endpoint_path: Optional[Path] = None,
     ):
         self.name = name
         self.sid = sid
+        # POSIX only, both None on Windows: the listening unix socket this
+        # server owns and the path it is bound to, held so `_ctx_shutdown`
+        # can remove that path -- ownership-checked, see there. Every
+        # pre-existing construction omits both and keeps its exact prior
+        # behaviour, which is what `test_server_loop.py`'s direct
+        # `_ServerContext(...)` builds depend on.
+        self.listen_socket = listen_socket
+        self.endpoint_path = endpoint_path
+        self._endpoint_identity = (
+            election.socket_identity(endpoint_path) if endpoint_path is not None else None
+        )
         self.version_state = version_state
         self.engine_root = engine_root
         # The generation token this server's pipe name was built from
@@ -1218,6 +1283,27 @@ class _ServerContext:
         # breadcrumb, and an unconditional unlink would delete the live
         # successor's entry. See `breadcrumb.unlink_breadcrumb`.
         breadcrumb.unlink_breadcrumb(self.engine_root, owner_pid=os.getpid())
+        # POSIX only. `os._exit(0)` closes the listening socket at the OS
+        # level either way, but it does NOT remove the socket FILE, and a
+        # file left behind is the corpse every future `bind()` fails
+        # against (`warm.election`'s module docstring). Removing it here
+        # is what keeps the successor's election a plain bind rather than
+        # a probe-and-reclaim.
+        #
+        # Ownership-checked for exactly the reason the breadcrumb unlink
+        # above is: a superseded generation reaching this point may be
+        # exiting while a SUCCESSOR already owns this path, and an
+        # unconditional unlink would delete the live successor's endpoint
+        # -- leaving a healthy server bound to an unlinked inode that no
+        # client can reach. `unlink_if_owned` compares (st_dev, st_ino)
+        # against what this server bound.
+        if self.listen_socket is not None:
+            try:
+                self.listen_socket.close()
+            except Exception:  # noqa: BLE001 -- never raises, per this method's contract
+                pass
+        if self.endpoint_path is not None:
+            election.unlink_if_owned(self.endpoint_path, self._endpoint_identity)
         if self._dispatch_pool is not None:
             # Best-effort, mirroring every other step in this method's own
             # "never raises" contract -- `os._exit(0)` (lifecycle's next
@@ -1360,6 +1446,101 @@ class _ServerContext:
         self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
         self._stopped.wait()
+
+    def serve_forever_unix(self, listen_socket: Any) -> None:
+        """POSIX counterpart of `serve_forever`. Same three layers, same
+        order, same blocking tail -- only the accept layer differs.
+
+        THE ACCEPT LAYER IS SIMPLER ON POSIX, AND THAT IS NOT AN OVERSIGHT.
+        Windows needs `PENDING_LISTENER_POOL_SIZE` pre-created pipe
+        INSTANCES, each with a `ConnectNamedPipe` posted on it and each
+        replenishing itself one-for-one, because a named pipe with no free
+        instance rejects a connecting client outright. A listening unix
+        socket has no such shape: one socket accepts every connection, and
+        the kernel's `listen()` backlog (`election.UNIX_LISTEN_BACKLOG`) is
+        what holds arrivals between accepts -- so there is nothing to
+        pre-create and nothing to replenish. What is preserved is the
+        property the Windows pool exists FOR: `ACCEPTOR_POOL_SIZE`
+        independent threads are simultaneously able to take a connection
+        off the kernel and enqueue it, so no single slow enqueue serializes
+        arrivals.
+
+        Everything downstream of the enqueue is literally the same code on
+        both platforms -- one `queue.Queue`, one `WORKER_POOL_SIZE` pool of
+        `_worker_loop` threads, one `InFlightCounter`, one idle watchdog --
+        which is the point: the accept-and-queue split the module
+        docstring's DRAIN SEMANTICS names is transport-independent, and
+        this method changes only what sits on its far side.
+        """
+        self._start_worker_pool()
+        self._start_acceptor_pool(listen_socket)
+        threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
+        self._stopped.wait()
+
+    def _start_acceptor_pool(
+        self, listen_socket: Any, *, pool_size: int = ACCEPTOR_POOL_SIZE
+    ) -> None:
+        """Start `pool_size` acceptor threads on one listening unix socket.
+        Split out of `serve_forever_unix` for the same isolated-exercise
+        reason `_start_pending_listener_pool` is split out of
+        `serve_forever`."""
+        for _ in range(pool_size):
+            threading.Thread(
+                target=self._acceptor_loop, args=(listen_socket,), daemon=True
+            ).start()
+
+    def _acceptor_loop(self, listen_socket: Any) -> None:
+        """One acceptor thread's whole life: accept, wrap, enqueue, repeat.
+
+        This thread's job ends at enqueue, exactly as
+        `_accept_and_replenish`'s does -- dispatch happens on a bounded
+        `_worker_loop` worker, never here, so acceptance can never spawn an
+        unbounded number of dispatching threads (AC7).
+
+        A connection accepted after `close_listener` is closed WITHOUT being
+        served, which is the same outcome the Windows chain produces for a
+        pipe instance connected after the listener closed: the client reads
+        EOF and goes cold rather than being answered by a generation that is
+        already draining.
+
+        An `OSError` from `accept()` ends this thread rather than looping.
+        The one way it happens is the listening socket being closed --
+        `_ctx_shutdown`, immediately before `os._exit(0)` -- so retrying
+        would spin a doomed thread against a dead fd for the microseconds
+        the process has left. A wrap-or-enqueue failure for ONE connection
+        is not that: it drops that connection and keeps accepting, on the
+        same reasoning `_worker_loop`'s own guard is load-bearing for --
+        an acceptor that dies on one bad connection is a permanent capacity
+        loss, not a single lost response.
+        """
+        while True:
+            try:
+                conn, _ = listen_socket.accept()
+            except OSError:
+                return
+
+            if not self._is_listening():
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                return
+
+            try:
+                io = _wrap_socket(conn)
+            except Exception as exc:  # noqa: BLE001 -- see docstring
+                print(
+                    f"[warm-server] failed to wrap an accepted connection; "
+                    f"dropping it and continuing to accept: {exc!r}",
+                    file=sys.stderr,
+                )
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                continue
+
+            self._enqueue_connection(io)
 
     def _start_worker_pool(self, *, pool_size: int = WORKER_POOL_SIZE) -> None:
         """Start `pool_size` long-lived dispatch worker threads, each
@@ -1547,15 +1728,17 @@ def _self_stable_pid_start_epoch() -> Optional[int]:
 def main() -> int:
     """`SERVER_ENTRY_SCRIPT`'s process entrypoint. Boot sequence:
 
-    1. Resolve this engine clone's pipe name using the SAME primary
-       skew token the client computes (`skew.compute_client_token`) as the
-       pipe's generation stamp -- a successor bound to a new commit
-       computes a different token, hence a different pipe name, and binds
-       immediately without contesting the predecessor's still-draining
-       pipe (election.py's own docstring).
-    2. `election.elect()` the first instance. `ElectionLost` means another
-       process already won this exact generation's pipe -- not an error,
-       just nothing for this process to do; exits 0.
+    1. Resolve this engine clone's endpoint -- a pipe name on Windows, a
+       unix socket path on POSIX -- using the SAME primary skew token the
+       client computes (`skew.compute_client_token`) as the endpoint's
+       generation stamp; a successor bound to a new commit computes a
+       different token, hence a different endpoint, and binds immediately
+       without contesting the predecessor's still-draining one
+       (election.py's own docstring).
+    2. Elect it (`election.elect` / `election.elect_unix_socket`).
+       `ElectionLost` means another process already won this exact
+       generation's endpoint -- not an error, just nothing for this
+       process to do; exits 0.
     3. Construct `skew.ServerVersionState` ONCE (boot identity).
     4. Write the breadcrumb (`warm.breadcrumb.write_breadcrumb`) -- only
        reachable past step 2, so a process that lost the election never
@@ -1585,10 +1768,6 @@ def main() -> int:
     would have before this guard existed -- per PM ruling, this must die
     audibly, not survive as a degraded no-op.
     """
-    if sys.platform != "win32":
-        print("[warm-server] this module is Windows-only", file=sys.stderr)
-        return 1
-
     try:
         return _run_guarded()
     except Exception as exc:  # noqa: BLE001 -- log, then re-raise; see docstring's STEP 0
@@ -1601,21 +1780,95 @@ def main() -> int:
         raise
 
 
+class _Elected(NamedTuple):
+    """What a boot-election arm hands back.
+
+    EXACTLY ONE OF `first_handle` / `listen_socket` IS EVER SET, and which
+    one names the transport this process won. `_run_guarded` dispatches on
+    THAT rather than re-reading the platform, so the serve call is narrowed
+    by the same value it consumes -- a static reader and the interpreter
+    agree, and neither `serve_forever` nor `serve_forever_unix` can be
+    reached with the other platform's `None`. A result with neither set is
+    a construction bug and raises rather than serving nothing.
+
+    A NamedTuple rather than a bare 5-tuple: the positional unpack read the
+    same for both arms while meaning opposite things in two slots, which is
+    exactly the shape a later edit transposes silently.
+    """
+
+    endpoint: str
+    identity: str
+    first_handle: Optional[int]
+    listen_socket: Any
+    endpoint_path: Optional[Path]
+
+
+def _elect_windows_pipe(repo_root: Path, token: str) -> _Elected:
+    """Windows arm of the boot election: resolve the SID, build the pipe
+    name, take the first instance. `first_handle` always an int here, the
+    two POSIX slots always None.
+
+    Lifted VERBATIM out of `_run_guarded` when the POSIX arm landed
+    (2026-08-21) -- same calls, same order, same messages. The extraction
+    exists so the shared tail below (version state, breadcrumb, route
+    declaration, preload, context, serve) is written once instead of twice
+    and cannot drift between platforms.
+    """
+    sid = election.current_user_sid()
+    name = election.pipe_name(token, engine_clone=repo_root, user_sid=sid)
+    first_handle = election.elect(name, user_sid=sid)
+    return _Elected(name, sid, first_handle, None, None)
+
+
+def _elect_unix_socket_endpoint(repo_root: Path, token: str) -> _Elected:
+    """POSIX arm of the boot election. Same return shape as
+    `_elect_windows_pipe`, with the slots swapped: `first_handle` always
+    None here, a listening socket and the path it is bound to instead.
+
+    `identity` carries `election.current_user_id()` -- the uid, the identity
+    analog of the SID. It reaches `_ServerContext.sid`, where its ONLY
+    Windows consumer (`_create_pipe_instance`'s ACL) is on a code path this
+    platform never takes; it is carried anyway so the context's identity
+    field is populated rather than a lie or a `None` on POSIX.
+    """
+    uid = election.current_user_id()
+    path = election.socket_path(token, engine_clone=repo_root)
+    listen_socket = election.elect_unix_socket(path)
+    return _Elected(str(path), uid, None, listen_socket, path)
+
+
 def _run_guarded() -> int:
     """`main()`'s actual boot sequence -- factored out so `main()` can wrap the
     whole thing in one guard (see `main`'s STEP 0) without the guard itself
-    needing to duplicate the platform check or the crash-reporting glue."""
+    needing to duplicate the platform branch or the crash-reporting glue.
+
+    ONE SEQUENCE, TWO TRANSPORTS. Only the election step differs by
+    platform (`_elect_windows_pipe` / `_elect_unix_socket_endpoint`) --
+    every later step, including which generation token is computed, what
+    the breadcrumb records, when the route is declared, and the whole
+    accept/queue/worker shape, is the same code on both. A POSIX server is
+    therefore not a second server that happens to resemble this one; it is
+    this one with a different endpoint under it.
+    """
     repo_root = _engine_clone_root()
-    sid = election.current_user_sid()
     token = skew.compute_client_token(repo_root)
-    name = election.pipe_name(token, engine_clone=repo_root, user_sid=sid)
+    on_windows = sys.platform == "win32"
 
     try:
-        first_handle = election.elect(name, user_sid=sid)
-    except election.ElectionLost:
+        elected = (
+            _elect_windows_pipe(repo_root, token)
+            if on_windows
+            else _elect_unix_socket_endpoint(repo_root, token)
+        )
+    except election.ElectionLost as lost:
+        # `lost.endpoint` is the contested name/path, carried on the
+        # exception because the election arm raises before it can return
+        # one. The wording stays platform-specific: on Windows this is the
+        # exact line the operator's logs have carried since C30.
+        endpoint_word = "pipe" if on_windows else "socket"
         print(
-            f"[warm-server] election lost for {name!r}; another server already "
-            "owns this generation's pipe, exiting",
+            f"[warm-server] election lost for {lost.endpoint!r}; another server already "
+            f"owns this generation's {endpoint_word}, exiting",
             file=sys.stderr,
         )
         return 0
@@ -1624,11 +1877,12 @@ def _run_guarded() -> int:
 
     try:
         breadcrumb.write_breadcrumb(
-            pipe=name,
+            pipe=elected.endpoint,
             pid=os.getpid(),
             stable_pid_start_epoch=_self_stable_pid_start_epoch() or 0,
             engine_sha=version_state.server_sha,
             engine_root=repo_root,
+            transport=breadcrumb.TRANSPORT_PIPE if on_windows else breadcrumb.TRANSPORT_UNIX,
         )
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
@@ -1640,13 +1894,30 @@ def _run_guarded() -> int:
     _preload_op_registry()
 
     ctx = _ServerContext(
-        name=name,
-        sid=sid,
+        name=elected.endpoint,
+        sid=elected.identity,
         version_state=version_state,
         engine_root=repo_root,
         boot_token=token,
+        listen_socket=elected.listen_socket,
+        endpoint_path=elected.endpoint_path,
     )
-    ctx.serve_forever(first_handle)
+
+    # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.
+    # The value that decides is the value that gets passed, so the
+    # not-None check IS the narrowing -- there is no path on which
+    # `serve_forever` sees a POSIX `None` or `serve_forever_unix` a
+    # Windows one. An election that returned neither served nothing and
+    # exited 0 silently before this branch existed; it now dies audibly,
+    # which is what `main`'s STEP 0 guard is for.
+    if elected.first_handle is not None:
+        ctx.serve_forever(elected.first_handle)
+    elif elected.listen_socket is not None:
+        ctx.serve_forever_unix(elected.listen_socket)
+    else:
+        raise election.ElectionError(
+            f"election returned no endpoint to serve for {elected.endpoint!r}"
+        )
     return 0
 
 

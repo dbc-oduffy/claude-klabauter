@@ -66,10 +66,9 @@ own rule.
 
 from __future__ import annotations
 
-import subprocess
 from typing import Optional
 
-_TIMEOUT_SECS = 2.0
+from coordinator_core.git.run import run_git
 
 
 def get_remote_url(remote: str = "origin", cwd: Optional[str] = None) -> Optional[str]:
@@ -80,20 +79,14 @@ def get_remote_url(remote: str = "origin", cwd: Optional[str] = None) -> Optiona
 
     Always spawns -- see module docstring's "Derivation method". Never
     memoized -- see module docstring's "No memo".
+
+    Bound by `git.run.LOCAL_PLUMBING_BUDGET_SECS`, which is the same 2.0
+    this module used to carry as its own `_TIMEOUT_SECS`. `git remote
+    get-url` reads `.git/config`; it contacts no remote, so `remote=` stays
+    False despite the subcommand's name.
     """
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", remote],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=_TIMEOUT_SECS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
+    result = run_git(["remote", "get-url", remote], cwd=cwd)
+    if not result.ok:
         return None
     value = result.stdout.strip()
     if not value:

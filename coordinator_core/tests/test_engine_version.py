@@ -42,7 +42,7 @@ def test_resolve_engine_sha_returns_none_when_git_missing(monkeypatch):
         raise FileNotFoundError("git not found")
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run", raise_file_not_found
+        "subprocess.run", raise_file_not_found
     )
     assert resolve_engine_sha() is None
 
@@ -57,7 +57,7 @@ def test_resolve_engine_sha_strips_trailing_newline_from_git_stdout(monkeypatch)
         stdout = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run",
+        "subprocess.run",
         lambda *args, **kwargs: FakeResult(),
     )
     assert resolve_engine_sha() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
@@ -69,7 +69,7 @@ def test_resolve_engine_sha_returns_none_when_git_returns_nonzero(monkeypatch):
         stdout = ""
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run",
+        "subprocess.run",
         lambda *args, **kwargs: FakeResult(),
     )
     assert resolve_engine_sha() is None
@@ -86,7 +86,7 @@ def test_resolve_engine_dirty_false_when_porcelain_output_empty(monkeypatch):
         stdout = ""
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run",
+        "subprocess.run",
         lambda *args, **kwargs: FakeResult(),
     )
     assert resolve_engine_dirty() is False
@@ -98,7 +98,7 @@ def test_resolve_engine_dirty_true_when_porcelain_output_nonempty(monkeypatch):
         stdout = " M engine_version.py\n"
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run",
+        "subprocess.run",
         lambda *args, **kwargs: FakeResult(),
     )
     assert resolve_engine_dirty() is True
@@ -116,7 +116,7 @@ def test_resolve_engine_dirty_scopes_status_to_engine_dir(monkeypatch):
         return FakeResult()
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run", fake_run
+        "subprocess.run", fake_run
     )
     resolve_engine_dirty()
     assert captured["cmd"][:3] == ["git", "-C", str(Path(__file__).resolve().parent.parent)]
@@ -128,7 +128,7 @@ def test_resolve_engine_dirty_returns_none_when_git_missing(monkeypatch):
         raise FileNotFoundError("git not found")
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run", raise_file_not_found
+        "subprocess.run", raise_file_not_found
     )
     assert resolve_engine_dirty() is None
 
@@ -139,7 +139,7 @@ def test_resolve_engine_dirty_returns_none_when_git_returns_nonzero(monkeypatch)
         stdout = ""
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run",
+        "subprocess.run",
         lambda *args, **kwargs: FakeResult(),
     )
     assert resolve_engine_dirty() is None
@@ -150,7 +150,7 @@ def test_resolve_engine_dirty_returns_none_when_timeout(monkeypatch):
         raise subprocess.TimeoutExpired(cmd="git", timeout=5)
 
     monkeypatch.setattr(
-        "coordinator_core.engine_version.subprocess.run", raise_timeout
+        "subprocess.run", raise_timeout
     )
     assert resolve_engine_dirty() is None
 

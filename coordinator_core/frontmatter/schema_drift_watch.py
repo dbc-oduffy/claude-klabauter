@@ -61,8 +61,9 @@ Negative-spec:
   - Does NOT replace the GATING tamper-check `check_schema_drift(..., ref=...)`. That
     one pins against a ref and raises by design; this one is the advisory HEAD signal.
     Keeping them structurally separate is deliberate — do not merge them.
-  - Does NOT spawn a shell. The only subprocess is the advisory's own `git show`
-    (naked-Python runtime convention; git is the consumer, not bash).
+  - Does NOT spawn a shell. Every subprocess is a `git_scope` read — one repo probe
+    plus one `cat-file --batch` per sibling clone, whatever the size of the vendored
+    set (naked-Python runtime convention; git is the consumer, not bash).
 
 Spec backlink: CLAUDE.md § Architecture (vendored-schema/DoE boundary);
                docs/wiki/claude-klabauter-install-doctor-system.md § Probe clusters.
@@ -71,13 +72,12 @@ Spec backlink: CLAUDE.md § Architecture (vendored-schema/DoE boundary);
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
-from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory
-from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_git_env
+from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory_batch
+from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_cat_file_batch
 from coordinator_core.machine_resolver import registry_get
 
 # Directory holding claude-klabauter's vendored copies of DoE's canonical schemas.
@@ -259,54 +259,12 @@ def _source_drift_indeterminate(schema_filename: str, detail: str) -> dict[str, 
 def _cat_file_batch(cockpit_repo_path: Path, tokens: list[str]) -> Optional[dict[str, Optional[str]]]:
     """One `git cat-file --batch` over every `HEAD:<path>` token, or None if git could not run.
 
-    Returns token -> blob text, with None for a token git reported as missing/ambiguous. This
-    is the batch primitive `git show HEAD:<path>` lacks: `cat-file --batch` reads its tokens
-    from stdin and emits `<oid> <type> <size>\\n<contents>\\n` per resolved token and
-    `<token> <reason>\\n` per unresolved one, so N vendored files cost ONE process instead of N.
-
-    Binary-exact by construction: the record framing is byte-counted, so the payload is sliced
-    by `<size>` from the raw stdout and decoded afterwards. Parsing the text stream instead
-    would desynchronise the framing on any blob whose bytes do not round-trip through the
-    locale codec.
-
-    Never raises — an OSError, a timeout, or a non-zero exit all fold into None, which the
-    caller turns into INDETERMINATE for every token in the batch.
+    Thin local name over `git_scope.scoped_cat_file_batch`, which owns the framing, the
+    scoped environment and the bound. The primitive moved there once the schema advisory
+    needed the same read against the DoE clone — one implementation, two callers, rather
+    than the second author re-deriving the byte-counted record parse.
     """
-    if not tokens:
-        return {}
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(cockpit_repo_path), "cat-file", "--batch"],
-            input=("\n".join(tokens) + "\n").encode("utf-8"),
-            capture_output=True,
-            timeout=30,
-            env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-
-    blobs: dict[str, Optional[str]] = {}
-    out = result.stdout
-    pos = 0
-    for token in tokens:
-        newline = out.find(b"\n", pos)
-        if newline == -1:
-            blobs[token] = None
-            continue
-        header = out[pos:newline].decode("utf-8", errors="replace").split()
-        pos = newline + 1
-        # `<oid> <type> <size>` is the only resolved shape; anything shorter is a
-        # `<token> missing`/`<token> ambiguous` line, which carries no payload to skip.
-        if len(header) != 3 or not header[2].isdigit():
-            blobs[token] = None
-            continue
-        size = int(header[2])
-        blobs[token] = out[pos:pos + size].decode("utf-8", errors="replace")
-        pos += size + 1  # the trailing newline git appends after each blob
-    return blobs
+    return scoped_cat_file_batch(cockpit_repo_path, tokens)
 
 
 def check_source_drift_advisory_batch(
@@ -345,7 +303,7 @@ def check_source_drift_advisory_batch(
 
     # Loop-invariant by inspection: the probe reads the COCKPIT clone, which does not vary
     # across `vendor_paths`. One call, not one per file.
-    unusable = foreign_repo_unusable_reason(cockpit_repo_path, timeout=30)
+    unusable = foreign_repo_unusable_reason(cockpit_repo_path)
 
     tokens = sorted({f"HEAD:{path}" for path in source_paths.values() if path is not None})
     blobs: Optional[dict[str, Optional[str]]] = None
@@ -677,8 +635,11 @@ def _scan(
                 ),
             })
     elif resolved_doe is not None:
-        for schema_path in schema_paths:
-            result = check_schema_drift_advisory(schema_path, resolved_doe)
+        # ONE batched comparison for the whole vendored schema set, then a pure reduce over
+        # its results — the per-schema call spawned twice per schema, of which one probe was
+        # loop-invariant. See `schema_validate.check_schema_drift_advisory_batch`.
+        schema_results = check_schema_drift_advisory_batch(schema_paths, resolved_doe)
+        for schema_path, result in zip(schema_paths, schema_results):
             name = str(result.get("schema") or schema_path.name)
             detail = str(result.get("detail") or "")
             # `determinate` is the advisory's discriminator for its diverged=False overload

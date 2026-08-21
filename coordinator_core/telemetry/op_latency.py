@@ -649,3 +649,364 @@ def pairing_summary(
         "in_flight": in_flight,
         "malformed_lines_skipped": malformed,
     }
+
+
+# --- budget-breach view ----------------------------------------------------
+#
+# Why here and not beside a reader: the two failure kinds a breach view must
+# never merge are stated in THIS module's own negative-spec ("Vanished vs
+# timed-out"), and the pairing rule that separates them is
+# `pairing_summary`'s directly above. A per-op breach aggregation built in a
+# reader module would restate both, and a restated distinction drifts.
+#
+# `breach_summary` is PURE over already-parsed rows -- no file IO, no sink
+# resolution, no new module-level import, so it costs the hot-path writers in
+# this module nothing (module docstring's "Cheap" requirement).
+# `coordinator_core.ops.op_budget_breaches` does the bounded read and hands
+# the rows in; `coordinator_core.ops.op_census_report.census` passes the rows
+# it has ALREADY read, paying one extra pass rather than a second read.
+
+#: The bar a breach is measured against. Deliberately NOT a per-op caller
+#: timeout: a caller timeout is a dial somebody chose, so an op that was
+#: given a bigger dial reads as compliant against it, and the ops this view
+#: exists to find are exactly the ones that got more grace. DR-344's
+#: brightline is PM-ratified and identical for every op. Stated once, in
+#: `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS`; mirrored here as
+#: a default only so this module keeps its no-new-imports property -- callers
+#: pass `bar_ms` explicitly, and
+#: `coordinator_core.telemetry.tests.test_breach_summary` asserts the two
+#: numbers still agree.
+DEFAULT_BREACH_BAR_MS: float = 500.0
+
+#: Minimum attempts a half-window must hold before a per-op trend is reported
+#: at all. Below it the answer is `"insufficient_data"`, never `"flat"` -- a
+#: two-sample rate cannot separate a trend from noise, and reading "flat" off
+#: it is the same false-pass `op_census.timing`'s three-state rule forbids.
+TREND_MIN_ATTEMPTS_PER_HALF: int = 20
+
+#: Relative change in breach rate between the two half-windows below which a
+#: trend reads `"flat"`.
+TREND_FLAT_BAND: float = 0.10
+
+#: Breach kinds, kept separate everywhere. Never reported as one number
+#: without the three alongside it:
+#:   over_bar       -- a `complete` row that finished but took at least
+#:                     `bar_ms`. It ran to completion and held the box for
+#:                     the whole of it.
+#:   caller_timeout -- a `complete` row with `outcome: "timeout"`. The CALLER
+#:                     gave up; the handler kept running and MAY STILL HAVE
+#:                     COMMITTED (module docstring, the "timeout" outcome).
+#:   vanished       -- a `started` row with no `complete` row sharing its
+#:                     `corr_id`, older than `staleness_cutoff_secs`. Killed
+#:                     mid-flight; whether it committed is UNKNOWN from this
+#:                     sink alone, and it carries no `elapsed_ms`, so it
+#:                     contributes nothing to `stolen_ms` rather than a
+#:                     fabricated cost.
+BREACH_KINDS = ("over_bar", "caller_timeout", "vanished")
+
+#: Epoch seconds before which a `t_start` cannot be a real invocation time
+#: (2020-01-01). Rows below it exist in the live sink — 5 of 46,416 on
+#: 2026-08-21, sitting at epoch ~1 — so some writer reaches `_write_entry`
+#: with a monotonic or zeroed clock reading instead of a wall-clock epoch.
+#: `breach_summary` counts them (`window.implausible_t_start_rows`) rather
+#: than dropping them silently: they are a defect in a writer, and the
+#: instrument that notices must say so. It does not correct them — the
+#: correction belongs at the writer, and guessing here would hide it.
+PLAUSIBLE_T_START_FLOOR: float = 1_577_836_800.0
+
+
+def _percentile_idx(sorted_vals: list, fraction: float):
+    """Index-based percentile over a pre-sorted list, no interpolation.
+
+    Same rule as `coordinator_core.telemetry.engine_report._percentile`,
+    which this module cannot import -- `engine_report` imports THIS module,
+    and the cycle would fire at hot-path import time. `fraction` is a
+    fraction (0.95), never a percentage.
+    """
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    idx = min(len(sorted_vals) - 1, int(round(fraction * (len(sorted_vals) - 1))))
+    return sorted_vals[idx]
+
+
+def _trend(early_attempts, early_breaches, late_attempts, late_breaches) -> str:
+    """Direction of an op's breach rate across the two half-windows.
+
+    Returns `"insufficient_data"` unless BOTH halves hold at least
+    `TREND_MIN_ATTEMPTS_PER_HALF` attempts -- an op seen twice has no trend,
+    and reporting one for it makes the ranking act on noise.
+    """
+    if early_attempts < TREND_MIN_ATTEMPTS_PER_HALF or late_attempts < TREND_MIN_ATTEMPTS_PER_HALF:
+        return "insufficient_data"
+    early_rate = early_breaches / early_attempts
+    late_rate = late_breaches / late_attempts
+    if early_rate == 0.0:
+        return "worsening" if late_rate > 0.0 else "flat"
+    delta = (late_rate - early_rate) / early_rate
+    if delta > TREND_FLAT_BAND:
+        return "worsening"
+    if delta < -TREND_FLAT_BAND:
+        return "improving"
+    return "flat"
+
+
+def breach_summary(
+    entries,
+    *,
+    bar_ms: float = DEFAULT_BREACH_BAR_MS,
+    staleness_cutoff_secs: float = DEFAULT_STALENESS_CUTOFF_SECS,
+    now: Optional[float] = None,
+    top_n: Optional[int] = None,
+) -> dict:
+    """Per-op budget-breach view over already-parsed op-latency rows.
+
+    Answers, for every op that breached: how often, how badly, when first and
+    last seen, and which way it is trending -- ranked so the ops doing the
+    most damage to the shared box sort first.
+
+    Ranking is `stolen_ms` DESCENDING, never raw breach count. `stolen_ms` is
+    the summed process time an op took PAST the bar
+    (``sum(elapsed_ms - bar_ms)`` over its `over_bar` and `caller_timeout`
+    rows) -- frequency times cost by construction. One 30s breach outranks
+    fifty 520ms ones because that is what the ~50 sessions queued behind it
+    actually paid; a raw count inverts that. Ties break on total breach count,
+    then op name, so the order is deterministic across runs.
+
+    The three breach kinds (`BREACH_KINDS`) are counted separately and never
+    merged away: `breaches` is their sum and is reported ALONGSIDE the three,
+    not instead of them. A `vanished` row has no `elapsed_ms` and adds nothing
+    to `stolen_ms` or to any percentile.
+
+    `bar_ms` is the brightline, not a per-op caller timeout -- see
+    `DEFAULT_BREACH_BAR_MS` for why raising a dial must not clear an op.
+
+    Return shape:
+        {"bar_ms": float,
+         "window": {"first_seen": float|None, "last_seen": float|None,
+                    "trend_split_t_start": float|None,
+                    "implausible_t_start_rows": int},
+         "totals": {"attempts": int, "complete_rows": int, "over_bar": int,
+                    "caller_timeout": int, "vanished": int, "in_flight": int,
+                    "breaching_ops": int, "stolen_ms": float},
+         "ops": [{"op": str, "attempts": int, "invocations": int,
+                  "over_bar": int, "caller_timeout": int, "vanished": int,
+                  "breaches": int, "breach_rate": float, "stolen_ms": float,
+                  "p50_ms": float|None, "p95_ms": float|None,
+                  "max_ms": float|None, "first_seen": float|None,
+                  "last_seen": float|None, "trend": str}, ...]}
+
+    `ops` lists ONLY ops with at least one breach -- a clean op has nothing to
+    surface and padding the list with it buries the ones that do. `top_n`, if
+    given, truncates the ranked list; `totals` always counts the whole
+    population, truncated or not, and `totals.breaching_ops` is the untruncated
+    count so a truncated list can never read as the whole population.
+
+    ONE pass over `entries`. The trend split is not known until every row has
+    been seen, so each op carries a compact `(t_start, breached)` timeline and
+    is bucketed after the split is computed -- a second pass over the raw rows
+    costs more, on a path held to DR-344's 200ms per-process bar. `entries` is
+    materialised once; pass a BOUNDED iterable
+    (`coordinator_core.ops.op_budget_breaches` holds the read bound).
+
+    Never raises on a malformed row: a row that is not a dict, or that carries
+    a non-numeric `elapsed_ms`/`t_start`, is skipped.
+    """
+    if now is None:
+        now = time.time()
+
+    rows = [e for e in entries if isinstance(e, dict)]
+
+    per_op: dict = {}
+    started: dict = {}
+    completed_corr_ids: set = set()
+    complete_t_starts: list = []
+    implausible_t_start = 0
+    window_first = None
+    window_last = None
+
+    def _op_bucket(op_name: str) -> dict:
+        # Membership test before construction, never `setdefault(op, {...})`:
+        # the dict literal is built on every call there, hit or miss, which
+        # over a 47k-row sink is ~47k throwaway 11-key dicts on a path held
+        # to DR-344's 200ms per-process bar.
+        bucket = per_op.get(op_name)
+        if bucket is None:
+            bucket = {
+                "op": op_name,
+                "invocations": 0,
+                "over_bar": 0,
+                "caller_timeout": 0,
+                "vanished": 0,
+                "stolen_ms": 0.0,
+                "elapsed": [],
+                # (t_start, breached) per complete row, collected here so the
+                # trend split does not need a second full pass over `rows` --
+                # the median that defines the split is not known until every
+                # row has been seen, but re-reading the raw dicts to find it
+                # costs more than carrying two numbers per row.
+                "timeline": [],
+                "first_seen": None,
+                "last_seen": None,
+            }
+            per_op[op_name] = bucket
+        return bucket
+
+    def _note_seen(bucket: dict, t_start) -> None:
+        if not isinstance(t_start, (int, float)):
+            return
+        if bucket["first_seen"] is None or t_start < bucket["first_seen"]:
+            bucket["first_seen"] = float(t_start)
+        if bucket["last_seen"] is None or t_start > bucket["last_seen"]:
+            bucket["last_seen"] = float(t_start)
+
+    for entry in rows:
+        kind = entry.get("kind") or "complete"
+        if kind not in ("started", "complete"):
+            continue
+        op_name = entry.get("op")
+        if not isinstance(op_name, str):
+            continue
+
+        t_start = entry.get("t_start")
+        if isinstance(t_start, (int, float)):
+            if t_start < PLAUSIBLE_T_START_FLOOR:
+                implausible_t_start += 1
+            if window_first is None or t_start < window_first:
+                window_first = float(t_start)
+            if window_last is None or t_start > window_last:
+                window_last = float(t_start)
+
+        bucket = _op_bucket(op_name)
+        _note_seen(bucket, t_start)
+        corr_id = entry.get("corr_id")
+
+        if kind == "started":
+            if corr_id is not None:
+                started[corr_id] = (op_name, t_start)
+            continue
+
+        if corr_id is not None:
+            completed_corr_ids.add(corr_id)
+        bucket["invocations"] += 1
+        if isinstance(t_start, (int, float)):
+            complete_t_starts.append(float(t_start))
+        elapsed = entry.get("elapsed_ms")
+        if isinstance(elapsed, (int, float)):
+            bucket["elapsed"].append(float(elapsed))
+
+        # A "timeout" outcome is its OWN kind and is checked first: it is a
+        # breach whatever its elapsed_ms says, and classifying it by elapsed
+        # would fold it into over_bar and lose the may-still-have-committed
+        # distinction this view exists to preserve.
+        breached = True
+        if entry.get("outcome") == "timeout":
+            bucket["caller_timeout"] += 1
+        elif isinstance(elapsed, (int, float)) and float(elapsed) >= bar_ms:
+            bucket["over_bar"] += 1
+        else:
+            breached = False
+
+        if breached and isinstance(elapsed, (int, float)):
+            bucket["stolen_ms"] += max(0.0, float(elapsed) - bar_ms)
+        if isinstance(t_start, (int, float)):
+            bucket["timeline"].append((float(t_start), breached))
+
+    in_flight = 0
+    for corr_id, (op_name, t_start) in started.items():
+        if corr_id in completed_corr_ids:
+            continue
+        age = (now - t_start) if isinstance(t_start, (int, float)) else None
+        if age is not None and age < staleness_cutoff_secs:
+            in_flight += 1
+            continue
+        _op_bucket(op_name)["vanished"] += 1
+
+    # Split at the MEDIAN t_start, never at (first + last) / 2. Measured on
+    # the live sink 2026-08-21: five of 46,416 rows carry a near-epoch
+    # `t_start` (1970), which drags an arithmetic midpoint to 1998 and leaves
+    # 5 rows early against 46,411 late — every op then reports
+    # "insufficient_data" and the whole trend axis goes dark on a handful of
+    # bad rows. A median is outlier-proof and splits the population evenly by
+    # construction, which is also what a rate comparison wants.
+    midpoint = None
+    if complete_t_starts:
+        ordered = sorted(complete_t_starts)
+        candidate = ordered[len(ordered) // 2]
+        if ordered[0] < candidate < ordered[-1]:
+            midpoint = candidate
+
+    ranked = []
+    totals_over_bar = totals_timeout = totals_vanished = totals_complete = 0
+    totals_stolen = 0.0
+
+    for bucket in per_op.values():
+        totals_complete += bucket["invocations"]
+        totals_over_bar += bucket["over_bar"]
+        totals_timeout += bucket["caller_timeout"]
+        totals_vanished += bucket["vanished"]
+        totals_stolen += bucket["stolen_ms"]
+
+        breaches = bucket["over_bar"] + bucket["caller_timeout"] + bucket["vanished"]
+        if breaches == 0:
+            continue
+
+        attempts = bucket["invocations"] + bucket["vanished"]
+        elapsed_sorted = sorted(bucket["elapsed"])
+
+        early_attempts = early_breaches = late_attempts = late_breaches = 0
+        if midpoint is not None:
+            for row_t_start, row_breached in bucket["timeline"]:
+                if row_t_start >= midpoint:
+                    late_attempts += 1
+                    late_breaches += 1 if row_breached else 0
+                else:
+                    early_attempts += 1
+                    early_breaches += 1 if row_breached else 0
+
+        ranked.append(
+            {
+                "op": bucket["op"],
+                "attempts": attempts,
+                "invocations": bucket["invocations"],
+                "over_bar": bucket["over_bar"],
+                "caller_timeout": bucket["caller_timeout"],
+                "vanished": bucket["vanished"],
+                "breaches": breaches,
+                "breach_rate": (breaches / attempts) if attempts else 0.0,
+                "stolen_ms": round(bucket["stolen_ms"], 3),
+                "p50_ms": _percentile_idx(elapsed_sorted, 0.50),
+                "p95_ms": _percentile_idx(elapsed_sorted, 0.95),
+                "max_ms": elapsed_sorted[-1] if elapsed_sorted else None,
+                "first_seen": bucket["first_seen"],
+                "last_seen": bucket["last_seen"],
+                "trend": _trend(early_attempts, early_breaches, late_attempts, late_breaches),
+            }
+        )
+
+    ranked.sort(key=lambda row: (-row["stolen_ms"], -row["breaches"], row["op"]))
+    breaching_ops = len(ranked)
+    if top_n is not None:
+        ranked = ranked[:top_n]
+
+    return {
+        "bar_ms": bar_ms,
+        "window": {
+            "first_seen": window_first,
+            "last_seen": window_last,
+            "trend_split_t_start": midpoint,
+            "implausible_t_start_rows": implausible_t_start,
+        },
+        "totals": {
+            "attempts": totals_complete + totals_vanished,
+            "complete_rows": totals_complete,
+            "over_bar": totals_over_bar,
+            "caller_timeout": totals_timeout,
+            "vanished": totals_vanished,
+            "in_flight": in_flight,
+            "breaching_ops": breaching_ops,
+            "stolen_ms": round(totals_stolen, 3),
+        },
+        "ops": ranked,
+    }

@@ -643,6 +643,23 @@ def main(argv: list[str]) -> int:
         # process-count optimisation — the extra frame is load-bearing.
         # Guard: coordinator/tests/test_claude_doe_launch_waits.py.
         #
+        # Negative-spec: do NOT add `timeout=` to this call, and do not count it
+        # as an unbounded spawn during a timeout-dial sweep. `subprocess.run`'s
+        # timeout is a KILL instrument — on expiry it kills the child and raises
+        # — so any value here is "terminate the operator's interactive session
+        # after N seconds". An interactive session legitimately runs for hours,
+        # so every finite N either kills live work or bounds nothing. Worse, the
+        # kill path does not run claude's own terminal restore, leaving the
+        # console in the raw/alternate-screen mode the TUI set: the exact
+        # corruption class this branch exists to prevent.
+        #
+        # There is no unattended failure mode to bound. This frame is not a
+        # mechanism occupying the box (CLAUDE.md § Load norm) — it is the
+        # console-owning parent of the process a human is typing into, and it
+        # runs exactly as long as they do. The headless `claude -p` path, which
+        # DOES need a kill ceiling, does not come through here: it is
+        # `coordinator/bin/lib/cc_invoke.py`, which carries its own.
+        #
         # len(exec_prefix) > 1 keeps the POSIX shebang case on subprocess.run
         # too: `os.execv` there builds its command line via a raw, unquoted
         # join, so a resolved interpreter path containing a space in one of

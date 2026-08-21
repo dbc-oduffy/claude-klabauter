@@ -1177,8 +1177,22 @@ _ALT_CUE_RE = re.compile(r"(Use instead:|Did you mean|Run this instead|Example:)
 #: precision work. A false-positive cue is harmless; a false-negative cue
 #: silently drops a real alternative, so broad-and-filtered beats
 #: narrow-and-exact for THIS regex's specific job.
-_CUE_WINDOW_RE = re.compile(r"(Use instead:?|Did you mean|Run this instead|Example:|\binstead\b)", re.IGNORECASE)
-_CUE_WINDOW_MAX_CHARS = 600
+#: DEFINED IN ``_advisory_dedupe``, re-exported here, and the direction of
+#: that dependency is load-bearing rather than stylistic. This module runs
+#: ``discover_write_guard_names()`` at import time (the module-level
+#: comprehension below), which imports ``write_guards.engine`` and through it
+#: the whole ``coordinator_core.ops`` registry -- measured at 480-710ms of
+#: process time. ``_advisory_dedupe.terse_alternative_text`` needs ONLY these
+#: two values, and it runs on the PreToolUse hot path every time an advisory
+#: repeat-fires, so importing this module to reach them charged the entire
+#: registry import to DR-344's budget on the fleet's most-fired guard. Homing
+#: them in the leaf module lets the hot path read them without ever loading
+#: this one. Do not move them back, and do not add a module-scope import of
+#: anything heavy to ``_advisory_dedupe`` to compensate.
+from coordinator_core.bash_guards._advisory_dedupe import (  # noqa: E402
+    _CUE_WINDOW_MAX_CHARS,
+    _CUE_WINDOW_RE,
+)
 
 
 def _cue_windows(text: str) -> List[str]:

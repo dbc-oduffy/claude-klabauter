@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.ops import poll_scratch_dir
 from coordinator_core.ops.poll_scratch_dir import _poll_scratch_dir
 
 
@@ -112,3 +113,92 @@ def test_registered_under_op_key():
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("fanout.poll_scratch_dir") is _poll_scratch_dir
+
+
+# ---------------------------------------------------------------------------
+# Timeout ceiling — a caller may ask for LESS wait, never for more
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """Monotonic clock whose only advance is the sleeps the op itself asks for.
+
+    Nothing here waits in wall-clock time, so the loop's own arithmetic — not a
+    real timer — decides when the op returns, and an unclamped budget shows up
+    as a fake-clock reading in the thousands rather than as a slow test.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleep_calls: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleep_calls.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def fake_clock(monkeypatch) -> _FakeClock:
+    clock = _FakeClock()
+    monkeypatch.setattr(poll_scratch_dir.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(poll_scratch_dir.time, "sleep", clock.sleep)
+    return clock
+
+
+def test_over_ceiling_timeout_is_clamped(tmp_path, fake_clock):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    result = _poll_scratch_dir(
+        _params(scratch, min_count=1, timeout_seconds=86400.0, poll_interval_seconds=1.0)
+    )
+
+    assert result["status"] == "timeout"
+    assert result["elapsed_seconds"] == poll_scratch_dir.MAX_TIMEOUT_SECONDS, (
+        "a caller-supplied timeout_seconds above MAX_TIMEOUT_SECONDS must be "
+        "clamped, and elapsed_seconds must report the budget actually spent — "
+        "never the one the caller asked for"
+    )
+
+
+def test_over_ceiling_poll_interval_is_clamped(tmp_path, fake_clock):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    _poll_scratch_dir(
+        _params(scratch, min_count=1, timeout_seconds=600.0, poll_interval_seconds=99999.0)
+    )
+
+    assert fake_clock.sleep_calls, "the op must have polled at least once"
+    assert max(fake_clock.sleep_calls) <= poll_scratch_dir.MAX_POLL_INTERVAL_SECONDS
+
+
+def test_sleep_never_overshoots_the_deadline(tmp_path, fake_clock):
+    """The ceiling only bounds the block if the last sleep is clamped too — a
+    poll interval longer than the remaining budget would otherwise park the
+    dispatch worker well past the timeout the caller was told bounds it."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    result = _poll_scratch_dir(
+        _params(scratch, min_count=1, timeout_seconds=5.0, poll_interval_seconds=30.0)
+    )
+
+    assert result["status"] == "timeout"
+    assert fake_clock.now == 5.0
+    assert fake_clock.sleep_calls == [5.0]
+
+
+def test_under_ceiling_timeout_is_honoured(tmp_path, fake_clock):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    result = _poll_scratch_dir(
+        _params(scratch, min_count=1, timeout_seconds=3.0, poll_interval_seconds=1.0)
+    )
+
+    assert result["status"] == "timeout"
+    assert result["elapsed_seconds"] == 3.0

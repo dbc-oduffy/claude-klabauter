@@ -64,9 +64,11 @@ passed — the spans simply aren't recorded) or in-process under `wsc_tail`
 
 Six-surface op registration (this op): impl module (here, `@register_op`);
 `coordinator_core/op_scopes.py::_OP_KEY_SCOPE` → `"common_dir"`; no
-`_OP_TIMEOUT_OVERRIDES` entry (not long-tail — same global-30s-guard
-precedent as `ceremony.wsc_tail` post-DEC-2, and this op does strictly less
-work than that one); `coordinator_core/authz/classification.py` →
+`_OP_TIMEOUT_OVERRIDES` entry — this is a `ceremony.*` op, so what bounds it
+is the 2s ceremony budget (`ipc.CEREMONY_BUDGET_SECS`, DR-348), not the
+global 30s runaway guard; this op does strictly less work than
+`ceremony.wsc_tail`, itself held to the same budget post-DEC-2;
+`coordinator_core/authz/classification.py` →
 `OpClass.MUTATING` with the DR-208 five-question affirmation;
 `coordinator_core/ops/__init__.py::_EAGER_OP_MODULES` eager-import entry;
 `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP` lazy-import entry.

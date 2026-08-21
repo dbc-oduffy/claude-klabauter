@@ -80,19 +80,34 @@ Negative-spec:
       twice; only `live_registry_op_names`/`registry_divergence`, called at
       most once per process by their own callers, trigger the import.
 
+PERSISTED TIER (op_census/C-thread cold-path fix, additive). A COLD process
+(no in-process `cache._REVALIDATED_CACHE` history) paid a full re-scan of
+every recognised-spawn-bearing module on its first `ops_with_spawn_evidence`
+call, ~1.3s over this repo's real op corpus -- well over the 1s kill bar
+(DR-344) even though a WARM second call in the same process was ~300ms via
+the in-process tier alone. `spawn_sites_by_relpath`/`ops_with_spawn_evidence`
+now also accept an optional caller-owned `SpawnIndex` (`load_spawn_index` /
+`save_spawn_index`), routed through `cache.read_disk_revalidated` -- the
+SAME persisted, content-revalidated tier `module_summary.py` already grows
+`cache.py` with (Ruling 1), not a second cache. `index=None` (the default)
+is byte-for-byte the prior in-process-only behaviour; nothing here changes
+`_MAX_CACHE`, `cache.read_revalidated`'s own contract, or any existing
+caller's cost.
+
 Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C2.md
 """
 
 from __future__ import annotations
 
 import dataclasses
+import json
 import pathlib
 import sys
 from typing import Callable, Dict, FrozenSet, Iterable, NamedTuple, Optional, Tuple
 
-from coordinator_core import ipc
+from coordinator_core import cache, ipc
 from coordinator_core.ops import _registry_map
-from coordinator_core.spawn_policy.detect import SpawnParseError, SpawnSite, sites_in_source
+from coordinator_core.spawn_policy.detect import SpawnKind, SpawnParseError, SpawnSite, sites_in_source
 
 __all__ = [
     "OpEntrypoint",
@@ -103,7 +118,16 @@ __all__ = [
     "resolve_op_entrypoints",
     "spawn_sites_by_relpath",
     "ops_with_spawn_evidence",
+    "load_spawn_index",
+    "save_spawn_index",
 ]
+
+#: `{relpath: (stamp, (SpawnSite, ...))}` -- the persisted-tier revalidation
+#: shape `spawn_sites_by_relpath`/`load_spawn_index`/`save_spawn_index` share,
+#: mirroring `module_summary.py`'s own `{path: (stamp, ModuleSummary)}` index
+#: convention (same two-tier design: caller loads once, revalidates via
+#: `cache.read_disk_revalidated`, saves back once).
+SpawnIndex = Dict[str, Tuple[str, Tuple[SpawnSite, ...]]]
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -227,40 +251,142 @@ def resolve_op_entrypoints(
     return out
 
 
-def spawn_sites_by_relpath(relpaths: Iterable[str]) -> Dict[str, Tuple[SpawnSite, ...]]:
+def _compute_spawn_sites_for_relpath(path: pathlib.Path, relpath: str) -> Tuple[SpawnSite, ...]:
+    """`compute_fn` for `cache.read_revalidated` -- reads `path` (re-read,
+    see `cache.read_revalidated`'s own TOCTOU negative-spec) and returns the
+    recognised spawn sites found in it, or `()` on a parse failure. Never
+    raises `SpawnParseError` out to the caller."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        return tuple(sites_in_source(text, relpath))
+    except SpawnParseError:
+        return ()
+
+
+def spawn_sites_by_relpath(
+    relpaths: Iterable[str],
+    *,
+    index: Optional[SpawnIndex] = None,
+) -> Dict[str, Tuple[SpawnSite, ...]]:
     """`spawn_policy.detect.sites_in_source` over each distinct repo-relative
-    path in `relpaths`, read exactly once per unique path. A path that cannot
-    be read (vanished, permission error) or fails to parse resolves to an
-    empty tuple rather than raising -- matching `module_summary.py`'s own
-    fail-closed-to-empty posture for a file this module cannot make sense of,
-    never silently dropping the path from the returned mapping."""
+    path in `relpaths`. A path that cannot be read (vanished, permission
+    error) or fails to parse resolves to an empty tuple rather than raising --
+    matching `module_summary.py`'s own fail-closed-to-empty posture for a
+    file this module cannot make sense of, never silently dropping the path
+    from the returned mapping.
+
+    `index` is `None` by default (unchanged behaviour, existing callers keep
+    today's semantics and cost): cached via
+    `coordinator_core.cache.read_revalidated`, keyed on the absolute path's
+    content-hash, into the SAME existing in-process revalidating tier
+    `module_summary.py` already uses (`cache._REVALIDATED_CACHE`). A call
+    whose file hasn't changed since the last call in THIS process is a
+    cache hit: no re-read, no re-scan.
+
+    Passing `index` (a caller-owned `SpawnIndex`, typically loaded via
+    `load_spawn_index`) routes through `cache.read_disk_revalidated`
+    instead -- the PERSISTED, cross-process tier `module_summary.py`
+    consumes for its own index (Ruling 1: additive to `cache.py`, not a
+    second cache module). This is the fix for the ~1.3s of uncached,
+    unbounded-per-COLD-PROCESS rescan `ops_with_spawn_evidence` used to pay
+    on every fresh process, warm or not -- see this module's own docstring
+    negative-spec for what stays unchanged (no `_MAX_CACHE` raise, no
+    change to `cache.read_revalidated`'s own contract or existing callers'
+    cost -- `index=None` never touches `read_disk_revalidated` at all)."""
     out: Dict[str, Tuple[SpawnSite, ...]] = {}
     for relpath in sorted(set(relpaths)):
-        if relpath in out:
-            continue
         abs_path = _REPO_ROOT / relpath
+        compute_fn = lambda p, r=relpath: _compute_spawn_sites_for_relpath(p, r)
         try:
-            text = abs_path.read_text(encoding="utf-8")
+            if index is None:
+                out[relpath] = cache.read_revalidated(abs_path, compute_fn)
+            else:
+                out[relpath] = cache.read_disk_revalidated(abs_path, compute_fn, index)
         except OSError:
-            out[relpath] = ()
-            continue
-        try:
-            out[relpath] = tuple(sites_in_source(text, relpath))
-        except SpawnParseError:
             out[relpath] = ()
     return out
 
 
+def _spawn_site_to_dict(site: SpawnSite) -> dict:
+    return {
+        "path": site.path,
+        "enclosing": site.enclosing,
+        "argv0": site.argv0,
+        "ordinal": site.ordinal,
+        "kind": site.kind.value,
+        "argv_digest": site.argv_digest,
+        "lineno": site.lineno,
+    }
+
+
+def _spawn_site_from_dict(data: dict) -> SpawnSite:
+    return SpawnSite(
+        path=data["path"],
+        enclosing=data["enclosing"],
+        argv0=data["argv0"],
+        ordinal=data["ordinal"],
+        kind=SpawnKind(data["kind"]),
+        argv_digest=data["argv_digest"],
+        lineno=data["lineno"],
+    )
+
+
+def load_spawn_index(disk_path: "str | pathlib.Path") -> SpawnIndex:
+    """Loads a previously `save_spawn_index`-written JSON file into the
+    `{relpath: (stamp, (SpawnSite, ...))}` shape `spawn_sites_by_relpath`
+    expects -- mirrors `module_summary.load_index`'s own fail-closed
+    contract exactly: a missing, unreadable, or malformed file degrades to
+    an empty index (a cold build for every path on the next call), never a
+    crash. One corrupt entry degrades only that entry, never the whole
+    load."""
+    disk_path = pathlib.Path(disk_path)
+    try:
+        raw = json.loads(disk_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    index: SpawnIndex = {}
+    if not isinstance(raw, dict):
+        return {}
+    for relpath, entry in raw.items():
+        try:
+            stamp, site_dicts = entry
+            index[relpath] = (stamp, tuple(_spawn_site_from_dict(d) for d in site_dicts))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return index
+
+
+def save_spawn_index(index: SpawnIndex, disk_path: "str | pathlib.Path") -> None:
+    """Serializes `index` to `disk_path` as JSON, creating parent
+    directories as needed. Overwrites any existing file at `disk_path` --
+    mirrors `module_summary.save_index`'s own shape."""
+    disk_path = pathlib.Path(disk_path)
+    disk_path.parent.mkdir(parents=True, exist_ok=True)
+    serializable = {
+        relpath: [stamp, [_spawn_site_to_dict(s) for s in sites]]
+        for relpath, (stamp, sites) in index.items()
+    }
+    disk_path.write_text(json.dumps(serializable, sort_keys=True), encoding="utf-8")
+
+
 def ops_with_spawn_evidence(
     entrypoints: Dict[str, OpEntrypoint],
+    *,
+    index: Optional[SpawnIndex] = None,
 ) -> Dict[str, Tuple[SpawnSite, ...]]:
     """`op_name -> spawn sites found in that op's owning module`, restricted
     to ops whose owning module resolved (`relpath is not None`) AND contains
     at least one recognised spawn site. This is MODULE granularity, not
     handler-function granularity -- see module docstring's "MODULE
-    GRANULARITY" section for why that is the deliberate choice here."""
+    GRANULARITY" section for why that is the deliberate choice here.
+
+    `index`, passed straight through to `spawn_sites_by_relpath`, is
+    `None` by default (unchanged in-process-only behaviour); pass a
+    caller-owned `SpawnIndex` (e.g. from `load_spawn_index`) to revalidate
+    against a persisted, cross-process tier instead."""
     relpaths = [ep.relpath for ep in entrypoints.values() if ep.relpath is not None]
-    sites_by_relpath = spawn_sites_by_relpath(relpaths)
+    sites_by_relpath = spawn_sites_by_relpath(relpaths, index=index)
 
     out: Dict[str, Tuple[SpawnSite, ...]] = {}
     for op_name, ep in entrypoints.items():

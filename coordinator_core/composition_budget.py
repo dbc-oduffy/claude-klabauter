@@ -192,10 +192,16 @@ DEFAULT_COMPOSITION_ID_ENV = "COORDINATOR_COMPOSITION_ID"
 #: partial/failed, and that tail is what a ceiling bounds):
 #:     aggregate_elapsed_budget = 319.53s worst-observed x 3.7 = 1182.3 -> 1200.0
 #:     max_invocations          =     29  worst-observed x 3.7 =   107.3 ->    110
-#: The 3.7x headroom copies `ipc.py`'s `ceremony.scoped_git_commit = 150.0`, sized at
-#: ~3.7x its own worst sample against the load norm. Do NOT re-tune either value from
-#: memory or intuition -- amend the record first, then the constant; a constant that has
-#: drifted from its derivation reads as measured while being guessed.
+#: The 3.7x headroom matched `ipc.py`'s `ceremony.scoped_git_commit = 150.0` precedent,
+#: itself sized at ~3.7x its own worst sample. That row is REVOKED (2026-08-21,
+#: `ipc.CEREMONY_BUDGET_SECS`, DR-348): the precedent this multiplier was copied from no
+#: longer exists, and the revocation's own finding was that a cap sized to a load-norm
+#: multiplier accommodates a defect instead of naming it. NOT RE-DERIVED HERE -- these
+#: two constants keep their derivation from the 360-compositions measurement above, which
+#: does not itself depend on the 150.0 precedent; only the citation for *why 3.7x* is now
+#: unsupported. Flagged for PM ruling, not silently re-tuned: do NOT re-tune either value
+#: from memory or intuition -- amend the record first, then the constant; a constant that
+#: has drifted from its derivation reads as measured while being guessed.
 #:
 #: RUNAWAY GUARDS, NOT PERFORMANCE BUDGETS -- the distinction
 #: `docs/wiki/machine-load-norm.md` draws for `ipc.py :: _timeout_for`. p95 elapsed is

@@ -41,59 +41,43 @@ Spec backlink: pln-branch-creation-seam-canonical-6f938d chunk C3
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from coordinator_core import daily_branch
+from coordinator_core.git.run import GitResult, run_git
 
 _PathLike = Union[str, "Path", None]
 
-#: House value (`dispatch_checks._run_git`) -- was 15s with no stated
-#: reason; brought down 2026-08-05 hardening pass. A hang here surfaces as
-#: an uncaught `subprocess.TimeoutExpired`, which propagates out of
-#: `other_canonical_branches`/`ahead_of_main` to `guard_branch_set_
-#: precedence.check`'s own unconditional `try/except Exception: return
-#: None` (CLASS = "advisory", fail-open by construction) -- so a shorter
-#: cap only shortens the stall, it does not change the fail direction.
-#:
-#: Review: code-reviewer (F4, nit) -- this is a PER-INVOCATION budget, not
-#: a budget for either public function's whole call sequence: every `_git`
-#: call (`_run` -> `subprocess.run`) gets its own fresh 2.0s cap, threaded
-#: as this module-level default through `_git`/`_run`'s own `timeout=`
-#: parameter (see both functions above). `other_canonical_branches` can
-#: spend up to 4 such calls (`_main_ref`'s up to 2 `_ref_exists` probes,
-#: one `for-each-ref`, one `_current_branch`); `ahead_of_main` up to 3
-#: (`_main_ref`'s up to 2, one `rev-list --count`). Each of those git
-#: subcommands (`rev-parse`, `for-each-ref --no-merged`, `rev-list
-#: --count`) is a plumbing read with no full-history walk, so a single one
-#: exceeding 2.0s on a cold-but-not-pathological repo is not expected --
-#: this was not empirically re-measured against a large repo as part of
-#: this hardening pass, only reasoned about from each subcommand's shape.
-#: Do NOT raise this value without a PM ruling -- a coverage regression
-#: here is a real tradeoff, not a free lunch.
-_GIT_TIMEOUT = 2.0
 
-
-def _run(cmd: list, timeout: float = _GIT_TIMEOUT, cwd: _PathLike = None) -> subprocess.CompletedProcess:
-    """Run a subprocess with a hang cap and no stdin -- mirrors the sibling
-    guard-module convention (`ops/orphan_branch_sweep.py::_run`)."""
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        cwd=cwd,
-    )
-
-
-def _git(args: list, timeout: float = _GIT_TIMEOUT, cwd: _PathLike = None) -> subprocess.CompletedProcess:
+def _git(args: list, cwd: _PathLike = None) -> GitResult:
     """Module-level git seam -- tests monkeypatch this attribute directly to
     inject a fake runner and count invocations (per this chunk's cost-
-    discipline requirement)."""
-    return _run(["git", *args], timeout=timeout, cwd=cwd)
+    discipline requirement).
+
+    The bound is `git.run.LOCAL_PLUMBING_BUDGET_SECS`, which is the same
+    2.0 this module used to carry as its own `_GIT_TIMEOUT` (itself brought
+    down from an unexplained 15 by the 2026-08-05 hot-path hardening pass).
+    The private constant and the private `_run` wrapper are gone: G7 of
+    `docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md` is that
+    60+ modules each invented that number, and this module agreeing with the
+    seam by coincidence is exactly what stopped being enough.
+
+    The per-invocation framing the retired constant documented still holds
+    and is worth keeping: this is a budget per `_git` CALL, not per public
+    function. `other_canonical_branches` can spend up to 4 calls
+    (`_main_ref`'s up to 2 `_ref_exists` probes, one `for-each-ref`, one
+    `_current_branch`); `ahead_of_main` up to 3. Each subcommand
+    (`rev-parse`, `for-each-ref --no-merged`, `rev-list --count`) is a
+    plumbing read with no full-history walk.
+
+    A failure no longer surfaces as an uncaught `subprocess.TimeoutExpired`
+    -- `run_git` returns `returncode=-1` instead. Every caller below already
+    branches on `returncode != 0` and degrades to empty/zero, which is the
+    same fail-open direction `guard_branch_set_precedence.check`'s
+    `except Exception: return None` produced, reached without the raise.
+    """
+    return run_git(args, cwd=str(cwd) if cwd is not None else None)
 
 
 def _ref_exists(ref: str, cwd: _PathLike = None) -> bool:

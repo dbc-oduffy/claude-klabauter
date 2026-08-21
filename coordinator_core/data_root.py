@@ -66,7 +66,41 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+try:
+    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
+    # The publish pre-swap FUNCTION gate imports this file as a FLAT, top-level
+    # `data_root` module in a hermetic, OSS-shaped subprocess whose PYTHONPATH is
+    # the staging dir itself (`coordinator/bin/publish.py ::
+    # _function_gate_modules_and_search_paths_for_repo_root` strips the
+    # `coordinator_core` prefix for a row staged at its own root). There is no
+    # `coordinator_core` package to import through there BY CONSTRUCTION, so a
+    # module-level import of the package from inside one of its own members can
+    # never satisfy the gate, and the engine row cannot publish while one stands.
+    #
+    # The module-level BINDING is load-bearing and is preserved: every test in
+    # `coordinator_core/test_data_root.py` monkeypatches this module attribute,
+    # and `_resolve_doe_root()` below reads the global at call time so that keeps
+    # working. Only the hard import-time FAILURE is removed; a real resolution
+    # under a real package still imports here, at import time, unchanged.
+    coordinator_doe_root = None  # type: ignore[assignment]
+
+
+def _resolve_doe_root():
+    """Call the DoE-root resolver, importing it late if module-level import failed.
+
+    Reads the module global at call time so a monkeypatched
+    `coordinator_core.data_root.coordinator_doe_root` still wins. When the
+    module-level import fell through (hermetic gate shape above), the deferred
+    import raises the genuine `ModuleNotFoundError` here rather than at import
+    time -- honest failure at the point of use, never a silent wrong answer.
+    """
+    resolver = coordinator_doe_root
+    if resolver is None:
+        from coordinator_core.ops.coordinator_doe_root import (  # noqa: PLC0415
+            coordinator_doe_root as resolver,
+        )
+    return resolver()
 
 
 def _colocated_root() -> Path:
@@ -115,7 +149,7 @@ def data_root(dir_name: str) -> Path:
     if colocated.is_dir():
         return colocated
 
-    doe = coordinator_doe_root()
+    doe = _resolve_doe_root()
     if not doe:
         raise RuntimeError(
             f"coordinator_core.data_root: cannot resolve data dir {dir_name!r}. "

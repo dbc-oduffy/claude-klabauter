@@ -55,9 +55,18 @@ ROLE_APPEND_CANARY = "INJECTION-ONLY-CANARY-ROLE: role framing text exists nowhe
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
+    # `git init` only -- no test in this file ever commits, so a `user.email`/
+    # `user.name` config would be dead subprocess weight even before
+    # considering that the suite-root conftest (`coordinator_core/conftest.py
+    # :: _quarantine_real_home`) already exports GIT_AUTHOR_NAME/EMAIL and
+    # GIT_COMMITTER_NAME/EMAIL process-wide for every test. Each spawn here
+    # contends with the real-corpus tests' own `resolve_git_root` call
+    # against the sibling DoE-claude checkout (2.0s hard timeout,
+    # `engine.py :: _resolve_git_root_uncached`) -- measured under load,
+    # trimming this fixture's 3 spawns to 1 is what keeps that call clear of
+    # the timeout rather than flaking into a false "sidecar_provisioning:
+    # missed" read.
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
     registry = tmp_path / "coordinator" / "snippets" / "registry.toml"
     registry.write_text(
@@ -371,27 +380,39 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(tmp_path: Path)
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
     block_names = policy_data["contract_blocks"][ELIGIBLE_TYPE]
 
+    session_id = "ac1-real-code-reviewer"
     payload = {
         "agent_type": ELIGIBLE_TYPE,
-        "session_id": "ac1-real-code-reviewer",
+        "session_id": session_id,
         "contract_blocks": block_names,
     }
-    result = compose_catering(payload, cwd=DOE_ROOT)
+    # Resolving against the real corpus means `cwd` is the sibling checkout,
+    # so provisioning writes into a PEER's working tree -- which is tracked
+    # there, not ignored. Anything this test leaves behind is reconciliation
+    # work for whoever runs `git status` in that repo next, so the session
+    # directory comes back out however this test exits.
+    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / session_id
+    try:
+        result = compose_catering(payload, cwd=DOE_ROOT)
 
-    snippets_dir = Path(DOE_ROOT) / "coordinator" / "snippets"
-    registry_data = load_registry(snippets_dir / "registry.toml")
-    for name in block_names:
-        entry = get_snippet_entry(registry_data, name)
-        header_style = entry.get("header_style", "sentinel-embedded")
-        snippet_text = (snippets_dir / f"{name}.md").read_text(encoding="utf-8")
-        body = _extract_contract_block_body(
-            snippet_text, header_style, entry["sentinel_begin"], entry["sentinel_end"]
-        )
-        assert body is not None, f"could not extract real block {name!r}"
-        # Placeholder-bearing blocks resolve {{...}}; check a substring that
-        # survives placeholder substitution rather than the raw body.
-        probe = body.strip().splitlines()[0][:40]
-        assert probe in result, f"block {name!r} not present in composed catering text"
+        snippets_dir = Path(DOE_ROOT) / "coordinator" / "snippets"
+        registry_data = load_registry(snippets_dir / "registry.toml")
+        for name in block_names:
+            entry = get_snippet_entry(registry_data, name)
+            header_style = entry.get("header_style", "sentinel-embedded")
+            snippet_text = (snippets_dir / f"{name}.md").read_text(encoding="utf-8")
+            body = _extract_contract_block_body(
+                snippet_text, header_style, entry["sentinel_begin"], entry["sentinel_end"]
+            )
+            assert body is not None, f"could not extract real block {name!r}"
+            # Placeholder-bearing blocks resolve {{...}}; check a substring that
+            # survives placeholder substitution rather than the raw body.
+            probe = body.strip().splitlines()[0][:40]
+            assert probe in result, f"block {name!r} not present in composed catering text"
+    finally:
+        import shutil
+
+        shutil.rmtree(session_dir, ignore_errors=True)
 
 
 @pytestmark_doe
@@ -473,9 +494,14 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     `subagent-sandbox-policy.yaml`, in a scratch git repo (the sidecar file
     itself must land under `state/subagent-share/<session>/`, which must
     not be DoE-claude's own tree)."""
+    # `git init` only -- see `git_repo` fixture's docstring-equivalent
+    # comment above for why the `user.email`/`user.name` config calls this
+    # test never needed are cut: no commit happens here, and trimming
+    # subprocess spawns keeps `resolve_git_root`'s own 2.0s-timeout spawn
+    # (against the sibling DoE-claude checkout, right below) clear of the
+    # load-driven contention that flaked it into a false
+    # "sidecar_provisioning: missed" read.
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, check=True)
 
     policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     import os

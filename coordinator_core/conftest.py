@@ -470,6 +470,34 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# foreign-repo probe memo quarantine
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_foreign_repo_probe_memo():
+    """Give every test an empty ``git_scope`` foreign-repo probe memo.
+
+    ``foreign_repo_unusable_reason`` caches "is this path a usable git repo"
+    per ``(realpath, pid)``, which is right for a process that only READS
+    sibling clones and wrong for a suite that builds, mutates and deletes
+    fixture repos in one interpreter. Clearing on both sides of the test makes
+    the memo unobservable across test boundaries: no test inherits a verdict
+    about a path a peer created, and none leaves one behind.
+
+    Same shape and same reason as the ``_reset_doe_root_cache()`` call in
+    ``_quarantine_real_home`` above — an interpreter-lifetime memo that is
+    correct in production and a cross-test channel in a suite. Unconditional
+    (no ``real_home`` opt-out): the memo is process state, not home state.
+    """
+    from coordinator_core.git_scope import reset_foreign_repo_probe_memo
+
+    reset_foreign_repo_probe_memo()
+    yield
+    reset_foreign_repo_probe_memo()
+
+
+# ---------------------------------------------------------------------------
 # probe-spray counter quarantine (2026-08-03 xdist cross-worker contamination)
 # ---------------------------------------------------------------------------
 
@@ -630,3 +658,28 @@ def pytest_configure(config: pytest.Config) -> None:
     from coordinator_core.ipc import allow_unstamped_dispatch
 
     allow_unstamped_dispatch()
+
+
+@pytest.fixture
+def exercise_suspended_op(monkeypatch):
+    """Let a test drive an op that `op_budget_suspension` has turned off.
+
+    The suspension exists to stop an over-budget op occupying the shared box at
+    RUNTIME. A test is not the box: exercising a suspended op's own contract costs
+    nothing anyone is queued behind, and that coverage is exactly what a
+    reinstatement case has to stand on. Deleting these tests because the op is off
+    would mean an op comes back with its envelope contract unproven — the failure
+    mode the suspension is trying to prevent, arriving by a different door.
+
+    Use ONLY for a test asserting what the op itself does. A test asserting that a
+    suspended op is REFUSED must not take this fixture — see
+    `tests/test_op_suspension_ratchet.py`, which deliberately does not.
+
+    `monkeypatch.setattr` reverts at teardown, so the suspension is live again for
+    every other test in the session. There is no process-wide clear and no env knob;
+    this is a per-test fixture by construction, so it cannot leak into runtime.
+    """
+    from coordinator_core import op_budget_suspension
+
+    monkeypatch.setattr(op_budget_suspension, "SUSPENDED_OPS", {})
+    return None

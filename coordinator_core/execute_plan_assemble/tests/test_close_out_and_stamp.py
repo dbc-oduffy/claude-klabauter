@@ -168,6 +168,48 @@ def _commit_chunk(
     if deliverable_id:
         message_args += ["-m", f"Deliverable-Id: {deliverable_id}"]
     _run_git(["commit", "-q", *message_args], root)
+    landing_sha = _head_sha(root)
+    # C3 (2026-08-21, "the close ceremony stops paying for the join"): the
+    # commit-subject/Deliverable-Id join this helper's own subject
+    # convention was built for is deleted -- the surviving evidence path
+    # is a `## Tasks` spine row's own verified `disposition_ref`. Stamp
+    # the just-landed sha onto `chunk_id`'s own row (a second, real commit
+    # -- never a synthetic sha) when the plan carries a LOCATED spine with
+    # a row for it, so this helper's many existing callers keep meaning
+    # "this chunk shipped" under the current oracle. A plan whose spine is
+    # absent, or has no row for `chunk_id` (the legacy Dispatch Ledger
+    # fixtures), is left untouched -- `_mark_chunk_disposition_ref` itself
+    # degrades to a no-op there.
+    _mark_chunk_disposition_ref(root, plan_rel, chunk_id, landing_sha)
+    return landing_sha
+
+
+def _mark_chunk_disposition_ref(
+    root: Path, plan_rel: str, chunk_id: str, sha: str
+) -> None:
+    """Stamps `disposition: coded` / `disposition_ref: <sha>` onto
+    `chunk_id`'s own `## Tasks` spine row and lands a second real commit --
+    reuses `close_out_and_stamp`'s own surviving `_stamp_rows_in_body`
+    splice (the SAME writer `cascade_baton_rows.py` now uses), never a
+    hand-rolled YAML edit. No-op (no write, no commit) when the plan has
+    no LOCATED spine, or no row named `chunk_id` at all."""
+    plan_file = root / plan_rel
+    text = plan_file.read_text(encoding="utf-8")
+    located = coas.locate_fenced_block(text)
+    if located.status != coas.LocateStatus.LOCATED:
+        return
+    start, end = located.span
+    new_body, stamp_error = coas._stamp_rows_in_body(
+        text[start:end], {chunk_id: sha}, {chunk_id: f"landed at {sha}"}
+    )
+    if stamp_error is not None:
+        # The row may not exist on this fixture's spine at all (e.g. a
+        # commit landed for a chunk-id this plan never declared) -- no
+        # stamp to make, same as the "no row" case above.
+        return
+    plan_file.write_text(text[:start] + new_body + text[end:], encoding="utf-8", newline="\n")
+    _run_git(["add", plan_rel], root)
+    _run_git(["commit", "-q", "-m", f"resolve {chunk_id}"], root)
 
 
 def _head_sha(root: Path) -> str:
@@ -533,7 +575,7 @@ class TestCloseOutReachesSharedCascadeEntrypoint:
         monkeypatch.setattr(
             coas,
             "_determine_shipped",
-            lambda *args, **kwargs: (True, [], coas.JOIN_PROVENANCE_JOINED, None),
+            lambda *args, **kwargs: (True, [], True, None),
         )
         calls = self._patch_cascade_spy(monkeypatch)
 
@@ -887,9 +929,8 @@ class TestCloseOutAndStampContinued:
     ):
         """False-positive-stamp incident fix: `shipped=True` on the
         no-spine/no-ledger branch no longer implies an evidence-backed
-        stamp -- `join_provenance` reports `JOIN_PROVENANCE_NO_EVIDENCE_
-        SOURCE` (no spine parse, no git-log query, no ledger read ever ran)
-        and the stamping gate refuses to act on it, leaving the plan's own
+        stamp -- no spine parse, no git-log query, no ledger read ever ran,
+        so the stamping gate refuses to act on it, leaving the plan's own
         status field untouched."""
         root = tmp_path
         _init_repo(root)
@@ -902,7 +943,6 @@ class TestCloseOutAndStampContinued:
         assert result["shipped"] is True
         assert result["stamped"] is False
         assert result["missing_chunk_ids"] == []
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_NO_EVIDENCE_SOURCE
         assert _read_status(plan_file) == original_status
         assert _head_sha(root) == pre_head
 
@@ -973,13 +1013,16 @@ class TestDryRun:
         assert result["stamped"] is False
         assert sorted(result["missing_chunk_ids"]) == ["C2a", "C2b"]
 
-        # AC8's auto-resolve backfill did NOT persist: C1's row is still
-        # `open` on disk, and the plan file is byte-identical to before the
-        # call -- unlike the live counterpart test, which DOES write this.
+        # The dry run wrote nothing beyond what `_commit_chunk` itself
+        # already landed (C3: `_commit_chunk` stamps `disposition: coded`/
+        # `disposition_ref` onto a committed chunk's own spine row as part
+        # of landing its commit -- the surviving evidence path is now
+        # PLAN-side, not a post-hoc join `close_out_and_stamp` computes) --
+        # the plan file is byte-identical to before this call.
         assert plan_file.read_bytes() == original_bytes
         rows = _spine_rows(plan_file)
         c1_row = next(row for row in rows if row.get("id") == "C1")
-        assert c1_row.get("disposition", "open") == "open"
+        assert c1_row.get("disposition") == "coded"
         assert _read_status(plan_file) == "draft"
         assert _head_sha(root) == pre_head
 
@@ -1019,10 +1062,8 @@ class TestDryRun:
             "stamped",
             "status_target",
             "missing_chunk_ids",
-            "deliverable_id_mismatch",
             "disposition_ref_rejections",
             "open_chunk_ids",
-            "skipped_sibling_repos",
         ]
         for key in compared_keys:
             assert dry_result[key] == live_result[key], key
@@ -1274,635 +1315,35 @@ class TestStampIndependentOfCwd:
 # ===========================================================================
 
 
-class TestDefect2ChunkCommitDetection:
-    def test_chunk_commit_that_never_touches_the_plan_doc_still_counts(self, tmp_path):
-        """2(a): a chunk commit that touches only WORK files (never the plan
-        doc itself) must still register as shipped -- the prior
-        `git log -- <plan-path>` path-scoping could never see it, which is
-        exactly the reported symptom (every chunk reported missing on a
-        fully-shipped plan). Deliberately does NOT use `_commit_chunk`
-        (this file's own helper, which touches the plan file) -- the whole
-        point is a commit that touches a DIFFERENT file.
-        """
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-
-        for chunk_id in ("C1", "C2a", "C2b"):
-            work_file = root / f"{chunk_id}.txt"
-            work_file.write_text(f"{chunk_id} work\n", encoding="utf-8")
-            _run_git(["add", f"{chunk_id}.txt"], root)
-            _run_git(
-                [
-                    "commit",
-                    "-q",
-                    "-m",
-                    f"{chunk_id}: land chunk (work file only)",
-                    "-m",
-                    f"Deliverable-Id: {_DLV_VALID_SPINE}",
-                ],
-                root,
-            )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert missing == []
-        assert shipped is True
-
-    def test_multi_id_wave_commit_subject_registers_every_id(self, tmp_path):
-        """2(b): a per-wave commit subject `C1,C2a,C2b: ...` must register
-        ALL THREE ids, not zero (the prior regex's character class had no
-        `,`, so the whole subject failed to match and contributed nothing).
-        """
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-
-        work_file = root / "wave.txt"
-        work_file.write_text("wave work\n", encoding="utf-8")
-        _run_git(["add", "wave.txt"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C1,C2a,C2b: land the whole wave in one commit",
-                "-m",
-                f"Deliverable-Id: {_DLV_VALID_SPINE}",
-            ],
-            root,
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert missing == []
-        assert shipped is True
-
-    def test_prose_subject_with_colon_does_not_register_as_a_chunk_id(self, tmp_path):
-        """Bounding check for 2(b)'s widened regex: an ordinary prose
-        subject like `fix: whatever was broken` must not cause `fix` (or
-        any other leading token) to spuriously satisfy a spine chunk-id.
-        """
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-
-        work_file = root / "unrelated.txt"
-        work_file.write_text("unrelated\n", encoding="utf-8")
-        _run_git(["add", "unrelated.txt"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "fix: whatever was broken",
-                "-m",
-                f"Deliverable-Id: {_DLV_VALID_SPINE}",
-            ],
-            root,
-        )
-
-        query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
-        assert query_ok is True
-        assert "fix" in committed
-        # "fix" registering as a committed id is expected (this op has no
-        # way to distinguish a genuine 1-token chunk-id subject from a
-        # prose subject that happens to start with a colon-terminated
-        # word) -- but it must never SPURIOUSLY satisfy an unrelated
-        # spine chunk-id like "C1".
-        assert coas._committed_id_covers_spine_id("fix", "C1") is False
-
-    def test_sub_chunk_suffixed_commit_satisfies_its_parent_spine_id(self, tmp_path):
-        """2(c): a spine id `C1` must be satisfied by a commit subjected
-        `C1a: ...` (the disjoint-write-target sub-chunk expansion shape),
-        but a spine id `C1` must NOT be satisfied by `C11` -- a distinct
-        chunk id, not a sub-chunk of `C1`.
-        """
-        assert coas._committed_id_covers_spine_id("C1a", "C1") is True
-        assert coas._committed_id_covers_spine_id("C3r", "C3") is True
-        assert coas._committed_id_covers_spine_id("C11", "C1") is False
-        assert coas._committed_id_covers_spine_id("C1", "C1") is True
-
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        # Land the spine's C1 as a sub-chunk-suffixed subject, and C2a/C2b
-        # verbatim -- full-shipped should still be reported.
-        _commit_chunk(root, "plan.md", "C1z", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert missing == []
-        assert shipped is True
-
-    def test_adjacency_dash_tag_does_not_cover_its_spine_id(self, tmp_path):
-        """Defect fix, 2026-08-14 (example-retrieval-repo cross-repo memo
-        `2026-08-14-example-retrieval-repo-em-close-out-adjacency-suffix-covers-spine-row`):
-        rule 2's dash-tag shape read `C8a-pre` as covering spine `C8a`,
-        so a landed PREREQUISITE chunk satisfied the row it was a
-        prerequisite FOR. Live repro: `b58edc057 "C8a-pre: green the
-        posix-exec baseline ..."` on plan
-        `2026-08-11-installer-body-port-to-python`, reporting
-        `missing_chunk_ids: ["C8b"]` when C8a was equally open.
-
-        Variant tags must keep covering -- the exclusion is a closed set
-        of ADJACENCY tags, not a retreat from rule 2.
-        """
-        for tag in ("pre", "prep", "post"):
-            assert coas._committed_id_covers_spine_id(f"C8a-{tag}", "C8a") is False
-        assert coas._committed_id_covers_spine_id("C8a-doe", "C8a") is True
-        assert coas._committed_id_covers_spine_id("C8a-mak", "C8a") is True
-        assert coas._committed_id_covers_spine_id("C1-fix2", "C1") is True
-        # `-press`/`-poster` are ordinary variant tags: the exclusion is on
-        # the whole tag, never a prefix of it.
-        assert coas._committed_id_covers_spine_id("C8a-press", "C8a") is True
-
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1-pre", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert "C1" in missing
-        assert shipped is False
-
-    def test_apostrophe_chunk_id_registers_and_covers_its_own_spine_id(self):
-        """Defect fix, 2026-08-06: a review-time chunk split can mint an
-        apostrophe-bearing id (`C9'`, from splitting `C9`). Live repro:
-        commit `9ffbaa505b54`'s exact subject `C9': deliver the manifest
-        to DoE ...` was invisible to `missing_chunk_ids` before this fix --
-        `_CHUNK_SUBJECT_RE`'s character class never admitted `'`, so the
-        id group before `:` could not match at all and `_extract_chunk_ids`
-        returned `[]` for the whole subject.
-        """
-        ids = coas._extract_chunk_ids(
-            "C9': deliver the manifest to DoE", spine_ids=["C9'"]
-        )
-        assert ids == ["C9'"]
-        assert coas._committed_id_covers_spine_id("C9'", "C9'") is True
-
-    def test_apostrophe_chunk_id_commit_scan_end_to_end(self, tmp_path):
-        """Same defect, exercised through the real `_committed_chunk_ids`
-        git-log scan this op actually calls -- the live repro's exact
-        subject shape (`C9': deliver the manifest to DoE ...`) must be
-        found as evidence, mirroring commit `9ffbaa505b54` on plan
-        `2026-08-06-writer-declared-write-surface-manifest`.
-        """
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        work_file = root / "manifest.txt"
-        work_file.write_text("manifest\n", encoding="utf-8")
-        _run_git(["add", "manifest.txt"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C9': deliver the manifest to DoE with the correspondence "
-                "property restated",
-                "-m",
-                f"Deliverable-Id: {_DLV_VALID_SPINE}",
-            ],
-            root,
-        )
-        query_ok, committed = coas._committed_chunk_ids(
-            root, _DLV_VALID_SPINE, spine_ids=["C9'"]
-        )
-        assert query_ok is True
-        assert "C9'" in committed
-
-    def test_dot_chunk_id_does_not_falsely_cover_an_unrelated_id(self):
-        """Negative-spec companion to the apostrophe fix: `.` was already
-        admitted literally by the id character class (a character class
-        has no `.`-as-wildcard meaning), so a subject `C9.: ...` must
-        register the literal id `C9.` and must NOT be treated as covering
-        an unrelated spine id `C9x` -- confirming this module's static
-        character class never behaved like an unescaped dynamic regex
-        would (no `C9.` == `C9x` false-positive collapse either before or
-        after this fix).
-        """
-        ids = coas._extract_chunk_ids("C9.: land the dotted chunk", spine_ids=["C9."])
-        assert ids == ["C9."]
-        assert coas._committed_id_covers_spine_id("C9.", "C9x") is False
-        assert coas._committed_id_covers_spine_id("C9x", "C9.") is False
-
-    def test_plain_chunk_id_unaffected_by_apostrophe_widening(self):
-        """Control case (the live run's own C0): an ordinary punctuation-
-        free chunk id must resolve exactly as before this fix -- byte-
-        identical behavior for the common case is the hard requirement
-        the widened character class must not regress.
-        """
-        assert coas._extract_chunk_ids(
-            "C0: record the stop-signal as discharged", spine_ids=["C0"]
-        ) == ["C0"]
-        assert coas._extract_chunk_ids("C13: land chunk", spine_ids=["C13"]) == ["C13"]
-        assert coas._extract_chunk_ids("C3a: land chunk", spine_ids=["C3a"]) == ["C3a"]
-
-    def test_git_log_query_failure_is_distinguishable_from_zero_commits(
-        self, tmp_path, monkeypatch
-    ):
-        """2(d): a broken git-log query (git-not-on-PATH, non-zero exit)
-        must be reported as an ERROR distinct from "genuinely nothing
-        committed" -- prior behavior silently collapsed both into an empty
-        set, which is exactly how this defect presented ("none of your
-        work exists" instead of a loud query-failure error).
-        """
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        real_run_git = coas._run_git
-
-        def _broken_git_log(args, cwd):
-            if args and args[0] == "log":
-                return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: broken")
-            return real_run_git(args, cwd)
-
-        monkeypatch.setattr(coas, "_run_git", _broken_git_log)
-
-        query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
-        assert query_ok is False
-        assert committed == set()
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert shipped is False
-        assert missing == []
-        assert error is not None
-        assert "git-log query" in error
-        assert "BROKEN" in error
-
-
-# ===========================================================================
-# Regression: paren-slug chunk-id suffix (Defect fix, 2026-08-15) -- the house
-# `Cn(slug):` commit-subject convention (`C16(composition-invocation-
-# budgets): ...`) registered ZERO chunk-ids: `_CHUNK_SUBJECT_RE`'s id
-# character class excluded `(`/`)` outright, so the leading-token match
-# failed before the separator/spine-bounding logic ever ran. 221 subjects
-# match this shape in this repo's own `git log` (2026-08-15), including
-# three of HEAD's own most recent commits at the time of the fix. Reported
-# cross-repo by example-retrieval-repo-em (memo dated 2026-08-15), where it presented
-# as a false `key_mismatch` on a fully-shipped plan.
-# ===========================================================================
-
-
-class TestParenSlugChunkIdSuffix:
-    def test_single_id_paren_slug_strips_to_bare_id(self):
-        assert coas._extract_chunk_ids(
-            "C1(path-scope): typed path_scope kwarg", spine_ids=["C1"]
-        ) == ["C1"]
-        assert coas._extract_chunk_ids(
-            "C16(composition-invocation-budgets): compute_scope's agent-claim "
-            "scan stops scaling with peer count",
-            spine_ids=["C16"],
-        ) == ["C16"]
-
-    def test_compound_paren_slug_strips_each_token_independently(self):
-        """A compound subject may mix a plain and a parenthesized id
-        freely -- only the parenthesized token's suffix is stripped, the
-        plain token is untouched."""
-        assert coas._extract_chunk_ids(
-            "C1+C3(path-scope): typed path_scope kwarg", spine_ids=["C1", "C3"]
-        ) == ["C1", "C3"]
-        assert coas._extract_chunk_ids(
-            "C1(path-scope)+C3(other-scope): typed", spine_ids=["C1", "C3"]
-        ) == ["C1", "C3"]
-
-    def test_spine_bounded_paren_slug_still_bounds_on_the_bare_id(self):
-        """The paren suffix is stripped BEFORE spine-id bounding, so a
-        parenthesized token that does not cover any real spine id is still
-        dropped, exactly like an unparenthesized stranger token would be."""
-        assert coas._extract_chunk_ids(
-            "C1(path-scope)+C9(unrelated): typed", spine_ids=["C1"]
-        ) == ["C1"]
-
-    def test_unparenthesized_id_list_unaffected_by_the_fix(self):
-        """Control case: `C1+C3: typed` (no parens at all) is byte-identical
-        to pre-fix behavior."""
-        assert coas._extract_chunk_ids(
-            "C1+C3: typed", spine_ids=["C1", "C3"]
-        ) == ["C1", "C3"]
-
-    def test_empty_parens_strip_to_the_bare_id(self):
-        assert coas._extract_chunk_ids("C1(): typed", spine_ids=["C1"]) == ["C1"]
-
-    def test_unbalanced_parens_do_not_crash_and_register_nothing(self):
-        assert coas._extract_chunk_ids("C1(oops: unterminated paren") == []
-        assert coas._extract_chunk_ids(
-            "C1(oops: unterminated paren", spine_ids=["C1"]
-        ) == []
-
-    def test_nested_parens_do_not_crash_and_register_nothing(self):
-        assert coas._extract_chunk_ids("C1(a(b)): nested paren") == []
-        assert coas._extract_chunk_ids(
-            "C1(a(b)): nested paren", spine_ids=["C1"]
-        ) == []
-
-    def test_pinned_counter_examples_unchanged(self):
-        """The three counter-examples this defect fix must not regress,
-        pinned by the dispatching brief -- none of these involve parens at
-        all, so none of their outputs should move."""
-        assert coas._extract_chunk_ids(
-            "coordinator/bin/stitch-observer-sidecar.py: add --scan standalone leak sweep"
-        ) == []
-        assert coas._extract_chunk_ids(
-            "g4-M1/M3a/M3b/M4/M4b: commit-authorization teeth"
-        ) == []
-        assert coas._extract_chunk_ids("fix: whatever was broken") == ["fix"]
-        assert coas._extract_chunk_ids(
-            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3"
-        ) == ["mise"]
-        assert coas._extract_chunk_ids(
-            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3",
-            spine_ids=["C12", "C3"],
-        ) == []
-
-    def test_paren_slug_commit_registers_end_to_end(self, tmp_path):
-        """Same defect, exercised through the real `_committed_chunk_ids`
-        git-log scan and `_determine_shipped` -- a plan whose every chunk
-        landed under the `Cn(slug):` convention must be reported fully
-        shipped, not `key_mismatch`."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "C1(path-scope): typed path_scope kwarg",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-        _commit_with_subject(
-            root, "plan.md", "C2a+C2b(second-scope): land both remaining chunks",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert missing == []
-        assert shipped is True
-        assert join_provenance == coas.JOIN_PROVENANCE_JOINED
-
-
-# ===========================================================================
-# Defect fix, 2026-08-15 -- prefix-then-ids commit-subject form
-# (`retrieval-audit C0/C1/C7: ...`, `retrieval-audit C2: ...`). A SECOND,
-# DISTINCT defect from the paren-slug fix above: `_CHUNK_SUBJECT_RE` requires
-# the id-list to be the LEADING token, so a scope word ahead of it fails the
-# whole match and `_extract_chunk_ids` returns `[]`. Reported cross-repo via
-# `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-close-out-and-stamp-key-
-# mismatch.md`: ten correctly-trailered commits on a fully-shipped
-# example-retrieval-repo plan all refused stamping. See `_CHUNK_SUBJECT_PREFIXED_RE`'s
-# own comment block for the exact contiguity bound admitted.
-# ===========================================================================
-
-
-class TestPrefixThenIdsChunkSubject:
-    def test_single_id_with_prefix_registers(self):
-        assert coas._extract_chunk_ids(
-            "retrieval-audit C2: schema v21 adds verdict, result_count, event_class",
-            spine_ids=["C2"],
-        ) == ["C2"]
-
-    def test_slash_joined_multi_id_with_prefix_registers(self):
-        assert coas._extract_chunk_ids(
-            "retrieval-audit C0/C1/C7: migration-ladder tripwire, RED outcome "
-            "test, consumer-dimension ruling",
-            spine_ids=["C0", "C1", "C7"],
-        ) == ["C0", "C1", "C7"]
-
-    def test_prefixed_token_naming_no_real_spine_id_is_dropped(self):
-        """Spine-bounded rejection: a prefixed token still has to cover a
-        real spine id, exactly like the unprefixed multi-id path."""
-        assert coas._extract_chunk_ids(
-            "retrieval-audit C9: nothing real here", spine_ids=["C1"]
-        ) == []
-
-    def test_pinned_counter_examples_still_register_nothing_extra(self):
-        """Every counter-example the dispatching brief pins: each has its
-        real chunk-id mention strictly AFTER the subject's only `: `, not
-        immediately before it, so `_CHUNK_SUBJECT_RE` resolves the single
-        leading token first and `_CHUNK_SUBJECT_PREFIXED_RE` is never
-        reached -- none of these move from pre-fix behavior."""
-        assert coas._extract_chunk_ids(
-            "close: mark C8 shipped, and record why this plan cannot stamp "
-            "implemented",
-            spine_ids=["C8"],
-        ) == []
-        assert coas._extract_chunk_ids(
-            "cross-repo: deliver ... C7 sweep deny was inverted memo from ...",
-            spine_ids=["C7"],
-        ) == []
-        assert coas._extract_chunk_ids(
-            "doctrine: stage the resolves-trailer zero-join amendment ahead "
-            "of claude-klabauter C4",
-            spine_ids=["C4"],
-        ) == []
-        assert coas._extract_chunk_ids(
-            "mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3",
-            spine_ids=["C12", "C3"],
-        ) == []
-        assert coas._extract_chunk_ids(
-            "mise: wave 1 -- DOCTRINE-C7a admission gate ...; RESIDUE-C9 "
-            "named-dispatch strip guard ...",
-            spine_ids=["C7a", "C9"],
-        ) == []
-
-    def test_still_unaffected_control_cases(self):
-        """Unrelated pinned counter-examples from the paren-slug fix, still
-        untouched by this fix."""
-        assert coas._extract_chunk_ids(
-            "coordinator/bin/stitch-observer-sidecar.py: add --scan "
-            "standalone leak sweep",
-            spine_ids=["C1"],
-        ) == []
-        assert coas._extract_chunk_ids(
-            "g4-M1/M3a/M3b/M4/M4b: ...",
-            spine_ids=["M1", "M3a", "M3b", "M4", "M4b"],
-        ) == ["M3a", "M3b", "M4", "M4b"]
-        assert coas._extract_chunk_ids("fix: whatever was broken") == ["fix"]
-        assert coas._extract_chunk_ids(
-            "C1+C3(path-scope): typed", spine_ids=["C1", "C3"]
-        ) == ["C1", "C3"]
-
-    def test_prefix_then_ids_commit_registers_end_to_end(self, tmp_path):
-        """Same defect, exercised through the real `_committed_chunk_ids`
-        git-log scan and `_determine_shipped` -- a plan whose every chunk
-        landed under the `<scope> Cn: ...`/`<scope> Cn/Cm: ...` convention
-        must be reported fully shipped, not `key_mismatch`."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "retrieval-audit C1: typed path_scope kwarg",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-        _commit_with_subject(
-            root, "plan.md",
-            "retrieval-audit C2a/C2b: land both remaining chunks",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert missing == []
-        assert shipped is True
-        assert join_provenance == coas.JOIN_PROVENANCE_JOINED
-
-
-class TestTrailerMatchedNoChunkIdMessaging:
-    """Chunk B: a commit whose `Deliverable-Id` trailer MATCHES but whose
-    subject registers zero chunk-ids (e.g. a plan-authoring/ceremony
-    commit) used to be reported through the exact same `key_mismatch`
-    reason string as a commit whose trailer VALUE genuinely differed --
-    `_JOIN_PROVENANCE_REASON[JOIN_PROVENANCE_KEY_MISMATCH]` asserts "never
-    one equal to this plan's own frontmatter value", which is false in this
-    state and sends the reader to re-inspect an already-correct trailer.
-    `DeliverableJoinStats.trailer_matched_no_chunk_id_count` (2026-08-15)
-    lets the message name the real cause instead."""
-
-    def test_committed_chunk_shas_counts_trailer_matched_no_chunk_id_commits(
-        self, tmp_path
-    ):
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "docs: author more of the plan document",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
-            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
-        )
-        assert query_ok is True
-        assert committed == set()
-        assert committed_shas == {}
-        assert join_stats.matched_commit_count == 0
-        assert join_stats.trailer_matched_no_chunk_id_count == 1
-
-    def test_broken_query_placeholder_zeroes_the_new_field(self, tmp_path, monkeypatch):
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-
-        def _broken_git_log(args, cwd):
-            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: broken")
-
-        monkeypatch.setattr(coas, "_run_git", _broken_git_log)
-        query_ok, _committed, _shas, join_stats = coas._committed_chunk_shas(
-            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
-        )
-        assert query_ok is False
-        assert join_stats.trailer_matched_no_chunk_id_count == 0
-
-    def test_message_names_no_chunk_id_cause_not_value_differed(
-        self, tmp_path, monkeypatch
-    ):
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "docs: author more of the plan document",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
-        assert "registered no chunk-id" in result["message"]
-        assert "inspect the commit subject, not the trailer" in result["message"]
-        assert "never one equal to this plan's own frontmatter value" not in result["message"]
-
-    def test_message_names_the_runnable_remedy(self, tmp_path, monkeypatch):
-        """The diagnosis alone left the operator with nothing to run -- the
-        gap AC7 of docs/plans/2026-08-20-wsc-identity-gates-key-on-the-
-        deliverable.md names. The trailer-matched branch carries the same
-        `plan-tasks-resolve --coded` remedy the genuinely-uncommitted branch
-        already names."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "docs: author more of the plan document",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert "plan-tasks-resolve --coded" in result["message"]
-        assert "re-run close-out-and-stamp" in result["message"]
-
-    def test_genuine_value_mismatch_keeps_the_static_reason(
-        self, tmp_path, monkeypatch
-    ):
-        """Control case: when NO commit's trailer matches at all (a genuine
-        value mismatch, not a no-chunk-id one), the static reason string is
-        unchanged."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root, "plan.md", "C1: land the chunk",
-            deliverable_id="dlv-a-totally-different-plan",
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
-        assert "never one equal to this plan's own frontmatter value" in result["message"]
-        assert "registered no chunk-id" not in result["message"]
-        # The remedy is scoped to the trailer-matched override: the only
-        # commits in range here carry a FOREIGN Deliverable-Id, so a
-        # per-row `--coded <sha>` would stamp a stranger's work.
-        assert "plan-tasks-resolve --coded" not in result["message"]
-
-
-# ===========================================================================
-# Regression: C7, plan-line-item-resolution-model (2026-07-27) -- AC7/AC8/AC9
-# ===========================================================================
-
-
 class TestResolutionModel:
-    """The widened completeness oracle (AC9), the `landed` intermediate
-    status (AC7), and committed-but-open row auto-resolution (AC8) -- see
-    `close_out_and_stamp.py`'s own "Resolution-model widening" docstring
-    section for the full design rationale.
+    """The widened completeness oracle (AC9) and the `landed` intermediate
+    status (AC7) -- see `close_out_and_stamp.py`'s own evidence-sources
+    docstring section for the full design rationale.
+
+    C3 (2026-08-21, "the close ceremony stops paying for the join"):
+    committed-but-open row auto-resolution (AC8) is DELETED along with the
+    commit-subject join it depended on -- there is no longer an automatic
+    "the tree already has this, promote it for me" inference. The former
+    `test_committed_open_row_auto_resolves_to_coded_with_sha` pin is
+    removed with it; the remaining tests below use a `disposition_ref`
+    fixture (the surviving evidence path) in place of `_commit_chunk`'s
+    subject-join fixture.
     """
 
     def test_wont_do_row_excluded_from_commit_oracle_stamps_implemented(
         self, tmp_path, monkeypatch
     ):
         """AC9: a plan with one `wont_do` row and every other row `coded`
-        stamps `implemented`, not halted -- `wont_do` was never
-        commit-required (it carries no code to land), and `coded` rows are
-        already resolved, so there is nothing left `open` to block the
-        stamp."""
+        (with a verified `disposition_ref`) stamps `implemented`, not
+        halted -- `wont_do` was never commit-required (it carries no code
+        to land), and `coded` rows with real evidence are already
+        resolved, so there is nothing left `open` to block the stamp."""
         root = tmp_path
         _init_repo(root)
+        (root / "widget.py").write_text("v1")
+        _run_git(["add", "widget.py"], root)
+        _run_git(["commit", "-q", "-m", "ship the widget"], root)
+        landing_sha = _head_sha(root)
         rows_yaml = (
             "- id: C1\n"
             "  title: Ship the widget\n"
@@ -1910,7 +1351,8 @@ class TestResolutionModel:
             "  surface: coordinator/bin/widget.py\n"
             "  deferred: false\n"
             "  disposition: coded\n"
-            "  disposition_ref: 1234567\n"
+            f"  disposition_ref: {landing_sha}\n"
+            "  disposition_detail: 'Shipped and verified.'\n"
             "  body: |\n"
             "    Already resolved from a prior close-out pass.\n"
             "- id: C2\n"
@@ -1925,11 +1367,6 @@ class TestResolutionModel:
             "    Declined -- never carried a commit of its own.\n"
         )
         plan_file = _seed_disposition_plan(root, rows_yaml)
-        # C1 is already `disposition: coded` (as if a PRIOR close-out pass
-        # auto-resolved it), but `coded` STAYS commit-required (AC9 only
-        # excludes spun_off/backlogged/wont_do) -- land the real matching
-        # commit too, or the oracle correctly reports it missing.
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_DISPOSITION)
 
         exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
 
@@ -1940,47 +1377,6 @@ class TestResolutionModel:
         assert result["status_target"] == "implemented"
         assert _read_status(plan_file) == "implemented"
         assert _head_sha(root) != pre_head
-
-    def test_committed_open_row_auto_resolves_to_coded_with_sha(
-        self, tmp_path, monkeypatch
-    ):
-        """AC8: a committed chunk-id whose row is still `open` is
-        auto-resolved to `disposition: coded` with `disposition_ref` set to
-        the covering commit's own sha -- verified directly against the
-        rewritten spine on disk, not just the shipped/implemented verdict."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = (
-            "- id: C1\n"
-            "  title: Ship the widget\n"
-            "  change_kind: script-edit\n"
-            "  surface: coordinator/bin/widget.py\n"
-            "  deferred: false\n"
-            "  body: |\n"
-            "    Ship the widget end to end.\n"
-        )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_DISPOSITION)
-        expected_sha = _run_git(["rev-parse", "--short", "HEAD"], root).stdout.strip()
-
-        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is True
-        assert result["status_target"] == "implemented"
-        assert _read_status(plan_file) == "implemented"
-
-        rows = _spine_rows(plan_file)
-        c1_row = next(row for row in rows if row.get("id") == "C1")
-        assert c1_row["disposition"] == "coded"
-        # The auto-resolved sha comes from the SAME `_committed_chunk_shas`
-        # git-log query this op's own completeness oracle uses -- assert it
-        # is a real, resolvable commit, not merely non-empty.
-        assert c1_row["disposition_ref"]
-        resolved = _run_git(
-            ["rev-parse", "--short", c1_row["disposition_ref"]], root
-        ).stdout.strip()
-        assert resolved == expected_sha
 
     def test_shipped_with_a_row_still_open_stamps_landed_not_implemented(
         self, tmp_path, monkeypatch
@@ -2011,7 +1407,7 @@ class TestResolutionModel:
         monkeypatch.setattr(
             coas,
             "_determine_shipped",
-            lambda *args, **kwargs: (True, [], coas.JOIN_PROVENANCE_JOINED, None),
+            lambda *args, **kwargs: (True, [], True, None),
         )
 
         exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
@@ -2121,7 +1517,21 @@ class TestResolutionModel:
         caught the original bug -- it asserts on the raw on-disk TEXT, not
         a re-parsed semantic view, which is exactly why the prior test
         suite (all of which re-parses and asserts on semantic fields) let
-        the defect through."""
+        the defect through.
+
+        C3 (2026-08-21, "the close ceremony stops paying for the join"):
+        `close_out_and_stamp()` no longer stamps a row's own `disposition:`/
+        `disposition_ref:` itself -- that AC8 auto-resolve write path was
+        deleted along with the commit-subject join it depended on, and
+        `_commit_chunk` (this file's own test helper) now lands that stamp
+        directly, as a second real commit, at chunk-commit time. So by the
+        time `close_out_and_stamp` runs here, C1's row is already stamped;
+        the only write this call itself makes is the `close_out_last_
+        partial:` frontmatter line, since C2 is still open. The comment/
+        block-scalar-preservation assertions below stay meaningful as a
+        "this call touches nothing it should not" pin, even though the
+        fence-body round-trip they originally guarded now lives in `_stamp_
+        rows_in_body`'s own direct unit tests."""
         root = tmp_path
         _init_repo(root)
         rows_yaml = (
@@ -2170,13 +1580,13 @@ class TestResolutionModel:
         assert "It''s" not in new_text
         assert "widget''s" not in new_text
 
-        # Exactly the expected four stamp lines were inserted: three for C1
-        # (disposition: + disposition_ref: + disposition_detail:), plus ONE
-        # `close_out_last_partial:` line (C2 fix, 2026-08-06 -- this run is
-        # still halted, since C2's own row stays open/uncommitted, so
-        # `_stamp_close_out_partial_evaluation` fires too); C2's row body
-        # is completely untouched otherwise (still uncommitted/open).
-        assert len(new_lines) == len(original_lines) + 4
+        # C1's own disposition/disposition_ref/disposition_detail lines
+        # were already written by `_commit_chunk`'s own `_mark_chunk_
+        # disposition_ref` call, BEFORE this `close_out_and_stamp` call --
+        # so the only line this call itself adds is the ONE `close_out_
+        # last_partial:` frontmatter line (C2 fix, 2026-08-06 -- this run is
+        # still halted, since C2's own row stays open/uncommitted).
+        assert len(new_lines) == len(original_lines) + 1
         assert any(l.startswith("close_out_last_partial: ") for l in new_lines)
         assert "  disposition: coded\n" in new_lines
         disposition_ref_lines = [l for l in new_lines if l.startswith("  disposition_ref: ")]
@@ -2191,10 +1601,10 @@ class TestResolutionModel:
         c2_row = next(row for row in rows if row.get("id") == "C2")
         assert c1_row["disposition"] == "coded"
         assert c1_row["disposition_ref"]
-        # disposition_detail carries the covering commit's own subject line
-        # (DR-103) -- _commit_chunk lands a commit subject of the form
-        # "<chunk_id>: land chunk".
-        assert c1_row["disposition_detail"] == "C1: land chunk"
+        # disposition_detail carries the prose `_mark_chunk_disposition_ref`
+        # (this file's own helper, not close_out_and_stamp) passes through
+        # `_stamp_rows_in_body` at chunk-commit time.
+        assert c1_row["disposition_detail"] == f"landed at {c1_row['disposition_ref']}"
         assert c2_row.get("disposition", "open") == "open"
         assert "disposition_ref" not in c2_row
         assert "disposition_detail" not in c2_row
@@ -2227,18 +1637,23 @@ class TestResolutionModel:
         assert sum(1 for l in lines if l.strip().startswith("disposition_ref:")) == 1
 
     def test_fidelity_gate_refuses_on_unstampable_body_without_writing_or_committing(
-        self, tmp_path, monkeypatch
+        self, monkeypatch
     ):
         """Step 2: if the row-level stamp somehow produced a change outside
-        the disposition/disposition_ref fields, the op must refuse --
-        never write, never commit, never push. Forces exactly that shape
-        by monkeypatching `_stamp_rows_in_body` to return a body with an
-        unrelated line corrupted, then asserts the whole
-        `close_out_and_stamp` orchestration surfaces the refusal as a
-        business failure and leaves the plan file and git history
-        untouched."""
-        root = tmp_path
-        _init_repo(root)
+        the disposition/disposition_ref fields, the caller must refuse --
+        never write, never commit, never push. Forces exactly that shape by
+        monkeypatching `_stamp_rows_in_body` to return a body with an
+        unrelated line corrupted, then asserts `_assert_stamp_fidelity`
+        (driven the same way `_stamp_whole_plan`'s own caller drives it)
+        surfaces the refusal.
+
+        C3 (2026-08-21): pinned directly against `_stamp_whole_plan` /
+        `_assert_stamp_fidelity`, not through `close_out_and_stamp()` --
+        that function no longer calls `_stamp_rows_in_body` itself at all
+        (the AC8 auto-resolve write path that used to wire them together
+        was deleted along with the commit-subject join it depended on;
+        `cascade_baton_rows.py`, C4's own surface, is this function's
+        current live caller)."""
         rows_yaml = (
             "- id: C1\n"
             "  title: Ship the widget\n"
@@ -2248,13 +1663,7 @@ class TestResolutionModel:
             "  body: |\n"
             "    Ship the widget end to end.\n"
         )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_DISPOSITION)
-        # Capture the plan's on-disk state AFTER the chunk commit (which
-        # itself appends a trailer line to make the commit non-empty) --
-        # this is the actual pre-close-out state the refusal must leave
-        # untouched.
-        original_text = plan_file.read_text(encoding="utf-8")
+        plan_text = _PLAN_TEMPLATE.format(status="executing", rows=rows_yaml)
 
         def _corrupting_stamp(body, updates, details=None):
             # Deliberately drop an unrelated line -- not a
@@ -2266,16 +1675,13 @@ class TestResolutionModel:
 
         monkeypatch.setattr(coas, "_stamp_rows_in_body", _corrupting_stamp)
 
-        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+        new_text, fidelity_error = _stamp_whole_plan(
+            plan_text, {"C1": "abc1234"}, {"C1": "C1: land chunk"}
+        )
 
-        assert exit_code == coas.EXIT_BUSINESS_FAIL
-        assert "error" in result
-        assert "plan.md" in result["error"]
-        assert "refusing" in result["error"].lower()
-
-        # No write, no commit, no push.
-        assert plan_file.read_text(encoding="utf-8") == original_text
-        assert _head_sha(root) == pre_head
+        assert fidelity_error is not None
+        assert "plan.md" in fidelity_error
+        assert "refusing" in fidelity_error.lower()
 
     def test_stamp_lands_at_a_non_default_child_key_indent(self, tmp_path):
         """Review: code-reviewer -- F4: `_stamp_rows_in_body` previously
@@ -2396,16 +1802,18 @@ class TestResolutionModel:
         assert error is None
         assert "  disposition_ref: 7876a31d\n" in new_body.splitlines(keepends=True)
 
-    def test_fidelity_gate_refuses_a_mis_indented_stamp(self, tmp_path, monkeypatch):
+    def test_fidelity_gate_refuses_a_mis_indented_stamp(self, monkeypatch):
         """Review: code-reviewer -- F3: proves the fidelity gate now
         REFUSES a stamp landed at the wrong indent, rather than passing it
         vacuously. Forces exactly that shape by monkeypatching
         `_stamp_rows_in_body` to emit its `disposition:`/`disposition_ref:`
         lines at an indent that does NOT match the row's own measured
-        content indent, then asserts the whole `close_out_and_stamp`
-        orchestration refuses -- no write, no commit, no push."""
-        root = tmp_path
-        _init_repo(root)
+        content indent, then asserts `_assert_stamp_fidelity` refuses.
+
+        C3 (2026-08-21): pinned directly against `_stamp_whole_plan` /
+        `_assert_stamp_fidelity`, not through `close_out_and_stamp()` --
+        see the sibling test above for why that orchestration no longer
+        wires them together."""
         rows_yaml = (
             "- id: C1\n"
             "  title: Ship the widget\n"
@@ -2415,9 +1823,7 @@ class TestResolutionModel:
             "  body: |\n"
             "    Ship the widget end to end.\n"
         )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_DISPOSITION)
-        original_text = plan_file.read_text(encoding="utf-8")
+        plan_text = _PLAN_TEMPLATE.format(status="executing", rows=rows_yaml)
 
         def _mis_indented_stamp(body, updates, details=None):
             # Row's own content indent is 2 spaces; deliberately stamp at
@@ -2430,16 +1836,13 @@ class TestResolutionModel:
 
         monkeypatch.setattr(coas, "_stamp_rows_in_body", _mis_indented_stamp)
 
-        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+        new_text, fidelity_error = _stamp_whole_plan(
+            plan_text, {"C1": "abc1234"}, {"C1": "C1: land chunk"}
+        )
 
-        assert exit_code == coas.EXIT_BUSINESS_FAIL
-        assert "error" in result
-        assert "plan.md" in result["error"]
-        assert "refusing" in result["error"].lower()
-
-        # No write, no commit, no push.
-        assert plan_file.read_text(encoding="utf-8") == original_text
-        assert _head_sha(root) == pre_head
+        assert fidelity_error is not None
+        assert "plan.md" in fidelity_error
+        assert "refusing" in fidelity_error.lower()
 
 
 # ===========================================================================
@@ -2642,1832 +2045,11 @@ class TestIdempotentRerunDoesNotAttemptAZeroDiffCommit:
 
 
 # ===========================================================================
-# Regression: chunk-ids collide ACROSS plans -- Deliverable-Id trailer
-# scoping (Defect fix, 2026-07-27; see close_out_and_stamp.py's own
-# docstring § Deliverable scoping for the full defect narrative and the
-# chosen false-negative-over-false-positive tradeoff).
-# ===========================================================================
-
-
-class TestDeliverableScoping:
-    """Pins the fix for the live false-positive bug: chunk-ids (`C1`,
-    `C2a`, `C8b`, ...) are only unique WITHIN a single plan's own spine, and
-    the shared workstream branch carries commits from many concurrent plans
-    reusing the same ids. An UNRELATED plan's chunk-id-shaped commit
-    subject must never satisfy THIS plan's spine row of the same id --
-    scoping is via the `Deliverable-Id:` git trailer cross-referenced
-    against the closing plan's own frontmatter `deliverable_id:` field;
-    subject match alone is no longer sufficient.
-    """
-
-    def test_matching_chunk_id_but_different_deliverable_id_does_not_count(
-        self, tmp_path
-    ):
-        """THE LIVE BUG, reproduced directly: a commit whose subject
-        matches the spine's chunk-id but whose `Deliverable-Id` trailer
-        belongs to a DIFFERENT plan must not count as evidence -- this is
-        exactly the false-positive observed live on
-        work/machine-b/2026-07-21to26, 2026-07-27 (plan
-        2026-07-27-plan-line-item-resolution-model's `C8b` row read as
-        shipped via two unrelated plans' own `C8b` commits).
-
-        Against the PRE-FIX code (raw subject matching, no trailer check)
-        this assertion would FAIL -- `shipped` would be `True` and `missing`
-        would be `[]`, because the C1 commit's subject alone was sufficient
-        evidence. That is the exact defect this fix closes.
-        """
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(
-            root, "plan.md", "C1", deliverable_id="dlv-some-other-plan-000002"
-        )
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-        # A DIFFERENT plan's Deliverable-Id trailer exists in range (the C1
-        # commit above) alongside C2a/C2b's own matching trailers -- the
-        # join itself succeeded (C2a/C2b matched), so this is "joined", not
-        # "key_mismatch": the still-missing C1 is a genuinely separate row
-        # this plan's own join correctly excluded, not a join failure.
-        assert join_provenance == "joined"
-
-    def test_matching_chunk_id_and_matching_deliverable_id_counts(self, tmp_path):
-        """The companion positive case: a commit whose `Deliverable-Id`
-        trailer DOES match the closing plan's own `deliverable_id:` counts
-        as evidence exactly as before this fix."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-        assert missing == []
-        assert join_provenance == "joined"
-
-    def test_untrailered_commit_with_matching_subject_does_not_count(self, tmp_path):
-        """A commit that predates the `Deliverable-Id:` trailer convention
-        -- matching subject, no trailer at all -- is UNATTRIBUTABLE and
-        must never count, even though its subject matches. This is the
-        deliberate false-negative-over-false-positive tradeoff this fix
-        makes on purpose (see the module docstring): a false negative just
-        makes a human look twice, a false positive silently ships an
-        incomplete plan as done."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1")  # no deliverable_id -- untrailered
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-        # C2a/C2b both carry the correctly-matching trailer -- the join
-        # succeeded overall ("joined"); C1's own commit simply carries no
-        # trailer at all and is correctly excluded as unattributable, which
-        # is a per-row exclusion, not a join-provenance failure.
-        assert join_provenance == "joined"
-
-    def test_plan_with_no_deliverable_id_reports_every_chunk_uncommitted(
-        self, tmp_path
-    ):
-        """A plan with no `deliverable_id:` frontmatter field at all
-        cannot be scoped -- the conservative choice this fix makes (see
-        the module docstring's "No `deliverable_id`..." section) is to
-        report every commit-required chunk-id as missing, NEVER to fall
-        back to the old unscoped subject-matching (which would silently
-        reinstate the defect this fix closes). The git-log query itself
-        must still succeed (`error is None`) -- this is "cannot
-        attribute", not "the git query broke" (Defect 2(d)'s distinction
-        stays intact). `join_provenance` is `"no_join_key"` here -- the
-        join was never ATTEMPTED at all (no `deliverable_id:` to key off
-        of), which is a distinct fact from "the join ran and found nothing"
-        (`no_join_candidates`/`key_mismatch`) -- see close_out_and_stamp.py's
-        own join-provenance widening for why the two must not be
-        conflated."""
-        root = tmp_path
-        _init_repo(root)
-        text = _FIXTURE_VALID_SPINE.read_text(encoding="utf-8").replace(
-            '\ndeliverable_id: "dlv-fixture-valid-spine-000001"\n', "\n"
-        )
-        assert "deliverable_id" not in text
-        plan_file = root / "plan.md"
-        plan_file.write_text(text, encoding="utf-8")
-        _run_git(["add", "plan.md"], root)
-        _run_git(["commit", "-q", "-m", "seed"], root)
-
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
-
-        assert coas._plan_deliverable_id(text) is None
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(text, "plan.md", root)
-        assert error is None
-        assert shipped is False
-        assert sorted(missing) == ["C1", "C2a", "C2b"]
-        assert join_provenance == "no_join_key"
-
-    def test_sub_chunk_suffix_still_matches_with_deliverable_id_scoping(
-        self, tmp_path
-    ):
-        """Sub-chunk-suffix matching (`C1a` covers spine id `C1`, Defect
-        2(c)) still works once the commit ALSO carries the matching
-        `Deliverable-Id` trailer -- deliverable scoping and sub-chunk
-        matching compose; neither disables the other. (This is a
-        deliverable-scoped restatement of
-        `TestDefect2ChunkCommitDetection.
-        test_sub_chunk_suffixed_commit_satisfies_its_parent_spine_id`
-        above, which already covers this under the new scoping -- kept
-        here too as an explicit, self-contained pin per this defect's own
-        test plan.)"""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1z", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-
-
-# ===========================================================================
-# Deliverable-Id near-miss diagnostic (2026-08-01) -- makes a zero/
-# under-counted `missing_chunk_ids` verdict LEGIBLE when the real cause is a
-# `Deliverable-Id` VALUE mismatch between the plan's own frontmatter
-# `deliverable_id:` and the trailer its own commits actually carry (two
-# independent producers of the same FK -- see close_out_and_stamp.py's own
-# `_deliverable_id_near_miss_diagnostics` docstring). Diagnostic-only: the
-# join semantics/verdict in `_committed_chunk_shas` are UNCHANGED by this
-# fix -- these tests pin that this is purely additive explanation, never a
-# second path to "count" a mismatched commit as evidence.
-# ===========================================================================
-
-
-class TestDeliverableIdMismatchDiagnostic:
-    def test_mismatch_present_names_both_values_with_count(self, tmp_path):
-        """A near-miss trailer value on a chunk-shaped commit is reported
-        with its covering-commit count, and the plan's own `deliverable_id`
-        is excluded from the candidate set (it isn't a "near miss" -- it
-        already counts as real evidence when present)."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        other_id = "dlv-percolate-root-rung-ordering-the-doe-roo-a8c947"
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=other_id)
-        _commit_chunk(root, "plan.md", "C2a", deliverable_id=other_id)
-        # An untrailered commit (no Deliverable-Id at all) must never be
-        # reported as a near-miss candidate -- there is no value to name.
-        _commit_chunk(root, "plan.md", "C2b")
-
-        candidates = coas._deliverable_id_near_miss_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1", "C2a", "C2b"]
-        )
-        assert candidates == [{"deliverable_id": other_id, "commit_count": 2}]
-
-    def test_no_near_miss_returns_empty(self, tmp_path):
-        """Genuinely-uncommitted chunks, with no trailer at all on any
-        chunk-shaped commit -- there is no near-miss candidate to name."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1")  # untrailered
-
-        candidates = coas._deliverable_id_near_miss_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1"]
-        )
-        assert candidates == []
-
-    def test_no_colon_subject_is_never_a_candidate(self, tmp_path):
-        """A commit subject with no leading `<id>: ` shape at all (no colon
-        to anchor `_CHUNK_SUBJECT_RE`) yields zero ids from
-        `_extract_chunk_ids` and must never contribute a near-miss
-        candidate, even if it carries a differing `Deliverable-Id` trailer
-        -- mirrors `_committed_chunk_shas`'s own "subject yields at least
-        one chunk-id" gate exactly."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        assert coas._extract_chunk_ids("merge branch updates") == []
-        _commit_with_subject(
-            root, "plan.md", "merge branch updates", deliverable_id="dlv-other-000009"
-        )
-
-        candidates = coas._deliverable_id_near_miss_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1"]
-        )
-        assert candidates == []
-
-    def test_prose_subject_token_not_covering_a_missing_id_is_not_a_candidate(
-        self, tmp_path
-    ):
-        """A `<token>: <prose>` commit whose leading token is NOT one of the
-        ids still missing must never be named as the near-miss cause.
-
-        `_extract_chunk_ids` deliberately registers the single leading token
-        of ANY colon-prefixed subject, so `fix: ...` contributes the id
-        `fix`. Gating on subject SHAPE alone would therefore let an ordinary
-        housekeeping commit that happens to carry a different Deliverable-Id
-        be reported as the reason a plan's chunks did not count -- naming a
-        wholly unrelated deliverable with full confidence. The intersection
-        against `missing_chunk_ids` is what forecloses that; this test is
-        the assertion that goes red if the gate is ever loosened back to
-        shape-only. Observed live: claude-klabauter's own history carries `fix:`,
-        `ceremony:` and `memo:` subjects under many distinct deliverable
-        ids."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        unrelated = "dlv-some-unrelated-deliverable-000077"
-        assert coas._extract_chunk_ids("fix: tidy an unrelated guard") == ["fix"]
-        _commit_with_subject(
-            root, "plan.md", "fix: tidy an unrelated guard", deliverable_id=unrelated
-        )
-
-        candidates = coas._deliverable_id_near_miss_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1", "C2a"]
-        )
-        assert candidates == []
-
-    def test_absent_deliverable_id_returns_empty_without_git_call(self, tmp_path, monkeypatch):
-        """`deliverable_id=None`/falsy short-circuits before any git-log
-        call at all -- nothing to compare a candidate against."""
-        root = tmp_path
-        _init_repo(root)
-
-        call_count = {"n": 0}
-        real_run_git = coas._run_git
-
-        def counting_run_git(args, cwd):
-            call_count["n"] += 1
-            return real_run_git(args, cwd)
-
-        monkeypatch.setattr(coas, "_run_git", counting_run_git)
-
-        assert coas._deliverable_id_near_miss_diagnostics(root, None, ["C1"]) == []
-        assert coas._deliverable_id_near_miss_diagnostics(root, "", ["C1"]) == []
-        assert call_count["n"] == 0
-
-    def test_zero_trailered_commits_in_range_never_recommends_an_equivalence(
-        self, tmp_path, monkeypatch
-    ):
-        """Second-defect regression (range-fix, 2026-08-07 -- see this
-        module's own bug-backlog entry `2026-08-07-close-out-and-stamp-s-
-        chunk-evidence-joi-8b6a7a32d833.yaml`): when the searched range
-        carries ZERO commits with any `Deliverable-Id` trailer at all
-        (`JOIN_PROVENANCE_NO_JOIN_CANDIDATES`), this is a range/visibility
-        failure, not a key mismatch -- the caller must never be steered
-        toward declaring a `state/deliverable-equivalence.yaml` equivalence
-        for it, since doing so on a genuine range bug would record a FALSE
-        equivalence between two unrelated workstreams (the exact live
-        incident this fix closes). `deliverable_id_mismatch` must stay
-        empty and the message must carry the `no_join_candidates` reason,
-        never an equivalence NOTE."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        # Nothing else committed at all -- the only commit in this repo's
-        # history is the untrailered "seed" commit `_seed_plan` itself
-        # lands, so the searched range carries zero Deliverable-Id-trailered
-        # commits of any kind.
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_NO_JOIN_CANDIDATES
-        assert result["deliverable_id_mismatch"] == []
-        assert "no_join_candidates" in result["message"]
-        assert "equivalence" not in result["message"]
-        assert "NOTE" not in result["message"]
-
-    def test_close_out_and_stamp_message_and_result_carry_the_mismatch(
-        self, tmp_path, monkeypatch
-    ):
-        """Integration: `close_out_and_stamp`'s own `message` string gets a
-        generic, register-matched NOTE (2026-08-14, key_mismatch stops
-        naming strangers) -- the structured `deliverable_id_mismatch` result
-        key still carries the candidate(s) (unaffected, `shipped`/AC7
-        invariant), but the human-facing message no longer names a specific
-        foreign id or advises declaring a `state/deliverable-equivalence.
-        yaml` equivalence: the search behind this diagnostic is unscoped by
-        author/session, so naming a stranger's commit as evidence against
-        THIS plan and inviting the reader to declare an equivalence against
-        it is exactly the shared-worktree false-positive this fix closes."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        other_id = "dlv-some-other-value-000042"
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=other_id)
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert sorted(result["missing_chunk_ids"]) == ["C1", "C2a", "C2b"]
-        assert result["deliverable_id_mismatch"] == [
-            {"deliverable_id": other_id, "commit_count": 3}
-        ]
-        assert other_id not in result["message"]
-        assert "equivalence" not in result["message"]
-        assert "earliest artifact wins" not in result["message"]
-        assert (
-            "3 commit(s) in range belong to other deliverables (expected on "
-            "a shared tree)" in result["message"]
-        )
-
-    def test_genuinely_uncommitted_with_no_near_miss_message_unchanged(
-        self, tmp_path, monkeypatch
-    ):
-        """Today's message/behavior is UNCHANGED when chunks are genuinely
-        uncommitted and no near-miss `Deliverable-Id` candidate exists --
-        no bogus NOTE clause is ever appended, and `deliverable_id_mismatch`
-        is empty."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        # C1 committed correctly, C2a/C2b never committed at all -- no
-        # commit anywhere carries a differing Deliverable-Id trailer.
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert sorted(result["missing_chunk_ids"]) == ["C2a", "C2b"]
-        assert result["deliverable_id_mismatch"] == []
-        assert result["message"] == (
-            f"plan.md: {len(result['missing_chunk_ids'])} chunk(s) still "
-            "uncommitted, committed partial state -- if delivered via a "
-            "consolidated commit, run `plan-tasks-resolve --coded <sha>` per "
-            "row, then re-run close-out-and-stamp"
-        )
-        assert "NOTE" not in result["message"]
-
-    def test_happy_path_full_shipped_unaffected_no_diagnostic_call(
-        self, tmp_path, monkeypatch
-    ):
-        """The happy path (fully shipped, `missing_chunk_ids == []`) never
-        even CALLS `_deliverable_id_near_miss_diagnostics` -- pinned
-        directly against a spy on that function, not just the result
-        shape, per this fix's own "never touch the happy path" constraint
-        (the caller must gate the call itself, not merely discard an
-        empty result)."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
-
-        call_count = {"n": 0}
-        real_diagnostic = coas._deliverable_id_near_miss_diagnostics
-
-        def counting_diagnostic(repo_root, deliverable_id, missing_chunk_ids):
-            call_count["n"] += 1
-            return real_diagnostic(repo_root, deliverable_id, missing_chunk_ids)
-
-        monkeypatch.setattr(
-            coas, "_deliverable_id_near_miss_diagnostics", counting_diagnostic
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is True
-        assert result["missing_chunk_ids"] == []
-        assert result["deliverable_id_mismatch"] == []
-        assert "NOTE" not in result["message"]
-        assert call_count["n"] == 0
-
-    def test_plan_with_no_deliverable_id_no_crash_no_bogus_diagnostic(
-        self, tmp_path, monkeypatch
-    ):
-        """A plan with no `deliverable_id:` frontmatter field at all (or an
-        explicit `null`) must not crash the diagnostic, and must never
-        manufacture a bogus near-miss candidate out of thin air.
-
-        This is also `_determine_shipped`'s `"no_join_key"` join-provenance
-        state -- the join was never attempted at all (no key to attempt it
-        with), so `close_out_and_stamp`'s own `message` must say the chunks
-        could not be ATTRIBUTED, never that they are "still uncommitted" --
-        that wording asserts a substantive delivery finding the join was
-        never in a position to make (this is "cannot attribute", not "the
-        git query broke" -- Defect 2(d)'s distinction stays intact, and this
-        is the exact conflation the cross-repo memo this fix closes flagged
-        against 7 correctly-committed chunks)."""
-        root = tmp_path
-        _init_repo(root)
-        text = _FIXTURE_VALID_SPINE.read_text(encoding="utf-8").replace(
-            '\ndeliverable_id: "dlv-fixture-valid-spine-000001"\n', "\n"
-        )
-        assert "deliverable_id" not in text
-        plan_file = root / "plan.md"
-        plan_file.write_text(text, encoding="utf-8")
-        _run_git(["add", "plan.md"], root)
-        _run_git(["commit", "-q", "-m", "seed"], root)
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert result["deliverable_id_mismatch"] == []
-        assert "NOTE" not in result["message"]
-        assert "could not be attributed" in result["message"]
-        assert "no_join_key" in result["message"]
-        assert "still uncommitted" not in result["message"]
-
-
-class TestKeyMismatchStopsNamingStrangers:
-    """docs/plans/2026-08-14-excise-cut-reaches-the-divergence-check.md C4:
-    promoted from `repro_claim_b.py`. `_deliverable_log_records` is the
-    sole `git log` site behind every chunk-evidence reader and bounds only
-    by commit range -- no author, committer, `Session-Id`, or deliverable
-    restriction. On a shared worktree with dozens of concurrent sessions,
-    an unrelated peer's landed commit therefore enters the candidate set
-    and surfaced (pre-fix) in the `key_mismatch` diagnostic as though it
-    were evidence about THIS plan, complete with advice to declare a
-    (false) equivalence against a total stranger."""
-
-    def test_ac6_peers_commit_not_named_and_no_equivalence_advice(
-        self, tmp_path, monkeypatch
-    ):
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        # A single "stranger" commit -- simulating a concurrent peer
-        # session's landed commit on the shared tree -- with a
-        # chunk-shaped subject covering a still-missing spine row (C1) and
-        # trailers naming a completely different Deliverable-Id and a
-        # foreign Session-Id. Nothing else is committed at all -- C1, C2a,
-        # C2b are all still open, all attributable only to this one
-        # foreign commit.
-        stranger_id = "dlv-stranger-foreign999"
-        (root / "stranger.txt").write_text("stranger content\n", encoding="utf-8")
-        _run_git(["add", "stranger.txt"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C1: stranger's own unrelated chunk\n\n"
-                f"Deliverable-Id: {stranger_id}\n"
-                "Session-Id: some-other-concurrent-session\n",
-            ],
-            root,
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
-        assert result["deliverable_id_mismatch"] == [
-            {"deliverable_id": stranger_id, "commit_count": 1}
-        ]
-        assert stranger_id not in result["message"]
-        assert "equivalence" not in result["message"]
-        assert "earliest artifact wins" not in result["message"]
-        assert (
-            "1 commit(s) in range belong to other deliverables (expected on "
-            "a shared tree)" in result["message"]
-        )
-
-    def test_ac7_shipped_unchanged_from_pre_fix_behaviour(self, tmp_path, monkeypatch):
-        """Same fixture as AC6 -- `shipped` (and the rest of the structured
-        verdict) is IDENTICAL to what pre-fix behaviour computed; only the
-        message/reason presentation moved."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        stranger_id = "dlv-stranger-foreign999"
-        (root / "stranger.txt").write_text("stranger content\n", encoding="utf-8")
-        _run_git(["add", "stranger.txt"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C1: stranger's own unrelated chunk\n\n"
-                f"Deliverable-Id: {stranger_id}\n"
-                "Session-Id: some-other-concurrent-session\n",
-            ],
-            root,
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert sorted(result["missing_chunk_ids"]) == ["C1", "C2a", "C2b"]
-
-
-# ===========================================================================
-# Regression: single-chunk-id-only subject parser (Defect fix, 2026-07-27) --
-# multi-chunk commit subjects (`,`/`+`/`/`-joined id-lists) are an
-# established convention on the shared workstream branch; the prior parser
-# only recognized `,` and mis-split nothing at all on a `+`/`/`-joined
-# subject, silently crediting zero of the named ids. Corpus evidence for the
-# separator set (`git log --format='%s'` over both DoE-claude and
-# claude-klabauter, 2026-07-27): `,`, `, ` (comma with trailing space, seen
-# live -- `C2, C7b: ...`), `+` (`C3+C2b: ...`), `/` (`C8a-doe/C8p: ...`).
-# ===========================================================================
-
-
-def _commit_with_subject(
-    root: Path,
-    plan_rel: str,
-    subject: str,
-    *,
-    deliverable_id: Optional[str] = None,
-    touch_file: Optional[str] = None,
-) -> None:
-    """Lands a commit with an EXACT, caller-chosen subject (unlike
-    `_commit_chunk`, which hardcodes `<chunk_id>: land chunk`) -- needed for
-    multi-chunk-subject coverage, where the subject itself names more than
-    one id or is deliberately NOT chunk-id-shaped at all. Touches
-    `plan_rel` by default (a trivial trailing-comment append, same reason
-    `_commit_chunk` does this -- `git log -- <path>` only lists commits that
-    actually change the tree entry at that path); pass `touch_file` to touch
-    a different path instead.
-    """
-    target_rel = touch_file if touch_file is not None else plan_rel
-    target_file = root / target_rel
-    if touch_file is not None and not target_file.exists():
-        target_file.write_text("", encoding="utf-8")
-    with target_file.open("a", encoding="utf-8") as fh:
-        fh.write(f"\n<!-- {subject!r} landed -->\n")
-    _run_git(["add", target_rel], root)
-    message_args = ["-m", subject]
-    if deliverable_id:
-        message_args += ["-m", f"Deliverable-Id: {deliverable_id}"]
-    _run_git(["commit", "-q", *message_args], root)
-
-
-class TestMultiChunkSubjectSeparators:
-    """Each of the three corpus-derived separators (`,`, `+`, `/`), plus the
-    comma-with-trailing-space spacing variant, registers every id it names."""
-
-    @pytest.mark.parametrize(
-        "subject,expected_ids",
-        [
-            ("C1,C2a,C2b: land the whole wave in one commit", {"C1", "C2a", "C2b"}),
-            ("C1, C2a: land two chunks, comma-space form", {"C1", "C2a"}),
-            ("C1+C2a: land two chunks, plus-joined", {"C1", "C2a"}),
-            ("C1/C2a: land two chunks, slash-joined", {"C1", "C2a"}),
-            (
-                "C1 + C2a: land two chunks, space-padded plus-joined",
-                {"C1", "C2a"},
-            ),
-            (
-                "C1 / C2a: land two chunks, space-padded slash-joined",
-                {"C1", "C2a"},
-            ),
-        ],
-        ids=["comma", "comma-space", "plus", "slash", "plus-spaced", "slash-spaced"],
-    )
-    def test_each_corpus_separator_registers_every_named_id(
-        self, tmp_path, subject, expected_ids
-    ):
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(root, "plan.md", subject, deliverable_id=_DLV_VALID_SPINE)
-
-        query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
-        assert query_ok is True
-        assert expected_ids <= committed
-
-    def test_space_padded_plus_joined_subject_reproduces_cross_repo_memo(self):
-        """Live repro from the 2026-08-06 cross-repo memo (`close-out-and-
-        stamp-compound-subject-space-separator`): `C4 + C3b + C5a: ...` and
-        `C4b + C5b: ...` must NOT fail the whole leading-token match --
-        `_CHUNK_SUBJECT_RE`'s `,` branch already tolerates surrounding
-        whitespace; `+`/`/` did not, so the ENTIRE match failed (zero ids,
-        not a partial miss)."""
-        assert coas._CHUNK_SUBJECT_RE.match(
-            "C4 + C3b + C5a: delete the misc bucket, surface the drop set, repair the tests"
-        ) is not None
-        assert coas._CHUNK_SUBJECT_RE.match(
-            "C4b + C5b: minting policy becomes a threshold we derive"
-        ) is not None
-
-    def test_multi_chunk_subject_with_partial_spine_coverage_reports_only_the_gap(
-        self, tmp_path
-    ):
-        """A `/`-joined multi-chunk subject naming `C1` and `C2a` (both real
-        spine ids) leaves `C2b` (the spine's third non-deferred row)
-        genuinely uncommitted -- `_determine_shipped` must report exactly
-        that one gap, not treat the whole commit as all-or-nothing."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1/C2a: land two of the three spine chunks",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C2b"]
-
-    def test_multi_chunk_subject_with_non_matching_deliverable_id_credits_nothing(
-        self, tmp_path
-    ):
-        """The Deliverable-Id gate (preceding fix) still applies to a
-        multi-chunk subject: a `,`-joined subject naming every spine id, but
-        trailered to a DIFFERENT plan's `deliverable_id`, must credit NONE
-        of the named ids -- the trailer check gates the whole commit, and
-        multi-id splitting only ever applies to commits that already
-        cleared that gate."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1,C2a,C2b: land the whole wave in one commit",
-            deliverable_id="dlv-some-other-plan-000099",
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert sorted(missing) == ["C1", "C2a", "C2b"]
-
-        query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
-        assert query_ok is True
-        assert committed == set()
-
-    def test_sub_chunk_suffix_inside_multi_chunk_subject_covers_both_spine_ids(
-        self, tmp_path
-    ):
-        """The real observed-live shape (2026-07-27): `C8a-doe/C8p: ...`
-        must credit BOTH spine `C8a` (via the dash-tag sub-chunk-suffix
-        `-doe`) AND spine `C8p` (exact match) -- this is the exact commit
-        subject the reported defect ("chunk `C8p` shipped inside
-        `C8a-doe/C8p: ...` and the oracle reported it uncommitted") is
-        drawn from, generalized to also assert `C8a`'s own coverage via the
-        dash-tag suffix widening."""
-        assert coas._committed_id_covers_spine_id("C8a-doe", "C8a") is True
-        assert coas._committed_id_covers_spine_id("C8a-mak", "C8a") is True
-        assert coas._committed_id_covers_spine_id("C1-fix2", "C1") is True
-        # The widened dash-tag suffix must not resurrect the C11-vs-C1
-        # false-positive Defect 2(c) was written to prevent.
-        assert coas._committed_id_covers_spine_id("C11", "C1") is False
-
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C8a-doe/C8p: add `landed` to the plan status enum",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        query_ok, committed = coas._committed_chunk_ids(root, _DLV_VALID_SPINE)
-        assert query_ok is True
-        assert committed == {"C8a-doe", "C8p"}
-        assert coas._committed_id_covers_spine_id("C8a-doe", "C8a") is True
-        assert any(
-            coas._committed_id_covers_spine_id(cid, "C8p") for cid in committed
-        )
-
-    def test_numeric_sub_dispatch_suffix_covers_letter_ending_spine_id(
-        self, tmp_path
-    ):
-        """Defect fix, 2026-08-07 (bug-backlog
-        `2026-08-07-close-out-and-stamp-reports-key-mismatch-dc4072b44474
-        .yaml`): a wave-map fanout that numbers its sub-dispatches
-        (`C6a` -> `C6a1`..`C6a7`) must satisfy its parent spine id `C6a`,
-        the same way a lettered sub-chunk suffix (`C1a`) already does --
-        but ONLY when the base spine id does not itself end in a digit,
-        preserving `C11` must-not-cover-`C1` verbatim."""
-        assert coas._committed_id_covers_spine_id("C6a1", "C6a") is True
-        assert coas._committed_id_covers_spine_id("C6a7", "C6a") is True
-        assert coas._committed_id_covers_spine_id("C6b2", "C6b") is True
-        # Digit-ending base id: the existing C11-vs-C1 exclusion must not
-        # regress -- a trailing digit on a digit-ending base is still a
-        # distinct, unrelated spine id, never a sub-dispatch of it.
-        assert coas._committed_id_covers_spine_id("C11", "C1") is False
-
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C6a1: numbered sub-dispatch of C6a",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-        _commit_with_subject(
-            root,
-            "widget.py",
-            "C6a1: numbered sub-dispatch commit for a foreign plan",
-            deliverable_id="dlv-a-completely-different-plan-abc123",
-        )
-
-        query_ok, committed = coas._committed_chunk_ids(
-            root, _DLV_VALID_SPINE, spine_ids=["C6a", "C1"]
-        )
-        assert query_ok is True
-        assert "C6a1" in committed
-        assert any(
-            coas._committed_id_covers_spine_id(cid, "C6a") for cid in committed
-        )
-        # Deliverable-Id scoping still resolves the SAME-subject, SAME-id
-        # commit for the foreign plan when queried under its OWN
-        # deliverable id -- a colliding subject never leaks the wrong
-        # plan's evidence into the other's committed set.
-        query_ok_foreign, committed_foreign = coas._committed_chunk_ids(
-            root, "dlv-a-completely-different-plan-abc123", spine_ids=["C6a"]
-        )
-        assert query_ok_foreign is True
-        assert "C6a1" in committed_foreign
-
-    def test_path_shaped_subject_before_colon_is_not_mis_split_into_chunk_ids(
-        self, tmp_path
-    ):
-        """Bounding check on the widened `+`/`/` separator support: a REAL
-        subject convention on this branch prefixes the subject with a file
-        path, not a chunk-id list (`coordinator/bin/stitch-observer-
-        sidecar.py: add --scan standalone leak sweep`). This must not be
-        mis-split into bogus ids `coordinator`/`bin`/`stitch-observer-
-        sidecar.py` -- none of which are chunk-id-shaped (`_CHUNK_ID_SHAPE_
-        RE` requires a leading `C` + digit) -- and in particular must never
-        spuriously satisfy a real spine id.
-        """
-        assert coas._extract_chunk_ids(
-            "coordinator/bin/stitch-observer-sidecar.py: add --scan standalone leak sweep"
-        ) == []
-        assert coas._extract_chunk_ids(
-            "docs/wiki: repoint review-brightline-gate canonical invocation"
-        ) == []
-        # A milestone/wave-tagged subject (real corpus shape, not this
-        # oracle's spine-id convention) also contributes nothing.
-        assert coas._extract_chunk_ids(
-            "g4-M1/M3a/M3b/M4/M4b: commit-authorization teeth"
-        ) == []
-
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "coordinator/bin/stitch-observer-sidecar.py: add --scan standalone leak sweep",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-        # C1/C2a/C2b all deliberately left uncommitted -- the path-shaped
-        # subject above must not accidentally satisfy any of them.
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert sorted(missing) == ["C1", "C2a", "C2b"]
-
-    def test_prose_subject_after_colon_never_reaches_the_splitter(self, tmp_path):
-        """Negative-spec for the id-list/description boundary itself: a
-        genuine multi-chunk subject's DESCRIPTION half (everything after
-        the first `: `) is never fed to the separator splitter, even when
-        it contains slashes and commas that would otherwise look
-        id-list-shaped -- `_CHUNK_SUBJECT_RE` only ever captures group(1),
-        the leading id-list, so `C1,C2a: touched path/to/file, and
-        other/thing too` must register exactly `C1` and `C2a`, never split
-        anything out of the description."""
-        ids = coas._extract_chunk_ids(
-            "C1,C2a: touched path/to/file, and other/thing too"
-        )
-        assert ids == ["C1", "C2a"]
-
-    def test_leading_token_only_bound_documents_non_leading_chunk_id_miss(self):
-        """Pins the KNOWN, DELIBERATE false negative documented in
-        `_extract_chunk_ids`'s own docstring (Defect fix, 2026-08-04): a
-        subject whose real chunk ids are not the leading token contributes
-        NOTHING, even when a spine id is supplied and appears later in the
-        subject text. `mise: wave 5 -- xwin-03+04 C12 ... + xwin-05 C3` is a
-        live-corpus-shaped example (see the real `mise: wave N --
-        DOCTRINE-C7a ...; RESIDUE-C9 ...` / `RESIDUE-C1..C7 ... C8 ...`
-        subjects the docstring cites) -- `C12` and `C3` never register even
-        though both are named `spine_ids`.
-
-        Also pins WHY this function must not be widened to a full-subject
-        scan instead: these three real corpus subjects mention a spine id
-        without landing it, and a bare token scan cannot distinguish them
-        from a genuine landing commit -- widening would silently OVER-
-        credit a chunk that never shipped, the dangerous direction this
-        function's docstring already forbids."""
-        assert (
-            coas._extract_chunk_ids(
-                "mise: wave 5 — xwin-03+04 C12 … + xwin-05 C3",
-                spine_ids=["C12", "C3"],
-            )
-            == []
-        )
-        assert (
-            coas._extract_chunk_ids(
-                "close: mark C8 shipped, and record why this plan cannot "
-                "stamp implemented",
-                spine_ids=["C8"],
-            )
-            == []
-        )
-        assert (
-            coas._extract_chunk_ids(
-                "cross-repo: deliver ... C7 sweep deny was inverted memo "
-                "from claude-klabauter-em",
-                spine_ids=["C7"],
-            )
-            == []
-        )
-        assert (
-            coas._extract_chunk_ids(
-                "doctrine: stage the resolves-trailer zero-join amendment "
-                "ahead of claude-klabauter C4",
-                spine_ids=["C4"],
-            )
-            == []
-        )
-
-
-# ===========================================================================
-# Non-`C`-prefixed spine ids (Defect fix, 2026-08-01): the multi-id split's
-# bounding gate used to be a static `^C\d` shape assumption
-# (`_CHUNK_ID_SHAPE_RE`), so a compound subject naming only `A`/`B`/`V`-
-# prefixed ids registered ZERO chunk-ids -- observed live, plan
-# `docs/plans/2026-08-01-baton-spine-information-integrity.md` (spine ids
-# `A1`-`A6`/`B1`-`B4`/`V1`), whose own chunk commits (`7614fb7ad`:
-# `A1+A2+A3+A5+B1+B2+B3: ...`; `3dc5b71cd`: `A4+A6+B4: ...`) were fully
-# invisible to the oracle, which reported all 11 chunks open on a
-# fully-shipped plan. The fix bounds the multi-id split to the plan's own
-# spine ids (`spine_ids`, threaded through `_extract_chunk_ids` from
-# `_all_spine_ids`) instead of a static shape regex -- see that function's
-# and `_CHUNK_ID_SHAPE_RE`'s own docstrings.
-# ===========================================================================
-
-_DISPOSITION_ROWS_TEMPLATE = (
-    "- id: {a1}\n"
-    "  title: baton producer, part 1\n"
-    "  deferred: false\n"
-    "  body: |\n"
-    "    give Resolves: a producer.\n"
-    "- id: {a2}\n"
-    "  title: baton producer, part 2\n"
-    "  deferred: false\n"
-    "  body: |\n"
-    "    open a peer-delivery door into frozen batons.\n"
-    "- id: {b1}\n"
-    "  title: peer-delivery ruling\n"
-    "  deferred: false\n"
-    "  body: |\n"
-    "    record the peer-delivery ruling.\n"
-    "- id: {b2}\n"
-    "  title: ship-state trailer sweep\n"
-    "  deferred: false\n"
-    "  body: |\n"
-    "    sweep the ship-state trailer consumers on the token axis.\n"
-    "- id: {v1}\n"
-    "  title: verification chunk\n"
-    "  deferred: false\n"
-    "  body: |\n"
-    "    verify the whole wave end to end.\n"
-)
-
-
-class TestNonCPrefixedSpineIds:
-    def test_compound_subject_resolves_non_c_prefixed_ids(self, tmp_path):
-        """Unit-level pin, direct against the two REAL live-repro subjects
-        named in the defect report: `_committed_chunk_ids`, given the
-        plan's own `A`/`B`-prefixed spine ids as `spine_ids`, resolves
-        every id out of both compound subjects -- the exact resolution
-        the static `^C\\d`-only gate could never produce."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
-            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
-        )
-        _seed_disposition_plan(root, rows_yaml)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A1+A2+A3+A5+B1+B2+B3: give Resolves: a producer, and open a peer-delivery door into frozen batons",
-            deliverable_id=_DLV_DISPOSITION,
-        )
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A4+A6+B4: record the peer-delivery ruling, and sweep the ship-state trailer consumers on the token axis",
-            deliverable_id=_DLV_DISPOSITION,
-        )
-
-        spine_ids = ["A1", "A2", "A3", "A4", "A5", "A6", "B1", "B2", "B3", "B4", "V1"]
-        query_ok, committed = coas._committed_chunk_ids(
-            root, _DLV_DISPOSITION, spine_ids
-        )
-        assert query_ok is True
-        assert committed == {
-            "A1", "A2", "A3", "A5", "B1", "B2", "B3", "A4", "A6", "B4",
-        }
-        # The static fallback gate (no `spine_ids`) is the OLD, defective
-        # behavior -- pinned here so a future edit cannot silently widen it
-        # back to admitting these ids unconditionally.
-        assert coas._extract_chunk_ids("A1+A2+A3+A5+B1+B2+B3: ...") == []
-
-    def test_fully_shipped_plan_with_code_only_commits_stamps_implemented(
-        self, tmp_path, monkeypatch
-    ):
-        """Requirement: a fully-shipped plan whose chunk commits touch ONLY
-        code (never the plan file itself) reports zero open chunks and
-        stamps `implemented` -- every commit below uses `touch_file` to
-        land against a throwaway code path, exactly the shape a real
-        background-Workflow executor produces (see this module's own
-        docstring § Range choice: executors are barred from writing plan
-        bodies at all)."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
-            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
-        )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A1+A2: land the first pair of chunks",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="a.py",
-        )
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "B1+B2: land the second pair of chunks",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="b.py",
-        )
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "V1: verify the whole wave",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="v.py",
-        )
-
-        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is True
-        assert result["missing_chunk_ids"] == []
-        assert result["open_chunk_ids"] == []
-        assert result["status_target"] == "implemented"
-        assert _read_status(plan_file) == "implemented"
-        assert _head_sha(root) != pre_head
-
-    def test_partial_plan_reports_missing_and_skips_stamp(self, tmp_path, monkeypatch):
-        """Regression guard (must NOT change): a genuinely partial plan --
-        one non-`C`-prefixed chunk (`V1`) never committed at all -- still
-        reports it missing and the stamp is correctly skipped. An oracle
-        that over-detects (crediting `V1` when it never shipped) would be
-        worse than the original under-detection defect, since it would
-        silently close out unfinished work."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
-            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
-        )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A1+A2+B1+B2: land everything except the verification chunk",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="everything-but-v1.py",
-        )
-        # V1 deliberately left uncommitted.
-
-        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert result["missing_chunk_ids"] == ["V1"]
-        assert result["status_target"] is None
-        assert _read_status(plan_file) == "executing"
-        # Nothing this op does not own was written or committed beyond the
-        # halted-state ceremony commit itself; in particular, no `status:`
-        # flip landed.
-        assert _head_sha(root) != pre_head
-
-    def test_subject_match_before_merge_base_range_is_excluded_when_plan_text_absent(
-        self, tmp_path
-    ):
-        """Pre-range-fix behavior, preserved as a rung-3-only regression
-        (`_chunk_evidence_log_range`'s § Range choice, widened again):
-        without `plan_text` (a caller with no plan text at hand, e.g. a
-        direct unit-test call), the range still falls back to the plain
-        `merge-base origin/main HEAD`..`HEAD` bound, so a commit AT the
-        merge-base itself is still excluded. See
-        `test_chunk_commits_behind_a_later_advanced_origin_main_are_still_attributed`
-        below for the WIDENED (plan-text-supplied) behavior this fix adds."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
-            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
-        )
-        _seed_disposition_plan(root, rows_yaml)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A1: shipped before this branch's own divergence point",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="pre-divergence.py",
-        )
-        _set_origin_main(root)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A2: shipped after this branch's own divergence point",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="post-divergence.py",
-        )
-
-        spine_ids = ["A1", "A2", "B1", "B2", "V1"]
-        query_ok, committed = coas._committed_chunk_ids(
-            root, _DLV_DISPOSITION, spine_ids
-        )
-        assert query_ok is True
-        assert "A1" not in committed
-        assert "A2" in committed
-
-    def test_chunk_commits_behind_a_later_advanced_origin_main_are_still_attributed(
-        self, tmp_path
-    ):
-        """Range-fix regression (2026-08-07 -- see this module's own
-        bug-backlog entry `2026-08-07-close-out-and-stamp-s-chunk-evidence-
-        joi-8b6a7a32d833.yaml`, two independent sightings): supersedes this
-        class's own prior single assertion, which pinned the CONFIRMED BUG
-        this fix closes -- a chunk commit that had already landed before
-        `origin/main` advanced past it read as "outside the evidence
-        window" and was silently excluded, even though it genuinely
-        belonged to THIS plan's own deliverable.
-
-        On a shared-main workflow `origin/main` advances as PEERS push,
-        independently of this plan's own chunk work -- interleaving peer
-        commits between this plan's own chunk commits, then advancing
-        `origin/main` past ALL of them (the exact shape both live
-        incidents in the backlog entry record), must not cause
-        `merge-base(origin/main, HEAD)` to swallow this plan's own
-        already-landed chunk commits, PROVIDED the caller supplies
-        `plan_text` so `_chunk_evidence_log_range` can widen past the
-        (now-degenerate) merge-base bound -- see `_chunk_evidence_log_range`'s
-        own docstring for the full rung ladder."""
-        root = tmp_path
-        _init_repo(root)
-        rows_yaml = _DISPOSITION_ROWS_TEMPLATE.format(
-            a1="A1", a2="A2", b1="B1", b2="B2", v1="V1"
-        )
-        plan_file = _seed_disposition_plan(root, rows_yaml)
-
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A1: first chunk lands",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="a1.py",
-        )
-        # A peer commit, unrelated to this plan, interleaved between chunk
-        # commits -- the ordinary shape of a shared-main worktree.
-        _commit_with_subject(
-            root, "plan.md", "peer: unrelated work", touch_file="peer1.py"
-        )
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "A2: second chunk lands",
-            deliverable_id=_DLV_DISPOSITION,
-            touch_file="a2.py",
-        )
-        _commit_with_subject(
-            root, "plan.md", "peer: more unrelated work", touch_file="peer2.py"
-        )
-        # origin/main now advances PAST every commit landed so far --
-        # simulating peers pushing/mirroring this branch's own history
-        # forward, the root cause the pre-fix `merge-base origin/main HEAD`
-        # bound was blind to.
-        _set_origin_main(root)
-
-        spine_ids = ["A1", "A2", "B1", "B2", "V1"]
-        plan_text = plan_file.read_text(encoding="utf-8")
-        query_ok, committed = coas._committed_chunk_ids(
-            root, _DLV_DISPOSITION, spine_ids, plan_text=plan_text
-        )
-        assert query_ok is True
-        assert "A1" in committed
-        assert "A2" in committed
-
-
-# ===========================================================================
-# Cross-repo scope scanning (Defect fix, 2026-07-27 -- the last
-# false-negative in this oracle): the completeness scan used to look only
-# at `repo_root`, so a chunk that legitimately shipped as a commit in a
-# SIBLING repo the plan's own `scope:` names could never be seen. These
-# tests pin the fix directly against `close_out_and_stamp.py`'s new
-# `_plan_sibling_repo_ids` / `_resolve_sibling_repo_root` /
-# `_sibling_committed_chunk_ids` trio, composed with BOTH pre-existing
-# fixes this defect must not weaken: Deliverable-Id trailer scoping and
-# multi-chunk subject parsing, both of which apply identically to a
-# sibling repo's own commits.
-# ===========================================================================
-
-_DLV_SIBLING = "dlv-fixture-sibling-000001"
-
-_SIBLING_PLAN_TEMPLATE = """---
-title: "Fixture plan — cross-repo sibling scan"
-created: 2026-07-27
-author: test-fixture
-status: {status}
-branch: "work/test-fixture/2026-07-27"
-plan_id: "pln-fixture-sibling-000001"
-deliverable_id: "dlv-fixture-sibling-000001"
-scope:
-  - plan.md
-  - sibling-repo: some/path/in/sibling.py
----
-
-# Fixture plan — cross-repo sibling scan
-
-## Tasks
-
-```yaml plan-tasks
-{rows}
-```
-"""
-
-_NO_SIBLING_PLAN_TEMPLATE = """---
-title: "Fixture plan — no sibling scope prefixes"
-created: 2026-07-27
-author: test-fixture
-status: {status}
-branch: "work/test-fixture/2026-07-27"
-plan_id: "pln-fixture-no-sibling-000001"
-deliverable_id: "dlv-fixture-sibling-000001"
-scope:
-  - plan.md
-  - coordinator_core/execute_plan_assemble/close_out_and_stamp.py
----
-
-# Fixture plan — no sibling scope prefixes
-
-## Tasks
-
-```yaml plan-tasks
-{rows}
-```
-"""
-
-
-def _seed_sibling_scope_plan(
-    root: Path,
-    rows_yaml: str,
-    *,
-    status: str = "executing",
-    template: str = _SIBLING_PLAN_TEMPLATE,
-    dest_name: str = "plan.md",
-) -> Path:
-    """Seeds a plan whose `scope:` frontmatter names a sibling repo via the
-    documented `<repo-id>: <path>` prefix grammar -- mirrors
-    `_seed_disposition_plan` (same inline-template shape, same disposition-
-    ready `## Tasks` spine) but adds the `scope:` block this file's other
-    fixtures never carry, since cross-repo sibling scanning is exactly the
-    behavior under test here."""
-    text = template.format(status=status, rows=rows_yaml)
-    dest = root / dest_name
-    dest.write_text(text, encoding="utf-8")
-    _run_git(["add", dest_name], root)
-    _run_git(["commit", "-q", "-m", "seed"], root)
-    return dest
-
-
-_SIBLING_ROW_C1_OPEN = "- id: C1\n  title: land in sibling repo\n  disposition: open\n"
-
-
-class TestCrossRepoSiblingScan:
-    def test_chunk_credited_from_sibling_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """THE FIX, reproduced directly: `C1` is committed ONLY in the
-        sibling repo the plan's own `scope:` names (`sibling-repo:`), never
-        in the home repo -- against the PRE-FIX code (single-repo scan)
-        this would report `shipped=False`, `missing=["C1"]`; the fix must
-        report `shipped=True`, `missing=[]`."""
-        root = tmp_path / "home"
-        root.mkdir()
-        sibling_root = tmp_path / "sibling"
-        sibling_root.mkdir()
-        _init_repo(root)
-        _init_repo(sibling_root)
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIBLING_REPO", str(sibling_root))
-
-        plan_file = _seed_sibling_scope_plan(root, _SIBLING_ROW_C1_OPEN)
-        _commit_chunk(sibling_root, "dummy.txt", "C1", deliverable_id=_DLV_SIBLING)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-        assert missing == []
-
-    def test_sibling_commit_with_non_matching_deliverable_id_credits_nothing(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """The Deliverable-Id gate applies to a sibling repo's own commits
-        exactly as it does to the home repo's -- a sibling commit whose
-        subject matches `C1` but whose `Deliverable-Id` trailer belongs to
-        a DIFFERENT plan must never count as evidence."""
-        root = tmp_path / "home"
-        root.mkdir()
-        sibling_root = tmp_path / "sibling"
-        sibling_root.mkdir()
-        _init_repo(root)
-        _init_repo(sibling_root)
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIBLING_REPO", str(sibling_root))
-
-        plan_file = _seed_sibling_scope_plan(root, _SIBLING_ROW_C1_OPEN)
-        _commit_chunk(
-            sibling_root, "dummy.txt", "C1", deliverable_id="dlv-some-other-plan-000099"
-        )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-
-    def test_unresolvable_sibling_is_skipped_not_crashed_and_surfaced(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """A sibling repo that is not registered on this machine (never
-        cloned here / no registry entry) must NOT crash the close-out, and
-        must NOT be silently swallowed either -- it is skipped, and the
-        skip is surfaced in `close_out_and_stamp`'s own result dict via
-        `skipped_sibling_repos`. Since the skipped sibling's evidence is
-        the ONLY thing that could satisfy `C1`, this plan correctly does
-        NOT claim full-shipped on that basis alone."""
-        root = tmp_path
-        # Deliberately do NOT set MACHINE_LOCAL_REPOS_SIBLING_REPO -- this
-        # sibling is unresolvable on this machine.
-        monkeypatch.delenv("MACHINE_LOCAL_REPOS_SIBLING_REPO", raising=False)
-        _init_repo(root)
-        plan_file = _seed_sibling_scope_plan(root, _SIBLING_ROW_C1_OPEN)
-
-        exit_code, result, pre_call_head_sha = _run_close_out(
-            monkeypatch, root, "plan.md"
-        )
-
-        assert exit_code == coas.EXIT_OK
-        assert result["shipped"] is False
-        assert result["missing_chunk_ids"] == ["C1"]
-        assert len(result["skipped_sibling_repos"]) == 1
-        assert result["skipped_sibling_repos"][0].startswith("sibling-repo: ")
-        # No crash, and the op still made forward progress on its own
-        # write (status: executing -> landed is NOT reached here since
-        # shipped is False; only auto-resolve/stamp bookkeeping, if any,
-        # is exercised elsewhere -- this test's own assertion surface is
-        # the skip list and the non-crash).
-        assert _head_sha(root) != pre_call_head_sha or _head_sha(root) == pre_call_head_sha
-
-    def test_no_sibling_prefixes_in_scope_is_unchanged_from_today(self, tmp_path):
-        """The common case: a plan's `scope:` names only local-repo paths,
-        no `<repo-id>:` prefix at all. `_plan_sibling_repo_ids` must return
-        `[]`, `_sibling_committed_chunk_ids` must return `(set(), [])`
-        unconditionally, and `_determine_shipped`'s verdict must be
-        byte-identical to its pre-fix behavior (already exercised by every
-        other test in this file, none of which declare a sibling-prefixed
-        `scope:` at all) -- this is the explicit regression guard."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_sibling_scope_plan(
-            root, _SIBLING_ROW_C1_OPEN, template=_NO_SIBLING_PLAN_TEMPLATE
-        )
-        text = plan_file.read_text(encoding="utf-8")
-
-        assert coas._plan_sibling_repo_ids(text) == []
-        committed, skipped = coas._sibling_committed_chunk_ids(text, _DLV_SIBLING)
-        assert committed == set()
-        assert skipped == []
-
-        # No commit anywhere -- C1 stays genuinely uncommitted.
-        shipped, missing, join_provenance, error = coas._determine_shipped(text, "plan.md", root)
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-
-    def test_sibling_shipped_chunk_is_not_auto_resolved_row_stays_open(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """Sibling-SHA auto-resolve decision (see this module's own
-        docstring § Cross-repo scope scanning): a chunk shipped ONLY via a
-        sibling repo's commit is credited for the shipped/missing verdict,
-        but its spine row is deliberately NOT auto-resolved to `disposition:
-        coded` (a bare sha would be ambiguous without knowing which repo it
-        came from) -- it stays `open`, and the plan's `status:` lands on
-        the intermediate `landed` target (D9), never `implemented`, until a
-        human runs `resolve --coded` manually."""
-        root = tmp_path / "home"
-        root.mkdir()
-        sibling_root = tmp_path / "sibling"
-        sibling_root.mkdir()
-        _init_repo(root)
-        _init_repo(sibling_root)
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIBLING_REPO", str(sibling_root))
-
-        plan_file = _seed_sibling_scope_plan(root, _SIBLING_ROW_C1_OPEN)
-        _commit_chunk(sibling_root, "dummy.txt", "C1", deliverable_id=_DLV_SIBLING)
-
-        exit_code, result, _pre_call_head_sha = _run_close_out(
-            monkeypatch, root, "plan.md"
-        )
-
-        assert exit_code == coas.EXIT_OK
-        assert result["shipped"] is True
-        assert result["missing_chunk_ids"] == []
-        assert result["skipped_sibling_repos"] == []
-        assert result["status_target"] == coas._LANDED_STATUS
-        assert _read_status(plan_file) == coas._LANDED_STATUS
-
-        rows = _spine_rows(plan_file)
-        c1_row = next(r for r in rows if r.get("id") == "C1")
-        assert c1_row.get("disposition", "open") == "open"
-        assert "disposition_ref" not in c1_row
-
-
-# ===========================================================================
-# `_SCOPE_SIBLING_PREFIX_RE` grammar (Defect fix, 2026-07-27): the pattern
-# used to require MANDATORY whitespace after the colon (`\s+`), a form no
-# real plan author ever writes -- YAML parses `- repo: path` as a mapping,
-# so authors write the space-free `- repo:path` form to keep the scope
-# entry a plain string. The mandatory-whitespace grammar made every
-# sibling-repo scope entry ever written invisible to
-# `_plan_sibling_repo_ids`, silently disabling the cross-repo scan these
-# tests exercise above. These tests pin the fix (whitespace now OPTIONAL)
-# together with the two safety properties the fix must not regress:
-# Windows drive letters and URLs must never parse as a sibling-repo
-# prefix.
-# ===========================================================================
-
-
-class TestScopeSiblingPrefixRegexGrammar:
-    def test_zero_space_form_matches(self):
-        """THE FIX, reproduced directly: `<repo-id>:<path>` with NO space
-        after the colon -- the form every real plan actually writes (see
-        `grep -rhoE '^\\s+- [a-z0-9-]+:[^ ]+' docs/plans/*.md` in
-        DoE-claude) -- must match."""
-        match = coas._SCOPE_SIBLING_PREFIX_RE.match(
-            "claude-klabauter:coordinator_core/dag.py"
-        )
-        assert match is not None
-        assert match.group(1) == "claude-klabauter"
-        assert match.group(2) == "coordinator_core/dag.py"
-
-    def test_single_space_form_still_matches(self):
-        """The pre-fix documented form (`<repo-id>: <path>`, one space)
-        must keep matching -- this is the exact form the existing
-        `_SIBLING_PLAN_TEMPLATE` fixture above uses, and is not itself the
-        defect (whitespace being ALLOWED was always fine; whitespace being
-        REQUIRED was the bug)."""
-        match = coas._SCOPE_SIBLING_PREFIX_RE.match(
-            "sibling-repo: some/path/in/sibling.py"
-        )
-        assert match is not None
-        assert match.group(1) == "sibling-repo"
-        assert match.group(2) == "some/path/in/sibling.py"
-
-    def test_multi_space_form_still_matches(self):
-        """Multiple spaces after the colon (accidental extra whitespace,
-        or a hand-aligned YAML block) must also still match -- `\\s*` is
-        zero-OR-MORE, not zero-or-one."""
-        match = coas._SCOPE_SIBLING_PREFIX_RE.match(
-            "claude-klabauter:   coordinator_core/dag.py"
-        )
-        assert match is not None
-        assert match.group(1) == "claude-klabauter"
-        assert match.group(2) == "coordinator_core/dag.py"
-
-    def test_windows_drive_letter_backslash_does_not_match(self):
-        """`C:\\Users\\foo\\bar` must NEVER parse as a sibling-repo prefix
-        -- a single-character drive letter can never satisfy the
-        `[A-Za-z][A-Za-z0-9_-]+` repo-id group, which requires a MINIMUM
-        of two characters (one mandatory leading letter, one-or-more
-        additional characters). This property is unchanged by the
-        whitespace fix -- the two-char minimum was never the broken
-        part."""
-        assert coas._SCOPE_SIBLING_PREFIX_RE.match(r"C:\Users\foo\bar") is None
-
-    def test_windows_drive_letter_forward_slash_does_not_match(self):
-        """`D:/foo/bar` -- the forward-slash-style Windows path some tools
-        emit -- must also never match, for the same single-character
-        reason as the backslash form above."""
-        assert coas._SCOPE_SIBLING_PREFIX_RE.match("D:/foo/bar") is None
-
-    def test_https_url_does_not_match(self):
-        """`https://example.com/x` must NEVER parse as a sibling-repo
-        prefix. Unlike a drive letter, `https` is 5 characters and WOULD
-        satisfy the two-char repo-id minimum on its own -- what excludes
-        it is the `(?!//)` negative lookahead placed immediately after
-        the colon (BEFORE `\\s*` consumes anything): a URL's `://` means
-        the two characters right after the colon are always `//`, so the
-        lookahead fails and the match cannot anchor here at all."""
-        assert (
-            coas._SCOPE_SIBLING_PREFIX_RE.match("https://example.com/x") is None
-        )
-
-    def test_http_url_does_not_match(self):
-        """Same as the `https` case, for the shorter `http` scheme --
-        confirms the `(?!//)` guard, not scheme-length, is doing the
-        work."""
-        assert coas._SCOPE_SIBLING_PREFIX_RE.match("http://example.com/x") is None
-
-    def test_bare_path_without_colon_does_not_match(self):
-        """A bare local-repo scope path with no colon at all (the common
-        case -- most `scope:` entries name a path in the home repo, never
-        a sibling) must not match; the regex requires a colon."""
-        assert (
-            coas._SCOPE_SIBLING_PREFIX_RE.match(
-                "coordinator_core/execute_plan_assemble/close_out_and_stamp.py"
-            )
-            is None
-        )
-
-    def test_prose_line_with_colon_and_space_is_rejected_downstream(self):
-        """A prose line shaped like `Note: see below` DOES match the bare
-        regex (`Note` is a valid-shaped repo-id token) -- the regex alone
-        cannot distinguish it from a real sibling-repo prefix. The
-        rejection is `_plan_sibling_repo_ids`'s own downstream ` " " in
-        rest` check (see that function's docstring), which this test
-        pins explicitly so the regex-only view above isn't mistaken for
-        the full picture."""
-        match = coas._SCOPE_SIBLING_PREFIX_RE.match("Note: see below")
-        assert match is not None
-        rest = match.group(2).strip()
-        assert " " in rest  # `_plan_sibling_repo_ids` rejects on this
-
-    def test_plan_sibling_repo_ids_recognizes_zero_space_scope_entry(self):
-        """End-to-end through `_plan_sibling_repo_ids` (not just the bare
-        regex): a `scope:` list entry written in the real-world zero-space
-        form must now be recognized as naming a sibling repo -- this is
-        the exact shape that was previously silently invisible."""
-        plan_text = """---
-title: "Fixture"
-scope:
-  - plan.md
-  - claude-klabauter:coordinator_core/dag.py
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == ["claude-klabauter"]
-
-    def test_plan_sibling_repo_ids_still_ignores_drive_letter_and_url_entries(self):
-        """End-to-end: a `scope:` list containing a Windows path and a URL
-        (neither of which is a real sibling-repo prefix) must not be
-        mistaken for one, even after the whitespace fix."""
-        plan_text = r"""---
-title: "Fixture"
-scope:
-  - plan.md
-  - C:\Users\foo\bar
-  - https://example.com/x
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == []
-
-
-# ===========================================================================
-# `_SCOPE_SIBLING_SLASH_RE` / registry-gated slash-form sibling recognition
-# (Defect fix, 2026-08-01): the colon grammar above never covered the
-# `<repo-id>/<path>` shape a real plan (`docs/plans/2026-08-01-baton-spine-
-# information-integrity.md`) used exclusively, so its cross-repo chunks
-# read as permanently open. The fix's own docstring is explicit that a
-# slash-form match is trusted ONLY when `_resolve_sibling_repo_root`
-# actually resolves it against the machine-local registry -- unlike the
-# colon form, an unresolvable slash-form entry is NOT surfaced in
-# `skipped_sibling_repos` at all (a stated, deliberate asymmetry, not an
-# oversight). These tests pin the fix plus that known limitation.
-# ===========================================================================
-
-
-class TestScopeSiblingSlashRegexGrammar:
-    def test_slash_form_regex_matches(self):
-        """The bare grammar: `<repo-id>/<path>`, no colon at all."""
-        match = coas._SCOPE_SIBLING_SLASH_RE.match(
-            "claude-klabauter/coordinator_core/ops/rollup_derive.py"
-        )
-        assert match is not None
-        assert match.group(1) == "claude-klabauter"
-        assert match.group(2) == "coordinator_core/ops/rollup_derive.py"
-
-    def test_registered_slash_form_sibling_is_recognized(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """THE FIX, reproduced against the live case: a `scope:` entry
-        shaped `claude-klabauter/coordinator_core/ops/rollup_derive.py`,
-        for a repo-id that IS registered on this machine, resolves to
-        `['claude-klabauter']` -- pre-fix this registered zero siblings at
-        all, since only the colon grammar was ever tried."""
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER_REPO", str(tmp_path))
-        plan_text = """---
-title: "Fixture"
-scope:
-  - plan.md
-  - claude-klabauter/coordinator_core/ops/rollup_derive.py
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == ["claude-klabauter"]
-
-    def test_registered_repo_id_that_is_also_a_local_dir_is_not_a_sibling(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """Review: code-reviewer -- Finding 1, 2026-08-02: a registry match
-        alone is NOT sufficient to accept a slash-form entry as a sibling
-        reference. Here `some-dir` is BOTH a registered `repos.<id>` on
-        this machine AND a real local directory in the plan's own
-        `repo_root` -- the over-detection direction the containment check
-        exists to close. Without it, `_plan_sibling_repo_ids` would
-        misclassify `some-dir/file.py` as a sibling reference and trigger a
-        scan of the wrong repo, unioning its committed chunk-ids into this
-        plan's evidence and risking an unfinished plan stamped
-        `implemented`. This test DOES fail against the pre-fix baseline
-        (pre-fix it returns `['some-dir']`; post-fix it returns `[]`)."""
-        home_root = tmp_path / "home"
-        home_root.mkdir()
-        (home_root / "some-dir").mkdir()
-        sibling_root = tmp_path / "sibling"
-        sibling_root.mkdir()
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SOME_DIR", str(sibling_root))
-        plan_text = """---
-title: "Fixture"
-scope:
-  - plan.md
-  - some-dir/file.py
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text, home_root) == []
-        # Without a repo_root to check containment against, the registry
-        # match alone still governs (documented degrade-safe posture).
-        assert coas._plan_sibling_repo_ids(plan_text) == ["some-dir"]
-
-    def test_local_paths_do_not_misfire_as_slash_form_siblings(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The property the registry gate exists to protect: an ordinary
-        `scope:` list of repo-relative local paths, none of whose leading
-        segments are registered sibling repo-ids, must resolve to `[]`.
-        Without the registry gate, `coordinator/bin/widget.py` would be
-        misread as naming a sibling repo `coordinator` purely by shape --
-        this is the exact ambiguity `_plan_sibling_repo_ids`'s own
-        docstring names between a local path and a sibling reference.
-
-        Review: code-reviewer -- Finding 2: this test does NOT demonstrate
-        `ee30c5a7c`'s slash-grammar fix and would pass identically against
-        the pre-fix baseline -- pre-fix, `_plan_sibling_repo_ids` never
-        attempted the slash grammar at all, so any slash-form-only `scope:`
-        list resolved to `[]` regardless of registry state. What this test
-        actually guards is a DIFFERENT, hypothetical future regression: a
-        shape-only widening of slash-form recognition that skips the
-        registry gate entirely. See
-        `test_registered_slash_form_sibling_is_recognized` above for the
-        test that DOES fail pre-fix and validates the fix itself."""
-        monkeypatch.delenv("MACHINE_LOCAL_REPOS_COORDINATOR", raising=False)
-        monkeypatch.delenv("MACHINE_LOCAL_REPOS_DOCS", raising=False)
-        plan_text = """---
-title: "Fixture"
-scope:
-  - coordinator/bin/widget.py
-  - docs/wiki/foo.md
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == []
-
-    def test_colon_form_still_works_alongside_slash_form(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """Regression guard: adding the slash grammar must not disturb the
-        pre-existing colon grammar -- both forms recognized in the same
-        `scope:` list, each resolving its own repo id in first-seen
-        order."""
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER_REPO", str(tmp_path))
-        plan_text = """---
-title: "Fixture"
-scope:
-  - plan.md
-  - sibling-repo: some/path/in/sibling.py
-  - claude-klabauter/coordinator_core/ops/rollup_derive.py
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == [
-            "sibling-repo",
-            "claude-klabauter",
-        ]
-
-    def test_unregistered_slash_form_repo_is_not_recognized_known_limitation(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """KNOWN LIMITATION, pinned deliberately rather than papered over
-        (see `_plan_sibling_repo_ids`'s own docstring § "KNOWN LIMITATION,
-        stated rather than papered over"): a slash-form entry naming a
-        repo NOT registered on this machine is indistinguishable from an
-        ordinary local path and is silently NOT recognized as
-        sibling-shaped at all. Unlike the colon form's own unresolvable-
-        sibling handling, this does NOT surface in `skipped_sibling_repos`
-        either -- the scanner never learns a sibling was named in the
-        first place. This is a deliberate asymmetry the docstring commits
-        to (gating slash-form recognition on shape alone would instead
-        misfire on every ordinary plan with a slash-shaped local scope
-        entry), not a gap to close.
-
-        Review: code-reviewer -- Finding 2: this test does NOT demonstrate
-        `ee30c5a7c`'s slash-grammar fix and would pass identically against
-        the pre-fix baseline -- pre-fix, the slash grammar didn't exist at
-        all, so an unregistered (or any) slash-form entry already resolved
-        to `[]` unconditionally. It guards a different, hypothetical future
-        regression: this KNOWN LIMITATION being silently narrowed or
-        widened later without a docstring update to match. It does not
-        validate that the fix itself works.
-        """
-        monkeypatch.delenv("MACHINE_LOCAL_REPOS_UNREGISTERED_SIBLING", raising=False)
-        plan_text = """---
-title: "Fixture"
-scope:
-  - plan.md
-  - unregistered-sibling/some/path.py
----
-
-# Fixture
-"""
-        assert coas._plan_sibling_repo_ids(plan_text) == []
-        committed, skipped = coas._sibling_committed_chunk_ids(plan_text, _DLV_SIBLING)
-        assert committed == set()
-        assert skipped == []  # not even surfaced as skipped -- see docstring above
-
-
-_SLASH_SIBLING_PLAN_TEMPLATE = """---
-title: "Fixture plan — slash-form cross-repo sibling scan"
-created: 2026-08-01
-author: test-fixture
-status: {status}
-branch: "work/test-fixture/2026-08-01"
-plan_id: "pln-fixture-slash-sibling-000001"
-deliverable_id: "dlv-fixture-sibling-000001"
-scope:
-  - plan.md
-  - sibling-repo/some/path/in/sibling.py
----
-
-# Fixture plan — slash-form cross-repo sibling scan
-
-## Tasks
-
-```yaml plan-tasks
-{rows}
-```
-"""
-
-
-class TestCrossRepoSlashFormSiblingScan:
-    def test_chunk_credited_from_sibling_repo_via_slash_form_scope(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """End-to-end: a plan whose `scope:` names a sibling repo via the
-        SLASH form, whose chunk commit landed only in that sibling repo
-        (never in the home repo), must be detected as committed -- mirrors
-        `TestCrossRepoSiblingScan.test_chunk_credited_from_sibling_repo`
-        but for the slash grammar this fix adds rather than the
-        pre-existing colon grammar. Against the pre-fix code (colon-only
-        recognition) this would report `shipped=False`, `missing=["C1"]`."""
-        root = tmp_path / "home"
-        root.mkdir()
-        sibling_root = tmp_path / "sibling"
-        sibling_root.mkdir()
-        _init_repo(root)
-        _init_repo(sibling_root)
-        monkeypatch.setenv("MACHINE_LOCAL_REPOS_SIBLING_REPO", str(sibling_root))
-
-        plan_file = _seed_sibling_scope_plan(
-            root, _SIBLING_ROW_C1_OPEN, template=_SLASH_SIBLING_PLAN_TEMPLATE
-        )
-        _commit_chunk(sibling_root, "dummy.txt", "C1", deliverable_id=_DLV_SIBLING)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-        assert missing == []
-
-
-# ---------------------------------------------------------------------------
-# A5 -- `plan_path_rel` posix output (2026-07-28)
-# ---------------------------------------------------------------------------
-
-
-def test_plan_path_rel_uses_rel_id_not_bare_str_relative_to():
-    # A5 fix: `close_out_and_stamp` now computes `plan_path_rel` via
-    # `coordinator_core.wire_paths.rel_id(live_path, root)`, not
-    # `str(live_path.relative_to(root))`. `plan_path_rel` is matched below
-    # against git-derived paths (`_determine_shipped`), which are ALWAYS
-    # forward-slash -- `str()` renders `os.sep`, which is `\` on Windows and
-    # would silently misclassify shipped/missing chunks at plan close-out on
-    # that host.
-    assert coas.rel_id is not None
-    from pathlib import PureWindowsPath
-
-    root = PureWindowsPath("C:/repo")
-    plan = PureWindowsPath("C:/repo/docs/plans/2026-07-20-x.md")
-    rel = plan.relative_to(root)
-    assert str(rel) == "docs\\plans\\2026-07-20-x.md"
-    assert rel.as_posix() == "docs/plans/2026-07-20-x.md"
-
-
-def test_close_out_and_stamp_nested_plan_path_rel_is_forward_slash(tmp_path, monkeypatch):
-    # Regression/functional check with a real (POSIX) filesystem: a plan
-    # nested two directories deep must still resolve to a clean
-    # forward-slash-joined relative path for git-comparison purposes.
-    root = tmp_path
-    _run_git(["init", "-q"], root)
-    _run_git(["config", "user.email", "test@example.com"], root)
-    _run_git(["config", "user.name", "Test"], root)
-
-    plan_dir = root / "docs" / "plans"
-    plan_dir.mkdir(parents=True)
-    plan_rel = "docs/plans/2026-07-20-nested-plan.md"
-    plan_file = plan_dir / "2026-07-20-nested-plan.md"
-    plan_file.write_text(
-        "---\nstatus: reviewed\nplan_id: nested-plan\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
-        "- {id: C1, title: chunk one, pm_approved: true}\n```\n",
-        encoding="utf-8",
-    )
-    _run_git(["add", plan_rel], root)
-    _run_git(["commit", "-q", "-m", "seed plan"], root)
-
-    exit_code, result, _pre_sha = _run_close_out(monkeypatch, root, plan_rel)
-
-    # Not asserting success (no chunk commits exist) -- only that any
-    # plan-path-derived text in the result is forward-slash-joined, never
-    # backslash-joined.
-    rendered = str(result)
-    assert "docs\\plans" not in rendered
-
-
-# ===========================================================================
-# Plan-side disposition_ref evidence -- the SECOND, independently-verified
-# evidence path for `docs/plans/2026-08-03-klabauter-rows-relocate-into-
-# claude-klabauter.md` C5/C6 (a chunk whose commit subject named the acceptance
-# criterion or artifact, e.g. "AC6 MET: ..."/"DR-261: ...", rather than the
-# chunk-id -- invisible to the commit-subject join forever, per
-# `_extract_chunk_ids`'s own docstring). See close_out_and_stamp.py's own
-# docstring § Plan-side disposition_ref evidence for the full design and the
-# Deliverable-Id question this decides (a disposition_ref commit does NOT
-# also need a matching Deliverable-Id trailer -- the ref's own placement
-# inside this plan's own spine row is the scoping mechanism).
+# Plan-side disposition_ref evidence -- the surviving, pure sha-ancestry
+# evidence path (C3, 2026-08-21, "the close ceremony stops paying for the
+# join"): a `disposition: coded` row's own `disposition_ref` verified as a
+# real, ancestor commit. See close_out_and_stamp.py's own docstring §
+# Plan-side disposition_ref evidence.
 # ===========================================================================
 
 
@@ -4478,8 +2060,8 @@ def _make_non_ancestor_commit(root: Path) -> str:
     gymnastics. `git rev-parse --verify <sha>^{commit}` resolves it (the
     object genuinely exists); `git merge-base --is-ancestor <sha> HEAD`
     reports false (no ref, including HEAD, was ever built from it) -- this
-    is exactly the shape `_verify_disposition_ref`'s `DISPOSITION_REF_
-    NOT_ANCESTOR` case must reject: a real commit HEAD never reached."""
+    is exactly the shape `_verify_disposition_ref`'s non-ancestor rejection
+    case must reject: a real commit HEAD never reached."""
     head_tree = _run_git(["rev-parse", "HEAD^{tree}"], root).stdout.strip()
     result = _run_git(
         ["commit-tree", head_tree, "-m", "unreachable commit for non-ancestor test"],
@@ -5055,296 +2637,6 @@ class TestTrackerReconciliation:
 
 
 # ===========================================================================
-# Hyphen-range-subject diagnostic (2026-08-05) -- makes a `missing_chunk_ids`
-# false negative LEGIBLE when the real cause is a `C1-C4: ...`-style commit
-# subject: `-` is deliberately NOT a recognized multi-id separator
-# (`_extract_chunk_ids` only splits on `,`/`+`/`/`), so such a subject goes
-# down the single-id path and registers nothing at all, even though every
-# named chunk genuinely shipped. See close_out_and_stamp.py's own
-# `_hyphen_range_subject_diagnostics` docstring for the live incident and the
-# explicit "do not add `-` to the separator set" negative-spec this pins.
-#
-# Diagnostic-only: these tests confirm the join semantics/verdict in
-# `_committed_chunk_shas`/`_determine_shipped` are UNCHANGED by this fix --
-# `C1-C4:` must keep registering zero ids under the real oracle; only the
-# NEW diagnostic explains why.
-# ===========================================================================
-
-
-class TestHyphenRangeSubjectDiagnostic:
-    def test_hyphen_range_subject_fires_over_a_covering_spine(self, tmp_path):
-        """`C1-C4: ...`, trailered to the plan's own deliverable_id, with
-        every one of C1..C4 still reported missing -- fires, naming the sha,
-        subject, and the spine ids the range appears to span."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1-C4: land four chunks in one commit",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-        head_sha = _head_sha(root)[:7]
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1", "C2", "C3", "C4"]
-        )
-        assert len(offenders) == 1
-        offender = offenders[0]
-        assert head_sha == offender["sha"][: len(head_sha)]
-        assert offender["subject"] == "C1-C4: land four chunks in one commit"
-        assert sorted(offender["spanned_chunk_ids"]) == ["C1", "C4"]
-
-    def test_doctrine_dash_tag_does_not_fire(self, tmp_path):
-        """`DOCTRINE-C7a: ...` splits to `["DOCTRINE", "C7a"]` -- `DOCTRINE`
-        covers no spine id, so this must NOT be confidently reported as a
-        hyphen-range subject. Load-bearing: this is the exact shape the
-        real `_extract_chunk_ids`/`_committed_id_covers_spine_id` gate
-        exists to leave alone (a compound dash-tag, not an id-list)."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "DOCTRINE-C7a: admission gate",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C7a"]
-        )
-        assert offenders == []
-
-    def test_residue_dash_tag_does_not_fire(self, tmp_path):
-        """`RESIDUE-C9: ...` splits to `["RESIDUE", "C9"]` -- `RESIDUE`
-        covers no spine id, so this must NOT fire either, mirroring the
-        `DOCTRINE-C7a` case above."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "RESIDUE-C9: named-dispatch strip guard",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C9"]
-        )
-        assert offenders == []
-
-    def test_dash_tag_suffix_shape_does_not_fire(self, tmp_path):
-        """`C8a-mak: ...` is a REAL corpus shape (`_committed_id_covers_
-        spine_id`'s own docstring names it: a repo-variant dash-tag
-        suffix, e.g. Claude-klabauter's own tag on a sub-chunk landed
-        elsewhere too -- NOT a hyphen-joined range) and it must not be
-        mistaken for one. It splits to `["C8a", "mak"]`; `C8a` covers
-        itself but `mak` does not cover any spine id, so this must not
-        fire -- and, unlike the `DOCTRINE`/`RESIDUE` cases above, this
-        currently only holds because dash-tag suffixes are always
-        lowercase while spine ids always start uppercase
-        (`_committed_id_covers_spine_id`'s own case-sensitive match).
-        This test pins that case-sensitivity invariant directly, since it
-        is incidental to a naming convention, not asserted anywhere else
-        this diagnostic itself relies on it (Review: code-reviewer --
-        Finding 1)."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C8a-mak: land C8a via the claude-klabauter variant tag",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C8a"]
-        )
-        assert offenders == []
-
-    def test_exact_match_preferred_over_suffix_derived_match(self, tmp_path):
-        """Bipartite-matching edge case (Review: code-reviewer -- Finding
-        2): `C1a-C1` splits to components `["C1a", "C1"]`. `C1a` exactly
-        matches missing spine id `C1a` but ALSO covers base spine id `C1`
-        via the single-lowercase-letter sub-chunk suffix rule; `C1` exactly
-        matches missing spine id `C1` and covers nothing else. A single
-        greedy first-match pass could assign `C1a`'s exact match away to
-        `C1` (since `covered[0]` is whichever candidate appears first in
-        `missing_chunk_ids`, not necessarily the exact one), leaving the
-        second component with no candidate left and aborting detection
-        entirely even though a valid one-to-one assignment exists:
-        `C1a`->`C1a`, `C1`->`C1`. The two-pass exact-match-first
-        assignment must find that assignment and fire."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1a-C1: land both the sub-chunk and its base row",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1", "C1a"]
-        )
-        assert len(offenders) == 1
-        assert sorted(offenders[0]["spanned_chunk_ids"]) == ["C1", "C1a"]
-
-    def test_hyphen_range_subject_scoped_to_a_different_plan_does_not_report(
-        self, tmp_path
-    ):
-        """A `C1-C4:`-shaped subject trailered to a DIFFERENT plan's
-        `deliverable_id` must never be reported against THIS plan just
-        because its subject shape happens to match -- the same
-        Deliverable-Id-scoping bound `_committed_chunk_shas`'s own join
-        enforces, applied identically here."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1-C4: land four chunks belonging to a different plan",
-            deliverable_id="dlv-some-other-plan-000099",
-        )
-
-        offenders = coas._hyphen_range_subject_diagnostics(
-            root, _DLV_VALID_SPINE, ["C1", "C2", "C3", "C4"]
-        )
-        assert offenders == []
-
-    def test_absent_deliverable_id_returns_empty_without_git_call(
-        self, tmp_path, monkeypatch
-    ):
-        """`deliverable_id=None`/falsy short-circuits before any git-log
-        call at all -- nothing to scope the search against."""
-        root = tmp_path
-        _init_repo(root)
-
-        call_count = {"n": 0}
-        real_run_git = coas._run_git
-
-        def counting_run_git(args, cwd):
-            call_count["n"] += 1
-            return real_run_git(args, cwd)
-
-        monkeypatch.setattr(coas, "_run_git", counting_run_git)
-
-        assert (
-            coas._hyphen_range_subject_diagnostics(root, None, ["C1", "C4"]) == []
-        )
-        assert (
-            coas._hyphen_range_subject_diagnostics(root, "", ["C1", "C4"]) == []
-        )
-        assert call_count["n"] == 0
-
-    def test_close_out_and_stamp_reports_the_hyphen_range_subject_and_note(
-        self, tmp_path, monkeypatch
-    ):
-        """Integration: `close_out_and_stamp`'s own `message` gets the
-        CAUSE-pointed NOTE clause naming the recognized separators, the
-        structured `hyphen_range_subjects` result key carries the offending
-        commit -- and, critically, `shipped`/`missing_chunk_ids` are
-        UNCHANGED by this diagnostic firing (the regression this fix must
-        never introduce): the plan's spine (C1/C2a/C2b) is genuinely NOT
-        satisfied by a `C1-C4:`-style subject that names none of those
-        exact ids via the recognized-separator path, so it must still read
-        as fully missing."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1-C2a: land two chunks as a hyphen range",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert sorted(result["missing_chunk_ids"]) == ["C1", "C2a", "C2b"]
-        assert len(result["hyphen_range_subjects"]) == 1
-        offender = result["hyphen_range_subjects"][0]
-        assert offender["subject"] == "C1-C2a: land two chunks as a hyphen range"
-        assert sorted(offender["spanned_chunk_ids"]) == ["C1", "C2a"]
-        assert (
-            "commit subject(s) used '-' to join a chunk-id list" in result["message"]
-        )
-        assert "',', '+', '/'" in result["message"]
-        assert "C1-C2a: land two chunks as a hyphen range" in result["message"]
-
-    def test_genuinely_uncommitted_with_no_hyphen_range_subject_message_unchanged(
-        self, tmp_path, monkeypatch
-    ):
-        """No commit subject uses `-` as a separator at all -- the
-        diagnostic reports nothing, and today's message/behavior for a
-        genuinely-uncommitted plan is completely unaffected."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is False
-        assert sorted(result["missing_chunk_ids"]) == ["C2a", "C2b"]
-        assert result["hyphen_range_subjects"] == []
-        # Amended 2026-08-20 (C9, docs/plans/2026-08-20-wsc-identity-gates-
-        # key-on-the-deliverable.md, AC7): the genuinely-uncommitted message
-        # now names its remedy. This test's subject is the ABSENCE of the
-        # hyphen-range clause, not the message's exact prose, so it tracks
-        # the new text rather than pinning the old.
-        assert result["message"] == (
-            f"plan.md: {len(result['missing_chunk_ids'])} chunk(s) still "
-            "uncommitted, committed partial state -- if delivered via a "
-            "consolidated commit, run `plan-tasks-resolve --coded <sha>` per "
-            "row, then re-run close-out-and-stamp"
-        )
-
-    def test_happy_path_full_shipped_unaffected_no_diagnostic_call(
-        self, tmp_path, monkeypatch
-    ):
-        """The happy path (fully shipped, `missing_chunk_ids == []`) never
-        even CALLS `_hyphen_range_subject_diagnostics` -- pinned directly
-        against a spy on that function, the same "never touch the happy
-        path" constraint `_deliverable_id_near_miss_diagnostics` already
-        enforces (the caller must gate the call itself, not merely discard
-        an empty result)."""
-        root = tmp_path
-        _init_repo(root)
-        _seed_plan(root, _FIXTURE_VALID_SPINE)
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
-
-        call_count = {"n": 0}
-        real_diagnostic = coas._hyphen_range_subject_diagnostics
-
-        def counting_diagnostic(repo_root, deliverable_id, missing_chunk_ids):
-            call_count["n"] += 1
-            return real_diagnostic(repo_root, deliverable_id, missing_chunk_ids)
-
-        monkeypatch.setattr(
-            coas, "_hyphen_range_subject_diagnostics", counting_diagnostic
-        )
-
-        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
-
-        assert exit_code == coas.EXIT_OK, result
-        assert result["shipped"] is True
-        assert result["missing_chunk_ids"] == []
-        assert result["hyphen_range_subjects"] == []
-        assert call_count["n"] == 0
-
-
-# ===========================================================================
 # Dispatch Ledger fallback (C1) + partial-evaluation stamp (C2)
 # Spec backlink: dispatch brief 2026-08-06, "teach _determine_shipped the
 # legacy Dispatch-Ledger format" / "give the partial outcome a durable,
@@ -5421,7 +2713,6 @@ class TestDispatchLedgerFallback:
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is False
         assert result["missing_chunk_ids"] == ["C1"]
-        assert result["join_provenance"] != coas.JOIN_PROVENANCE_LEDGER_FALLBACK
 
     def test_ledger_fallback_classifies_fully_committed_legacy_plan_as_shipped(
         self, tmp_path, monkeypatch
@@ -5458,7 +2749,6 @@ class TestDispatchLedgerFallback:
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is True
         assert result["missing_chunk_ids"] == []
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_LEDGER_FALLBACK
         assert result["stamped"] is True
         assert _read_status(plan_file) == "implemented"
 
@@ -5476,7 +2766,6 @@ class TestDispatchLedgerFallback:
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is False
         assert result["missing_chunk_ids"] == ["C1"]
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_LEDGER_FALLBACK
         assert _read_status(plan_file) == "draft"
 
     def test_ledger_citing_non_ancestor_sha_is_not_shipped(self, tmp_path, monkeypatch):
@@ -5516,7 +2805,6 @@ class TestDispatchLedgerFallback:
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is False
         assert result["missing_chunk_ids"] == ["C1"]
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_LEDGER_FALLBACK
         assert _read_status(plan_file) == "draft"
 
     def test_malformed_ledger_table_is_not_shipped(self, tmp_path, monkeypatch):
@@ -5586,26 +2874,28 @@ class TestDispatchLedgerFallback:
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is True
         assert result["missing_chunk_ids"] == []
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_LEDGER_FALLBACK
         assert result["stamped"] is True
         assert _read_status(plan_file) == "implemented"
 
 
 # ===========================================================================
 # False-positive-stamp incident (2026-08-06): the no-spine/no-ledger branch
-# of `_determine_shipped` performs ZERO evidence lookups yet used to report
-# `JOIN_PROVENANCE_JOINED`, byte-identical to a genuine evidence-backed
-# join -- `workstream_complete` callers branched on that string BY VALUE and
-# treated it as attributed. This class pins the fix: `shipped` stays True
-# (D7's own posture, unchanged), but `join_provenance` now reports
-# `JOIN_PROVENANCE_NO_EVIDENCE_SOURCE` and the stamping gate refuses to act
-# on it -- see `_determine_shipped`'s own routing comment and
-# `JOIN_PROVENANCE_NO_EVIDENCE_SOURCE`'s own docstring.
+# of `_determine_shipped` performs ZERO evidence lookups. This class pins
+# the fix: `shipped` stays True (D7's own posture, unchanged), but
+# `evidence_backed` is False so the stamping gate refuses to act on it --
+# see `_determine_shipped`'s own docstring/routing comment.
+#
+# C3 (2026-08-21, "the close ceremony stops paying for the join"): the
+# commit-subject/Deliverable-Id join this class originally pinned via a
+# `join_provenance` string is deleted along with the rest of that
+# machinery -- `_determine_shipped` now reports a plain `evidence_backed`
+# bool instead, and `close_out_and_stamp()`'s own return dict no longer
+# carries a `join_provenance` key at all.
 # ===========================================================================
 
 
 class TestNoEvidenceSourceProvenance:
-    def test_no_spine_no_ledger_reports_no_evidence_source_not_joined(
+    def test_no_spine_no_ledger_reports_not_evidence_backed(
         self, tmp_path, monkeypatch
     ):
         root = tmp_path
@@ -5613,21 +2903,22 @@ class TestNoEvidenceSourceProvenance:
         plan_file = _seed_plan(root, _FIXTURE_ZERO_BLOCKS)
         plan_text = plan_file.read_text(encoding="utf-8")
 
-        shipped, missing, join_provenance, error = coas._determine_shipped(
+        shipped, missing, evidence_backed, error = coas._determine_shipped(
             plan_text, "plan.md", root
         )
 
         assert error is None
         assert shipped is True
         assert missing == []
-        assert join_provenance == coas.JOIN_PROVENANCE_NO_EVIDENCE_SOURCE
-        assert join_provenance != coas.JOIN_PROVENANCE_JOINED
+        assert evidence_backed is False
 
-    def test_real_deliverable_id_join_still_reports_joined(self, tmp_path, monkeypatch):
-        """Sibling pin: a plan with a real `## Tasks` spine and a genuine
-        Deliverable-Id-trailer join over committed chunks still reports the
-        ordinary `JOIN_PROVENANCE_JOINED` -- this fix narrows ONLY the
-        no-spine/no-ledger branch, nothing about the real join path."""
+    def test_real_disposition_ref_evidence_still_reports_evidence_backed(
+        self, tmp_path, monkeypatch
+    ):
+        """Sibling pin: a plan with a real `## Tasks` spine whose rows carry
+        genuine, verified `disposition_ref` evidence still reports
+        `evidence_backed=True` -- this fix narrows ONLY the no-spine/
+        no-ledger branch, nothing about the real evidence path."""
         root = tmp_path
         _init_repo(root)
         plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
@@ -5635,14 +2926,14 @@ class TestNoEvidenceSourceProvenance:
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
         plan_text = plan_file.read_text(encoding="utf-8")
 
-        shipped, missing, join_provenance, error = coas._determine_shipped(
+        shipped, missing, evidence_backed, error = coas._determine_shipped(
             plan_text, "plan.md", root
         )
 
         assert error is None
         assert shipped is True
         assert missing == []
-        assert join_provenance == coas.JOIN_PROVENANCE_JOINED
+        assert evidence_backed is True
 
     def test_no_evidence_source_plan_is_not_stamped_end_to_end(self, tmp_path, monkeypatch):
         """Downstream refusal-to-stamp, exercised via the real
@@ -5657,7 +2948,6 @@ class TestNoEvidenceSourceProvenance:
 
         assert exit_code == coas.EXIT_OK, result
         assert result["shipped"] is True
-        assert result["join_provenance"] == coas.JOIN_PROVENANCE_NO_EVIDENCE_SOURCE
         assert result["stamped"] is False
         assert _read_status(plan_file) == original_status
         assert _head_sha(root) == pre_head
@@ -6228,327 +3518,6 @@ class TestCommitResultPushStatus:
         assert result["commit"]["pushed_count"] is None
 
 
-def _commit_chunk_with_demoted_trailer(
-    root: Path,
-    plan_rel: str,
-    chunk_id: str,
-    deliverable_id: str,
-    *,
-    tail_trailers: str = "Commit-Token: 0123456789abcdef0123456789abcdef",
-) -> None:
-    """Lands a chunk commit shaped exactly like the ones the 2026-08-10
-    trailer-join defect produced: the caller's `Deliverable-Id:` sits in its
-    OWN paragraph, with a blank line before the pipeline's `Commit-Token:`/
-    `Session-Id:` block. Git recognises only the LAST paragraph as trailers,
-    so `%(trailers:key=Deliverable-Id,valueonly)` comes back EMPTY for a
-    commit that visibly carries the line.
-
-    Successive `-m` arguments are exactly how git builds that shape (it joins
-    them with blank lines), so this reproduces the on-disk commits
-    `b1e0881d39a7`/`3301a8d1f68c` without depending on the pipeline that
-    emitted them.
-    """
-    plan_file = root / plan_rel
-    with plan_file.open("a", encoding="utf-8") as fh:
-        fh.write(f"\n<!-- {chunk_id} landed -->\n")
-    _run_git(["add", plan_rel], root)
-    _run_git(
-        [
-            "commit",
-            "-q",
-            "-m",
-            f"{chunk_id}: land chunk",
-            "-m",
-            f"Deliverable-Id: {deliverable_id}",
-            "-m",
-            tail_trailers,
-        ],
-        root,
-    )
-
-
-class TestDemotedDeliverableIdTrailerFallback:
-    """Pins the message-line fallback in `_resolve_deliverable_id`.
-
-    A defect in `commit()`'s trailer-join branch (fixed 2026-08-10 at
-    `5fcbb42696e5`) left a blank line between a caller's `Deliverable-Id:`
-    and the pipeline's own trailer block, so git demoted the caller's line to
-    prose and the exact-equality trailer join could not see it. Every `-F`
-    caller was exposed for as long as that path has existed, which is the
-    commit practice `/execute-plan` doctrine prescribes -- so the affected
-    set is every plan whose chunks landed before the fix, not just the two
-    commits that surfaced it. Rewriting shared-branch history is not the
-    remedy, so the READER adapts.
-
-    Each test below fails against the pre-fallback reader: the demoted
-    commits produce an empty trailer atom, so the join attributes nothing and
-    the plan reports its chunks missing at exit 0 over a range that provably
-    contains them.
-    """
-
-    def test_demoted_trailer_still_attributes_the_chunk(self, tmp_path):
-        """THE LIVE BUG, reproduced: every chunk landed, every commit carries
-        a visible `Deliverable-Id:` line, and the plan must read shipped."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk_with_demoted_trailer(
-                root, "plan.md", chunk_id, _DLV_VALID_SPINE
-            )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-        assert missing == []
-        assert join_provenance == "joined"
-
-    def test_demoted_trailer_for_another_plan_still_does_not_count(self, tmp_path):
-        """The fallback recovers attribution; it must not widen it. A DEMOTED
-        line naming a DIFFERENT plan's deliverable is now visible to the join
-        and must be excluded by the same exact-equality test that excludes a
-        properly-parsed foreign trailer -- otherwise this fix would reopen
-        the 2026-07-27 false-positive incident from the other side."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk_with_demoted_trailer(
-            root, "plan.md", "C1", "dlv-some-other-plan-000002"
-        )
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-        assert join_provenance == "joined"
-
-    def test_parsed_trailer_wins_over_a_conflicting_body_line(self, tmp_path):
-        """Precedence is trailer-first and never the reverse. A commit whose
-        PARSED trailer names another plan, while its body quotes THIS plan's
-        id at line start, must still not count -- the fallback is consulted
-        only when git parsed nothing at all, so no already-correct verdict
-        can change."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        plan_target = root / "plan.md"
-        with plan_target.open("a", encoding="utf-8") as fh:
-            fh.write("\n<!-- C1 landed -->\n")
-        _run_git(["add", "plan.md"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C1: land chunk",
-                "-m",
-                f"Deliverable-Id: {_DLV_VALID_SPINE}",
-                "-m",
-                "Deliverable-Id: dlv-some-other-plan-000002",
-            ],
-            root,
-        )
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
-
-        shipped, missing, _join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-
-    def test_mid_sentence_mention_is_not_an_attribution(self, tmp_path):
-        """The fallback is line-anchored on purpose: prose that mentions
-        `Deliverable-Id: <id>` mid-sentence is not an attribution and must
-        not join, or every commit message discussing this defect would
-        attribute itself."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        plan_target = root / "plan.md"
-        with plan_target.open("a", encoding="utf-8") as fh:
-            fh.write("\n<!-- C1 landed -->\n")
-        _run_git(["add", "plan.md"], root)
-        _run_git(
-            [
-                "commit",
-                "-q",
-                "-m",
-                "C1: land chunk",
-                "-m",
-                f"The join reads Deliverable-Id: {_DLV_VALID_SPINE} from a trailer.",
-            ],
-            root,
-        )
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2a", _DLV_VALID_SPINE)
-        _commit_chunk_with_demoted_trailer(root, "plan.md", "C2b", _DLV_VALID_SPINE)
-
-        shipped, missing, _join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1"]
-
-
-def _commit_chunk_session_only(root: Path, plan_rel: str, chunk_id: str, session_id: str) -> None:
-    """Lands a chunk commit carrying ONLY a `Session-Id:` trailer -- no
-    `Deliverable-Id:` at all -- the shape `_committed_chunk_shas`'s C6
-    Session-Id fallback exists to recover: a genuinely-shipped commit whose
-    Deliverable-Id leg has nothing to join against. Mirrors `_commit_chunk`'s
-    own append-then-commit shape so `git log -- <path>` sees a real tree
-    change at `plan_rel`, exactly as that helper's own docstring explains."""
-    plan_file = root / plan_rel
-    with plan_file.open("a", encoding="utf-8") as fh:
-        fh.write(f"\n<!-- {chunk_id} landed -->\n")
-    _run_git(["add", plan_rel], root)
-    _run_git(
-        ["commit", "-q", "-m", f"{chunk_id}: land chunk", "-m", f"Session-Id: {session_id}"],
-        root,
-    )
-
-
-def _write_plan_claim(root: Path, plan_rel: str, session_id: str) -> None:
-    """Writes a plan-claim dir's `session_id` file directly at the exact
-    on-disk path `_plan_claim_holder_session_id` reads
-    (`coordinator_core.ops.fleet._common.plan_claim_dir`) -- deliberately
-    bypassing the full `session.claims.claim_plan` machinery (session-id
-    resolution, pid liveness, EEXIST/takeover handling), none of which this
-    fallback's own read path depends on or needs exercised here."""
-    claim_dir = coas.plan_claim_dir(coas.git_common_dir(root), Path(plan_rel))
-    claim_dir.mkdir(parents=True, exist_ok=True)
-    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
-
-
-class TestSessionIdFallbackEvidence:
-    """Pins C6 (`docs/plans/2026-08-10-a-commit-trailer-that-names-the-
-    session.md`, AC10, finding 0): `_committed_chunk_shas` degrades to a
-    Session-Id-scoped chunk-subject match, bounded to this plan's own claim
-    holder and spine ids, ONLY when its own `Deliverable-Id:` join finds
-    ZERO evidence for this plan (`DeliverableJoinStats.matched_commit_count
-    == 0`). See that function's own docstring for the full zero-evidence-
-    gated argument this class exists to pin -- a general Session-Id
-    widening, applied regardless of Deliverable-Id evidence, would re-admit
-    the 2026-07-27 `C8b` cross-plan false-positive incident § Deliverable
-    scoping already closed."""
-
-    def test_zero_evidence_session_id_fallback_fires_for_a_covering_commit(
-        self, tmp_path
-    ):
-        """THE RECOVERY CASE: zero Deliverable-Id evidence anywhere in
-        range, but every chunk's own commit carries a `Session-Id:` trailer
-        naming the session this plan's own claim dir records as the
-        current holder, and a subject that covers a real spine id -- the
-        fallback must fire and the plan must read fully shipped."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk_session_only(
-                root, "plan.md", chunk_id, "sess-fallback-000001"
-            )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is True
-        assert missing == []
-        # No commit anywhere in range ever carried a Deliverable-Id trailer
-        # at all -- the join itself never had a candidate to compare
-        # against, so this is "no_join_candidates", not "joined". The
-        # Session-Id fallback resolving every chunk-id is what makes
-        # `shipped` True despite that -- exactly the case this fix exists
-        # to recover.
-        assert join_provenance == "no_join_candidates"
-
-    def test_zero_evidence_unresolvable_session_claim_stays_missing(self, tmp_path):
-        """The negative twin: same zero-Deliverable-Id-evidence
-        precondition, but the commit's `Session-Id:` trailer does NOT
-        resolve to a claim on THIS plan (the plan's own claim dir records a
-        DIFFERENT session as holder). No fallback evidence must be added --
-        the chunk stays missing, never a crash, never a guess."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _write_plan_claim(root, "plan.md", "sess-real-holder-000001")
-        for chunk_id in ("C1", "C2a", "C2b"):
-            _commit_chunk_session_only(
-                root, "plan.md", chunk_id, "sess-impostor-000002"
-            )
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C1", "C2a", "C2b"]
-        assert join_provenance == "no_join_candidates"
-
-    def test_non_zero_evidence_gate_blocks_the_fallback(self, tmp_path):
-        """THE GATE ITSELF: at least one commit in range already carries a
-        matching `Deliverable-Id:` trailer (non-zero evidence), and a SECOND
-        commit exists that would otherwise satisfy the fallback shape
-        (correct `Session-Id:` claim holder, covering subject) for a
-        DIFFERENT still-missing chunk. The fallback must NOT fire at all --
-        that second commit contributes nothing, proving the gate is
-        zero-evidence-only and not a general widening."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
-        # Fallback-shaped, but the Deliverable-Id join above already found
-        # evidence for this plan -- this must contribute nothing.
-        _commit_chunk_session_only(root, "plan.md", "C2a", "sess-fallback-000001")
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C2a"]
-        assert join_provenance == "joined"
-
-    def test_partial_fallback_reports_session_fallback_partial(self, tmp_path):
-        """Review: code-reviewer -- Finding P2, 2026-08-10, slice D. Zero
-        Deliverable-Id evidence anywhere in range (same precondition as
-        `test_zero_evidence_session_id_fallback_fires_for_a_covering_commit`),
-        but the Session-Id fallback only resolves SOME of the plan's
-        chunk-ids (one commit names the correct claim holder; one still has
-        no covering commit at all) -- `join_provenance` must name the
-        partial-fallback state, not "no_join_candidates" ("nothing existed
-        to compare against" is no longer true once the fallback found
-        evidence for another chunk in the same range), and the still-
-        uncovered chunk must remain in `missing`."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _write_plan_claim(root, "plan.md", "sess-fallback-000001")
-        for chunk_id in ("C1", "C2a"):
-            _commit_chunk_session_only(
-                root, "plan.md", chunk_id, "sess-fallback-000001"
-            )
-        # C2b gets no commit at all -- the fallback resolves 2 of 3.
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert missing == ["C2b"]
-        assert join_provenance == "session_fallback_partial"
-
-
 # ===========================================================================
 # C4a -- repo-identity gate wiring (compute_repo_identity_gate)
 # ===========================================================================
@@ -6594,6 +3563,45 @@ def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
             "coordinator_core.session.core._resolve_claude_pid_from_env",
             lambda: (None, "env-miss:absent"),
         )
+
+
+def _commit_chunk_with_demoted_trailer(
+    root: Path,
+    plan_rel: str,
+    chunk_id: str,
+    deliverable_id: str,
+    *,
+    tail_trailers: str = "Commit-Token: 0123456789abcdef0123456789abcdef",
+) -> None:
+    """Lands a chunk commit shaped exactly like the ones the 2026-08-10
+    trailer-join defect produced: the caller's `Deliverable-Id:` sits in its
+    OWN paragraph, with a blank line before the pipeline's `Commit-Token:`/
+    `Session-Id:` block. Git recognises only the LAST paragraph as trailers,
+    so `%(trailers:key=Deliverable-Id,valueonly)` comes back EMPTY for a
+    commit that visibly carries the line.
+
+    Successive `-m` arguments are exactly how git builds that shape (it joins
+    them with blank lines), so this reproduces the on-disk commits
+    `b1e0881d39a7`/`3301a8d1f68c` without depending on the pipeline that
+    emitted them.
+    """
+    plan_file = root / plan_rel
+    with plan_file.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n<!-- {chunk_id} landed -->\n")
+    _run_git(["add", plan_rel], root)
+    _run_git(
+        [
+            "commit",
+            "-q",
+            "-m",
+            f"{chunk_id}: land chunk",
+            "-m",
+            f"Deliverable-Id: {deliverable_id}",
+            "-m",
+            tail_trailers,
+        ],
+        root,
+    )
 
 
 class TestRepoIdentityGateWiring:
@@ -6703,65 +3711,3 @@ class TestRepoIdentityGateWiring:
 # ===========================================================================
 
 
-class TestJoinProvenanceExcludesNonChunkCommits:
-    def test_trailered_non_chunk_shaped_commit_alone_does_not_report_joined(
-        self, tmp_path
-    ):
-        """A commit whose subject registers zero chunk-ids (a plain
-        ceremony/authoring subject, e.g. `docs: author the plan`) but
-        carries a matching `Deliverable-Id:` trailer must NOT, by itself,
-        satisfy `matched_commit_count`/`JOIN_PROVENANCE_JOINED` -- the join
-        stat is a fact about attributable CHUNK evidence, not about any
-        trailered commit in range."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "docs: author the plan document",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
-            root, _DLV_VALID_SPINE, spine_ids=["C1", "C2a", "C2b"]
-        )
-        assert query_ok is True
-        assert committed == set()
-        assert committed_shas == {}
-        assert join_stats.matched_commit_count == 0
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert shipped is False
-        assert join_provenance != coas.JOIN_PROVENANCE_JOINED
-
-    def test_trailered_chunk_shaped_commit_still_reports_joined(self, tmp_path):
-        """Sibling pin: a genuine chunk-shaped, trailered commit still
-        reports `matched_commit_count > 0`/`JOIN_PROVENANCE_JOINED` -- this
-        fix narrows matched-commit counting to chunk-shaped commits only,
-        it does not touch the real join path."""
-        root = tmp_path
-        _init_repo(root)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_with_subject(
-            root,
-            "plan.md",
-            "C1: land chunk one",
-            deliverable_id=_DLV_VALID_SPINE,
-        )
-
-        query_ok, committed, committed_shas, join_stats = coas._committed_chunk_shas(
-            root, _DLV_VALID_SPINE
-        )
-        assert query_ok is True
-        assert "C1" in committed
-        assert join_stats.matched_commit_count >= 1
-
-        shipped, missing, join_provenance, error = coas._determine_shipped(
-            plan_file.read_text(encoding="utf-8"), "plan.md", root
-        )
-        assert error is None
-        assert join_provenance == coas.JOIN_PROVENANCE_JOINED

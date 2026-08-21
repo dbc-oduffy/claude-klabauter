@@ -79,6 +79,7 @@ from typing import Dict, List, Sequence, Set, Tuple
 
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.install.timeouts import DEPENDENCY_LOCK_SECS
 from coordinator_core.install.write_surface import (
     StaticClause,
     WriteSurfaceDeclaration,
@@ -113,11 +114,10 @@ _CU130_INDEX_URL = "https://download.pytorch.org/whl/cu130"
 _CU130_SOURCED_PACKAGES: Tuple[str, ...] = ("torch", "torchvision")
 _DARWIN_EXCLUSION_MARKER = "sys_platform != 'darwin'"
 
-# Generous timeout: resolving ~250 packages across three platforms with a
-# cold uv cache on a 50-70-session machine is a slow op, not a hung one
-# (CLAUDE.md § Load norm) — this is a cold-path, operator/CI-invoked
-# generator, never a request-path call.
-_UV_LOCK_TIMEOUT_SECS = 1800
+# `uv lock` — a member of the named `install` timeout family (DR-349
+# § Carve-outs). The number and the membership test live in
+# `install/timeouts.py`; a third-party resolver's cost is not ours to tune.
+_UV_LOCK_TIMEOUT_SECS = DEPENDENCY_LOCK_SECS
 
 # PM ruling, 2026-08-16 (state/audits/2026-08-16-fleet-venv-survey.md):
 # "go for the better (more modern) huggingface" — a first-class floor in the

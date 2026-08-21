@@ -90,7 +90,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Sequence, TypedDict
 
 import yaml
 
@@ -101,7 +101,12 @@ from coordinator_core.frontmatter.baton_class import canonical_kind as _canonica
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.schema_shape import semantic_shape_hash
-from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_git_env
+from coordinator_core.git_scope import (
+    FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
+    foreign_repo_unusable_reason,
+    scoped_cat_file_batch,
+    scoped_git_env,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -4062,7 +4067,7 @@ def check_schema_drift(
     schema_filename = schema_path.name
     doe_schema_ref = f'coordinator/schemas/{schema_filename}'
 
-    unusable = foreign_repo_unusable_reason(doe_repo_path, timeout=30)
+    unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
         raise SchemaDriftError(
             f'Cannot read DoE {ref} schema "{doe_schema_ref}": the DoE clone at '
@@ -4070,7 +4075,6 @@ def check_schema_drift(
             'This is NOT a drift finding — the comparison never ran.'
         )
 
-    # Review: code-reviewer — F9: add timeout so a hung git-show doesn't block test runner
     # Review: code-reviewer — F4 (Wave B): stdin=DEVNULL + CREATE_NO_WINDOW to match the
     # _run_git hardening pattern used by this slice's sibling modules.
     result = subprocess.run(
@@ -4078,7 +4082,7 @@ def check_schema_drift(
         capture_output=True,
         text=True,
         encoding='utf-8',
-        timeout=30,
+        timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
         stdin=subprocess.DEVNULL,
         env=scoped_git_env(),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -4288,7 +4292,7 @@ def check_schema_ahead_of_doe(
     schema_filename = schema_path.name
     doe_schema_ref = f'coordinator/schemas/{schema_filename}'
 
-    unusable = foreign_repo_unusable_reason(doe_repo_path, timeout=30)
+    unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
         raise SchemaDriftError(
             f'Cannot read DoE schema "{doe_schema_ref}": the DoE clone at '
@@ -4302,7 +4306,7 @@ def check_schema_ahead_of_doe(
             capture_output=True,
             text=True,
             encoding='utf-8',
-            timeout=30,
+            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL,
             env=scoped_git_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -4939,8 +4943,11 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
     (with determinate=False) and an explanatory detail — unreadable is not evidence
     of divergence, and must never be reported as drift.
 
-    Cadence consumer: coordinator_core.frontmatter.schema_drift_watch aggregates this
-    across the whole vendored set for the claude-klabauter.schema.vendor_drift doctor probe.
+    Cadence consumer: coordinator_core.frontmatter.schema_drift_watch aggregates the
+    whole vendored set for the claude-klabauter.schema.vendor_drift doctor probe — through
+    `check_schema_drift_advisory_batch`, not through this one-element seam. A caller
+    holding a SET must use the batch form: this one costs two processes per schema by
+    construction, which is the amplification the batch exists to close.
 
     Negative-spec: the gating sibling `check_schema_drift` is byte-exact ON PURPOSE
     and must NOT be given this canonical-JSON treatment — its own docstring names
@@ -4954,83 +4961,127 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
     Spec backlink:
     cross-repo/inbox/2026-08-03-doe-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
     """
-    schema_path = Path(schema_path)
-    doe_repo_path = Path(doe_repo_path)
+    return check_schema_drift_advisory_batch([schema_path], doe_repo_path)[0]
 
-    schema_filename = schema_path.name
-    doe_schema_ref = f'coordinator/schemas/{schema_filename}'
+
+def _advisory_indeterminate(schema_filename: str, detail: str) -> dict:
+    """The advisory's diverged=False, determinate=False shape — "the comparison never ran".
+
+    One constructor for every indeterminate exit so a new one cannot ship a
+    different key set. Never carries a version or bump-class field: those are
+    read off content this path did not obtain.
+    """
+    return {
+        'schema': schema_filename,
+        'diverged': False,
+        'determinate': False,
+        'direction': None,
+        'divergence_kind': None,
+        'local_version': None,
+        'doe_version': None,
+        'local_bump_class': None,
+        'doe_bump_class': None,
+        'doe_bump_note': None,
+        'detail': detail,
+    }
+
+
+def check_schema_drift_advisory_batch(
+    schema_paths: "Sequence[str | Path]", doe_repo_path: str | Path
+) -> list[dict]:
+    """Advisory over N vendored schemas against DoE HEAD, in TWO spawns whatever N is.
+
+    The batched primary; `check_schema_drift_advisory` is its one-element call, not
+    the other way round. The per-schema form spawned twice PER SCHEMA — a
+    `foreign_repo_unusable_reason` probe whose answer does not vary with
+    `schema_path` at all, and a `git show HEAD:<path>` — so the drift watch's loop
+    over the vendored set was a 2N-process walk. Hoisting the invariant probe and
+    replacing `show` with `git_scope.scoped_cat_file_batch` makes the whole set cost two,
+    the same shape `schema_drift_watch.check_source_drift_advisory_batch` already
+    uses against the cockpit clone.
+
+    Results are returned in `schema_paths` order, one dict per input, in exactly the
+    field shape `check_schema_drift_advisory` documents — that function's docstring
+    is the contract for every key here.
+
+    Negative-spec:
+      - NEVER raises, and never reports an unreadable side as drift.
+      - A batch is never all-or-nothing at the SCHEMA level: one token git cannot
+        resolve makes that one entry indeterminate and leaves the rest comparable.
+        A failure of the batch call ITSELF is indeterminate for every entry — that
+        is "no comparison ran", not "no drift".
+    """
+    paths = [Path(p) for p in schema_paths]
+    if not paths:
+        return []
+    doe_repo_path = Path(doe_repo_path)
 
     # An unreachable — or wrongly-resolved — DoE clone is INDETERMINATE, never
     # drift. `git -C` does not scope to a foreign repo on its own (see
     # check_schema_drift's git-scoping negative-spec and
-    # `coordinator_core/git_scope.py`); without the confinement check below, an
+    # `coordinator_core/git_scope.py`); without the confinement check, an
     # inherited GIT_DIR yields a determinate=True verdict computed against the
-    # local repo's copy of the same path.
-    unusable = foreign_repo_unusable_reason(doe_repo_path, timeout=30)
+    # local repo's copy of the same path. Loop-invariant by inspection: the probe
+    # reads the DoE clone, which does not vary across `schema_paths`.
+    unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
-        return {
-            'schema': schema_filename,
-            'diverged': False,
-            'determinate': False,
-            'direction': None,
-            'divergence_kind': None,
-            'local_version': None,
-            'doe_version': None,
-            'local_bump_class': None,
-            'doe_bump_class': None,
-            'doe_bump_note': None,
-            'detail': (
+        return [
+            _advisory_indeterminate(
+                path.name,
                 f'DoE repo ({doe_repo_path}) could not be read as a git '
                 f'repository ({unusable}) — drift could not be determined; '
-                'this is not a claim that the vendored schema has diverged.'
-            ),
-        }
+                'this is not a claim that the vendored schema has diverged.',
+            )
+            for path in paths
+        ]
 
-    try:
-        result = subprocess.run(
-            ['git', '-C', str(doe_repo_path), 'show', f'HEAD:{doe_schema_ref}'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=30,
-            stdin=subprocess.DEVNULL,
-            env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {
-            'schema': schema_filename,
-            'diverged': False,
-            'determinate': False,
-            'direction': None,
-            'divergence_kind': None,
-            'local_version': None,
-            'doe_version': None,
-            'local_bump_class': None,
-            'doe_bump_class': None,
-            'doe_bump_note': None,
-            'detail': f'Could not run git against DoE repo ({doe_repo_path}): {exc}',
-        }
+    refs = {path: f'coordinator/schemas/{path.name}' for path in paths}
+    blobs = scoped_cat_file_batch(
+        doe_repo_path, sorted({f'HEAD:{ref}' for ref in refs.values()})
+    )
+    if blobs is None:
+        return [
+            _advisory_indeterminate(
+                path.name,
+                f'Could not run git against DoE repo ({doe_repo_path}): '
+                '`git cat-file --batch` did not complete.',
+            )
+            for path in paths
+        ]
 
-    if result.returncode != 0:
-        return {
-            'schema': schema_filename,
-            'diverged': False,
-            'determinate': False,
-            'direction': None,
-            'divergence_kind': None,
-            'local_version': None,
-            'doe_version': None,
-            'local_bump_class': None,
-            'doe_bump_class': None,
-            'doe_bump_note': None,
-            'detail': (
-                f'Cannot read DoE HEAD schema "{doe_schema_ref}": {result.stderr.strip()}. '
-                f'DoE repo path ({doe_repo_path}) unreadable or missing this schema at HEAD.'
-            ),
-        }
+    results: list[dict] = []
+    for path in paths:
+        doe_schema_ref = refs[path]
+        doe_content = blobs.get(f'HEAD:{doe_schema_ref}')
+        if doe_content is None:
+            results.append(_advisory_indeterminate(
+                path.name,
+                f'Cannot read DoE HEAD schema "{doe_schema_ref}". '
+                f'DoE repo path ({doe_repo_path}) unreadable or missing this schema at HEAD.',
+            ))
+            continue
+        results.append(_advisory_compare(path, doe_schema_ref, doe_repo_path, doe_content))
+    return results
 
-    doe_content = result.stdout
+
+def _advisory_compare(
+    schema_path: Path, doe_schema_ref: str, doe_repo_path: Path, doe_content: str
+) -> dict:
+    """Reduce one vendored schema and its already-fetched DoE HEAD text to a verdict dict.
+
+    Pure of subprocess: every git read happens once, above, for the whole batch.
+    `check_schema_drift_advisory`'s docstring is the contract for the returned keys,
+    including why the comparison is canonical-JSON rather than byte-exact.
+
+    Line endings are normalised on the DoE side because the local side normalises
+    too: `Path.read_text` opens in universal-newline mode, and so did the
+    `subprocess.run(..., text=True)` `git show` this batch replaced. Decoding
+    `cat-file --batch`'s bytes directly does not, so without this a CRLF blob would
+    report as drift against an identical LF vendored copy on Windows — a false DRIFT
+    introduced by the batching, not by anything upstream moved.
+    """
+    schema_filename = schema_path.name
+    doe_content = doe_content.replace('\r\n', '\n').replace('\r', '\n')
     doe_version = _read_schema_version(doe_content)
     doe_bump_class = _read_bump_class(doe_content)
     doe_bump_note = _read_bump_note(doe_content)

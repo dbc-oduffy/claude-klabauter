@@ -536,7 +536,7 @@ class TestTagIsAncestorOfPin:
       1   → False (not ancestor → pin behind or diverged)
       ≥ 2 → None  (git error, commits absent, not-a-commit SHA, etc.)
       FileNotFoundError → None (git not installed)
-      TimeoutExpired    → None (live after F2 adds timeout=30)
+      TimeoutExpired    → None (live: git_predicate always passes a bound)
     """
 
     _DOE_CLONE = Path("/tmp/fake-doe-clone")
@@ -591,8 +591,9 @@ class TestTagIsAncestorOfPin:
     def test_timeout_expired_returns_none(self) -> None:
         """TimeoutExpired → None.
 
-        Live after F2 adds timeout=30; previously a dead except branch because
-        subprocess.TimeoutExpired is only raised when timeout= is passed.
+        Live because `git_scope.git_predicate` always passes a bound
+        (`FOREIGN_REPO_GIT_TIMEOUT_SECONDS`); previously a dead except branch,
+        because subprocess.TimeoutExpired is only raised when timeout= is passed.
         """
         with patch(
             "coordinator_core.ops.emit.doe_drift.subprocess.run",

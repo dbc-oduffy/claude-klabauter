@@ -290,6 +290,43 @@ def test_provably_undispatched_error_still_falls_through(tmp_path: Path) -> None
     assert "-32004" not in proc.stdout
 
 
+def test_a_suspended_op_refusal_never_reads_as_a_maybe_completed_mutation(
+    tmp_path: Path,
+) -> None:
+    """-32006 OP_SUSPENDED must fall through, NOT become a -32004.
+
+    The regression this pins was measured on the real binary 2026-08-21,
+    before -32006 was on `is_provably_undispatched`'s list: the door
+    discarded the server's refusal and emitted its own "the op may have
+    COMPLETED, reconcile against real state" envelope. For
+    `ceremony.scoped_git_commit` -- one of the 17 ops the 2s-max ruling
+    suspended -- that told an operator whose commit was refused BEFORE
+    anything ran that it might have landed, while the actual reason and the
+    bar to reinstate the op never reached them at all.
+
+    Asserted as an ABSENCE of the -32004 shape rather than a presence of
+    the refusal text, because the fall-through hands the request to the
+    cold engine, and it is the cold engine's own `_dispatch_message_impl`
+    -- the same one that refused here -- that renders the message. What
+    this door owes is not swallowing it."""
+    root = _make_stub_engine_root(tmp_path)
+    reply = (
+        '{"jsonrpc":"2.0","id":1,"error":{"code":-32006,'
+        '"message":"ceremony.scoped_git_commit is suspended: over the 2s max bar."}}\n'
+    ).encode("utf-8")
+
+    server = _ReplyingServer(_pipe_name_for(root), reply)
+    try:
+        proc = _run_door(root, timeout=60)
+    finally:
+        server.close()
+
+    assert _FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == _FALLBACK_EXIT
+    assert "-32004" not in proc.stdout
+    assert "may have COMPLETED" not in proc.stdout
+
+
 def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path) -> None:
     """The server accepts and never answers. The door must stop -- and must
     stop by REFUSING, never by re-running a request it already delivered."""

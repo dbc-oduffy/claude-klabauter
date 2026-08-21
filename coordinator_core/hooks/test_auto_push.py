@@ -2865,3 +2865,103 @@ def test_oracle_arm3_end_to_end_wsc_tail_ceremony_real_deferred_push(tmp_path, m
     assert _remote_tip() == result["committed_sha"], (
         "the sole publisher's push never reached the remote"
     )
+
+
+# ---------------------------------------------------------------------------
+# _release_claims_for_head — the claim ledger is released for EVERY commit
+# route, not only the coordinator ops that release their own.
+# ---------------------------------------------------------------------------
+
+
+def test_release_claims_for_head_releases_the_landed_commits_paths(monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: "a.py\nb.py\n")
+
+    from coordinator_core.session import core as session_core
+    from coordinator_core.session import scope as session_scope
+
+    monkeypatch.setattr(session_core, "resolve_session_id", lambda cwd=None: "sid-1")
+    monkeypatch.setattr(
+        session_scope,
+        "release_committed_claims",
+        lambda sid, paths, cwd=None: seen.update(sid=sid, paths=paths, cwd=cwd),
+    )
+
+    auto_push._release_claims_for_head("/repo")
+
+    assert seen == {"sid": "sid-1", "paths": ["a.py", "b.py"], "cwd": "/repo"}
+
+
+def test_release_claims_for_head_never_raises(monkeypatch):
+    # Fail-open is the whole contract of this path: a stale claim is a far
+    # smaller harm than a blocked commit.
+    def _boom(*a, **k):
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(auto_push, "_run_git", _boom)
+
+    auto_push._release_claims_for_head("/repo")  # must not raise
+
+
+def test_release_claims_for_head_is_a_no_op_when_the_commit_named_no_paths(monkeypatch):
+    called = []
+
+    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: "")
+
+    from coordinator_core.session import scope as session_scope
+
+    monkeypatch.setattr(
+        session_scope, "release_committed_claims", lambda *a, **k: called.append(a)
+    )
+
+    auto_push._release_claims_for_head("/repo")
+
+    assert called == []
+
+
+def test_main_releases_claims_on_a_plain_post_commit_invocation(monkeypatch, tmp_path):
+    released = []
+
+    monkeypatch.delenv(auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH, raising=False)
+    monkeypatch.setattr(auto_push, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: "work/x")
+    monkeypatch.setattr(auto_push, "branch_gate", lambda branch: (False, None))
+    monkeypatch.setattr(
+        auto_push, "_release_claims_for_head", lambda root: released.append(root)
+    )
+
+    assert auto_push.main([]) == 0
+    # Released even though the branch gate declined the push -- the ledger is
+    # about what was COMMITTED, not about what was pushed.
+    assert released == [str(tmp_path)]
+
+
+def test_main_does_not_release_on_the_detached_respawn(monkeypatch, tmp_path):
+    # spawn_detached_push respawns main() with an explicit --branch; releasing
+    # there would repeat the work and add a spawn in the detached child.
+    released = []
+
+    monkeypatch.delenv(auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH, raising=False)
+    monkeypatch.setattr(auto_push, "_resolve_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(auto_push, "run_push_with_retry", lambda root, branch: None)
+    monkeypatch.setattr(
+        auto_push, "_release_claims_for_head", lambda root: released.append(root)
+    )
+
+    assert auto_push.main(["--branch", "work/x", "--no-async"]) == 0
+    assert released == []
+
+
+def test_main_does_not_release_when_the_coordinator_path_suppressed_it(monkeypatch):
+    # The coordinator commit path releases its own claims and suppresses this
+    # hook -- releasing here too would be redundant work on the hot path.
+    released = []
+
+    monkeypatch.setenv(auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH, "1")
+    monkeypatch.setattr(
+        auto_push, "_release_claims_for_head", lambda root: released.append(root)
+    )
+
+    assert auto_push.main([]) == 0
+    assert released == []

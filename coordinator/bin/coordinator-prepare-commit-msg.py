@@ -223,20 +223,64 @@ def _no_console_creationflags() -> dict:
 
 
 def _resolve_git_dir() -> str:
-    """Resolve the current repo's git-dir via ONE ``git rev-parse --git-dir``
-    subprocess call. Returns ``""`` on any failure (git missing, not a repo,
-    spawn error, timeout) — callers treat that as "no git-dir available" and
-    degrade gracefully (Deliverable-Id lookup becomes a no-op, never
-    errors)."""
+    """Resolve the current repo's git-dir with ZERO subprocess spawns —
+    replaces the former ``git rev-parse --git-dir`` call on this hot path
+    (§ C1(b)). Returns ``""`` on any failure (not a repo, unreadable
+    ``.git``, permission error) — callers treat that as "no git-dir
+    available" and degrade gracefully, exactly as the spawn-based version
+    did.
+
+    NOT via ``GIT_INDEX_FILE``: it names ``$GIT_DIR/index`` only by
+    default, is relocated by ordinary git operations (and by porcelain
+    staging through a temporary index) with no signal that it moved, and a
+    build on it fails silently with a plausible-looking wrong path — do not
+    resurrect that shortcut here.
+
+    Derivation, cheapest-safe-check first:
+      1. ``$GIT_DIR``, if the environment sets it — ``git --git-dir=...
+         commit`` exports it into the hook environment even though a plain
+         ``git commit`` does not, so honouring it is free correctness, not
+         dead code.
+      2. Otherwise resolve ``.git`` relative to cwd — git invokes
+         ``prepare-commit-msg`` with cwd already AT the worktree root
+         (this file's module docstring and ``_resolve_staged_paths``'s own
+         docstring both already rely on that same invariant for their own
+         relative-path git calls), so no upward directory walk is needed
+         or attempted.
+         - a DIRECTORY there is an ordinary repo's git-dir: return ``".git"``.
+         - a FILE there is a linked worktree or submodule gitlink: parse its
+           ``gitdir: <path>`` first line and resolve that path relative to
+           the FILE's own directory (not cwd) if it is not already
+           absolute — the same trap commit ``87b2f3f43`` already paid for
+           once in this codebase.
+
+    This reproduces ``git rev-parse --git-dir``'s PER-WORKTREE answer
+    (``.git/worktrees/<name>``), never the common dir —
+    ``_resolve_deliverable_id_at``'s ``<git-dir>/coordinator-sessions/<id>/
+    session-shape.json`` lookup and the ``common_dir=`` argument threaded
+    into ``resolve_claim_state`` both depend on which one this returns; a
+    "helpfully" common-dir-returning derivation would change behaviour
+    silently.
+    """
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **_no_console_creationflags(),
-        )
-        return (out.stdout or "").strip()
+        env_git_dir = os.environ.get("GIT_DIR", "").strip()
+        if env_git_dir:
+            return env_git_dir
+
+        cwd = os.getcwd()
+        dotgit = os.path.join(cwd, ".git")
+        if os.path.isdir(dotgit):
+            return ".git"
+        if os.path.isfile(dotgit):
+            with open(dotgit, encoding="utf-8") as fh:
+                first_line = fh.readline().strip()
+            if first_line.startswith("gitdir:"):
+                target = first_line[len("gitdir:"):].strip()
+                if target and not os.path.isabs(target):
+                    target = os.path.normpath(os.path.join(cwd, target))
+                if target:
+                    return target
+        return ""
     except Exception:
         return ""
 
@@ -473,7 +517,6 @@ def _resolve_deliverable_id_from_paths(
     if not claude_klabauter_root:
         return ""
     try:
-        from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
         from coordinator_core.frontmatter.primitives import (
             read_fm_field_unquoted,
             split_frontmatter,

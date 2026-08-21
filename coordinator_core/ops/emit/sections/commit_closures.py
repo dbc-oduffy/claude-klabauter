@@ -98,6 +98,35 @@ from coordinator_core.ops.emit.context import EmitContext
 # plan's example; a future reader tuning this value had no signal for why 540 (vs. 365).
 _SCAN_SINCE_HORIZON = "540 days ago"
 
+# Server-side pre-filter for the ONLY two markers this section extracts: a `Closes:`
+# trailer (the close arm) and git's own auto-generated revert line (the revert arm).
+# Record-set preserving BY CONSTRUCTION, not by measurement: `collect()` skips any commit
+# with no trailer values, and the revert arm skips any body `_REVERT_LINE_RE` does not
+# match, so a commit carrying neither marker contributes to neither `records` nor
+# `malformed`. Multiple `--grep` terms are OR'd by default (`--all-match` is deliberately
+# NOT passed -- it would AND them and emit only reverts-that-also-close). git compiles
+# `--grep` with REG_NEWLINE, so `^` anchors at line starts within the message, which is
+# where both markers always sit. Verified against this repo's history: identical record
+# set, stdout 15.9 MB -> 15 KB.
+_MARKER_GREPS = ("--grep=^Closes:", "--grep=^This reverts commit ")
+
+#: This scan is NOT on the shared `git.run` seam, and that is a deliberate report rather
+#: than an oversight. Measured on this repo (23,402 commits): the walk costs **2,048 ms
+#: wall** and `--since=540 days ago` bounds nothing -- 23,409 commits fall inside the
+#: window, i.e. all of them plus origin/main's extra tip. Routing it through `run_git`
+#: would clamp it to `LOCAL_PLUMBING_BUDGET_SECS` (2.0, narrow-only), which this call
+#: already exceeds on an unloaded box; under the load norm it would expire and this
+#: section's fail-open arm would emit an EMPTY `commit_closures` array. Silent data loss
+#: in a cross-repo-consumed payload is a worse defect than the one being fixed.
+#:
+#: The real fix is to bound the walk, and bounding it changes WHICH closures are emitted
+#: -- a `state/cockpit-emission.json` contract question owed to the consuming repos, not
+#: a timeout dial. Until that decision lands this constant is named and measured rather
+#: than inherited: it is deliberately not 60 (the house number this site carried, see the
+#: hitlist's headline finding) and it is a runaway guard on a known-2s call, not a budget.
+#: Spec backlink: docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G5
+_HISTORY_SCAN_TIMEOUT_SECS = 10.0
+
 # NUL-delimited format: a NUL precedes every commit's %H so the whole subprocess output can
 # be split unambiguously on "\x00" even though %(trailers:...valueonly) may itself emit
 # multiple newline-separated lines when a commit carries more than one Closes: trailer.
@@ -127,7 +156,8 @@ def _extract_closure_commits(
     Scoped to DECISION-3's range: commits reachable from ``origin/main`` OR ``HEAD`` (a
     union-of-positive-refs query — git de-dupes commits reachable from either, so this is
     naturally idempotent when HEAD sits on or ahead of origin/main), bounded by
-    ``_SCAN_SINCE_HORIZON``. Any subprocess failure (missing git, no origin/main configured,
+    ``_SCAN_SINCE_HORIZON`` and pre-filtered to the two markers this section reads
+    (``_MARKER_GREPS``). Any subprocess failure (missing git, no origin/main configured,
     offline) degrades to ``([], [])`` — this section never aborts emit (matches every other
     porter's fail-open posture, e.g. ``sections/roadmap_dag.py._query_roadmap_records``).
     """
@@ -136,6 +166,8 @@ def _extract_closure_commits(
         "origin/main", "HEAD",
         f"--since={_SCAN_SINCE_HORIZON}",
         f"--format={_LOG_FORMAT}",
+        "--extended-regexp",
+        *_MARKER_GREPS,
     ]
     try:
         proc = subprocess.run(
@@ -143,7 +175,7 @@ def _extract_closure_commits(
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            timeout=_HISTORY_SCAN_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,
             **no_console_creationflags(),
         )

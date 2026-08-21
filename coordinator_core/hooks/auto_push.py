@@ -2055,6 +2055,69 @@ def spawn_detached_push(repo_root: str, branch: str) -> None:
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+def _release_claims_for_head(repo_root: str) -> None:
+    """Append the ``R`` (release) events for the commit that just landed.
+
+    WHY THIS LIVES IN AUTO-PUSH, which is otherwise about pushing: the claim
+    ledger must be released for EVERY commit route, not only the coordinator
+    ops that call ``scope.release_committed_claims`` themselves
+    (``scoped_git_commit``, ``consumed_handoff_stamp``,
+    ``detached_render_commit``, ``post_commit_tail``). A plain ``git commit``
+    -- an operator's, a tool's, any route bypassing those ops -- released
+    nothing, so the claim stayed ``T`` forever and
+    ``claim_index.commit_set`` kept offering an already-committed path back
+    for commit. That is precisely the "you already committed these" answer the
+    offer exists NOT to give.
+
+    The post-commit hook is the one seam every route passes through, and this
+    module is the only program that hook runs -- so folding the release in here
+    costs ZERO additional processes on the commit hot path, where a second
+    interpreter start would be break-class under CLAUDE.md's brightline. One
+    ``git show`` spawn is added, inside a process that was starting anyway.
+
+    Complementary, never double-releasing: the coordinator commit path sets
+    ``_ENV_SUPPRESS_FOR_SYNC_PUSH``, which returns from ``main`` before this is
+    reached, and that path already released its own claims. This covers exactly
+    the routes that were missing it.
+
+    Fail-open in every arm, like everything else here: a commit must never be
+    blocked, and a stale claim is a far smaller harm than a failed commit.
+
+    KNOWN NARROW GAP, measured rather than theorised: ``release_committed_claims``
+    releases only paths that are CLEAN in the worktree, and a path git is still
+    renormalizing line endings for can read as dirty for a moment right after
+    the commit. Observed once here -- of two paths in one commit, one released
+    and one did not; calling ``release_committed_claims`` on the straggler
+    seconds later released it immediately, so the function was right and the
+    timing was not. The failure mode is benign and self-correcting in effect:
+    the claim stays ``T``, so the offer re-offers an already-committed path and
+    the next commit of it is an empty no-op. Do NOT "fix" this by relaxing the
+    clean check -- that check is what stops a release racing an unstaged edit.
+    """
+    try:
+        from coordinator_core.session import core as _session_core
+        from coordinator_core.session import scope as _session_scope
+
+        sid = _session_core.resolve_session_id(repo_root)
+        if not sid:
+            return
+        # `--format=` suppresses the header, leaving one path per line.
+        out = _run_git(repo_root, ["show", "--name-only", "--format=", "HEAD"])
+        if not out:
+            return
+        paths = [line.strip() for line in out.splitlines() if line.strip()]
+        if not paths:
+            return
+        # Releases only paths that are CLEAN in the worktree, and is
+        # structurally incapable of releasing a peer's claim -- see
+        # `release_committed_claims`' own docstring for both properties.
+        _session_scope.release_committed_claims(sid, paths, cwd=repo_root)
+    except Exception:
+        # Never block a commit, and never let a diagnostic here become the
+        # thing that does.
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entrypoint. ALWAYS returns 0 -- auto-push must never block a commit.
 
@@ -2088,6 +2151,15 @@ def main(argv: list[str] | None = None) -> int:
         repo_root = args.repo_root or _resolve_repo_root()
         if not repo_root:
             return 0
+
+        if args.branch is None:
+            # Only on the genuine post-commit invocation, and BEFORE the branch
+            # gate below -- the ledger must be released for a commit on a branch
+            # this hook declines to push, exactly as for one it pushes.
+            # `spawn_detached_push` respawns this same main() with an explicit
+            # --branch; releasing there would repeat the work and add a spawn in
+            # the detached child.
+            _release_claims_for_head(repo_root)
 
         if args.branch:
             # Explicit branch from an engine-facing spawn

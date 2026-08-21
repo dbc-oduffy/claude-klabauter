@@ -674,9 +674,15 @@ class TestContendedLockWaitSecs:
         )
         assert locked_write.contended_lock_wait_secs() == 180.0
 
-    def test_env_override_is_honoured(self, monkeypatch):
+    def test_env_override_is_honoured_downward(self, monkeypatch):
+        monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "30")
+        assert locked_write.contended_lock_wait_secs() == 30.0
+
+    def test_env_override_cannot_raise_the_wait(self, monkeypatch):
+        """Narrow-only, 2026-08-21 PM ruling. Ratchet:
+        `coordinator_core/tests/test_contended_lock_wait_ratchet.py`."""
         monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "600")
-        assert locked_write.contended_lock_wait_secs() == 600.0
+        assert locked_write.contended_lock_wait_secs() == 180.0
 
     @pytest.mark.parametrize("raw", ["", "   ", "soon", "0", "-5", "1e"])
     def test_malformed_or_non_positive_falls_back(self, monkeypatch, raw):

@@ -40,16 +40,18 @@ directory.
 
 `--surface RESOLUTION CONTRACT` (implemented exactly, not improvised) — a
 precedence ladder, explicit beats inferred:
-  1. an explicit `--surface plan|diff` (a caller/engine that has already
-     resolved the surface, e.g. `coordinator/commands/review.md` passing
-     `--surface plan`, `review-code.md` passing `--surface diff`)
+  1. an explicit `--surface plan|diff|roadmap` (a caller/engine that has
+     already resolved the surface, e.g. `coordinator/commands/review.md`
+     passing `--surface plan`, `review-code.md` passing `--surface diff`)
                                           -> resolved surface = that value,
      no inference, no judgment point. HIGHEST precedence — an explicit
      surface WINS even when the artifact/diff context would otherwise infer
      the opposite surface (that contradiction is exactly the silent
      mis-resolution this ladder exists to close). An explicit `--surface`
-     value outside `{"plan", "diff"}` is a `ResidueUsageError` (CLI: usage
-     exit code) — never a silent fallthrough to inference.
+     value outside `{"plan", "diff", "roadmap"}` is a `ResidueUsageError`
+     (CLI: usage exit code) — never a silent fallthrough to inference.
+     `roadmap` is reachable ONLY through this explicit branch — no rule
+     below ever infers it from an artifact argument or a diff surface.
   2. else an artifact argument resolving to a path under `docs/plans/`, or
      any path ending in `.md`                     -> resolved surface = plan
   3. else no artifact argument at all, with a non-empty local diff surface
@@ -120,15 +122,19 @@ from coordinator_core.resolve_coordinator_clone import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-#: The three legal values of a segment's `surface:` frontmatter field.
-#: `shared` applies to every resolved surface; `plan`/`diff` apply only when
-#: that surface is the one actually resolved this call.
-SEGMENT_SURFACES: tuple[str, ...] = ("plan", "diff", "shared")
+#: The four legal values of a segment's `surface:` frontmatter field.
+#: `shared` applies to every resolved surface; `plan`/`diff`/`roadmap` apply
+#: only when that surface is the one actually resolved this call.
+SEGMENT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap", "shared")
 
-#: The two legal values of an explicit `--surface` argument — deliberately
+#: The three legal values of an explicit `--surface` argument — deliberately
 #: narrower than `SEGMENT_SURFACES` (no `shared`; a caller resolves to a
-#: concrete surface, never to the segment-authoring category).
-EXPLICIT_SURFACES: tuple[str, ...] = ("plan", "diff")
+#: concrete surface, never to the segment-authoring category). `roadmap` is
+#: reachable ONLY via an explicit `--surface roadmap` — there is no
+#: inference rule for it (no artifact-shape or diff-based heuristic infers
+#: `roadmap`); a caller that has already resolved a roadmap surface passes
+#: it explicitly, same as `plan`/`diff`.
+EXPLICIT_SURFACES: tuple[str, ...] = ("plan", "diff", "roadmap")
 
 #: Windows console-window suppression, matching every other subprocess
 #: call site this package touches (`baton_assemble/__init__.py`,
@@ -248,8 +254,8 @@ def _resolve_surface(
     *,
     explicit_surface: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    """Resolve `plan` / `diff` / unresolved, per the `--surface RESOLUTION
-    CONTRACT` precedence ladder in the module docstring. Returns
+    """Resolve `plan` / `diff` / `roadmap` / unresolved, per the `--surface
+    RESOLUTION CONTRACT` precedence ladder in the module docstring. Returns
     `(surface, judgment_point)` where exactly one of the pair is non-`None`:
     a resolved surface carries no judgment point, and an unresolved surface
     (`None`) always carries one — this function never returns `(None,
@@ -260,7 +266,10 @@ def _resolve_surface(
     every inference rule below it, including a context that would otherwise
     infer the opposite surface. That is deliberate: an explicit surface
     contradicting inferred context is exactly the silent mis-resolution this
-    ladder exists to close, not a case to reconcile.
+    ladder exists to close, not a case to reconcile. `roadmap` is reachable
+    ONLY through this explicit branch — no inference rule below ever
+    produces it; there is no artifact-shape or diff-based heuristic for
+    `roadmap`.
     """
     if explicit_surface is not None:
         return explicit_surface, None

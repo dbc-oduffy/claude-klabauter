@@ -125,11 +125,21 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from coordinator_core._settings_home import native_path_form
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
 
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
 # one-shot install phases can be slow (pip installs in ensure-coordinator-venv)
-# but must never hang the orchestrator forever on a wedged child.
-_SUBPROCESS_TIMEOUT = 600
+# but must never hang the orchestrator forever on a wedged child. A member of
+# the named `install` timeout family (DR-349 § Carve-outs); the number and its
+# membership test live in `install/timeouts.py`.
+_SUBPROCESS_TIMEOUT = PHASE_SUBPROCESS_SECS
+
+# `compileall -q` over the whole engine package, measured warm at 2.4s process
+# time on the normal tier. Deliberately NOT a family member (it sweeps source
+# we own, which `install/timeouts.py` § Negative spec excludes) and not a
+# tuned expectation — a runaway guard with ~25x headroom over the measurement,
+# so a wedged child surfaces in a minute rather than two.
+_COMPILEALL_RUNAWAY_GUARD_SECS = 60
 
 _USAGE = """\
 install-maximalist.sh -- single idempotent orchestrator for the cold maximalist
@@ -452,12 +462,16 @@ def _run_compileall(interp: str, pkg_root: Path) -> subprocess.CompletedProcess:
     module; ``compileall`` must run under the target interpreter to
     byte-compile for that interpreter's own bytecode magic number. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
+    for the recorded verdict.
+
+    Bound is `_COMPILEALL_RUNAWAY_GUARD_SECS`, NOT a member of the `install`
+    timeout family: the bounded work is a sweep over our own source tree, and
+    `install/timeouts.py` admits only work we do not own."""
     return subprocess.run(
         [interp, "-m", "compileall", "-q", str(pkg_root)],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=_COMPILEALL_RUNAWAY_GUARD_SECS,
         **no_console_creationflags(),
     )
 

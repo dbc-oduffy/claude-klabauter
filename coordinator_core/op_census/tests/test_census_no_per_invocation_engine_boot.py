@@ -57,15 +57,17 @@ def test_module_has_no_top_level_coordinator_core_ops_import():
         f"unconditionally at module scope; found: {top_level_op_import_lines!r}"
     )
 
+# Review: staff-eng Finding 11 — `test_module_does_not_import_ipc_dispatch_
+# stack_eagerly` was removed here. It asserted against
+# `source.split("def ")[0].split("class ")[0]`, which truncates at the first
+# literal "def " ANYWHERE, including inside the module docstring, so the
+# region it actually searched shrank whenever the docstring changed — a
+# scope accident, not a real guard — and it duplicated the strictly stronger
+# line-prefix check in `test_module_has_no_top_level_coordinator_core_ops_
+# import` above, which scans every line at column 0.
 
-def test_module_does_not_import_ipc_dispatch_stack_eagerly():
-    """`from coordinator_core.ipc import register_op` is fine (a plain
-    name import, not the ops package) -- pins that this module's own
-    top-level imports stay to the lightweight op_census.* package plus
-    `register_op`, never `coordinator_core.ops` itself."""
-    with open(op_census_report.__file__, "r", encoding="utf-8") as fh:
-        source = fh.read()
-    assert "import coordinator_core.ops\n" not in source.split("def ")[0].split("class ")[0]
+
+
 
 
 # ---------------------------------------------------------------------------

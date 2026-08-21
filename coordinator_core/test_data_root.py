@@ -18,6 +18,9 @@ for the real (unstubbed) proof.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -219,3 +222,56 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     assert core_result == expected
     assert bin_result == expected
     assert core_result == bin_result
+
+
+def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path) -> None:
+    """The publish pre-swap FUNCTION gate imports this file as a FLAT top-level
+    `data_root` module with only the staging dir on `PYTHONPATH` — no
+    `coordinator_core` package to import through, by construction (that hermetic
+    shape is the point of the gate: `coordinator/bin/publish.py ::
+    _function_gate_modules_and_search_paths_for_repo_root` strips the
+    `coordinator_core` prefix for a row staged at its own root).
+
+    Regression, 2026-08-21: a module-level `from coordinator_core.ops.
+    coordinator_doe_root import coordinator_doe_root` failed that gate with
+    `ModuleNotFoundError: No module named 'coordinator_core'`, so the ENGINE row
+    of the claude-klabauter target never published while the other eight landed —
+    the mirror silently lagged the source tree fleet-wide
+    (`state/bug-backlog/2026-08-21-the-engine-row-cannot-publish-data-root-b0706ca7fc0d.yaml`).
+    This asserts the gate's own import, not a proxy for it.
+    """
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    shutil.copy2(Path(dr_mod.__file__), staging / "data_root.py")
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import importlib; importlib.import_module('data_root'); print('GATE_OK')"],
+        cwd=str(staging),
+        env={
+            **{k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "PATH", "TEMP", "TMP", "COMSPEC")},
+            "PYTHONPATH": str(staging),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, f"hermetic import failed:\n{proc.stderr}"
+    assert "GATE_OK" in proc.stdout
+
+
+def test_deferred_resolver_still_honours_a_monkeypatched_module_attribute(tmp_path, monkeypatch) -> None:
+    """`_resolve_doe_root()` reads the module global at CALL time, so the
+    module-attribute binding every other test in this file monkeypatches stays
+    the contract — the hermetic-import fix above removed the import-time
+    failure, never the seam."""
+    colocated_base = tmp_path / "colocated-miss"
+    doe_root = tmp_path / "doe"
+    (doe_root / "coordinator" / "schemas").mkdir(parents=True)
+
+    monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
+    monkeypatch.setattr(dr_mod, "coordinator_doe_root", lambda: str(doe_root))
+
+    assert dr_mod._resolve_doe_root() == str(doe_root)
+    assert dr_mod.data_root("schemas") == doe_root / "coordinator" / "schemas"

@@ -681,7 +681,20 @@ def dirty_tree_gate(
 
     unattributable: List[str] = []
 
-    status_result = status_porcelain(root)
+    # Scoped to NOTHING (`gate_paths == []`, the empty-but-non-None sentinel
+    # documented above): every otherwise-(c) path is excluded at the filter
+    # below, so the whole-tree walk that feeds it is read and then discarded
+    # in full. Return the passing outcome without spawning `git` at all.
+    if scoped and not gate_scope:
+        return DirtyTreeOutcome(passed=True, unattributable=[])
+
+    # Pathspec-scoped when the caller named one. The filter below already
+    # drops every path outside `gate_scope`, so scoping the QUERY narrows
+    # only work, never the answer -- and it is retained verbatim rather than
+    # relied upon being redundant: a directory element in `gate_paths` makes
+    # `git` emit that directory's children, which the exact-match filter
+    # discards exactly as it does today under the whole-tree scan.
+    status_result = status_porcelain(root, sorted(gate_scope) if scoped else None)
     parsed_lines: List[tuple] = []
     phantom_candidates: List[str] = []
     for line in status_result.stdout.splitlines():

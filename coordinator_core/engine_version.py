@@ -37,9 +37,9 @@ Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from coordinator_core.git.run import run_git
 from coordinator_core.git_scope import scoped_git_env
 
 # Committed floor-provenance guardrail. This value is version-controlled and
@@ -62,8 +62,13 @@ def resolve_engine_sha() -> str | None:
       - git is not installed / not on PATH (FileNotFoundError/OSError),
       - the engine's own directory is not inside a git repo,
       - the subprocess exits non-zero for any other reason,
-      - the subprocess exceeds the timeout (subprocess.TimeoutExpired),
-      - the subprocess output cannot be decoded (UnicodeDecodeError).
+      - the subprocess exceeds its bound,
+      - the subprocess output cannot be decoded (handled by the shared
+        runner's `errors="replace"`, so it can no longer raise).
+
+    Bound by `git.run.LOCAL_PLUMBING_BUDGET_SECS`. This site carried its own
+    `timeout=5` until the G7 migration; nothing measured that 5, and
+    `git -C <repo> rev-parse HEAD` is 26.9 ms on this box (DR-344 § 4).
 
     Negative-spec (git scoping): `git -C <engine_dir>` sets only the working
     directory. An inherited `GIT_DIR` — git exports one to every hook it runs,
@@ -79,24 +84,11 @@ def resolve_engine_sha() -> str | None:
     `coordinator_core/git_scope.py`.
     """
     engine_dir = Path(__file__).resolve().parent
-    try:
-        # Review: code-reviewer (Finding 1) — bounded timeout so a blocked/locked
-        # git process degrades to None instead of hanging the per-op invocation
-        # budget indefinitely.
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "-C", str(engine_dir), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=scoped_git_env(),
-            **no_console_creationflags(),
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
-        return None
-
-    if result.returncode != 0:
+    result = run_git(
+        ["-C", str(engine_dir), "rev-parse", "HEAD"],
+        env=scoped_git_env(),
+    )
+    if not result.ok:
         return None
 
     return result.stdout.strip()
@@ -125,8 +117,11 @@ def resolve_engine_dirty() -> bool | None:
       - git is not installed / not on PATH (FileNotFoundError/OSError),
       - the engine's own directory is not inside a git repo,
       - the subprocess exits non-zero for any other reason,
-      - the subprocess exceeds the timeout (subprocess.TimeoutExpired),
-      - the subprocess output cannot be decoded (UnicodeDecodeError).
+      - the subprocess exceeds its bound,
+      - the subprocess output cannot be decoded (see `resolve_engine_sha`).
+
+    Bound by `git.run.LOCAL_PLUMBING_BUDGET_SECS`, same migration and same
+    retired `timeout=5` as `resolve_engine_sha`.
 
     Negative-spec (git scoping): same `GIT_DIR`-stripping rationale as
     `resolve_engine_sha()` applies identically here — an inherited `GIT_DIR`
@@ -138,21 +133,11 @@ def resolve_engine_dirty() -> bool | None:
     `coordinator_core/git_scope.py`.
     """
     engine_dir = Path(__file__).resolve().parent
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        result = subprocess.run(
-            ["git", "-C", str(engine_dir), "status", "--porcelain", "--", "."],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=scoped_git_env(),
-            **no_console_creationflags(),
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
-        return None
-
-    if result.returncode != 0:
+    result = run_git(
+        ["-C", str(engine_dir), "status", "--porcelain", "--", "."],
+        env=scoped_git_env(),
+    )
+    if not result.ok:
         return None
 
     return bool(result.stdout.strip())

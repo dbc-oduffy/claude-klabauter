@@ -26,8 +26,13 @@ Options:
     --set-by <who>         Identifier of the session/agent/person setting this
                            priority. Optional.
     --note <text>          Optional free-form note.
-    --timeout <secs>       Max seconds to wait for the cross-process lock
-                           (default: 10.0, matching the op's own default).
+    --timeout <secs>       Max seconds to wait for the cross-process lock.
+                           Capped at 2.0 (MAX_TIMEOUT_SECS): a larger value is
+                           clamped, with a stderr notice, never honoured. Ask
+                           for less, never for more. Omitting the flag leaves
+                           the op on its own 10.0 default, which the op's
+                           MAX_LOCK_TIMEOUT_SECS clamps to the same 2.0 — so
+                           2.0s is the effective wait either way.
 
 Exit codes:
     0 — success; the op's bare result
@@ -59,8 +64,39 @@ if _LIB_DIR not in sys.path:
 from cc_invoke import cc_invoke, mutation_refusal_message  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
+MAX_TIMEOUT_SECS: float = 2.0
+"""Ceiling on --timeout, mirroring coordinator_core.ops.priority_set's
+MAX_LOCK_TIMEOUT_SECS (itself matching ipc.CEREMONY_BUDGET_SECS). Restated
+rather than imported: this door reaches the op
+only across the cc_invoke process boundary and cannot import coordinator_core.
+The op-side clamp is the authority and holds regardless of this one; this exists
+so an over-ask is answered at the door the caller typed at, not silently
+downstream."""
 
-def _parse_args(argv: list[str]) -> dict[str, str]:
+
+def _clamp_timeout(raw: str) -> float:
+    """Parse a --timeout argument and clamp it to MAX_TIMEOUT_SECS.
+
+    Exits 1 on an unparseable value. A request above the ceiling is clamped, not
+    refused, with a one-line stderr notice — the caller asked for a lock wait,
+    and a shorter wait still does the work they asked for.
+    """
+    try:
+        requested = float(raw)
+    except ValueError:
+        print(f"ERROR: --timeout must be a number, got {raw!r}", file=sys.stderr)
+        sys.exit(1)
+    if requested > MAX_TIMEOUT_SECS:
+        print(
+            f"priority-set: --timeout {requested}s exceeds the {MAX_TIMEOUT_SECS}s "
+            f"ceiling; using {MAX_TIMEOUT_SECS}s",
+            file=sys.stderr,
+        )
+        return MAX_TIMEOUT_SECS
+    return requested
+
+
+def _parse_args(argv: list[str]) -> dict[str, object]:
     target_id = ""
     target_kind = ""
     priority = ""
@@ -125,7 +161,7 @@ def _parse_args(argv: list[str]) -> dict[str, str]:
         print("ERROR: --priority is required", file=sys.stderr)
         sys.exit(1)
 
-    params: dict[str, str] = {
+    params: dict[str, object] = {
         "target_id": target_id,
         "target_kind": target_kind,
         "priority": priority,
@@ -135,7 +171,7 @@ def _parse_args(argv: list[str]) -> dict[str, str]:
     if note:
         params["note"] = note
     if timeout:
-        params["timeout"] = timeout
+        params["timeout"] = _clamp_timeout(timeout)
 
     return params
 

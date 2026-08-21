@@ -8299,11 +8299,34 @@ def check_multiprobe_banner_rewrite(
     # fixed across all four `python3 -c` emission sites in this module).
     # Kept double-quoted anyway for readability, not correctness.
     if needs_git:
+        # A FAILED `git status` must never render as a CLEAN one. This call
+        # used to read `.stdout` off `subprocess.run(...)` with the return
+        # code discarded, so every non-zero exit -- `.git/index.lock` held by
+        # one of the ~50 concurrent peers this repo's load norm assumes,
+        # `fatal: not a git repository`, a mid-operation ref lock -- produced
+        # empty stdout, an empty `_status_lines`, and a banner reporting an
+        # unmodified worktree, a blank branch, and a blank HEAD, at exit 0.
+        # Observed live 2026-08-21: three agents read that fabricated clean
+        # tree as their work having been wiped, and one proposed a `git stash
+        # pop` recovery that would have been the day's only real data loss.
+        # The engine's own status reader already has the right shape --
+        # `git/divergence.py :: diverging_paths` passes `--no-optional-locks`
+        # and treats a non-zero exit as a failure rather than as an answer;
+        # this payload now matches it. `--no-optional-locks` is
+        # output-identical and lock-free per `guard_no_optional_locks.py`'s
+        # measured evidence, so it both removes this batched read from the
+        # contention it was failing on and stops it competing with the typed
+        # `git status` that same guard already rewrites.
         lines.append("import subprocess")
+        lines.append("import sys")
         lines.append(
-            '_gs = subprocess.run(["git", "status", "--porcelain=v2", '
-            '"--branch"], capture_output=True, text=True).stdout.splitlines()'
+            '_gsp = subprocess.run(["git", "--no-optional-locks", "status", '
+            '"--porcelain=v2", "--branch"], capture_output=True, text=True)'
         )
+        lines.append("if _gsp.returncode != 0:")
+        lines.append("    sys.stderr.write(_gsp.stderr or \"\")")
+        lines.append("    raise SystemExit(_gsp.returncode)")
+        lines.append("_gs = _gsp.stdout.splitlines()")
         lines.append("_branch = _head = None")
         lines.append("_status_lines = []")
         lines.append("for _l in _gs:")

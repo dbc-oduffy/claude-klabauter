@@ -1541,7 +1541,28 @@ def _build_guard_chain(
         # `GuardBand`'s own docstring forbids for this band). The advisory
         # leg is `destructive-git-revert-advisory`, registered below in
         # ADVISORY_REWRITE, after every CONFINEMENT_DENY guard.
-        GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES 2026-08-21. The
+        # unscoped-`git stash` deny this guard carries is the only EM-side
+        # coverage for a shape `block_subagent_stash_creation` (subagent-
+        # only) and `block_stash_destruction` (drop/clear only) do not
+        # cover -- and both of THOSE already declare COMMAND_TOOL_NAMES, so
+        # a Bash-only matcher here left `git stash` reachable from the
+        # PowerShell tool for exactly the caller the other two exempt.
+        # Observed: three unscoped stashes on this shared tree in one day
+        # (14:02, 16:18, 18:27), the last capturing 144 files of concurrent
+        # sessions' uncommitted work, while every stash shape this guard
+        # classifies denied correctly on a Bash payload.
+        #
+        # NO NEW LEG WAS NEEDED, unlike `bump-foreign-repo-write`'s own
+        # widening below (which had to author a PowerShell candidate
+        # extractor first, and whose comment explains why widening a
+        # matcher over a Bash-only body buys nothing). This guard resolves
+        # the git verb from tokens, not from shell syntax, so the same body
+        # already classifies a PowerShell command line: `git stash`,
+        # `git -C <path> stash push -u`, and `& "git" stash` were each
+        # verified to deny through a `tool_name: "PowerShell"` payload
+        # before this line changed.
+        GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Must precede `offer-git-c`. That check rewrites `cd <dir> && git <sub>`
@@ -1733,7 +1754,12 @@ def _build_guard_chain(
         # swallow to allow, never route through the hard-deny crash path --
         # the same reasoning `bump-foreign-repo-write`'s own registration
         # comment states for its identical choice.
-        GuardEntry("destructive-git-revert-advisory", lambda: _git_revert_full()[1], False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Matches its hard-deny leg's matchers (above): the two split out of
+        # one guard and share `_git_revert_full`'s body, so a payload the
+        # deny leg classifies must be able to reach the advisory leg too --
+        # otherwise a PowerShell sweep that does not meet the deny bar
+        # passes with no nudge at all.
+        GuardEntry("destructive-git-revert-advisory", lambda: _git_revert_full()[1], False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Advisory (never a deny) sibling of `block-dev-repo-sentinel-
         # removal` above (same CONFINEMENT_DENY shadowing hazard
         # `destructive-git-revert-advisory` above fixes; see this guard's

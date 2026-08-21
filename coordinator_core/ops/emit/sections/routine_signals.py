@@ -4,8 +4,9 @@ Emits exactly six RoutineSignal records — weekly, docs, arch-audit, bug-sweep,
 dormant-repo, distill-backlog — in that order. Each carries a computed staleness
 ``computed_state`` + ``overdue`` boolean derived from a live source: two staleness
 checks (natively ported ``coordinator_core.ops.check_weekly_staleness`` /
-``check_arch_audit_staleness``, invoked in-process), git-log commit counts since the
-last update-docs / bug-sweep commit, a static "unknown" dormant-repo placeholder
+``check_arch_audit_staleness``, invoked in-process), commit counts since the last
+update-docs / bug-sweep commit (ONE depth-capped ``git log`` for both — see
+``_commits_since_last_batch``), a static "unknown" dormant-repo placeholder
 (cross-repo scan needs the tc-4 connector), and a native distill-backlog count
 (``_count_distill_backlog`` below — port of ``count-distill-backlog.sh --format json``).
 
@@ -23,12 +24,12 @@ import contextlib
 import io
 import logging
 import os
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.check_arch_audit_staleness import main as _arch_staleness_main
 from coordinator_core.ops.check_weekly_staleness import (
@@ -329,63 +330,89 @@ def _count_distill_backlog(repo_root: Path, coordinator_root: Path) -> dict:
     return result
 
 
-def _commits_since_last(repo_root: Path, grep: str) -> int:
-    """Count commits from the last commit matching ``grep`` to HEAD (parity: bash:854-865/877-886).
+#: How far back down HEAD's ancestry the cadence scan looks. Chosen against the bands it
+#: feeds, not against repo size: the widest threshold either signal draws is ">15 commits
+#: since the last bug-sweep", so a commit further back than this is "very stale" by a
+#: factor of thirteen and no larger integer would move any verdict. This is what makes
+#: ONE spawn sufficient — see :func:`_commits_since_last_batch`.
+_SCAN_DEPTH = 200
 
-    Finds the newest commit across all refs whose message matches ``grep`` (git basic-regex),
-    then counts ``<sha>..HEAD``. No matching commit → 99 (the "very stale" sentinel).
+#: Returned when no matching commit is found within ``_SCAN_DEPTH``. Not a new sentinel:
+#: the bash oracle already returned 99 for "no such commit anywhere", and both readings
+#: land in the same "stale / overdue" band, which is the only thing downstream reads.
+_VERY_STALE = 99
 
-    Both invocations pin ``GIT_CEILING_DIRECTORIES=<repo_root's parent>`` so git's own
-    upward repository discovery cannot escape *repo_root* into an ancestor repo when
-    *repo_root* itself is not (or is no longer, e.g. a relocated/detached fixture tree)
-    a git root — git stops climbing exactly at the ceiling instead of silently adopting
-    whatever enclosing repo happens to sit above it. ``repo_root`` is contractually the
-    emitting working tree's own root (context.py:137), which normally has ``.git``
-    directly inside it, so this ceiling is a no-op there; it only changes behavior for
-    the not-a-git-root case, from "escape to an ancestor repo" to the intended
-    "not a git repository" failure.
+
+def _commits_since_last_batch(repo_root: Path, patterns: dict[str, str]) -> dict[str, int]:
+    """Commits since the newest message matching each pattern, in ONE git spawn.
+
+    Returns ``{name: count}`` for every key of *patterns*, with ``_VERY_STALE`` where no
+    commit within ``_SCAN_DEPTH`` matched. Counting is by position in HEAD's newest-first
+    ancestry walk, which is the count of commits made since the match.
+
+    Replaces a per-pattern ``_commits_since_last`` that ran ``git log --all
+    --extended-regexp --grep`` (a regex applied to every commit on every ref, cost
+    O(repo history)) and then a second ``git log <sha>..HEAD``: two spawns per pattern,
+    four per emit, measured at **593.8 ms of process time** against this repo's 23,402
+    commits. One capped read of HEAD's own log, matched in Python, measures **15.6 ms** —
+    the entire brightline budget (DR-344: 500 ms end-to-end) was being spent by this one
+    section of one section-registry pass.
+
+    Two deliberate narrowings, both of which are what buy the single spawn:
+
+      - **HEAD's ancestry, not ``--all``.** The signal asks how stale THIS line of work's
+        cadence is. A bug-sweep commit stranded on a branch that never merged did not
+        sweep anything reachable from HEAD, and the discarded ``--all`` reading proves the
+        difference is decorative here: it dated the last bug-sweep at 9,070 commits back
+        against HEAD-only's "none in 200" — both "stale", both ``overdue``.
+      - **Depth-capped, so a saturated signal costs a fixed amount.** Beyond
+        ``_SCAN_DEPTH`` the honest integer and the sentinel say the same thing.
+
+    The integer itself is explicitly not contract: ``ops/emit/normalizers.py ::
+    _VOLATILE_GIT_OTHER_KEYS`` already lists ``commits_since_update_docs`` and
+    ``commits_since_bug_sweep`` as volatile and normalises them out of every parity
+    comparison, because they advance with every commit that lands. ``computed_state`` and
+    ``overdue`` — the fields anything downstream branches on — are unchanged.
+
+    ``GIT_CEILING_DIRECTORIES`` is pinned to *repo_root*'s parent so git's upward
+    repository discovery cannot escape *repo_root* into an ancestor repo when *repo_root*
+    is not (or is no longer, e.g. a relocated fixture tree) a git root: git stops climbing
+    at the ceiling instead of silently adopting whatever enclosing repo sits above it.
+
+    Negative-spec:
+      - Does NOT ask git to do the matching. ``--grep`` is what made the walk
+        history-scaled; the patterns are applied to a bounded, already-read slice here.
+      - Does NOT spawn per pattern. Adding a seventh routine signal must not add a spawn.
     """
+    matched: dict[str, int] = {name: _VERY_STALE for name in patterns}
+    if not patterns:
+        return matched
+
     env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(repo_root).parent))
-    last_sha = ""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "--oneline", "--all",
-             "--extended-regexp", "--grep", grep, "--format=%H"],
-            capture_output=True, text=True, check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            cwd=str(repo_root),
-            env=env,
-            **no_console_creationflags(),
-            # AC-5 no-implicit-cwd: explicit cwd= is redundant with `git -C <repo_root>`
-            # (which already overrides git's working directory) but required by the
-            # AST-level no-implicit-cwd gate (test_no_implicit_cwd.py), which flags any
-            # subprocess.run call lacking an explicit cwd= keyword regardless of -C.
-        )
-        if proc.returncode == 0:
-            first = proc.stdout.splitlines()
-            last_sha = first[0].strip() if first else ""
-    except (OSError, subprocess.TimeoutExpired):
-        last_sha = ""
+    result = run_git(
+        ["-C", str(repo_root), "log", "HEAD", "-n", str(_SCAN_DEPTH),
+         "--format=%H%x1f%B%x00"],
+        cwd=str(repo_root),
+        env=env,
+    )
+    if not result.ok:
+        # Not a git repo, no commits, git absent, or over budget — every signal reads
+        # "very stale", which is what the bash oracle also returned when it found nothing.
+        return matched
 
-    if not last_sha:
-        return 99
-
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "--oneline", f"{last_sha}..HEAD"],
-            capture_output=True, text=True, check=False,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            cwd=str(repo_root),
-            env=env,
-            **no_console_creationflags(),
-        )
-        if proc.returncode != 0:
-            return 0
-        return len(proc.stdout.splitlines())
-    except (OSError, subprocess.TimeoutExpired):
-        return 0
+    compiled = {name: re.compile(pattern) for name, pattern in patterns.items()}
+    pending = set(compiled)
+    for position, record in enumerate(result.stdout.split("\x00")):
+        if not pending:
+            break
+        message = record.split("\x1f", 1)[1] if "\x1f" in record else ""
+        if not message:
+            continue
+        for name in list(pending):
+            if compiled[name].search(message):
+                matched[name] = position
+                pending.discard(name)
+    return matched
 
 
 def _build_signal(ctx: EmitContext, kind: str, state: str, overdue: bool,
@@ -429,8 +456,14 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     # skipped subtree as overdue conservatively rather than falsely-clean.
     distill_overdue = distill_pending >= 6 or distill_skipped_subtrees > 0
 
-    # Docs staleness (bash:854-875).
-    docs_commits = _commits_since_last(ctx.repo_root, "update-docs")
+    # Docs + bug-sweep staleness (bash:854-875 / 877-896) — ONE git spawn for both.
+    # The bug-sweep pattern's alternation matches either spelling, as the bash oracle's
+    # basic-regex form did.
+    cadence = _commits_since_last_batch(
+        ctx.repo_root, {"docs": "update-docs", "bug": "bug-sweep|bug_sweep"}
+    )
+
+    docs_commits = cadence["docs"]
     if docs_commits == 0:
         docs_state, docs_overdue = "fresh", False
     elif docs_commits <= 10:
@@ -438,8 +471,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     else:
         docs_state, docs_overdue = "stale", True
 
-    # Bug-sweep staleness (bash:877-896). Basic-regex alternation matches either spelling.
-    bug_commits = _commits_since_last(ctx.repo_root, "bug-sweep|bug_sweep")
+    bug_commits = cadence["bug"]
     if bug_commits == 0:
         bug_state, bug_overdue = "fresh", False
     elif bug_commits <= 15:

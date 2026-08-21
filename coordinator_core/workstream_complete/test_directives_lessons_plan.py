@@ -1,18 +1,15 @@
 """test_directives_lessons_plan — direct unit coverage of
 `coordinator_core.workstream_complete.directives_lessons_plan.
-resolve_governing_plan_with_source`'s new deliverable_id-join leg (3.5),
-plus (C6, AC4) the commit-trailer leg (2.5) that sits above it.
-
-Cross-repo/inbox baton-lifecycle investigation: leg 3 (the consumed
-handoff's `governing_plan:` frontmatter) was found dead fleet-wide — 0 of
-276 live handoffs carry it — so `build_plan_claim_and_stamp_directives`
-almost never fires, `d-stamp-plan-implemented` never emits, and the
-downstream `deliverable.cascade_terminal` baton-advance never triggers
-(197 of ~204 fleet-wide `/workstream-complete` receipts record
-`no-governing-plan-slug`). This file pins the new leg composed from
-`__init__.py`'s existing `_resolve_session_handoff_plan_by_deliverable_id`
-join, which resolves from the SAME consumed handoff's `deliverable_id`
-frontmatter field instead.
+resolve_governing_plan_with_source` after its C10 rebuild
+(docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): the
+former precedence ladder (explicit override, explicit override, session
+commit-trailer join, consumed-handoff-deliverable_id join, fixed-file
+fallback) is replaced by exactly two explicit overrides plus a single
+disk-resolvable source — the baton's own `governing_plan` stamp (R5/C5),
+now reliable rather than the dead field a fleet-wide sweep found on 0 of
+276 live handoffs pre-C5. No join, no scan, no fixed-file fallback is
+attempted at any price; an unstamped baton with no explicit override
+resolves to `(None, "none")`.
 
 `__init__.py`'s `wsc.brief()` owns end-to-end coverage through the full
 ceremony (see `test_workstream_complete.py`'s governing-plan section);
@@ -20,31 +17,32 @@ this file only exercises the pure resolution function directly, following
 this module family's own established convention (see
 `test_directives_review_scale.py`'s own docstring for the same chunk
 split).
+
+Negative-spec: this file does NOT cover C6's plan-owner mismatch warning
+(§ C10 body, "the plan names a different owner") — C6 (the plan-side
+owner stamp that check reads) is undelivered as of this chunk; see
+`resolve_governing_plan_with_source`'s own docstring for why it is not
+implemented here.
 """
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-import pytest
-
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete.directives_lessons_plan import (
+    GoverningPlan,
     build_governing_plan_directives,
     build_plan_claim_and_stamp_directives,
     resolve_governing_plan_with_source,
 )
 
 
-def _write_plan(tmp_path: Path, slug: str, deliverable_id: str | None = None, status: str | None = None) -> None:
+def _write_plan(tmp_path: Path, slug: str, status: str | None = None) -> None:
     plan_dir = tmp_path / "docs" / "plans"
     plan_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if status is not None:
         lines.append(f"status: {status}")
-    if deliverable_id is not None:
-        lines.append(f"deliverable_id: {deliverable_id}")
     lines.append("---")
     lines.append("")
     lines.append(f"# {slug}")
@@ -53,144 +51,160 @@ def _write_plan(tmp_path: Path, slug: str, deliverable_id: str | None = None, st
 
 
 # ---------------------------------------------------------------------------
-# The real failing shape: no decisions, no governing_plan: frontmatter, no
-# tasks/todo.md -- only a deliverable_id join available.
+# The primary source: the baton's own stamped `governing_plan` path (C5).
 # ---------------------------------------------------------------------------
 
 
-def test_deliverable_id_join_resolves_governing_plan_when_frontmatter_leg_is_dead(tmp_path):
+def test_baton_stamp_resolves_governing_plan(tmp_path):
     slug = "2026-08-04-some-shipped-plan"
-    _write_plan(tmp_path, slug, deliverable_id="dr-129")
+    _write_plan(tmp_path, slug)
 
     resolved, source = resolve_governing_plan_with_source(
         tmp_path,
         decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
+        handoff_governing_plan_field=f"docs/plans/{slug}.md",
     )
 
-    assert source == "deliverable_id_join"
+    assert source == "handoff_frontmatter"
     assert resolved is not None
     assert resolved.slug == slug
     assert resolved.path == tmp_path / "docs" / "plans" / f"{slug}.md"
 
 
-def test_deliverable_id_join_emits_claim_and_stamp_directives():
-    from coordinator_core.workstream_complete.directives_lessons_plan import GoverningPlan
-
-    directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("unused")))
-    ids = {d["id"] for d in directives}
-    assert "d-claim-plan-execution-lock" in ids
-    assert "d-stamp-plan-implemented" in ids
-
-
-# ---------------------------------------------------------------------------
-# C6, AC4: the new leg-2.5 commit-trailer rung, sourced from the SESSION'S
-# OWN commits via `session_identity` (C1) rather than the consumed handoff's
-# provenance (legs 3 / 3.5) -- a session whose own commits carry a plan's
-# `deliverable_id` but which did NOT author the plan.
-# ---------------------------------------------------------------------------
-
-pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
-def _git(*args: str, cwd, input: str | None = None) -> subprocess.CompletedProcess:  # noqa: A002 - shadow ok, local helper
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-        input=input,
-        **no_console_creationflags(),
-    )
-
-
-def _init_repo(path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    _git("init", "-q", cwd=path)
-    _git("config", "user.email", "test@example.com", cwd=path)
-    _git("config", "user.name", "Test", cwd=path)
-
-
-def _commit_with_message(path, filename: str, content: str, message: str) -> str:
-    (path / filename).write_text(content, encoding="utf-8")
-    _git("add", filename, cwd=path)
-    proc = _git("commit", "-q", "-F", "-", cwd=path, input=message)
-    if proc.returncode != 0:
-        pytest.skip(f"git unavailable/failed committing fixture: {proc.stderr}")
-    return _git("rev-parse", "HEAD", cwd=path).stdout.strip()
-
-
-def test_session_commit_trailer_join_resolves_plan_the_session_did_not_author(tmp_path):
-    _init_repo(tmp_path)
-    sha = _commit_with_message(tmp_path, "seed.txt", "seed\n", "seed\n")
-    if not sha:
-        pytest.skip("git unavailable — cannot build a fixture repo with history")
-
-    slug = "2026-08-04-some-other-authors-plan"
-    _write_plan(tmp_path, slug, deliverable_id="dlv-not-mine")
-    _git("add", "docs/plans", cwd=tmp_path)
-    _git("commit", "-q", "-m", "add plan\n", cwd=tmp_path)
-
-    _commit_with_message(
+def test_baton_stamp_named_but_file_missing_does_not_fall_through(tmp_path):
+    resolved, source = resolve_governing_plan_with_source(
         tmp_path,
-        "work.txt",
-        "work\n",
-        "did the work\n\nSession-Id: sid-successor\nDeliverable-Id: dlv-not-mine\n",
+        decisions={},
+        handoff_governing_plan_field="docs/plans/does-not-exist.md",
     )
+
+    assert resolved is None
+    assert source == "handoff_frontmatter_not_found"
+
+
+def test_null_string_stamp_treated_as_absent(tmp_path):
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path,
+        decisions={},
+        handoff_governing_plan_field="null",
+    )
+
+    assert resolved is None
+    assert source == "none"
+
+
+def test_no_stamp_no_override_warns_absent_no_search_attempted(tmp_path):
+    # Deliberately seed disk with what the OLD fixed-file fallback would
+    # have picked up — proving no scan is attempted at any price (C10, R1).
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "tasks" / "todo.md").write_text("# todo\n", encoding="utf-8")
 
     resolved, source = resolve_governing_plan_with_source(
         tmp_path,
         decisions={},
         handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id=None,
+    )
+
+    assert resolved is None
+    assert source == "none"
+
+
+def test_unused_deliverable_id_and_session_id_params_accepted_for_caller_compat(tmp_path):
+    """`__init__.py` (out of this chunk's `writes:` scope) still calls this
+    function with five positional args — a signature change there would be
+    the caller-first hazard this plan's own Anti-scope forbids. Both
+    trailing params must remain accepted, and inert."""
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path,
+        decisions={},
+        handoff_governing_plan_field=None,
+        consumed_handoff_deliverable_id="dr-129",
         session_id="sid-successor",
     )
 
-    assert source == "session_commit_trailer_join"
-    assert resolved is not None
-    assert resolved.slug == slug
-
-    directives = build_governing_plan_directives(tmp_path, decisions={}, session_id="sid-successor")
-    ids = {d["id"] for d in directives}
-    assert "d-stamp-plan-implemented" in ids
+    assert resolved is None
+    assert source == "none"
 
 
-def test_session_commit_trailer_join_falls_through_on_conflicting_trailers(tmp_path):
-    _init_repo(tmp_path)
-    sha = _commit_with_message(tmp_path, "seed.txt", "seed\n", "seed\n")
-    if not sha:
-        pytest.skip("git unavailable — cannot build a fixture repo with history")
+# ---------------------------------------------------------------------------
+# Precedence -- the two explicit EM-supplied overrides still win over the
+# baton's own stamp.
+# ---------------------------------------------------------------------------
 
-    slug = "2026-08-04-some-other-authors-plan"
-    _write_plan(tmp_path, slug, deliverable_id="dlv-one")
-    _git("add", "docs/plans", cwd=tmp_path)
-    _git("commit", "-q", "-m", "add plan\n", cwd=tmp_path)
 
-    _commit_with_message(
+def test_decisions_slug_still_wins_over_baton_stamp(tmp_path):
+    decisions_slug = "decisions-named-plan"
+    stamped_slug = "stamped-plan"
+    _write_plan(tmp_path, decisions_slug)
+    _write_plan(tmp_path, stamped_slug)
+
+    resolved, source = resolve_governing_plan_with_source(
         tmp_path,
-        "work1.txt",
-        "work1\n",
-        "did some work\n\nSession-Id: sid-conflicted\nDeliverable-Id: dlv-one\n",
+        decisions={"governing_plan_slug": decisions_slug},
+        handoff_governing_plan_field=f"docs/plans/{stamped_slug}.md",
     )
-    _commit_with_message(
+
+    assert source == "decisions_slug"
+    assert resolved.slug == decisions_slug
+
+
+def test_decisions_path_still_wins_over_baton_stamp(tmp_path):
+    decisions_slug = "decisions-path-plan"
+    stamped_slug = "stamped-plan"
+    _write_plan(tmp_path, decisions_slug)
+    _write_plan(tmp_path, stamped_slug)
+
+    resolved, source = resolve_governing_plan_with_source(
         tmp_path,
-        "work2.txt",
-        "work2\n",
-        "did more work\n\nSession-Id: sid-conflicted\nDeliverable-Id: dlv-two\n",
+        decisions={"governing_plan_path": f"docs/plans/{decisions_slug}.md"},
+        handoff_governing_plan_field=f"docs/plans/{stamped_slug}.md",
     )
+
+    assert source == "decisions_path"
+    assert resolved.slug == decisions_slug
+
+
+def test_decisions_slug_named_but_missing_does_not_fall_through_to_stamp(tmp_path):
+    stamped_slug = "stamped-plan"
+    _write_plan(tmp_path, stamped_slug)
+
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path,
+        decisions={"governing_plan_slug": "does-not-exist"},
+        handoff_governing_plan_field=f"docs/plans/{stamped_slug}.md",
+    )
+
+    assert resolved is None
+    assert source == "decisions_slug_not_found"
+
+
+# ---------------------------------------------------------------------------
+# An already-implemented plan must not produce a spurious/harmful directive
+# beyond the normal claim+stamp pair -- `archive-stamp-cli stamp-plan-
+# implemented` is documented as a no-op-by-construction on frozen statuses
+# (`plan_status_transition._FROZEN_STATUSES`), so this module's own
+# contract is only to resolve the plan and emit the same directive pair it
+# always emits; it is not this module's job to special-case an already-
+# terminal status (see `build_plan_claim_and_stamp_directives`'s own
+# docstring: "fires unconditionally once the predicate holds").
+# ---------------------------------------------------------------------------
+
+
+def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pair(tmp_path):
+    slug = "already-implemented-plan"
+    _write_plan(tmp_path, slug, status="implemented")
 
     resolved, source = resolve_governing_plan_with_source(
         tmp_path,
         decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id=None,
-        session_id="sid-conflicted",
+        handoff_governing_plan_field=f"docs/plans/{slug}.md",
     )
+    assert source == "handoff_frontmatter"
+    assert resolved.slug == slug
 
-    assert source != "session_commit_trailer_join"
-    assert resolved is None
+    directives = build_plan_claim_and_stamp_directives(resolved)
+    ids = {d["id"] for d in directives}
+    assert ids == {"d-claim-plan-execution-lock", "d-stamp-plan-implemented"}
 
 
 def test_stamp_directive_depends_on_the_claim_landing():
@@ -201,8 +215,6 @@ def test_stamp_directive_depends_on_the_claim_landing():
     gate. The `{d-claim-plan-execution-lock.landed}` arg token is what
     actually enforces this — see `build_plan_claim_and_stamp_directives`'s
     own docstring for the incident this closes."""
-    from coordinator_core.workstream_complete.directives_lessons_plan import GoverningPlan
-
     directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("unused")))
     by_id = {d["id"]: d for d in directives}
     assert by_id["d-stamp-plan-implemented"]["depends_on"] == "d-claim-plan-execution-lock"
@@ -217,18 +229,10 @@ def test_stamp_directive_does_not_execute_when_claim_is_denied():
     directive's gate CLOSED (denied — modelled here as a judgment-point
     gate that never opens, the same shape a real denial takes), and assert
     the stamp CLI is never invoked and no plan mutation occurs.
-
-    This replaces the pre-existing field-only assertion
-    (`test_stamp_directive_depends_on_the_claim_landing` above) that let
-    the guard ship inert — asserting `depends_on == "d-claim-plan-
-    execution-lock"` proves nothing about whether the stamp actually runs,
-    since `apply_halt.py::_directive_gate_open` does not gate on a
-    sibling-directive `depends_on` at all.
     """
     from types import ModuleType
 
     from coordinator_core.workstream_complete import apply as ws_apply
-    from coordinator_core.workstream_complete.directives_lessons_plan import GoverningPlan
 
     directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("unused")))
 
@@ -267,155 +271,6 @@ def test_stamp_directive_does_not_execute_when_claim_is_denied():
 
 
 # ---------------------------------------------------------------------------
-# Precedence -- EM-supplied legs 1/2 and the frontmatter leg 3 still win.
-# ---------------------------------------------------------------------------
-
-
-def test_decisions_slug_still_wins_over_deliverable_id_join(tmp_path):
-    decisions_slug = "decisions-named-plan"
-    joined_slug = "joined-plan"
-    _write_plan(tmp_path, decisions_slug)
-    _write_plan(tmp_path, joined_slug, deliverable_id="dr-129")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={"governing_plan_slug": decisions_slug},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
-    )
-
-    assert source == "decisions_slug"
-    assert resolved.slug == decisions_slug
-
-
-def test_decisions_path_still_wins_over_deliverable_id_join(tmp_path):
-    decisions_slug = "decisions-path-plan"
-    joined_slug = "joined-plan"
-    _write_plan(tmp_path, decisions_slug)
-    _write_plan(tmp_path, joined_slug, deliverable_id="dr-129")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={"governing_plan_path": f"docs/plans/{decisions_slug}.md"},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
-    )
-
-    assert source == "decisions_path"
-    assert resolved.slug == decisions_slug
-
-
-def test_handoff_frontmatter_leg_still_wins_over_deliverable_id_join(tmp_path):
-    frontmatter_slug = "frontmatter-named-plan"
-    joined_slug = "joined-plan"
-    _write_plan(tmp_path, frontmatter_slug)
-    _write_plan(tmp_path, joined_slug, deliverable_id="dr-129")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=f"docs/plans/{frontmatter_slug}.md",
-        consumed_handoff_deliverable_id="dr-129",
-    )
-
-    assert source == "handoff_frontmatter"
-    assert resolved.slug == frontmatter_slug
-
-
-# ---------------------------------------------------------------------------
-# Clean fall-through -- no deliverable_id, no match, ambiguous match.
-# ---------------------------------------------------------------------------
-
-
-def test_no_deliverable_id_falls_through_to_fixed_fallback(tmp_path):
-    (tmp_path / "tasks").mkdir()
-    (tmp_path / "tasks" / "todo.md").write_text("# todo\n", encoding="utf-8")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id=None,
-    )
-
-    assert source == "fixed_fallback"
-    assert resolved.slug == "todo"
-
-
-def test_deliverable_id_matching_no_plan_falls_through_cleanly(tmp_path):
-    _write_plan(tmp_path, "unrelated-plan", deliverable_id="dr-999")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
-    )
-
-    assert resolved is None
-    assert source == "none"
-
-
-def test_deliverable_id_matching_multiple_plans_falls_through_cleanly(tmp_path):
-    _write_plan(tmp_path, "plan-a", deliverable_id="dr-129")
-    _write_plan(tmp_path, "plan-b", deliverable_id="dr-129")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
-    )
-
-    assert resolved is None
-    assert source == "none"
-
-
-def test_literal_string_null_deliverable_id_treated_as_absent(tmp_path):
-    _write_plan(tmp_path, "some-plan", deliverable_id="dr-129")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="'null'",
-    )
-
-    assert resolved is None
-    assert source == "none"
-
-
-# ---------------------------------------------------------------------------
-# An already-implemented plan must not produce a spurious/harmful directive
-# beyond the normal claim+stamp pair -- `archive-stamp-cli stamp-plan-
-# implemented` is documented as a no-op-by-construction on frozen statuses
-# (`plan_status_transition._FROZEN_STATUSES`), so this module's own
-# contract is only to resolve the plan and emit the same directive pair it
-# always emits; it is not this module's job to special-case an already-
-# terminal status (see `build_plan_claim_and_stamp_directives`'s own
-# docstring: "fires unconditionally once the predicate holds").
-# ---------------------------------------------------------------------------
-
-
-def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pair(tmp_path):
-    slug = "already-implemented-plan"
-    _write_plan(tmp_path, slug, deliverable_id="dr-129", status="implemented")
-
-    resolved, source = resolve_governing_plan_with_source(
-        tmp_path,
-        decisions={},
-        handoff_governing_plan_field=None,
-        consumed_handoff_deliverable_id="dr-129",
-    )
-    assert source == "deliverable_id_join"
-    assert resolved.slug == slug
-
-    directives = build_plan_claim_and_stamp_directives(resolved)
-    ids = {d["id"] for d in directives}
-    assert ids == {"d-claim-plan-execution-lock", "d-stamp-plan-implemented"}
-
-
-# ---------------------------------------------------------------------------
 # C8/AC17 -- d-attest-review-verified, emitted alongside d-stamp-plan-
 # implemented off the same governing_plan_predicate gate, additionally
 # conditioned on decisions["review"] being truthy this pass.
@@ -424,7 +279,6 @@ def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pa
 
 def test_review_verified_directive_emitted_alongside_stamp_when_review_present():
     from coordinator_core.workstream_complete.directives_lessons_plan import (
-        GoverningPlan,
         build_review_verified_directive,
     )
 
@@ -441,7 +295,6 @@ def test_review_verified_directive_emitted_alongside_stamp_when_review_present()
 
 def test_review_verified_directive_depends_on_the_claim_landing():
     from coordinator_core.workstream_complete.directives_lessons_plan import (
-        GoverningPlan,
         build_review_verified_directive,
     )
 
@@ -456,7 +309,6 @@ def test_review_verified_directive_depends_on_the_claim_landing():
 
 def test_review_verified_directive_absent_when_no_review_happened():
     from coordinator_core.workstream_complete.directives_lessons_plan import (
-        GoverningPlan,
         build_review_verified_directive,
     )
 
@@ -475,10 +327,6 @@ def test_review_verified_directive_absent_without_a_governing_plan():
 
 
 def test_build_governing_plan_directives_composes_the_attest_directive(tmp_path):
-    from coordinator_core.workstream_complete.directives_lessons_plan import (
-        build_governing_plan_directives,
-    )
-
     slug = "composed-plan"
     _write_plan(tmp_path, slug)
 

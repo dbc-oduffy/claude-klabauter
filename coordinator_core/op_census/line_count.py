@@ -60,7 +60,9 @@ __all__ = [
     "FROZEN_HIGH_WATER_OVER_BAR",
     "LineCountDistribution",
     "RatchetError",
+    "RatchetOutcome",
     "compute_distribution",
+    "evaluate_ratchet",
     "ratchet_check",
 ]
 
@@ -103,6 +105,32 @@ class RatchetError(Exception):
     assertions refuse (not degrade, not skip)")."""
 
 
+@dataclasses.dataclass(frozen=True)
+class RatchetOutcome:
+    """The ratchet's verdict as DATA, not control flow — staff-eng Finding 5:
+    a measurement instrument must still produce a measurement when its
+    verdict is "over". `tripped` is the aggregate boolean (any of the three
+    quantities over its frozen high-water); each per-quantity dict below
+    carries both the `frozen` bound and the `measured` value so a consumer
+    can see BY HOW MUCH, not only whether. `evaluate_ratchet` never raises —
+    `ratchet_check` (below) is the raising sibling built on top of it for
+    callers that still want the refusal as control flow (e.g. `strict=True`
+    census callers)."""
+
+    tripped: bool
+    module_count: Dict[str, int]
+    total_lines: Dict[str, int]
+    over_bar_count: Dict[str, int]
+
+    def to_dict(self) -> dict:
+        return {
+            "tripped": self.tripped,
+            "module_count": dict(self.module_count),
+            "total_lines": dict(self.total_lines),
+            "over_bar_count": dict(self.over_bar_count),
+        }
+
+
 def compute_distribution(summaries: Iterable[ModuleSummary]) -> LineCountDistribution:
     """Aggregates `summaries` (as produced by `module_summary.summarize_paths`)
     into a `LineCountDistribution`. A `ModuleSummary` with `parse_error` set
@@ -126,13 +154,48 @@ def compute_distribution(summaries: Iterable[ModuleSummary]) -> LineCountDistrib
     )
 
 
+def evaluate_ratchet(distribution: LineCountDistribution) -> RatchetOutcome:
+    """Measures `distribution` against the frozen high-water on all three
+    ratcheted quantities and returns the verdict as a `RatchetOutcome` —
+    NEVER raises (staff-eng Finding 5: separating measurement from verdict
+    so a caller can always obtain a report, even when the ratchet has
+    tripped). `ratchet_check` is the raising sibling built on top of this
+    for callers that still want the refusal as control flow."""
+    return RatchetOutcome(
+        tripped=(
+            distribution.module_count > FROZEN_HIGH_WATER_MODULES
+            or distribution.total_lines > FROZEN_HIGH_WATER_LINES
+            or distribution.over_bar_count > FROZEN_HIGH_WATER_OVER_BAR
+        ),
+        module_count={
+            "frozen": FROZEN_HIGH_WATER_MODULES,
+            "measured": distribution.module_count,
+        },
+        total_lines={
+            "frozen": FROZEN_HIGH_WATER_LINES,
+            "measured": distribution.total_lines,
+        },
+        over_bar_count={
+            "frozen": FROZEN_HIGH_WATER_OVER_BAR,
+            "measured": distribution.over_bar_count,
+        },
+    )
+
+
 def ratchet_check(distribution: LineCountDistribution) -> None:
     """Refuses (raises `RatchetError`) when `distribution` has grown past
     the frozen high-water on module count, total lines, or over-bar count.
     A shrink or hold on all three measures is always allowed with no bump
     required — mirrors the "shrinks or holds without a reasoned bump"
     shape of `claude_md_budget.ratchet_check`, without that module's
-    ledger-file indirection (see negative-spec above)."""
+    ledger-file indirection (see negative-spec above). Built on
+    `evaluate_ratchet` — the measurement; this function is the raising
+    control-flow wrapper around it, kept for callers (e.g. `census(...,
+    strict=True)`) that still want the refusal to happen inline."""
+    outcome = evaluate_ratchet(distribution)
+    if not outcome.tripped:
+        return
+
     violations = []
     if distribution.module_count > FROZEN_HIGH_WATER_MODULES:
         violations.append(
@@ -149,11 +212,10 @@ def ratchet_check(distribution: LineCountDistribution) -> None:
             f"over_bar_count {distribution.over_bar_count} > frozen high-water "
             f"{FROZEN_HIGH_WATER_OVER_BAR}"
         )
-    if violations:
-        raise RatchetError(
-            "Refused: the corpus has grown past its frozen line-count "
-            "high-water on " + "; ".join(violations) + ". Bump the frozen "
-            "FROZEN_HIGH_WATER_* constants in coordinator_core/op_census/"
-            "line_count.py deliberately, with a stated reason, if this "
-            "growth is intended -- this ratchet does not degrade or skip."
-        )
+    raise RatchetError(
+        "Refused: the corpus has grown past its frozen line-count "
+        "high-water on " + "; ".join(violations) + ". Bump the frozen "
+        "FROZEN_HIGH_WATER_* constants in coordinator_core/op_census/"
+        "line_count.py deliberately, with a stated reason, if this "
+        "growth is intended -- this ratchet does not degrade or skip."
+    )

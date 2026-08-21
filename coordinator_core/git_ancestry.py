@@ -40,12 +40,9 @@ own docstring.
 
 from __future__ import annotations
 
-import subprocess
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
-from coordinator_core.win_portability import no_console_creationflags
-
-_NO_CONSOLE: Dict[str, Any] = no_console_creationflags()
+from coordinator_core.git.run import run_git
 
 
 def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool, Optional[bool]]:
@@ -64,18 +61,16 @@ def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool,
     module's docstring promotion note and `coordinator_core.sibling_fact`'s
     own negative spec, which depends on this distinction to avoid silently
     treating "could not verify" as a negative verdict.
+
+    Bounded, as of the migration onto `git.run`, at
+    `LOCAL_PLUMBING_BUDGET_SECS`. It previously carried NO `timeout=` at
+    all, so a wedged `git merge-base` held its caller indefinitely; the
+    tri-state above already had the honest outcome for that case
+    (`(False, None)`) and simply never reached it. The two sentinel
+    returncodes the shared runner emits both land there: `-1` (timeout) and
+    `127` (git absent) are neither 0 nor 1.
     """
-    try:
-        result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", commit, ref],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False, None
+    result = run_git(["merge-base", "--is-ancestor", commit, ref], cwd=cwd)
     if result.returncode == 0:
         return True, True
     if result.returncode == 1:

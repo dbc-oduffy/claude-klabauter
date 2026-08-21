@@ -113,6 +113,7 @@ int parse_response_envelope(
 #define JSONRPC_METHOD_NOT_FOUND (-32601)
 #define JSONRPC_ENGINE_SKEW (-32002)
 #define JSONRPC_UNTRUSTED_CALLER (-32003)
+#define JSONRPC_OP_SUSPENDED (-32006)
 /* Mirrors `coordinator_core.warm.client.WARM_DISPATCH_INDETERMINATE` --
  * same code, same meaning ("delivered, no usable answer, do not re-run"). */
 #define JSONRPC_WARM_DISPATCH_INDETERMINATE (-32004)
@@ -136,6 +137,23 @@ int parse_response_envelope(
  *     correctly-built door never produces this; it is handled anyway,
  *     because "our own caller can't trigger this" is not the same claim as
  *     "no caller can".
+ *   -32006 OP_SUSPENDED_ERROR: `ipc.py::_dispatch_message_impl` returns on
+ *     `op_budget_suspension.is_suspended(method)` immediately BEFORE the
+ *     registry lookup that produces -32601 -- so it is strictly stronger
+ *     proof of non-dispatch than a code already on this list, reached one
+ *     branch earlier in the same function.
+ *
+ *     ADDED 2026-08-21, MEASURED NOT ASSUMED. Serving a real -32006 to the
+ *     real binary showed the door discarding the server's refusal envelope
+ *     and emitting its own -32004 instead: an operator whose
+ *     `ceremony.scoped_git_commit` was refused before anything ran was told
+ *     "the op may have COMPLETED, reconcile against real state" -- the most
+ *     alarming sentence this door can produce, about the op where a false
+ *     "maybe it committed" costs the most to unwind, while the actual
+ *     reason (suspended, and the bar to reinstate it) never reached them at
+ *     all. Falling through re-runs it cold, where the SAME refusal fires
+ *     from the same shared `_dispatch_message_impl` and the real message
+ *     reaches the operator.
  *
  * DELIBERATELY EXCLUDES -32602 INVALID_PARAMS: `ipc.py`'s
  * `_handler_exception_error` ALSO emits it for a

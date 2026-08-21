@@ -1119,21 +1119,19 @@ def _no_commit_row_judgment(
     commit") rather than re-deriving a second git-log scan -- per this
     chunk's own governing instruction: duplicating commit-scanning logic is
     the desync hazard this plan keeps hitting. `_determine_shipped` already
-    handles the absent-spine (nothing to check), malformed-spine (fails
+    handles the absent-spine (nothing to check) and malformed-spine (fails
     loud via its own `error` return, treated here as "cannot judge, do not
-    guess" and skipped rather than guessed past), and cross-repo `scope:`
-    sibling-scanning cases -- none of that is reimplemented here.
+    guess" and skipped rather than guessed past) cases -- none of that is
+    reimplemented here.
 
-    False-positive-stamp incident fix: a plan reporting
-    `close_out_and_stamp.JOIN_PROVENANCE_NO_EVIDENCE_SOURCE` always returns
-    an empty `missing_chunk_ids` too (see that constant's own docstring --
-    it is the no-spine/no-ledger case, so there is nothing to name as
-    missing), so this guard already returns `None` for it via the
-    `not missing_chunk_ids` check below without any special-casing --
-    named here so a reader does not need to re-derive that from scratch.
-    `close_out_and_stamp`'s own stamping path is what refuses to stamp a
-    plan carrying that value; this guard's job (no-commit-row disposition)
-    was never in the stamp-decision path to begin with.
+    C3 (2026-08-21, "the close ceremony stops paying for the join"):
+    `_determine_shipped` no longer returns a `join_provenance` string --
+    the commit-subject/`Deliverable-Id` join it once classified is deleted.
+    Its evidence-source-absent case (formerly `JOIN_PROVENANCE_NO_EVIDENCE_
+    SOURCE`) still always returns an empty `missing_chunk_ids` too (the
+    no-spine/no-ledger case has nothing to name as missing), so this guard
+    still returns `None` for it via the `not missing_chunk_ids` check below
+    without any special-casing.
 
     Governing-plan resolution reuses `directives_lessons_plan.
     resolve_governing_plan_with_source` (the SAME function `__init__.py`'s
@@ -1158,14 +1156,10 @@ def _no_commit_row_judgment(
     dispositions"]`. Otherwise returns the built judgment point for the
     still-unresolved row-id subset.
 
-    `join_provenance` (cross-repo memo fix -- see `_determine_shipped`'s own
-    widened docstring) is threaded straight through to `judgments.
-    build_no_commit_row_disposition_judgment_point` unchanged: this guard
-    still fires in every case (an unjoinable key never suppresses the
-    judgment -- see that builder's own docstring for why a silent sixth
-    exit is deliberately not introduced here), it only changes how the
-    judgment's OWN evidence text frames a non-`"joined"` result -- as an
-    unattributable key, not as unshipped work."""
+    `judgments.build_no_commit_row_disposition_judgment_point` is called
+    with `unresolved` alone (C3, 2026-08-21) -- no `join_provenance` to
+    thread through any more; that builder's own `join_provenance` parameter
+    keeps its `"joined"` default and its pre-existing evidence wording."""
     governing_plan, _source = directives_lessons_plan.resolve_governing_plan_with_source(
         root, decisions
     )
@@ -1176,7 +1170,7 @@ def _no_commit_row_judgment(
     except OSError:
         return None
 
-    _is_shipped, missing_chunk_ids, join_provenance, error = _determine_shipped(
+    _is_shipped, missing_chunk_ids, _evidence_backed, error = _determine_shipped(
         plan_text, str(governing_plan.path), root
     )
     if error is not None or not missing_chunk_ids:
@@ -1186,9 +1180,7 @@ def _no_commit_row_judgment(
     unresolved = [cid for cid in missing_chunk_ids if cid not in already_resolved]
     if not unresolved:
         return None
-    return _judgments.build_no_commit_row_disposition_judgment_point(
-        unresolved, join_provenance
-    )
+    return _judgments.build_no_commit_row_disposition_judgment_point(unresolved)
 
 
 def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:

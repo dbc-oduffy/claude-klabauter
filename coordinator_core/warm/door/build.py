@@ -47,6 +47,13 @@ from pathlib import Path
 
 _SOURCE = Path(__file__).resolve().parent / "door.c"
 
+#: The OS-agnostic half, shared verbatim with the POSIX door and compiled
+#: alongside `door.c`. Unlike `_SOURCE` it is NOT rendered through
+#: `_render()` -- it carries no build-time placeholders, and must not, since
+#: the same file is compiled for a platform `build.py` never runs on.
+_CORE_SOURCE = Path(__file__).resolve().parent / "door_core.c"
+_CORE_HEADER = Path(__file__).resolve().parent / "door_core.h"
+
 #: Must equal door.c's `ENGINE_ROOT_SIDECAR_FILENAME` verbatim -- the two
 #: are never derived from a shared constant because one is a C wide-string
 #: macro and the other a Python `Path` component; keep them in lockstep by
@@ -154,9 +161,26 @@ def write_provenance(
     reproduce this exact binary, not incidental metadata. Without it,
     `door.exe.provenance.json` would tell a verifier the source hash and
     compiler but not the one other argument required to actually get a
-    MATCH."""
+    MATCH.
+
+    TWO SOURCE FIELDS, DELIBERATELY, since `door.c` stopped being the only
+    input. `door_c_sha256` is retained UNCHANGED -- still exactly
+    `sha256(door.c)`, so README.md's description of it stays literally true
+    and prior handoffs that compared this field against a clone's `door.c`
+    keep working. But it is no longer the WHOLE answer to "what source
+    produced this binary", so `sources` records every file that did:
+    `door.c`, `door_core.c`, and `door_core.h`. A verifier who checks only
+    the legacy field would now miss a change to the shared core -- which is
+    precisely the safety classification, so the complete set is the one to
+    read. Keeping both is the compatible move; silently narrowing
+    `door_c_sha256` to mean "all sources" would break the comparisons that
+    already exist."""
     provenance = {
         "door_c_sha256": _sha256_file(source_path),
+        "sources": {
+            path.name: _sha256_file(path)
+            for path in (source_path, _CORE_SOURCE, _CORE_HEADER)
+        },
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -239,17 +263,26 @@ def _compile(kind: str, compiler: str, source_path: Path, output_path: Path) -> 
     committed source: a verifier reruns this exact command and compares
     hashes, rather than trusting an unreproducible artifact."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # `source_path` is the RENDERED door.c, written to a temp directory, so
+    # its `#include "door_core.h"` cannot resolve relatively -- the include
+    # path below is what makes the shared core reachable from there.
+    # `door_core.c` is passed unrendered on purpose: it carries no build-time
+    # placeholders, and giving it none is what lets the same object logic
+    # compile identically for the POSIX door.
+    include_dir = str(_SOURCE.parent)
     if kind == "clang":
         cmd = [
             compiler, "-O2", "-Wall", "-Wextra",
-            "-o", str(output_path), str(source_path),
+            "-I", include_dir,
+            "-o", str(output_path), str(source_path), str(_CORE_SOURCE),
             "-ladvapi32", "-lshell32",
             "-Xlinker", "/Brepro",
         ]
     else:
         cmd = [
             compiler, "/nologo", "/O2", "/W3",
-            f"/Fe:{output_path}", str(source_path),
+            f"/I{include_dir}",
+            f"/Fe:{output_path}", str(source_path), str(_CORE_SOURCE),
             "/link", "Advapi32.lib", "Shell32.lib", "/Brepro",
         ]
     proc = subprocess.run(

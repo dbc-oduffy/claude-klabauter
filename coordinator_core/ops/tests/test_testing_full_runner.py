@@ -37,7 +37,9 @@ import pytest
 import coordinator_core.ipc as ipc
 import coordinator_core.ops  # noqa: F401 — triggers every op module's register_op(...) side-effect
 from coordinator_core.authz.classification import OpClass, classify
+from coordinator_core.ops import testing_full_runner
 from coordinator_core.ops.testing_full_runner import _testing_full_runner
+from coordinator_core.testing.run import DEFAULT_TIMEOUT
 
 pytest_plugins = ("coordinator_core.testing._fixtures",)
 
@@ -96,7 +98,7 @@ def test_op_not_in_worktree_scoped_ops():
     )
 
 
-def test_dispatch_message_smoke(fixture_tree):
+def test_dispatch_message_smoke(fixture_tree, exercise_suspended_op):
     tree = fixture_tree(venv_dirname=".venv")
     msg = {
         "jsonrpc": "2.0",
@@ -195,3 +197,56 @@ def test_file_target_root_is_rejected(tmp_path):
     a_file.write_text("x", encoding="utf-8")
     result = _call({"target_root": str(a_file), "families": ["py-native"]})
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Timeout ceiling — the acknowledged pytest carve-out is still bounded
+# ---------------------------------------------------------------------------
+
+
+def _record_run_suites_timeout(monkeypatch) -> list[int]:
+    """Swap the op module's run_suites for a recorder of its timeout kwarg.
+
+    No pytest subprocess is dispatched: the clamp is the whole contract here,
+    and running a real suite to observe it would put minutes of load on a shared
+    box to learn one integer.
+    """
+    seen: list[int] = []
+
+    def _fake_run_suites(_suites, _root, *, timeout, jobs=None):
+        seen.append(timeout)
+        return []
+
+    monkeypatch.setattr(testing_full_runner, "run_suites", _fake_run_suites)
+    monkeypatch.setattr(testing_full_runner, "discover", lambda _root, families=None: [])
+    return seen
+
+
+def test_huge_timeout_is_clamped_to_the_runaway_ceiling(monkeypatch, tmp_path):
+    seen = _record_run_suites_timeout(monkeypatch)
+
+    _call({"target_root": str(tmp_path), "timeout": 10**9})
+
+    assert seen == [testing_full_runner.MAX_TIMEOUT_SECONDS], (
+        "testing.full_runner is exempt from the 2s process regime because it "
+        "runs pytest — it is NOT exempt from a runaway bound, and a caller "
+        "cannot raise the per-unit subprocess timeout past it"
+    )
+
+
+def test_timeout_below_the_ceiling_is_honoured(monkeypatch, tmp_path):
+    seen = _record_run_suites_timeout(monkeypatch)
+
+    _call({"target_root": str(tmp_path), "timeout": 30})
+
+    assert seen == [30], (
+        "the ceiling is a bound on over-asking, not a floor — a caller wanting "
+        "a shorter per-unit timeout must still get it"
+    )
+
+
+def test_default_timeout_is_well_under_the_ceiling():
+    assert DEFAULT_TIMEOUT < testing_full_runner.MAX_TIMEOUT_SECONDS, (
+        "a ceiling at or below the default would silently make the default "
+        "unreachable and turn every ordinary run into a clamped one"
+    )

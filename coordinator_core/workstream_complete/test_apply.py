@@ -1085,6 +1085,13 @@ def test_no_commit_row_judgment_returns_none_once_row_already_resolved(tmp_path:
 
 
 def test_no_commit_row_judgment_returns_none_once_the_row_ships(tmp_path: Path) -> None:
+    """C3 (2026-08-21, 'the close ceremony stops paying for the join'): the
+    commit-subject/Deliverable-Id join `_determine_shipped` once used to
+    auto-detect a shipped row is deleted -- the only remaining evidence a
+    `## Tasks` spine row can carry is its own verified `disposition_ref`.
+    This fixture now seeds `disposition: coded` with a `disposition_ref`
+    pointing at a real, HEAD-ancestor commit, instead of relying on a
+    commit subject the deleted join would have parsed."""
     _init_repo(tmp_path)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     plan_file = _seed_no_commit_row_plan(tmp_path, "docs/plans/myplan.md")
@@ -1092,122 +1099,34 @@ def test_no_commit_row_judgment_returns_none_once_the_row_ships(tmp_path: Path) 
     with plan_file.open("a", encoding="utf-8") as fh:
         fh.write("\n<!-- C1 landed -->\n")
     _git(["add", "docs/plans/myplan.md"], tmp_path)
-    _git(
-        ["commit", "-q", "-m", "C1: land chunk", "-m", "Deliverable-Id: dlv-fixture-no-commit-row-000001"],
-        tmp_path,
+    _git(["commit", "-q", "-m", "land the work C1 needed"], tmp_path)
+    covering_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    plan_file.write_text(
+        _NO_COMMIT_ROW_PLAN_TEXT.replace(
+            "  disposition: open",
+            f"  disposition: coded\n  disposition_ref: {covering_sha}",
+        ),
+        encoding="utf-8",
     )
+    _git(["add", "docs/plans/myplan.md"], tmp_path)
+    _git(["commit", "-q", "-m", "resolve C1"], tmp_path)
 
     jp = ws_apply._no_commit_row_judgment({"governing_plan_slug": "myplan"}, tmp_path)
 
     assert jp is None
 
 
-_NO_DELIVERABLE_ID_PLAN_TEXT = """---
-title: "fixture plan, no deliverable_id"
-created: 2026-08-03
-status: draft
----
-
-# fixture plan, no deliverable_id
-
-## Tasks
-
-```yaml plan-tasks
-- id: C1
-  title: a row with no covering commit
-  disposition: open
-```
-"""
-
-
-def _seed_no_deliverable_id_plan(root: Path, dest_name: str = "myplan.md") -> Path:
-    """Seeds a governing-plan fixture carrying NO `deliverable_id:`
-    frontmatter field at all -- the commit-coverage join is never
-    ATTEMPTED for this plan (`_determine_shipped`'s `"no_join_key"`
-    join-provenance state), which is a distinct fact from "the join ran
-    and genuinely found nothing" -- see close_out_and_stamp.py's own
-    join-provenance widening for why the two must not be conflated in the
-    judgment this guard surfaces."""
-    dest = root / dest_name
-    dest.write_text(_NO_DELIVERABLE_ID_PLAN_TEXT, encoding="utf-8")
-    _git(["add", dest_name], root)
-    _git(["commit", "-q", "-m", "seed"], root)
-    return dest
-
-
-def test_no_commit_row_judgment_names_unjoinable_key_not_unshipped_work_no_join_key(
-    tmp_path: Path,
-) -> None:
-    """AC-level coverage at the `workstream_complete` boundary (cross-repo
-    memo fix): a plan with no `deliverable_id:` field at all must still
-    surface the judgment (the guard never silently suppresses on an
-    unjoinable key), but its `evidence` text must name the key as
-    unattributable rather than asserting the row is unshipped."""
-    _init_repo(tmp_path)
-    (tmp_path / "docs" / "plans").mkdir(parents=True)
-    _seed_no_deliverable_id_plan(tmp_path, "docs/plans/myplan.md")
-
-    jp = ws_apply._no_commit_row_judgment({"governing_plan_slug": "myplan"}, tmp_path)
-
-    assert jp is not None
-    assert jp["id"] == "jp-no-commit-row-disposition"
-    assert "C1" in jp["evidence"]
-    assert "no_join_key" in jp["evidence"]
-    assert "UNATTRIBUTABLE" in jp["evidence"]
-    # The judgment still fires with all five named exits -- no sixth,
-    # silent "unjoinable, skip it" disposition was introduced.
-    disposition_names = {d["value"] for d in jp["dispositions"]}
-    assert disposition_names == {
-        "shipped",
-        "spun-off",
-        "backlogged",
-        "wont-do",
-        "carried-forward",
-    }
-
-
-def test_no_commit_row_judgment_names_unjoinable_key_not_unshipped_work_key_mismatch(
-    tmp_path: Path,
-) -> None:
-    """The `key_mismatch` sibling of the test above: the governing plan's
-    own `deliverable_id:` is present, and a commit in range DOES carry a
-    `Deliverable-Id` trailer -- just for a different plan entirely. The
-    join is genuinely unattributable for this plan, not evidence C1 is
-    unshipped."""
-    _init_repo(tmp_path)
-    (tmp_path / "docs" / "plans").mkdir(parents=True)
-    plan_file = _seed_no_commit_row_plan(tmp_path, "docs/plans/myplan.md")
-
-    with plan_file.open("a", encoding="utf-8") as fh:
-        fh.write("\n<!-- C1 landed (wrong deliverable) -->\n")
-    _git(["add", "docs/plans/myplan.md"], tmp_path)
-    _git(
-        [
-            "commit",
-            "-q",
-            "-m",
-            "C1: land chunk",
-            "-m",
-            "Deliverable-Id: dlv-some-other-plan-000099",
-        ],
-        tmp_path,
-    )
-
-    jp = ws_apply._no_commit_row_judgment({"governing_plan_slug": "myplan"}, tmp_path)
-
-    assert jp is not None
-    assert jp["id"] == "jp-no-commit-row-disposition"
-    assert "C1" in jp["evidence"]
-    assert "key_mismatch" in jp["evidence"]
-    assert "UNATTRIBUTABLE" in jp["evidence"]
-    disposition_names = {d["value"] for d in jp["dispositions"]}
-    assert disposition_names == {
-        "shipped",
-        "spun-off",
-        "backlogged",
-        "wont-do",
-        "carried-forward",
-    }
+# C3 (2026-08-21, "the close ceremony stops paying for the join") removed
+# the two `no_join_key`/`key_mismatch` unjoinable-key tests that used to
+# live here: `_no_commit_row_judgment` no longer threads a `join_provenance`
+# value through to `judgments.build_no_commit_row_disposition_judgment_point`
+# at all (that builder's own default `join_provenance="joined"` wording
+# applies unconditionally now), since `_determine_shipped` no longer
+# classifies a commit-subject/Deliverable-Id join outcome -- there is no
+# "unattributable key" distinction left for this guard to surface.
 
 
 def test_apply_halts_before_any_directive_when_no_commit_row_guard_fires(

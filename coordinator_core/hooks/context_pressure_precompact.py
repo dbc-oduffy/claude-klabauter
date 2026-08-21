@@ -125,7 +125,14 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=10,
+            # House value (`bash_guards.dispatch_checks._run_git`), not a local
+            # choice. The 2026-08-05 hot-path hardening incident that produced
+            # `test_hot_path_subprocess_timeouts.py` was a Windows box degraded by
+            # exactly this shape -- a `timeout=10` sitting on a hook path against a
+            # house value of 2.0. A git read that has not answered in 2s is a defect
+            # to find, not a wait to extend, and this call already degrades to "" on
+            # expiry rather than propagating.
+            timeout=2.0,
             **no_console_creationflags(),
         )
     except Exception:

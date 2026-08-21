@@ -102,7 +102,7 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
 
         return captured[0] if captured else None
 
-    def test_artifact_emit_receives_non_none_repo_root(self, tmp_path: Path) -> None:
+    def test_artifact_emit_receives_non_none_repo_root(self, tmp_path: Path, exercise_suspended_op) -> None:
         """artifact.emit handler receives non-None repo_root when _origin_worktree is present.
 
         Regression guard: if artifact.emit were accidentally reclassified back to "central",
@@ -171,7 +171,7 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
             # _origin_worktree deliberately absent
         }
 
-    def test_artifact_emit_without_origin_worktree_returns_invalid_params(self) -> None:
+    def test_artifact_emit_without_origin_worktree_returns_invalid_params(self, exercise_suspended_op) -> None:
         """artifact.emit without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
         d = _run(dispatch_message(self._msg_without_worktree("artifact.emit")))
         assert "error" in d, "Expected error response when _origin_worktree is absent"

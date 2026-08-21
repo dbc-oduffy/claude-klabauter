@@ -42,6 +42,8 @@ from coordinator_core.frontmatter.schema_drift_watch import (
     vendored_schema_paths,
     vendored_source_paths,
 )
+from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory_batch
+from coordinator_core.git_scope import reset_foreign_repo_probe_memo
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -233,16 +235,18 @@ class TestDriftDirection:
         """An older advisory build that omits `direction` degrades to a legible
         placeholder rather than a bare KeyError or a blank segment."""
         real_advisory = __import__(
-            "coordinator_core.frontmatter.schema_validate", fromlist=["check_schema_drift_advisory"]
-        ).check_schema_drift_advisory
+            "coordinator_core.frontmatter.schema_validate",
+            fromlist=["check_schema_drift_advisory_batch"],
+        ).check_schema_drift_advisory_batch
 
-        def _advisory_without_direction(schema_path, doe_repo_path):
-            result = dict(real_advisory(schema_path, doe_repo_path))
-            result.pop("direction", None)
-            return result
+        def _advisory_without_direction(schema_paths, doe_repo_path):
+            results = real_advisory(schema_paths, doe_repo_path)
+            for result in results:
+                result.pop("direction", None)
+            return results
 
         monkeypatch.setattr(
-            "coordinator_core.frontmatter.schema_drift_watch.check_schema_drift_advisory",
+            "coordinator_core.frontmatter.schema_drift_watch.check_schema_drift_advisory_batch",
             _advisory_without_direction,
         )
         (vendored_dir / _SCHEMA_B).write_text(_schema_body("LOCALLY CHANGED"), encoding="utf-8")
@@ -493,6 +497,70 @@ class TestAdvisoryDeterminateKey:
         assert result["determinate"] is True
 
 
+class TestSchemaAdvisoryBatch:
+    """`check_schema_drift_advisory_batch` — the DoE-side twin of the cockpit batch below.
+
+    Same two properties: the process count does not grow with N, and per-entry
+    verdicts survive the batching."""
+
+    def test_results_align_with_inputs_and_mix_verdicts(
+        self, fake_doe: Path, vendored_dir: Path
+    ) -> None:
+        (vendored_dir / _SCHEMA_A).write_text(_schema_body("CHANGED"), encoding="utf-8")
+        absent = vendored_dir / "not-vendored-in-doe.schema.json"
+        absent.write_text(_schema_body("absent"), encoding="utf-8")
+        paths = [vendored_dir / _SCHEMA_A, vendored_dir / _SCHEMA_B, absent]
+
+        results = check_schema_drift_advisory_batch(paths, fake_doe)
+
+        assert [r["schema"] for r in results] == [p.name for p in paths]
+        assert (results[0]["diverged"], results[0]["determinate"]) == (True, True)
+        assert (results[1]["diverged"], results[1]["determinate"]) == (False, True)
+        assert (results[2]["diverged"], results[2]["determinate"]) == (False, False), (
+            "a schema absent from DoE HEAD is indeterminate for THAT entry only"
+        )
+
+    def test_process_count_does_not_grow_with_the_set(
+        self, fake_doe: Path, vendored_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawns: list[list[str]] = []
+        real_run = subprocess.run
+
+        def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+            spawns.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", counting_run)
+
+        reset_foreign_repo_probe_memo()
+        check_schema_drift_advisory_batch([vendored_dir / _SCHEMA_A], fake_doe)
+        after_one = len(spawns)
+        reset_foreign_repo_probe_memo()
+        two = check_schema_drift_advisory_batch(
+            [vendored_dir / _SCHEMA_A, vendored_dir / _SCHEMA_B], fake_doe
+        )
+
+        assert len(two) == 2
+        assert len(spawns) - after_one == after_one, (
+            f"two schemas cost {len(spawns) - after_one} spawns against {after_one} for one: "
+            f"{spawns[after_one:]}"
+        )
+
+    def test_empty_set_spawns_nothing(self, fake_doe: Path) -> None:
+        assert check_schema_drift_advisory_batch([], fake_doe) == []
+
+    def test_unreadable_doe_repo_is_indeterminate_for_every_entry(
+        self, tmp_path: Path, vendored_dir: Path
+    ) -> None:
+        results = check_schema_drift_advisory_batch(
+            [vendored_dir / _SCHEMA_A, vendored_dir / _SCHEMA_B], tmp_path / "not-a-repo"
+        )
+        assert all(r["determinate"] is False for r in results)
+        assert all(r["diverged"] is False for r in results), (
+            "unreadable must never be reported as drift"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Parallel `*.vendor.ts`-vs-cockpit-HEAD comparison (C7, 2026-08-19) — the
 # durability gap C1's parity check does not close on its own: this watch is
@@ -662,7 +730,13 @@ class TestSourceDriftAdvisoryBatch:
         self, fake_cockpit: Path, vendored_source_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The amplification property itself, guarded here as well as by the repo-wide
-        collector: comparing three files must cost the same spawns as comparing one."""
+        collector: comparing three files must cost the same spawns as comparing one.
+
+        The probe memo is dropped before each measurement so this pins the BATCH
+        property alone. Left in place the second call would be cheaper still (the
+        repo probe is memoised per process) — a real saving, measured by
+        `test_repeat_batch_reuses_the_memoised_repo_probe`, but not the property
+        under test here."""
         spawns: list[list[str]] = []
         real_run = subprocess.run
 
@@ -672,10 +746,12 @@ class TestSourceDriftAdvisoryBatch:
 
         monkeypatch.setattr(subprocess, "run", counting_run)
 
+        reset_foreign_repo_probe_memo()
         one = check_source_drift_advisory_batch(
             [vendored_source_dir / _VENDOR_SOURCE_NAME], fake_cockpit
         )
         after_one = len(spawns)
+        reset_foreign_repo_probe_memo()
         three = check_source_drift_advisory_batch(
             self._multi(vendored_source_dir, fake_cockpit), fake_cockpit
         )
@@ -688,6 +764,35 @@ class TestSourceDriftAdvisoryBatch:
 
     def test_empty_set_spawns_nothing(self, fake_cockpit: Path) -> None:
         assert check_source_drift_advisory_batch([], fake_cockpit) == []
+
+    def test_repeat_batch_reuses_the_memoised_repo_probe(
+        self, fake_cockpit: Path, vendored_source_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The second batch against the same clone costs ONE spawn, not two.
+
+        `git_scope.foreign_repo_unusable_reason` is memoised per (realpath, pid), so
+        the loop-invariant repo probe is paid once per process however many surfaces
+        ask. Without it the same clone is re-probed from scratch by every caller.
+        """
+        spawns: list[list[str]] = []
+        real_run = subprocess.run
+
+        def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+            spawns.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", counting_run)
+
+        paths = [vendored_source_dir / _VENDOR_SOURCE_NAME]
+        reset_foreign_repo_probe_memo()
+        check_source_drift_advisory_batch(paths, fake_cockpit)
+        cold = len(spawns)
+        check_source_drift_advisory_batch(paths, fake_cockpit)
+
+        assert cold == 2, f"cold batch should be probe + cat-file: {spawns[:cold]}"
+        assert len(spawns) - cold == 1, (
+            f"warm batch re-probed the clone instead of reusing the memo: {spawns[cold:]}"
+        )
 
     def test_unreadable_cockpit_repo_is_indeterminate_for_every_entry(
         self, tmp_path: Path, vendored_source_dir: Path, fake_cockpit: Path

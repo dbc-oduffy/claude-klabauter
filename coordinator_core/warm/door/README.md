@@ -273,12 +273,17 @@ explicitly **not** bit-for-bit determinism across different compilers or
 toolchains, which is out of scope.
 
 Every build writes `door.exe.provenance.json` next to the binary — the
-SHA-256 of the `door.c` it was built from, plus the compiler and its
+SHA-256 of every source it was built from, plus the compiler and its
 version:
 
 ```json
 {
   "door_c_sha256": "...",
+  "sources": {
+    "door.c": "...",
+    "door_core.c": "...",
+    "door_core.h": "..."
+  },
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (...)",
   "built_at": "2026-08-21T11:49:29+00:00",
@@ -286,13 +291,26 @@ version:
 }
 ```
 
+**`door.c` is no longer the only source.** Since the shared core was split
+out, `door.exe` is compiled from `door.c` *and* `door_core.c` (the
+OS-agnostic half — SHA-1, the buffer, the envelope reader, and
+`is_provably_undispatched()` — shared verbatim with the POSIX door). So
+`sources` is the complete answer to "what produced this binary", and it is
+the field to check.
+
+`door_c_sha256` is retained **unchanged**: still exactly `sha256(door.c)`,
+so existing comparisons against a clone's `door.c` keep working. But a
+verifier who checks only that legacy field would now miss a change to the
+shared core — which is precisely the safety classification. Check
+`sources`.
+
 `engine_root` is recorded because it is now an INPUT to the build (baked
 as `BUILD_ENGINE_ROOT_W`, "PM ruling" above), not incidental metadata —
 see "What a MATCH does and does not prove" below for why that matters to
 `--verify`.
 
-A mismatch between that recorded hash and the current `door.c` is
-detectable with one `sha256sum door.c`, by anyone, without a compiler.
+A mismatch between a recorded hash and the current source is detectable
+with one `sha256sum`, by anyone, without a compiler.
 
 **Two commands** to actually rebuild and verify, same compiler AND the
 same `<engine_root>` argument as the committed binary was built with:
@@ -354,11 +372,11 @@ binary was **byte-identical** to the committed `door.exe`, because
 `/Brepro` aside, comments never reach codegen. So a mirror-side
 `build.py --verify` (which rebuilds and hash-compares the COMPILED
 bytes, never the source text) still correctly reports MATCH. What does
-NOT survive the trip is `door.exe.provenance.json`'s recorded
-`door_c_sha256` field, which hashes the live tree's SOURCE TEXT
-including those six comment lines — a mirror-side `door.c` will legitimately
-hash differently there, and that is expected, not a sign anything is
-wrong. Trust `--verify`'s own compiled-byte comparison over a manual
+NOT survive the trip is `door.exe.provenance.json`'s recorded source
+hashes — `door_c_sha256` and the `sources` entries — which hash the live
+tree's SOURCE TEXT including those six comment lines; a mirror-side
+`door.c` will legitimately hash differently there, and that is expected,
+not a sign anything is wrong. Trust `--verify`'s own compiled-byte comparison over a manual
 source hash on a mirror clone. This is current-state, not a guarantee:
 if a future edit ever puts a `claude-klabauter`-shaped token into actual code
 (rather than a comment), this safety would need re-proving, not assumed

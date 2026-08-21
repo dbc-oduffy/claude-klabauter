@@ -19,8 +19,9 @@ neighbour-less answer (the defect this module exists to close — see
   1. ``scope:`` in the artifact's own frontmatter (plans and sizings both
      carry one).
   2. A handoff carries no ``scope:`` by design — bridge via the handoff's
-     ``deliverable_id`` to the PLAN carrying the same ``deliverable_id``,
-     and use that plan's ``scope:``.
+     ``governing_plan:`` stamp (stamped at baton-mint, C5/R5) to that
+     PLAN's own ``scope:``. A single targeted read of the stamped path,
+     never a directory walk.
   3. Neither resolves -> ``ClaimNeighboursResult.status`` is
      ``UNRESOLVABLE``, never an empty ``neighbours`` list. Conflating "I
      could not tell" with "nobody is there" is exactly what made the
@@ -28,6 +29,15 @@ neighbour-less answer (the defect this module exists to close — see
      derived, ``None`` whenever either side was empty — which is EVERY
      handoff) answer nothing while looking wired. Rebuilding that
      conflation under a new name is the main trap in this module.
+
+NO FALLBACK SCAN (PM ruling R1, ratified — absence is information): an
+unstamped artifact (no ``scope:``, no ``governing_plan:``) resolves
+UNRESOLVABLE directly. There is deliberately no legacy ``docs/plans/``
+directory walk keyed on a ``deliverable_id:`` bridge — a scan that can
+return a confident wrong answer is disqualified whatever cost it would
+save. This is accepted, deliberate cost on any artifact minted before the
+``governing_plan:`` stamp existed; do not reintroduce a scan to recover
+them.
 
 COST DISCIPLINE (AC6, live constraint not a preference): the path-set ->
 claimant join routes through ``claim_index.lookup()`` ONLY, which is
@@ -42,10 +52,7 @@ holding a couple of tiny marker files (``session_id``, no touched.txt
 walk); this is the same cost CLASS as ``claim_index.rebuild()``'s own
 walk over the substrate it depends on, not the excised O(all claims)
 git-log mechanism (13.91s on this tree — see ``claim_index``'s module
-docstring) this plan's Anti-scope forbids reintroducing. The
-deliverable-bridge scan (tier 2 only, one ``docs/plans/*.md`` header read
-per plan file, ~15ms measured on this tree's 444 plans) is likewise a
-bounded, one-shot read pass, never re-derived per candidate.
+docstring) this plan's Anti-scope forbids reintroducing.
 
 ADVISORY / FAIL-SOFT CONTRACT (AC4): this module never raises to its
 caller. A degradation anywhere past file-set resolution (a raising
@@ -68,7 +75,7 @@ from typing import Dict, FrozenSet, Iterable, List, Optional
 
 import yaml
 
-from coordinator_core.frontmatter.primitives import split_frontmatter, read_fm_field
+from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session import liveness
@@ -117,15 +124,6 @@ _CLAIM_CLASS_TO_PATH_FMT = {
 #: (see this plan's Out of scope: cross-machine peers are not answered by
 #: this module, and pretending otherwise would be a silent wrong answer).
 _SCOPE_ENTRY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.+)$")
-
-#: Bytes read from the head of each ``docs/plans/*.md`` file while scanning
-#: for a ``deliverable_id:`` match (tier 2, the handoff bridge). Generous
-#: relative to this repo's plan frontmatter blocks (typically well under 1
-#: KB) so the closing ``---`` is reliably inside the read window; a plan
-#: whose frontmatter genuinely exceeds this is skipped by the scan (falls
-#: through to the next candidate) rather than mis-resolved.
-_PLAN_HEAD_SCAN_BYTES = 8192
-
 
 @dataclasses.dataclass(frozen=True)
 class Neighbour:
@@ -196,8 +194,8 @@ class ClaimNeighboursResult:
     ``status`` is ``RESOLVED`` or ``UNRESOLVABLE`` — check this BEFORE
     reading ``neighbours``. ``UNRESOLVABLE`` means the artifact's file set
     itself could not be determined (no ``scope:``, and either no
-    ``deliverable_id`` to bridge from or no plan carries a matching one);
-    ``neighbours`` is always ``[]`` on this status and must not be read as
+    ``governing_plan:`` stamp to bridge from or the stamped plan could not
+    be read); ``neighbours`` is always ``[]`` on this status and must not be read as
     "no neighbours" — ``reason`` names why. ``RESOLVED`` means a file set
     (possibly empty, e.g. an artifact with an explicit ``scope: []``) was
     determined; ``neighbours`` is the genuine answer, and an empty list on
@@ -288,49 +286,33 @@ def _resolve_repo_root(cwd: Optional[str]) -> str:
     return cwd or "."
 
 
-def _bridge_deliverable_to_plan_scope(
-    deliverable_id: str, *, cwd: Optional[str] = None
+#: Sentinel values that mean "no stamp" on a baton's ``governing_plan:``
+#: field — mirrors ``baton_assemble/__init__.py``'s own
+#: ``not in (None, "", "none")`` carried-value convention (see that
+#: module's successor-hop carry site) so this reader treats an explicit
+#: null the same way the writer does.
+_NO_GOVERNING_PLAN = (None, "", "none")
+
+
+def _bridge_via_governing_plan_stamp(
+    governing_plan: str, *, cwd: Optional[str] = None
 ) -> Optional[List[str]]:
-    """Tier 2: find the plan carrying ``deliverable_id`` and return its
-    ``scope:``, filtered to bare-local paths. ``None`` when no such plan
-    exists (the caller renders this as UNRESOLVABLE, never empty-neighbours)
-    OR the matching plan itself carries no parseable ``scope:`` list."""
+    """Tier 2 (stamp-backed, C5/R5): read the ``governing_plan:`` path
+    stamped directly on the artifact's own frontmatter at mint and return
+    THAT plan's ``scope:``, filtered to bare-local paths — a single bounded
+    file read, never a ``docs/plans/`` directory walk. ``None`` when the
+    stamped plan cannot be read/parsed or carries no parseable ``scope:``
+    list; the caller renders this as UNRESOLVABLE, the same outcome an
+    absent stamp already produces. There is no further fallback past this
+    tier — an unresolvable stamp is a stop, never a scan (PM ruling R1)."""
     repo_root = Path(_resolve_repo_root(cwd))
-    plans_dir = repo_root / _PLAN_DIR
-    try:
-        entries = sorted(os.scandir(plans_dir), key=lambda e: e.name)
-    except OSError:
+    fm = _read_frontmatter_dict(repo_root / governing_plan)
+    if fm is None:
         return None
-
-    for entry in entries:
-        if not entry.name.endswith(".md"):
-            continue
-        try:
-            with open(entry.path, "r", encoding="utf-8") as fh:
-                head = fh.read(_PLAN_HEAD_SCAN_BYTES)
-        except OSError:
-            continue
-        split = split_frontmatter(head)
-        if split is None:
-            continue
-        candidate = read_fm_field(split.fm_text, "deliverable_id")
-        if candidate is None:
-            continue
-        candidate = candidate.strip("'\"")
-        if candidate != deliverable_id:
-            continue
-        try:
-            fm = yaml.safe_load(split.fm_text)
-        except yaml.YAMLError:
-            return None
-        if not isinstance(fm, dict):
-            return None
-        scope = fm.get("scope")
-        if not isinstance(scope, list):
-            return None
-        return _local_paths_from_scope(scope)
-
-    return None
+    scope = fm.get("scope")
+    if not isinstance(scope, list):
+        return None
+    return _local_paths_from_scope(scope)
 
 
 def _resolve_file_set(
@@ -351,20 +333,22 @@ def _resolve_file_set(
         # set; it is just empty — RESOLVED, not UNRESOLVABLE.
         return _local_paths_from_scope(scope), None
 
-    deliverable_id = fm.get("deliverable_id")
-    if not deliverable_id or not isinstance(deliverable_id, str):
-        return None, (
-            f"{artifact_path} carries neither a scope: list nor a "
-            "deliverable_id to bridge from"
-        )
+    governing_plan = fm.get("governing_plan")
+    if isinstance(governing_plan, str) and governing_plan.strip() not in _NO_GOVERNING_PLAN:
+        plan_scope = _bridge_via_governing_plan_stamp(governing_plan.strip(), cwd=cwd)
+        if plan_scope is None:
+            return None, (
+                f"{artifact_path}'s governing_plan stamp {governing_plan!r} "
+                "could not be read/parsed for a scope: list"
+            )
+        return plan_scope, None
 
-    plan_scope = _bridge_deliverable_to_plan_scope(deliverable_id, cwd=cwd)
-    if plan_scope is None:
-        return None, (
-            f"no plan carries deliverable_id {deliverable_id!r} to bridge "
-            f"{artifact_path}'s file set from"
-        )
-    return plan_scope, None
+    return None, (
+        f"{artifact_path} carries neither a scope: list nor a "
+        "governing_plan stamp to bridge from — no fallback scan is "
+        "performed (see module docstring, PM ruling R1: absence is "
+        "information, not a search)"
+    )
 
 
 def _sid_to_artifact_map(

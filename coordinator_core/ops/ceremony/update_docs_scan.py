@@ -53,7 +53,7 @@ from typing import Any, Optional
 
 from coordinator_core.distill.curation_status import compute_curation_status
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.lifecycle_constants import SPEC_SKIP_STATUSES
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.win_portability import no_console_creationflags
@@ -192,7 +192,10 @@ def _phase1_git_log_window(worktree_root: Path, *, now: _dt.datetime) -> dict[st
             cwd=worktree_root,
             capture_output=True,
             text=True,
-            timeout=30,
+            # Bounded to the op's own end-to-end budget: a wider inner timeout
+            # never fires (the dispatch layer abandons the await first) and
+            # only leaves the scan running after the caller has moved on.
+            timeout=CEREMONY_BUDGET_SECS,
             check=False,
             **kwargs,
         )

@@ -130,22 +130,69 @@ def test_git_lfs_enable_mutates_when_binary_functional(mod, monkeypatch):
         return '{"name":"git_lfs","status":"pass","severity":"advisory","detail":"post-mutation ready","remediation":""}\n'
 
     monkeypatch.setattr(prereq_probe, "probe_git_lfs", fake_probe)
-    monkeypatch.setattr(mod, "_run", lambda *a, **k: _FakeResult(0, stdout="git-lfs/3.5.1"))
 
-    mutate_calls = []
+    spawns = []
 
-    def fake_subprocess_run(argv, **kwargs):
-        mutate_calls.append(argv)
-        return _FakeResult(0)
+    def fake_run(argv, **kwargs):
+        spawns.append(argv)
+        return _FakeResult(0, stdout="git-lfs/3.5.1")
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    def fail_bare_run(*a, **k):
+        raise AssertionError(
+            "`git lfs install` must go through `_run`, which bounds it with a "
+            "timeout and captures its output away from this command's JSON line; "
+            "a bare subprocess.run does neither"
+        )
+
+    monkeypatch.setattr(mod.subprocess, "run", fail_bare_run)
 
     rc, out = _run_cli(mod, ["git-lfs-enable"])
 
     assert rc == 0
-    assert mutate_calls == [["git", "lfs", "install"]]
+    assert spawns == [["git", "lfs", "version"], ["git", "lfs", "install"]]
     row = json.loads(out)
     assert row["status"] == "pass"
+
+
+def test_git_lfs_install_is_bounded_like_its_neighbour(mod, monkeypatch):
+    """Both git-lfs spawns carry the same finite timeout.
+
+    `git lfs install` used to run bare on the line after a timeout-guarded
+    `git lfs version` — adjacent spawns, asymmetric guarding. A hung git on a
+    cold install path blocked the installer with nothing to report, and this
+    command's stdout is a JSON line a caller parses, so the mutation's own
+    output belonged in a capture rather than mixed into it.
+    """
+    from coordinator_core.install import prereq_probe
+
+    monkeypatch.setattr(
+        prereq_probe,
+        "probe_git_lfs",
+        lambda: '{"name":"git_lfs","status":"pass","severity":"advisory","detail":"ready","remediation":""}\n',
+    )
+
+    import inspect
+
+    declared_timeout = inspect.signature(mod._run).parameters["timeout"].default
+    assert 0 < declared_timeout < 60, (
+        "`_run`'s timeout default is the bound both git-lfs spawns inherit; an "
+        "absent or unbounded default makes that bound decorative"
+    )
+
+    timeouts = []
+
+    def fake_run(argv, *, timeout=declared_timeout, **kwargs):
+        timeouts.append(timeout)
+        return _FakeResult(0, stdout="git-lfs/3.5.1")
+
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    rc, _ = _run_cli(mod, ["git-lfs-enable"])
+
+    assert rc == 0
+    assert timeouts == [declared_timeout, declared_timeout]
 
 
 def test_git_lfs_enable_skips_mutation_when_binary_absent(mod, monkeypatch):

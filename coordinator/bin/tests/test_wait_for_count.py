@@ -204,3 +204,55 @@ def test_cli_treats_missing_dir_as_zero_not_error(mod, tmp_path):
 
     assert rc == 1
     assert "count=0" in err
+
+
+# ---------------------------------------------------------------------------
+# Timeout ceiling — a caller may ask for LESS, never for more
+# ---------------------------------------------------------------------------
+
+
+def test_over_ceiling_dials_are_clamped(mod):
+    over = mod.clamp_dials(mod.MAX_TIMEOUT_SEC * 100, mod.MAX_POLL_INTERVAL_SEC * 100)
+    assert over == (mod.MAX_TIMEOUT_SEC, mod.MAX_POLL_INTERVAL_SEC)
+
+
+def test_under_ceiling_dials_pass_through(mod):
+    assert mod.clamp_dials(5.0, 1.0) == (5.0, 1.0)
+
+
+def test_clamp_dials_is_idempotent(mod):
+    once = mod.clamp_dials(mod.MAX_TIMEOUT_SEC * 100, mod.MAX_POLL_INTERVAL_SEC * 100)
+    assert mod.clamp_dials(*once) == once
+
+
+def test_wait_for_count_cannot_be_asked_to_wait_past_the_ceiling(mod, tmp_path):
+    """A caller naming a day-long budget must still return at the ceiling.
+
+    The fake clock advances only on sleep, so the loop's own arithmetic — not
+    wall time — decides when this returns. An unclamped timeout_sec would drive
+    the fake clock to 86400, and an unclamped poll_interval_sec would record a
+    single 86400s sleep call.
+    """
+    clock = _FakeClock()
+
+    met, count = mod.wait_for_count(
+        tmp_path, "*", 1, timeout_sec=86400, poll_interval_sec=86400,
+        now_fn=clock.now_fn, sleep_fn=clock.sleep_fn,
+    )
+
+    assert met is False
+    assert count == 0
+    assert clock.now == mod.MAX_TIMEOUT_SEC
+    assert max(clock.sleep_calls) <= mod.MAX_POLL_INTERVAL_SEC
+
+
+def test_cli_timeout_message_reports_the_clamped_budget(mod, tmp_path):
+    """The TIMEOUT line must name what was actually waited, not what was asked
+    for — reporting the over-ask back would tell the caller its dial worked."""
+    rc, out, err = _run_cli(
+        mod,
+        ["--dir", str(tmp_path), "--min", "1", "--timeout-sec", "0", "--poll-interval-sec", "99999"],
+    )
+
+    assert rc == 1
+    assert "99999" not in err

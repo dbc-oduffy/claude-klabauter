@@ -333,6 +333,56 @@ def _resolve_git_root_uncached(cwd: Optional[str] = None) -> Optional[str]:
     return os.path.normpath(root)
 
 
+#: Depth bound for `resolve_git_root_cheap`'s walk-up. Same value the
+#: bash_guards prefilter has used since it was written -- a repo nested deeper
+#: than this reports "not found" rather than walking to the filesystem root.
+_CHEAP_ROOT_WALK_MAX_DEPTH = 64
+
+
+def resolve_git_root_cheap(cwd: Optional[str]) -> Optional[str]:
+    """Nearest ancestor of ``cwd`` holding a ``.git`` entry, found with
+    ``os.path.exists`` only -- NEVER a ``git rev-parse`` spawn.
+
+    MISS-MODE CALLERS ONLY, and that restriction is the whole contract. This
+    is deliberately cheaper and LESS AUTHORITATIVE than ``resolve_git_root``
+    below: a root reached through a symlinked ancestor can resolve to a
+    different absolute path than ``git rev-parse --show-toplevel`` reports,
+    because that realpath-resolves and this does not. A caller whose wrong
+    answer produces a wrong VERDICT (``bump_foreign_repo_write``'s same-repo
+    comparison is the standing example) must keep using ``resolve_git_root``
+    -- there, a divergent root is a false bump or a silent miss. A caller
+    whose wrong answer merely means "this lookup missed" may use this.
+
+    Homed here rather than in ``bash_guards/_helpers`` (which is where
+    docs/plans/2026-08-21-guards-under-the-brightline.md § Anti-scope
+    suggested lifting it) because its first non-guard caller,
+    ``guard_advisory_counter``, is a TOP-LEVEL module: importing ``_helpers``
+    from there would invert the layering and drag the guard import closure
+    into it. Siting it beside ``resolve_git_root`` keeps ONE resolver pair in
+    one place, which is what that Anti-scope entry was protecting.
+
+    Returns ``None`` when ``cwd`` is falsy or unresolvable, or when no
+    ``.git`` is found within ``_CHEAP_ROOT_WALK_MAX_DEPTH`` levels.
+    """
+    if not cwd:
+        return None
+    try:
+        current = os.path.abspath(cwd)
+    except (OSError, ValueError):
+        return None
+    for _ in range(_CHEAP_ROOT_WALK_MAX_DEPTH):
+        try:
+            if os.path.exists(os.path.join(current, ".git")):
+                return current
+        except OSError:
+            return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
 def resolve_git_root(cwd: Optional[str] = None) -> Optional[str]:
     """Return the git repo toplevel, or ``None`` (fail-open, row 4).
 

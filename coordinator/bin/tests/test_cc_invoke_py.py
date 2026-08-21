@@ -86,6 +86,98 @@ if str(_LIB_DIR) not in sys.path:
 
 import cc_invoke as _mod  # noqa: E402  (import after path setup)
 
+#: Independent second copies of the two client-ceiling constants. Deliberately literals,
+#: not imports of `_mod._CLIENT_START_MARGIN_SECS` / `_mod._NO_BUDGET_FALLBACK_SECS` --
+#: importing them would make every assertion below agree with any value whatsoever.
+#: Lowering either constant is fine (a client wait ratchets down); raising one fails here,
+#: which is the whole point after the 2026-08-21 PM ruling that no EM may widen a dial.
+_PINNED_CLIENT_MARGIN_SECS = 2
+_PINNED_NO_BUDGET_FALLBACK_SECS = 10
+
+#: The two dials retired on 2026-08-21. Cleared before every test below so a developer's
+#: ambient shell export cannot alter a result — the vars are inert in production, and a
+#: test that happens to pass only because one was unset would hide a regression.
+_RETIRED_TIMEOUT_DIALS = ("CC_INVOKE_TIMEOUT_SECS", "CC_INVOKE_CLIENT_MARGIN_SECS")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_op_timeout_state(monkeypatch):
+    """Restore cc_invoke's op-budget memoization to its cold state around every test.
+
+    `_OP_TIMEOUTS_STATE` / `_OP_TIMEOUTS_MAP` / `_OP_TIMEOUTS_BREADCRUMB_SHOWN` are
+    resolved AT MOST ONCE per process by design — a facade process is short-lived, so the
+    engine's `--dump-op-timeouts` probe is paid once and cached. Under a test runner that
+    lifetime is the whole session, which makes every one of those globals a channel
+    between unrelated tests: whether the probe spawns at all, and therefore what sits at
+    index 0 of a captured-spawn list, depends on which test ran first.
+
+    `_reset_op_timeout_cache` is the seam for exactly this, but six opportunistic `setUp`
+    calls only cover the classes that remembered. Doing it here makes the whole class of
+    ordering failure impossible rather than patching call sites, and it is what the
+    module's own once-per-process memoization implies for a runner that reuses the
+    process. Resetting on the way out as well contains a test that resolves state without
+    patching the globals (a `patch.object` on `_OP_TIMEOUTS_STATE` restores that name and
+    leaves the breadcrumb flag set).
+
+    Applies to `unittest.TestCase` methods too: an autouse fixture runs around them, and
+    ahead of `setUp`, so a class that sets these vars itself still wins.
+    """
+    for dial in _RETIRED_TIMEOUT_DIALS:
+        monkeypatch.delenv(dial, raising=False)
+    _mod._reset_op_timeout_cache()
+    yield
+    _mod._reset_op_timeout_cache()
+
+
+_DUMP_PROBE_FLAG = "--dump-op-timeouts"
+
+
+def _is_dump_probe(argv) -> bool:
+    """True for the once-per-process engine op-budget probe spawn.
+
+    Same predicate `_bare_run_dispatcher` already branches on — kept as one named
+    function so the two cannot drift apart on what counts as the probe.
+    """
+    return _DUMP_PROBE_FLAG in argv
+
+
+def _argv_of(entry):
+    """Normalise the two capture shapes in this module to a plain argv list.
+
+    A callback may record the bare `cmd` (`args[0]`) or the whole `(args, kwargs)`
+    tuple; both are common here and neither is worth rewriting at every call site.
+    """
+    if isinstance(entry, tuple) and entry and isinstance(entry[0], tuple):
+        return entry[0][0]
+    return entry
+
+
+def _invoke_argv(captured):
+    """The argv of the ONE `coordinator_core.invoke` OP spawn in `captured`.
+
+    NEVER index a captured-spawn list positionally. `_op_timeout_ceiling` resolves the
+    engine's op-budget map at most once per process, so whether the `--dump-op-timeouts`
+    probe spawns inside any given test depends on whether an earlier test in the run
+    already populated the cache. `captured[0]` used to be the op spawn by luck of
+    ordering — a cross-test dependency masquerading as a passing assertion. Once the
+    autouse reset above made isolation real, every test pays the probe first and every
+    positional index shifts by one.
+
+    Selecting by predicate is correct under either ordering, and makes the next change to
+    spawn order a non-event rather than a suite-wide breakage.
+    """
+    matches = [
+        argv
+        for argv in (_argv_of(entry) for entry in captured)
+        if "coordinator_core.invoke" in argv and not _is_dump_probe(argv)
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected exactly one coordinator_core.invoke op spawn, got {len(matches)}; "
+            f"captured argvs: {[_argv_of(e) for e in captured]}"
+        )
+    return matches[0]
+
 
 # ---------------------------------------------------------------------------
 # Fake CLAUDE_KLABAUTER_ROOT factory — creates a temp dir with a coordinator_core.invoke
@@ -343,8 +435,7 @@ class TestRouteState2Success(unittest.TestCase):
         ):
             _mod.cc_invoke("queue.append", {"a": 1}, "/the/repo")
 
-        self.assertEqual(len(captured_calls), 1)
-        call_args = captured_calls[0][0][0]  # first positional arg = cmd list
+        call_args = _invoke_argv(captured_calls)  # the op spawn, selected by predicate
         # Review: cross-slice (DR-148) — cc_invoke.py now uses sys.executable, not "python3".
         self.assertEqual(call_args[0], sys.executable)
         self.assertEqual(call_args[1], "-m")
@@ -380,7 +471,7 @@ class TestRouteState2Success(unittest.TestCase):
         ):
             _mod.cc_invoke("op", {"foo": "bar", "n": 42}, "/repo")
 
-        cmd = captured_calls[0][0][0]
+        cmd = _invoke_argv(captured_calls)
         self.assertIn("--params-file", cmd)
 
     def test_params_file_content_readable_during_spawn(self) -> None:
@@ -396,6 +487,10 @@ class TestRouteState2Success(unittest.TestCase):
 
         def _capture(*args: Any, **kwargs: Any) -> Any:
             cmd = args[0]
+            if _is_dump_probe(cmd):
+                # The op-budget probe carries no --params-file; reading one off it
+                # would raise before the op spawn under test ever arrived.
+                return _dump_absent_proc()
             params_path = cmd[cmd.index("--params-file") + 1]
             with open(params_path, "r", encoding="utf-8") as f:
                 captured_params.append(json.load(f))
@@ -427,6 +522,8 @@ class TestRouteState2Success(unittest.TestCase):
 
         def _capture(*args: Any, **kwargs: Any) -> Any:
             cmd = args[0]
+            if _is_dump_probe(cmd):
+                return _dump_absent_proc()
             captured_calls.append(cmd)
             params_path = cmd[cmd.index("--params-file") + 1]
             with open(params_path, "r", encoding="utf-8") as f:
@@ -440,7 +537,7 @@ class TestRouteState2Success(unittest.TestCase):
         ):
             _mod.cc_invoke("fleet.publish", big_params, "/repo")
 
-        cmd = captured_calls[0]
+        cmd = _invoke_argv(captured_calls)
         argv_total_len = sum(len(str(a)) for a in cmd)
         # Well under the Windows 32767 CreateProcess cap — the whole point is the
         # payload (hundreds of KB of paths) never rides argv at all.
@@ -461,6 +558,8 @@ class TestRouteState2Success(unittest.TestCase):
 
         def _run(*args: Any, **kwargs: Any) -> Any:
             cmd = args[0]
+            if _is_dump_probe(cmd):
+                return _dump_absent_proc()
             pf = cmd[cmd.index("--params-file") + 1]
             seen_paths.append(pf)
             self.assertTrue(os.path.exists(pf), "params file must exist during the spawn")
@@ -1002,89 +1101,32 @@ class TestSeamPresent(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Fix #2 — CC_INVOKE_TIMEOUT_SECS: robust parse, no raw ValueError traceback
+# The retired client dials — CC_INVOKE_TIMEOUT_SECS / CC_INVOKE_CLIENT_MARGIN_SECS
 # ---------------------------------------------------------------------------
 
-class TestTimeoutEnvGuard(unittest.TestCase):
-    """Fix #2 regression: invalid CC_INVOKE_TIMEOUT_SECS falls back to 10 without raising.
+class TestRetiredTimeoutEnvKnobsAreInert(unittest.TestCase):
+    """PM ruling 2026-08-21: no EM, in this repo or a sibling, may raise a timeout dial.
 
-    A malformed timeout tuning knob must not break the transport — defaulting is the
-    resilient choice and eliminates the raw ValueError traceback (the actual defect).
+    This class replaces `TestTimeoutEnvGuard`, which pinned the parse-and-warn behaviour
+    of `_read_positive_int_env` for `CC_INVOKE_TIMEOUT_SECS`. That reader existed only to
+    serve the two client dials and is deleted along with them: the FLOOR was run at 460
+    from a sibling repo and produced a 460s client wait on a shared box, and the MARGIN
+    was guarded by nothing at all. A malformed value can no longer break the transport for
+    the stronger reason that no value is read — so the tests here assert INERTNESS across
+    the same value shapes the old parse guard covered (garbage, zero, negative, and a
+    perfectly valid number), rather than a defaulting warning.
     """
 
     def setUp(self) -> None:
-        # cc_invoke() now resolves the per-op ceiling (shared with cc_invoke_bare), which
-        # memoizes the --dump-op-timeouts probe in module globals. Reset per-test so the
-        # dump-probe path is exercised deterministically and cannot leak across tests.
+        # The per-op ceiling memoizes the --dump-op-timeouts probe in module globals.
+        # Reset per-test so the dump-probe path is exercised deterministically.
         _mod._reset_op_timeout_cache()
 
-    def _invoke_with_timeout_env(self, raw_val: str) -> tuple[bool, str]:
-        """Invoke cc_invoke with CC_INVOKE_TIMEOUT_SECS=raw_val (subprocess mocked to succeed).
+    def _op_timeout_with_env(self, env: dict) -> int:
+        """Return the `timeout=` cc_invoke passed to the op-call spawn under `env`.
 
-        Returns (raised: bool, stderr_output: str).
-        Captures stderr to detect the clean warning line.
-        """
-        success_envelope = json.dumps({
-            "jsonrpc": "2.0", "id": 1, "result": {"ok": True}
-        })
-        mock_proc = unittest.mock.Mock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = success_envelope
-        mock_proc.stderr = ""
-
-        import io
-        captured_stderr = io.StringIO()
-
-        with (
-            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
-            unittest.mock.patch("subprocess.run", return_value=mock_proc),
-            unittest.mock.patch.dict(os.environ, {"CC_INVOKE_TIMEOUT_SECS": raw_val}, clear=False),
-            unittest.mock.patch("sys.stderr", captured_stderr),
-        ):
-            try:
-                _mod.cc_invoke("op", {}, "/repo")
-                return False, captured_stderr.getvalue()
-            except Exception as exc:
-                return True, str(exc)
-
-    def test_nonnumeric_timeout_falls_back_to_default(self) -> None:
-        """CC_INVOKE_TIMEOUT_SECS='notanumber' must not raise; must fall back to 10s."""
-        raised, stderr_out = self._invoke_with_timeout_env("notanumber")
-        self.assertFalse(raised, "cc_invoke must NOT raise on non-numeric CC_INVOKE_TIMEOUT_SECS")
-        self.assertIn(
-            "notanumber",
-            stderr_out,
-            "warning must name the offending value; got stderr: {stderr_out!r}",
-        )
-        self.assertIn(
-            "warn",
-            stderr_out.lower(),
-            f"warning must appear on stderr; got: {stderr_out!r}",
-        )
-
-    def test_zero_timeout_falls_back_to_default(self) -> None:
-        """CC_INVOKE_TIMEOUT_SECS='0' (non-positive) must not raise; must fall back to 10s."""
-        raised, stderr_out = self._invoke_with_timeout_env("0")
-        self.assertFalse(raised, "cc_invoke must NOT raise when CC_INVOKE_TIMEOUT_SECS=0")
-        self.assertIn(
-            "0",
-            stderr_out,
-            f"warning must name the offending value; got stderr: {stderr_out!r}",
-        )
-
-    def test_negative_timeout_falls_back_to_default(self) -> None:
-        """CC_INVOKE_TIMEOUT_SECS='-5' (negative) must not raise; must fall back to 10s."""
-        raised, stderr_out = self._invoke_with_timeout_env("-5")
-        self.assertFalse(raised, "cc_invoke must NOT raise when CC_INVOKE_TIMEOUT_SECS=-5")
-
-    def test_valid_timeout_is_used(self) -> None:
-        """CC_INVOKE_TIMEOUT_SECS='30' (valid) is honored as the FLOOR on the op call.
-
-        cc_invoke() now resolves the per-op ceiling (max(FLOOR, budget+MARGIN)) exactly
-        like cc_invoke_bare(). With the dump surface ABSENT (older-claude-klabauter branch), the
-        ceiling degrades to a flat FLOOR, so the op-call timeout is the valid FLOOR (30).
-        The op call is isolated from the --dump-op-timeouts probe spawn, which the ceiling
-        path issues first.
+        The dump surface is ABSENT, so the ceiling takes the no-budget fallback — the
+        branch the retired FLOOR used to own outright.
         """
         op_proc = unittest.mock.Mock()
         op_proc.returncode = 0
@@ -1096,19 +1138,53 @@ class TestTimeoutEnvGuard(unittest.TestCase):
         def _run(*args: Any, **kwargs: Any) -> Any:
             cmd = args[0]
             if "--dump-op-timeouts" in cmd:
-                return _dump_absent_proc()  # older-claude-klabauter -> ceiling degrades to flat FLOOR
+                return _dump_absent_proc()
             op_call_timeouts.append(kwargs.get("timeout"))
             return op_proc
 
         with (
             unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
             unittest.mock.patch("subprocess.run", side_effect=_run),
-            unittest.mock.patch.dict(os.environ, {"CC_INVOKE_TIMEOUT_SECS": "30"}, clear=False),
+            unittest.mock.patch.dict(os.environ, env, clear=False),
         ):
             _mod.cc_invoke("op", {}, "/repo")
 
         self.assertEqual(len(op_call_timeouts), 1, "exactly one op-call spawn expected")
-        self.assertEqual(op_call_timeouts[0], 30, "valid FLOOR must be passed to the op-call subprocess.run")
+        return op_call_timeouts[0]
+
+    def test_huge_knobs_do_not_raise_the_op_call_timeout(self) -> None:
+        """The reproduced incident, as a test: a 460s floor buys a 460s wait no longer."""
+        self.assertEqual(
+            self._op_timeout_with_env(
+                {"CC_INVOKE_TIMEOUT_SECS": "460", "CC_INVOKE_CLIENT_MARGIN_SECS": "9999"}
+            ),
+            _PINNED_NO_BUDGET_FALLBACK_SECS,
+        )
+
+    def test_valid_knob_value_is_equally_inert(self) -> None:
+        """A well-formed 30 is not a special case — it is simply not read."""
+        self.assertEqual(
+            self._op_timeout_with_env({"CC_INVOKE_TIMEOUT_SECS": "30"}),
+            _PINNED_NO_BUDGET_FALLBACK_SECS,
+        )
+
+    def test_malformed_knob_values_neither_raise_nor_warn(self) -> None:
+        """Garbage, zero, and a negative all reach the same number, silently.
+
+        The old reader emitted a `warn: cc_invoke: invalid ...` line for each of these.
+        A warning about a variable nothing reads is noise that also implies the variable
+        matters, so its absence is asserted, not merely tolerated.
+        """
+        import io
+
+        for raw in ("notanumber", "0", "-5"):
+            with self.subTest(raw=raw):
+                _mod._reset_op_timeout_cache()
+                cap_err = io.StringIO()
+                with unittest.mock.patch("sys.stderr", cap_err):
+                    timeout = self._op_timeout_with_env({"CC_INVOKE_TIMEOUT_SECS": raw})
+                self.assertEqual(timeout, _PINNED_NO_BUDGET_FALLBACK_SECS)
+                self.assertNotIn("warn", cap_err.getvalue().lower())
 
 
 # ---------------------------------------------------------------------------
@@ -1388,9 +1464,9 @@ class TestCcInvokeBare(unittest.TestCase):
         self.assertIn("not a JSON object", str(ctx.exception))
 
     def test_bare_timeout_raises(self) -> None:
-        with self._mr(), unittest.mock.patch.dict(
-            os.environ, {"CC_INVOKE_TIMEOUT_SECS": "1"}, clear=False
-        ), unittest.mock.patch(
+        # Dump absent (the dispatcher's default) -> the no-budget fallback is the wait,
+        # and no env value narrows or widens it.
+        with self._mr(), unittest.mock.patch(
             "subprocess.run",
             side_effect=_bare_run_dispatcher(
                 op_proc=None,
@@ -1400,7 +1476,7 @@ class TestCcInvokeBare(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 _mod.cc_invoke_bare("op", {}, "/repo")
         self.assertIn("timeout", str(ctx.exception))
-        self.assertIn("after 1s", str(ctx.exception))
+        self.assertIn(f"after {_PINNED_NO_BUDGET_FALLBACK_SECS}s", str(ctx.exception))
 
     def test_bare_params_file_cleaned_up(self) -> None:
         """The --params-file temp file is unlinked after the spawn (no scratch leak)."""
@@ -1434,7 +1510,9 @@ class TestCcInvokeBareOpTimeout(unittest.TestCase):
     """DEC-1..3: per-op timeout ceiling resolved from the engine's --dump-op-timeouts map.
 
     Each test asserts the exact `timeout=` value passed to the op-call subprocess.run
-    (max(FLOOR, budget+MARGIN)), pinning the arithmetic rather than only pass/fail.
+    (budget + `_CLIENT_START_MARGIN_SECS`), pinning the arithmetic rather than only
+    pass/fail. Every case sets both retired env dials absurdly high, so each assertion
+    doubles as proof the environment cannot reach the number (PM ruling 2026-08-21).
     """
 
     def setUp(self) -> None:
@@ -1478,58 +1556,55 @@ class TestCcInvokeBareOpTimeout(unittest.TestCase):
         self.assertEqual(len(captured_timeouts), 1)
         return captured_timeouts[0], cap_err.getvalue()
 
-    def test_override_op_resolves_budget_plus_margin(self) -> None:
-        """AC1: op WITH an override -> _t = max(FLOOR, budget+MARGIN) = max(1, 2+1) = 3.
+    #: Both retired dials, set far above anything the derivation can produce.
+    _RETIRED_KNOBS = {
+        "CC_INVOKE_TIMEOUT_SECS": "460",
+        "CC_INVOKE_CLIENT_MARGIN_SECS": "9999",
+    }
 
-        The probe now runs unconditionally (once per process) -- no env-var gate needed.
+    def test_override_op_resolves_budget_plus_margin(self) -> None:
+        """AC1: op WITH an override -> _t = budget + MARGIN = 2 + 2 = 4.
+
+        The probe runs unconditionally (once per process) -- no env-var gate needed.
         """
         t, _err = self._run_capture_timeout(
             "custom.op",
             self._dump_ok({"custom.op": 2, "__default__": 5}),
-            {
-                "CC_INVOKE_TIMEOUT_SECS": "1",
-                "CC_INVOKE_CLIENT_MARGIN_SECS": "1",
-            },
+            dict(self._RETIRED_KNOBS),
         )
-        self.assertEqual(t, 3, "override op must resolve max(1, 2+1)=3, not flat FLOOR")
+        self.assertEqual(
+            t,
+            2 + _PINNED_CLIENT_MARGIN_SECS,
+            "override op must resolve budget+margin=4 from the engine's own map, and "
+            "must not see the 460s dial set alongside it",
+        )
 
     def test_override_less_op_resolves_default_plus_margin(self) -> None:
-        """AC2: op WITHOUT an override -> map['__default__']+MARGIN = max(1, 2+1) = 3."""
+        """AC2: op WITHOUT an override -> map['__default__'] + MARGIN = 2 + 2 = 4."""
         t, _err = self._run_capture_timeout(
             "other.op",
             self._dump_ok({"custom.op": 99, "__default__": 2}),
-            {
-                "CC_INVOKE_TIMEOUT_SECS": "1",
-                "CC_INVOKE_CLIENT_MARGIN_SECS": "1",
-            },
+            dict(self._RETIRED_KNOBS),
         )
-        self.assertEqual(t, 3, "override-less op must resolve via __default__, not flat FLOOR")
+        self.assertEqual(
+            t,
+            2 + _PINNED_CLIENT_MARGIN_SECS,
+            "override-less op must resolve via __default__, not via any env dial",
+        )
 
-    def test_dump_absent_flat_floor_silent(self) -> None:
-        """AC3(a): dump surface absent (older claude-klabauter) -> flat FLOOR, no breadcrumb."""
+    def test_dump_absent_falls_back_silently(self) -> None:
+        """AC3(a): dump surface absent (older claude-klabauter) -> no-budget fallback, no breadcrumb."""
         t, err = self._run_capture_timeout(
-            "other.op",
-            _dump_absent_proc(),
-            {
-                "CC_INVOKE_TIMEOUT_SECS": "1",
-                "CC_INVOKE_CLIENT_MARGIN_SECS": "1",
-            },
+            "other.op", _dump_absent_proc(), dict(self._RETIRED_KNOBS)
         )
-        self.assertEqual(t, 1, "dump-absent must fall back to flat FLOOR (1)")
+        self.assertEqual(t, _PINNED_NO_BUDGET_FALLBACK_SECS)
         self.assertNotIn("op-budget dump failed", err, "dump-absent must be silent")
 
-    def test_dump_errored_flat_floor_with_breadcrumb(self) -> None:
-        """AC3(b): dump present but malformed (missing __default__) -> flat FLOOR + breadcrumb."""
+    def test_dump_errored_falls_back_with_breadcrumb(self) -> None:
+        """AC3(b): dump present but malformed (missing __default__) -> fallback + breadcrumb."""
         dump = self._dump_ok({"custom.op": 5})  # missing "__default__" -> error state
-        t, err = self._run_capture_timeout(
-            "other.op",
-            dump,
-            {
-                "CC_INVOKE_TIMEOUT_SECS": "1",
-                "CC_INVOKE_CLIENT_MARGIN_SECS": "1",
-            },
-        )
-        self.assertEqual(t, 1, "dump-errored must still fall back to flat FLOOR (1)")
+        t, err = self._run_capture_timeout("other.op", dump, dict(self._RETIRED_KNOBS))
+        self.assertEqual(t, _PINNED_NO_BUDGET_FALLBACK_SECS)
         self.assertIn("op-budget dump failed", err, "dump-errored must emit the breadcrumb")
 
     def test_dump_probe_runs_without_env_var(self) -> None:
@@ -1553,9 +1628,7 @@ class TestCcInvokeBareOpTimeout(unittest.TestCase):
         import io
         cap_err = io.StringIO()
         with self._mr(), unittest.mock.patch.dict(
-            os.environ,
-            {"CC_INVOKE_TIMEOUT_SECS": "1", "CC_INVOKE_CLIENT_MARGIN_SECS": "1"},
-            clear=False,
+            os.environ, dict(self._RETIRED_KNOBS), clear=False
         ), unittest.mock.patch("subprocess.run", side_effect=_run), unittest.mock.patch(
             "sys.stderr", cap_err
         ):
@@ -1572,22 +1645,23 @@ class TestCcInvokeCompositeOpTimeout(unittest.TestCase):
 
     session.boot_sweep runs five sequential git-heavy sweeps under the engine's
     DISPATCH_TIMEOUT_SECS budget (default 30s). It routes route_mutation -> route ->
-    cc_invoke() (the NON-bare path), which previously used a flat CC_INVOKE_TIMEOUT_SECS
-    floor (default 10s) — strictly tighter than the engine's 30s. On a loaded machine the
-    facade fired `cc_invoke: engine timeout after 10s (op=session.boot_sweep)` and killed
-    the sweep well before the engine's own clock. These tests pin the invariant that the
-    two clocks cannot silently drift back apart.
+    cc_invoke() (the NON-bare path), which once used a flat 10s client floor — strictly
+    tighter than the engine's 30s. On a loaded machine the facade fired `cc_invoke: engine
+    timeout after 10s (op=session.boot_sweep)` and killed the sweep well before the
+    engine's own clock. These tests pin the invariant that the two clocks cannot silently
+    drift back apart — now with the client clock derived from the engine's alone.
     """
 
     def setUp(self) -> None:
         _mod._reset_op_timeout_cache()
 
     def test_boot_sweep_facade_ceiling_ge_engine_budget_mocked(self) -> None:
-        """cc_invoke() resolves _t = max(FLOOR, budget+MARGIN) for a composite op.
+        """cc_invoke() resolves _t = budget + MARGIN for a composite op.
 
         Dump reports the engine budget (30) for session.boot_sweep (via __default__,
-        since boot_sweep carries no explicit override today). FLOOR=10, MARGIN=10 ->
-        _t = max(10, 30+10) = 40 >= 30. The op-call spawn (not the dump probe) carries it.
+        since boot_sweep carries no explicit override today). MARGIN=2 -> _t = 32 >= 30.
+        The op-call spawn (not the dump probe) carries it. Both retired dials are set
+        absurdly high and must not appear in the result.
         """
         op_proc = unittest.mock.Mock()
         op_proc.returncode = 0
@@ -1613,16 +1687,16 @@ class TestCcInvokeCompositeOpTimeout(unittest.TestCase):
             _mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"
         ), unittest.mock.patch("subprocess.run", side_effect=_run), unittest.mock.patch.dict(
             os.environ,
-            {"CC_INVOKE_TIMEOUT_SECS": "10", "CC_INVOKE_CLIENT_MARGIN_SECS": "10"},
+            {"CC_INVOKE_TIMEOUT_SECS": "460", "CC_INVOKE_CLIENT_MARGIN_SECS": "9999"},
             clear=False,
         ):
             _mod.cc_invoke("session.boot_sweep", {}, "/repo")
 
         self.assertEqual(len(op_call_timeouts), 1, "exactly one op-call spawn expected")
         self.assertEqual(
-            op_call_timeouts[0], 40,
-            "cc_invoke() must resolve max(FLOOR, budget+MARGIN)=max(10,30+10)=40, "
-            "NOT the flat 10s floor that strangled boot_sweep",
+            op_call_timeouts[0], engine_budget + _PINNED_CLIENT_MARGIN_SECS,
+            "cc_invoke() must resolve budget+margin=30+2=32 — neither the flat 10s floor "
+            "that strangled boot_sweep, nor anything the two retired dials name",
         )
         self.assertGreaterEqual(
             op_call_timeouts[0], engine_budget,
@@ -1910,7 +1984,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
             _mod.cc_invoke("memo.list", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
 
-        cmd = captured[0]
+        cmd = _invoke_argv(captured)
         self.assertNotIn("--repo", cmd)
 
     def test_cc_invoke_keeps_repo_for_repo_scoped_op(self) -> None:
@@ -1925,7 +1999,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
             _mod.cc_invoke("queue.append", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
 
-        cmd = captured[0]
+        cmd = _invoke_argv(captured)
         self.assertIn("--repo", cmd)
         self.assertEqual(cmd[cmd.index("--repo") + 1], "/the/repo")
 
@@ -1944,7 +2018,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
             _mod.cc_invoke_bare("memo.list", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
 
-        cmd = captured[0]
+        cmd = _invoke_argv(captured)
         self.assertNotIn("--repo", cmd)
 
     def test_cc_invoke_bare_keeps_repo_for_repo_scoped_op(self) -> None:
@@ -1962,7 +2036,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
             _mod.cc_invoke_bare("queue.append", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
 
-        cmd = captured[0]
+        cmd = _invoke_argv(captured)
         self.assertIn("--repo", cmd)
         self.assertEqual(cmd[cmd.index("--repo") + 1], "/the/repo")
 

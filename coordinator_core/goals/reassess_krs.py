@@ -588,9 +588,12 @@ def _write_goal_file_atomic(goal_file: Path, new_text: str) -> None:
     Review: code-reviewer P0 — the prior plain ``goal_file.write_text(...)``
     truncate-write left a state/goals/*.yaml artifact vulnerable to
     truncation/corruption if the process is killed mid-write (e.g. by
-    cc_invoke's outer client-side subprocess timeout — see the CLI
-    trampoline's CC_INVOKE_TIMEOUT_SECS default bump for the other half of
-    this fix). Mirrors the same mkstemp-in-same-dir + os.replace pattern
+    cc_invoke's outer client-side subprocess kill ceiling). Atomicity is the
+    WHOLE fix: the CLI trampoline once also poked CC_INVOKE_TIMEOUT_SECS to
+    70 to widen that ceiling, which bought nothing (the knob is a floor on
+    the client's wait, not on this op's engine-side budget) and was removed
+    2026-08-21 under the no-dial-raises ruling.  Mirrors the same
+    mkstemp-in-same-dir + os.replace pattern
     already used by orientation/regenerate_cache.py::write_cache().
     """
     fd, tmp = tempfile.mkstemp(dir=str(goal_file.parent), suffix=".tmp")

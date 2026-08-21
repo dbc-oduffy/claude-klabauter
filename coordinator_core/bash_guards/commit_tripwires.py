@@ -130,19 +130,17 @@ import dataclasses
 import os
 import re
 import shlex
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.git.divergence import diverging_paths as _diverging_paths
+from coordinator_core.git.run import run_git
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
-
-_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Generator-provenance declaration (generator_provenance.py).
 # _log_pathspec_divergence_override appends to
@@ -151,21 +149,26 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GENERATES = []
 
 
-def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0) -> Tuple[int, str]:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            timeout=timeout,
-            creationflags=_CREATIONFLAGS,
-        )
-    except subprocess.TimeoutExpired:
-        return -1, ""
-    except OSError:
-        return 127, ""
+def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float] = None) -> Tuple[int, str]:
+    """`(returncode, stdout)` for one local git read, bound by
+    `git.run.LOCAL_PLUMBING_BUDGET_SECS`.
+
+    Kept as a named local function rather than inlining `run_git` at each of
+    this module's call sites: the `(rc, out)` tuple is what every Check in
+    here already destructures, and the two sentinel returncodes are
+    unchanged (`-1` timeout, `127` git absent) because the shared runner
+    emits the same ones this body used to.
+
+    `timeout` no longer DEFAULTS to a number. It defaulted to 2.0 -- the
+    same value the shared seam applies -- and a module-private numeric
+    default is precisely the shape G7 of
+    `docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md` exists to
+    remove: 60+ modules each carrying their own copy of a number nobody
+    measured. The parameter itself stays, forwarded, because `run_git`
+    treats it as narrow-only -- a caller can ask this read to give up
+    sooner, and no value it passes can buy more time than the seam allows.
+    """
+    result = run_git(args, cwd=cwd, timeout=timeout)
     return result.returncode, result.stdout
 
 

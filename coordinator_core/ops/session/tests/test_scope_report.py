@@ -97,6 +97,8 @@ def _dirty_status(repo):
 
 
 class TestAssertPathsInSessionScope:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_own_session_paths_allow(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -214,6 +216,8 @@ class TestAssertPathsInSessionScope:
         assert ok is False
         assert reason
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_multi_path_denial_enumerates_every_denied_path(self, tmp_path):
         """SC-DR-019: a scoped-commit refusal is per-path, not per-commit —
         the deny reason must name EVERY denied path, not just the first, so
@@ -247,6 +251,8 @@ class TestAssertPathsInSessionScope:
         assert "claimed by live session other" in reason
         assert "reapable" not in reason
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_allowed_remainder_named_as_committable_and_exact(self, tmp_path):
         """The uncontested remainder (allowed paths) appears in the message
         and is EXACTLY the subset that was not denied."""
@@ -267,6 +273,8 @@ class TestAssertPathsInSessionScope:
         committable_section = reason.split("committable now")[1]
         assert "orphan.py" not in committable_section
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_stable_prefix_still_matches_single_path_denial(self, tmp_path):
         """Regression guard for existing pinned callers: the message still
         STARTS WITH the stable prefix for the first (only) denied path."""
@@ -323,6 +331,8 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         # claimed by no session at all), not merely mtime-excluded.
         return repo
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_orphan_default_mode_denies_and_names_orphan(self, tmp_path):
         repo = self._seed_orphan(tmp_path)
         ok, reason = assert_paths_in_session_scope("mine", ["orphan.py"], cwd=str(repo))
@@ -330,6 +340,8 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert "orphan" in reason
         assert "peer" not in reason and "live session" not in reason
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_orphan_allow_orphans_true_adopts_now_that_r1_is_closed(self, tmp_path):
         """Inverted per this test's own prior docstring: staff-eng R1
         (2026-08-03) is now closed (`ScopeResult.indeterminate` +
@@ -347,6 +359,8 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok is True
         assert reason == ""
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_peer_claimed_path_denies_in_both_modes(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -462,6 +476,8 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok is False
         assert reason
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_compute_offer_existing_keys_unchanged(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -724,6 +740,8 @@ class TestPostCommitResidueReport:
     residue (the exact harm case AC5 exists to prevent: nudging an operator
     into sweeping a peer's in-flight work)."""
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_residue_names_uncommitted_path_and_attributes_peer_owned_path(
         self, tmp_path
     ):
@@ -791,6 +809,8 @@ class TestPostCommitResidueReport:
         # instead, not duplicated as residue).
         assert "peer.py" not in rendered
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_residue_rendering_bounded_across_many_classes(self, tmp_path):
         """Review: code-reviewer (Finding 1/Finding 5) regression guard —
         many repo-root residue files, each its own class per
@@ -824,6 +844,8 @@ class TestPostCommitResidueReport:
         )
         assert "more class(es)" in rendered
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_residue_class_sample_capped_with_many_paths_in_one_class(
         self, tmp_path
     ):
@@ -864,6 +886,8 @@ class TestPostCommitResidueReport:
 
 
 class TestOwnershipReadout:
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_mine_bucket_mirrors_safe_paths(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -875,6 +899,8 @@ class TestOwnershipReadout:
         assert ownership["mine"] == offer["safe_paths"] == ["a.py"]
         assert ownership["degraded"] is False
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_peer_bucket_names_a_live_peers_claim(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -893,6 +919,8 @@ class TestOwnershipReadout:
         assert entry["claim_source"] in ("session", "agent", "agent-race")
         assert entry["liveness"] in ("live", "dead", "undetermined")
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_unattributed_bucket_names_an_unclaimed_dirty_path(self, tmp_path):
         """DR-258 (ScopeResult.orphans's own docstring): a dirty path nobody
         ever claimed lands here, never in `peer` (there is no owner to
@@ -910,6 +938,8 @@ class TestOwnershipReadout:
         assert "orphan.py" not in {p["path"] for p in ownership["peer"]}
         assert "orphan.py" in ownership["unattributed"]
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_degraded_forces_every_non_mine_path_into_unattributed(
         self, tmp_path, monkeypatch
     ):
@@ -1038,6 +1068,8 @@ class TestClassificationOffer:
             future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
         )
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_peer_held_path_never_touched_by_caller_names_the_holder(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1063,6 +1095,8 @@ class TestClassificationOffer:
         assert "peer" in reason
         assert scope_report._CLASSIFICATION_UNCLASSIFIED not in reason
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_orphan_still_classifies_as_orphan_and_still_denies(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1087,6 +1121,8 @@ class TestClassificationOffer:
         assert scope_report.CLAIMED_BY_PREFIX in reason
         assert scope_report.deny_reason_names_a_holder(reason) is False
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_orphan_classification_is_unreachable_with_include_orphans(self, tmp_path):
         """`_CLASSIFICATION_ORPHAN` contains the literal `CLAIMED_BY_PREFIX`
         substring, and `scoped_git_commit._include_orphans_ineffective_note`
@@ -1119,6 +1155,8 @@ class TestClassificationOffer:
         assert scope_report._CLASSIFICATION_ORPHAN not in reason
         assert scope_report.deny_reason_names_a_holder(reason) is False
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_genuinely_unknown_path_stays_unclassified(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1133,6 +1171,8 @@ class TestClassificationOffer:
         assert scope_report._CLASSIFICATION_UNCLASSIFIED in reason
         assert scope_report.deny_reason_names_a_holder(reason) is False
 
+    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    @pytest.mark.designed_red
     def test_classification_offer_never_widens_the_verdict(self, tmp_path):
         """THE invariant test. `extra_candidates` feeds `compute_scope` Step
         1, so every path below IS a member of the classification offer's own

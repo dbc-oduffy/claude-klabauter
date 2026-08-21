@@ -91,6 +91,7 @@ from coordinator_core.install._shared import (
     require_home,
 )
 from coordinator_core.install import resolution_journal
+from coordinator_core.install.timeouts import NETWORK_FETCH_SECS, TOOLCHAIN_BOOTSTRAP_SECS
 from coordinator_core.install.shell_rc_guard import write_path_entry_guard_blocks
 from coordinator_core.install.substrate_migrate import migrate_substrate_to_settings_home
 from coordinator_core.install.write_surface import (
@@ -4241,7 +4242,7 @@ def _fnm_step(check_only: bool) -> None:
         return
     if shutil.which("brew"):
         print("[setup] installing fnm via brew...", flush=True)
-        proc = _run(["brew", "install", "fnm"], timeout=300)
+        proc = _run(["brew", "install", "fnm"], timeout=TOOLCHAIN_BOOTSTRAP_SECS)
         if proc.returncode == 0:
             print("[setup] fnm installed via brew")
         else:
@@ -4257,7 +4258,7 @@ def _fnm_step(check_only: bool) -> None:
         # failure output — the run read as if the failure preceded the attempt.
         print("[setup] installing fnm via official curl installer...", flush=True)
         try:
-            curl_proc = subprocess.run(["curl", "-fsSL", "https://fnm.vercel.app/install"], capture_output=True, timeout=60, **_NO_CONSOLE)
+            curl_proc = subprocess.run(["curl", "-fsSL", "https://fnm.vercel.app/install"], capture_output=True, timeout=NETWORK_FETCH_SECS, **_NO_CONSOLE)
             if curl_proc.returncode != 0:
                 # Review: coordinator:code-reviewer — a failed/partial curl must
                 # never feed its (possibly empty/garbage) stdout into `bash -s`;
@@ -4265,7 +4266,7 @@ def _fnm_step(check_only: bool) -> None:
                 # both return codes only after both have already run.
                 ok = False
             else:
-                install_proc = subprocess.run(["bash", "-s", "--", "--skip-shell"], input=curl_proc.stdout, timeout=300, **_NO_CONSOLE)
+                install_proc = subprocess.run(["bash", "-s", "--", "--skip-shell"], input=curl_proc.stdout, timeout=TOOLCHAIN_BOOTSTRAP_SECS, **_NO_CONSOLE)
                 ok = install_proc.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             ok = False

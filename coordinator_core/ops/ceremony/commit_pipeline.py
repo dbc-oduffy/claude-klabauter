@@ -174,7 +174,12 @@ from coordinator_core.telemetry.op_latency import record_composition_span
 #: `_OP_TIMEOUT_OVERRIDES` comment block records 53 `git` spawns and
 #: 25.7/36.6/40.9s wall for a 2,100-path commit with no network claim
 #: attached -- direct in-tree evidence the non-push leg can itself be
-#: seconds at fleet path counts. Reusing `record_composition_span` (the
+#: seconds at fleet path counts. That spawn count is now named as the DEFECT
+#: the old 150s override cap was hiding (`ipc.CEREMONY_BUDGET_SECS`, DR-348,
+#: revoked 2026-08-21), not a cost this span exists to accommodate: these
+#: spans measure the leg the ceremony budget now holds to 2s end-to-end, so a
+#: 53-spawn commit is exactly what this instrumentation must catch, not
+#: explain away. Reusing `record_composition_span` (the
 #: existing span writer, no new sink, no new field) rather than inventing a
 #: parallel mechanism -- see that function's own docstring for the record
 #: shape and its fail-open contract (never raises, honours

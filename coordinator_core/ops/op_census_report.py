@@ -83,22 +83,33 @@ Negative-spec:
     - `census()` reads ONLY the current (newest) op-latency generation
       (`op_latency.sink_generations(...)[:1]`) — folding in rotated
       generations is explicitly out of scope (plan § Out of scope).
+    - `report["budget_breaches"]` is a HEADLINE, capped at
+      `CENSUS_BREACH_TOP_N` ranked rows, computed by
+      `op_latency.breach_summary` over the telemetry rows this function has
+      ALREADY read — one extra in-memory pass, never a second sink read, and
+      no widening of this op's read bound. The full ranked list lives at
+      `op_census.breaches` (`coordinator_core.ops.op_budget_breaches`), a
+      sibling op rather than a mode of this one: a breach view needs none of
+      the sha256/AST corpus scan that dominates this handler's cost, and it
+      must not be gated behind `CorpusIdentityError`, which is a fact about
+      the source tree and says nothing about a sink.
     - Does not build a second spawn inventory or a second cache — reuses
       `op_census.module_summary` (C1), `op_census.spawn_bearing_ops` (C2),
       and `op_census.timing` (C4) verbatim (anti-scope).
     - Does not kill anything — `census()` produces evidence only (plan
       anti-scope: "Do not kill anything. This plan measures. P2 kills.").
-    - Registration-wiring gap, named rather than silently worked around:
-      registering `op_census.report` in `ipc._REGISTRY` (this module's own
-      `@register_op` decorator) is necessary but not sufficient for
-      `coordinator-invoke op_census.report` to resolve it — the lazy/eager
-      dispatch seam (`coordinator_core/ops/__init__.py::_EAGER_OP_MODULES`,
-      `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP`) is a
-      hand-maintained list neither of which is in this chunk's declared
-      `writes:` scope. Full reachability via `coordinator-invoke` (the
-      stated AC) needs a one-line addition to each of those two files by
-      whichever chunk/session owns that scope — see this chunk's own report
-      Notes.
+    - Registration-wiring: `op_census.report` is registered in `ipc._REGISTRY`
+      (this module's own `@register_op` decorator) AND enrolled in both
+      hand-maintained lazy/eager dispatch seams
+      (`coordinator_core/ops/__init__.py::_EAGER_OP_MODULES`,
+      `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP`) — fully
+      reachable via `coordinator-invoke op_census.report`. (Review: staff-eng
+      Finding 4 — this bullet previously described the wiring as an
+      outstanding gap; both seams were closed in this same diff.) Nothing yet
+      guards the ops-side seam against recurrence — `_EAGER_OP_MODULES` has
+      no completeness gate the way `coordinator_core/hooks/*.py` does via
+      `test_eager_hook_modules_covers_every_register_op.py`; that gap is
+      tracked separately, not by this module.
 
 Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C6.md
                docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md
@@ -108,31 +119,38 @@ Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-o
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from coordinator_core.engine_root import is_published_engine_mirror
 from coordinator_core.ipc import register_op
 from coordinator_core.op_census import module_summary
 from coordinator_core.op_census.line_count import (
     PER_MODULE_LINE_BAR,
     compute_distribution,
+    evaluate_ratchet,
     ratchet_check,
 )
 from coordinator_core.op_census.spawn_bearing_ops import (
     OpEntrypoint,
     live_registry_op_names,
+    load_spawn_index,
     ops_with_spawn_evidence,
     registry_divergence,
     resolve_op_entrypoints,
+    save_spawn_index,
 )
 from coordinator_core.op_census.timing import (
     AxisResult,
     Disposition,
     NoDataReason,
+    PROCESS_TIME_BAR_MS,
     invocation_tax_dispositions,
     process_time_by_op,
 )
+from coordinator_core.telemetry.op_latency import breach_summary
 
 __all__ = [
     "CorpusIdentityError",
@@ -143,7 +161,9 @@ __all__ = [
     "BRIGHTLINE_BUDGET_MS",
     "PER_PROCESS_BAR_MS",
     "MAX_TELEMETRY_ROWS",
+    "CENSUS_BREACH_TOP_N",
     "census",
+    "measure_census_self_timing_ms",
 ]
 
 #: The one concrete, cheap identity check `census()` can make today for
@@ -172,6 +192,13 @@ PER_PROCESS_BAR_MS = 200.0
 #: mirrors `cost_census.MAX_ROWS_SCANNED`'s own bounding discipline.
 MAX_TELEMETRY_ROWS = 200_000
 
+#: Ranked breach rows folded into this report. Short by design: this is the
+#: census's headline, and the full ranked list is `op_census.breaches`
+#: (`coordinator_core.ops.op_budget_breaches`) — the surface that exists to
+#: carry it. `budget_breaches.totals.breaching_ops` is always the untruncated
+#: count, so a short list here can never read as a clean box.
+CENSUS_BREACH_TOP_N = 5
+
 
 class CorpusIdentityError(Exception):
     """Raised when `census()` resolves a corpus root whose name is not
@@ -197,13 +224,35 @@ def _corpus_root() -> Path:
 def _index_path(corpus_root: Path) -> Path:
     """Persisted-tier index location — sibling to `op_latency.py`'s own
     `.git/coordinator-sessions/logs/` convention (never tracked, since
-    `.git/` itself is never tracked; no `.gitignore` entry needed)."""
+    `.git/` itself is never tracked; no `.gitignore` entry needed). Callers
+    only persist through this path when `corpus_root.parent/'.git'` already
+    exists (see `census()`'s own guard) — a non-git deployment (e.g. the
+    published mirror) degrades to a cold build every call rather than
+    fabricate a `.git/` directory that isn't there."""
     return (
         corpus_root.parent
         / ".git"
         / "coordinator-sessions"
         / "cache"
         / "op-census-module-index.json"
+    )
+
+
+def _spawn_index_path(corpus_root: Path) -> Path:
+    """Persisted-tier spawn-evidence index location -- same directory and
+    same non-git-deployment degrade-to-cold-build guard as `_index_path`
+    (see that function's own docstring), a sibling file rather than a
+    second index shape folded into the module-summary index: spawn
+    evidence (C2, `spawn_bearing_ops.SpawnIndex`) and module summaries (C1,
+    `module_summary`'s own index) are different value shapes with
+    different serializers, kept as separate on-disk files exactly as they
+    are separate in-memory index types."""
+    return (
+        corpus_root.parent
+        / ".git"
+        / "coordinator-sessions"
+        / "cache"
+        / "op-census-spawn-index.json"
     )
 
 
@@ -261,11 +310,23 @@ def _spawn_axis(
     entrypoints: Dict[str, OpEntrypoint],
     spawn_evidence: Dict[str, tuple],
 ) -> Dict[str, AxisResult]:
-    """Per-op spawn-evidence disposition — `over_bar` when the op's owning
-    module carries a recognised spawn site (module granularity, per C2's own
-    deliberate over-approximation), `under_bar` when it resolved and does
-    not, `no_data`/`never_observed` when the op's handler could not be
-    resolved to a source file at all (see `OpEntrypoint.unresolved_reason`)."""
+    """Per-op spawn-EVIDENCE disposition — reuses the `Disposition` enum's
+    `over_bar`/`under_bar` names but there is no spawn BAR on this axis
+    (nothing here is compared against a budget): `over_bar` means "the op's
+    owning module carries a recognised spawn site" (module granularity, per
+    C2's own deliberate over-approximation, so this can be true for an op
+    that is itself perfectly within its own spawn budget), `under_bar` means
+    "resolved and carries none", `no_data`/`never_observed` means the op's
+    handler could not be resolved to a source file at all (see
+    `OpEntrypoint.unresolved_reason`). Consequently `dispositions.cleared`
+    excludes every op whose module spawns AT ALL, not only ops that are
+    themselves over some enrolled spawn budget — read `cleared` as "no
+    spawn evidence found for this op's module," never as "this op is
+    verified within its spawn budget." (Review: staff-eng Finding 10 —
+    named here rather than renaming the shared `Disposition` enum, which
+    would be a cross-cutting rename touching `_four_axis_report`'s
+    exhaustive dispatch and every axis/consumer; left to a dedicated pass if
+    the confusion proves live in practice.)"""
     results: Dict[str, AxisResult] = {}
     for op_name, ep in entrypoints.items():
         if ep.relpath is None:
@@ -373,6 +434,7 @@ def census(
     telemetry_entries: Optional[Iterable[dict]] = None,
     measured_tax_ms: Optional[float] = FROZEN_INVOCATION_TAX_MS,
     persist_index: bool = True,
+    strict: bool = False,
 ) -> dict:
     """Assembles the full machine-readable op_census report. Pure of IPC —
     the `register_op` handler below is a thin wrapper.
@@ -384,24 +446,47 @@ def census(
     is never live-measured per call).
 
     Raises `CorpusIdentityError` (a refusal, not a degrade) when the
-    resolved corpus root's name is not `coordinator_core`, and re-raises
-    `line_count.RatchetError` when the corpus has grown past its frozen
-    high-water — both per the plan AC: "the ratchet assertions refuse."
+    resolved corpus root's name is not `coordinator_core` — this refusal is
+    a property of the CORPUS ROOT, and always fires regardless of `strict`.
+
+    The line-count RATCHET is different (staff-eng Finding 5): a measurement
+    instrument must still produce a measurement when its verdict is "over",
+    so `census()` ALWAYS assembles and emits its report even when the
+    corpus has grown past `line_count.FROZEN_HIGH_WATER_*` — the verdict is
+    carried as data at `report["line_count"]["ratchet"]`
+    (`line_count.evaluate_ratchet`'s own `.to_dict()` shape: `tripped` plus
+    `frozen`/`measured` for each of `module_count`/`total_lines`/
+    `over_bar_count`). Passing `strict=True` restores today's raising
+    behaviour — `line_count.RatchetError` — for callers (e.g. the gate
+    test) that still want the refusal as control flow.
     """
     handler_t0 = time.process_time()
 
     corpus_root = _corpus_root()
-    if corpus_root.name != FROZEN_CORPUS_ROOT_NAME:
+    # Review: staff-eng Finding 1 -- a bare directory-name comparison cannot
+    # distinguish the published mirror from the live source tree (both are
+    # named `coordinator_core`), which is exactly the confusion this refusal
+    # exists to prevent. Key on the resolved published-mirror identity too:
+    # the FROZEN_HIGH_WATER_* figures were measured over the live tree, not
+    # the mirror, so reading a mirror through this path is also a refusal.
+    is_mirror = is_published_engine_mirror(str(corpus_root.parent))
+    if corpus_root.name != FROZEN_CORPUS_ROOT_NAME or is_mirror:
         raise CorpusIdentityError(
             f"census() refused: corpus root {corpus_root!s} does not match the frozen "
             f"identity {FROZEN_CORPUS_ROOT_NAME!r} the ratcheted figures were taken "
-            "against (Finding 5, stays OPEN)."
+            f"against (is_published_mirror={is_mirror})."
         )
     if repo_root is None:
         repo_root = corpus_root.parent
 
     # --- cache revalidate -------------------------------------------------
     revalidate_t0 = time.process_time()
+    # Review: staff-eng Finding 8 -- persisting under `<corpus_root.parent>/
+    # .git/...` fabricates a `.git/` directory in the published mirror (and
+    # any non-git deployment), where none exists. Persist only when a real
+    # `.git` directory is already there; otherwise degrade to a cold build
+    # every call rather than manufacture git-tree structure that isn't ours.
+    persist_index = persist_index and (corpus_root.parent / ".git").is_dir()
     index_path = _index_path(corpus_root)
     index = module_summary.load_index(index_path) if persist_index else {}
     paths = _corpus_paths(corpus_root)
@@ -414,21 +499,35 @@ def census(
     # --- summary aggregate --------------------------------------------------
     aggregate_t0 = time.process_time()
     distribution = compute_distribution(summaries.values())
-    ratchet_check(distribution)  # refuses (raises RatchetError) on growth
+    # Measurement first, always (staff-eng Finding 5) -- ratchet_outcome is
+    # emitted below at report["line_count"]["ratchet"] regardless of
+    # `tripped`. `strict=True` additionally re-raises via ratchet_check,
+    # preserving today's refusal as control flow for callers that want it.
+    ratchet_outcome = evaluate_ratchet(distribution)
+    if strict:
+        ratchet_check(distribution)
 
     op_names = live_registry_op_names()
     entrypoints = resolve_op_entrypoints(op_names)
-    spawn_evidence = ops_with_spawn_evidence(entrypoints)
+    spawn_index_path = _spawn_index_path(corpus_root)
+    spawn_index = load_spawn_index(spawn_index_path) if persist_index else {}
+    spawn_evidence = ops_with_spawn_evidence(entrypoints, index=spawn_index)
+    if persist_index:
+        save_spawn_index(spawn_index, spawn_index_path)
     divergence = registry_divergence()
 
     # Re-key by the same repo-relative form `resolve_op_entrypoints` produces
-    # (POSIX, relative to the repo root) so `_line_count_axis` can look an
-    # op's owning module up directly.
-    repo_root_resolved = repo_root.resolve()
+    # (POSIX, relative to the ENGINE repo root -- corpus_root.parent, never
+    # the caller-supplied `repo_root`, which names the consuming repo an op
+    # dispatched against, not the engine source tree `resolve_op_entrypoints`
+    # resolved paths against). Review: staff-eng Finding 0 -- re-keying
+    # against the dispatch-time repo_root made every relative_to() raise on
+    # the real wire path, voiding the line_count axis for all ops silently.
+    engine_repo_root_resolved = corpus_root.parent.resolve()
     summaries_by_op_relpath: Dict[str, module_summary.ModuleSummary] = {}
     for path_str, summary in summaries.items():
         try:
-            relpath = Path(path_str).resolve().relative_to(repo_root_resolved).as_posix()
+            relpath = Path(path_str).resolve().relative_to(engine_repo_root_resolved).as_posix()
         except ValueError:
             continue
         summaries_by_op_relpath[relpath] = summary
@@ -444,6 +543,12 @@ def census(
     telemetry_entries = list(telemetry_entries)
     process_time_axis = process_time_by_op(telemetry_entries, op_names)
     invocation_tax_axis = invocation_tax_dispositions(op_names, measured_tax_ms=measured_tax_ms)
+    # One extra pass over rows already in memory, never a second read. The
+    # process_time axis says WHETHER an op is over the bar; this says how
+    # much it took past it, how often, and which way it is going -- and it
+    # keeps the caller-timeout and vanished populations separate, which the
+    # p50/max axis structurally cannot (see op_latency.breach_summary).
+    breaches = breach_summary(telemetry_entries, bar_ms=PROCESS_TIME_BAR_MS, top_n=CENSUS_BREACH_TOP_N)
     telemetry_ms = (time.process_time() - telemetry_t0) * 1000.0
 
     # --- serialization -------------------------------------------------------
@@ -452,17 +557,20 @@ def census(
     report = {
         "op": "op_census.report",
         "corpus": {
-            "root": corpus_root.name,
+            "root": str(corpus_root),
+            "root_name": corpus_root.name,
+            "is_published_mirror": is_mirror,
             "module_count": distribution.module_count,
             "bytes_scanned": bytes_scanned,
         },
-        "line_count": distribution.to_dict(),
+        "line_count": {**distribution.to_dict(), "ratchet": ratchet_outcome.to_dict()},
         "registry_divergence": {
             "agrees": divergence.agrees,
             "only_in_live": sorted(divergence.only_in_live),
             "only_in_fast_path": sorted(divergence.only_in_fast_path),
         },
         "dispositions": dispositions,
+        "budget_breaches": breaches,
     }
     serialize_ms = (time.process_time() - serialize_t0) * 1000.0
 
@@ -490,6 +598,50 @@ def census(
         "byte_scan_within_frozen_ratio": byte_scan_ms_per_mb <= FROZEN_BYTE_SCAN_MS_PER_MB * 1.10,
     }
     return report
+
+
+#: The measurement script run by `measure_census_self_timing_ms` -- reports
+#: the CHILD's own `report["self_assessment"]["handler_total_ms"]` (already
+#: `time.process_time()`-based inside `census()` itself), mirroring
+#: `timing._TAX_PROBE_SCRIPT`'s shape: a minimal in-process call whose own
+#: process time is what the parent batches and averages.
+_SELF_TIMING_PROBE_SCRIPT = (
+    "import json, sys\n"
+    "from coordinator_core.ops.op_census_report import census\n"
+    "report = census(telemetry_entries=[], persist_index=False)\n"
+    "sys.stdout.write(json.dumps({'handler_total_ms': report['self_assessment']['handler_total_ms']}))\n"
+)
+
+
+def measure_census_self_timing_ms(*, k: int = 5, timeout_secs: float = 60.0) -> dict:
+    """Periodic, out-of-band re-verification of `census()`'s own handler
+    process-time cost, using the Windows job-object batched primitive
+    (`coordinator_core.benchmarks.process_time.batched_process_time_ms`) —
+    the correct pattern for a sub-150ms `time.process_time()` reading, which
+    a single sample cannot resolve past the ~15.625ms Windows scheduler
+    tick (see module docstring's budget table and
+    `timing.measure_invocation_tax_ms`'s own 5-iteration-mean worked
+    example, which this mirrors).
+
+    NOT called on the live `census()`/`op_census.report` request path:
+    running the full handler `k` times per real request would itself blow
+    the very DR-344 budget this measures. This is a benchmark/reference
+    helper only, re-run when this module's own docstring budget-table
+    figures are re-verified -- exactly as `measure_invocation_tax_ms` is
+    for `FROZEN_INVOCATION_TAX_MS` (see module docstring negative-spec).
+
+    Returns `batched_process_time_ms`'s own dict shape
+    (`process_time_ms`/`wall_ms`/`procs_per_call`/`rc`/`k`). Raises
+    `NotImplementedError` off Windows and propagates any job-object API
+    failure -- never silently degrades to a wrong unit (see
+    `batched_process_time_ms`'s own contract).
+    """
+    from coordinator_core.benchmarks.process_time import batched_process_time_ms
+
+    return batched_process_time_ms(
+        [sys.executable, "-c", _SELF_TIMING_PROBE_SCRIPT],
+        k=k,
+    )
 
 
 @register_op("op_census.report")

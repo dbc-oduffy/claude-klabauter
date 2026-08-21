@@ -73,12 +73,22 @@ _BASELINE_REASON = (
 _SPAWN_COUNT_HIGH_WATER = {
     "ceremony.scoped_git_commit": {
         "green_path": {
-            "ceiling": 17,
+            "ceiling": 19,
             "reason": (
                 "Raised 12->17 on 2026-08-18 (opro-01): the CAS re-read of "
                 "index/HEAD plus one interpret-trailers call are five real, "
                 "correctness-bearing spawns landed after the 2026-08-11 "
-                "baseline -- see module docstring."
+                "baseline -- see module docstring. Raised 17->19 on "
+                "2026-08-21: NEWLY-COUNTED PRE-EXISTING COST, not growth. "
+                "`323aafaf8` added `_mode_delta_paths_chunked()` (one "
+                "`git diff --cached --raw` per `commit_scoped()`) and "
+                "`82dc080eb` added `_reject_stale_index_paths()` (two "
+                "batched `diff` calls per `_handler()`); both are "
+                "unconditional, both are break-class fixes, and neither "
+                "moved the manifest in its own commit. Seam figure measured "
+                "stable 8/8 in a single-process loop plus repeated pytest "
+                "runs. Verdict supplied by the op's owner (session b6cb0c6b) "
+                "as a budget raise rather than a kill candidate."
             ),
         },
         "refusal_path_unanswerable": {
@@ -90,28 +100,50 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
         "directory_pathspec_expansion": {
-            "ceiling": 18,
+            "ceiling": 20,
             "reason": (
                 "Raised 13->18 alongside green_path on 2026-08-18 (opro-01) "
                 "for the same CAS re-read plus interpret-trailers spawns -- "
-                "see green_path's reason above."
+                "see green_path's reason above. Raised 18->20 on 2026-08-21 "
+                "for the same newly-counted pre-existing cost as green_path "
+                "17->19: the two unconditional `_git`-routed spawns added by "
+                "`323aafaf8` and `82dc080eb` land on EVERY shape, not just "
+                "the green path, so all four seam figures moved together."
             ),
         },
         "push_raced_path": {
-            "ceiling": 20,
+            "ceiling": 22,
             "reason": (
                 "Pre-existing mark, not touched by the 2026-08-18 CAS raise "
                 "documented above; no session-local rationale is recorded "
-                "for this key."
+                "for that earlier value. Raised 20->22 on 2026-08-21 for the "
+                "same newly-counted pre-existing cost as green_path 17->19 "
+                "-- `323aafaf8` and `82dc080eb` add unconditional spawns to "
+                "every shape; see green_path's reason above."
             ),
         },
         "pending_drain_superseded": {
-            "ceiling": 23,
+            "ceiling": 25,
             "reason": (
                 "New shape first measured 2026-08-19 (opro-03 C6): a due "
                 "pending-push record draining into a superseded "
-                "non-fast-forward push. Enters at its measured value, not a "
-                "raise -- it budgets a path no prior shape reached."
+                "non-fast-forward push. Entered at its measured value, not a "
+                "raise -- it budgets a path no prior shape reached. Raised "
+                "23->25 on 2026-08-21 for the same newly-counted "
+                "pre-existing cost as green_path 17->19; see that reason."
+            ),
+        },
+        "deferred_diverged_detach": {
+            "ceiling": 20,
+            "reason": (
+                "Entered 2026-08-21 at its measured value, not a raise -- it "
+                "budgets the diverged-path detach shape that reaches "
+                "`auto_push._detach_and_run`, which no prior shape counted. "
+                "Landed in the manifest by `56c76107e` without a mark here, "
+                "leaving the completeness pin red until this row; that "
+                "half-pair is the third of the same shape recorded on "
+                "2026-08-21. Seam figure, stable per the op owner "
+                "(session b6cb0c6b)."
             ),
         },
         # The three `op_total_*` marks below entered the manifest on
@@ -157,6 +189,27 @@ _SPAWN_COUNT_HIGH_WATER = {
                 "this is the only one whose drain actually pushes: it pays "
                 "`push_once`, the `_is_superseded` fetch and ancestor test, "
                 "and the cockpit-contract publish leg on top of the commit."
+            ),
+        },
+        "op_total_deferred_diverged_detach": {
+            "ceiling": 26,
+            "reason": (
+                "Entered 2026-08-21 at its measured HEAD value, not a raise. "
+                "Whole-op count for the diverged-path detach shape against "
+                "`deferred_diverged_detach`'s seam figure of 20. Landed by "
+                "`56c76107e` without a mark here, red on the completeness "
+                "pin until this row. RE-BANK WHEN IT DROPS: a pending "
+                "`porcelain=v2` state-read consolidation in "
+                "`ops/ceremony/git_native.py` + `git/divergence.py` folds "
+                "two chunked spawns into one v2 read and is expected to "
+                "reduce every `op_total_*` key here by exactly 1 (this one "
+                "to 25), seam keys unchanged. That is a REDUCTION, so it "
+                "cannot red this ratchet (`live <= ceiling`); bank it when "
+                "the consolidation lands rather than leaving the ceiling "
+                "loose. Deliberately cites the mechanism and not the session "
+                "holding it: a governed table must not assert what an "
+                "uncommitted session will do, and re-banking should be "
+                "triggered by observing the code change."
             ),
         },
     },

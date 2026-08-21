@@ -40,29 +40,42 @@ bytes-scanned time and this design avoids it.
 spike-era estimates the plan cited before this mechanism existed — those
 figures, 0.7ms load / 2,154ms cold build / 56.9ms warm total / 54.6ms of
 that as the sha256 floor over 1,135 files, were taken against a mechanism
-that did not exist; superseded below):
+that did not exist; superseded below).
+
+**WHOLE-TREE reference figures, not a figure about `op_census.report`
+itself** (Review: staff-eng Finding 9 — these three rows are all measured
+over the 2,823-file whole tree, `tests/` included; `census()` never scans
+that corpus — `_corpus_paths` excludes `tests/` and `test_*.py` by design,
+scanning ~1,135-1,159 non-test files, see that function's own docstring.
+Kept here as the module-level floor/cost-shape reference `summarize_paths`
+itself was measured against; `op_census_report.py`'s own additive budget
+table is the figure that binds the op's real, non-test-corpus cost):
     - `cache.compute_stamp` alone, sha256 over this repo's own
-      `coordinator_core/` tree at authoring time (2,823 `.py` files,
-      excluding `__pycache__`): **158.7ms** — the unavoidable floor, scales
-      with bytes not op count, matches the spike's "sha256 is the floor"
-      finding in shape though not in absolute figure (this repo's tree is
-      ~2.5x the file count the spike measured against).
+      `coordinator_core/` tree at authoring time (WHOLE TREE, 2,823 `.py`
+      files, excluding `__pycache__`): **158.7ms** — the unavoidable floor,
+      scales with bytes not op count, matches the spike's "sha256 is the
+      floor" finding in shape though not in absolute figure (this repo's
+      tree is ~2.5x the file count the spike measured against).
     - Cold build (`summarize_paths` with an empty `index`, every file a
-      miss — full parse + spawn-site scan + stamp for every file):
-      **19,448ms** over the same 2,823 files — a one-time cost, off the
-      measured warm-path budget by design, and off the brightline (the
+      miss — full parse + spawn-site scan + stamp for every file), WHOLE
+      TREE: **19,448ms** over the same 2,823 files — a one-time cost, off
+      the measured warm-path budget by design, and off the brightline (the
       brightline governs the warm hot path, not a one-time index build).
     - Warm revalidate (`summarize_paths` against an `index` already
-      populated by the prior cold build, no file bodies changed): every
-      file still pays its `compute_stamp` read (content-hash revalidation
-      is unconditional, per `cache.read_disk_revalidated`'s own contract),
-      but zero files re-parse: **346.3ms** over the same 2,823 files —
-      inside the 500ms brightline, with headroom, but not by the wide
-      margin the spike-era 56.9ms figure implied (this repo's real file
-      count is materially larger than what that figure was taken
+      populated by the prior cold build, no file bodies changed), WHOLE
+      TREE: every file still pays its `compute_stamp` read (content-hash
+      revalidation is unconditional, per `cache.read_disk_revalidated`'s
+      own contract), but zero files re-parse: **346.3ms** over the same
+      2,823 files — inside the 500ms brightline, with headroom, but not by
+      the wide margin the spike-era 56.9ms figure implied (this repo's real
+      file count is materially larger than what that figure was taken
       against). The gap above the 158.7ms sha256 floor is per-file
       `Path`/dict-lookup overhead in `summarize_paths`/
-      `read_disk_revalidated`, not re-parsing.
+      `read_disk_revalidated`, not re-parsing. Contrast with
+      `op_census_report.py`'s own additive-budget-table row for this same
+      mechanism, **125.0ms warm** — that figure is over the NON-TEST
+      ~1,159-file corpus `census()` actually scans, not this 2,823-file
+      whole-tree reference.
 
 Negative-spec:
     - `summarize_paths` never imports `coordinator_core.ops` and never boots

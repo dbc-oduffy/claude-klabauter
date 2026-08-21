@@ -600,3 +600,91 @@ def test_lookup_edit_ts_ignores_unparseable_timestamp(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# commit_set — "what belongs to me to commit?"
+# ---------------------------------------------------------------------------
+
+
+def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path):
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "a.py"), _touch_line("T", "b.py")])
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "c.py")])
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.paths == ["a.py", "b.py"]
+    assert result.complete is True
+    assert result.contested == {}
+
+
+def test_commit_set_excludes_a_released_path(tmp_path):
+    # Committing releases the claim, so the answer is "still outstanding",
+    # never "ever touched" -- the distinction the PM named explicitly.
+    _session_touched(
+        tmp_path,
+        "sid-mine",
+        [
+            _touch_line("T", "kept.py"),
+            _touch_line("T", "committed.py"),
+            _touch_line("R", "committed.py", when="2026-08-08T11:00:00.000000Z"),
+        ],
+    )
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.paths == ["kept.py"]
+
+
+def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path):
+    # A peer's path is not yours, so it is not offered -- but it IS named, so
+    # the operator learns why something they edited is missing instead of
+    # wondering. Silent omission would reintroduce the doubt this removes.
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py"), _touch_line("T", "solo.py")])
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.paths == ["solo.py"]
+    assert result.contested == {"shared.py": ["sid-peer"]}
+
+
+def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path):
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "em.py")])
+    _agent_touched(tmp_path, "agent-1", "sid-mine", [_touch_line("T", "worker.py")])
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.paths == ["em.py", "worker.py"]
+
+
+def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
+    # The whole point. The mechanism this replaces cost 73 processes per call.
+    import subprocess
+
+    def _explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("commit_set spawned a subprocess: %r" % (args,))
+
+    monkeypatch.setattr(subprocess, "run", _explode)
+    monkeypatch.setattr(subprocess, "Popen", _explode)
+    monkeypatch.setattr(subprocess, "check_output", _explode)
+
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "a.py")])
+
+    assert claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path)).paths == ["a.py"]
+
+
+def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
+    # An aborted or unresolvable walk may under-report BOTH buckets, so the
+    # caller must be able to say "this may be partial" rather than presenting
+    # a short answer as THE answer. Note the contract this does NOT test: a
+    # sessions_dir that simply does not exist resolves fine and honestly means
+    # "no claims here" (complete=True, paths=[]) -- absence of a directory is
+    # an answer, absence of a resolution is not.
+    monkeypatch.setattr(claim_index, "_resolve_base", lambda *a, **k: "")
+
+    result = claim_index.commit_set("sid-mine", sessions_dir="/irrelevant")
+
+    assert result.complete is False
+    assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
+    assert result.paths == []

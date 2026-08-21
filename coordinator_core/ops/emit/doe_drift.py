@@ -58,6 +58,7 @@ from typing import Optional
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.git_scope import (
+    FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
     PROBE_UNKNOWN,
     PROBE_YES,
     foreign_repo_unusable_reason,
@@ -396,7 +397,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     available on Apple git 2.x; rev-parse ^{} is semantically equivalent when the tag
     object is locally present.
     """
-    unusable = foreign_repo_unusable_reason(doe_clone, timeout=30)
+    unusable = foreign_repo_unusable_reason(doe_clone)
     if unusable is not None:
         warnings.warn(
             f"DoE clone at {doe_clone} could not be read as a git repository "
@@ -412,6 +413,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
             env=scoped_git_env(),
             **no_console_creationflags(),
         )
@@ -420,6 +422,15 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             "git executable not found — cannot probe DoE freshness ref.  "
             "Install git to enable the freshness check."
         ) from exc
+    except subprocess.TimeoutExpired:
+        warnings.warn(
+            f"Reading DoE origin URL in {doe_clone} exceeded "
+            f"{FOREIGN_REPO_GIT_TIMEOUT_SECONDS}s; skipping freshness check. A local "
+            "`git remote get-url` over budget is a defect in this probe, not a reason "
+            "to wait longer.",
+            stacklevel=3,
+        )
+        return None
 
     if origin.returncode != 0:
         warnings.warn(
@@ -489,7 +500,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             capture_output=True,
             text=True,
             check=False,
-            timeout=10,
+            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
             env=scoped_git_env(),
             **no_console_creationflags(),
         )
@@ -530,12 +541,9 @@ def _tag_is_ancestor_of_pin(
     ``returncode != 0`` here would conflate "definitely not an ancestor" with
     "the question never reached DoE's object database".
     """
-    # Review: code-reviewer (F2) — timeout=30 matches probe_freshness_ref's bound and
-    # makes the timeout branch live; a timeout is a real UNKNOWN, hence a real None.
     verdict, _reason = git_predicate(
         doe_clone,
         ["merge-base", "--is-ancestor", tag_sha, pin_sha],
-        timeout=30,
     )
     if verdict == PROBE_UNKNOWN:
         # Exit code >= 2 means git error (commits not present, not a git repo,

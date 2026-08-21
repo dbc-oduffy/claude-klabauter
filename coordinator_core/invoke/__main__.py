@@ -42,13 +42,19 @@ Invocation:
                          DR-279.
     --dump-op-timeouts — Read-only surface: print
                          {"<op>": <float>, ..., "__default__": <live
-                         DISPATCH_TIMEOUT_SECS>} to stdout and exit 0. No <op>
-                         required. Lets an external caller (e.g. DoE's
+                         DISPATCH_TIMEOUT_SECS>, "__ceremony_budget__":
+                         <ipc.CEREMONY_BUDGET_SECS>} to stdout and exit 0. No
+                         <op> required. Lets an external caller (e.g. DoE's
                          cc_invoke, which applies a flat 10s cap) read
                          claude-klabauter's real per-op dispatch-timeout budgets instead
-                         of guessing. Source of truth is
-                         coordinator_core.ipc.OP_TIMEOUT_OVERRIDES /
-                         DISPATCH_TIMEOUT_SECS — the SAME module constants
+                         of guessing. Every `ceremony.*` op is projected
+                         EXPLICITLY at the 2s ceremony budget rather than left
+                         to fall through to "__default__" (30s) — a caller
+                         sizing its kill ceiling off the default would wait on
+                         a request the engine already abandoned at 2s.
+                         Source of truth is coordinator_core.ipc.
+                         OP_TIMEOUT_OVERRIDES / DISPATCH_TIMEOUT_SECS /
+                         CEREMONY_BUDGET_SECS — the SAME module constants
                          _timeout_for() uses, re-read live at call time (this
                          process is spawn-per-call per DR-215, so there is no
                          stale-value risk, but DISPATCH_TIMEOUT_SECS is
@@ -155,7 +161,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Print the op-timeout-budget map as JSON to stdout and exit 0. "
             "No <op> required. Shape: {\"<op>\": <float>, ..., "
-            "\"__default__\": <live DISPATCH_TIMEOUT_SECS>}. Takes priority "
+            "\"__default__\": <live DISPATCH_TIMEOUT_SECS>, "
+            "\"__ceremony_budget__\": <ipc.CEREMONY_BUDGET_SECS>}, with every "
+            "ceremony.* op projected explicitly at the ceremony budget. Takes priority "
             "over <op>: if both are passed, <op> is ignored."
         ),
     )
@@ -208,14 +216,38 @@ def _dump_op_timeouts() -> dict:
     process started with an overridden COORDINATOR_DISPATCH_TIMEOUT_SECS env
     var reports the value it actually resolved to.
 
+    Ceremony ops are projected EXPLICITLY at `ipc.CEREMONY_BUDGET_SECS` rather than
+    left to fall through to "__default__". An external caller sizes its own kill
+    ceiling off this dump (DoE's cc_invoke: `engine_budget(op) + MARGIN`), so a
+    ceremony op reporting the 30s default here would hand that caller a ~40s ceiling
+    for an op the engine abandons at 2s -- the caller would sit waiting on a request
+    already cancelled. Every op the keying table knows about is emitted by name, and
+    "__ceremony_budget__" carries the ceiling itself so a caller can bound a
+    ceremony op this table does not list (the budget is prefix-matched in
+    `ipc._timeout_for`, so an unlisted `ceremony.*` op is still capped).
+
     Returns:
-        dict -- {"<op>": <float>, ..., "__default__": <float>}. "__default__"
-        is the reserved key for the global runaway-guard fallback.
+        dict -- {"<op>": <float>, ..., "__default__": <float>,
+        "__ceremony_budget__": <float>}. "__default__" is the reserved key for the
+        global runaway-guard fallback.
     """
-    from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS, OP_TIMEOUT_OVERRIDES
+    from coordinator_core.ipc import (
+        CEREMONY_BUDGET_SECS,
+        DISPATCH_TIMEOUT_SECS,
+        OP_TIMEOUT_OVERRIDES,
+        is_ceremony_method,
+    )
+    from coordinator_core.op_scopes import OP_KEY_SCOPE
 
     payload = dict(OP_TIMEOUT_OVERRIDES)
+    for op in OP_KEY_SCOPE:
+        if is_ceremony_method(op):
+            payload[op] = CEREMONY_BUDGET_SECS
+    for op, budget in list(payload.items()):
+        if is_ceremony_method(op):
+            payload[op] = min(budget, CEREMONY_BUDGET_SECS)
     payload["__default__"] = DISPATCH_TIMEOUT_SECS
+    payload["__ceremony_budget__"] = CEREMONY_BUDGET_SECS
     return payload
 
 

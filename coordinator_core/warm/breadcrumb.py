@@ -83,6 +83,9 @@ __all__ = [
     "SPAWN_DEBOUNCE_SECS",
     "RUNTIME_BASE_ENV",
     "BREADCRUMB_FILENAME",
+    "TRANSPORT_PIPE",
+    "TRANSPORT_UNIX",
+    "runtime_base",
     "svc_dir",
     "breadcrumb_path",
     "write_breadcrumb",
@@ -97,6 +100,12 @@ __all__ = [
 SPAWN_DEBOUNCE_SECS = 2.0
 
 BREADCRUMB_FILENAME = "warm.json"
+
+#: `transport` field values -- what shape the `pipe` field's endpoint is.
+#: See `write_breadcrumb` for why the field that carries the endpoint is
+#: still called `pipe` on both platforms.
+TRANSPORT_PIPE = "pipe"
+TRANSPORT_UNIX = "unix"
 
 
 def _default_engine_clone() -> Path:
@@ -163,10 +172,26 @@ RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
 def _runtime_base() -> Path:
     r"""User-local, non-synced base for warm runtime state.
 
-    `%LOCALAPPDATA%` on Windows (the warm engine is Windows-only --
-    `server.main` refuses to start elsewhere), falling back to
-    `~/.cache` so this module stays importable and testable on any
-    platform rather than raising at import or resolution time.
+    `%LOCALAPPDATA%` on Windows, falling back to `~/.cache` so this
+    module stays importable and testable on any platform rather than
+    raising at import or resolution time. That `~/.cache` fallback,
+    written before anything ran off Windows, is now the REAL POSIX
+    answer: `election.socket_path` binds the server's unix socket under
+    the directory this function resolves.
+
+    NO `$XDG_RUNTIME_DIR` BRANCH, DELIBERATELY, AND IT IS A CONTRACT NOT
+    A PREFERENCE. On the merits XDG is the better home on Linux --
+    tmpfs, per-user, already 0700, cleared at logout, which would sweep a
+    socket corpse for free. It is still not consulted here, because this
+    function is one half of a two-implementation agreement: the C door
+    (`warm/door/`) recomputes this path independently to find the server,
+    and a socket path the binder and the door disagree about produces NO
+    ERROR ANYWHERE -- the door finds nothing, falls through to cold
+    dispatch forever, and every surface stays green while the warm engine
+    is silently unreachable. An XDG branch added on one side only is
+    exactly that failure. PM-locked 2026-08-21 to the three candidates
+    below, matching what the door shipped. Changing it means changing
+    both halves in one move.
 
     `RUNTIME_BASE_ENV` overrides both, and exists for ONE reason: test
     isolation. Passing a `tmp_path` as `engine_root` varies only the
@@ -195,6 +220,25 @@ def _runtime_base() -> Path:
     return Path.home() / ".cache"
 
 
+def runtime_base() -> Path:
+    """Public read of `_runtime_base()` -- the base directory every warm
+    runtime artifact hangs under.
+
+    Exists for ONE caller: `election.ensure_private_dir` needs to know
+    where the operator's own directory ends and OURS begins, so it can
+    apply an ownership check to every directory this package creates
+    (`coordinator/`, `warm/`, `<clone-hash>/`) and to none of the ones it
+    does not own. `~/.cache` at 0755 is the user's business; a 0755
+    `~/.cache/coordinator/warm` is a substitution vector.
+
+    A public accessor rather than a reach into `_runtime_base` from a
+    sibling module: this is a real boundary question two modules share,
+    not the one-off private-symbol reach `server._create_pipe_instance`
+    documents against `election._build_security_attributes`.
+    """
+    return _runtime_base()
+
+
 def breadcrumb_path(engine_root: Optional[Path] = None) -> Path:
     """`<svc dir>/warm.json` for `engine_root` (see `svc_dir`)."""
     return svc_dir(engine_root) / BREADCRUMB_FILENAME
@@ -208,6 +252,7 @@ def write_breadcrumb(
     engine_sha: Optional[str],
     started_at: Optional[str] = None,
     engine_root: Optional[Path] = None,
+    transport: Optional[str] = None,
 ) -> None:
     """Write the breadcrumb under `locked_write.held_lock`, replacing any
     prior content -- this is a snapshot of the current boot, not an
@@ -223,12 +268,28 @@ def write_breadcrumb(
     to RECORD a spawn needs to know if that recording failed, unlike the
     read side (module docstring's "it is a HINT" applies to CONSUMERS of
     the breadcrumb, not to a writer's own request to persist one).
+
+    `pipe` IS THE ENDPOINT, whatever shape this platform's endpoint takes
+    -- a `\\\\.\\pipe\\...` name on Windows, an absolute `.sock` path on
+    POSIX. The field kept its Windows-era name because every reader pins
+    it (`should_spawn` here, `coordinator/bin/warm-engine-stop.py`, and
+    the benchmark gate), and renaming it would have been a breaking
+    change to on-disk shape bought for nothing: a breadcrumb is
+    machine-local and per-clone, so its writer and its readers are always
+    the same platform. `transport` is the explicit companion --
+    `TRANSPORT_PIPE` or `TRANSPORT_UNIX`, defaulted from the writing
+    platform -- so a reader can name what it is holding instead of
+    inferring it from the string, without any reader being REQUIRED to
+    look (every one of them keys off `pipe` today and still works).
     """
     if started_at is None:
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if transport is None:
+        transport = TRANSPORT_PIPE if os.name == "nt" else TRANSPORT_UNIX
 
     record = {
         "pipe": pipe,
+        "transport": transport,
         "pid": pid,
         "stable_pid_start_epoch": stable_pid_start_epoch,
         "engine_sha": engine_sha,
@@ -336,32 +397,80 @@ PIPE_LIVENESS_PROBE_TIMEOUT_MS = 5
 
 
 def _pipe_is_alive(pipe: str, timeout_ms: int = PIPE_LIVENESS_PROBE_TIMEOUT_MS) -> bool:
-    """Cheap, PIPE-proving liveness check via Win32 `WaitNamedPipeW` --
-    deliberately distinct from `stable_pid_alive`, which proves only that
-    the PROCESS a breadcrumb names is running, not that it is actually
-    serving. A process can be alive and wedged (accepted no new
-    connections since some earlier failure) while its breadcrumb still
-    reads as young and alive by pid alone; this function is what tells
-    the two apart, in milliseconds rather than the read-deadline's
-    seconds.
+    """Cheap, ENDPOINT-proving liveness check -- deliberately distinct from
+    `stable_pid_alive`, which proves only that the PROCESS a breadcrumb
+    names is running, not that it is actually serving. A process can be
+    alive and wedged (accepted no new connections since some earlier
+    failure) while its breadcrumb still reads as young and alive by pid
+    alone; this function is what tells the two apart, in milliseconds
+    rather than the read-deadline's seconds.
 
-    `WaitNamedPipeW` connects to nothing and exchanges no data -- it asks
-    the kernel whether an instance of the named pipe is currently
+    Name retained from its Windows-only origin (`should_spawn` and this
+    module's own test suite pin it) -- it is no longer pipe-exclusive: on
+    POSIX the recorded endpoint is a unix socket path and the probe is a
+    connect, per `_unix_socket_is_alive`.
+
+    Windows: `WaitNamedPipeW` connects to nothing and exchanges no data --
+    it asks the kernel whether an instance of the named pipe is currently
     listening and available, and returns within `timeout_ms` either way.
-    It therefore carries none of `warm.client`'s mutation-safety
-    concerns (no request is sent, so there is nothing to double-execute)
-    and touches no code on that module's read-deadline path.
+    It therefore carries none of `warm.client`'s mutation-safety concerns
+    (no request is sent, so there is nothing to double-execute) and
+    touches no code on that module's read-deadline path.
 
-    Fails OPEN (returns True) on any error: off Windows, a missing
-    `kernel32` symbol, or an unanticipated `OSError` all degrade to "the
-    process-only answer stands," rather than a caller-visible failure or
-    a wrongly-triggered respawn.
+    Fails OPEN (returns True) on any error: a missing `kernel32` symbol,
+    an unanticipated `OSError`, or a platform with no probe at all all
+    degrade to "the process-only answer stands," rather than a
+    caller-visible failure or a wrongly-triggered respawn.
     """
+    if os.name != "nt":
+        return _unix_socket_is_alive(pipe, timeout_ms=timeout_ms)
     try:
         import ctypes
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         return bool(kernel32.WaitNamedPipeW(pipe, int(timeout_ms)))
+    except Exception:
+        return True
+
+
+def _unix_socket_is_alive(
+    endpoint: str, timeout_ms: int = PIPE_LIVENESS_PROBE_TIMEOUT_MS
+) -> bool:
+    """POSIX arm of `_pipe_is_alive`: is a server listening on `endpoint`?
+
+    NOT THE SAME COST AS THE WINDOWS ARM, and the difference is worth
+    knowing before reading this as a like-for-like port.
+    `WaitNamedPipeW` asks the kernel a question and connects to nothing;
+    POSIX offers no such call, so this genuinely CONNECTS and immediately
+    closes. A live server therefore accepts one connection per probe,
+    reads EOF from it, and drops it -- a real (if trivial) round through
+    its accept/queue/worker path. It still sends no request, so it
+    inherits the Windows arm's whole mutation-safety argument unchanged:
+    there is nothing to double-execute.
+
+    `ECONNREFUSED` (the path exists, nothing is listening) and a missing
+    path both read DEAD -- the two shapes a hard-killed server leaves
+    behind, and the pair `warm.election.probe_endpoint` distinguishes
+    when it has to decide whether to unlink. Here they collapse: the
+    caller only asked whether anything is serving.
+
+    Fails OPEN on any other error, matching the Windows arm.
+    """
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(max(timeout_ms, 1) / 1000.0)
+        try:
+            sock.connect(endpoint)
+        except (ConnectionRefusedError, FileNotFoundError, NotADirectoryError):
+            return False
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        return True
     except Exception:
         return True
 

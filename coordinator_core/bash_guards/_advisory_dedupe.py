@@ -148,6 +148,27 @@ from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 #: anchor per line, not just at the string's ends.
 _COMMAND_LINE_RE = re.compile(r"^[ \t]*" + re.escape(COMMAND_LINE_LABEL) + r"[ \t]*.*$", re.MULTILINE)
 
+#: HOMED HERE, not in `_alternative_liveness`, because `terse_alternative_text`
+#: runs on the PreToolUse hot path and these two values are all it ever needed
+#: from that module. `_alternative_liveness` executes
+#: `discover_write_guard_names()` at import time, which pulls in
+#: `write_guards.engine` and through it the entire `coordinator_core.ops`
+#: registry -- 480-710ms of process time, charged to DR-344's 500ms budget on
+#: every repeat firing of the fleet's most-fired advisory. The lazy import that
+#: used to sit inside `terse_alternative_text` avoided the CIRCULAR-import
+#: problem noted above but not the COST one: deferring an import does not make
+#: it cheaper, it only moves when it is paid, and here it was paid on the hot
+#: path. `_alternative_liveness` re-exports both names from here, so its own
+#: readers are unaffected.
+#:
+#: Deliberately BROADER than `_alternative_liveness._ALT_CUE_RE` (it also
+#: matches a bare mid-sentence "instead") because a false-positive window only
+#: WIDENS where backtick spans get a chance to classify, while a false-negative
+#: cue silently drops a real alternative -- see that constant's own comment for
+#: the full reasoning, which this move does not change.
+_CUE_WINDOW_RE = re.compile(r"(Use instead:?|Did you mean|Run this instead|Example:|\binstead\b)", re.IGNORECASE)
+_CUE_WINDOW_MAX_CHARS = 600
+
 #: Subdirectory (of the resolved gitdir) markers live under -- namespaced
 #: away from `_write_bump_marker.py`'s own root-level `allow-xrepo-write-*`
 #: markers so a directory listing of one never needs to filter the other's
@@ -223,11 +244,6 @@ def terse_alternative_text(text: str) -> Optional[str]:
     alternative span to isolate, and a caller (``degrade_advisory_envelope``)
     must not synthesize one.
     """
-    from coordinator_core.bash_guards._alternative_liveness import (
-        _CUE_WINDOW_MAX_CHARS,
-        _CUE_WINDOW_RE,
-    )
-
     match = _CUE_WINDOW_RE.search(text)
     if match is None:
         return None

@@ -23,6 +23,7 @@ from coordinator_core.op_census.line_count import (
     LineCountDistribution,
     RatchetError,
     compute_distribution,
+    evaluate_ratchet,
     ratchet_check,
 )
 from coordinator_core.op_census.module_summary import ModuleSummary
@@ -159,3 +160,43 @@ def test_line_count_ratchet_trips_on_over_bar_count_growth_alone():
 
     with pytest.raises(RatchetError, match="over_bar_count"):
         ratchet_check(distribution)
+
+
+def test_evaluate_ratchet_never_raises_and_reports_tripped_true_on_growth():
+    """Staff-eng Finding 5: measurement separated from verdict.
+    `evaluate_ratchet` returns a `RatchetOutcome` even when the corpus has
+    grown past the frozen high-water -- `ratchet_check` (raising) is built
+    on top of this, never the reverse."""
+    distribution = LineCountDistribution(
+        module_count=FROZEN_HIGH_WATER_MODULES + 1,
+        total_lines=FROZEN_HIGH_WATER_LINES,
+        over_bar_count=FROZEN_HIGH_WATER_OVER_BAR,
+        over_bar_modules={},
+    )
+
+    outcome = evaluate_ratchet(distribution)
+
+    assert outcome.tripped is True
+    assert outcome.module_count == {
+        "frozen": FROZEN_HIGH_WATER_MODULES,
+        "measured": FROZEN_HIGH_WATER_MODULES + 1,
+    }
+    assert outcome.total_lines == {"frozen": FROZEN_HIGH_WATER_LINES, "measured": FROZEN_HIGH_WATER_LINES}
+    assert outcome.over_bar_count == {
+        "frozen": FROZEN_HIGH_WATER_OVER_BAR,
+        "measured": FROZEN_HIGH_WATER_OVER_BAR,
+    }
+    assert outcome.to_dict()["tripped"] is True
+
+
+def test_evaluate_ratchet_reports_tripped_false_on_shrink():
+    distribution = LineCountDistribution(
+        module_count=FROZEN_HIGH_WATER_MODULES - 1,
+        total_lines=FROZEN_HIGH_WATER_LINES - 1000,
+        over_bar_count=FROZEN_HIGH_WATER_OVER_BAR - 1,
+        over_bar_modules={},
+    )
+
+    outcome = evaluate_ratchet(distribution)
+
+    assert outcome.tripped is False

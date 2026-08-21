@@ -81,11 +81,14 @@ def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# AC2 — handoff resolves via the deliverable_id bridge
+# A deliverable_id alone (no governing_plan stamp, no scope:) is no longer a
+# bridge — that scan was retired (PM ruling R1: absence is information, not
+# a search). This premise dissolved with the design; the artifact resolves
+# UNRESOLVABLE rather than falling through to a docs/plans/ walk.
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_resolves_via_deliverable_bridge(tmp_path, monkeypatch):
+def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "bridge-plan.md"
@@ -117,19 +120,153 @@ def test_handoff_resolves_via_deliverable_bridge(tmp_path, monkeypatch):
         sessions_dir=str(sessions),
     )
 
+    assert result.status == claim_neighbours.UNRESOLVABLE
+    assert result.neighbours == []
+    assert result.reason is not None
+
+
+# ---------------------------------------------------------------------------
+# C4 — the governing_plan stamp (C5/R5) is preferred over the deliverable_id
+# scan: a single targeted read of the stamped plan, no docs/plans/ walk.
+# ---------------------------------------------------------------------------
+
+
+def test_handoff_resolves_via_governing_plan_stamp_no_deliverable_id(tmp_path, monkeypatch):
+    sessions = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    plan_path = repo / "docs" / "plans" / "stamped-plan.md"
+    _write_artifact(
+        str(plan_path),
+        {"title": "stamped plan", "scope": ["coordinator_core/session/claim_neighbours.py"]},
+    )
+    handoff_path = repo / "state" / "handoffs" / "stamped-handoff.md"
+    _write_artifact(
+        str(handoff_path),
+        {"title": "a handoff", "governing_plan": "docs/plans/stamped-plan.md"},
+    )
+
+    _session_touched(
+        sessions, "peer-sid", [_touch_line("T", "coordinator_core/session/claim_neighbours.py")]
+    )
+    monkeypatch.setattr(
+        claim_neighbours.liveness, "session_live", lambda sid, cwd=None: sid == "peer-sid"
+    )
+
+    result = claim_neighbours.find_neighbours(
+        str(handoff_path),
+        caller_sid="my-own-sid",
+        cwd=str(repo),
+        sessions_dir=str(sessions),
+    )
+
     assert result.status == claim_neighbours.RESOLVED
     assert result.file_set == ["coordinator_core/session/claim_neighbours.py"]
     assert [n.session_id for n in result.neighbours] == ["peer-sid"]
 
 
-def test_handoff_with_no_matching_plan_is_unresolvable(tmp_path):
+def test_governing_plan_stamp_ignores_unrelated_deliverable_id(tmp_path, monkeypatch):
+    """A `deliverable_id:` alongside a `governing_plan:` stamp is inert --
+    only the stamp is read (it would resolve to a DIFFERENT plan's scope
+    here if `deliverable_id` were consulted, proving it is not)."""
+    sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
-    handoff_path = repo / "state" / "handoffs" / "orphan-handoff.md"
+    scanned_plan = repo / "docs" / "plans" / "scanned-plan.md"
+    _write_artifact(
+        str(scanned_plan),
+        {
+            "title": "scanned plan",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "scope": ["wrong/path.py"],
+        },
+    )
+    stamped_plan = repo / "docs" / "plans" / "stamped-plan.md"
+    _write_artifact(
+        str(stamped_plan),
+        {"title": "stamped plan", "scope": ["coordinator_core/session/claim_neighbours.py"]},
+    )
+    handoff_path = repo / "state" / "handoffs" / "both-fields-handoff.md"
     _write_artifact(
         str(handoff_path),
-        {"title": "orphan", "deliverable_id": "dlv-nobody-claims-this-999999"},
+        {
+            "title": "a handoff",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "governing_plan": "docs/plans/stamped-plan.md",
+        },
     )
-    # No docs/plans dir at all under repo.
+
+    result = claim_neighbours.find_neighbours(
+        str(handoff_path), caller_sid="my-own-sid", cwd=str(repo), sessions_dir=str(sessions)
+    )
+
+    assert result.status == claim_neighbours.RESOLVED
+    assert result.file_set == ["coordinator_core/session/claim_neighbours.py"]
+
+
+def test_governing_plan_stamp_none_sentinel_is_unresolvable_not_scanned(tmp_path, monkeypatch):
+    """A ``governing_plan: none`` sentinel (the explicit-null shape C5's
+    writer uses) is treated the same as an absent field -- UNRESOLVABLE
+    directly. No fallback scan against ``deliverable_id`` is performed even
+    though one would have matched (PM ruling R1: absence is information)."""
+    sessions = tmp_path / "sessions"
+    repo = tmp_path / "repo"
+    plan_path = repo / "docs" / "plans" / "bridge-plan.md"
+    _write_artifact(
+        str(plan_path),
+        {
+            "title": "bridge plan",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "scope": ["coordinator_core/session/claim_neighbours.py"],
+        },
+    )
+    handoff_path = repo / "state" / "handoffs" / "none-stamp-handoff.md"
+    _write_artifact(
+        str(handoff_path),
+        {
+            "title": "a handoff",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "governing_plan": "none",
+        },
+    )
+
+    _session_touched(
+        sessions, "peer-sid", [_touch_line("T", "coordinator_core/session/claim_neighbours.py")]
+    )
+    monkeypatch.setattr(
+        claim_neighbours.liveness, "session_live", lambda sid, cwd=None: sid == "peer-sid"
+    )
+
+    result = claim_neighbours.find_neighbours(
+        str(handoff_path), caller_sid="my-own-sid", cwd=str(repo), sessions_dir=str(sessions)
+    )
+
+    assert result.status == claim_neighbours.UNRESOLVABLE
+    assert result.neighbours == []
+    assert result.reason is not None
+
+
+def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path):
+    """A stamped path that does not resolve to a readable plan is
+    UNRESOLVABLE directly -- the stamp is definitive, so this does NOT fall
+    through to a deliverable_id scan even when one would have matched."""
+    repo = tmp_path / "repo"
+    plan_path = repo / "docs" / "plans" / "bridge-plan.md"
+    _write_artifact(
+        str(plan_path),
+        {
+            "title": "bridge plan",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "scope": ["coordinator_core/session/claim_neighbours.py"],
+        },
+    )
+    handoff_path = repo / "state" / "handoffs" / "broken-stamp-handoff.md"
+    _write_artifact(
+        str(handoff_path),
+        {
+            "title": "a handoff",
+            "deliverable_id": "dlv-shared-thing-abc123",
+            "governing_plan": "docs/plans/does-not-exist.md",
+        },
+    )
 
     result = claim_neighbours.find_neighbours(
         str(handoff_path), caller_sid="my-own-sid", cwd=str(repo)

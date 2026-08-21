@@ -56,7 +56,12 @@ from coordinator_core.git.commit_trailers import (
     compute_missing_trailer_args,
     read_trailer_value,
 )
-from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
+from coordinator_core.git.divergence import (
+    DivergenceCheckFailed,
+    V2Record,
+    diverging_paths,
+    parse_v2_records,
+)
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -178,6 +183,61 @@ def _diverging_paths_chunked(
     for chunk in _chunk_paths(list(paths)):
         diverged.update(diverging_paths(list(chunk), cwd=cwd, timeout=timeout, fail_loud=True))
     return diverged
+
+
+def _v2_state_records_chunked(
+    paths: Sequence[str],
+    cwd: str,
+    *,
+    timeout: float,
+) -> "Dict[str, V2Record]":
+    """Chunked `git status --porcelain=v2 -z --no-renames -- <paths>`, merged
+    into one `{path: V2Record}` map.
+
+    The single state read `commit_scoped()` takes for BOTH of its
+    branch-selection questions. Those were two separate chunked spawns over
+    the same `path_list` at the same point in the function with no mutation
+    between them -- content divergence (`_diverging_paths_chunked`, `X`/`Y`)
+    and mode delta (`_mode_delta_paths_chunked`, `m_head`/`m_index` +
+    `sha_head`/`sha_index`) -- and one porcelain-v2 record already carries
+    every field both of them read. Under DR-344 the spawn IS the cost, so
+    asking one process two questions instead of two processes one each is the
+    whole point.
+
+    Same `_chunk_paths()` seam and the same fail-loud posture as the two
+    functions it consolidates: any chunk that fails raises
+    `DivergenceCheckFailed` rather than collapsing to an empty map, because
+    `commit_scoped()` picks the commit MECHANISM off this answer and an
+    indeterminate read must never read as "clean".
+
+    Negative-spec: this does NOT answer "does the worktree match HEAD".
+    Porcelain v2 carries the HEAD and index blob OIDs but no worktree OID,
+    and it omits CLEAN paths entirely -- so `_reject_stale_index_paths`,
+    `_index_blobs` and `_head_blobs` stay on their own reads. Folding those
+    in would silently turn "clean" into "absent"."""
+    records: "Dict[str, V2Record]" = {}
+    for chunk in _chunk_paths(list(paths)):
+        result = _git(
+            [
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--no-renames",
+                "--",
+                *chunk,
+            ],
+            cwd=cwd,
+            timeout=timeout,
+        )
+        if not result.ok:
+            raise DivergenceCheckFailed(
+                f"_v2_state_records_chunked: `git status --porcelain=v2` failed or "
+                f"timed out (rc={result.returncode}) for {len(chunk)} path(s) -- "
+                "index/worktree state indeterminate"
+            )
+        records.update(parse_v2_records(result.stdout))
+    return records
 
 
 def _mode_delta_paths_chunked(
@@ -514,14 +574,54 @@ def _empty_private_index_refusal(
 # ---------------------------------------------------------------------------
 
 
-def status_porcelain(cwd: Union[str, Path]) -> GitResult:
+def status_porcelain(
+    cwd: Union[str, Path], paths: Optional[Sequence[str]] = None
+) -> GitResult:
     """`git status --porcelain` — dirty-tree gate classification (C3).
 
     `--no-optional-locks` (pre-subcommand, per `git`'s placement rule)
     suppresses the opportunistic stat-cache write-back a bare `git status`
     takes `.git/index.lock` for — contention noise on this shared worktree.
-    Read-only call; never applied to a writing invocation."""
-    return _git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd)
+    Read-only call; never applied to a writing invocation.
+
+    `paths` — an optional pathspec. `None` (the default) keeps the whole-tree
+    scan every existing caller gets. When given, the answer is scoped to those
+    paths: this is the only query on the commit hot path whose cost scales
+    with the TREE rather than with what is being committed.
+
+    Measured on claude-klabauter at ~40 dirty paths: 1071ms unscoped floor
+    against 884ms scoped. The walk is NOT the main cost and this parameter is
+    not where the ceremony's latency lives — process creation is (DR-344),
+    and both numbers are one spawn. It is taken because it is free and
+    scales with the tree, not because ~190ms closes any gap; the ceremony's
+    budget is made or missed on how many times `git` is spawned at all.
+
+    Output SHAPE is byte-identical either way — same porcelain v1, same
+    C-quoting, same ` -> ` rename separator — deliberately, so a caller that
+    already parses `status_porcelain()` output can pass a pathspec without
+    touching its parse. That is why this takes a parameter instead of routing
+    to `status_porcelain_scoped()` above, whose `-z`/`-uall` shape answers a
+    different question (a committable path list, not a dirty/clean verdict)
+    and would silently change how a `R`-record or a non-ASCII path reads.
+
+    Chunked against the Windows 32767-char argv cap, because failing that cap
+    here is worse than slow: `git` reports `rc=127`, `stdout` comes back
+    empty, and an empty dirty set reads as "tree is clean" — a gate that
+    FAILS OPEN on exactly the large-pathspec batch (percolate-publish scale,
+    ~2000-2700 paths) it most needs to hold. Any chunk that fails short-
+    circuits and is returned as-is, so the caller sees an unsuccessful
+    `GitResult` rather than a partial dirty set that looks complete."""
+    base = ["--no-optional-locks", "status", "--porcelain"]
+    if paths is None:
+        return _git(base, cwd=cwd)
+
+    combined: List[str] = []
+    for chunk in _chunk_paths(list(paths)):
+        result = _git([*base, "--", *chunk], cwd=cwd)
+        if not result.ok:
+            return result
+        combined.append(result.stdout)
+    return GitResult(returncode=0, stdout="".join(combined), stderr="")
 
 
 def status_porcelain_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
@@ -2875,6 +2975,28 @@ def commit_scoped(
     # silently-pick" posture the rest of this module already applies to the
     # empty-path-set and directory-pathspec guards above.
     try:
+        # ONE state read for BOTH branch-selection questions below (content
+        # divergence and mode delta). They were two chunked spawns over this
+        # same `path_list`, back to back, with nothing mutating between them
+        # -- and one porcelain-v2 record carries every field both of them
+        # read. See `_v2_state_records_chunked()`'s own docstring, including
+        # the three reads it deliberately does NOT absorb.
+        state_records = _v2_state_records_chunked(
+            path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
+        )
+
+        def _diverged_from_records(candidates: Sequence[str]) -> Set[str]:
+            """`X != "." and Y != "."` -- identical to the `git diff --cached
+            --name-only` / `git diff --name-only` intersection
+            `diverging_paths()` documents, read off `state_records`."""
+            return {
+                p
+                for p in candidates
+                if (rec := state_records.get(p)) is not None
+                and rec.x != "."
+                and rec.y != "."
+            }
+
         if known_checked is not None and known_diverged is not None:
             gap = [p for p in path_list if p not in known_checked]
             # Chunked (see `_diverging_paths_chunked()`'s own docstring):
@@ -2884,11 +3006,7 @@ def commit_scoped(
             # ordinarily empty/small (the dedup seam's whole point), but a
             # swept-rename destination set can still reach percolate-
             # publish scale.
-            gap_diverged = (
-                _diverging_paths_chunked(gap, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS)
-                if gap
-                else set()
-            )
+            gap_diverged = _diverged_from_records(gap) if gap else set()
             diverged = sorted((known_diverged & set(path_list)) | gap_diverged)
         else:
             # Chunked for the same argv-length reason as the `gap` branch
@@ -2900,11 +3018,7 @@ def commit_scoped(
             # cap on one unchunked `git diff --cached --name-only` call
             # (`rc=127`, "divergence indeterminate" -- the live failure this
             # fix closes).
-            diverged = sorted(
-                _diverging_paths_chunked(
-                    path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
-                )
-            )
+            diverged = sorted(_diverged_from_records(path_list))
 
         # Mode-preservation fix: union in the subset of `path_list` whose
         # STAGED mode differs from HEAD's while the content is unchanged
@@ -2924,9 +3038,19 @@ def commit_scoped(
         # `_commit_scoped_private_index` can exclude these paths from its
         # `worktree_excluded` reporting -- see that function's own
         # `mode_only_paths` parameter docstring.
-        mode_delta_paths = _mode_delta_paths_chunked(
-            path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
-        )
+        # Read off `state_records` rather than its own `git diff --cached
+        # --raw` spawn: `m_head != m_index` with `sha_head == sha_index` is
+        # the same "same blob, different mode" predicate
+        # `_mode_delta_paths_chunked()` documents, and a path added or
+        # deleted (mode `000000`) fails the OID-equality half here exactly as
+        # it failed `<oldsha> == <newsha>` there.
+        mode_delta_paths = {
+            p
+            for p in path_list
+            if (rec := state_records.get(p)) is not None
+            and rec.m_head != rec.m_index
+            and rec.sha_head == rec.sha_index
+        }
         diverged = sorted(set(diverged) | mode_delta_paths)
     except DivergenceCheckFailed as exc:
         return GitResult(

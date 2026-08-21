@@ -489,8 +489,9 @@ def test_red_proof_two_arg_update_ref_silently_orphans_peer_commit(tmp_path):
 
 
 def test_indeterminate_divergence_fails_loud_never_agree_branch(tmp_path, monkeypatch):
-    """A `diverging_paths()` failure (simulated here; real cause is a `git
-    diff` non-zero exit or timeout) must FAIL LOUD (`GitResult.ok is
+    """A state-read failure (simulated here; real cause is a `git status
+    --porcelain=v2` non-zero exit or timeout in
+    `_v2_state_records_chunked`) must FAIL LOUD (`GitResult.ok is
     False`), never be silently read as "no divergence" and take the AGREE
     branch -- that would discard the deliberately-staged content exactly
     like the claude-klabauter 506748a0 incident, through `commit_scoped()`
@@ -502,9 +503,9 @@ def test_indeterminate_divergence_fails_loud_never_agree_branch(tmp_path, monkey
     head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
     def _boom(*args, **kwargs):
-        raise DivergenceCheckFailed("simulated git diff timeout")
+        raise DivergenceCheckFailed("simulated state-read timeout")
 
-    monkeypatch.setattr(git_native, "diverging_paths", _boom)
+    monkeypatch.setattr(git_native, "_v2_state_records_chunked", _boom)
 
     result = git_native.commit_scoped(["file.txt"], msg_file, repo)
 
@@ -528,9 +529,9 @@ def test_indeterminate_gap_check_fails_loud_with_known_kwargs(tmp_path, monkeypa
     head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
     def _boom(*args, **kwargs):
-        raise DivergenceCheckFailed("simulated git diff timeout on gap")
+        raise DivergenceCheckFailed("simulated state-read timeout on gap")
 
-    monkeypatch.setattr(git_native, "diverging_paths", _boom)
+    monkeypatch.setattr(git_native, "_v2_state_records_chunked", _boom)
 
     result = git_native.commit_scoped(
         ["checked.txt", "gap.txt"],
@@ -1214,11 +1215,18 @@ def test_argv_stays_bounded_and_uses_pathspec_file_for_add_and_commit(tmp_path, 
     assert not (set(paths) & set(add_argv))
     assert not (set(paths) & set(commit_argv))
 
-    diff_argvs = [a for a in argvs if len(a) > 1 and a[1] == "diff"]
-    assert diff_argvs, "expected at least one chunked `git diff` divergence call"
-    for a in diff_argvs:
+    # The chunked state read `commit_scoped()` picks its branch from. This is
+    # `git status --porcelain=v2`, not the `git diff` pair it used to be:
+    # one porcelain-v2 record carries both the divergence XY and the
+    # mode-delta mode/OID fields, so the two chunked reads became one
+    # (`git_native._v2_state_records_chunked`). The BOUND is what this test
+    # pins, and it is unchanged -- whatever command carries the pathspec must
+    # stay chunked rather than putting all 2000+ paths on one argv.
+    state_argvs = [a for a in argvs if "--porcelain=v2" in a]
+    assert state_argvs, "expected at least one chunked porcelain-v2 state read"
+    for a in state_argvs:
         total_len = sum(len(tok) for tok in a)
-        assert total_len < 20000, f"unchunked-looking git diff argv: {total_len} chars"
+        assert total_len < 20000, f"unchunked-looking state-read argv: {total_len} chars"
 
 
 def test_large_batch_diverged_path_preserved_amid_agree_bulk(tmp_path):
@@ -1246,7 +1254,7 @@ def test_large_batch_diverged_path_preserved_amid_agree_bulk(tmp_path):
 
 
 def test_large_batch_genuine_divergence_failure_still_fails_loud(tmp_path, monkeypatch):
-    """A genuine `diverging_paths()` failure (not an argv-length artifact --
+    """A genuine state-read failure (not an argv-length artifact --
     each chunk is already sized to avoid that) still fails the WHOLE call
     loud, never partially commits or silently treats the un-checked chunks
     as clean, even at percolate-publish scale."""
@@ -1256,9 +1264,9 @@ def test_large_batch_genuine_divergence_failure_still_fails_loud(tmp_path, monke
     head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
 
     def _boom(*args, **kwargs):
-        raise DivergenceCheckFailed("simulated git diff failure mid-batch")
+        raise DivergenceCheckFailed("simulated state-read failure mid-batch")
 
-    monkeypatch.setattr(git_native, "diverging_paths", _boom)
+    monkeypatch.setattr(git_native, "_v2_state_records_chunked", _boom)
 
     result = git_native.commit_scoped(paths, msg_file, repo)
 

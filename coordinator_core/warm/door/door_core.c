@@ -443,7 +443,7 @@ int parse_response_envelope(
 int is_provably_undispatched(long code) {
     return code == JSONRPC_PARSE_ERROR || code == JSONRPC_INVALID_REQUEST ||
            code == JSONRPC_METHOD_NOT_FOUND || code == JSONRPC_ENGINE_SKEW ||
-           code == JSONRPC_UNTRUSTED_CALLER;
+           code == JSONRPC_UNTRUSTED_CALLER || code == JSONRPC_OP_SUSPENDED;
 }
 
 int build_indeterminate_envelope(buf_t *out, const char *detail) {

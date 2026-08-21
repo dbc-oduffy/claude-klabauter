@@ -45,7 +45,13 @@ THREE DETECTION LEGS, ONE JUDGMENT LEG -- not four legs of the same kind
     match surfaces as a ``judgment_point`` candidate, never a decided
     yes/no; reporting this leg "done" from the floor alone closes a
     judgment call by omission (fragment ``never``: no peer-team/person
-    roster, hardcoded or inferred).
+    roster, hardcoded or inferred). The floor matches on a WORD BOUNDARY
+    (``_match_tokens_word_boundary``), not bare substring -- the fragment is
+    silent on that choice for this leg (unlike
+    ``decision-approval-policy-scope``, whose doc explicitly specifies
+    substring prose matching), and a 2-char term like ``"PM"``/``"VP"``
+    firing inside "3pm"/"campmate" would undercut the fragment's own
+    "high-precision term lookup" claim for this leg.
 
 Field handling: scans ``blocking_notes`` (current) and the deprecated
 ``gate_dependency`` (nothing authors new values into it, but the existing
@@ -82,6 +88,7 @@ sprint-spine-split/C8.md
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -130,6 +137,30 @@ def _match_tokens(text: str, terms: List[str], case_sensitive: bool) -> List[str
     for term in terms:
         needle = term if case_sensitive else term.lower()
         if needle in haystack:
+            matched.append(term)
+    return matched
+
+
+def _match_tokens_word_boundary(
+    text: str, terms: List[str], case_sensitive: bool
+) -> List[str]:
+    """Same shape as :func:`_match_tokens`, but each term matches only on a
+    word boundary rather than as a bare substring -- ``"PM"`` fires on "PM
+    decision" but not inside "3pm" or "campmate". Reserved for the
+    ``named-stakeholder`` mechanical floor (fragment ``mechanical_floor``):
+    that leg's terms are short, fleet-stable role words for which the
+    fragment's own doc claims "a high-precision term lookup", and the fragment
+    is silent on substring-vs-boundary semantics -- unlike
+    ``decision-approval-policy-scope``, which the fragment doc explicitly
+    specifies as deliberately substring-based low-precision prose matching
+    ("scope" firing inside "out of scope") and must keep using
+    :func:`_match_tokens` unchanged.
+    """
+    flags = 0 if case_sensitive else re.IGNORECASE
+    matched = []
+    for term in terms:
+        pattern = r"\b" + re.escape(term) + r"\b"
+        if re.search(pattern, text, flags=flags):
             matched.append(term)
     return matched
 
@@ -193,7 +224,7 @@ def detect_stub(fragment: dict, stub: Dict[str, Any]) -> Optional[Dict[str, Any]
     stakeholder_leg = _leg_by_id(fragment, "named-stakeholder")
     if stakeholder_leg is not None:
         floor = stakeholder_leg.get("mechanical_floor", {})
-        matched_terms = _match_tokens(
+        matched_terms = _match_tokens_word_boundary(
             scanned_text, floor.get("terms", []), floor.get("case_sensitive", False)
         )
         if matched_terms:

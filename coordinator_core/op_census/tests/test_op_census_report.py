@@ -19,6 +19,7 @@ Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-o
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -168,18 +169,28 @@ def test_census_refuses_when_corpus_root_name_diverges(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_census_refuses_on_real_tree_when_corpus_has_grown_past_the_frozen_high_water():
+def test_census_reports_tripped_ratchet_on_real_tree_when_corpus_has_grown_past_the_frozen_high_water():
     """Real, live, expected-today finding, asserted rather than hidden: the
     non-test coordinator_core/ tree (which now includes this very
     workstream's op_census/ package) has grown past C5's frozen high-water.
-    `census()` REFUSES (raises RatchetError), which is the correct,
-    non-degrading behaviour the plan AC requires — this test pins that it
-    keeps refusing rather than silently starting to pass, and documents WHY
+
+    Staff-eng Finding 5: a measurement instrument must still produce a
+    measurement when its verdict is "over" -- `census()` (default
+    `strict=False`) ALWAYS assembles and emits its report, carrying the
+    ratchet's tripped verdict as DATA at `report["line_count"]["ratchet"]`
+    rather than raising. This test pins that the report keeps reporting
+    `tripped: True` rather than silently starting to pass, and documents WHY
     for the next session that sees this red: bump FROZEN_HIGH_WATER_* in
     line_count.py (out of this chunk's declared writes scope) once the
-    growth is reviewed as intended."""
+    growth is reviewed as intended. `strict=True` still refuses via
+    RatchetError -- the gate's own control-flow refusal never weakened, it
+    only moved."""
+    report = ocr.census(telemetry_entries=[], persist_index=False)
+    ratchet = report["line_count"]["ratchet"]
+    assert ratchet["tripped"] is True
+
     with pytest.raises(RatchetError):
-        ocr.census(telemetry_entries=[], persist_index=False)
+        ocr.census(telemetry_entries=[], persist_index=False, strict=True)
 
 
 # ---------------------------------------------------------------------------
@@ -198,26 +209,31 @@ def test_census_refuses_on_real_tree_when_corpus_has_grown_past_the_frozen_high_
 
 
 def test_census_budget():
-    """The named budget assertion, against the WARM path -- the shape every
-    other figure in this module's own docstring is measured against
+    """The named budget assertion, against the WARM, SAME-PROCESS path only
+    -- i.e. a second `census()` call inside a process that already paid the
+    interpreter import and already holds `cache._REVALIDATED_CACHE`
+    entries from its own first call. `test_census_cold_process_budget`
+    (below) is the sibling that measures a FRESH, COLD process's own first
+    call -- the two are deliberately not interchangeable: this one
+    measures the WARM path
     (`module_summary`'s own docstring: cold build is off the measured path
     by design). `persist_index=True` writes the real, on-disk index this
     op's own callers rely on for warmth; the first call here pays the cold
     build (excluded from the assertion, exactly like C1's own cold-build
     row), the second call reads it back warm -- that second call's process
-    time is the one DR-344's brightline binds. Because the real tree
-    currently trips the line-count ratchet (see the test above), this
-    measures process time around the call up to and including the
-    RatchetError -- the ratchet check sits inside `census()`'s own
-    `summary_aggregate` phase, so the cost up to refusal is still the real,
-    honest cost of the work `census()` does before it can emit a report."""
-    with pytest.raises(RatchetError):
-        ocr.census(telemetry_entries=[], persist_index=True)  # cold — primes the index
+    time is the one DR-344's brightline binds. `census()` (default
+    `strict=False`) always emits a report now, including when the real tree
+    trips the line-count ratchet (see the test above) -- the ratchet's
+    tripped verdict rides along as data at `report["line_count"]["ratchet"]`
+    rather than aborting the call, so this measures the full, real, honest
+    handler cost, not merely the cost up to a refusal."""
+    ocr.census(telemetry_entries=[], persist_index=True)  # cold — primes the index
 
     t0 = time.process_time()
-    with pytest.raises(RatchetError):
-        ocr.census(telemetry_entries=[], persist_index=True)  # warm
+    report = ocr.census(telemetry_entries=[], persist_index=True)  # warm
     elapsed_ms = (time.process_time() - t0) * 1000.0
+
+    assert report["line_count"]["ratchet"]["tripped"] is True
 
     assert elapsed_ms < ocr.BRIGHTLINE_BUDGET_MS, (
         f"census() took {elapsed_ms:.1f}ms of process time (warm), breaching "
@@ -225,15 +241,14 @@ def test_census_budget():
     )
 
 
-def test_census_self_assessment_reports_against_both_dr344_bars(monkeypatch):
-    """With the ratchet neutralised (monkeypatched to a no-op), the full
-    report's own `self_assessment` numbers are internally consistent and
-    reference both DR-344 bars — never hidden, never hedged (module
-    docstring: today's real handler-only total sits under the 500ms
-    brightline but over the 200ms per-process bar, and this test pins that
-    `under_per_process_bar` reports that honestly rather than silently
-    reading True)."""
-    monkeypatch.setattr(ocr, "ratchet_check", lambda distribution: None)
+def test_census_self_assessment_reports_against_both_dr344_bars():
+    """`census()` (default `strict=False`) always emits a report now, even
+    with the real tree's ratchet tripped -- the full report's own
+    `self_assessment` numbers are internally consistent and reference both
+    DR-344 bars — never hidden, never hedged (module docstring: today's real
+    handler-only total sits under the 500ms brightline but over the 200ms
+    per-process bar, and this test pins that `under_per_process_bar` reports
+    that honestly rather than silently reading True)."""
     report = ocr.census(telemetry_entries=[], persist_index=True)
 
     budget = report["self_assessment"]
@@ -259,3 +274,136 @@ def test_batched_process_time_ms_harness_available_for_client_door_provenance():
     assert callable(batched_process_time_ms)
     if not IS_WINDOWS:
         pytest.skip("batched_process_time_ms is a Windows job-object primitive")
+
+
+def test_measure_census_self_timing_ms_uses_the_batched_harness():
+    """`measure_census_self_timing_ms` (C3: census()'s own self-timing is
+    tick-quantized) is the `batched_process_time_ms` pattern applied to the
+    census() site, mirroring `timing.measure_invocation_tax_ms`'s worked
+    example — pins the wiring (`k=1` to keep this test cheap; the harness's
+    own averaging correctness is covered by its own test suite) rather than
+    re-deriving a specific figure."""
+    from coordinator_core.benchmarks.process_time import IS_WINDOWS
+
+    if not IS_WINDOWS:
+        pytest.skip("batched_process_time_ms is a Windows job-object primitive")
+
+    result = ocr.measure_census_self_timing_ms(k=1)
+    assert result["k"] == 1
+    assert result["process_time_ms"] >= 0.0
+    assert result["rc"] == 0
+
+
+#: Probe run by `test_census_cold_process_budget`, via
+#: `benchmarks.process_time.batched_process_time_ms` -- unlike
+#: `ocr._SELF_TIMING_PROBE_SCRIPT` (which pins `persist_index=False`,
+#: exactly the setting that hid the cold-path regression this test exists
+#: to catch), this leaves `persist_index` at its real default (`True`): a
+#: FRESH process reading back the persisted, on-disk C1/C2 indexes this
+#: same test primes before measuring, matching what an actual cold
+#: `coordinator-invoke op_census.report` call pays in production. Writes
+#: `handler_total_ms` to a fixed path (formatted in below) rather than
+#: stdout: `batched_process_time_ms` redirects every child's stdout to
+#: `DEVNULL` (it reports aggregate job-object CPU time across all `k`
+#: children, not any one child's own output), so the LAST of the `k`
+#: (homogeneous, all-cold-process, all-warm-persisted-index) iterations'
+#: self-reported figure is read back off disk once the harness returns.
+_COLD_PROCESS_PROBE_SCRIPT_TEMPLATE = (
+    "import json, sys\n"
+    "from coordinator_core.ops.op_census_report import census\n"
+    "report = census(telemetry_entries=[])\n"
+    "with open(r'{out_path}', 'w', encoding='utf-8') as fh:\n"
+    "    json.dump({{'handler_total_ms': report['self_assessment']['handler_total_ms']}}, fh)\n"
+)
+
+
+def test_census_cold_process_budget():
+    """Binds the COLD path (`ocr.census()`'s first call in a FRESH
+    interpreter) against DR-344's brightline -- `test_census_budget` above
+    measures only the WARM, same-process path, and that blindness is
+    exactly the defect this test exists to close (a fresh process paid
+    ~1.3s before this chunk threaded the persisted spawn-evidence index
+    through `op_census_report.py`'s own `census()`, over the 1s kill bar,
+    while the warm-path test stayed green throughout).
+
+    Primes the on-disk C1 (`module_summary`) and C2 (`spawn_bearing_ops`)
+    indexes with one un-measured in-process call first -- exactly
+    `test_census_budget`'s own "first call pays the cold build, excluded"
+    convention -- then spawns `k=3` FRESH child processes via
+    `benchmarks.process_time.batched_process_time_ms` (module docstring:
+    the correct primitive for a sub-150ms `time.process_time()` reading a
+    single sample cannot resolve past the ~15.625ms scheduler tick; also
+    the SAME chokepoint `test_measure_census_self_timing_ms_uses_the_
+    batched_harness` and `test_batched_process_time_ms_harness_available_
+    for_client_door_provenance` above already spawn through, so this file
+    stays within the shape the repo's own spawn ratchet
+    (`coordinator_core/tests/test_no_new_spawning_tests.py`) already
+    resolves for it -- a literal `subprocess.run` call here, by contrast,
+    would newly Rule-2/Rule-4-tier this WHOLE file onto the cadence suite,
+    pulling every other fast, synthetic-fixture test in it off the
+    per-commit path as a side effect this task does not ask for).
+
+    Each child writes its own `report["self_assessment"]["handler_total_ms"]`
+    to `_cold_probe_out_path` (batched_process_time_ms redirects every
+    child's stdout to DEVNULL -- it reports aggregate job-object CPU time
+    across all `k` children, not any one child's own output) -- the k
+    iterations are homogeneous (all cold-process, all reading the SAME
+    warm persisted index primed above), so the LAST one's self-reported
+    figure, read back off disk once the harness returns, stands in for the
+    population.
+
+    Reads `handler_total_ms` rather than `batched_process_time_ms`'s own
+    `process_time_ms` (interpreter start + `coordinator_core.ops` import +
+    handler, summed): that whole-child figure would fold the already-
+    separately-tracked, already-known-over-its-own-50ms-bar invocation-tax
+    cost (`FROZEN_INVOCATION_TAX_MS = 343.8` -- see
+    `timing.INVOCATION_TAX_BAR_MS`) into THIS assertion, double-counting
+    an out-of-scope axis into the census handler's own bar (measured:
+    600-900ms of combined process time on this box's real concurrent-
+    session load, almost entirely import + scheduler variance, with
+    `handler_total_ms` itself holding steady near 300ms across the same
+    runs). Reading `handler_total_ms` isolates exactly the quantity
+    `BRIGHTLINE_BUDGET_MS` governs elsewhere in this module (`census()`'s
+    own `self_assessment` shape), and is the fix this task exists to bind,
+    not the pre-existing, separately-budgeted interpreter-start tax.
+
+    `k=3`, not `timing.py`'s own `k=5`: each child here pays a full
+    (non-`-S`) interpreter start plus the `coordinator_core.ops` import
+    plus a real census() handler call, several times the per-child cost
+    `measure_invocation_tax_ms` pays -- three fresh processes is enough to
+    beat single-sample tick noise without multiplying this already-heavier
+    per-child cost by DR-344's own spawn-count axis (module docstring: line
+    count and spawn count are BOTH budgeted, not just process time).
+    """
+    import json
+    import os
+    import tempfile
+
+    from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+
+    if not IS_WINDOWS:
+        pytest.skip("batched_process_time_ms is a Windows job-object primitive")
+
+    ocr.census(telemetry_entries=[], persist_index=True)  # primes the on-disk indexes
+
+    fd, out_path = tempfile.mkstemp(prefix="census_cold_probe_", suffix=".json")
+    os.close(fd)
+    try:
+        script = _COLD_PROCESS_PROBE_SCRIPT_TEMPLATE.format(out_path=out_path)
+        result = batched_process_time_ms([sys.executable, "-c", script], k=3)
+        assert result["rc"] == 0
+
+        with open(out_path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        handler_total_ms = float(payload["handler_total_ms"])
+    finally:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+
+    assert handler_total_ms < ocr.BRIGHTLINE_BUDGET_MS, (
+        f"a COLD-PROCESS census() handler took {handler_total_ms:.1f}ms of "
+        f"process time, breaching the {ocr.BRIGHTLINE_BUDGET_MS}ms DR-344 "
+        f"brightline"
+    )

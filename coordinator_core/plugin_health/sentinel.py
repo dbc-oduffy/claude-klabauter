@@ -56,6 +56,17 @@ this engine's own). P-7's mcpServers/enabledPlugins JSON validation, formerly an
 inline `python -c` heredoc, collapses to a direct in-process function — pure data
 validation with no interpreter-dependent behavior.
 
+Spawn budget (hitlist G8, 2026-08-21). Every subprocess this suite makes derives its
+bound from `_PROBE_SPAWN_BUDGET_SECS` — no probe carries a hand-typed timeout, and
+`coordinator_core/plugin_health/tests/test_sentinel.py ::
+test_no_probe_spawn_carries_a_hand_typed_timeout` fails on a new literal. P-3 no longer
+spawns `machine-local keys` at all: it asked the registry a DATA question and paid a
+Python interpreter cold start to have the CLI re-read a TOML this process can parse,
+duplicating the identical spawn P-4 makes in the same run. It now reads the registry
+in-process via `machine_resolver.merged_flat_registry()`, resolved once per run and
+shared. P-4 and P-10 keep one spawn each because the resolver CLI is what those two
+probes are about — that is a subject, not a lookup.
+
 Known pre-existing manifest/sentinel skew (NOT a bug introduced by this port — ported
 as-is, byte-parity target): doctor-probes.toml declares a P-16 probe (cluster
 "machine-local", hardware.cores/hardware.ram_gb presence), but the bash oracle's
@@ -104,7 +115,8 @@ from coordinator_core._settings_home import normalize_native_path, settings_home
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
+from coordinator_core.machine_resolver import merged_flat_registry
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.ops import probe_onboarding_currency, verify_templates_setup_sync, verify_ue_overrides
 from coordinator_core.plugin_health.probe_select import id_to_cluster, load_probes, resolve_active_probes
@@ -117,6 +129,23 @@ from coordinator_core.win_portability import is_executable
 GENERATES = []
 
 _PROG = "coordinator-doctor-sentinel.sh"
+
+# Every subprocess this suite spawns derives its bound from ONE budget rather
+# than carrying its own literal (DR-349 § Decision 1; the shape three
+# `ops/ceremony/*` modules already ship). Before this constant existed the suite
+# carried ten hand-typed bounds across two values, 15 and 30 -- both members of
+# the three house numbers that make up 48% of every dial in the tree, and
+# neither derived from anything. Nothing here is allowed to cost seconds: the
+# widest thing under this bound is one interpreter cold start, and CLAUDE.md
+# § Load norm rules a process over 2s a defect on every machine under every
+# load. A breach is therefore a defect report about the probe, which is exactly
+# how each call site already routes it -- `_inconclusive(...)`, never a
+# fabricated verdict.
+#
+# Negative-spec: do NOT reintroduce a per-site literal here, and do NOT raise
+# this by widening `CEREMONY_BUDGET_SECS` -- that constant is a ratchet
+# (DR-348) whose blast radius is every ceremony op in the engine.
+_PROBE_SPAWN_BUDGET_SECS: float = CEREMONY_BUDGET_SECS
 
 # severity in {"red", "amber", "advisory"} — advisory NEVER contributes to verdict.
 ProbeNote = namedtuple("ProbeNote", ["id", "severity", "message"])
@@ -288,6 +317,25 @@ def _resolve_cli(sh_bin: Path, bin_dir: Path, name: str) -> Optional[str]:
     return shutil.which(name)
 
 
+def _registry_keys(ml_dir: Path) -> Optional[List[str]]:
+    """The machine-local registry's flattened dotted keys, read once per run.
+
+    Delegates to `machine_resolver.merged_flat_registry()` -- the tree's one
+    registry.local.toml-over-registry.toml merge, already
+    `MACHINE_LOCAL_REGISTRY_DIR`-aware -- rather than parsing the TOML a
+    second way here, and rather than spawning the `machine-local` CLI to ask
+    the same files the same question.
+
+    Returns None (distinct from an empty list) when neither registry file is
+    present under `ml_dir`, so a caller can tell "the registry declares no
+    such key" from "there is no registry to ask" and leave the second case to
+    P-1/P-2, whose finding it is.
+    """
+    if not any((ml_dir / name).is_file() for name in ("registry.toml", "registry.local.toml")):
+        return None
+    return sorted(merged_flat_registry())
+
+
 def _inconclusive(probe_id: str, detail: str) -> List[ProbeNote]:
     """"I could not run this check" — NOT "the thing I check is broken".
 
@@ -421,7 +469,7 @@ def _py_ident(py_bin: str, py_args: List[str]) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=15,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
         lines = (proc.stdout or "").splitlines()
@@ -431,26 +479,34 @@ def _py_ident(py_bin: str, py_args: List[str]) -> str:
     return f"{version_line} at {py_path}"
 
 
-def _whoami_importable(py_bin: str, py_args: List[str]) -> bool:
+def _whoami_importable(py_bin: str, py_args: List[str]) -> Optional[bool]:
     """Deliberate isolation boundary, not a candidate for an in-process
     import — ``py_bin`` is a resolved candidate interpreter, distinct from
     the one running this module, and import-state isolation is also
     required: a failed ``import coordinator_whoami`` under a candidate must
     not land in this process's own ``sys.modules``. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
+    for the recorded verdict.
+
+    Three-valued, not two: True/False are OBSERVED import outcomes, and None
+    means the check could not be run at all (the candidate interpreter never
+    exec'd, or exceeded the spawn budget). Collapsing None into False — which
+    this returned before the budget clamp made the timeout branch genuinely
+    reachable — makes P-5 assert RED "coordinator_whoami not importable"
+    about an import it never performed, the fabricated verdict
+    ``docs/wiki/doctor-probe-design.md`` § `inconclusive` forbids."""
     try:
         from coordinator_core.win_portability import no_console_creationflags
 
         proc = subprocess.run(
             [py_bin, *py_args, "-c", "import coordinator_whoami"],
             capture_output=True,
-            timeout=30,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
         return proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
 
 
 class _Lazy:
@@ -574,7 +630,7 @@ def probe_p2(registry_path: Path, ml_dir: Path, py_bin: str, py_args: List[str])
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=_PROBE_SPAWN_BUDGET_SECS,
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -597,24 +653,32 @@ def probe_p2(registry_path: Path, ml_dir: Path, py_bin: str, py_args: List[str])
     return []
 
 
-def probe_p3(ml_cmd: Optional[str]) -> List[ProbeNote]:
-    if not ml_cmd:
-        return []
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+def probe_p3(registry_keys: Optional[Sequence[str]]) -> List[ProbeNote]:
+    """Is any `repos.*` key populated in the machine-local registry?
 
-        proc = subprocess.run(
-            [ml_cmd, "keys"], capture_output=True, text=True, timeout=30,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return _inconclusive(
-            "P-3", f"could not run {ml_cmd} keys — {_exec_detail(exc)}"
-        )
-    has_repo_key = proc.returncode == 0 and any(
-        line.startswith("repos.") for line in (proc.stdout or "").splitlines()
-    )
-    if not has_repo_key:
+    Reads the registry IN-PROCESS. This probe's subject is the registry's
+    DATA, not the resolver CLI that happens to be one way of reading it, so
+    it no longer spawns `machine-local keys` -- a whole Python interpreter
+    cold start to read a TOML file this process can parse for free. P-4 keeps
+    the one spawn the suite still needs, because the CLI itself is what P-4
+    is about; the two questions were being answered by two identical spawns
+    of the same command in the same run.
+
+    `registry_keys` is the flattened dotted-key set `_run` resolves once via
+    `machine_resolver.merged_flat_registry()` (registry.local.toml over
+    registry.toml, `MACHINE_LOCAL_REGISTRY_DIR`-aware -- the same directory
+    ladder P-1/P-2 probe). `None` means the registry files are absent or
+    unreadable, which is P-1's and P-2's finding to report, not this one's:
+    claiming "no repos.* keys populated" about a registry nobody could read
+    would be a verdict this probe did not observe.
+
+    Negative-spec: do NOT re-add a `machine-local keys` subprocess here. The
+    CLI reads the same two files through the same precedence; a spawn buys
+    no information and costs an interpreter start.
+    """
+    if registry_keys is None:
+        return []
+    if not any(key.startswith("repos.") for key in registry_keys):
         return [
             ProbeNote(
                 "P-3",
@@ -631,7 +695,7 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
             from coordinator_core.win_portability import no_console_creationflags
 
             proc = subprocess.run(
-                [ml_cmd, "keys"], capture_output=True, timeout=30,
+                [ml_cmd, "keys"], capture_output=True, timeout=_PROBE_SPAWN_BUDGET_SECS,
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -663,9 +727,14 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
     ]
 
 
-def probe_p5(whoami_ok: bool, py_ident: str, sh: Path) -> List[ProbeNote]:
+def probe_p5(whoami_ok: Optional[bool], py_ident: str, sh: Path) -> List[ProbeNote]:
     if whoami_ok:
         return []
+    if whoami_ok is None:
+        return _inconclusive(
+            "P-5", f"could not run the import check under {py_ident} — the candidate "
+            "interpreter did not exec or exceeded the probe spawn budget"
+        )
     return [
         ProbeNote(
             "P-5",
@@ -678,7 +747,9 @@ def probe_p5(whoami_ok: bool, py_ident: str, sh: Path) -> List[ProbeNote]:
     ]
 
 
-def probe_p6(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) -> List[ProbeNote]:
+def probe_p6(
+    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str
+) -> List[ProbeNote]:
     """Deliberate isolation boundary, not a candidate for an in-process
     import — runs ``coordinator_whoami.example_retrieval_repo`` under ``py_bin``, a
     resolved candidate interpreter distinct from the one running this
@@ -686,6 +757,8 @@ def probe_p6(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) ->
     this process's. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
     for the recorded verdict."""
+    if whoami_ok is None:
+        return _inconclusive("P-6", f"P-5's import check could not run under {py_ident}")
     if not whoami_ok:
         return [
             ProbeNote(
@@ -702,7 +775,7 @@ def probe_p6(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) ->
             [py_bin, *py_args, "-m", "coordinator_whoami.example_retrieval_repo"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
         out = proc.stdout or ""
@@ -734,7 +807,9 @@ def probe_p6(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) ->
     return []
 
 
-def probe_p6s(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) -> List[ProbeNote]:
+def probe_p6s(
+    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str
+) -> List[ProbeNote]:
     """Deliberate isolation boundary, not a candidate for an in-process
     import — runs ``coordinator_whoami.session`` under ``py_bin``, a
     resolved candidate interpreter distinct from the one running this
@@ -742,6 +817,8 @@ def probe_p6s(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) -
     this process's. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
     for the recorded verdict."""
+    if whoami_ok is None:
+        return _inconclusive("P-6s", f"P-5's import check could not run under {py_ident}")
     if not whoami_ok:
         return [
             ProbeNote(
@@ -758,7 +835,7 @@ def probe_p6s(whoami_ok: bool, py_bin: str, py_args: List[str], py_ident: str) -
             [py_bin, *py_args, "-m", "coordinator_whoami.session"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
         out = proc.stdout or ""
@@ -928,7 +1005,8 @@ def probe_p10(ch_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
             from coordinator_core.win_portability import no_console_creationflags
 
             proc = subprocess.run(
-                [ch_cmd, "plugins"], capture_output=True, text=True, timeout=30,
+                [ch_cmd, "plugins"], capture_output=True, text=True,
+                timeout=_PROBE_SPAWN_BUDGET_SECS,
                 **no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1433,7 +1511,7 @@ def probe_p20() -> List[ProbeNote]:
             [bash_path, "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1613,7 +1691,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
     ]
 
 
-def _fetch_machine_json(whoami_ok: bool, py_bin: str, py_args: List[str]) -> dict:
+def _fetch_machine_json(whoami_ok: Optional[bool], py_bin: str, py_args: List[str]) -> dict:
     """Deliberate isolation boundary, not a candidate for an in-process
     import — runs ``coordinator_whoami.machine`` under ``py_bin``, a
     resolved candidate interpreter distinct from the one running this
@@ -1630,7 +1708,7 @@ def _fetch_machine_json(whoami_ok: bool, py_bin: str, py_args: List[str]) -> dic
             [py_bin, *py_args, "-m", "coordinator_whoami.machine"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
             **no_console_creationflags(),
         )
         out = (proc.stdout or "").strip()
@@ -1842,6 +1920,11 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     ch_cmd = _resolve_cli(sh_bin, bin_dir, "claude-home")
 
     whoami_lazy = _Lazy(lambda: _whoami_importable(py_bin, py_args))
+    # Resolved once per run and shared, so a second probe asking the registry
+    # the same question costs nothing (G8's verdict). Lazy because P-3 is not
+    # in the triage set: a bare triage run must not pay even two file reads it
+    # will not consult.
+    registry_keys_lazy = _Lazy(lambda: _registry_keys(ml_dir))
 
     # Review: code-reviewer (P2) — each probe call is isolated in its own
     # try/except. An unexpected exception in any single probe must not abort
@@ -1867,7 +1950,7 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
 
     _run_probe("P-1", lambda: probe_p1(ml_dir))
     _run_probe("P-2", lambda: probe_p2(ml_dir / "registry.toml", ml_dir, py_bin, py_args))
-    _run_probe("P-3", lambda: probe_p3(ml_cmd))
+    _run_probe("P-3", lambda: probe_p3(registry_keys_lazy.get()))
     _run_probe("P-4", lambda: probe_p4(ml_cmd, sh_bin))
     _run_probe("P-5", lambda: probe_p5(whoami_lazy.get(), py_ident, sh))
     _run_probe("P-6", lambda: probe_p6(whoami_lazy.get(), py_bin, py_args, py_ident))

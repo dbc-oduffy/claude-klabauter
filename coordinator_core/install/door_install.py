@@ -211,12 +211,40 @@ def main(argv: Optional[list] = None) -> int:
         "--verify-reproducible", action="store_true",
         help="Also rebuild from source and hash-compare against the committed prebuilt.",
     )
+    parser.add_argument(
+        "--python", type=Path, default=None,
+        help=(
+            "Interpreter to bake into the REBUILD that --verify-reproducible "
+            "hash-compares against (default: this interpreter). The committed "
+            "binary bakes an absolute interpreter path, so a rebuild that bakes "
+            "a different one differs in bytes for that reason alone -- pass the "
+            "path the prebuilt was built with to compare like with like."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.verify_reproducible:
-        ok = rebuild_and_verify_prebuilt(engine_root=args.engine_root)
+        # `python_bin` is threaded through rather than left to default. Without
+        # it this check reported MISMATCH on any machine whose `sys.executable`
+        # basename differs from the one baked into the committed binary --
+        # `python3.exe` here against a prebuilt built with `python.exe`, same
+        # source, same compiler, different embedded string. That is a
+        # verification gate nobody can pass, which is worse than no gate: it
+        # fooled this workstream twice (see the door's own build lesson,
+        # "check the invocation before the artifact") and a gate that always
+        # cries wolf trains its readers to wave it through.
+        ok = rebuild_and_verify_prebuilt(
+            engine_root=args.engine_root, python_bin=args.python
+        )
         print(f"[door-install] reproducibility check: {'MATCH' if ok else 'MISMATCH'}")
         if not ok:
+            print(
+                "[door-install] if the ONLY difference is the baked interpreter, "
+                "re-run with --python pointing at the one the prebuilt was built "
+                "with (read it out of the binary, or off door.exe.provenance.json's "
+                "sibling build). A genuine source/binary divergence needs a rebuild.",
+                file=sys.stderr,
+            )
             return 1
 
     try:

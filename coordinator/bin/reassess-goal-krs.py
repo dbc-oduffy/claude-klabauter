@@ -121,16 +121,6 @@ def main() -> None:
         "signal_repo_root": cwd_repo_root,
     }
 
-    # Review: code-reviewer P0 — _gather_signal makes two SEQUENTIAL subprocess
-    # calls each with its own 30s internal timeout (up to 60s worst case), but
-    # cc_invoke's default client-side timeout is 10s — an order of magnitude
-    # smaller than the internal budget it wraps. A slow-but-within-budget
-    # signal source (10-60s) would otherwise trigger cc_invoke's outer kill of
-    # the whole op mid-write. Set a default that comfortably covers 30s×2 +
-    # slack, without clobbering an explicit operator override (mirrors the
-    # `${CC_INVOKE_TIMEOUT_SECS:-90}` bash pattern used for ceremony.wsc_commit).
-    os.environ.setdefault("CC_INVOKE_TIMEOUT_SECS", "70")
-
     try:
         result = cc_invoke("goals.reassess_krs", params, cwd_repo_root)
     except RuntimeError as exc:

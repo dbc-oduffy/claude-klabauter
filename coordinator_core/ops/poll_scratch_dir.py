@@ -22,9 +22,31 @@ Design (wave-3 settlement B6, RATIFIES — binding):
       premise failure, not an empty result. This also holds if the directory
       vanishes mid-loop.
     - This op INTENTIONALLY BLOCKS for up to `timeout_seconds` — callers own the
-      budget. It is a waiting primitive, not a ceremony hot-path op; the handler
-      is deliberately sync so the dispatch layer offloads it to a worker thread
-      and the event loop stays live while it sleeps.
+      budget WITHIN the ceiling below. It is a waiting primitive, not a ceremony
+      hot-path op; the handler is deliberately sync so the dispatch layer
+      offloads it to a worker thread and the event loop stays live while it
+      sleeps.
+
+Timeout ceiling: `timeout_seconds` is clamped, silently via `min()`, to
+`MAX_TIMEOUT_SECONDS`; `poll_interval_seconds` to `MAX_POLL_INTERVAL_SECONDS`.
+This op is NOT held to the 2s process regime — it is a deliberate wait on ANOTHER
+agent's output, not our own compute, and a tight bound would make it useless. The
+ceiling is a runaway bound, not a budget: it is what separates "this wave is
+slow" from "this thread is parked forever holding a dispatch worker on a box
+shared with ~50 concurrent sessions". Its VALUE is not invented here — it is
+`composition_budget.FLEET_AGGREGATE_ELAPSED_BUDGET`, the already-ratified fleet
+aggregate elapsed ceiling, imported so the two move together. The principle:
+a waiter must never outlive the composition it is waiting inside. A wait that
+outlives its own composition is waiting on something nothing will deliver.
+`poll_interval_seconds` is bounded
+separately because an interval larger than the remaining budget is pure
+latency — the loop cannot observe the count it is waiting for while asleep.
+A caller may always ask for LESS of either.
+
+Negative-spec (ceiling): a caller-supplied `timeout_seconds` above the ceiling is
+NEVER honoured, and the returned `elapsed_seconds` reflects the clamped budget,
+never the requested one — a caller that reads its own request back would learn
+nothing about what actually ran.
 
 Idempotency (DEC-7 note, AC8 — platform risk was rated high): inherent — the loop
 only reads (counts directory entries) and sleeps between checks; it performs no
@@ -56,7 +78,30 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.composition_budget import FLEET_AGGREGATE_ELAPSED_BUDGET
 from coordinator_core.ipc import register_op
+
+_UNARMED_FLEET_BUDGET_FALLBACK_SECONDS: float = 1200.0
+"""Ceiling used when the fleet budget is disarmed (`FLEET_AGGREGATE_ELAPSED_BUDGET
+is None` — its documented "no aggregate ceiling" state). Disarming the
+composition instrument must not silently unbound this waiter: "no ceiling on the
+composition" is a decision about telemetry, not a licence for one op to block
+forever."""
+
+MAX_TIMEOUT_SECONDS: float = (
+    FLEET_AGGREGATE_ELAPSED_BUDGET
+    if FLEET_AGGREGATE_ELAPSED_BUDGET is not None
+    else _UNARMED_FLEET_BUDGET_FALLBACK_SECONDS
+)
+"""Hard ceiling on the caller-supplied block duration — see module docstring
+"Timeout ceiling". Imported rather than restated: this is a runaway guard, not a
+ratchet, and the invariant it encodes — a waiter must never outlive the
+composition it is waiting inside — only holds if the two numbers move
+together."""
+
+MAX_POLL_INTERVAL_SECONDS: float = 60.0
+"""Hard ceiling on the caller-supplied sleep between count checks — see module
+docstring "Timeout ceiling"."""
 
 
 def _count_entries(scratch: Path):
@@ -82,9 +127,12 @@ def _poll_scratch_dir(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Required params: scratch_dir, min_count, timeout_seconds, poll_interval_seconds.
 
-    BLOCKS for up to timeout_seconds (see module docstring — callers own the
-    budget). Returns {status: "count_reached"|"timeout", count, elapsed_seconds},
-    or {"error": <str>} on invalid params / missing scratch_dir.
+    BLOCKS for up to min(timeout_seconds, MAX_TIMEOUT_SECONDS) — callers own the
+    budget within that ceiling, and the final sleep is clamped to the remaining
+    budget so the ceiling actually bounds the block (see module docstring
+    "Timeout ceiling"). Returns {status: "count_reached"|"timeout", count,
+    elapsed_seconds}, or {"error": <str>} on invalid params / missing
+    scratch_dir.
     """
     scratch_dir = params.get("scratch_dir")
     if not scratch_dir or not isinstance(scratch_dir, str):
@@ -106,9 +154,12 @@ def _poll_scratch_dir(params: dict, repo_root: Optional[Path] = None) -> dict:
     ):
         return {"error": "fanout.poll_scratch_dir requires poll_interval_seconds: a positive number"}
 
+    budget = min(float(timeout_seconds), MAX_TIMEOUT_SECONDS)
+    interval = min(float(poll_interval_seconds), MAX_POLL_INTERVAL_SECONDS)
+
     scratch = Path(scratch_dir).expanduser()
     start = time.monotonic()
-    deadline = start + float(timeout_seconds)
+    deadline = start + budget
 
     while True:
         count, err = _count_entries(scratch)
@@ -121,10 +172,11 @@ def _poll_scratch_dir(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "count": count,
                 "elapsed_seconds": now - start,
             }
-        if now >= deadline:
+        remaining = deadline - now
+        if remaining <= 0:
             return {
                 "status": "timeout",
                 "count": count,
                 "elapsed_seconds": now - start,
             }
-        time.sleep(float(poll_interval_seconds))
+        time.sleep(min(interval, remaining))

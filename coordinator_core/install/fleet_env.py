@@ -199,6 +199,7 @@ from typing import Callable, Optional
 
 from coordinator_core._settings_home import settings_home as _default_settings_home
 from coordinator_core.install import junction
+from coordinator_core.install.timeouts import DEPENDENCY_SYNC_SECS, HEALTH_PROBE_SECS
 from coordinator_core.locked_write import _plat_try_lock, _plat_unlock, held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.fleet_env_lock import (
@@ -236,16 +237,12 @@ _FLEET_ENV_IMPORT_PROBES = (
     "huggingface_hub",
 )
 
-#: Generous timeout: `uv sync --frozen` installing ~250 packages incl. a
-#: multi-GB cu130 torch build, with a possibly-cold uv cache, on a
-#: 50-70-session machine is a slow op, not a hung one (CLAUDE.md § Load
-#: norm) — this is a cold-path provisioning call, never a request-path one.
-_UV_SYNC_TIMEOUT_SECS = 3600
-
-#: Bounded: a health probe imports at most `_FLEET_ENV_IMPORT_PROBES`, whose
-#: heaviest member (`torch`) can take several seconds cold but never
-#: approaches this ceiling under normal disk/CPU conditions.
-_HEALTH_PROBE_TIMEOUT_SECS = 120
+#: `uv sync --frozen` and its post-sync import probe, both members of the
+#: named `install` timeout family (DR-349 § Carve-outs). The numbers live in
+#: `install/timeouts.py` with the membership test they had to pass; neither
+#: bounds code this repo owns.
+_UV_SYNC_TIMEOUT_SECS = DEPENDENCY_SYNC_SECS
+_HEALTH_PROBE_TIMEOUT_SECS = HEALTH_PROBE_SECS
 
 #: Additional extension point ONLY — see module docstring "Binding registry
 #: (C6)". `_replay_sibling_bindings` always consults the registry itself

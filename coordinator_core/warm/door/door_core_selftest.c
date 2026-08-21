@@ -159,6 +159,10 @@ int main(void) {
     check_int("classify/-32601_no_method", is_provably_undispatched(JSONRPC_METHOD_NOT_FOUND), 1);
     check_int("classify/-32002_skew", is_provably_undispatched(JSONRPC_ENGINE_SKEW), 1);
     check_int("classify/-32003_untrusted", is_provably_undispatched(JSONRPC_UNTRUSTED_CALLER), 1);
+    /* Refused one branch BEFORE the -32601 lookup above, so at least as
+     * strong a proof of non-dispatch. A 0 here is the door telling an
+     * operator a suspended commit may have landed. */
+    check_int("classify/-32006_suspended", is_provably_undispatched(JSONRPC_OP_SUSPENDED), 1);
     check_int("classify/-32602_invalid_params", is_provably_undispatched(-32602), 0);
     check_int("classify/-32603_internal", is_provably_undispatched(-32603), 0);
     check_int("classify/-32004_indeterminate",

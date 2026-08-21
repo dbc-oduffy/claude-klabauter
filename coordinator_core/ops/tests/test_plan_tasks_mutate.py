@@ -842,6 +842,49 @@ def test_stamp_one_row_preserves_literal_block_style_on_other_rows(tmp_path):
     assert "\\n" not in after_text
 
 
+@pytest.mark.parametrize(
+    "label,body",
+    [
+        ("lf-trailing-newline", "para one.\npara two.\n"),
+        ("crlf", "para one.\r\npara two.\r\n"),
+        ("no-trailing-newline", "para one.\npara two."),
+        ("two-trailing-newlines", "para one.\npara two.\n\n"),
+        ("whitespace-only-line", "para one.\n   \npara two.\n"),
+        ("trailing-whitespace-on-line", "para one.   \npara two.\n"),
+    ],
+)
+def test_dump_rows_round_trips_every_body_shape_byte_for_byte(label, body):
+    """`_dump_rows` must return the body it was given, for every newline and
+    whitespace shape — whichever scalar style it picks to get there.
+
+    The style fallback is the point. `_plan_tasks_str_representer` can only
+    use a literal block (`|`) for bodies YAML can represent that way; a body
+    carrying CRLF, a whitespace-only line, or trailing whitespace on a line
+    falls back to the quoted form, because a literal block would not survive
+    the round trip. That fallback is CONTENT-SAFE and this test is what says
+    so — it was measured, not assumed, and it is pinned here because the two
+    plausible failure modes are invisible in review: PyYAML choosing a
+    chomping indicator that drops or adds a trailing newline, and a CRLF body
+    normalizing to LF. Both would be silent content mutation of prose in rows
+    the caller never named, which is the defect class the literal-style fix
+    exists to close.
+
+    Style is deliberately NOT asserted. Which shapes earn a block scalar is
+    PyYAML's call and may shift across versions; that they come back byte-
+    identical is the contract.
+    """
+    import yaml
+
+    rows = [{"id": "C1", "body": body}]
+
+    restored = yaml.safe_load(plan_tasks_mutate._dump_rows(rows))[0]["body"]
+
+    assert restored == body, (
+        f"{label}: body did not survive the dump/load round trip — "
+        f"expected {body!r}, got {restored!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Path containment (AC10 / F0)
 # ---------------------------------------------------------------------------

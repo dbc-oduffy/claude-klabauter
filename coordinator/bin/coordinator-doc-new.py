@@ -413,6 +413,61 @@ def _sanitize_session_segment(seg: str) -> str:
         return "em-unknown"
     return sanitized
 
+
+# Precedence chain _resolve_session_id() reads, named here so the missing---out
+# refusal below can quote the exact variables a caller with no session identity
+# would have to look at. Kept adjacent to the resolver rather than inlined into
+# the message so the two can never drift apart.
+_SESSION_ID_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
+
+
+def _missing_out_message(type_label: str) -> str:
+    """Compose the ``--out``-is-required refusal shared by the two session-scoped
+    sidecar types (--type run-report and --type subagent-sidecar).
+
+    Neither type gains a derived default here, and this function does not add
+    one: the live path is computed by ``coordinator_core.dispatch.provision`` at
+    spawn time, and a scaffold that guessed a session-scoped path would write a
+    sidecar into a directory nothing reaps (the DEC-3 rationale pinned at both
+    call sites and in ``_default_path``). What differs is the *remediation named
+    to the reader*, per docs/wiki/guard-messaging.md § Key Patterns — "only offer
+    remediation the current reader can actually run":
+
+      - a dispatched agent carrying a harness session id can construct the path
+        itself, so the message resolves the session-scoped root for it rather
+        than restating the formula;
+      - a caller with no session identity resolvable at all has no path to
+        construct and no flag value to invent, so the message names the missing
+        identity instead of the missing flag.
+
+    Session id comes from ``_resolve_session_id()``/``_sanitize_session_segment()``
+    -- the same resolver and precedence chain --type review-findings's fallback
+    path uses; that resolver's 'em-unknown' unset sentinel selects the second arm.
+
+    Spec backlink: state/improvement-queue/2026-08-21-a-dispatched-executor-
+    cannot-scaffold-it-7c2ccafdf81a.yaml
+    Negative-spec: returns message text only -- never exits, never writes, and
+    never derives an --out value for the caller.
+    """
+    session_id = _sanitize_session_segment(_resolve_session_id())
+    head = (
+        f"error: --out <path> is required for --type {type_label}. "
+        "There is no default output path -- the live sidecar path is computed by "
+        "coordinator_core.dispatch.provision at spawn time and travels in the dispatch brief."
+    )
+    if session_id == "em-unknown":
+        return (
+            f"{head} No session id is set here ("
+            + ", ".join(_SESSION_ID_ENV_VARS)
+            + "), so no session-scoped path is derivable from this process. "
+            "Take the sidecar path from the dispatch brief."
+        )
+    return (
+        f"{head} Absent one, write under state/subagent-share/{session_id}/ "
+        "and pass that path as --out."
+    )
+
+
 # ---------------------------------------------------------------------------
 # from_repo resolution — mirrors coordinator-queue-append._resolve_from_repo
 #
@@ -5426,11 +5481,7 @@ def main() -> None:
         # path. Fail loud instead of writing to a wrong/stale default.
         if not args.out:
             print(
-                "error: --out <path> is required for --type run-report "
-                "(and its --type flight-recorder alias). There is no default output path — "
-                "the universal subagent run-report sidecar lives under state/subagent-share/, "
-                "whose path is computed by the engine's provision_report at spawn time. "
-                "Pass --out explicitly.",
+                _missing_out_message("run-report (and its --type flight-recorder alias)"),
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -5458,13 +5509,7 @@ def main() -> None:
         # coordinator_core.dispatch.provision at spawn time, exactly the same
         # rationale as --type run-report's --out requirement above.
         if not args.out:
-            print(
-                "error: --out <path> is required for --type subagent-sidecar. "
-                "There is no default output path — the live subagent-sidecar lives under "
-                "state/subagent-share/, whose path is computed by "
-                "coordinator_core.dispatch.provision at spawn time. Pass --out explicitly.",
-                file=sys.stderr,
-            )
+            print(_missing_out_message("subagent-sidecar"), file=sys.stderr)
             sys.exit(1)
 
     # Validate audit-record-specific required fields.

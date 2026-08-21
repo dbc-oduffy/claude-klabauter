@@ -18,10 +18,12 @@ from coordinator_core.subagent_sandbox.engine import (
     Policy,
     load_policy,
     resolve_git_root,
+    resolve_git_root_cheap,
 )
 
 __all__ = [
     "Policy",
     "load_policy",
     "resolve_git_root",
+    "resolve_git_root_cheap",
 ]

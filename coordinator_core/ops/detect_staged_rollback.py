@@ -83,6 +83,14 @@ here blocks every one of them from committing. Missing a marginal real
 incident is the deliberately preferred failure mode over blocking legitimate
 work; see the threshold docstrings for the historical margin each one keeps.
 
+That bias governs the THRESHOLDS, not the spelling of the key. Either override
+arms on exactly ``"1"`` and on nothing else (``_override_armed``, PM-authorized
+2026-08-21): the earlier "anything but empty-or-0" form silently disarmed a
+tripwire for the operator who typed ``=false`` meaning the opposite, and
+disagreed with the generated hook's own ``[ "$KEY" = "1" ]``. Keeping an
+override cheap to reach is the bias; guessing which string means yes is not
+part of it.
+
 Negative-spec:
     - NEVER runs a mutating git command (no ``git reset``, ``git checkout``,
       no staging/unstaging) — read-only over ``git diff --cached`` / ``git
@@ -806,6 +814,26 @@ def _report(candidates: Sequence[RollbackCandidate], overridden: bool) -> str:
     return "\n".join(lines)
 
 
+def _override_armed(env: dict, key: str) -> bool:
+    """Is `key` set to the one value that arms an override — exactly ``"1"``?
+
+    Both overrides here disarm a tripwire, so the comparator decides which way
+    an ambiguous value fails. The prior form (`not in ("", "0")`) armed on
+    ANYTHING else, which inverts the intent of the most likely thing an
+    operator types after a key spelled like a boolean: `=false`, `=no`, and
+    `=off` all read as "leave the tripwire on" and all disarmed it, silently.
+    The generated pre-commit hook already tested `[ "$KEY" = "1" ]` on its own
+    side, so strictness here also retires a comparator mismatch that only ever
+    resolved by accident.
+
+    This narrows an override the module docstring records as deliberately
+    permissive; the bias it names is toward not BLOCKING legitimate work, and
+    an operator who meant to disarm still can, by the value the hook and this
+    CLI now both name. PM-authorized 2026-08-21.
+    """
+    return env.get(key, "") == "1"
+
+
 _USAGE = """\
 usage: detect-staged-rollback [repo-root]
 
@@ -864,11 +892,11 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
     # staged alongside it, and vice versa.
     candidates = find_rollback_candidates(repo_root, env=env, tokens=raw_diff_tokens)
     rollback_fires = bool(candidates) and _should_fire(candidates)
-    rollback_overridden = env.get(OVERRIDE_ENV, "") not in ("", "0")
+    rollback_overridden = _override_armed(env, OVERRIDE_ENV)
 
     mass_finding = find_mass_deletion(repo_root, env=env, tokens=raw_diff_tokens)
     mass_fires = _mass_deletion_should_fire(mass_finding)
-    mass_overridden = env.get(MASS_DELETION_OVERRIDE_ENV, "") not in ("", "0")
+    mass_overridden = _override_armed(env, MASS_DELETION_OVERRIDE_ENV)
 
     if not rollback_fires and not mass_fires:
         return EXIT_CLEAN

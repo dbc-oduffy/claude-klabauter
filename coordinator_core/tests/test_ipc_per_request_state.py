@@ -16,9 +16,14 @@ both only observable under OVERLAPPING dispatch:
      rather than trusting the value the module constant snapshotted at
      import — a warm, long-lived process must be able to retune this knob
      without a restart.
-  3. `_OP_TIMEOUT_OVERRIDES` remains live after the C11 change:
-     `coverage.gate` (600s) and `ceremony.scoped_git_commit` (150s) must
-     still resolve to their table values regardless of the global knob.
+  3. `_OP_TIMEOUT_OVERRIDES` remains live after the C11 change: an override
+     row, when one exists, must still resolve regardless of the global
+     knob's per-request re-resolution. Both rows this docstring used to name
+     are gone — `coverage.gate` (600s, removed K-001, state/kill-ledger.md)
+     and `ceremony.scoped_git_commit` (150s, revoked 2026-08-21 by the
+     ceremony budget, DR-348). Ceremony ops now have their own bound, owned
+     by `coordinator_core/tests/test_ceremony_budget_ratchet.py`, not by any
+     row in this table — see `ipc.CEREMONY_BUDGET_SECS`.
 
 Handlers use `asyncio.run()` in sync test functions — no pytest-asyncio
 dependency, matching `test_dispatch_message.py`'s own pattern.
@@ -192,14 +197,22 @@ def test_resolve_dispatch_timeout_secs_ignores_unparsable_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch):
-    """`ceremony.scoped_git_commit` must keep resolving to its
-    `_OP_TIMEOUT_OVERRIDES` table value regardless of the global knob's
-    per-request re-resolution — the C11 body's explicit DO NOT BREAK.
-    `coverage.gate`'s row was removed (K-001, state/kill-ledger.md); it now
-    tracks the live global knob like any unlisted op."""
+    """An `_OP_TIMEOUT_OVERRIDES` row keeps resolving to its table value
+    regardless of the global knob's per-request re-resolution — the C11
+    body's explicit DO NOT BREAK.
+
+    Both real rows this test used to pin against are gone: `coverage.gate`
+    (removed, K-001) now tracks the live global knob like any unlisted op,
+    and `ceremony.scoped_git_commit` (revoked 2026-08-21, DR-348) can no
+    longer carry a widening row at all — a live row would still be inert,
+    clamped by `CEREMONY_BUDGET_SECS`
+    (test_ceremony_budget_ratchet.py::test_an_injected_widening_row_is_still_clamped),
+    which would make it useless as a test of "override wins over the env
+    knob". A synthetic NON-ceremony row keeps that property under test
+    without depending on a row that must never exist again."""
+    monkeypatch.setitem(ipc._OP_TIMEOUT_OVERRIDES, "test.widened", 42.0)
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "5")
-    assert ipc._timeout_for("coverage.gate") == 5.0
-    assert ipc._timeout_for("ceremony.scoped_git_commit") == 150.0
+    assert ipc._timeout_for("test.widened") == 42.0
     # A method NOT in the override table still tracks the live global knob.
     assert ipc._timeout_for("ping") == 5.0
 
@@ -214,9 +227,14 @@ def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch
 # requires editing this table, which is the point — the edit is the argument,
 # made in a diff a reviewer sees, rather than a one-character change to a dict
 # literal that reads as routine tuning.
-_TIMEOUT_HIGH_WATER_SECS = {
-    "ceremony.scoped_git_commit": 150.0,
-}
+#
+# `ceremony.scoped_git_commit`'s 150.0s row lived here until 2026-08-21, when the
+# ceremony budget (DR-348) revoked it outright rather than lowering it — a
+# ceremony op's ceiling is no longer this table's business at all. That budget
+# owns every `ceremony.*` method by prefix, present or future, and ratchets on
+# its own schedule; see `coordinator_core/tests/test_ceremony_budget_ratchet.py`.
+# This table now governs only non-ceremony override rows.
+_TIMEOUT_HIGH_WATER_SECS: dict = {}
 
 
 def test_op_timeout_overrides_never_ratchet_upward():

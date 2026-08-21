@@ -56,14 +56,45 @@ does not own or import -- the prose itself is carried verbatim so a
 consuming agent's exact-line marker match (`coordinator/agents/
 code-reviewer.md` § HARD RULE step 1) behaves identically on both paths.
 
-Negative-spec: this module does NOT resolve `contract_blocks` out of
-`subagent-sandbox-policy.yaml` itself -- that resolution is DoE-owned
-(`enforce-agent-dispatch-mode.py :: _resolve_contract_blocks`, keyed off
-their own policy file) and is expected to already be present on
-`payload["contract_blocks"]` by the time this module sees the payload,
-exactly as `assemble_contract_blocks_for_payload` already consumes it for
-the Agent path (C3/AC7 wires DoE's `SubagentStart` shim to populate it).
-Absent, this leg is simply empty -- fail-open, not re-derived here.
+CONTRACT CHANGE (2026-08-21, agreed with doe-claude-6d, bug-backlog
+`2026-08-21-named-dispatch-catering-resolves-contrac-0755d38ec8ea.yaml`):
+`payload["contract_blocks"]` now arrives in one of TWO shapes, and this
+module resolves which shape it got before handing anything to
+`assemble_contract_blocks_for_payload`:
+
+  (a) a LIST of block-name strings -- an already-selected row, TODAY's
+      shape, kept byte-identical for the pre-cutover compatibility window
+      (DoE's shim has not cut over on every deploy at once). Passed
+      through untouched.
+  (b) a MAPPING of `agent_type -> [block names]` -- the new shape. DoE's
+      shim still locates and parses `subagent-sandbox-policy.yaml` itself
+      (`__file__`-anchored; that boundary does not move), but stops
+      pre-selecting a row, because only THIS plane can resolve which type
+      a dispatch actually is: a NAMED dispatch's `payload["agent_type"]`
+      is the teammate NAME, not a policy key (`resolve_effective_types`
+      below), so a caller selecting the row off the raw field silently
+      picks nothing for that population. This module tries the raw
+      `agent_type` key first (the common, unnamed-dispatch path, no
+      back-pointer read needed), then the back-pointer-resolved
+      `subagent_type` -- `_resolve_contract_blocks_payload` /
+      `_select_contract_blocks_row`.
+
+Anything else (`None`, a string, an int, any other malformed value) is
+passed through unchanged -- `assemble_contract_blocks_for_payload`'s own
+existing validation handles it exactly as before this change: `None`/falsy
+degrades silently to no blocks, any other non-list is reported to stderr by
+that function and also degrades to no blocks. This module does not
+duplicate that check.
+
+Negative-spec: this module does NOT resolve block NAMES out of
+`subagent-sandbox-policy.yaml` itself (i.e. it never reads that YAML file)
+-- that stays DoE-owned (`enforce-agent-dispatch-mode.py ::
+_resolve_contract_blocks`, keyed off their own policy file). What moved to
+this plane is only ROW SELECTION within the map DoE now hands over whole --
+picking which `agent_type`'s list of names applies to this dispatch, not
+deriving the list itself. `assemble_contract_blocks_for_payload` still owns
+turning the selected list of names into rendered block text
+(`_assemble_contract_blocks`), exactly as it always has for the list shape.
 
 Negative-spec: this module does NOT call `coordinator_core.dispatch.
 provision` (the subagent-sidecar DECISION-OBJECT provisioner) -- that is a
@@ -85,8 +116,10 @@ full breakdown and the plan-level disposition this needs.
 from __future__ import annotations
 
 import secrets
+import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core._settings_home import claude_config_dir
 from coordinator_core.hooks._envelope import context_only, no_advisory
@@ -131,6 +164,18 @@ BLOCKS_COMPANION_MARKER_PREFIX = "blocks_path: "
 #: measured ~31,913 composed chars against this cap -- 10 of 33 catered
 #: types were over it (module docstring § AC9).
 ADDITIONAL_CONTEXT_CHAR_CAP = 10_000
+
+#: Prevalence counter (bug-backlog `2026-08-21-named-dispatch-catering-
+#: resolves-contrac-0755d38ec8ea.yaml` deliverable 2) -- same machine-
+#: readable "key: value" marker shape as `SIDECAR_PATH_MARKER_PREFIX` /
+#: `SIDECAR_MISS_MARKER`, but this one is stderr-only diagnostic output,
+#: never part of `additionalContext` (a spawned child must never see it).
+#: Fires exactly once per dispatch where `payload["contract_blocks"]` is
+#: the mapping shape AND row selection needed the back-pointer leg -- the
+#: population that would have composed silently empty under the list-only
+#: contract this module had before the fix.
+NAMED_DISPATCH_ROW_RESOLVED_MARKER = "named_dispatch_contract_blocks_resolved: 1"
+
 
 #: Snippet path, relative to the coordinator-claude plugin root, in either
 #: of its two known on-disk shapes (see `_resolve_role_append_snippet_path`).
@@ -280,8 +325,74 @@ def _load_role_append() -> str:
         return ""
 
 
+def _select_contract_blocks_row(
+    contract_blocks: Mapping, agent_type: str, subagent_type: str
+) -> Tuple[Optional[List[str]], Optional[str], bool]:
+    """Select `agent_type`'s (or, failing that, `subagent_type`'s) row out
+    of a mapping-shaped `payload["contract_blocks"]`. Returns
+    ``(selected_or_None, matched_key_or_None, via_backpointer)``.
+
+    Order matters (module docstring): `agent_type` first -- the common,
+    unnamed-dispatch path, no back-pointer semantics involved -- then
+    `subagent_type`, the back-pointer-resolved leg that only a NAMED
+    dispatch needs. `via_backpointer` is True only when the SECOND leg is
+    what matched -- exactly the population the prevalence counter
+    (`NAMED_DISPATCH_ROW_RESOLVED_MARKER`) exists to measure. Neither key
+    present is a lookup-miss, not an error: several catered types
+    (`coordinator:git-commit-agent`, `coordinator:atlas-clarity-reviewer`)
+    legitimately carry no `contract_blocks` row at all.
+    """
+    if agent_type and agent_type in contract_blocks:
+        return contract_blocks.get(agent_type), agent_type, False
+    if subagent_type and subagent_type in contract_blocks:
+        return contract_blocks.get(subagent_type), subagent_type, True
+    return None, None, False
+
+
+def _resolve_contract_blocks_payload(
+    payload: Dict[str, Any], agent_type: str, subagent_type: str
+) -> Dict[str, Any]:
+    """Return `payload`, or a shallow-copied patched version of it, ready
+    for `assemble_contract_blocks_for_payload` to consume.
+
+    Only the MAPPING shape is patched (module docstring, deliverable 1):
+    `payload["contract_blocks"]` is replaced with the selected row's list
+    of block names, so the downstream assembler sees exactly the shape it
+    has always consumed. The LIST shape and every other value (`None`, a
+    string, an int, ...) pass through byte-identical -- this function
+    never touches a payload it did not itself recognize as a mapping.
+
+    Emits the prevalence counter (deliverable 4) when row selection needed
+    the back-pointer leg, and a stderr diagnostic (deliverable 3) ONLY for
+    the genuinely-anomalous case: a row that IS present in the map but
+    resolves to an empty/falsy list. A type absent from the map entirely,
+    with no back-pointer type either, is the legitimate "no row for this
+    type" case and stays silent, matching the sidecar leg's own posture
+    toward an unenumerated type.
+    """
+    raw = payload.get("contract_blocks")
+    if not isinstance(raw, Mapping):
+        return payload
+
+    selected, matched_key, via_backpointer = _select_contract_blocks_row(
+        raw, agent_type, subagent_type
+    )
+    if via_backpointer:
+        print(NAMED_DISPATCH_ROW_RESOLVED_MARKER, file=sys.stderr)
+    if matched_key is not None and not selected:
+        print(
+            "cater_subagent_start: contract_blocks row present but empty "
+            f"for {matched_key!r}",
+            file=sys.stderr,
+        )
+
+    patched = dict(payload)
+    patched["contract_blocks"] = selected if selected else []
+    return patched
+
+
 def _resolve_sidecar_leg(
-    payload: Dict[str, Any], cwd: Optional[str]
+    payload: Dict[str, Any], cwd: Optional[str], agent_type: str, subagent_type: str
 ) -> tuple[str, str]:
     """Resolve the sidecar-offer/miss-notice leg. Returns
     ``(sidecar_path, sidecar_text)`` -- ``sidecar_path`` is `""` when no
@@ -290,6 +401,13 @@ def _resolve_sidecar_leg(
     the composed offer/miss prose, or `""` when neither applies (the
     ineligible-type case -- stays silent, matching the Agent-path hook's
     own `_is_report_sidecar_eligible` gate on the miss notice).
+
+    `agent_type`/`subagent_type` arrive pre-resolved from the caller
+    (`compose_catering`) rather than re-derived here -- `resolve_effective_
+    types`'s back-pointer read is in-process file I/O, not a process
+    spawn, but this module still resolves it exactly once per dispatch
+    (brightline: "add no second one") now that the contract-blocks leg
+    needs the same two values.
 
     `policy_path=None` on both `load_policy` and `_provision` deliberately
     reuses `load_policy`'s own existing 3-rung fallback (explicit path ->
@@ -300,9 +418,7 @@ def _resolve_sidecar_leg(
     would duplicate logic that already exists, exactly the shape this
     module's own docstring says to avoid.
     """
-    git_root = resolve_git_root(cwd)
     policy = load_policy(None)
-    agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)
 
     sidecar_eligible = bool(
         (agent_type and agent_type in policy.report_sidecar)
@@ -336,18 +452,31 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     if not isinstance(payload, dict):
         return ""
 
+    agent_type = ""
+    subagent_type = ""
+    try:
+        git_root = resolve_git_root(cwd)
+        _agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)
+    except Exception:
+        agent_type, subagent_type = "", ""
+
     sidecar_path = ""
     sidecar_text = ""
     try:
-        sidecar_path, sidecar_text = _resolve_sidecar_leg(payload, cwd)
+        sidecar_path, sidecar_text = _resolve_sidecar_leg(
+            payload, cwd, agent_type, subagent_type
+        )
     except Exception:
         sidecar_path, sidecar_text = "", ""
 
     injected_blocks = ""
     try:
+        resolved_payload = _resolve_contract_blocks_payload(
+            payload, agent_type, subagent_type
+        )
         injected_blocks = (
             assemble_contract_blocks_for_payload(
-                payload, cwd=cwd, report_sidecar_path=sidecar_path
+                resolved_payload, cwd=cwd, report_sidecar_path=sidecar_path
             )
             or ""
         )

@@ -23,6 +23,7 @@ sprint-spine-split/C6.md
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,8 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 import coordinator_core.ops.read_sizing_object_fields  # noqa: F401 — fires @register_op
 
-from coordinator_core.ipc import _REGISTRY
+import coordinator_core.ipc as ipc
+from coordinator_core.ipc import _REGISTRY, dispatch_message
 from coordinator_core.ops.read_sizing_object_fields import (
     _handler,
     _read_sizing_object_fields,
@@ -174,6 +176,45 @@ def test_handler_happy_path(tmp_path):
     assert result["sizing_path"] == "state/sizings/a-sizing.yaml"
     assert result["intent"] == "Do the thing, verbatim."
     assert result["estimate"] == {"tshirt": "M", "provisional": False}
+
+
+# ---------------------------------------------------------------------------
+# (e) real dispatch path — through ipc.dispatch_message, not a direct
+# `_handler(...)` call. B1 (code review, slice B): `sizing.read_object_fields`
+# was absent from `op_scopes.py::_OP_KEY_SCOPE`, so every real JSON-RPC
+# dispatch resolved `scope = "none"` and reached the handler with
+# `repo_root=None` — 100% failure in production despite every test above
+# (which all call `_handler(...)` directly with an explicit `repo_root=`)
+# passing green. Mirrors `test_artifact_emit_scope_touch.py`'s dispatch-path
+# pattern (drive the REAL registered handler end-to-end through
+# `dispatch_message`, not a synthetic stand-in) — the only in-repo precedent
+# found for a scope-table regression test of this shape.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_message_resolves_repo_root_and_returns_fields(tmp_path):
+    assert "sizing.read_object_fields" in ipc._REGISTRY, (
+        "import guard: sizing.read_object_fields not registered"
+    )
+    worktree = _init_worktree(tmp_path)
+    sizings_dir = worktree / "state" / "sizings"
+    sizings_dir.mkdir(parents=True)
+    sizing_path = sizings_dir / "a-sizing.yaml"
+    sizing_path.write_text(_SIZING_YAML, encoding="utf-8")
+
+    msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sizing.read_object_fields",
+        "params": {"sizing_path": "state/sizings/a-sizing.yaml"},
+        "_origin_worktree": str(worktree),
+    }
+    reply = asyncio.run(dispatch_message(msg))
+
+    assert "error" not in reply, reply
+    assert reply["result"]["sizing_path"] == "state/sizings/a-sizing.yaml"
+    assert reply["result"]["intent"] == "Do the thing, verbatim."
+    assert reply["result"]["estimate"] == {"tshirt": "M", "provisional": False}
 
 
 def _init_worktree(tmp_path: Path) -> Path:

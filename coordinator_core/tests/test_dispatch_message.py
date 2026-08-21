@@ -520,7 +520,7 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
     )
 
 
-def test_emit_op_requires_origin_worktree(tmp_path):
+def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
     """artifact.emit is common_dir-scoped and REQUIRES _origin_worktree (2026-07-07 cutover).
 
     Prior to 2026-07-07, emit ops (artifact.emit, backlog.record, goal.append) were
@@ -986,25 +986,41 @@ def test_base_exception_absorbed():
 # docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md (a dispatch timeout is
 # a runaway guard, not a performance budget; the <2s ruling is a KPI test).
 # Historical: state/improvement-queue/2026-07-13-ceremony-wsc-commit-reliably-times-out-o-62330efd3dd4.yaml
+#
+# `ceremony.scoped_git_commit`'s own 150.0s override row (added after DEC-2, for the
+# same op DEC-2 had just un-widened) was itself revoked 2026-08-21 by the ceremony
+# budget (DR-348) — see ipc.CEREMONY_BUDGET_SECS and
+# coordinator_core/tests/test_ceremony_budget_ratchet.py, which is now the sole
+# authority on ceremony.* op timeouts. The tests below therefore assert every
+# ceremony.* method resolves at-or-below CEREMONY_BUDGET_SECS, not at the global
+# default — the clamp in `_timeout_for` applies whether or not an override row
+# exists, so a ceremony op no longer falls all the way to DISPATCH_TIMEOUT_SECS.
 # ---------------------------------------------------------------------------
 
 def test_timeout_for_resolves_per_op_override():
-    """_timeout_for falls to the global runaway guard for unlisted ops — including the retired ceremony.* rows."""
-    assert ipc._timeout_for("ceremony.wsc_commit") == ipc.DISPATCH_TIMEOUT_SECS
-    assert ipc._timeout_for("ceremony.wsc_resolve") == ipc.DISPATCH_TIMEOUT_SECS
-    assert ipc._timeout_for("ceremony.wsc_tail") == ipc.DISPATCH_TIMEOUT_SECS
+    """Unlisted, non-ceremony ops fall to the global runaway guard.
+
+    `ceremony.*` methods are excluded here on purpose: they route through the
+    same "no override row" branch of `_timeout_for` but are then clamped to
+    `CEREMONY_BUDGET_SECS`, which is below `DISPATCH_TIMEOUT_SECS` in normal
+    configuration. That clamp is pinned separately by
+    `test_timeout_for_clamps_ceremony_ops_to_the_budget` below and by the
+    ratchet suite — this test only covers the unclamped, non-ceremony path.
+    """
     assert ipc._timeout_for("ping") == ipc.DISPATCH_TIMEOUT_SECS
     assert ipc._timeout_for("test.nonesuch") == ipc.DISPATCH_TIMEOUT_SECS
 
 
-def test_timeout_for_resolves_scoped_git_commit_override():
-    """ceremony.scoped_git_commit resolves to its widened per-op override (2026-08-15,
-    live incident: a ~2116-path publish commit died at the 30s global default), not the
-    global runaway guard — see the _OP_TIMEOUT_OVERRIDES comment block in ipc.py for the
-    measurement this value is sized from.
+def test_timeout_for_clamps_ceremony_ops_to_the_budget():
+    """ceremony.scoped_git_commit resolves at-or-below CEREMONY_BUDGET_SECS, not the
+    global runaway guard nor any widened override — its 150.0s row (2026-08-15, sized
+    from a live incident) was REVOKED 2026-08-21 by the ceremony budget (DR-348). The
+    budget's own ratchet is enforced in test_ceremony_budget_ratchet.py; this test only
+    pins that this specific, formerly-widened op is subject to it like any other.
     """
-    assert ipc._timeout_for("ceremony.scoped_git_commit") == ipc._OP_TIMEOUT_OVERRIDES["ceremony.scoped_git_commit"]
+    assert ipc._timeout_for("ceremony.scoped_git_commit") <= ipc.CEREMONY_BUDGET_SECS
     assert ipc._timeout_for("ceremony.scoped_git_commit") != ipc.DISPATCH_TIMEOUT_SECS
+    assert "ceremony.scoped_git_commit" not in ipc._OP_TIMEOUT_OVERRIDES
 
 
 def test_op_timeout_overrides_public_proxy_contents_and_immutability():
@@ -1012,11 +1028,14 @@ def test_op_timeout_overrides_public_proxy_contents_and_immutability():
 
     Review: code-reviewer F4 — the public export shipped with zero direct test
     coverage of its own contents or immutability, unlike OP_KEY_SCOPE's coverage test.
-    DEC-2 emptied the table (ceremony.* rows deleted); the proxy must reflect that.
+    DEC-2 emptied the table, and the `ceremony.scoped_git_commit` row DEC-2's
+    revert had readmitted was itself revoked 2026-08-21 (DR-348, ceremony budget) —
+    the table is now empty and stays that way for any ceremony op by construction
+    (test_ceremony_budget_ratchet.py::test_no_override_row_widens_a_ceremony_op).
+    A genuinely justified NON-ceremony override still has somewhere to land here.
     """
     assert dict(ipc.OP_TIMEOUT_OVERRIDES) == dict(ipc._OP_TIMEOUT_OVERRIDES)
-    assert "ceremony.wsc_tail" not in ipc.OP_TIMEOUT_OVERRIDES
-    assert "ceremony.scoped_git_commit" in ipc.OP_TIMEOUT_OVERRIDES
+    assert dict(ipc.OP_TIMEOUT_OVERRIDES) == {}
     with pytest.raises(TypeError):
         ipc.OP_TIMEOUT_OVERRIDES["test.new"] = 1.0
 

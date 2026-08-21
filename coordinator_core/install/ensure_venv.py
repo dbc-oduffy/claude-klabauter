@@ -183,6 +183,7 @@ from coordinator_core.locked_write import _plat_try_lock, _plat_unlock
 from coordinator_core.trusted_root_guard import coordinator_trusted_root_guard
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install import junction
+from coordinator_core.install.timeouts import PACKAGE_INSTALL_SECS, VENV_CREATE_SECS
 from coordinator_core.install.uninstall_legs import _sweep_orphaned_swap_dirs
 from coordinator_core.install.write_surface import (
     ShapedClause,
@@ -775,7 +776,7 @@ def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
 
 
 def _create_venv(base_py: str, venv_dir: Path) -> None:
-    proc = _run([base_py, "-m", "venv", str(venv_dir)], timeout=120)
+    proc = _run([base_py, "-m", "venv", str(venv_dir)], timeout=VENV_CREATE_SECS)
     if proc.returncode != 0:
         raise EnsureVenvError(
             f"[ensure-coordinator-venv] ERROR: venv creation failed (exit {proc.returncode})."
@@ -799,7 +800,7 @@ def _install_deps(venv_py: Path, whoami_pkg: Path) -> None:
             [str(venv_py), "-m", "pip", "install", "-e", f"{whoami_pkg}/", *_VENV_PIP_DEPS],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=PACKAGE_INSTALL_SECS,
             **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired as exc:
@@ -936,7 +937,7 @@ def _ensure_whoami_under_general_pin(
             [general, "-m", "pip", "install", "-e", f"{whoami_pkg}/"],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=PACKAGE_INSTALL_SECS,
             **no_console_creationflags(),
         )
         if proc.returncode == 0:

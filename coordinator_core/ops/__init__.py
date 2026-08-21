@@ -233,6 +233,19 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     ("coordinator_core.ops.record_history", 'registers "records.history"'),
     (
+        "coordinator_core.ops.read_sizing_object_fields",
+        'registers "sizing.read_object_fields" -- shipped PRESENT-BUT-DEAD: '
+        "decorated and listed in `_registry_map.py`, but absent here, so "
+        "`import coordinator_core.ops` never registered it and "
+        "`coordinator-invoke sizing.read_object_fields` could not resolve it. "
+        "Its own suite asserted registry membership and stayed GREEN "
+        "throughout, because that test file imports the module directly and "
+        "the decorator fires as an import side effect -- a guard or test that "
+        "imports what it audits cannot observe declared-but-unreachable. "
+        "Caught 2026-08-21 by `test_registry_fast_path_matches_live_registry`, "
+        "not by the op's own tests.",
+    ),
+    (
         "coordinator_core.ops.handoff_columns_query",
         'registers "handoff.columns" (2026-08-11 pull-surface-four-columns C3 — '
         "batch-computed status/deployment_state/predecessor/shipped_in over live "
@@ -559,6 +572,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.op_census_report",
         'registers "op_census.report" (docs/plans/2026-08-21-the-census-that-'
         "cannot-miss-an-op.md § C6)",
+    ),
+    (
+        "coordinator_core.ops.op_budget_breaches",
+        'registers "op_census.breaches" (the budget-breach surface — DR-344-the-'
+        "brightline-process-budget-for-claude-klabauter.md)",
     ),
 ]
 

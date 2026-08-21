@@ -3665,91 +3665,82 @@ def compute_claim_grant(
     `apply` (C2b), which re-resolves this same verdict immediately before
     mutating rather than trusting a brief-time snapshot.
 
-    Five-row truth table (AC3b), resolved in this order:
-      1. No claim dir at all -> `granted` (no competing claim).
-      2. Holder IS this session -> `granted`, no mutation, narrated as "you
-         already hold this" (the Director of Engineering review, F2) — without this row, re-typing
-         `/pickup <path>` after a `hold` verdict or a compaction would
-         resolve to `denied: held by a live peer` naming the EM's OWN
-         session, the amnesiac-facing contradiction the contract's
-         "Speaking to an amnesiac" section exists to prevent.
-
-         `held_by_self` is `True` ONLY on this row — a distinct machine-
-         readable field, not just a session-id string the EM must eyeball
-         against its own (which it often doesn't have handy). Fix for the
-         2026-07-29 incident: an EM re-reading its own just-applied claim
-         directly off the frontmatter (bypassing a fresh `brief()`) saw
-         `status: claimed` / `claimed_by: <its own sid>` with nothing
-         anywhere naming the claim as its own, and burned a full dispatch
-         confirming a non-bug. Every other row carries `held_by_self: False`
-         explicitly, so callers never have to fall back on a bare `.get()`
-         default to tell "not self" from "not computed".
+    R4 claim rule (ratified, replacing the former age-keyed settling-window
+    split — docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md
+    C2): resolved in this order:
+      1. No claimant (no claim dir at all, or a claim dir with no recorded
+         `session_id`) -> `granted`.
+      2. A claimant is recorded and IS this session -> `granted`,
+         `held_by_self: True`, narrated as "you already hold this" (the Director of Engineering
+         review, F2) — without this row, re-typing `/pickup <path>` after a
+         `hold` verdict or a compaction would resolve to `denied: held by a
+         live peer` naming the EM's OWN session, the amnesiac-facing
+         contradiction the contract's "Speaking to an amnesiac" section
+         exists to prevent. Identity, not part of the R4 outcome table
+         itself — a session can never be in contention with itself.
       2b. Holder is a DIFFERENT session holding an EXPIRED `brief`-stage
          lease (`session.claims.brief_lease_expired`) -> `granted-with-
-         warning`, EVEN IF that session reads live. This is the ONE row on
-         which a live holder's claim is takeable, and it exists because
-         liveness cannot bound a brief-stage reservation: `session_live`'s
-         Layer 1 is PPID-authoritative and ignores recency, so a session that
-         briefed the artifact and walked away without exiting would otherwise
-         hold it for its whole lifetime. An `apply`-stage claim never reaches
-         this row — rows 3-5 below own it unchanged.
-      3. Holder is a DIFFERENT session and live -> `denied`, UNLESS (AC3e)
-         that holder is lineage-related to this artifact via `fm`
+         warning`, EVEN IF that session reads live. Untouched by the R4
+         rewrite: it answers a different question than claim contention
+         does (a fixed lease duration on an unappliеd reservation, not a
+         liveness read), and `session_live`'s Layer 1 is PPID-authoritative
+         and ignores recency, so a session that briefed the artifact and
+         walked away without exiting would otherwise hold it forever. An
+         `apply`-stage claim never reaches this row.
+      3. A DIFFERENT claimant is recorded and that session is LIVE (resolved
+         via `coordinator_core.session.liveness.claim_holder_live`, which
+         keys on `coordinator_core.session.core.stable_pid_alive` against
+         the holder's `meta.json` — not the harness registry's raw pid or
+         status field) -> `denied` (REJECT), UNLESS (AC3e) that holder is
+         lineage-related to this artifact via `fm`
          (`_lineage_related_sessions` — this artifact's own author, or a
          predecessor artifact's live claimant) — then it is a HANDOVER, not
-         contention, and resolves `granted` instead, narrated as such. `fm`
-         is optional (default `None` -> no lineage evidence, row 3 behaves
-         exactly as before) so existing callers that pre-date AC3e are
-         unaffected.
-      4. Holder not live, claim age <= `CLAIM_STALE_AFTER_MINUTES` ->
-         `denied` (the settling window: doctrine is explicit that "a stored
-         pid alone never proves the holder dead" — a session mid-boot or a
-         liveness probe reading a dead hook subshell both present as
-         not-live, so a fresh not-live reading stays conservative rather
-         than being treated as proof of absence).
-      5. Holder not live, claim age > `CLAIM_STALE_AFTER_MINUTES` ->
-         `granted-with-warning` (the holder is gone and the claim is stale;
-         take it, and say so).
+         contention, and resolves `granted` instead. Untouched by the R4
+         rewrite for the same reason as 2b: it is an identity/relationship
+         question, not an age proxy.
+      4. A DIFFERENT claimant is recorded and that session is NOT live, OR
+         liveness could not be resolved -> `granted-with-warning`
+         (GRANT_WITH_WARN). Not-live and unresolvable collapse to the SAME
+         outcome — an evidence gap is never treated as proof of liveness,
+         and (this is the R4 change) neither is claim age: the former
+         table's separate settling-window `denied` cell for a *recently*
+         not-live claimant is gone. `claimed_at`/`claim_age_minutes` is
+         never read to reach this row.
 
-    An unparseable/missing claim age is treated as row 4 (conservative
-    `denied`), never as row 5 — an evidence gap is not evidence of
-    staleness.
+    Age is NOT an input to the row-4 decision and `claimed_at` is never read
+    for it: the prior table's settling-window/staleness split (a live
+    claimant treated as takeable once its claim was old enough; a not-live
+    claimant's takeability keyed on how long it had been not-live) granted a
+    baton away from a demonstrably running session, which the PM killed.
+    Liveness is decidable on its own; age was a proxy that could disagree
+    with the thing it proxied.
 
     `unclean_prior_holder` (bool, always present) — the fact pickup/SKILL.md's
     "recovery banner" step expects to read (contract § "Classify, Load,
     Reconcile -> Report briefly"): "a recovery means the prior session died
     uncleanly, so verify on-disk state against the body before resuming."
-    Before this field existed nothing in this module emitted that signal at
-    all -- prose in the skill instructing the EM to prepend a banner that no
-    producer ever wrote (see `_is_spinoff_kind`'s corrected docstring, which
-    used to falsely claim this classifier fed that banner).
+    `True` ONLY on row 4 (a not-live/unresolvable claimant is being granted
+    over) — `session.claims`' `drop()` always `shutil.rmtree`s the whole
+    claims dir on a clean release, so a claims dir that still exists and
+    names a not-live holder can only mean the holder went away without
+    releasing it. Every other row is `False`.
 
-    `True` ONLY on row 5 above. That row is the one on-disk state this
-    module can witness as an unclean exit: `session.claims`' `drop()` always
-    `shutil.rmtree`s the whole claims dir on a clean release (see
-    `session/claims.py`'s three `rmtree` call sites), so there is no
-    "cleanly dropped but still on disk" state to confuse with death -- a
-    claims dir that still exists, names a holder that reads not-live, and
-    has sat past the `CLAIM_STALE_AFTER_MINUTES` settling window (row 4's
-    conservative floor) can only mean the holder went away without
-    releasing it. Every other row is `False`: row 1 has no claim at all
-    (nothing to have died); rows 2/2b/3 all read `holder_live: True` or are
-    `held_by_self`; row 4 is within the settling window, where "not live" is
-    still an inconclusive read per `liveness.py`'s own INDETERMINATE-vs-dead
-    contract, not yet evidence of death.
-
-    The evidence an EM needs to verify on-disk state per that banner step
-    -- which session, when it went quiet, what it held -- is NOT duplicated
-    onto a second field: row 5 already merges `holder_evidence()` into this
-    same dict (via `_with_evidence`), so `holder`, `claim_age_minutes`,
-    `liveness_basis`, and `last_activity_age_sec` sit alongside this flag on
-    the identical decision object.
+    `claim_age_minutes` is retained on the returned dict for shape stability
+    with older callers but is no longer used to resolve `verdict` — it is
+    always `None` here since age is not read as part of this decision.
+    `holder_evidence()`-derived narration fields (`liveness_basis`,
+    `last_activity_age_sec`, `recent_paths`, `scope_overlap`, ...) are no
+    longer merged into this dict (F6, see the chunk's completion report):
+    this rewrite implements the literal ratified R4 read for the
+    liveness/contention question — dropping `holder_evidence()` entirely
+    rather than keeping it for narration-only enrichment. `claim_stage` is
+    still resolved and returned (needed by row 2b above).
     """
     cwd_str = cwd if cwd is not None else str(repo_root)
     drop_invocation = f"pickup-assemble drop {artifact_path}"
     claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
 
-    if not claims_dir.is_dir():
+    def _no_claimant() -> dict[str, Any]:
         return {
             "verdict": "granted",
             "reason": "no competing claim",
@@ -3762,6 +3753,9 @@ def compute_claim_grant(
             "unclean_prior_holder": False,
         }
 
+    if not claims_dir.is_dir():
+        return _no_claimant()
+
     holder_sid = None
     sid_file = claims_dir / "session_id"
     if sid_file.is_file():
@@ -3770,27 +3764,11 @@ def compute_claim_grant(
         except OSError:
             holder_sid = None
 
-    claim_age_minutes = _claim_age_minutes(claims_dir)
-    fm = fm or {}
+    if not holder_sid:
+        return _no_claimant()
 
-    def _with_evidence(base: dict[str, Any]) -> dict[str, Any]:
-        """Merge `holder_evidence()`'s decidable fields into `base` when a
-        holder is actually named — no holder, nothing to explain (row 1
-        never reaches here)."""
-        if not holder_sid:
-            return base
-        evidence = _holder_evidence(
-            holder_sid, repo_root, scope=fm.get("scope"),
-            artifact_path=str(repo_root / artifact_path), want_activity=True,
-        )
-        # `base`'s caller-computed fields (notably `held_by_self`, `verdict`)
-        # must always win over `holder_evidence()`'s fields -- merge order is
-        # base-last so a future evidence key sharing a name can never
-        # silently override a correctly-computed value here (the Director of Engineering review,
-        # F5: this is the same "a key added later silently masks a real
-        # distinction" failure mode the held_by_self fix itself exists to
-        # eliminate).
-        return {**evidence, **base}
+    fm = fm or {}
+    stage = _claims.claim_stage(claims_dir)
 
     try:
         self_holder = _liveness.claim_held_by_me(str(claims_dir), cwd=cwd_str)
@@ -3798,125 +3776,81 @@ def compute_claim_grant(
         self_holder = False
 
     if self_holder:
-        return _with_evidence(
-            {
-                "verdict": "granted",
-                "reason": "you already hold this",
-                "holder": holder_sid,
-                "holder_live": True,
-                "held_by_self": True,
-                "claim_age_minutes": claim_age_minutes,
-                "claim_stage": _claims.claim_stage(claims_dir),
-                "drop_invocation": drop_invocation,
-                "unclean_prior_holder": False,
-            }
-        )
+        return {
+            "verdict": "granted",
+            "reason": "you already hold this",
+            "holder": holder_sid,
+            "holder_live": True,
+            "held_by_self": True,
+            "claim_age_minutes": None,
+            "claim_stage": stage,
+            "drop_invocation": drop_invocation,
+            "unclean_prior_holder": False,
+        }
+
+    if stage == _claims.CLAIM_STAGE_BRIEF and _claims.brief_lease_expired(claims_dir):
+        return {
+            "verdict": "granted-with-warning",
+            "reason": (
+                f"{holder_sid} reserved this at brief and never applied it — the "
+                f"{_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute brief-stage lease has "
+                "elapsed, so the reservation is takeable"
+            ),
+            "holder": holder_sid,
+            "holder_live": None,
+            "held_by_self": False,
+            "claim_age_minutes": None,
+            "claim_stage": stage,
+            "drop_invocation": drop_invocation,
+            "unclean_prior_holder": False,
+        }
 
     try:
         holder_live = _liveness.claim_holder_live(str(claims_dir), cwd_str)
     except (OSError, ValueError):
         holder_live = False
 
-    stage = _claims.claim_stage(claims_dir)
-    if stage == _claims.CLAIM_STAGE_BRIEF and _claims.brief_lease_expired(claims_dir):
-        return _with_evidence(
-            {
-                "verdict": "granted-with-warning",
+    if holder_live:
+        related_sessions = _lineage_related_sessions(repo_root, fm)
+        if holder_sid in related_sessions:
+            return {
+                "verdict": "granted",
                 "reason": (
-                    f"{holder_sid} reserved this at brief {claim_age_minutes} minutes ago "
-                    f"and never applied it — the {_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute "
-                    "brief-stage lease has elapsed, so the reservation is takeable"
+                    f"held by {holder_sid} — that session authored this artifact or "
+                    "holds/consumed one of its predecessors; a clean handover, not "
+                    "contention (AC3e)"
                 ),
                 "holder": holder_sid,
-                "holder_live": holder_live,
+                "holder_live": True,
                 "held_by_self": False,
-                "claim_age_minutes": claim_age_minutes,
+                "claim_age_minutes": None,
                 "claim_stage": stage,
                 "drop_invocation": drop_invocation,
                 "unclean_prior_holder": False,
             }
-        )
-
-    if holder_live:
-        related_sessions = _lineage_related_sessions(repo_root, fm)
-        if holder_sid in related_sessions:
-            return _with_evidence(
-                {
-                    "verdict": "granted",
-                    "reason": (
-                        f"held by {holder_sid} — that session authored this artifact or "
-                        "holds/consumed one of its predecessors; a clean handover, not "
-                        "contention (AC3e)"
-                    ),
-                    "holder": holder_sid,
-                    "holder_live": True,
-                    "held_by_self": False,
-                    "claim_age_minutes": claim_age_minutes,
-                    "claim_stage": stage,
-                    "drop_invocation": drop_invocation,
-                    "unclean_prior_holder": False,
-                }
-            )
-        evidence = _holder_evidence(
-            holder_sid, repo_root, scope=fm.get("scope"),
-            artifact_path=str(repo_root / artifact_path), want_activity=True,
-        )
-        # Same base-wins-over-evidence merge order as `_with_evidence` above
-        # -- a future `holder_evidence()` key sharing a name (e.g.
-        # `held_by_self`) must never override this row's correctly-computed
-        # `False`.
         return {
-            **evidence,
             "verdict": "denied",
-            "reason": _claim_grant_denied_live_reason(holder_sid, evidence),
+            "reason": f"held by {holder_sid} — live",
             "holder": holder_sid,
             "holder_live": True,
             "held_by_self": False,
-            "claim_age_minutes": claim_age_minutes,
+            "claim_age_minutes": None,
             "claim_stage": stage,
             "drop_invocation": drop_invocation,
             "unclean_prior_holder": False,
         }
 
-    if claim_age_minutes is not None and claim_age_minutes > CLAIM_STALE_AFTER_MINUTES:
-        return _with_evidence(
-            {
-                "verdict": "granted-with-warning",
-                "reason": (
-                    f"prior claim by {holder_sid} is {claim_age_minutes} minutes old "
-                    "and that session is not live"
-                ),
-                "holder": holder_sid,
-                "holder_live": False,
-                "held_by_self": False,
-                "claim_age_minutes": claim_age_minutes,
-                "claim_stage": stage,
-                "drop_invocation": drop_invocation,
-                "unclean_prior_holder": True,
-            }
-        )
-
-    age_note = (
-        f"{claim_age_minutes} minutes old"
-        if claim_age_minutes is not None
-        else "of unreadable age"
-    )
-    return _with_evidence(
-        {
-            "verdict": "denied",
-            "reason": (
-                f"held by {holder_sid}; that session is not live but the claim is "
-                f"{age_note}, inside the {CLAIM_STALE_AFTER_MINUTES}-minute settling window"
-            ),
-            "holder": holder_sid,
-            "holder_live": False,
-            "held_by_self": False,
-            "claim_age_minutes": claim_age_minutes,
-            "claim_stage": stage,
-            "drop_invocation": drop_invocation,
-            "unclean_prior_holder": False,
-        }
-    )
+    return {
+        "verdict": "granted-with-warning",
+        "reason": f"held by {holder_sid}; that session is not live",
+        "holder": holder_sid,
+        "holder_live": False,
+        "held_by_self": False,
+        "claim_age_minutes": None,
+        "claim_stage": stage,
+        "drop_invocation": drop_invocation,
+        "unclean_prior_holder": True,
+    }
 
 
 def _adopt_into_baton(
@@ -5565,272 +5499,6 @@ def compute_sender_reachability(sent_by: Optional[str]) -> dict[str, Any]:
         "address": address,
         "resolved_at": resolved_at,
     }
-
-
-def compute_competing_claim(
-    repo_root: Path,
-    fm: dict[str, Any],
-    artifact_path: str,
-    *,
-    handoff_scan: Optional[list[dict[str, Any]]] = None,
-    liveness_cache: Optional[dict[str, bool]] = None,
-) -> dict[str, Any]:
-    """`gates.competing_claim` (AC3, the Staff Engineer second-pass finding #3) — resolves
-    the claim-vs-liveness question over SIBLING handoffs, rather than
-    exposing its inputs for the EM to interpret.
-
-    NOT subsumed by `compute_claim_grant`: that function reads THIS
-    artifact's OWN claim record (the `.git/coordinator-sessions/*-claims/`
-    dir); this one scans every OTHER handoff under `state/handoffs/` for a
-    populated `claimed_by`/`consumed_by`/`picked_up_by`, cross-checking each
-    holder through `coordinator_core.session.liveness.live_session_verdicts`
-    (AC13/AC-live-verdicts, C8 — in-process import — no subcommand name to
-    misremember; fetched once per call, not per candidate).
-
-    `verdict` resolves across all candidates, most-severe first:
-      `live-peer`      — at least one sibling is held by a live, non-lineage
-                         session WHOSE OWN `scope:` overlaps this artifact's
-                         `scope:` (or either side declares no scope, so
-                         overlap can't be ruled out). Informational-only
-                         (PM ruling 2026-07-24, pickup-skill-code-driven-
-                         branch-result spinoff): `build_competing_claim_judgment_point`
-                         is retired to an always-`None` no-op, so this
-                         verdict never forces `gates.coast` to a blocked
-                         verdict — only `gates.claim`/`gates.claim_grant`
-                         (this artifact's OWN claim state) may gate a pickup.
-      `handover`       — no live-peer, but at least one sibling is held by a
-                         live session THAT IS lineage-related (this
-                         artifact's own author, or a predecessor artifact's
-                         live claimant — AC3e). Narrated per-candidate so
-                         the EM can tell a clean handover from real
-                         contention without re-deriving lineage itself.
-                         Never forces a block.
-      `stale-only`     — no live holder at all, but at least one sibling
-                         names a holder that reads not-live. Surfaced,
-                         non-blocking.
-      `live-unrelated` — a live, non-lineage holder exists, but its
-                         declared `scope:` has NO path overlap with this
-                         artifact's own — a peer mid-work on a genuinely
-                         different surface, not contention (the
-                         false-positive this tier exists to stop surfacing
-                         as a stand-down question: coincidentally sharing a
-                         branch is not scope overlap). Surfaced,
-                         non-blocking — `build_competing_claim_judgment_point`
-                         only fires on `live-peer`.
-      `none`           — no sibling names a claimed_by/consumed_by/
-                         picked_up_by holder at all.
-
-    Each candidate also carries `send_message_address`: a best-effort bare
-    `SendMessage` address for `claimed_by` (`""` when THIS PEER is
-    unresolvable while messaging works elsewhere on the box, `None` with
-    `send_message_address_unavailable_reason` set to `"peer-messaging-
-    unavailable"` when NO peer on the box can have one, or `"<this
-    session>"` for a self-claim), so the EM reading this brief has
-    somewhere to reach the named holder without a separate lookup, and can
-    tell "this peer has no address" apart from "no peer can have one right
-    now" the way the peer-roster surface already can (`state/handoffs/
-    2026-08-13-session-owner-reachability-registry.md` § 3; `cross-repo/
-    inbox/2026-08-13-doe-claude-em-peer-roster-doctrine-reply.md` § Counter
-    2; `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-messaging-gate-off-
-    vs-proven-round-trip.md` § "Smaller, concrete: the empty-string
-    rendering"). Advisory only: resolved via `reachability.
-    resolve_addresses_bulk_with_availability` off ONE live-registry
-    snapshot for the whole candidate set, and any resolution failure
-    degrades every candidate's field to `""` (reason `None`) without
-    touching `verdict`, `disposition`, or `holder_live` (see the try/except
-    below) -- a resolver exception is "we don't know", never "box-wide
-    unavailable". A sibling `send_message_address_resolved_at` (UTC
-    ISO-8601) is stamped alongside it on every candidate, resolved or not.
-
-    Negative-spec: `send_message_address` is NOT durable identity and must
-    never be persisted and reused past the instant it was computed — it
-    encodes a live session's socket path, and a dead socket can be reused
-    by an unrelated LATER session, so acting on a stale address risks
-    injecting into the wrong session's context. `claimed_by` (the UUID) is
-    the one durable identity a caller may hold onto; `send_message_address`
-    is valid only for the caller that just computed this brief, and
-    `send_message_address_resolved_at` exists so a reader of a PERSISTED
-    copy of this dict (e.g. `pickup_assemble.apply`'s session-scoped
-    decision-object file, which serializes `gates.competing_claim`
-    verbatim) can tell a stale address apart from a fresh one instead of
-    trusting it silently. This function does not itself read that
-    persisted file back in, so it cannot itself act on a stale value.
-
-    Read-only (AC3): reads disk/git state only, never mutates.
-    """
-    self_resolved = (repo_root / artifact_path).resolve()
-    related_sessions = _lineage_related_sessions(repo_root, fm)
-    handoffs_dir = repo_root / "state" / "handoffs"
-    self_scope = fm.get("scope", []) or []
-
-    # Ledger-first (C11, row 18): pre-resolve `common_dir` once for this
-    # call's whole sibling scan, mirroring `resolve_claim_state`'s own
-    # hot-path guidance (a caller that already has `common_dir` in hand never
-    # triggers a second resolution) — this loop can visit many candidates.
-    try:
-        _common_dir = lifecycle.git_common_dir(repo_root)
-    except Exception:
-        _common_dir = None
-
-    candidates: list[dict[str, Any]] = []
-    saw_live_peer = False
-    saw_handover = False
-    saw_stale = False
-    saw_live_unrelated = False
-
-    # Call-scoped liveness memo — dies with this function's stack frame on
-    # every return path, so it CANNOT reopen the cross-call staleness race
-    # `session_live`'s own docstring (liveness.py:46-48, "Do NOT memoize the
-    # live-set inside `live_session_ids`") and `live_session_ids`'s AC8
-    # negative-spec (liveness.py:403, "NO memoization here") both guard
-    # against. Those negative-specs are about a PROCESS-LIFETIME cache that
-    # would serve a stale answer across separate `compute_competing_claim`
-    # invocations (or across `live_session_ids` calls entirely); this dict is
-    # a local, never persisted anywhere, and is rebuilt from scratch on the
-    # next call — it only collapses redundant probes for the SAME sid within
-    # ONE scan of `state/handoffs/`, where the answer cannot go stale between
-    # the first and second sighting because no time passes and no external
-    # state changes between two iterations of this loop.
-    liveness_by_sid: dict[str, bool] = liveness_cache if liveness_cache is not None else {}
-
-    # C8/AC13 migration: `holder_live` is now derived from
-    # `session.liveness.live_session_verdicts()` — the ONE shared per-id
-    # liveness seam also consulted (via `holder_evidence._liveness_basis`)
-    # for `liveness_basis` below, closing the two-independent-reads-of-the-
-    # same-meta.json defect (Review: staff-eng second pass, Finding 7):
-    # `holder_live` used to come from `session_live` while `liveness_basis`
-    # came from a separate `_liveness_basis` re-derivation, and the two could
-    # disagree. Consumed DIRECTLY (never the 2s-TTL-cached
-    # `coordinator_core.liveness` legacy bridge) and fetched ONCE per call,
-    # not per candidate (AC-live-verdicts).
-    verdicts = _liveness.live_session_verdicts(str(repo_root))
-
-    # Evidence memos, same call-scoped-only lifetime rationale as
-    # `liveness_by_sid` above: one holder naming N sibling handoffs gets its
-    # evidence read once, not N times. `_ACTIVITY_CANDIDATE_CAP` bounds the
-    # number of DISTINCT holders that ever pay the transcript-read cost
-    # (`want_activity=True`) per call — cheap meta.json-only fields
-    # (`liveness_basis`/`last_activity_age_sec`) are unbounded since they
-    # cost nothing beyond the already-open meta.json.
-    cheap_evidence_by_sid: dict[str, dict[str, Any]] = {}
-    full_evidence_by_sid: dict[str, dict[str, Any]] = {}
-    activity_calls_used = 0
-    _ACTIVITY_CANDIDATE_CAP = 5
-
-    scan = handoff_scan if handoff_scan is not None else (
-        _scan_handoff_dir(handoffs_dir) if handoffs_dir.is_dir() else []
-    )
-    for entry in scan:
-        candidate_path = entry["path"]
-        if entry["resolved"] == self_resolved:
-            continue
-        candidate_fm = entry["fm"]
-
-        # Ledger-first (C11, row 18): a sibling's claim holder now resolves
-        # through `_resolve_ledger_first_holder` rather than a raw
-        # frontmatter scan, so a sibling whose mirror reverted but whose
-        # ledger still holds a live claim still surfaces as a candidate.
-        holder_sid = _resolve_ledger_first_holder(
-            repo_root, candidate_path, candidate_fm, common_dir=_common_dir
-        )
-        if not holder_sid:
-            continue
-
-        if holder_sid in liveness_by_sid:
-            holder_live = liveness_by_sid[holder_sid]
-        else:
-            # A holder_sid absent from the verdicts map (`no-session`
-            # sentinel, an archived dir) reads not-live — same contract
-            # `live_session_ids()` absence already carried.
-            entry = verdicts.get(holder_sid)
-            holder_live = entry[0] if entry is not None else False
-            liveness_by_sid[holder_sid] = holder_live
-
-        try:
-            display_path = rel_id(candidate_path, repo_root)
-        except ValueError:
-            display_path = str(candidate_path)
-
-        if not holder_live:
-            disposition = "stale-claim"
-            saw_stale = True
-        elif holder_sid in related_sessions:
-            disposition = "handover"
-            saw_handover = True
-        elif not _scopes_intersect(self_scope, candidate_fm.get("scope", []) or []):
-            # Live, non-lineage holder whose OWN declared scope has no
-            # path overlap with this artifact's scope — a coincidence of
-            # sharing a branch, not real contention (the false-positive
-            # this spinoff exists to close: a peer mid-work on an
-            # unrelated handoff must never gate `gates.coast` on this
-            # one). Conservative when either side declares no scope at
-            # all (can't prove non-overlap) — that case falls through to
-            # `live-peer` below, unchanged.
-            disposition = "live-unrelated"
-            saw_live_unrelated = True
-        else:
-            disposition = "live-peer"
-            saw_live_peer = True
-
-        if holder_sid in cheap_evidence_by_sid:
-            cheap_evidence = cheap_evidence_by_sid[holder_sid]
-        else:
-            cheap_evidence = _holder_evidence(holder_sid, repo_root, want_activity=False)
-            cheap_evidence_by_sid[holder_sid] = cheap_evidence
-
-        candidate = {
-            "path": display_path,
-            "claimed_by": holder_sid,
-            "holder_live": holder_live,
-            "disposition": disposition,
-            "liveness_basis": cheap_evidence.get("liveness_basis"),
-            "last_activity_age_sec": cheap_evidence.get("last_activity_age_sec"),
-        }
-
-        if disposition in ("live-peer", "handover"):
-            if holder_sid in full_evidence_by_sid:
-                full_evidence = full_evidence_by_sid[holder_sid]
-            elif activity_calls_used < _ACTIVITY_CANDIDATE_CAP:
-                full_evidence = _holder_evidence(
-                    holder_sid, repo_root, scope=self_scope,
-                    artifact_path=str(repo_root / artifact_path), want_activity=True,
-                )
-                full_evidence_by_sid[holder_sid] = full_evidence
-                activity_calls_used += 1
-            else:
-                # Cap reached — say so explicitly (a silent cap reads as
-                # "checked everything") rather than leaving these fields
-                # absent or falsely populated.
-                full_evidence = {
-                    "recent_paths": [],
-                    "recent_paths_source": "capped",
-                    "scope_overlap": None,
-                }
-            candidate["recent_paths"] = full_evidence.get("recent_paths", [])
-            candidate["recent_paths_source"] = full_evidence.get("recent_paths_source")
-            candidate["scope_overlap"] = full_evidence.get("scope_overlap")
-
-        candidates.append(candidate)
-
-    # Advisory-only cross-session reachability, resolved ONCE for the whole
-    # distinct-holder set this scan has already collected -- shared core in
-    # `_resolve_send_message_addresses` (its own docstring carries the full
-    # negative-spec: `send_message_address` is NOT durable identity, never
-    # persist-and-reuse; `claimed_by` stays the durable identity).
-    _resolve_send_message_addresses(candidates)
-
-    if saw_live_peer:
-        verdict = "live-peer"
-    elif saw_handover:
-        verdict = "handover"
-    elif saw_stale:
-        verdict = "stale-only"
-    elif saw_live_unrelated:
-        verdict = "live-unrelated"
-    else:
-        verdict = "none"
-
-    return {"verdict": verdict, "candidates": candidates}
 
 
 def build_competing_claim_judgment_point(
@@ -8915,16 +8583,18 @@ def brief(
     branch_gate = compute_branch_gate(root, classification=classification)
     liveness_fired = compute_liveness_signal(root, fm, artifact["path"])
     # One glob+read+frontmatter-parse pass over `state/handoffs/*.md`, shared
-    # by `compute_competing_claim` and `compute_successor_handoffs` below
-    # (Review: coordinatorcode-reviewer-91d7b9ae Finding 2) — `brief()` is on
-    # the session-boot hot path, so a second full-directory scan+parse per
-    # call is exactly the per-call cost its budget exists to catch.
+    # with `compute_successor_handoffs` below (Review: coordinatorcode-
+    # reviewer-91d7b9ae Finding 2) — `brief()` is on the session-boot hot
+    # path, so a second full-directory scan+parse per call is exactly the
+    # per-call cost its budget exists to catch. `compute_competing_claim`
+    # (the `gates.competing_claim` producer) was deleted outright (C2,
+    # docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): a
+    # reverse-reference scan of the control-plane skill corpus found no
+    # reader of that field, and `compute_claim_grant`/`held_by_self` was the
+    # only genuinely-consumed field this scan fed.
     _handoffs_dir = root / "state" / "handoffs"
     _handoff_scan = _scan_handoff_dir(_handoffs_dir) if _handoffs_dir.is_dir() else []
     _handoff_liveness_cache: dict[str, bool] = {}
-    competing_claim = compute_competing_claim(
-        root, fm, artifact["path"], handoff_scan=_handoff_scan, liveness_cache=_handoff_liveness_cache
-    )
     execution_stamp_hit = compute_execution_stamp_match(root, fm, artifact["path"])
     execution_stamp_match = execution_stamp_hit[0] if execution_stamp_hit else None
     execution_stamp_target = execution_stamp_hit[1] if execution_stamp_hit else None
@@ -9097,7 +8767,6 @@ def brief(
                         "gate_notes": compute_gate_notes(fm),
                         "aging_verdict": aging_verdict,
                         "liveness_signal": liveness_fired,
-                        "competing_claim": competing_claim,
                         "commit_reality": commit_reality,
                         "coast": compute_coast(
                             live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
@@ -9271,7 +8940,6 @@ def brief(
             "gate_notes": compute_gate_notes(fm),
             "aging_verdict": aging_verdict,
             "liveness_signal": liveness_fired,
-            "competing_claim": competing_claim,
             "commit_reality": commit_reality,
             "coast": compute_coast(judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence),
         }
@@ -9347,7 +9015,6 @@ def brief(
                     "gate_notes": compute_gate_notes(fm),
                     "aging_verdict": "not_applicable",
                     "liveness_signal": liveness_fired,
-                    "competing_claim": competing_claim,
                     "sender_reachability": compute_sender_reachability(fm.get("sent_by")),
                     "coast": compute_coast(reply_jps, tree_quiescence=tree_quiescence),
                 },
@@ -9378,7 +9045,6 @@ def brief(
                         "gate_notes": compute_gate_notes(fm),
                         "aging_verdict": "not_applicable",
                         "liveness_signal": liveness_fired,
-                        "competing_claim": competing_claim,
                         "coast": compute_coast([], tree_quiescence=tree_quiescence),
                     },
                     "directives": [],
@@ -9459,7 +9125,6 @@ def brief(
                     "gate_notes": compute_gate_notes(fm),
                     "aging_verdict": "not_applicable",
                     "liveness_signal": liveness_fired,
-                    "competing_claim": competing_claim,
                     "sender_reachability": compute_sender_reachability(fm.get("sent_by")),
                     "coast": compute_coast(
                         live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
@@ -9541,7 +9206,6 @@ def brief(
                 "gate_notes": compute_gate_notes(fm),
                 "aging_verdict": "not_applicable",
                 "liveness_signal": liveness_fired,
-                "competing_claim": competing_claim,
                 "sender_reachability": compute_sender_reachability(fm.get("sent_by")),
                 "coast": compute_coast(judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence),
             },

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -2317,13 +2318,13 @@ def _commit_call_kwargs(spy):
     ]
 
 
-def _non_publish_call_kwargs(spy):
-    return [
-        kw
-        for c, kw in zip(spy.calls, spy.call_kwargs)
-        if str(_mod._PUBLISH) not in " ".join(str(x) for x in c)
-        and str(_mod._SCOPED_GIT_COMMIT) not in " ".join(str(x) for x in c)
-    ]
+# `_non_publish_call_kwargs` was deleted with the assertion it served
+# ("every other leg carries the shared default"). There is no shared
+# default any more, so a helper that partitions legs into "publish" and
+# "everything else" would encode the very grouping G1 retired -- the legs
+# are grouped by cost model now, and
+# `test_every_leg_bound_comes_from_a_declared_family` checks the whole set
+# at once.
 
 
 def test_delta_default_is_the_engine_s_not_forwarded_per_call(tmp_path, monkeypatch):
@@ -2354,14 +2355,131 @@ def test_no_delta_flag_forwards_the_opt_out_to_every_publish_call(tmp_path, monk
         assert "--no-delta" in call, call
 
 
-def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monkeypatch):
+#: The complete set of bounds a `_run` leg is allowed to carry. Anything
+#: else reaching a spawn means a leg was given a number instead of a cost
+#: model — which is the defect
+#: docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md § G1 names.
+_DECLARED_LEG_BOUNDS = {
+    "_GIT_PLUMBING_TIMEOUT_SECS",
+    "_GIT_PUSH_TIMEOUT_SECS",
+    "_REGISTRY_CLI_TIMEOUT_SECS",
+    "_ROUND_SCAN_LEG_TIMEOUT_SECS",
+    "_COMMIT_LEG_TIMEOUT_SECS",
+    "_PUBLISH_LEG_TIMEOUT_SECS",
+    "_EXTERNAL_CI_TIMEOUT_SECS",
+}
+
+
+def test_local_bounds_are_cost_plus_the_named_scheduling_term():
+    """The two local families must stay `<cost> + <scheduling headroom>`,
+    with the headroom as its own named term.
+
+    Collapsing them to a single literal is the change this pins against:
+    it reads as a simplification and silently destroys the ability to
+    tell "this leg got slower" from "the box got busier", which is the
+    whole distinction CLAUDE.md § Load norm turns on. The cost term is
+    recovered here by subtraction precisely so a future edit that folds
+    the headroom in fails loudly.
+    """
+    headroom = _mod._SPAWN_SCHEDULING_HEADROOM_SECS
+    assert headroom > 0
+    assert _mod._GIT_PLUMBING_TIMEOUT_SECS - headroom == pytest.approx(2.0)
+    assert _mod._REGISTRY_CLI_TIMEOUT_SECS - headroom == pytest.approx(2.0)
+
+
+#: Legs allowed to sit on a value that was once a blanket, each for a
+#: reason recorded at the constant, not for the value's own sake.
+#:   `_EXTERNAL_CI_TIMEOUT_SECS` (600) — DR-349's named test-runner
+#:     carve-out; the leg is consumer-owned code containing a pytest run.
+#:   `_PUBLISH_LEG_TIMEOUT_SECS` (3600) — held on measurement: one row's
+#:     `publish.py --dry-run` costs 88.75s of process time over 211
+#:     spawns, and a nine-row mirror publish extrapolates past 1,200s, so
+#:     lowering it hard-kills working publishes. That is a PM scope call
+#:     (DR-349 § "What this record does not decide"), not this rebuild's.
+_BLANKET_VALUE_EXEMPT = {"_EXTERNAL_CI_TIMEOUT_SECS", "_PUBLISH_LEG_TIMEOUT_SECS"}
+
+
+def test_no_leg_silently_inherits_a_retired_blanket_value():
+    """600.0 (`_SUBPROCESS_TIMEOUT_SECS`, inherited by ~24 sites) and
+    3600.0 (the publish/commit blanket) may not reappear as a leg's bound
+    except at a constant that names why.
+
+    The exemption is by NAME, never by value: that is the whole point.
+    G1's defect was not the size of 600, it was that ~24 legs arrived at
+    it without anyone choosing it, so a leg landing on a retired value
+    must do so through a constant whose docstring carries its own
+    measurement. A new leg cannot join the exemption set by coincidence.
+    """
+    for name in _DECLARED_LEG_BOUNDS - _BLANKET_VALUE_EXEMPT:
+        assert getattr(_mod, name) not in (600.0, 3600.0), name
+    assert not hasattr(_mod, "_SUBPROCESS_TIMEOUT_SECS")
+
+
+def test_run_takes_its_bound_as_a_required_keyword():
+    """`_run` must have NO default `timeout`, so a new call site cannot
+    acquire a bound by omitting an argument.
+
+    This is the artifact that discharges G1's rule rather than restating
+    it: a shared `_SUBPROCESS_TIMEOUT_SECS = 600.0` default is what let a
+    24ms `git rev-parse --show-toplevel` and a full-tree publish sit under
+    one ten-minute grant, and the next author would have inherited it the
+    same way. Signature-level enforcement makes every inheriting site a
+    call-time error instead of a silent decision.
+    """
+    sig = inspect.signature(_mod._run)
+    param = sig.parameters["timeout"]
+    assert param.default is inspect.Parameter.empty, sig
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY, sig
+
+    with pytest.raises(TypeError):
+        _mod._run(["git", "--version"])
+
+
+def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
+    """Every spawn a round makes must carry one of the module's named
+    family constants — never a bare literal, and never a bound inherited
+    from a sibling leg with an unrelated cost model."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+
+    assert rc == _mod._EXIT_OK
+    declared = {getattr(_mod, name) for name in _DECLARED_LEG_BOUNDS}
+    assert spy.call_kwargs, "expected at least one spawn"
+    for call, kw in zip(spy.calls, spy.call_kwargs):
+        assert "timeout" in kw, call
+        assert kw["timeout"] in declared, (call, kw["timeout"])
+
+
+def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, monkeypatch):
+    """The purest specimen G1 names: a local `git` spawn against dest
+    answering one question. Measured process time at the live mirror is
+    24.2ms for `rev-parse`, 190.6ms for the family's worst member
+    (`status --porcelain`), so its COST term is the tree's existing 2.0s
+    local-git budget — never the publish legs' runaway guard, and never
+    the bare 2.0 either (see the module's unit-mismatch block: a
+    `subprocess` timeout is wall clock, and the same spawn measured a
+    4,588ms wall maximum on this box under its design load)."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+
+    assert rc == _mod._EXIT_OK
+    git_kwargs = [
+        kw
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if c and str(c[0]) == "git" and "push" not in [str(x) for x in c]
+    ]
+    assert git_kwargs, "expected at least one local git leg"
+    for kw in git_kwargs:
+        assert kw.get("timeout") == _mod._GIT_PLUMBING_TIMEOUT_SECS, kw
+
+
+def test_publish_legs_use_the_publish_bound(tmp_path, monkeypatch):
     """Review: coordinatorcode-reviewer-c58be590 -- `_SubprocessSpy` previously
     discarded `**kwargs`, so no test asserted `timeout=_PUBLISH_LEG_TIMEOUT_SECS`
     actually reached the two `publish.py` legs (`519cc8baf7`'s whole point).
-    Pins both the heavier bound on the publish legs and the shared default
-    on every other leg. The `scoped-git-commit` leg is excluded from "other"
-    here -- it carries the same heavier bound, covered by
-    test_commit_leg_uses_publish_leg_timeout_not_shared_default below."""
+
+    Its companion assertion (every other leg carries the shared default)
+    was deleted, not weakened: there is no shared default any more, and
+    `test_every_leg_bound_comes_from_a_declared_family` covers the same
+    ground without licensing one."""
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2370,19 +2488,22 @@ def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monk
     for kw in publish_kwargs:
         assert kw.get("timeout") == _mod._PUBLISH_LEG_TIMEOUT_SECS, kw
 
-    other_kwargs = _non_publish_call_kwargs(spy)
-    assert other_kwargs, "expected at least one non-publish.py invocation"
-    for kw in other_kwargs:
-        assert kw.get("timeout") == _mod._SUBPROCESS_TIMEOUT_SECS, kw
 
+def test_commit_leg_has_its_own_bound_not_the_publish_leg_s(tmp_path, monkeypatch):
+    """The `scoped-git-commit` leg carries `_COMMIT_LEG_TIMEOUT_SECS`, its
+    own bound, not the two `publish.py` legs' runaway guard.
 
-def test_commit_leg_uses_publish_leg_timeout_not_shared_default(tmp_path, monkeypatch):
-    """The `scoped-git-commit` leg commits a full publish round's files --
-    the same weight class as the two `publish.py` legs, not the light
-    single-`git`-command legs the shared 600s bound is sized for (see the
-    `_PUBLISH_LEG_TIMEOUT_SECS` docstring). Covers BOTH call sites: the
-    `--dry-run-first` path (`_cmd_round`'s inline branch) and the default
-    no-dry-run path (`_cmd_round_default`)."""
+    Staging and committing a round's changed paths is a different cost
+    model from re-walking the whole source tree — measured, one row's
+    `publish.py --dry-run` costs 88.75s of process time across 211 spawns,
+    which is what the publish bound is sized against and what a commit is
+    not. Sharing one number across the two is the same inheritance defect
+    G1 names, one level down, so this pins that they stay distinct.
+    Covers BOTH call sites: the `--dry-run-first` path (`_cmd_round`'s
+    inline branch) and the default no-dry-run path
+    (`_cmd_round_default`)."""
+    assert _mod._COMMIT_LEG_TIMEOUT_SECS != _mod._PUBLISH_LEG_TIMEOUT_SECS
+
     for dry_run_first in (True, False):
         case_dir = tmp_path / str(dry_run_first)
         case_dir.mkdir()
@@ -2391,7 +2512,7 @@ def test_commit_leg_uses_publish_leg_timeout_not_shared_default(tmp_path, monkey
 
         commit_kwargs = _commit_call_kwargs(spy)
         assert len(commit_kwargs) == 1, (dry_run_first, commit_kwargs)
-        assert commit_kwargs[0].get("timeout") == _mod._PUBLISH_LEG_TIMEOUT_SECS, (
+        assert commit_kwargs[0].get("timeout") == _mod._COMMIT_LEG_TIMEOUT_SECS, (
             dry_run_first, commit_kwargs[0],
         )
 

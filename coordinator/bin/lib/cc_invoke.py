@@ -1266,28 +1266,6 @@ def _seam_present(claude_klabauter_root: str) -> bool:
 # and cc_invoke_bare() (--bare convention) so the fail-closed ladder lives once.
 # ---------------------------------------------------------------------------
 
-def _read_positive_int_env(name: str, default: int) -> int:
-    """Read a positive-int tuning knob from the environment, defaulting on any garbage.
-
-    A malformed timeout/margin knob must never break the transport — defaulting is the
-    resilient choice (mirrors the retired bash transport's ${VAR:-N} floors, which silently ignore a
-    non-numeric override). Emits a single warn line to stderr when the value is present
-    but unusable.
-    """
-    raw = os.environ.get(name, str(default))
-    try:
-        value = int(raw)
-        if value <= 0:
-            raise ValueError("non-positive")
-    except ValueError:
-        print(
-            f"warn: cc_invoke: invalid {name}={raw!r}, using default {default}s",
-            file=sys.stderr,
-        )
-        return default
-    return value
-
-
 def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool:
     """Return whether `--repo` should be spawned on argv for `op`.
 
@@ -1667,10 +1645,33 @@ def _raise_on_process_failure(
         )
 
 
-def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], floor: int) -> None:
+#: Additive client-side allowance over the engine's OWN published budget, covering the
+#: only part of the wait that budget does not: the child's cold interpreter start plus
+#: the `coordinator_core` import it pays before its dispatch clock starts. Sized from
+#: what that costs, not from the 10s it replaced — the engine's measured cold-start
+#: floor is 57.1ms (CoV 1.5%, `docs/wiki/misc-harvest-2026-08-06-13h-corrected.md`), and
+#: a spawn under the declared 50-70-concurrent-LLM load norm runs 0.076s min / 0.219s
+#: median (`_machine_local_get_in_process`'s own 2026-08-20 measurement). 2s is ~34x the
+#: unloaded floor and ~9x the loaded median, and is simultaneously the ceiling CLAUDE.md
+#: § Load norm puts on any single process: budgeting a client margin above 2s would be
+#: budgeting for a defect rather than for a cold start.
+_CLIENT_START_MARGIN_SECS = 2
+
+#: The wait when the engine publishes no budget at all — an engine too old for
+#: `--dump-op-timeouts` ("absent"), or a dump that failed/was malformed ("error"). Not a
+#: floor under the derived ceiling: on the "ok" branch the engine's budget is the sole
+#: term, and this constant is not consulted.
+_NO_BUDGET_FALLBACK_SECS = 10
+
+#: Bound on the one-shot `--dump-op-timeouts` probe. Its own cold start is the whole cost
+#: of that spawn, so it is bounded by the same fallback the probe's failure resolves to.
+_DUMP_PROBE_TIMEOUT_SECS = _NO_BUDGET_FALLBACK_SECS
+
+
+def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], probe_timeout: int) -> None:
     """Resolve the engine's per-op timeout budget map ONCE per process (DEC-1..3).
 
-    Spawns `coordinator_core.invoke --dump-op-timeouts` (capped at FLOOR) and feature-
+    Spawns `coordinator_core.invoke --dump-op-timeouts` (capped at `probe_timeout`) and feature-
     detects three outcomes into _OP_TIMEOUTS_STATE, faithfully porting the shell
     transport's _cc_resolve_op_timeouts DEC-2a/2b split:
       "ok"     — dump succeeded; _OP_TIMEOUTS_MAP holds the {op: secs} map (incl. the
@@ -1679,7 +1680,8 @@ def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], floor:
                  stderr) — DEC-2a, silent, expected.
       "error"  — surface present but the call failed (timeout / nonzero for another
                  reason / empty / malformed / missing "__default__") — DEC-2b, still
-                 falls back to flat FLOOR but earns a once-per-process breadcrumb.
+                 falls back to `_NO_BUDGET_FALLBACK_SECS` but earns a once-per-process
+                 breadcrumb.
 
     The DEC-1 dump surface ships server-side today, so the probe always runs — once
     per process, memoized via the `_OP_TIMEOUTS_STATE is not None` guard above, so it
@@ -1702,7 +1704,7 @@ def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], floor:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=floor,
+            timeout=probe_timeout,
             env=env,
             cwd=claude_klabauter_root,
             **_no_console_kw(claude_klabauter_root),
@@ -1754,39 +1756,53 @@ def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], floor:
 
 
 def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]) -> int:
-    """Per-op timeout ceiling (DEC-1..3): _t = max(FLOOR, engine_budget(op) + MARGIN).
+    """Per-op timeout ceiling (DEC-1..3): _t = engine_budget(op) + `_CLIENT_START_MARGIN_SECS`.
 
-    FLOOR (CC_INVOKE_TIMEOUT_SECS, default 10) is a floor-only knob — the minimum the
-    client will ever wait, NOT a ceiling for override-less ops. MARGIN
-    (CC_INVOKE_CLIENT_MARGIN_SECS, default 10) covers cold python startup + import on top
-    of the engine's own dispatch budget. Falls back to flat FLOOR when the engine's
-    op-budget dump is absent or errored (with a once-per-process breadcrumb on error).
+    The engine's OWN published budget is the only term that varies. The margin is the
+    single additive constant covering the client-side cold start the engine's budget
+    excludes; falls back to `_NO_BUDGET_FALLBACK_SECS` when the op-budget dump is absent
+    or errored (with a once-per-process breadcrumb on error).
 
-    Substrate fact (2026-08-08 timeout-remedy fix): the long-unexplained "observed
-    consistently at 40s" in the backlog is this formula with the default constants —
-    max(FLOOR=10, engine_budget(op)=30 + MARGIN=10) = 40. See `_timeout_exceeded_message`,
-    which surfaces this derivation in the TimeoutExpired remedy text instead of the old
-    (and wrong, on a healthy engine) "verify CLAUDE_KLABAUTER_ROOT / installation" text.
+    NOTHING IN THE ENVIRONMENT REACHES THIS NUMBER, and that is the point. Both terms
+    used to be env knobs — a FLOOR (`CC_INVOKE_TIMEOUT_SECS`) and a MARGIN
+    (`CC_INVOKE_CLIENT_MARGIN_SECS`), each unbounded above, each read through a generic
+    positive-int reader. A caller in a sibling repo ran a single op with the floor set to
+    460 and got a 460s client wait on a shared box; the margin was defended by nothing at
+    all. The client's wait now tracks the engine's declared budget and cannot be widened
+    from outside the engine.
+
+    Negative-spec (DO NOT reintroduce): no `os.environ` read may re-enter this function
+    or `_timeout_exceeded_message`. A narrowing read is not the exception it looks like —
+    the same variable that narrows also widens the moment a later edit swaps `min` for
+    `max`, which is exactly how the retired FLOOR grew. An op that needs a wider wait
+    needs a wider ENGINE budget, declared server-side where a ratchet can see it.
+
+    Ceremony ops need no special case HERE and deliberately do not get one: their 2s
+    engine budget arrives through the ordinary `--dump-op-timeouts` read (the engine
+    projects every `ceremony.*` op explicitly for exactly this reason), so the formula
+    yields 2 + 2 = 4 without knowing anything about ceremonies. The margin still applies
+    because it bounds the CLIENT's wait -- cold python startup is the client's problem,
+    not the engine's budget -- and collapsing the client wait onto the engine budget
+    would kill legitimate cold dispatches. What ceremony ops do get is a different REMEDY
+    text; see `_timeout_exceeded_message`.
     """
     global _OP_TIMEOUTS_BREADCRUMB_SHOWN
-    floor = _read_positive_int_env("CC_INVOKE_TIMEOUT_SECS", 10)
-    margin = _read_positive_int_env("CC_INVOKE_CLIENT_MARGIN_SECS", 10)
 
-    _resolve_op_timeouts(claude_klabauter_root, env, floor)
+    _resolve_op_timeouts(claude_klabauter_root, env, _DUMP_PROBE_TIMEOUT_SECS)
 
     if _OP_TIMEOUTS_STATE == "ok":
         budget = _OP_TIMEOUTS_MAP.get(op, _OP_TIMEOUTS_MAP["__default__"])
         budget_int = int(budget)  # integer-truncate a float budget (e.g. 30.0 -> 30)
-        return max(floor, budget_int + margin)
+        return budget_int + _CLIENT_START_MARGIN_SECS
 
     if _OP_TIMEOUTS_STATE == "error" and not _OP_TIMEOUTS_BREADCRUMB_SHOWN:
         print(
-            "cc_invoke: op-budget dump failed; using flat floor — "
-            "overridden ops may hit the client cap",
+            f"cc_invoke: op-budget dump failed; waiting {_NO_BUDGET_FALLBACK_SECS}s instead "
+            "— an op whose engine budget exceeds that is cut off early",
             file=sys.stderr,
         )
         _OP_TIMEOUTS_BREADCRUMB_SHOWN = True
-    return floor
+    return _NO_BUDGET_FALLBACK_SECS
 
 
 # Stable literal prefix of every TimeoutExpired-derived RuntimeError this module raises
@@ -1799,7 +1815,7 @@ _TIMEOUT_MESSAGE_PREFIX = "cc_invoke: engine timeout after "
 def is_timeout_error(exc: BaseException) -> bool:
     """True if `exc` is the TimeoutExpired-derived RuntimeError this module raises.
 
-    Lets a caller distinguish "engine was simply busy" (never install-related) from
+    Lets a caller distinguish "the op ran past its budget" (never install-related) from
     every other RuntimeError this module's ladder can raise (which may legitimately be
     install-related, e.g. `_engine_wont_start`) WITHOUT re-deriving or duplicating
     `_timeout_exceeded_message`'s text. A caller that appends its own generic "verify
@@ -1810,60 +1826,88 @@ def is_timeout_error(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and str(exc).startswith(_TIMEOUT_MESSAGE_PREFIX)
 
 
+def _is_ceremony_op(op: str) -> bool:
+    """Client-side mirror of `coordinator_core.ipc.is_ceremony_method`.
+
+    Deliberately a prefix test re-spelled here rather than an import: this module is
+    the thin client that runs BEFORE and INSTEAD OF loading the engine — importing
+    `coordinator_core.ipc` (which pulls asyncio) to answer a string question would put
+    an engine import on the client's own cold path, which is the cost this whole file
+    exists to avoid. The duplication is safe because the prefix is the contract: the
+    engine budgets by name, so a client that matches by name cannot disagree with it
+    about membership, only about the number — and the number is read from the engine's
+    own `--dump-op-timeouts`, never guessed here.
+    """
+    return op.startswith("ceremony.")
+
+
 def _timeout_exceeded_message(op: str, timeout: int) -> str:
-    """Build the TimeoutExpired remedy text — names the COMPUTED ceiling, not the install.
+    """Build the TimeoutExpired remedy text — one fact, one alternative, no knob.
 
-    Replaces the old "Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation" text, which
-    was flatly wrong on a demonstrably healthy engine (it cost a session four retries and
-    a wrong install diagnosis; reproduced on coverage.gate and ceremony.wsc_tail, neither
-    lock-related). Called AFTER `_op_timeout_ceiling(op, ...)` has already run for this
-    invocation, so `_OP_TIMEOUTS_STATE`/`_OP_TIMEOUTS_MAP` are already resolved — no
-    second engine spawn here.
+    Called AFTER `_op_timeout_ceiling(op, ...)` has already run for this invocation, so
+    `_OP_TIMEOUTS_STATE`/`_OP_TIMEOUTS_MAP` are already resolved — no second engine spawn
+    here.
 
-    Names the derivation (`max(FLOOR, engine_budget(op) + MARGIN)`) so the reader knows
-    CC_INVOKE_TIMEOUT_SECS is a FLOOR: it only raises the ceiling when set ABOVE the
-    already-computed `timeout`, and is a no-op at or below it.
+    NAMES NO ENV VAR, on any branch. This text used to close by coaching the reader on
+    which variable to raise — `CC_INVOKE_TIMEOUT_SECS` for the client wait,
+    `COORDINATOR_DISPATCH_TIMEOUT_SECS` for the engine budget — and that advice is what
+    the message was actually read for: a timeout became a retry with a bigger number
+    instead of a fix, on a box where the retry is itself the load. Naming an override key
+    in a guard-shaped message hands the reader the key even when the surrounding sentence
+    says it will not work (`docs/wiki/guard-messaging.md` § Register, B6). The client
+    ceiling no longer reads the environment at all (see `_op_timeout_ceiling`'s
+    negative-spec), so naming those variables would now also be false.
 
-    That FLOOR sentence is true but incomplete on its own: on the `_OP_TIMEOUTS_STATE ==
-    "ok"` branch the binding term is usually the engine's own op budget, not the client
-    floor — CC_INVOKE_TIMEOUT_SECS provably cannot clear the timeout in that case. A
-    client-side floor cannot clear an engine-budget timeout; only
-    COORDINATOR_DISPATCH_TIMEOUT_SECS (`coordinator_core/ipc.py::DISPATCH_TIMEOUT_SECS`)
-    raises that budget. An operator who read only the FLOOR sentence set
-    CC_INVOKE_TIMEOUT_SECS=300, watched the same 30s-derived timeout recur, and had to
-    read ipc.py to find the real knob — see
-    `cross-repo/inbox/2026-08-10-doe-claude-em-wsc-tail-exceeds-the-30s-dispatch-budget.md`.
-    This function now names both knobs and which side of the wait each governs whenever
-    the engine-budget derivation is known; the degraded branch (dump unavailable) still
-    names both but does not assert a budget number it could not read.
+    What survives is the derivation with real numbers — the reader still learns which
+    term bound the wait — plus the one remedy that works: reconcile, then make the op
+    cheaper. The reconcile line is on EVERY branch, not just ceremony ops: a client-side
+    timeout never stops the engine, so any op that mutates may already have landed.
+
+    The degraded branch (dump unavailable) states the ceiling without asserting a budget
+    number it could not read.
 
     The returned text always starts with `_TIMEOUT_MESSAGE_PREFIX` — `is_timeout_error`
-    depends on that invariant.
+    depends on that invariant, on every branch.
     """
-    floor = _read_positive_int_env("CC_INVOKE_TIMEOUT_SECS", 10)
-    margin = _read_positive_int_env("CC_INVOKE_CLIENT_MARGIN_SECS", 10)
+    # A ceremony op's budget is a ratchet, not a knob: naming
+    # COORDINATOR_DISPATCH_TIMEOUT_SECS here would hand the reader a remedy that
+    # provably cannot work (the engine clamps ceremony ops with `min()` AFTER
+    # reading that var) and would point them at the one door the ratchet exists
+    # to close. The honest remedy for a ceremony breach is the op, not the cap.
+    if _is_ceremony_op(op):
+        budget_txt = ""
+        if _OP_TIMEOUTS_STATE == "ok":
+            ceremony_budget = _OP_TIMEOUTS_MAP.get(
+                op, _OP_TIMEOUTS_MAP.get("__ceremony_budget__", "")
+            )
+            if ceremony_budget != "":
+                budget_txt = f" against a {ceremony_budget}s ceremony budget"
+        return (
+            f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — "
+            f"the ceremony did not complete{budget_txt}\n"
+            "  The ceremony budget is a ratchet; no env var widens it. Make the op\n"
+            "  cheaper: fewer git spawns, batched pathspecs, a warm path.\n"
+            "  The engine does not stop when this client does — a mutating ceremony\n"
+            "  may still have committed. Reconcile against real repo state before\n"
+            "  re-running.\n"
+            "  docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md"
+        )
+
     if _OP_TIMEOUTS_STATE == "ok":
         budget = _OP_TIMEOUTS_MAP.get(op, _OP_TIMEOUTS_MAP["__default__"])
         budget_int = int(budget)
-        derivation = f"max(floor {floor}, engine budget {budget_int} + margin {margin})"
-        knobs_line = (
-            f"  To raise the engine budget itself (currently {budget_int}s for op={op}), set\n"
-            "  COORDINATOR_DISPATCH_TIMEOUT_SECS: CC_INVOKE_TIMEOUT_SECS governs only the\n"
-            "  client-side wait; COORDINATOR_DISPATCH_TIMEOUT_SECS governs the op's own budget."
+        derivation = (
+            f"engine budget {budget_int} + {_CLIENT_START_MARGIN_SECS}s client start margin"
         )
     else:
-        derivation = f"floor {floor} (engine op-budget dump unavailable)"
-        knobs_line = (
-            "  CC_INVOKE_TIMEOUT_SECS governs only the client-side wait; the op's own budget\n"
-            "  (raised via COORDINATOR_DISPATCH_TIMEOUT_SECS) could not be read here."
-        )
+        derivation = "the no-budget fallback (engine op-budget dump unavailable)"
     return (
-        f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — "
-        "coordinator_core.invoke did not respond\n"
-        f"  Exceeded {timeout}s = {derivation}. The engine may simply be busy.\n"
-        "  CC_INVOKE_TIMEOUT_SECS is a FLOOR, not a ceiling: it only raises this number when\n"
-        f"  set ABOVE {timeout}s. Setting it at or below {timeout}s changes nothing.\n"
-        f"{knobs_line}"
+        f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — the op is over budget\n"
+        f"  Exceeded {timeout}s = {derivation}.\n"
+        "  The client wait is derived from the engine's own budget; nothing outside the\n"
+        "  engine widens it. Make the op cheaper: fewer spawns, batched git, a warm path.\n"
+        "  The engine does not stop when this client does — a mutating op may still have\n"
+        "  landed. Reconcile against real repo state before re-running."
     )
 
 
@@ -1939,12 +1983,11 @@ def cc_invoke(
     # Mirrors _cc_resolve_deps() PYTHONPATH idempotency check in the shell transport.
     env = _build_subprocess_env(claude_klabauter_root)
 
-    # Per-op timeout ceiling (DEC-1..3): _t = max(FLOOR, engine_budget(op)+MARGIN),
-    # resolved once-per-process from the engine's --dump-op-timeouts map (flat-FLOOR
-    # fallback when absent/errored). Shares the ceiling path with cc_invoke_bare so a
-    # composite op (e.g. session.boot_sweep, engine budget 30s) never gets a facade
-    # timeout tighter than its engine-side DISPATCH_TIMEOUT_SECS budget — the flat
-    # CC_INVOKE_TIMEOUT_SECS floor (default 10s) was strangling heavy ops here.
+    # Per-op timeout ceiling (DEC-1..3): _t = engine_budget(op) + _CLIENT_START_MARGIN_SECS,
+    # resolved once-per-process from the engine's --dump-op-timeouts map
+    # (_NO_BUDGET_FALLBACK_SECS when absent/errored). Shares the ceiling path with
+    # cc_invoke_bare so a composite op (e.g. session.boot_sweep, engine budget 30s) never
+    # gets a facade timeout tighter than its engine-side DISPATCH_TIMEOUT_SECS budget.
     timeout = _op_timeout_ceiling(op, claude_klabauter_root, env)
 
     # Spawn invoke with timeout cap.
@@ -2071,9 +2114,10 @@ def cc_invoke_bare(
         strip. cc_invoke() uses the non-bare envelope-parse convention.
       - `--params-file`: params ride a temp file, not argv — ARG_MAX-immune on
         Windows/msys, where a ~50KB+ payload overflows a bare argv arg (exit 126 HALT).
-      - Per-op timeout ceiling (DEC-1..3): _t = max(FLOOR, engine_budget(op)+MARGIN) for
-        every op, resolved once-per-process from the engine's --dump-op-timeouts map;
-        flat-FLOOR fallback when that surface is absent (older engine repo) or errored.
+      - Per-op timeout ceiling (DEC-1..3): _t = engine_budget(op) +
+        _CLIENT_START_MARGIN_SECS for every op, resolved once-per-process from the
+        engine's --dump-op-timeouts map; _NO_BUDGET_FALLBACK_SECS when that surface is
+        absent (older engine repo) or errored.
 
     Shares the timeout / nonzero-exit ImportError-vs-op / empty-stdout fail-closed rungs
     with cc_invoke() via _raise_on_process_failure — one ladder, two call conventions.

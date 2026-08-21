@@ -141,7 +141,23 @@ def _require_windows() -> None:
 #: miss, and this chunk changes no guard behaviour, so today's genuine
 #: over-budget cost must be VISIBLE (this assertion still runs and still
 #: fails) without gating the fast/full tiers red before C2 lands.
-_KNOWN_OVER_BUDGET_PRE_FIX = {"bash_cat_pyproject_head"}
+#: EMPTIED 2026-08-21, once the cost the comment above describes was actually
+#: found and removed. The attribution in that comment was WRONG and is kept
+#: only as a record of it: the residual was never Site 1's interpreter spawns
+#: (C2's cache retired those, verified at zero spawns). It was
+#: `_advisory_dedupe.terse_alternative_text` importing `_alternative_liveness`
+#: for two regex constants, which ran `discover_write_guard_names()` at import
+#: time and pulled in the whole `coordinator_core.ops` registry -- 480-710ms,
+#: paid on every repeat firing of an advisory. Homing those constants in the
+#: leaf module took `cat pyproject.toml | head -5` from 437ms median to 109ms,
+#: 0/15 samples over budget.
+#:
+#: This set is EMPTY on purpose, and the gate is enforcing again for every
+#: corpus row. Re-populating it silently converts DR-344's ratchet back into a
+#: record of a known breach: a `pending_fix` row still runs but gates nothing,
+#: so a regression lands green. If a row goes over budget, that is a finding to
+#: fix or to take to the PM, not an entry to add here.
+_KNOWN_OVER_BUDGET_PRE_FIX: set = set()
 
 
 @pytest.mark.parametrize(

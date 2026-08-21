@@ -13,8 +13,11 @@ docstring (2026-07-28 D2 fix section) for the full defect writeup.
 """
 from __future__ import annotations
 
+import functools
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -402,35 +405,82 @@ fi
 # helpers to locate real interpreters for narrowed-PATH tests
 # ---------------------------------------------------------------------------
 
-def _bash_path() -> str:
-    # `command` is a shell builtin; invoke via sh -c to resolve it.
+def _tool_survives_a_narrowed_path(candidate: str, name: str) -> bool:
+    """Does `candidate` still RUN when its own directory is off PATH?
+
+    The narrowed-PATH tests reach each tool through a symlink in a bindir that
+    holds nothing else, so a binary that resolves its dependencies out of its
+    own directory is unusable here even though it runs fine normally. On
+    git-for-windows, `mingw64/bin/git.exe` is exactly that: it loads sibling
+    DLLs from `mingw64/bin`, so with PATH narrowed it dies at load with rc 127
+    and no stderr. `cmd/git.exe` -- the standalone launcher -- survives.
+    """
+    if not symlink_capability.CAN_CREATE_SYMLINK:
+        return False
+    probe_dir = Path(tempfile.mkdtemp()) / "probe-bindir"
+    probe_dir.mkdir(parents=True)
+    (probe_dir / name).symlink_to(candidate)
+    env = dict(os.environ)
+    env["PATH"] = str(probe_dir)
     result = subprocess.run(
-        [require_sh_interpreter(), "-c", "command -v bash"], capture_output=True, text=True
+        [require_sh_interpreter(), "-c", f"{name} --version"],
+        env=env,
+        capture_output=True,
+        text=True,
     )
-    path = result.stdout.strip()
-    if not path:
-        pytest.skip("bash not found on PATH in this environment")
-    return path
+    return result.returncode == 0
+
+
+@functools.lru_cache(maxsize=None)
+def _native_tool_path(name: str) -> str:
+    """Absolute path to `name` that the host can execute through a symlink.
+
+    Two distinct Windows failures make the obvious resolutions wrong, and both
+    present identically -- as the hook's gate not firing, never as a broken
+    lookup -- which is why this is a probe and not a `which` call.
+
+    `sh -c "command -v <name>"` answers in git-for-windows' own MSYS namespace
+    (`/mingw64/bin/git`), a path the Windows loader cannot follow. Bare
+    `shutil.which` answers in the host namespace but returns whichever copy
+    leads on PATH, which on this box is the DLL-dependent `mingw64` git. A
+    symlink to either satisfies `command -v` inside the hook -- so the narrowed
+    PATH looks correctly built -- yet execution fails with rc 127. The hook's
+    `git rev-parse` then yields nothing and `[ -n "$_cur" ] || exit 0` retires
+    the whole hook BEFORE any gate runs, so a test asserting a loud BLOCK reads
+    a silent exit 0.
+
+    So: walk PATH in order and return the first copy that survives an
+    execution probe under a narrowed PATH. Cached -- resolution costs a handful
+    of spawns once per name per session, not once per test.
+    """
+    seen: list[str] = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidate = shutil.which(name, path=directory)
+        if not candidate or candidate in seen:
+            continue
+        seen.append(candidate)
+        if _tool_survives_a_narrowed_path(candidate, name):
+            return candidate
+    if seen:
+        pytest.skip(
+            f"{name} found on PATH ({len(seen)} copy/copies) but none execute "
+            f"with their own directory off PATH; first was {seen[0]}"
+        )
+    pytest.skip(f"{name} not found on PATH in this environment")
+
+
+def _bash_path() -> str:
+    return _native_tool_path("bash")
 
 
 def _node_path() -> str:
-    result = subprocess.run(
-        [require_sh_interpreter(), "-c", "command -v node"], capture_output=True, text=True
-    )
-    path = result.stdout.strip()
-    if not path:
-        pytest.skip("node not found on PATH in this environment")
-    return path
+    return _native_tool_path("node")
 
 
 def _git_path() -> str:
-    result = subprocess.run(
-        [require_sh_interpreter(), "-c", "command -v git"], capture_output=True, text=True
-    )
-    path = result.stdout.strip()
-    if not path:
-        pytest.skip("git not found on PATH in this environment")
-    return path
+    return _native_tool_path("git")
 
 
 def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
@@ -443,6 +493,16 @@ def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
     bash back in. A dedicated symlink dir is the only way to control
     resolvable-vs-not per binary independent of which real directory each
     one happens to live in.
+
+    The link carries the real target's extension on Windows. An extensionless
+    `node` link satisfies both `command -v node` (MSYS sh appends `.exe`) and a
+    direct spawn from Python, so the narrowed PATH looks correctly built -- but
+    `node --test` runs each test file in an isolated child process spawned from
+    `process.execPath`, and CreateProcess does NOT append `.exe`. The re-spawn
+    dies ENOENT, node reports the test file itself as failing, and gate 1 blocks
+    on a fixture written to pass it. Measured 2026-08-21 against
+    `state/bug-backlog/2026-08-21-publish-repo-hook-the-node-exec-bit-gate-8760f7187de9.yaml`:
+    the exec-bit gate and Windows exec-bit semantics were both innocent.
     """
     if not symlink_capability.CAN_CREATE_SYMLINK:
         pytest.skip(
@@ -452,7 +512,7 @@ def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
     bindir = tmp_path / "tool-bindir"
     bindir.mkdir(exist_ok=True)
     for name, real_path in tools.items():
-        link = bindir / name
+        link = bindir / (name + Path(real_path).suffix)
         if not link.exists():
             link.symlink_to(real_path)
     return str(bindir)

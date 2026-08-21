@@ -4006,18 +4006,22 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
 
 _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
     {
-        # OPEN (4) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
+        # OPEN (3) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
         # Each chunk named a real batch primitive for its row and then declined it on budget,
         # verification-cost, or regression-risk grounds; the C-review second-reader pass
         # (`state/ledgers/wave4-dispositions/second-reader.md`) overturned all four from EXEMPT
         # back to OPEN, because an exemption claims batching is WRONG here, never that it is
         # expensive. They stay on this worklist, which is exactly what it is for.
+        #
+        # GRADUATED 2026-08-21 (G6 of docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md):
+        # `schema_drift_watch.py::_scan -> check_schema_drift_advisory` is FIXED, not exempted.
+        # `_scan` now calls `schema_validate.check_schema_drift_advisory_batch`, which hoists the
+        # loop-invariant `foreign_repo_unusable_reason` probe and folds the per-schema
+        # `git show HEAD:<path>` into one `git_scope.scoped_cat_file_batch` -- the same one the
+        # sibling cockpit batch on this module already used. Two spawns for the whole vendored
+        # set, whatever N is. Pinned by `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+        # test_process_count_does_not_grow_with_the_set`.
         ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'branch_reachable'),
-        (
-            'coordinator_core/frontmatter/schema_drift_watch.py',
-            '_scan',
-            'check_schema_drift_advisory',
-        ),
         ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
         ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run'),
         # OVERTURNED (22) -- returned here from `_EXEMPT_SITES` by the 2026-08-19 ADVERSARIAL
@@ -4643,14 +4647,16 @@ def test_burn_down_known_preexisting_amplification_sites():
     THE BURN-DOWN IS PARTIAL, NOT COMPLETE, and `designed_red` STAYS for that reason. Wave 4
     (2026-08-19) took the inventory 94 -> 14, then the same day's adversarial re-verification
     returned 22 keys it had exempted on claims that did not survive being read at the call site;
-    2026-08-21 retired one more to a discriminator. 28 keys remain and this assertion is NOT yet
+    2026-08-21 retired one more to a discriminator and GRADUATED one by fixing it (the schema
+    advisory, hitlist G6 -- see `_KNOWN_SITES`). 27 keys remain and this assertion is NOT yet
     a standing `violations == []`. A reader six months out must not mistake this for a weakened
     test, and must not mistake the shrunk inventory for a finished one. They break down as:
 
-      4  OPEN     -- a real batch primitive exists and was declined on cost, not on principle.
+      3  OPEN     -- a real batch primitive exists and was declined on cost, not on principle.
                     C-review overturned all four from EXEMPT (`branch_reachable`,
                     `check_schema_drift_advisory`, `check_destructive_rm`, `orphan_branch_
-                    sweep::main -> _run`). Each is genuinely fixable work.
+                    sweep::main -> _run`); the schema advisory has since been batched and
+                    graduated off the inventory. Each remaining one is genuinely fixable work.
      19  OVERTURNED -- 13 REFUTED (a working batch primitive was named at the call site) plus
                     6 NOT PROVEN (the governing rationale is not evidenced there). Debt in the
                     same sense as OPEN; per-key evidence is cited inline in `_KNOWN_SITES`.
@@ -4659,8 +4665,8 @@ def test_burn_down_known_preexisting_amplification_sites():
                     retire, and for the three (retry-loop, discriminator-7 gap, route-d name
                     collision) that have already been retired exactly that way.
 
-    So 23 rows are amplification debt in the original sense. The other 5 are a
-    collector-precision backlog. Closing this test means disposing all 28;
+    So 22 rows are amplification debt in the original sense. The other 5 are a
+    collector-precision backlog. Closing this test means disposing all 27;
     `_KNOWN_SITES` shrinking to `frozenset()` is what flips the marker off.
 
     Why `designed_red`, not gated: burning these down is a follow-up workstream, not this

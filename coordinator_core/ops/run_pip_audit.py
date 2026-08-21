@@ -85,6 +85,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
 
 #: Max characters of a failing pip-audit invocation's stderr replayed into
@@ -93,8 +94,11 @@ _STDERR_TAIL = 2000
 
 # Review: code-reviewer — pip-audit is a live network call (vulnerability
 # advisory endpoint); an unresponsive network wedges this op's worker thread
-# forever without a cap. Mirrors _NETWORK_TIMEOUT in release_tagging.py.
-_TIMEOUT_SECONDS = 180
+# forever without a cap. The cap is no longer this module's to choose: DR-349
+# grants a network leg no standing carve-out, so it lives inside the
+# external-tool ceiling like any other third-party spawn.
+_PIP_AUDIT_SITE = "coordinator_core/ops/run_pip_audit.py :: _run_pip_audit"
+_TIMEOUT_SECONDS = bound_for(_PIP_AUDIT_SITE)
 
 
 @register_op("ci.run_pip_audit")
@@ -153,7 +157,7 @@ def _run_pip_audit(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"ci.run_pip_audit: pip-audit timed out after {_TIMEOUT_SECONDS}s "
+            f"ci.run_pip_audit: pip-audit timed out after {_TIMEOUT_SECONDS:.0f}s "
             f"invoking {cmd!r}"
         ) from exc
 
