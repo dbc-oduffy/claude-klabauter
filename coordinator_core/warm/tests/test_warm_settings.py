@@ -27,8 +27,10 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # _cached_result for every test that runs after it in the same pytest
     # process, silently defeating each test's own registry_get monkeypatch.
     settings._reset_for_test()
+    settings._reset_warm_disabled_announcement_for_test()
     yield
     settings._reset_for_test()
+    settings._reset_warm_disabled_announcement_for_test()
 
 
 def test_off_when_neither_env_nor_registry_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,3 +80,55 @@ def test_registry_value_is_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> 
         settings, "registry_get", lambda key: "TRUE" if key == settings.REGISTRY_KEY else None
     )
     assert settings.is_warm_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# Warm-disabled announcement (state/handoffs/2026-08-21_103635_reaching-the-
+# warm-engine.md) -- a deliberate off-switch must not FAIL a dispatch (that
+# would make the switch useless), but it must not be SILENT either, mirroring
+# `warm.client._log_live_tree_cold_once`'s own once-per-process shape.
+# ---------------------------------------------------------------------------
+
+
+def test_warm_disabled_via_env_announces_once(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setenv(settings.ENV_VAR, "0")
+    monkeypatch.setattr(settings, "registry_get", lambda key: None)
+
+    assert settings.is_warm_enabled() is False
+    assert settings.is_warm_enabled() is False  # second call: no second notice
+    assert settings.is_warm_enabled() is False  # third call: still no second notice
+
+    err = capsys.readouterr().err
+    assert err.count("warmth is disabled by configuration") == 1
+    assert "every dispatch from this process runs cold" in err
+
+
+def test_warm_disabled_via_registry_announces_once(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(settings, "registry_get", lambda key: None)
+
+    assert settings.is_warm_enabled() is False
+    assert settings.is_warm_enabled() is False  # memoised rung: still no second notice
+
+    err = capsys.readouterr().err
+    assert err.count("warmth is disabled by configuration") == 1
+
+
+def test_warm_enabled_never_announces(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setenv(settings.ENV_VAR, "1")
+
+    assert settings.is_warm_enabled() is True
+
+    err = capsys.readouterr().err
+    assert err == ""
+
+
+def test_disabled_does_not_fail_only_announces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE POLICY ITSELF: a deliberate off-switch must return `False`
+    cleanly, never raise -- refusing here would make the switch useless,
+    per the PM's own framing."""
+    monkeypatch.setenv(settings.ENV_VAR, "off")
+    monkeypatch.setattr(settings, "registry_get", lambda key: None)
+
+    result = settings.is_warm_enabled()  # must not raise
+
+    assert result is False

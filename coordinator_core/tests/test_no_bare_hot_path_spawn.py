@@ -652,5 +652,68 @@ def test_gate_ignores_an_unrelated_dot_run_call(tmp_path):
     assert violations == []
 
 
+#: Bare `subprocess`-family spawn sites in the live source roots this module's
+#: standing gate does NOT walk, measured 2026-08-21. A RATCHET: each number may
+#: only ever go DOWN, and the test below fails in BOTH directions so the figure
+#: cannot rot in either.
+#:
+#: Why this exists. This module's docstring says "SCOPE -- repo-wide, STAGE 2",
+#: but `test_no_bare_hot_path_spawn` calls
+#: `find_bare_hot_path_spawns(REPO_ROOT / "coordinator_core")` -- so
+#: `coordinator/bin` and `coordinator/lib` were never walked at all, and the
+#: gate reported green because of what it declined to look at. That is the F1/
+#: F13 recurrence shape (a check reporting clean on the strength of its own
+#: blind spot) that `write_guards/nudge_windows_subprocess_popup.py`'s
+#: negative-spec names, here in the gate meant to prevent it. Found 2026-08-21
+#: while sizing the burn-down for
+#: `state/audits/2026-08-21-detached-process-console-window-storm.md`;
+#: `coordinator/bin/coordinator-prepare-commit-msg.py` is a LIVE git hook and
+#: was among the unwalked files.
+#:
+#: These sites are NOT gated to zero here, deliberately: `no_console_creation
+#: flags()` splatted into a spawn that wires no `stdout`/`stderr`/
+#: `capture_output` silently loses the child's output (measured -- see
+#: `win_portability`'s "THE CATCH"), so each site needs a per-site
+#: capture-vs-passthrough call, not a sweep. The ratchet makes the population
+#: visible and stops it growing while that burn-down proceeds. Sizing and
+#: rationale: `docs/decisions/DR-345-console-popup-guard-fires-per-call-site-and-keeps-whole-file-scope.md`.
+_UNWALKED_ROOT_BASELINE: dict[str, int] = {
+    "coordinator/bin": 112,
+    "coordinator/lib": 13,
+}
+
+
+def test_bare_spawn_outside_coordinator_core_only_ever_shrinks():
+    """Ratchet over the live source roots the standing gate does not walk.
+
+    Fails in both directions on purpose. A rise is a new bare spawn landing in
+    an unguarded root -- the regrowth this gate exists to stop. A fall is the
+    burn-down making progress, and must be banked by lowering the baseline in
+    the same commit; a ratchet that silently accepts a lower number stops being
+    evidence of anything.
+    """
+    measured = {
+        root: len(find_bare_hot_path_spawns(REPO_ROOT / root))
+        for root in _UNWALKED_ROOT_BASELINE
+    }
+    grew = {r: (n, _UNWALKED_ROOT_BASELINE[r]) for r, n in measured.items() if n > _UNWALKED_ROOT_BASELINE[r]}
+    shrank = {r: (n, _UNWALKED_ROOT_BASELINE[r]) for r, n in measured.items() if n < _UNWALKED_ROOT_BASELINE[r]}
+
+    assert not grew, (
+        "new bare subprocess spawn(s) landed in a root the standing gate does "
+        "not walk: "
+        + ", ".join(f"{r} {base} -> {now}" for r, (now, base) in grew.items())
+        + ". Splat coordinator_core.win_portability.no_console_creationflags() "
+        "into the call -- or no_console_passthrough_kwargs() if the child's "
+        "output must reach the operator -- or tag the line "
+        "`# popup-intentional-last-resort`."
+    )
+    assert not shrank, (
+        "burn-down progress is unbanked -- lower _UNWALKED_ROOT_BASELINE in "
+        "this commit: "
+        + ", ".join(f"{r} {base} -> {now}" for r, (now, base) in shrank.items())
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

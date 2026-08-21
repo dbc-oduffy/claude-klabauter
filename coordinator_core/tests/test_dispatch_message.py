@@ -1102,3 +1102,113 @@ def test_near_miss_timeout_env_warns(caplog):
     )
 
 
+# ---------------------------------------------------------------------------
+# Dispatch-axis stamp gate (state/handoffs/2026-08-21_103635_reaching-the-
+# warm-engine.md) -- `dispatch_message` must refuse when the currently-
+# imported `coordinator_core` is not rooted in a stamped engine build,
+# UNLESS the explicit, process-local opt-in was set. This suite's own
+# `conftest.py::pytest_configure` already calls `allow_unstamped_dispatch()`
+# once for the whole session (the suite dispatches against the live tree by
+# design), so every test below that wants to see the REFUSED behaviour must
+# flip `ipc._unstamped_dispatch_allowed` off itself via `monkeypatch` --
+# which reverts automatically at that test's own teardown, never leaking
+# into a later test.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_stamp_verdict_cache():
+    """Every test in this section gets a clean memoized-verdict slate --
+    `_is_dispatch_engine_stamped` caches its answer at module scope, so a
+    test that monkeypatches the underlying predicate must not leave a stale
+    verdict for the next one."""
+    ipc._reset_engine_stamped_verdict_for_test()
+    yield
+    ipc._reset_engine_stamped_verdict_for_test()
+
+
+def test_stamp_gate_refuses_when_unstamped_and_opt_in_off(monkeypatch):
+    """THE GATE ITSELF: an unstamped root, opt-in off -> refused with
+    UNSTAMPED_ENGINE_ROOT_ERROR, and the handler never runs (the whole
+    point -- a refused dispatch must not have executed anything)."""
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+    monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: False)
+
+    calls = []
+    with _RegistryScope({"test.stamp_gate_refuses": lambda params, ctx=None, repo_root=None: calls.append(1)}):
+        response = _run(dispatch_message(
+            {"jsonrpc": "2.0", "id": 1, "method": "test.stamp_gate_refuses", "params": {}}
+        ))
+
+    assert response["error"]["code"] == ipc.UNSTAMPED_ENGINE_ROOT_ERROR
+    assert response["id"] == 1
+    assert calls == []  # handler never invoked
+    assert "coordinator-invoke" in response["error"]["message"]
+    assert "--allow-unstamped-dispatch" in response["error"]["message"]
+
+
+def test_stamp_gate_allows_when_stamped(monkeypatch):
+    """A stamped root dispatches normally even with the opt-in off -- the
+    gate's own no-op path, proving it does not refuse everything."""
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+    monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: True)
+
+    with _RegistryScope({"test.stamp_gate_allows": _sync_handler}):
+        response = _run(dispatch_message(
+            {"jsonrpc": "2.0", "id": 2, "method": "test.stamp_gate_allows", "params": {"x": 1}}
+        ))
+
+    assert "error" not in response
+    assert response["result"] == {"echo": {"x": 1}}
+
+
+def test_stamp_gate_bypassed_by_explicit_opt_in(monkeypatch):
+    """An unstamped root still dispatches when the explicit opt-in is set --
+    the manual-testing carve-out, exercised via the SAME public function
+    conftest.py and the CLI flag both call."""
+    monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: False)
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+    ipc.allow_unstamped_dispatch()
+
+    with _RegistryScope({"test.stamp_gate_bypassed": _sync_handler}):
+        response = _run(dispatch_message(
+            {"jsonrpc": "2.0", "id": 3, "method": "test.stamp_gate_bypassed", "params": {}}
+        ))
+
+    assert "error" not in response
+    assert response["result"] == {"echo": {}}
+
+
+def test_stamp_verdict_is_memoized_across_dispatches(monkeypatch, tmp_path):
+    """`_is_dispatch_engine_stamped` must pay the resolution cost ONCE per
+    process, not per dispatch -- see its own docstring's brightline note
+    (measured ~21ms process time to even IMPORT the shared predicate this
+    module deliberately does not use here). Proven by counting real stat
+    calls across three dispatches with the opt-in off (so the gate is
+    actually consulted each time)."""
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+
+    stamp_dir = tmp_path / "coordinator_core"
+    stamp_dir.mkdir()
+    (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
+    monkeypatch.setattr(ipc, "_DISPATCH_ENGINE_ROOT", tmp_path)
+
+    calls = {"n": 0}
+    real_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self):
+        calls["n"] += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    with _RegistryScope({"test.stamp_gate_memo": _sync_handler}):
+        for i in range(3):
+            response = _run(dispatch_message(
+                {"jsonrpc": "2.0", "id": i, "method": "test.stamp_gate_memo", "params": {}}
+            ))
+            assert "error" not in response
+
+    assert calls["n"] == 1
+
+

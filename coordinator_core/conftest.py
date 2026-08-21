@@ -605,3 +605,28 @@ def _fail_on_environ_leak(request):
         "the test's own setup.",
         pytrace=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-axis stamp gate opt-in (state/handoffs/2026-08-21_103635_reaching-
+# the-warm-engine.md) — this suite imports and dispatches against the LIVE,
+# unstamped tree by design (that is the entire point of a test suite), so it
+# is one of the two sanctioned callers of `ipc.allow_unstamped_dispatch` named
+# in that function's own docstring. NOT an environment variable — see
+# `_fail_on_environ_leak` above for why this suite treats an env-var-shaped
+# opt-in as a defect class in its own right: it would be inherited by every
+# subprocess a test spawns, silently disarming the gate in processes nobody
+# intended. `pytest_configure` runs exactly once per session, before any test
+# collects, so this is a single, visible, in-process declaration — not
+# something a test can accidentally trigger or a later test can accidentally
+# inherit from a DIFFERENT source. A test that wants to assert the REFUSAL
+# itself flips `coordinator_core.ipc._unstamped_dispatch_allowed` off via
+# `monkeypatch.setattr`, which reverts automatically at that test's own
+# teardown — see `ipc.allow_unstamped_dispatch`'s own docstring.
+# ---------------------------------------------------------------------------
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    from coordinator_core.ipc import allow_unstamped_dispatch
+
+    allow_unstamped_dispatch()

@@ -89,9 +89,12 @@ def test_scoped_sha_equals_pin_when_pin_itself_touches_engine_paths(tmp_path):
     out = io.StringIO()
     scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", head, out=out)
     assert scoped == head
-    # No "scoped to" announcement when the scoped value equals the pin —
-    # nothing to distinguish it from the unscoped behaviour in this case.
-    assert "scoped to" not in out.getvalue()
+    # Logging is unconditional (2026-08-21 fix): even when the scoped value
+    # equals the pin, the source tag must say so explicitly — a silent line
+    # here would be indistinguishable from the fallback-on-git-failure case,
+    # which is exactly the ambiguity this test guards against.
+    assert "source=scoped-match-pin" in out.getvalue()
+    assert head in out.getvalue()
 
 
 def test_scoped_sha_ignores_trailing_non_engine_commits(tmp_path):
@@ -138,9 +141,13 @@ def test_scoped_sha_rotates_on_a_genuine_engine_change(tmp_path):
     (repo / "coordinator_core" / "f.py").write_text("v2", encoding="utf-8")
     second_pin = _commit_all(repo, "engine change 2")
 
-    scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", second_pin, out=io.StringIO())
+    out = io.StringIO()
+    scoped = publish._scoped_engine_stamp_sha(repo / "coordinator_core", second_pin, out=out)
     assert scoped == second_pin
     assert scoped != first_engine_head
+    # scoped == pin here too (the pin IS the latest engine commit), so the
+    # log must still say so explicitly rather than reading like a fallback.
+    assert "source=scoped-match-pin" in out.getvalue()
 
 
 def test_scoped_sha_covers_the_coordinator_bin_prefix_too(tmp_path):
@@ -164,22 +171,63 @@ def test_scoped_sha_covers_the_coordinator_bin_prefix_too(tmp_path):
 def test_scoped_sha_falls_back_to_the_pin_outside_a_work_tree(tmp_path):
     """Never a silent no-stamp: a root that is not a git work tree at all
     (e.g. a materialization/ordering bug upstream) must fall back to the
-    unscoped pin rather than raise or write nothing."""
+    unscoped pin rather than raise or write nothing. The log must tag this
+    outcome as a fallback, distinctly from a legitimate scoped match —
+    see `test_fallback_and_match_are_distinguishable_in_the_log` below for
+    why that distinction is the point, not decoration."""
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
-    scoped = publish._scoped_engine_stamp_sha(not_a_repo, "deadbeef" * 5, out=io.StringIO())
+    out = io.StringIO()
+    scoped = publish._scoped_engine_stamp_sha(not_a_repo, "deadbeef" * 5, out=out)
     assert scoped == "deadbeef" * 5
+    assert "source=fallback-not-a-work-tree" in out.getvalue()
 
 
 def test_scoped_sha_falls_back_to_the_pin_when_no_ancestor_touches_engine_paths(tmp_path):
     """Defensive case that should not arise for the real `coordinator_core`
     row (the row IS that directory) but must degrade safely regardless:
     no commit in the pin's ancestry touches `_ENGINE_TOUCHING_PATHS` ->
-    fall back to the unscoped pin, never an empty/None stamp value."""
+    fall back to the unscoped pin, never an empty/None stamp value. Log
+    must tag this as a fallback too."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "unrelated.txt").write_text("v1", encoding="utf-8")
     head = _commit_all(repo, "no engine paths at all")
 
-    scoped = publish._scoped_engine_stamp_sha(repo, head, out=io.StringIO())
+    out = io.StringIO()
+    scoped = publish._scoped_engine_stamp_sha(repo, head, out=out)
     assert scoped == head
+    assert "source=fallback-scoped-log-empty-or-failed" in out.getvalue()
+
+
+def test_fallback_and_match_are_distinguishable_in_the_log(tmp_path):
+    """THE OBSERVABILITY REGRESSION PIN. An earlier version of this function
+    only printed when `scoped != pinned_sha`, so "the pin itself is the last
+    engine-touching commit" (a legitimate, common outcome — the round pinned
+    2026-08-21 13:17:15 real-world, `ddf8587d…`, hit exactly this case) and
+    "the scoped git call silently failed and fell back to the pin" produced
+    an IDENTICAL silent log. Both write the same stamp value, so the mirror
+    alone can never tell them apart either — the log is the only place this
+    distinction can live, and it must always make it. This test constructs
+    both cases against the same resulting `scoped` value and asserts their
+    log lines are NOT equal — the property the gated version violated."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "coordinator_core").mkdir()
+    (repo / "coordinator_core" / "f.py").write_text("v1", encoding="utf-8")
+    head = _commit_all(repo, "engine change")
+
+    match_out = io.StringIO()
+    matched = publish._scoped_engine_stamp_sha(repo / "coordinator_core", head, out=match_out)
+
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    fallback_out = io.StringIO()
+    fell_back = publish._scoped_engine_stamp_sha(not_a_repo, head, out=fallback_out)
+
+    assert matched == fell_back == head  # same written stamp value in both cases
+    assert match_out.getvalue() != fallback_out.getvalue(), (
+        "a legitimate scoped match and a fallback wrote the identical stamp "
+        "AND the identical log line -- the two are indistinguishable after "
+        "the fact, which is exactly the gap this fix closes"
+    )

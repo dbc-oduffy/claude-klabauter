@@ -53,6 +53,8 @@ import os
 import threading
 from typing import Optional
 
+import sys
+
 from coordinator_core.machine_resolver import registry_get
 
 __all__ = ["ENV_VAR", "REGISTRY_KEY", "is_warm_enabled"]
@@ -65,6 +67,52 @@ _FALSY = frozenset({"0", "false", "no", "off"})
 
 _cache_lock = threading.Lock()
 _cached_result: Optional[bool] = None
+
+#: Once-per-process announcement flag -- mirrors `warm.client.
+#: _log_live_tree_cold_once`'s shape exactly (a module-scope bool, set once,
+#: never reset outside a test) for the identical reason that function
+#: states: this is the permanent condition of a whole process population,
+#: not a per-call fact, so a per-call diagnostic would be pure noise.
+_warm_disabled_announced = False
+
+
+def _reset_warm_disabled_announcement_for_test() -> None:
+    """Test-only seam: clear the once-per-process announcement flag."""
+    global _warm_disabled_announced
+    _warm_disabled_announced = False
+
+
+def _log_warm_disabled_once() -> None:
+    """Emit a one-line stderr notice, once per process, that warmth is off
+    and every dispatch from this process is going cold.
+
+    state/handoffs/2026-08-21_103635_reaching-the-warm-engine.md; PM ruling
+    verbatim: "keeping this loophole makes us blind to the true state of
+    the engine." `COORDINATOR_WARM=0` (or the registry key) is a legitimate,
+    deliberate off-switch -- this function does NOT refuse the dispatch,
+    only announces the condition, matching the PM's own framing ("Do not
+    make warm-disabled fail -- a deliberate off-switch that refuses is
+    useless"). Without this, an operator flips the switch once, forgets,
+    and the box runs cold forever with nothing ever saying so -- the same
+    silent-degradation shape this whole row exists to close, just with a
+    human's fingerprint on it instead of a boot-path defect's.
+
+    Register (docs/wiki/guard-messaging.md § Register): one fact, no
+    remediation offered -- there is nothing to "fix" about a deliberate
+    configuration choice, so naming an alternative here would be the B6
+    class this register bans (arguing against a setting the reader chose on
+    purpose).
+    """
+    global _warm_disabled_announced
+    if _warm_disabled_announced:
+        return
+    _warm_disabled_announced = True
+    print(
+        "[warm-settings] warmth is disabled by configuration "
+        f"({ENV_VAR} or {REGISTRY_KEY}) -- every dispatch from this process "
+        "runs cold.",
+        file=sys.stderr,
+    )
 
 
 def is_warm_enabled() -> bool:
@@ -85,6 +133,7 @@ def is_warm_enabled() -> bool:
     """
     env_value = os.environ.get(ENV_VAR, "").strip().lower()
     if env_value in _FALSY:
+        _log_warm_disabled_once()
         return False
     if env_value in _TRUTHY:
         return True
@@ -92,6 +141,8 @@ def is_warm_enabled() -> bool:
     global _cached_result
     with _cache_lock:
         if _cached_result is not None:
+            if not _cached_result:
+                _log_warm_disabled_once()
             return _cached_result
 
     registry_value = (registry_get(REGISTRY_KEY) or "").strip().lower()
@@ -99,6 +150,8 @@ def is_warm_enabled() -> bool:
 
     with _cache_lock:
         _cached_result = result
+    if not result:
+        _log_warm_disabled_once()
     return result
 
 

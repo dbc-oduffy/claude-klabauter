@@ -455,6 +455,178 @@ retries or degrades-to-skip on INTERNAL_ERROR must NOT do the same here. See
 dispatch_message's exception handling below and coordinator_core.invoke.__main__'s
 distinct exit code (2) for this class."""
 
+UNSTAMPED_ENGINE_ROOT_ERROR = -32005
+"""`dispatch_message` refused because the `coordinator_core` package THIS PROCESS has
+imported carries no engine build stamp -- see `_refuse_unstamped_dispatch`'s own
+docstring for the ruling this enforces and `warm.skew.UnstampedEngineRootError`
+(-32005 is the next free app-code slot after WARM_DISPATCH_INDETERMINATE, -32004,
+`coordinator_core.warm.client`) for the sibling check on the warm axis this one
+extends to dispatch generally."""
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-axis stamp gate (state/handoffs/2026-08-21_103635_reaching-the-
+# warm-engine.md; PM ruling verbatim: "for any live ops there should be no
+# fallback to claude-klabauter. none whatsoever ... I want that shit to fail hard every
+# time if it can't go via Klabauter").
+#
+# Four caller-side resolvers already existed on this box before this row
+# (coordinator-invoke.py's require_dispatch_engine_on_path, cc_invoke's
+# delegation to coordinator_engine_root_with_class, the 745 settings-home
+# forwarders' exec_cli, and the warm axis's own UnstampedEngineRootError) --
+# each correctly refuses an unstamped published root WHEN CONSULTED. None of
+# them is consulted by a caller that skips straight to `import coordinator_core`
+# or `python -m coordinator_core.invoke`, which is served instead by this
+# box's machine-wide editable install (unconditionally pointing at the live,
+# unstamped claude-klabauter tree). This gate closes that gap at the one seam
+# every dispatch -- cold or warm, CLI or hook, however it got here -- actually
+# passes through: `dispatch_message` itself, "the SOLE process-level dispatch
+# chokepoint" per its own docstring above.
+# ---------------------------------------------------------------------------
+
+#: Process-local, explicit opt-in -- NEVER an environment variable (PM
+#: constraint: "explicit, deliberate, never ambient, never inherited
+#: silently from a parent process"; an env var is inherited by every child,
+#: grandchild, and detached spawn this box runs, which is exactly the
+#: silent-off-in-processes-nobody-intended failure mode this gate exists to
+#: remove). A plain module-global bool cannot cross a `Popen`/`subprocess`
+#: boundary at all -- a child process that itself dispatches gets the
+#: enforced behaviour regardless of what its parent set, which is correct:
+#: that child IS a live dispatch.
+_unstamped_dispatch_allowed = False
+
+
+def allow_unstamped_dispatch() -> None:
+    """Explicit, process-local opt-out of the stamp gate below.
+
+    THE TWO SANCTIONED CALLERS, per the PM ruling: (1) `coordinator_core`'s
+    own `conftest.py`, so the test suite -- which imports and dispatches
+    against the live tree by design -- keeps working; (2) an explicit CLI
+    flag on the dispatch entrypoint (`coordinator_core.invoke.__main__`'s
+    `--allow-unstamped-dispatch`), typed per invocation, for deliberate
+    manual testing against a live engine build. Neither is ambient: a
+    conftest fixture runs only inside that process's own pytest collection,
+    and a CLI flag is visible in the command that set it.
+
+    Not a toggle callers are expected to pair with a matching "off" call --
+    tests that need the ENFORCED behaviour for one case (asserting the
+    refusal itself) flip the underlying `_unstamped_dispatch_allowed` flag
+    off via `monkeypatch.setattr`, which reverts automatically at that
+    test's teardown -- see `test_dispatch_message.py`'s own gate tests. A
+    bespoke reset function here would be a second, competing revert
+    mechanism for the same state.
+    """
+    global _unstamped_dispatch_allowed
+    _unstamped_dispatch_allowed = True
+
+
+def is_unstamped_dispatch_allowed() -> bool:
+    """Public reader for `_unstamped_dispatch_allowed` -- the single opt-in
+    this module exposes, read by `invoke.__main__` to decide whether a
+    warm-unavailable dispatch may fall through to cold at all (see
+    `_dispatch_argv_body`'s own "fail hard, not just fail closed" block):
+    the same explicit, deliberate, per-invocation carve-out covers both the
+    stamp gate above and the no-cold-fallback policy, rather than growing a
+    second, independently-toggled opt-in for what is the same "this is a
+    deliberate manual/test invocation" declaration."""
+    return _unstamped_dispatch_allowed
+
+
+#: This process's own resolved engine clone root, `ipc.py`-anchored:
+#: `coordinator_core/ipc.py`'s parent is `coordinator_core/`, whose parent is
+#: the repo root -- byte-identical derivation to
+#: `warm.engine_root.current_engine_clone()` (`Path(__file__).resolve().
+#: parents[2]` from `coordinator_core/warm/engine_root.py`, two directories
+#: deeper), NOT imported from there (see `_is_dispatch_engine_stamped`'s own
+#: docstring for why). Computed once at import time -- this process's own
+#: `coordinator_core` cannot be re-rooted after the fact.
+_DISPATCH_ENGINE_ROOT = Path(__file__).resolve().parent.parent
+
+#: Repo-relative parts to this process's own engine build stamp -- mirrors
+#: `warm.skew.ENGINE_STAMP_FILENAME` / `_engine_stamp_path` byte-for-byte in
+#: shape (also independently duplicated, for the identical reason, by
+#: `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::
+#: _ENGINE_STAMP_RELATIVE_PARTS` -- keep all three in sync by hand if the
+#: stamp filename or location ever changes).
+_ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+#: Cached verdict: is `_DISPATCH_ENGINE_ROOT` a stamped engine build? `None`
+#: means "not yet computed". Memoized, not re-stat'd per dispatch (staff EM
+#: review, this row): the root of an ALREADY-IMPORTED package cannot change
+#: for the life of the process, so the cost of proving it is paid once, not
+#: per request on a warm server serving many dispatches/sec (the brightline
+#: is measured in process time -- see CLAUDE.md § brightline).
+_engine_stamped_verdict: Optional[bool] = None
+
+
+def _reset_engine_stamped_verdict_for_test() -> None:
+    """Test-only seam: clear the memoized stamp verdict.
+
+    Needed because a test may monkeypatch `_DISPATCH_ENGINE_ROOT` (or the
+    stamp file itself) to simulate a differently-rooted process; without a
+    reset the FIRST test to compute the verdict would pin it for every
+    later test in the same pytest process.
+    """
+    global _engine_stamped_verdict
+    _engine_stamped_verdict = None
+
+
+def _is_dispatch_engine_stamped() -> bool:
+    """True iff `_DISPATCH_ENGINE_ROOT` carries a valid engine build stamp.
+
+    DELIBERATELY NOT `warm.engine_root.is_engine_root` -- that predicate is
+    `dispatch_message`'s natural single-implementation source of truth, and
+    importing it was the first cut of this row. Measured (this box,
+    `coordinator_core/benchmarks/process_time.py::batched_process_time_ms`,
+    K=20): importing `coordinator_core.warm.engine_root` (which pulls
+    `warm.skew` -> `coordinator_core.engine_version` +
+    `coordinator_core.lifecycle`) costs ~21ms of PROCESS time per cold CLI
+    invocation, on a chokepoint every single dispatch on this box now pays
+    once. That is the exact defect class `warm.client`'s own module
+    docstring fights at length (`spawn_detached`'s lazy import, W11's
+    `is_warm_enabled()`-before-`warm.client`-import ordering) -- and the
+    same tradeoff `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`
+    already made for the identical reason (see that module's own
+    `_is_stamped_engine_root` docstring: "cannot import
+    coordinator_core... its entire job is to FIND claude-klabauter, so it cannot
+    presuppose claude-klabauter is already importable"). This is that module's
+    pattern applied one layer down: a THIRD standalone twin of the same
+    two-line predicate, not a fourth import edge onto a hot chokepoint.
+    Never raises.
+    """
+    global _engine_stamped_verdict
+    if _engine_stamped_verdict is None:
+        stamp_path = _DISPATCH_ENGINE_ROOT.joinpath(*_ENGINE_STAMP_RELATIVE_PARTS)
+        try:
+            _engine_stamped_verdict = len(stamp_path.read_bytes()) > 0
+        except OSError:
+            _engine_stamped_verdict = False
+    return _engine_stamped_verdict
+
+
+def _unstamped_dispatch_refusal(request_id) -> dict:
+    """JSON-RPC 2.0 error envelope for a dispatch refused by the stamp gate.
+
+    Register (docs/wiki/guard-messaging.md § Register): one fact, one
+    runnable alternative, no self-legitimacy, no apology. Names
+    `coordinator-invoke` (which resolves the published engine through the
+    existing, already-stamp-gated resolver chain) rather than a slash
+    command -- this can fire from a bare CLI invocation before any Claude
+    Code session exists.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": UNSTAMPED_ENGINE_ROOT_ERROR,
+            "message": (
+                f"dispatch refused: engine root {_DISPATCH_ENGINE_ROOT} has no build stamp -- "
+                "not a published engine. Dispatch via coordinator-invoke, or "
+                "pass --allow-unstamped-dispatch for deliberate manual testing."
+            ),
+        },
+    }
+
 
 class CallerFacingValidationError(ValueError):
     """Raised by an op handler for a caller-supplied-PARAMETER validation failure whose
@@ -743,6 +915,18 @@ def _timeout_for(method: str) -> float:
 # ---------------------------------------------------------------------------
 _ORIGIN_WORKTREE_FIELD = "_origin_worktree"
 
+# Telemetry-only companion field to _ORIGIN_WORKTREE_FIELD (C7,
+# 2026-08-20-a-refusal-cannot-exit-zero) — the CALLER's actual process cwd,
+# stamped unconditionally by coordinator_core.invoke.__main__.main for every
+# op, including "none"-scoped ops that never get _origin_worktree. Read ONLY
+# by op-latency telemetry recording below, as a fallback when
+# resolve_request_repo(msg) is None, so a warm-served none-scoped op still
+# attributes its row to the caller's repo instead of the server's own cwd
+# (coordinator_core.telemetry.op_latency._write_entry's Path.cwd() fallback,
+# which in a warm pool worker is the SERVER's cwd). Never used for authz or
+# repo-scope resolution — that stays _ORIGIN_WORKTREE_FIELD's job.
+_CALLER_CWD_FIELD = "_caller_cwd"
+
 # ---------------------------------------------------------------------------
 # AC-1b op-keying table (C1c) — moved to coordinator_core.op_scopes (2026-07-21)
 # to break the asyncio-on-import chain: `import coordinator_core` re-exports
@@ -847,6 +1031,29 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
     if not raw or not isinstance(raw, str):
         return None
     return Path(raw).resolve()
+
+
+def resolve_caller_cwd(msg: dict) -> Optional[Path]:
+    """Extract the caller's process cwd from a JSON-RPC message envelope (C7).
+
+    Reads the _CALLER_CWD_FIELD companion field (telemetry-only, never
+    authz/repo-scope) and returns the canonical Path if present and
+    non-empty, else None. Deliberately does NOT ``.resolve()`` against the
+    CURRENT process — the whole point is that this path may not exist
+    relative to whichever process (warm pool worker or cold CLI) happens to
+    read it; ``Path(raw)`` is already absolute (``os.getcwd()`` always is).
+
+    Returns:
+        Optional[Path] — the caller's cwd if _caller_cwd is a non-empty
+                         string; None if the field is absent, empty, or not
+                         a string (e.g. a pre-C7 client that never stamped it).
+
+    Spec backlink: docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md § C7
+    """
+    raw = msg.get(_CALLER_CWD_FIELD)
+    if not raw or not isinstance(raw, str):
+        return None
+    return Path(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -1809,11 +2016,31 @@ async def dispatch_message(msg: dict) -> dict:
 
     Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md
                    docs/wiki/machine-load-norm.md
+
+    STAMP GATE (checked FIRST, before anything else in this function): a
+    refused dispatch never ran, so it gets no `record_op_started`/
+    `record_op_latency` row -- those measure real invocations, and a
+    refusal is not one. See `_is_dispatch_engine_stamped`'s own docstring
+    for what this enforces and `allow_unstamped_dispatch` for the two
+    sanctioned ways past it.
     """
+    if not _unstamped_dispatch_allowed and not _is_dispatch_engine_stamped():
+        request_id = msg.get("id") if isinstance(msg, dict) else None
+        return _unstamped_dispatch_refusal(request_id)
+
     import time as _time
 
     method = msg.get("method") if isinstance(msg, dict) else None
     request_repo = resolve_request_repo(msg) if isinstance(msg, dict) else None
+    # C7 fallback: a "none"-scoped op never carries _origin_worktree (see
+    # WORKTREE_SCOPED_OPS gating in invoke.__main__.main), so request_repo is
+    # routinely None for it even on a live client. Prefer the caller's
+    # stamped process cwd over letting op_latency._write_entry fall back to
+    # THIS process's own cwd — which, warm-served, is the server's, not the
+    # caller's.
+    telemetry_repo_root = request_repo
+    if telemetry_repo_root is None and isinstance(msg, dict):
+        telemetry_repo_root = resolve_caller_cwd(msg)
 
     t_start = _time.time()
     perf_start = _time.perf_counter()
@@ -1841,7 +2068,7 @@ async def dispatch_message(msg: dict) -> dict:
             op=method if isinstance(method, str) else "<unknown>",
             t_start=t_start,
             corr_id=corr_id,
-            repo_root=request_repo,
+            repo_root=telemetry_repo_root,
             sid=sid,
         )
     except Exception:
@@ -1870,7 +2097,7 @@ async def dispatch_message(msg: dict) -> dict:
                 t_start=t_start,
                 elapsed_ms=elapsed_ms,
                 outcome=outcome,
-                repo_root=request_repo,
+                repo_root=telemetry_repo_root,
                 sid=sid,
                 corr_id=corr_id,
             )

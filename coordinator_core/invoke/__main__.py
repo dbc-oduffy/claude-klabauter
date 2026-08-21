@@ -176,6 +176,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "behavior."
         ),
     )
+    p.add_argument(
+        "--allow-unstamped-dispatch",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt out of the dispatch-axis stamp gate (ipc.dispatch_message) "
+            "for THIS invocation only, so an op runs against an unstamped "
+            "(live working tree) engine root instead of being refused. For "
+            "deliberate manual testing of engine changes ONLY -- typed per "
+            "invocation, never inherited by a spawned child. Live ops must "
+            "never pass this; it exists so a developer can test against "
+            "their own edits before publishing them."
+        ),
+    )
     return p
 
 
@@ -371,6 +385,21 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
+    # --allow-unstamped-dispatch: process-local, per-invocation opt-out of
+    # ipc.dispatch_message's stamp gate (state/handoffs/2026-08-21_103635_
+    # reaching-the-warm-engine.md). Deliberately set here, AFTER argparse,
+    # never via an environment variable -- see ipc.allow_unstamped_dispatch's
+    # own docstring for why an env var is the wrong shape (inherited by every
+    # subprocess this process might itself spawn, silently disarming the
+    # gate somewhere nobody intended). Import kept local: this module's own
+    # "no eager coordinator_core.ops import" discipline (see the warm
+    # preamble's own comment below) still applies, and `ipc` is already
+    # imported a few lines down for `dispatch_message` regardless.
+    if args.allow_unstamped_dispatch:
+        from coordinator_core.ipc import allow_unstamped_dispatch
+
+        allow_unstamped_dispatch()
+
     # 0. --dump-op-timeouts short-circuit -- read-only, no op dispatch, no
     #    repo_root resolution, no params parsing. Runs BEFORE the op-required
     #    check below since this is the one flag that makes <op> optional.
@@ -524,10 +553,17 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     (warmth disabled, no pipe, busy, someone else's pipe, a stale
     #     ENGINE_SKEW server, or read-deadline expiry), including on the
     #     FileNotFoundError path where it best-effort spawns a warm server
-    #     for NEXT time and still returns None for THIS call. Never raises
-    #     — Backstop 2, "the cold path is a SUCCESS path". Everything below
-    #     this point is the pre-existing cold dispatch path, unchanged: it
-    #     only runs when `response` is not already set here.
+    #     for NEXT time and still returns None for THIS call. `try_warm_
+    #     dispatch` itself never raises. BACKSTOP 2 IS RETIRED (2026-08-21,
+    #     PM ruling, state/handoffs/2026-08-21_103635_reaching-the-warm-
+    #     engine.md): "the cold path is a SUCCESS path" is no longer this
+    #     box's rule when warm is enabled -- see the fail-hard block
+    #     immediately below `try_warm_dispatch`'s call, which refuses to
+    #     fall through to cold on a warm miss unless the caller opted in.
+    #     Everything below THAT point is the pre-existing cold dispatch
+    #     path, unchanged: it only runs when `response` is not already set,
+    #     which now means either a served warm hit, warm disabled entirely,
+    #     or the explicit `--allow-unstamped-dispatch` carve-out.
     #
     #     `allow_warm=False` (invoke.from_argv, served FROM the warm server)
     #     skips this block outright — see this function's caller's docstring
@@ -560,6 +596,43 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             from coordinator_core.warm.client import try_warm_dispatch
 
             response = try_warm_dispatch(msg)
+
+            # FAIL HARD, NOT FAIL CLOSED (state/handoffs/2026-08-21_103635_
+            # reaching-the-warm-engine.md; PM ruling verbatim: "I'd rather
+            # have a fail than a silent slow. Much rather."). THIS REVERSES
+            # Backstop 2 -- warm.client's own module docstring names it "the
+            # cold path is a SUCCESS path", the deliberate design this box
+            # ran on until today. See that module's docstring for the
+            # retirement notice; this is the enforcement half of it.
+            #
+            # A warm-enabled box that could not reach a live server for
+            # THIS call (skew-evicted, still booting, busy, wedged) no
+            # longer silently degrades to a slow cold spawn -- it fails,
+            # loudly, on THIS invocation. `try_warm_dispatch` has already
+            # kicked off a fresh spawn attempt on its own way out for every
+            # miss that can trigger one (see its own module docstring's
+            # spawn-trigger table) -- this failure's own remediation is
+            # therefore "retry", not "go fix something": the self-heal is
+            # already in flight by the time this message is printed.
+            #
+            # Bypassed by the SAME explicit opt-in as the stamp gate
+            # (`ipc.is_unstamped_dispatch_allowed()`) -- one carve-out for
+            # "this is a deliberate manual/test invocation", not two
+            # independently-toggled ones. A manual test against a live
+            # engine build routinely has no warm server for that build at
+            # all; demanding one would make the carve-out unusable for the
+            # exact case it exists to serve.
+            if response is None:
+                from coordinator_core.ipc import is_unstamped_dispatch_allowed
+
+                if not is_unstamped_dispatch_allowed():
+                    _fatal_stderr(
+                        "warm dispatch unavailable and cold fallback is "
+                        "disabled (no live ops without warm). A respawn was "
+                        "already triggered on the way out of this call -- "
+                        "retry in a moment. For deliberate manual testing, "
+                        "pass --allow-unstamped-dispatch."
+                    )
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
