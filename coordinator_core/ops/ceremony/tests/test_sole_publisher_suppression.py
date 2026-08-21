@@ -161,12 +161,31 @@ def _init_repo(tmp_path):
         (commit_pipeline.PUSH_MODE_SYNC, True),
         (commit_pipeline.PUSH_MODE_DEFERRED, False),
         (commit_pipeline.PUSH_MODE_NONE, False),
+        (commit_pipeline.PUSH_MODE_NEVER, True),
     ],
 )
 def test_suppression_is_wired_to_sync_mode_only(monkeypatch, tmp_path, push_mode, expected):
     """Pins the LOWER layer only: the per-call `suppress_post_commit_auto_
     push` argument `commit_pipeline.commit()` computes for itself is tied to
-    `push_mode == PUSH_MODE_SYNC` and nothing else in `push_mode`.
+    `_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK` and nothing else in
+    `push_mode`.
+
+    Two modes suppress, for OPPOSITE reasons, and the distinction is what
+    keeps this parametrization honest rather than arbitrary. `"sync"`
+    suppresses because this pipeline publishes the commit itself moments
+    later — one publisher, not two. `"never"` (2026-08-21) suppresses
+    because the commit is not to be published AT ALL, by anyone: its caller
+    (`publish.py::_commit_published_dests`) ends a percolation at a local
+    commit and hands the push to the operator. `"deferred"`/`"none"` do NOT
+    suppress, because there the hook's push is the only one there is and
+    standing it down would strand the commit — which is why a
+    must-not-publish caller cannot be expressed as `"none"`.
+
+    A regression that widened this to `push_mode != PUSH_MODE_SYNC` would
+    re-arm the hook under `"never"` and put a percolation's push back on
+    whatever the hook's branch policy happens to say. That is the exact
+    shape this mode replaced, so it is pinned here rather than left to the
+    caller.
 
     Re-derived (C5, docs/plans/2026-08-19-windows-commit-hook-starts-python-
     once.md): this test used to pin the WHOLE invariant -- "suppression is

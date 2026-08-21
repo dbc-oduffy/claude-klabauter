@@ -190,9 +190,38 @@ _COMPOSITION_SPAN_PUSH = "commit_pipeline.push"
 #: for never issuing one); "deferred" additionally signals the caller
 #: (`wsc_tail.py`) to spawn ONE detached background push after its own
 #: locked critical section completes.
+#:
+#: "never" is the fourth, and is about a DIFFERENT question than the other
+#: three. Sync/deferred/none all answer "which publisher pushes this commit"
+#: -- every one of them ends with the commit published by somebody. "never"
+#: answers "may this commit be published at all", and the answer is no: the
+#: in-pipeline push leg is skipped (as in "none") AND the `post-commit`
+#: hook's own detached push is stood down, so NO publisher pushes it. Use it
+#: where committing and publishing are separate deliberate acts and only the
+#: first one is authorized here -- `publish.py::_commit_published_dests` is
+#: the reason it exists (a percolation ends at a local commit; the push is
+#: the operator's own next step, `percolate-push <target>`).
+#:
+#: Why a mode rather than leaving that caller on "none": under "none" the
+#: post-commit hook is deliberately left armed, because there the hook's
+#: push is the only one there is and standing it down would strand the
+#: commit. A caller that must not publish therefore cannot express itself
+#: with "none" -- it would be relying on whatever the hook's own branch
+#: policy happens to say, which is not a decision it controls. See
+#: `test_sole_publisher_suppression.py` for the pinned wiring.
 PUSH_MODE_SYNC = "sync"
 PUSH_MODE_DEFERRED = "deferred"
 PUSH_MODE_NONE = "none"
+PUSH_MODE_NEVER = "never"
+
+#: `push_mode` values under which `commit()` is told to stand the
+#: `post-commit` hook's detached push down. Two different reasons land in
+#: one set: "sync" because this pipeline publishes the commit itself a few
+#: lines later (two publishers for one branch tip is what makes
+#: `integrity_breach` racy -- `git_native._sole_publisher_env`), and "never"
+#: because the commit is not to be published by anyone. Deliberately NOT
+#: "deferred"/"none", where the hook is the only publisher there is.
+_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK = frozenset({PUSH_MODE_SYNC, PUSH_MODE_NEVER})
 
 from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolve_branch
 
@@ -3301,11 +3330,19 @@ def run_commit_pipeline(
     enumeration does not name). In `push_mode="sync"` (default --
     `scoped_git_commit.py`'s untouched wire contract, DEC-1/F1), this
     function's own critical section spans stage through push-with-retry,
-    exactly as before the lock's removal. In `push_mode="deferred"|"none"`,
-    this section spans ONLY stage -> gates -> commit -- `push_with_retry()`
-    is skipped entirely, `pushed` is always `None`, and `integrity_breach` is
-    always `False` (there is no synchronous push outcome to breach against;
-    see `wsc_tail.py`'s deferred-push design, DEC-1).
+    exactly as before the lock's removal. In
+    `push_mode="deferred"|"none"|"never"`, this section spans ONLY stage ->
+    gates -> commit -- `push_with_retry()` is skipped entirely, `pushed` is
+    always `None`, and `integrity_breach` is always `False` (there is no
+    synchronous push outcome to breach against; see `wsc_tail.py`'s
+    deferred-push design, DEC-1).
+
+    `"never"` differs from `"deferred"|"none"` only outside this function's
+    own push leg, and the difference is the whole point of it: it ALSO
+    stands the `post-commit` hook's detached push down, so the commit is
+    published by nobody rather than by the hook. A caller that must end at a
+    local commit wants `"never"`; a caller that will push later itself wants
+    `"deferred"`/`"none"`. See `PUSH_MODE_NEVER`.
 
     Sequence:
       0. `_resolve_pass_common_dir(str(root))` -- the pass's ONE git-common-dir
@@ -3714,9 +3751,13 @@ def run_commit_pipeline(
         # opro-01 C-01: stand the post-commit hook's own detached push down
         # for this commit IFF this call will publish it synchronously below.
         # Two publishers for one branch tip is what makes `integrity_breach`
-        # racy -- see `git_native._sole_publisher_env`. Strictly `sync`: in
-        # `deferred`/`none` this call does NOT push, so the hook's push is the
-        # only one there is and suppressing it would strand the commit.
+        # racy -- see `git_native._sole_publisher_env`. In `deferred`/`none`
+        # this call does NOT push, so the hook's push is the only one there
+        # is and suppressing it would strand the commit.
+        # `never` also suppresses, for the opposite reason: that caller is
+        # not authorized to publish this commit at all, so the hook standing
+        # down is the point rather than a stranding
+        # (§ `_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK`).
         commit_outcome = commit(
             root,
             message=message,
@@ -3725,7 +3766,7 @@ def run_commit_pipeline(
             deliverable_id=deliverable_id,
             stage_patch=stage_patch,
             attributed_session_id=attributed_session_id,
-            suppress_post_commit_auto_push=(push_mode == PUSH_MODE_SYNC),
+            suppress_post_commit_auto_push=(push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK),
         )
         if commit_outcome.exit_code != 0:
             if not commit_outcome.landed:
