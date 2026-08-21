@@ -36,11 +36,36 @@ def _publisher_stamp_filename() -> str:
     return match.group(1)
 
 
+def _publisher_engine_touching_paths() -> tuple:
+    """Read the publisher's duplicate of `skew._ENGINE_TOUCHING_PATHS`
+    textually, same reason as `_publisher_stamp_filename` above."""
+    src = _PUBLISH_PY.read_text(encoding="utf-8")
+    match = re.search(r'^_ENGINE_TOUCHING_PATHS\s*=\s*(\([^)]*\))', src, re.MULTILINE)
+    assert match is not None, "publish.py no longer defines _ENGINE_TOUCHING_PATHS"
+    return eval(match.group(1))  # noqa: S307 -- a literal tuple of string paths, own source file
+
+
 def test_publisher_and_engine_agree_on_the_stamp_filename():
     assert _publisher_stamp_filename() == skew.ENGINE_STAMP_FILENAME, (
         "publish.py writes a stamp filename the engine's own reader does not "
         "look for -- the published engine would silently fall back to the "
         "git-ref token and resume rotating its generation on every peer commit"
+    )
+
+
+def test_publisher_and_skew_agree_on_engine_touching_paths():
+    """`publish.py`'s `_scoped_engine_stamp_sha` and `skew.py`'s own
+    `publish_lag()` must agree on what "engine surface" means -- a commit
+    `publish_lag` would count as unpublished engine lag is exactly the kind
+    of commit that must rotate the stamp, and one it would not count must
+    not rotate it either. A silent divergence here does not fail loudly: it
+    reintroduces the coarse-stamp defect for whichever path is now scoped
+    wider than the other, invisibly, since both sides stay green on their
+    own tests."""
+    assert _publisher_engine_touching_paths() == skew._ENGINE_TOUCHING_PATHS, (
+        "publish.py's _ENGINE_TOUCHING_PATHS duplicate has drifted from "
+        "skew._ENGINE_TOUCHING_PATHS -- the stamp writer and publish_lag() "
+        "now disagree about what counts as engine-touching"
     )
 
 

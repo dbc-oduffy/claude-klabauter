@@ -84,6 +84,29 @@ Negative-spec:
     state/handoffs/2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md.
     Each pattern constant above carries its own load-bearing note; this line
     is the summary, not a substitute for reading those.
+  - DETECTION IS TWO DETECTORS, ORed — the file-wide regex cascade AND the
+    per-call-site AST walk (``_analyze_py_call_sites``, added 2026-08-21).
+    The AST path exists because whole-file scope answers the wrong question
+    in both directions: one ``creationflags=`` anywhere silenced the guard
+    for every OTHER spawn in the file (measured: 65 files blind, including
+    ``coordinator/bin/publish.py`` at 7 suppressed vs 9 bare), and one
+    ``DETACHED_PROCESS`` line symmetrically condemned every spawn in its
+    file. The AST path may only ever ADD fires; the single scoped exception
+    is the no-op-suppression leg, which defers to the per-call-site verdict
+    only when that walk reports ``conclusive``. See
+    ``state/audits/2026-08-21-detached-process-console-window-storm.md``.
+  - The regex cascade is NOT retired by the AST path and must not be
+    deleted to simplify it. An AST-only detector cannot fire on a
+    docstring-only file, and
+    ``TestCaseCDocstringOnlyProse::test_write_pure_prose_file_still_surfaces_but_only_as_advisory``
+    pins (DR-077) that pure prose MUST still surface. The regex path is that
+    prose fallback; the AST path is a second, more precise detector layered
+    in front of it, never a replacement.
+  - ``_AST_CONSOLE_TARGET_NAMES`` and ``_PY_CONSOLE_TARGET_RE`` are one
+    target list in two spellings — widen them in lockstep, never one alone,
+    or the precise detector silently stops seeing a target the coarse one
+    still names. Pinned by
+    ``TestAnalyzerContract::test_ast_targets_stay_in_lockstep_with_the_regex_alternation``.
   - Does NOT replicate the reference hook's claude-klabauter fast-path re-dispatch —
     see the async-seam note above.
   - The git exemption (reference hook code-reviewer F3: "git always spawns
@@ -123,9 +146,10 @@ Grep anchors: WINDOWS-CONSOLE-POPUP DR-077
 
 from __future__ import annotations
 
+import ast
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 CLASS = "advisory"  # DR-077 part 2 — was "hard-deny"; the class no longer blocks.
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -566,7 +590,294 @@ def _extract_content(tool_name: str, tool_input: Dict[str, Any], file_path: str)
     return content
 
 
-def _should_deny_sh_or_py(file_path: str, content: str) -> bool:
+#: Console-subsystem argv0 names, per CALL SITE. The string-literal twin of
+#: ``_PY_CONSOLE_TARGET_RE``'s alternation, kept as a set because the AST path
+#: resolves each call's OWN argv0 rather than searching whole-file text. Widen
+#: in lockstep with that regex; never narrow either alone, or the two detectors
+#: drift and the more precise one silently stops seeing a target the coarse one
+#: still names.
+_AST_CONSOLE_TARGET_NAMES = frozenset(
+    {"powershell.exe", "netstat.exe", "python.exe", "cmd.exe", "git.exe", "git"}
+)
+
+#: Per-call-site verdicts from ``_analyze_py_call_sites``.
+_AST_FIRE = "fire"
+_AST_CLEAN = "clean"
+_AST_UNKNOWN = "unknown"
+
+
+def _ast_argv0_names(node: ast.AST) -> Tuple[Optional[List[str]], bool]:
+    """Resolve a spawn call's argv0 to candidate names.
+
+    Returns ``(names, resolved)``. ``names`` is the set of spellings to test
+    against ``_AST_CONSOLE_TARGET_NAMES`` (the literal token plus its
+    basename, so a fully-pathed ``.../Git/cmd/git.exe`` resolves like
+    ``git.exe``).
+    ``resolved`` is False whenever argv0 is not a static string — a variable,
+    an f-string, a call — in which case the caller must NOT conclude the site
+    is clean; it degrades to ``_AST_UNKNOWN`` and the file-wide regex path
+    keeps its say. Static-only resolution is the whole reason this detector
+    can be precise; pretending to resolve a dynamic argv0 would trade the
+    guard's coarse-but-honest verdict for a confident wrong one.
+    """
+    if isinstance(node, ast.Attribute) and node.attr == "executable":
+        if isinstance(node.value, ast.Name) and node.value.id == "sys":
+            return ["sys.executable"], True
+        return None, False
+
+    first: Optional[ast.AST] = node
+    if isinstance(node, (ast.List, ast.Tuple)):
+        if not node.elts:
+            return None, False
+        first = node.elts[0]
+        if isinstance(first, ast.Attribute):
+            return _ast_argv0_names(first)
+
+    if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+        return None, False
+
+    # A shell/`os.system` string carries the program in its first token.
+    stripped = first.value.strip()
+    if not stripped:
+        return None, False
+    token = stripped.split()[0].strip("\"'")
+    if not token:
+        return None, False
+    normalized = token.replace("\\", "/")
+    return [normalized, normalized.rsplit("/", 1)[-1]], True
+
+
+def _ast_spawn_kind(func: ast.AST) -> Optional[str]:
+    """Name the spawn form a call node uses, or None if it is not one.
+
+    Parity with ``_PY_SUBPROCESS_CALL_RE`` is deliberate and load-bearing:
+    this function must recognize exactly the forms that regex matches, no
+    fewer. A form the regex sees and this does not is a site the precise
+    detector silently skips while the coarse one still fires — survivable. A
+    form this sees and the regex does not is a widening, also fine.
+    Recognizing FEWER than the regex here AND trusting an AST "clean" verdict
+    is the combination that would re-open the blind spot this detector exists
+    to close, which is why ``_analyze_py_call_sites`` reports ``conclusive``
+    only when every recognized call resolved.
+    """
+    if isinstance(func, ast.Attribute):
+        if isinstance(func.value, ast.Name):
+            if func.value.id == "subprocess" and func.attr in ("run", "Popen"):
+                return "subprocess"
+            if func.value.id == "os" and func.attr == "system":
+                return "os.system"
+            if func.value.id == "asyncio" and func.attr in (
+                "create_subprocess_exec",
+                "create_subprocess_shell",
+            ):
+                return "asyncio"
+        return None
+    if isinstance(func, ast.Name) and func.id in (
+        "create_subprocess_exec",
+        "create_subprocess_shell",
+    ):
+        return "asyncio"
+    return None
+
+
+def _ast_creationflags_opaque(expr: ast.AST) -> bool:
+    """True when a ``creationflags=`` value cannot be read from its own source.
+
+    ``creationflags=flags`` says nothing about whether ``flags`` carries
+    ``DETACHED_PROCESS``. Treating such a value as suppression-and-not-a-no-op
+    would let the per-call-site path call a file conclusive and thereby retire
+    the file-wide ``DETACHED_PROCESS`` leg on a file where that name is merely
+    bound to a variable first — exactly the amplifying spelling the leg exists
+    to catch. So any free ``Name`` other than a known module reference makes
+    the expression opaque, and one opaque value makes the whole file
+    non-conclusive.
+    """
+    for sub in ast.walk(expr):
+        if isinstance(sub, ast.Name) and sub.id not in ("subprocess", "os"):
+            return True
+    return False
+
+
+def _ast_parse_whole_or_fragment(content: str) -> Optional[ast.AST]:
+    """Parse whole-file content, falling back to an indented-fragment retry.
+
+    The fragment retry is not defensive tidiness — it is the only way the
+    per-call-site detector reaches a file over ``_MAX_WHOLE_FILE_BYTES``.
+    ``_read_file_safely`` refuses to read such a file, so an ``Edit`` to it
+    arrives here as the raw edit fragment (see ``_extract_content_ex``), which
+    is typically an indented block body and raises ``IndentationError`` from a
+    bare ``ast.parse``. ``coordinator/bin/publish.py`` — the measured worst
+    case at ~558KB, 7 suppressed spawns standing in front of 9 bare ones — is
+    exactly this shape, so without the retry the file named in the audit as
+    the defect's headline example would stay blind to the fix for it.
+
+    Wrapping in ``if True:`` and re-indenting preserves uniform relative
+    indentation, so any block body that was legal in its original position
+    parses here. A fragment that still will not parse returns None, and the
+    caller degrades to ``_AST_UNKNOWN`` — the file-wide regex path keeps its
+    say, never silence.
+    """
+    try:
+        return ast.parse(content)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        pass
+    try:
+        indented = "".join("    " + line for line in content.splitlines(keepends=True))
+        return ast.parse("if True:\n" + indented + "\n")
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+
+
+def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
+    """Decide per SPAWN CALL SITE whether a console spawn is unsuppressed.
+
+    Returns ``(verdict, conclusive)``.
+
+    This is a SECOND detector layered in front of the file-wide regex
+    cascade, never a replacement for it — see this module's negative-spec and
+    ``_should_deny_sh_or_py``. The regex path answers a whole-file question
+    ("does this file contain a spawn, a console target, and a suppression?"),
+    which is the wrong question in two measured directions:
+
+      - FALSE NEGATIVE, the defect this closes: one ``creationflags=``
+        anywhere silences the guard for every OTHER spawn in the same file.
+        Measured 2026-08-21 across this repo: 65 files blind, among them live
+        CLIs such as ``coordinator/bin/publish.py`` (7 suppressed spawns
+        standing in front of 9 bare ones). Reproduced order-independently.
+      - FALSE POSITIVE, its mirror: one ``DETACHED_PROCESS`` line condemns
+        every spawn in its file via ``_PY_NO_OP_SUPPRESSION_RE``, which shares
+        the same file-wide scope.
+
+    ``conclusive`` is True only when the AST view is complete enough to
+    REPLACE the file-wide no-op-suppression leg: the file parsed, at least one
+    recognized spawn call was found, every one of them resolved its own argv0,
+    none carried a ``**`` splat that could smuggle a kwarg past this walk, and
+    every ``creationflags=`` value was readable from its own source. Anything
+    less and the coarse leg keeps its say — a detector that cannot see a
+    construct must not be the reason a guard goes quiet about it.
+
+    The verdict never suppresses a regex fire (the caller ORs them), so this
+    path can only make the guard louder, in line with the module-level
+    widen-never-narrow rule — with the single, deliberately-scoped exception
+    of the ``conclusive`` no-op leg above.
+
+    Measurement and remit: `state/audits/2026-08-21-detached-process-console-
+    window-storm.md`.
+    """
+    tree = _ast_parse_whole_or_fragment(content)
+    if tree is None:
+        return _AST_UNKNOWN, False
+
+    fires = False
+    saw_call = False
+    complete = True
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        kind = _ast_spawn_kind(node.func)
+        if kind is None:
+            continue
+        saw_call = True
+
+        if not node.args:
+            complete = False
+            continue
+        names, resolved = _ast_argv0_names(node.args[0])
+        if not resolved or names is None:
+            complete = False
+            continue
+        if not any(
+            name in _AST_CONSOLE_TARGET_NAMES or name == "sys.executable"
+            for name in names
+        ):
+            continue
+
+        # os.system takes no kwargs at all: a console-target command routed
+        # through it is unsuppressable by construction, not merely
+        # unsuppressed here.
+        if kind == "os.system":
+            fires = True
+            continue
+
+        creationflags: Optional[ast.AST] = None
+        has_splat = False
+        for kw in node.keywords:
+            if kw.arg is None:
+                has_splat = True
+            elif kw.arg == "creationflags":
+                creationflags = kw.value
+
+        if creationflags is None:
+            if has_splat:
+                complete = False
+                continue
+            fires = True
+            continue
+
+        if _ast_creationflags_opaque(creationflags):
+            complete = False
+            continue
+        if _PY_NO_OP_SUPPRESSION_RE.search(_ast_expr_source(creationflags)):
+            fires = True
+
+    if fires:
+        return _AST_FIRE, complete and saw_call
+    if not saw_call:
+        return _AST_UNKNOWN, False
+    return _AST_CLEAN, complete
+
+
+def _ast_expr_source(expr: ast.AST) -> str:
+    """Best-effort source text for an expression node.
+
+    ``ast.unparse`` is 3.9+; the ``ast.dump`` fallback is not decorative —
+    it still contains every ``DETACHED_PROCESS``/``CREATE_NEW_CONSOLE``
+    identifier as an ``attr=``/``id=`` field, so the no-op-suppression regex
+    reads the same verdict off either form. Never let this return "" on the
+    failure path: an empty string reads as a clean creationflags value.
+    """
+    try:
+        return ast.unparse(expr)
+    except Exception:
+        return ast.dump(expr)
+
+
+def _should_deny_sh_or_py(
+    file_path: str, content: str, ast_content: Optional[str] = None
+) -> bool:
+    """Advisory verdict for ``.sh``/``.py`` content — two detectors, not one.
+
+    ``content`` is comment-stripped and drives the file-wide regex cascade.
+    ``ast_content`` is the ORIGINAL, unstripped text and drives the per-call-
+    site AST cascade (``_analyze_py_call_sites``); it is optional so the regex
+    path stays independently exercisable, and its absence degrades this to the
+    pre-2026-08-21 whole-file behaviour rather than to silence. The two are
+    ORed: the AST path exists to make the guard fire on spawns the file-wide
+    suppression check hid, never to talk it out of a fire it already has.
+
+    The one place the AST path SUBTRACTS is the no-op-suppression leg
+    (``_PY_NO_OP_SUPPRESSION_RE``), whose file-wide scope means a single
+    ``DETACHED_PROCESS`` line condemns every spawn in its file. That leg
+    defers to the per-call-site verdict only when the AST view is
+    ``conclusive`` — see ``_analyze_py_call_sites`` for what that word is
+    allowed to mean.
+
+    Negative-spec: the regex path is NOT retired by the AST path. An AST-only
+    detector cannot fire on a docstring-only file, and
+    ``TestCaseCDocstringOnlyProse::test_write_pure_prose_file_still_surfaces_but_only_as_advisory``
+    pins (DR-077, whole-file context + advisory) that pure prose MUST still
+    surface. The regex cascade is that prose fallback; deleting it to make an
+    AST rewrite pass would trade a pinned behaviour for a tidier shape.
+    """
+    ast_verdict, ast_conclusive = _AST_UNKNOWN, False
+    if (
+        ast_content is not None
+        and file_path.endswith(".py")
+        and len(ast_content) <= _MAX_WHOLE_FILE_BYTES
+    ):
+        ast_verdict, ast_conclusive = _analyze_py_call_sites(ast_content)
+
     if _PY_SUBPROCESS_CALL_RE.search(content) and _PY_CONSOLE_TARGET_RE.search(content):
         # Suppression check only: triple-quoted spans (docstrings, string
         # literals) are blanked out first so a prose *mention* of
@@ -581,7 +892,11 @@ def _should_deny_sh_or_py(file_path: str, content: str) -> bool:
         # either, leaving the child console-less and its whole subtree
         # allocating windowed consoles. See _PY_NO_OP_SUPPRESSION_RE.
         if _PY_NO_OP_SUPPRESSION_RE.search(suppression_scope):
-            return True
+            if not ast_conclusive:
+                return True
+
+    if ast_verdict == _AST_FIRE:
+        return True
 
     if file_path.endswith(".sh"):
         if _SH_BARE_TOKEN_RE.search(content):
@@ -639,7 +954,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if file_path.endswith((".ps1", ".psm1")):
             should_advise = _should_deny_ps1(stripped_content)
         else:
-            should_advise = _should_deny_sh_or_py(file_path, stripped_content)
+            should_advise = _should_deny_sh_or_py(
+                file_path, stripped_content, ast_content=content
+            )
 
         if not should_advise:
             return None

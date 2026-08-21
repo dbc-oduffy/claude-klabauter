@@ -213,6 +213,25 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
     makes the generation stable between publishes -- which is precisely
     when the engine's code actually differs.
 
+    THIS READER'S HALF OF THE CONTRACT WAS ALWAYS HONEST; THE WRITER'S
+    WAS NOT, until 2026-08-21. This function has always changed exactly
+    when the STAMP BYTES change -- that part was never in question. What
+    was aspirational was the sentence above it: `publish.py`'s stamp
+    writer pinned the round's raw toplevel HEAD (`_round_pin_source_sha`),
+    which moves on every commit to the shared branch, not only an
+    engine-touching one -- so in practice the stamp, and therefore this
+    token, rotated on every publish round regardless of content, the
+    exact coarseness this docstring claims was fixed. Measured
+    2026-08-21: skew/superseded server exits ran 55%/33% of all warm
+    generations, at medians of ~7min/~2.5min against a 15min idle
+    deadline, tracking the ~9min publish cadence 1:1. `publish.py` now
+    scopes the stamp's sha to the last commit touching
+    `coordinator_core/`/`coordinator/` at or before the round's pin
+    (`_scoped_engine_stamp_sha`, mirroring this module's own
+    `_ENGINE_TOUCHING_PATHS`/`publish_lag` scoping) before writing it, so
+    the sentence above is now enforced at the write site, not merely
+    asserted at this read site.
+
     NEGATIVE SPEC -- a stale or absent stamp cannot serve stale code, and
     this is why keying on it is safe rather than merely cheap. Staleness
     detection does not rest on this token at all: axis 2

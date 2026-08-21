@@ -1529,11 +1529,45 @@ def main() -> int:
        `warm_server` instead of the `in_process` default.
     6. Run the accept loop until a drain-triggered `os._exit(0)` ends the
        process.
+
+    STEP 0, ADDED 2026-08-21 (state/subagent-share silent-failure audit):
+    everything from the repo-root resolution below through `serve_forever`'s
+    own setup is wrapped in `_run_guarded` and reports any crash via
+    `ops.ceremony.detached_spawn.record_child_failure` before re-raising.
+    Before this, a crash here (a bad token, an `election.elect` failure
+    other than `ElectionLost`, a `_ServerContext` construction error) wrote
+    an uncaught traceback to `sys.stderr` -- which `detached_spawn.
+    spawn_detached` opens as `subprocess.DEVNULL` for every detached child,
+    this one included -- and reached no log, no telemetry, nothing: the
+    parent's own `spawn_detached` call had already returned `True` (Popen
+    itself didn't raise) and never reads this process's exit code. See that
+    module's own "CHILD FAILED" contract, which this was the one spawn site
+    never wired into it. Deliberately NOT swallowed: the re-raise below
+    propagates straight out of `sys.exit(main())` at module scope -- the
+    interpreter's own unhandled-exception path, exit code 1, exactly as it
+    would have before this guard existed -- per PM ruling, this must die
+    audibly, not survive as a degraded no-op.
     """
     if sys.platform != "win32":
         print("[warm-server] this module is Windows-only", file=sys.stderr)
         return 1
 
+    try:
+        return _run_guarded()
+    except Exception as exc:  # noqa: BLE001 -- log, then re-raise; see docstring's STEP 0
+        try:
+            from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
+
+            record_child_failure(str(_engine_clone_root()), __file__, exc=exc)
+        except Exception:  # noqa: BLE001 -- the failure record must not hide the original crash
+            pass
+        raise
+
+
+def _run_guarded() -> int:
+    """`main()`'s actual boot sequence -- factored out so `main()` can wrap the
+    whole thing in one guard (see `main`'s STEP 0) without the guard itself
+    needing to duplicate the platform check or the crash-reporting glue."""
     repo_root = _engine_clone_root()
     sid = election.current_user_sid()
     token = skew.compute_client_token(repo_root)

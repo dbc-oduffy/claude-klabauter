@@ -209,6 +209,7 @@ from coordinator_core.hooks.auto_push import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
+from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
@@ -1193,6 +1194,7 @@ def _render_cache(
     fast_test_lines: List[str],
     audits_lines: List[str],
     hook_cancellation_line: str,
+    warm_engine_line: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1237,6 +1239,9 @@ def _render_cache(
 
     if hook_cancellation_line:
         parts.append("\n## Hook cancellation miss rate\n" + hook_cancellation_line + "\n")
+
+    if warm_engine_line:
+        parts.append("\n## Warm engine\n" + warm_engine_line + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1319,6 +1324,7 @@ def build_cache(
     fast_test_lines = emit_fast_test(repo_root)
     audits_lines = emit_audits_index(state_root)
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
+    warm_engine_line = emit_warm_engine_health()
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1345,6 +1351,7 @@ def build_cache(
         fast_test_lines,
         audits_lines,
         hook_cancellation_line,
+        warm_engine_line,
         housekeeping_lines,
         pinboard_final,
     )
@@ -1513,6 +1520,7 @@ _CACHE_ELASTIC_SECTIONS = frozenset({
     "Housekeeping", "Active workstreams", "Auto-push health",
     "Recent commits", "Wiki", "Architecture atlas", "Capabilities",
     "Fast test", "Audits & censuses", "Hook cancellation miss rate",
+    "Warm engine",
 })
 # "Hook cancellation miss rate" is elastic, not protected, on the same ground as
 # "Capabilities" above: a single informational rate line trimmed by the byte budget costs
@@ -1523,6 +1531,11 @@ _CACHE_ELASTIC_SECTIONS = frozenset({
 # a pointer trimmed by the byte budget costs an agent one lookup, not a wrong
 # belief, so protecting it would defend against a cost this section does not
 # actually impose.
+# "Warm engine" is elastic, not protected, on the same ground as "Hook cancellation
+# miss rate" above: a single degraded-warm-rate line, already gated to appear only
+# when the engine is genuinely underperforming (emit_warm_engine_health's own
+# threshold), costs an agent nothing it needed at boot if trimmed under pressure --
+# see coordinator_core.orientation.warm_health_signal.
 
 _CACHE_SECTION_RE = re.compile(r"\n## ([^\n]+)\n")
 _CACHE_BUDGET_EXCEEDED_SENTINEL = "orientation cache exceeded its"

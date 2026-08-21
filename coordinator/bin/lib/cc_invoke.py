@@ -1015,8 +1015,12 @@ def resolve_engine_root(script_file: str) -> str:
     The ladder every ``coordinator/bin`` entrypoint should use to find the
     engine it is about to import from:
 
-      Rung 1: ``CLAUDE_KLABAUTER_ROOT`` in the environment, when it names a real
-              directory — the explicit operator/test-harness override.
+      Rung 1: ``COORDINATOR_ENGINE_ROOT`` in the environment, when it names a
+              real directory — the explicit operator/test-harness override.
+              (Pre-C14 this rung read ``CLAUDE_KLABAUTER_ROOT``; the dual-read window
+              closed and the old name is no longer consulted here — see
+              ``_ENGINE_ROOT_NEW_VAR``/``_ENGINE_ROOT_OLD_VAR``'s module-level
+              note.)
       Rung 2: self-location — ``_walk_up_to_checkout(script_file)``, the
               nearest enclosing checkout at any depth.
       Rung 3: ``_resolve_claude_klabauter_root()``'s remaining rungs — the
@@ -1026,25 +1030,26 @@ def resolve_engine_root(script_file: str) -> str:
     Distinct from ``resolve_colocated_claude_klabauter_root`` in rung ORDER, and the
     difference is load-bearing: that function probes self-location BEFORE the
     environment, so a caller pointing a script at a different engine checkout
-    via ``CLAUDE_KLABAUTER_ROOT`` is silently served the one the script happens to sit in.
-    Its existing callers are pinned to that ordering, so this is a new function
-    rather than a change of semantics underneath them.
+    via ``COORDINATOR_ENGINE_ROOT`` is silently served the one the script
+    happens to sit in. Its existing callers are pinned to that ordering, so
+    this is a new function rather than a change of semantics underneath them.
 
     Relative to the bare ``_resolve_claude_klabauter_root()`` this replaces at ~26 call
-    sites, rung 1 is NOT byte-identical. Both still consult ``CLAUDE_KLABAUTER_ROOT``
-    first and both still let it outrank every other rung — but unlike
-    ``_resolve_claude_klabauter_root``, which returns any non-empty env value verbatim,
-    this rung 1 is gated on ``os.path.isdir(env_root)``: a set-but-nonexistent
-    ``CLAUDE_KLABAUTER_ROOT`` (e.g. stale after a cross-platform sync — ``~/.claude`` is
-    shared between machines whose absolute paths differ, so a value baked on
-    one box can name nothing on the other) falls through to self-location
-    instead of being honored. This is deliberate: silently trusting a
-    nonexistent root would reintroduce the ModuleNotFoundError this function
-    exists to remove. The consequence for a caller relying on the old
+    sites, rung 1 is NOT byte-identical. Both still consult
+    ``COORDINATOR_ENGINE_ROOT`` first and both still let it outrank every
+    other rung — but unlike ``_resolve_claude_klabauter_root``, which returns any
+    non-empty env value verbatim, this rung 1 is gated on
+    ``os.path.isdir(env_root)``: a set-but-nonexistent
+    ``COORDINATOR_ENGINE_ROOT`` (e.g. stale after a cross-platform sync —
+    ``~/.claude`` is shared between machines whose absolute paths differ, so a
+    value baked on one box can name nothing on the other) falls through to
+    self-location instead of being honored. This is deliberate: silently
+    trusting a nonexistent root would reintroduce the ModuleNotFoundError this
+    function exists to remove. The consequence for a caller relying on the old
     verbatim-return behavior — e.g. a test harness that deliberately pins a
-    broken ``CLAUDE_KLABAUTER_ROOT`` to assert on the resulting failure — is that it
-    will no longer get that broken root back; it gets self-location's answer
-    (or the registry ladder's) instead.
+    broken ``COORDINATOR_ENGINE_ROOT`` to assert on the resulting failure — is
+    that it will no longer get that broken root back; it gets self-location's
+    answer (or the registry ladder's) instead.
 
     Otherwise: self-location is consulted ahead of the pointer file and the
     registry. That is what makes a script inside an engine checkout work on an
@@ -1056,8 +1061,9 @@ def resolve_engine_root(script_file: str) -> str:
     registry names a DIFFERENT checkout than the one the script lives in, the
     script now uses its own. That is the intended reading of "co-located" and
     matches what ``resolve_colocated_claude_klabauter_root``'s callers already do; an
-    operator who genuinely wants the other tree sets ``CLAUDE_KLABAUTER_ROOT`` to an
-    EXISTING directory, which still outranks everything.
+    operator who genuinely wants the other tree sets
+    ``COORDINATOR_ENGINE_ROOT`` to an EXISTING directory, which still outranks
+    everything.
 
     Raises RuntimeError (via ``_resolve_claude_klabauter_root``'s fail-loud remediation
     text) when every rung misses.

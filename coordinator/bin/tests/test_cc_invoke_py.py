@@ -1991,8 +1991,8 @@ class ResolveEngineRootTest(unittest.TestCase):
         (root / "pyproject.toml").write_text("", encoding="utf-8")
 
     def test_env_override_outranks_self_location(self) -> None:
-        """CLAUDE_KLABAUTER_ROOT wins over the checkout the script sits in — the whole
-        point of rung 1, and the regression a naive swap onto
+        """COORDINATOR_ENGINE_ROOT wins over the checkout the script sits in —
+        the whole point of rung 1, and the regression a naive swap onto
         resolve_colocated_claude_klabauter_root introduces."""
         with tempfile.TemporaryDirectory() as tmp:
             own = Path(tmp) / "own"
@@ -2003,17 +2003,25 @@ class ResolveEngineRootTest(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_text("", encoding="utf-8")
 
-            with unittest.mock.patch.dict(os.environ, {"CLAUDE_KLABAUTER_ROOT": str(other)}):
+            with unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": str(other)}):
                 self.assertEqual(_mod.resolve_engine_root(str(script)), str(other))
 
     def test_blank_and_nonexistent_env_fall_through_to_self_location(self) -> None:
-        """An empty or stale CLAUDE_KLABAUTER_ROOT is not an override — it must not
-        shadow a perfectly good co-located checkout.
+        """An empty or stale COORDINATOR_ENGINE_ROOT is not an override — it
+        must not shadow a perfectly good co-located checkout.
 
         Deliberate divergence from ``_resolve_claude_klabauter_root``'s rung 1, which
         returns any non-empty env value verbatim (no isdir gate): this
-        function adds the gate because a stale CLAUDE_KLABAUTER_ROOT surviving a
-        cross-platform ~/.claude sync must fall through, not be honored.
+        function adds the gate because a stale COORDINATOR_ENGINE_ROOT
+        surviving a cross-platform ~/.claude sync must fall through, not be
+        honored.
+
+        NOTE: before C14 retargeted this fixture from the retired
+        ``CLAUDE_KLABAUTER_ROOT`` name, this test passed VACUOUSLY — it set a variable
+        the ladder no longer read, so the assertion below was unreachable and
+        would have passed even if the isdir gate it exists to pin were
+        deleted outright. Retargeting to the name the ladder actually reads
+        makes the assertion reachable again.
 
         Asserts against ``own.resolve()`` rather than ``own``: on macOS,
         ``tempfile.TemporaryDirectory()`` yields a path under ``/var/...``
@@ -2030,7 +2038,7 @@ class ResolveEngineRootTest(unittest.TestCase):
             script.write_text("", encoding="utf-8")
 
             for bogus in ("", str(Path(tmp) / "does-not-exist")):
-                with unittest.mock.patch.dict(os.environ, {"CLAUDE_KLABAUTER_ROOT": bogus}):
+                with unittest.mock.patch.dict(os.environ, {"COORDINATOR_ENGINE_ROOT": bogus}):
                     self.assertEqual(_mod.resolve_engine_root(str(script)), str(own.resolve()))
 
     def test_self_location_is_depth_agnostic(self) -> None:
@@ -2045,6 +2053,7 @@ class ResolveEngineRootTest(unittest.TestCase):
 
             with unittest.mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
                 self.assertEqual(_mod.resolve_engine_root(str(deep)), str(own.resolve()))
 
     def test_falls_back_to_registry_ladder_outside_any_checkout(self) -> None:
@@ -2059,6 +2068,7 @@ class ResolveEngineRootTest(unittest.TestCase):
             ):
                 with unittest.mock.patch.dict(os.environ, {}, clear=False):
                     os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
                     self.assertEqual(
                         _mod.resolve_engine_root(str(stray)), "/from/registry"
                     )
@@ -2075,6 +2085,7 @@ class ResolveEngineRootTest(unittest.TestCase):
             try:
                 with unittest.mock.patch.dict(os.environ, {}, clear=False):
                     os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
                     self.assertEqual(_mod.ensure_engine_on_path(str(script)), str(own.resolve()))
                     self.assertEqual(sys.path[0], str(own.resolve()))
                     _mod.ensure_engine_on_path(str(script))
@@ -2095,6 +2106,7 @@ class ResolveEngineRootTest(unittest.TestCase):
             ):
                 with unittest.mock.patch.dict(os.environ, {}, clear=False):
                     os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+                    os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
                     self.assertIsNone(_mod.ensure_engine_on_path(str(stray)))
 
 
@@ -2235,11 +2247,12 @@ class RequireEngineVariantsTest(unittest.TestCase):
     # -- Order (AC8 pin) ------------------------------------------------------
 
     def test_env_first_vs_self_location_first_diverge_correctly(self) -> None:
-        """CLAUDE_KLABAUTER_ROOT points at a DIFFERENT valid checkout than the script's own:
-        require_engine_on_path (env-first) must return the ENV tree;
-        require_colocated_engine_on_path (self-location-first) must return its
-        OWN tree. A naive migration that swapped the two ladders would collapse
-        this into agreement — this is the assertion that catches it."""
+        """COORDINATOR_ENGINE_ROOT points at a DIFFERENT valid checkout than the
+        script's own: require_engine_on_path (env-first) must return the ENV
+        tree; require_colocated_engine_on_path (self-location-first) must
+        return its OWN tree. A naive migration that swapped the two ladders
+        would collapse this into agreement — this is the assertion that
+        catches it."""
         with tempfile.TemporaryDirectory() as tmp:
             own = Path(tmp) / "own"
             other = Path(tmp) / "other"
@@ -2253,7 +2266,7 @@ class RequireEngineVariantsTest(unittest.TestCase):
             saved = list(sys.path)
             try:
                 with self._hermetic_env(settings_home):
-                    os.environ["CLAUDE_KLABAUTER_ROOT"] = str(other)
+                    os.environ["COORDINATOR_ENGINE_ROOT"] = str(other)
                     self.assertEqual(
                         _mod.require_engine_on_path(str(script)), str(other)
                     )
