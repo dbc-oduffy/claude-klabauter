@@ -847,6 +847,90 @@ def _engine_installed(interpreter: str, import_names: list[str]) -> bool:
         return False
 
 
+# The site-packages artifact naming pip/setuptools emits for a PEP 660
+# "strict mode" editable install of `coordinator_core` — the finder module
+# whose import drags `pathlib`/`glob` into every interpreter start on this
+# box (see this repo's docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-
+# the-interpreter-floor.md, C8: "Its entire mapping is one static absolute
+# path ... for which a plain-path .pth line is an exact substitute").
+_EDITABLE_PTH_PREFIX = "__editable__.{package}-"
+
+
+def convert_editable_finder_to_plain_path(
+    interpreter: str, package_root: Path, package_name: str = "coordinator_core"
+) -> str:
+    """Rewrite `coordinator_core`'s PEP 660 strict-mode editable-install
+    `.pth` file (`__editable__.coordinator_core-<version>.pth`, which
+    `import`s a generated `__editable___coordinator_core_<version>_finder`
+    module) under `interpreter`'s site-packages into a PLAIN absolute-path
+    `.pth` line instead.
+
+    CLAUDE-KLABAUTER-ONLY, PLAN C8 SCOPE. The finder module's entire mapping is one
+    static absolute path — `package_root` itself, since `coordinator_core`
+    is a top-level package at the claude-klabauter checkout root — for which a bare
+    `.pth` line (interpreted directly by `site.py`, no `pathlib`/`glob`
+    machinery) is an exact substitute. This function does NOT touch the
+    other five fleet finders named in the plan's site-time tax (example-retrieval-repo,
+    etc.) — those are other repos' surface; see C8's body for why the fleet
+    figure does not move until all six convert.
+
+    Idempotent: a `.pth` already holding the plain path is left alone and
+    reported as such rather than rewritten every run. The orphaned finder
+    `.py` module is deliberately left on disk (still referenced by pip's
+    RECORD for `pip uninstall`) — only the `.pth` file's CONTENT changes,
+    matching this row's literal scope ("convert ... to a plain-path .pth
+    line"), not a NEW artifact set.
+
+    Advisory only: any resolution/read/write failure returns a `skip: ...`
+    string rather than raising — this is a startup-cost optimization on an
+    install that has already verified `coordinator_core` importable; it must
+    never fail the install that already succeeded."""
+    program = "import sysconfig; print(sysconfig.get_path('purelib'))"
+    try:
+        proc = subprocess.run(
+            [interpreter, "-c", program],
+            timeout=10.0,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "skip: could not resolve site-packages (probe failed)"
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return "skip: could not resolve site-packages (probe returned no path)"
+
+    site_packages = Path(proc.stdout.strip())
+    prefix = _EDITABLE_PTH_PREFIX.format(package=package_name)
+    try:
+        pth_files = sorted(p for p in site_packages.glob(f"{prefix}*.pth") if p.is_file())
+    except OSError as exc:
+        return f"skip: could not scan {site_packages}: {exc}"
+    if not pth_files:
+        return f"skip: no {prefix}*.pth found under {site_packages}"
+
+    plain_path = str(package_root.resolve())
+    results: list[str] = []
+    for pth in pth_files:
+        try:
+            existing = pth.read_text(encoding="utf-8")
+        except OSError as exc:
+            results.append(f"skip ({pth}): read failed: {exc}")
+            continue
+        if existing.strip() == plain_path:
+            results.append(f"already plain-path: {pth}")
+            continue
+        if "import " not in existing:
+            results.append(f"skip ({pth}): not an import-style finder .pth")
+            continue
+        try:
+            pth.write_text(plain_path + "\n", encoding="utf-8", newline="\n")
+        except OSError as exc:
+            results.append(f"skip ({pth}): write failed: {exc}")
+            continue
+        results.append(f"converted: {pth}")
+    return "; ".join(results)
+
+
 def _fallback_to_venv(
     claude_klabauter_root: Path,
     settings_home_path: Path,
@@ -1097,6 +1181,14 @@ def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bo
             else:
                 print(f"PASS [deps] {candidate.label} ({candidate.path}) provisioned and verified.")
                 resolved = candidate.path
+
+        if resolved == candidate.path:
+            # Plan C8: claude-klabauter's own editable-install finder -> plain-path
+            # .pth conversion. Skipped for the venv-fallback branch above
+            # (`resolved != candidate.path` there) — that path never runs
+            # `-e .`, so there is no finder to convert.
+            conv_result = convert_editable_finder_to_plain_path(candidate.path, claude_klabauter_root)
+            print(f"  [editable-finder] {conv_result}")
 
         if index == 0:
             engine_py = resolved

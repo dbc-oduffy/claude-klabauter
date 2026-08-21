@@ -1553,15 +1553,33 @@ def _build_guard_chain(
         # sessions' uncommitted work, while every stash shape this guard
         # classifies denied correctly on a Bash payload.
         #
-        # NO NEW LEG WAS NEEDED, unlike `bump-foreign-repo-write`'s own
-        # widening below (which had to author a PowerShell candidate
-        # extractor first, and whose comment explains why widening a
-        # matcher over a Bash-only body buys nothing). This guard resolves
-        # the git verb from tokens, not from shell syntax, so the same body
-        # already classifies a PowerShell command line: `git stash`,
-        # `git -C <path> stash push -u`, and `& "git" stash` were each
-        # verified to deny through a `tool_name: "PowerShell"` payload
-        # before this line changed.
+        # PARTIAL COVERAGE, NOT DIALECT PARITY -- scoped honestly here
+        # because the first draft of this comment overclaimed it, and a
+        # reviewer was right to call it. `git stash`, `git -C <path> stash
+        # push -u` and `& "git" stash` were each verified to deny through a
+        # `tool_name: "PowerShell"` payload before this line changed, and
+        # they are the shapes the incident actually produced. But all three
+        # are POSIX-idiom spellings that happen to `shlex`-tokenize; the
+        # body behind this entry (`_check_destructive_git_revert_full`) is
+        # regex-over-raw-string plus `shlex`, NOT the tree-sitter dialect
+        # tokenizer the 2026-08-19 held-cohort conversion built
+        # (`archive/specs/2026-08/2026-08-19-the-held-guard-cohort-becomes-
+        # dialect-safe.md`). PowerShell-native shapes still evade it:
+        # `Start-Process git -ArgumentList 'stash'`, splatting
+        # (`git @('stash')`), and aliased invocation.
+        #
+        # Widening is still right: those shapes evaded on the Bash tool too,
+        # so this closes a real hole (the plain `git stash` that took the
+        # tree) without opening one. What it does NOT do is make this guard
+        # dialect-safe, and nobody should read the matcher as saying it did.
+        #
+        # NOT RATCHET-COVERED, and that is the governance gap worth naming:
+        # `tests/test_guard_matchers_ratchet.py` watches modules carrying a
+        # module-level `MATCHERS` constant and skips `dispatch.py` via
+        # `_NON_GUARD_MODULES`. This guard is registered inline here with no
+        # backing module, so its matchers are policed by nothing -- neither
+        # this widening nor a future narrowing would fail a test. Census
+        # entry: `docs/reference/guard-tool-name-membership.md` § 3.
         GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),

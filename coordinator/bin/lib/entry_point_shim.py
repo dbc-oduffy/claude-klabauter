@@ -538,6 +538,35 @@ GATE_TARGETS = (
 
 assert len(GATE_TARGETS) == 60, f"expected 60 gate targets, counted {len(GATE_TARGETS)}"
 
+# The corrected denominator for a shim-usage census (chunk C10 of
+# docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md).
+#
+# A naive cross-reference of "how many of the 434 shipping CLIs has
+# `record_invocation` ever seen fire" reads as 20 -- the count of bin/*.py
+# files that actually `import entry_point_shim` (the 13 converted
+# `-assemble` shims, the 5 converted GATE_ENGINE_ENTRIES shims, and the two
+# batch dispatchers `coordinator-assemble.py`/`coordinator-gate.py`). That
+# number answers "how many FILES route through this module", not "how many
+# NAMES this module's census can account for" -- `run_target` and
+# `run_gate_target` both call `_record_invocation(name)` unconditionally,
+# for every name in ASSEMBLE_TARGETS/GATE_TARGETS, regardless of whether
+# that name's own standalone bin/<name>.py has been converted to a shim.
+# A GATE_TARGETS member still resolved BY PATH (`GATE_BY_PATH_TARGETS`)
+# still gets recorded the moment it is reached through
+# `coordinator-gate.py`'s batched dispatch -- only a DIRECT invocation of
+# that name's own untouched .py file (bypassing both dispatchers) escapes
+# the census.
+#
+# So the true instrumented surface is this union: every name this module's
+# two dispatch tables know how to route AT ALL, whether by engine-callable
+# or by-path. Reading "417 of 434 never invoked" off the 20-file count
+# is FALSE -- it conflates 414 UNINSTRUMENTED names (no evidence either
+# way) with genuinely dead ones. `ALL_TARGETS` is the corrected 74-name
+# enumeration a census should read invocation evidence against; the
+# remaining 434-74 names are not covered by this module at all and stay
+# correctly "uninstrumented", not "unused".
+ALL_TARGETS = tuple(ASSEMBLE_TARGETS) + tuple(GATE_TARGETS)
+
 
 def _run_op_main_entry(name: str, dotted: str, fail_exit: int = 1) -> Callable[[List[str]], int]:
     """Reproduce the `cli_entry.run_op_main` CLI-trampoline shape shared by

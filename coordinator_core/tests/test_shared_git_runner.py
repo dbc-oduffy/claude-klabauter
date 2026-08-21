@@ -97,6 +97,8 @@ import ast
 import dataclasses
 import pathlib
 
+import pytest
+
 from coordinator_core.git import run as git_run
 from coordinator_core.spawn_policy import is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
@@ -967,6 +969,29 @@ def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
     assert recorded["kwargs"]["errors"] == "replace"
     assert recorded["kwargs"]["stdin"] == subprocess.DEVNULL
     assert "input" not in recorded["kwargs"]
+
+
+def test_str_input_raises_type_error_before_any_spawn(monkeypatch):
+    """The bytes-only contract the module docstring's negative-spec claims
+    ("Does NOT accept `str` for `input`") is now real, not just documented.
+
+    Passing `str` used to reach `subprocess.run` in binary mode and raise an
+    uncaught `TypeError` from inside `Popen.communicate` -- a failure path
+    `run_git`'s own `except` clauses do not catch, contradicting "Does NOT
+    raise on any failure path". The fix raises a clear `TypeError` at the
+    seam itself, before a subprocess is even considered, and this test pins
+    that: `subprocess.run` must never be called for a `str` input.
+
+    Non-spawning by construction -- same discipline as the two tests above."""
+    import subprocess
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be reached for str input")
+
+    monkeypatch.setattr(subprocess, "run", _fail_if_called)
+
+    with pytest.raises(TypeError):
+        git_run.run_git(["check-ignore", "-z", "--stdin"], input="a/b\0c/d\0")
 
 
 def test_the_pre_split_spellings_are_gone_and_stay_gone():

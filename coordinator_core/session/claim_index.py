@@ -163,7 +163,7 @@ import dataclasses
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.session import core
 from coordinator_core.session.path_dialect import canonicalize_relative_path
@@ -711,6 +711,115 @@ def commit_set(
     return CommitSet(
         paths=mine,
         contested=contested,
+        complete=state.complete,
+        abort_cause=state.abort_cause,
+    )
+
+
+#: The four verdicts :func:`classify_paths` returns, one per queried path.
+#: Named constants rather than bare strings because a consumer branches on
+#: them to build an operator-facing refusal, and a typo in a literal reads as
+#: "no branch matched" rather than failing.
+OWNERSHIP_MINE = "mine"
+OWNERSHIP_PEER = "peer"
+OWNERSHIP_UNCLAIMED = "unclaimed"
+OWNERSHIP_UNANSWERABLE = "unanswerable"
+
+
+@dataclasses.dataclass
+class PathOwnership:
+    """One path's answer to "may this session commit it?".
+
+    ``verdict`` is one of the four ``OWNERSHIP_*`` constants. ``peers`` names
+    every OTHER claimant found, and is populated ONLY on ``OWNERSHIP_PEER``
+    -- a refusal that cannot name who it is protecting is the refusal an
+    operator overrides.
+    """
+
+    verdict: str
+    peers: List[str] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class OwnershipAnswer:
+    """:func:`classify_paths`'s return -- ``by_path`` keyed by the CALLER's
+    own path strings (not the normalized keys), so a caller can look its
+    pathspec back up without re-normalizing.
+
+    ``complete``/``abort_cause`` mirror :class:`_IndexState`'s, and are
+    already folded into the per-path verdicts: an incomplete walk cannot
+    return ``OWNERSHIP_UNCLAIMED`` or ``OWNERSHIP_MINE`` for any path, so a
+    caller that ignores these two fields still cannot fail open. They are
+    carried for narration.
+    """
+
+    by_path: Dict[str, PathOwnership]
+    complete: bool
+    abort_cause: Optional[str] = None
+
+
+def classify_paths(
+    session_id: str,
+    paths: Sequence[str],
+    sessions_dir: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> OwnershipAnswer:
+    """Answer "who holds each of these paths?" for ``session_id``. NO git spawns.
+
+    The sibling of :func:`commit_set`, and the same pure projection of
+    :func:`rebuild`'s reverse index: ``commit_set`` answers the open question
+    ("what is mine?"), this answers the closed one ("is THIS path mine?") for
+    a pathspec a caller already has in hand. One index rebuild, no
+    enumeration of its own, no subprocess. Both exist because a gate handed a
+    pathspec cannot use ``commit_set``'s answer as a membership test: a path
+    NOBODY has claimed is absent from ``paths`` for the same reason a peer's
+    path is, and collapsing those two into one "not yours" is what makes an
+    ownership refusal unreadable.
+
+    FAIL-CLOSED, in two directions, and neither is negotiable:
+
+      - An INCOMPLETE walk (:data:`ABORT_CAUSE_CAP_EXCEEDED`,
+        :data:`ABORT_CAUSE_IO_ERROR`, :data:`ABORT_CAUSE_EMPTY_BASE`) can
+        still return :data:`OWNERSHIP_PEER` -- a peer claim this walk DID
+        reach is a fact the abort does not undo -- but never
+        :data:`OWNERSHIP_MINE` or :data:`OWNERSHIP_UNCLAIMED`, which are both
+        claims about what the walk did NOT find. A walk that stopped early
+        found nothing it did not reach. This is C10's fail-open, closed here
+        by construction instead of by a caller remembering to read
+        ``complete``.
+
+      - A peer claim denies whether or not that peer is still LIVE. This is a
+        deliberate narrowing versus the mechanism killed at ``e927d9463``,
+        which pruned a dead peer's claim -- but only in combination with a
+        git dirty read, gating the prune on the path being clean as well as
+        the holder dead. Dirtiness is out of this answer by PM ruling
+        (2026-08-21, see :func:`commit_set`), so the paired half of that gate
+        is gone, and honouring only the liveness half would prune a dead
+        peer's claim on a path still carrying their in-flight edit -- the
+        exact work-loss this gate exists to prevent. Strictly more
+        conservative than what it replaces, never less; a stale claim is the
+        reaper's job, and the refusal names the holder so it can be done
+        deliberately.
+
+    Agent fan-out and last-event-wins need no handling here for the same
+    reason they need none in :func:`commit_set` -- ``rebuild`` has already
+    applied both.
+    """
+    state = rebuild(sessions_dir=sessions_dir, cwd=cwd)
+    by_path: Dict[str, PathOwnership] = {}
+    for path in paths:
+        claimants = state.claims.get(_normalize_key(path)) or []
+        peers = [c for c in claimants if c != session_id]
+        if peers:
+            by_path[path] = PathOwnership(verdict=OWNERSHIP_PEER, peers=list(peers))
+        elif not state.complete:
+            by_path[path] = PathOwnership(verdict=OWNERSHIP_UNANSWERABLE)
+        elif claimants:
+            by_path[path] = PathOwnership(verdict=OWNERSHIP_MINE)
+        else:
+            by_path[path] = PathOwnership(verdict=OWNERSHIP_UNCLAIMED)
+    return OwnershipAnswer(
+        by_path=by_path,
         complete=state.complete,
         abort_cause=state.abort_cause,
     )

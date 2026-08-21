@@ -84,8 +84,6 @@ Negative-spec:
 """
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
@@ -550,38 +548,6 @@ def lesson_capture_resolves_ids(decisions: dict[str, Any]) -> list[str]:
     return [d["id"] for d in build_lesson_capture_directives(decisions)]
 
 
-def _body_argv(body: str, add_id: str) -> list[str]:
-    """`--body TEXT` for a single-line body, `--body-file PATH` otherwise.
-
-    `coordinator-lesson-add` refuses a `--body` containing a newline and names
-    `--body-file` as the alternative, but this builder only ever emitted
-    `--body`. Every multi-line lesson therefore died at `argv_rejected`, which
-    is every lesson the corpus actually wants: the existing entries are
-    multi-paragraph by convention, and a one-line lesson is the rare shape, not
-    the normal one. The ceremony reported it honestly (exit 4,
-    `PARTIAL_MUTATION`) rather than silently dropping the capture, so the cost
-    was a hand-written YAML per session rather than a lost lesson -- but the
-    directive could not do the job it exists for.
-
-    Materialising a file here follows `directives_review.py`'s own precedent
-    (`tempfile.mkstemp` for a payload too large or too structured for argv)
-    rather than inventing a second convention. The file is written next to the
-    other session temporaries and named for the directive that consumes it, so
-    an orphan is attributable rather than anonymous.
-
-    Negative-spec: this does NOT re-wrap, strip, or normalise the body. The
-    bytes `coordinator-lesson-add` reads are the bytes the caller supplied --
-    a lesson body is prose whose paragraph breaks carry meaning, and a builder
-    that reflowed it would be editing content it does not own.
-    """
-    if "\n" not in body:
-        return ["--body", body]
-    fd, tmp_str = tempfile.mkstemp(prefix=f".{add_id}.body.", suffix=".md")
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-        handle.write(body)
-    return ["--body-file", tmp_str]
-
-
 def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str, Any]]:
     """Step 1 / Step 1.2's mechanical directive tail.
 
@@ -643,7 +609,7 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
             )
         add_args = [
             "--title", str(lesson["title"]),
-            *_body_argv(str(lesson["body"]), add_id),
+            "--body", str(lesson["body"]),
             "--scope", str(lesson["scope"]),
         ]
         for key, flag in _LESSON_OPTIONAL_FLAGS:

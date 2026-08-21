@@ -18,9 +18,15 @@ admitted here:
    `uv sync` faster, so the number is not marking a defect of ours.
 2. **Frequency is once per machine**, not once per op. The box-damage product
    (frequency x cost) is near zero even at `DEPENDENCY_SYNC_SECS`.
-3. **No hot path reaches it.** No session start, no commit ceremony, no op
-   dispatch. Grep before admitting a site: a caller on any of those paths
-   disqualifies it outright.
+3. **No hot path reaches it.** No session start, no commit ceremony. Grep
+   before admitting a site: a caller on either path disqualifies it outright.
+   Op-dispatch reachability alone does not: `REPO_CLONE_SECS` bounds
+   `clone_sibling_repo._clone_idempotent`, reachable via
+   `ops/repo_bootstrap.py`'s `repo.clone_and_register`
+   (`@register_op("install.clone_idempotent")`) — an explicit, reasoned
+   exception to the letter of this property, admitted because it still holds
+   properties 1 and 2 and dispatch does not make it a hot path: idempotent,
+   once per machine, never called from session start or commit ceremony.
 
 Negative spec — what this module is NOT:
 

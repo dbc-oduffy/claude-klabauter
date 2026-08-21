@@ -131,11 +131,6 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
     format_addressee_message as _format_addressee_message,
 )
 from coordinator_core.ops.handoff_gate_aging import check_one as _gate_aging_check_one
-from coordinator_core.ops.handoff_reconcile import (
-    _chain_ancestor_norm_paths,
-    _collect_open_handoffs,
-    _norm_path,
-)
 from coordinator_core.session.holder_evidence import (
     holder_evidence as _holder_evidence,
 )
@@ -143,8 +138,6 @@ from coordinator_core.ops.parse_completeness_item import (
     _Malformed as _CompletenessMalformed,
     parse_completeness_item as _parse_completeness_item,
 )
-from coordinator_core.reconcile.commit_reality import evaluate_commit_reality
-from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session_baton.store import merge_baton, read_baton
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
@@ -5208,163 +5201,6 @@ def unify_run_batons(root: Path, run_legs: Optional[Sequence[str]] = None) -> di
     return report
 
 
-def _scan_bounded_archive_handoff_dir(archive_dir: Path) -> list[dict[str, Any]]:
-    """A BOUNDED counterpart to `_scan_handoff_dir`, over `archive/handoffs/`
-    instead of `state/handoffs/`: flat `archive/handoffs/*.md` (pre-month-
-    folder or hand-placed) plus the TWO most-recently-modified `YYYY-MM/`
-    month folders (one level deep each, not recursive) — never the whole
-    archive tree.
-
-    Exists solely so `compute_successor_handoffs` can find a DIRECT
-    `deployment_state: continued` referencer that the DR-084 supersede verb
-    (`archive_stamp.cs_supersede_archive_handoff`) already moved out of
-    `state/handoffs/` before/at the moment it was stamped — the state-only
-    scan `_scan_handoff_dir` performs can never see it (see
-    `_walk_continued_chain`'s docstring). A continuation link is, by
-    construction, freshly written near "now" (the same session that claims
-    a predecessor to hand it onward archives the link in the same breath),
-    so bounding to the two newest month folders trades a vanishingly rare
-    miss (a chain resumed many months after its own last continuation) for
-    keeping this off `brief()`'s full ~370-entry archive corpus on every
-    call — the session-boot hot-path budget this package is held to
-    (see module-level cold-invocation-cost comments elsewhere in this file)
-    does not have headroom for an unconditional full-archive scan, and this
-    function is called on every `state/handoffs` predecessor regardless of
-    whether it turns out to have a successor at all.
-
-    Same per-file skip behavior as `_scan_handoff_dir`: unreadable or
-    unparseable-frontmatter files are silently skipped.
-    """
-    scanned: list[dict[str, Any]] = []
-    candidate_dirs: list[Path] = [archive_dir]
-    month_dirs = [
-        entry for entry in archive_dir.iterdir()
-        if entry.is_dir() and re.match(r"^\d{4}-\d{2}$", entry.name)
-    ] if archive_dir.is_dir() else []
-    month_dirs.sort(key=lambda p: p.name, reverse=True)
-    candidate_dirs.extend(month_dirs[:2])
-
-    for one_dir in candidate_dirs:
-        try:
-            paths = sorted(one_dir.glob("*.md"))
-        except OSError:
-            continue
-        for candidate_path in paths:
-            try:
-                text = candidate_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            split = split_frontmatter(text)
-            if split is None:
-                continue
-            scanned.append(
-                {
-                    "path": candidate_path,
-                    "resolved": candidate_path.resolve(),
-                    "fm": _parse_fm_dict(split.fm_text),
-                }
-            )
-    return scanned
-
-
-def _read_handoff_fm(path: Path) -> Optional[dict[str, Any]]:
-    """Read+parse one handoff's frontmatter off disk, or `None` on any read/
-    parse failure. Factored out of `compute_successor_handoffs`'s pre-
-    existing defensive-fallback block so `_walk_continued_chain` (below) can
-    reuse the identical read path for nodes that are never a member of the
-    caller's pre-parsed `handoff_scan` (a continuation chain routinely walks
-    into `archive/handoffs/`, which that scan never covers)."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    split = split_frontmatter(text)
-    if split is None:
-        return None
-    return _parse_fm_dict(split.fm_text)
-
-
-def _walk_continued_chain(
-    fm: dict[str, Any], handoffs_dir: Path, root: Path
-) -> Optional[tuple[str, dict[str, Any]]]:
-    """Follow a `deployment_state: continued` node's `continued_into` pointer
-    forward — recursively, since the target can itself be `continued` again
-    before landing on a genuinely live tip — to the chain's terminal node.
-
-    Root cause this closes (cross-repo/inbox/2026-08-14-example-retrieval-repo-em-
-    succession-heir-never-archives.md item 3): the DR-084 supersede verb
-    (`archive_stamp.cs_supersede_archive_handoff`) stamps
-    `deployment_state: continued` + `continued_into: <successor>` and moves
-    the stamped node to `archive/handoffs/YYYY-MM/` in the SAME commit. By
-    the time a caller briefs the node's own predecessor,
-    `compute_successor_handoffs`'s single-hop, state-only reverse-membership
-    scan can see that the direct child now reads `continued` (never a live
-    `_SUCCESSOR_LIVE_DEPLOYMENT_STATES` value), but has no way to see PAST
-    it to whichever descendant is actually live — the continuation link
-    itself is no longer even a member of the state-only scan set. This
-    function is the "see past it" step: it resolves `continued_into`
-    (`coordinator_core.dag.resolve_target`'s normal path/basename/archive/
-    git-history tiers, plus a lazily-built handoff_id index for an
-    id-shaped pointer — `continued_into` is documented, per
-    `archive_stamp.py`, as accepting either) and reads the target's
-    frontmatter directly off disk, archived or not.
-
-    Returns `(abs_path, fm)` for the first node reached whose OWN
-    `deployment_state` is not `"continued"` — the caller applies the
-    ORDINARY live-candidacy test (status + deployment_state +, for
-    `in_flight`, holder liveness) to that node exactly as it would any
-    direct referencer. A node reached this way that fails that test (e.g.
-    itself terminal — `shipped`/`abandoned`/`closed`) is correctly not a
-    candidate; only a node independently `ready_to_fire`/live-`in_flight`
-    ever surfaces, so AC8 ("archived and terminal children surface
-    neither") holds for the chain's terminal node exactly as it already did
-    for a direct referencer.
-
-    Returns `None` on an unresolvable pointer, a missing/unparseable
-    target, a depth-cap trip, or a cycle — an indeterminate chain
-    contributes no candidate, it never raises or hangs `brief()`. Read-only
-    throughout.
-    """
-    from coordinator_core.dag import build_handoff_id_index as _dag_build_handoff_id_index
-    from coordinator_core.dag import resolve_target as _dag_resolve_target
-
-    id_index: Optional[dict[str, str]] = None
-    visited: set[str] = set()
-    current_fm = fm
-    for _ in range(_MAX_CONTINUATION_CHAIN_DEPTH):
-        continued_into = current_fm.get("continued_into")
-        if not continued_into:
-            return None
-        ref_str = str(continued_into).strip()
-        if not ref_str:
-            return None
-        if id_index is None and not ref_str.endswith(".md"):
-            # `continued_into` is id-shaped (no other tier can resolve it) —
-            # build the corpus-wide handoff_id index ONCE, lazily, only when
-            # a chain actually needs it (the common path/basename form never
-            # pays this cost).
-            id_paths = [str(p) for p in sorted(handoffs_dir.glob("*.md"))]
-            archive_dir = root / "archive" / "handoffs"
-            if archive_dir.is_dir():
-                id_paths.extend(str(p) for p in sorted(archive_dir.rglob("*.md")))
-            id_index = _dag_build_handoff_id_index(id_paths)
-        resolved = _dag_resolve_target(ref_str, str(handoffs_dir), str(root), id_index=id_index)
-        if not resolved or resolved == "git-history":
-            return None
-        resolved_abs = os.path.abspath(resolved)
-        if resolved_abs in visited:
-            return None  # cycle — corrupt continued_into chain, never legitimate
-        visited.add(resolved_abs)
-        next_fm = _read_handoff_fm(Path(resolved_abs))
-        if next_fm is None:
-            return None
-        next_state = str(next_fm.get("deployment_state") or "").strip().lower()
-        if next_state != "continued":
-            return resolved_abs, next_fm
-        current_fm = next_fm
-    return None
-
-
 #: `_resolve_send_message_addresses` relocated (2026-08-19, chunk C1a) to
 #: `coordinator_core.session.work_state` — imported above.
 
@@ -5519,417 +5355,6 @@ def build_competing_claim_judgment_point(
     is kept as non-blocking informational context (never removed, never
     surfaced as a judgment point) for the rare case an EM wants to look."""
     return None
-
-
-#: `deployment_state` values `compute_successor_handoffs` treats as a "live
-#: successor" candidate — AC7/AC8's two named cases only. Any other
-#: `deployment_state` (`awaiting_gate`, `shipped`, ...) is out of this
-#: function's scope and never contributes a candidate.
-_SUCCESSOR_LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
-
-#: `status` values `compute_successor_handoffs` treats as non-terminal —
-#: dual-tolerant DR-084 spelling (`open` is current, `active` is the old
-#: term the corpus may not have migrated off of yet;
-#: `lifecycle_constants.HANDOFF_TERMINAL_STATUS` names the terminal
-#: complement: consumed/superseded/claimed). Named explicitly here (plan
-#: 2026-08-01-wsc-completeness-gate-and-pickup-successor.md, C5) rather than
-#: derived from the terminal set, since a successor's own status axis is a
-#: narrower question ("is this candidate still live at all") than the
-#: terminal-set consumers answer.
-_SUCCESSOR_LIVE_STATUSES = frozenset({"open", "active"})
-
-#: Bounded-walk guard for `_walk_continued_chain` — a `continued_into` cycle
-#: (corruption; never a legitimate write) or a pathological chain must
-#: terminate this walk, not hang `brief()`. 12 hops is generous headroom
-#: over any observed continuation chain (the incident this guards against,
-#: cross-repo/inbox/2026-08-14-example-retrieval-repo-em-succession-heir-never-
-#: archives.md item 3, was 2 hops deep).
-_MAX_CONTINUATION_CHAIN_DEPTH = 12
-
-
-#: `compute_commit_reality`'s programming-error class — judged against what
-#: this function's own new logic (not the corpus walk it wraps) can
-#: actually raise: a `TypeError`/`AttributeError` from an unexpected
-#: `this_handoff`/`fm` shape, or a `NameError` from a future edit. Logged
-#: via `_LOG.exception` (traceback) rather than `_LOG.warning`, distinct
-#: from the environmental class (unreadable policy file, malformed
-#: frontmatter elsewhere in the open set, git spawn failure) the fail-soft
-#: wrap was written for.
-_PROGRAMMING_ERROR_TYPES = (TypeError, AttributeError, NameError)
-
-
-def compute_commit_reality(root: Path, fm: dict[str, Any], artifact_live_path: Path) -> dict[str, Any]:
-    """`gates.commit_reality` (C2, DR-300 route (d)) — the single-baton
-    HEAD-consistency verdict for the ONE artifact under pickup, EM-judgment
-    evidence only, never a directive.
-
-    Mirrors `handoff_reconcile._handler`'s own call construction
-    (docs/decisions/DR-300-pickup-may-not-call-the-reconcile-orchestrator.md;
-    mechanism proven standalone by
-    docs/research/spike-verdicts/2026-08-13-evaluate-commit-reality-standalone-single-baton.md):
-    an open-set walk (`_collect_open_handoffs`) populates
-    `other_open_handoffs` — passing `[]` would silently disable the
-    cross-handoff attribution guard and over-claim `auto-ship`, measured on 2
-    of 6 candidate-producing batons in the spike — and
-    `_chain_ancestor_norm_paths`/`_norm_path` exclude this artifact's own
-    pinned-lineage ancestors from that guard set, the same exclusion the
-    orchestrator applies to itself. NOT a literal mirror at the self-
-    exclusion mechanism itself: the handler excludes by object identity
-    (`h is not handoff`), this function by path equality
-    (`_norm_path(...) != this_norm_path`). The adaptation is necessary, not
-    optional — `this_handoff` here is a freshly built `dict(fm)` that is
-    never identity-present in the walked `open_handoffs` set, so identity
-    exclusion would be a silent no-op on this call path; path equality is
-    the correct rewrite of the same intent, not a drift from it.
-
-    `load_policy(None)` resolves the shared policy read-only (no
-    `policy_path` override, no env var set here) — `dry_run` plays no part in
-    this call since `evaluate_commit_reality` itself never writes; only the
-    denylist/attribution-guard/three-signal tunables it carries are read.
-
-    Calls `evaluate_commit_reality` directly — the pure per-handoff function
-    — never `handoff.reconcile_open`, which writes `surfaced-history.json` in
-    every mode it has (DR-300 § "Why the decline holds").
-
-    Fail-soft (house pattern — see `_holder_from_claim_state`'s
-    `resolve_claim_state` guard above): unlike ~83 other `brief()` compute
-    sites, this one walks the ENTIRE open-handoff corpus
-    (`_collect_open_handoffs`, ~132 files on the live corpus), loads policy
-    from disk, and spawns git (`evaluate_commit_reality`) — any one of a
-    malformed frontmatter file elsewhere in the open set, an unreadable
-    policy file, or a git failure must not take down `brief()` for the ONE
-    baton actually being picked up. A raise here degrades to a
-    `verdict: "unavailable"` result carrying the same dict shape (so callers
-    never special-case it) with the failure reason folded into `evidence[]`,
-    never propagated — the EM reading the brief learns the check could not
-    run rather than losing the whole brief. The degrade itself stays
-    unconditional (availability on the pickup path outranks loudness — a
-    propagating error takes pickup down for every baton, worse than a quiet
-    degrade) but the *signal* is not: `_PROGRAMMING_ERROR_TYPES` (`TypeError`,
-    `AttributeError`, `NameError` — the classes this function's own new
-    logic, not the corpus walk, can raise) log via `_LOG.exception` so the
-    traceback reaches the log and the `evidence[]` entry names it a
-    "(likely a pickup_assemble bug)"; everything else (malformed frontmatter,
-    unreadable policy, git spawn failure — the environmental class the wrap
-    was written for) still logs at `_LOG.warning` with no such tag. Either
-    way the returned dict shape is identical — callers never special-case it.
-    """
-    try:
-        this_handoff = dict(fm)
-        this_handoff["_path"] = str(artifact_live_path)
-        this_norm_path = _norm_path(str(artifact_live_path))
-
-        open_handoffs = _collect_open_handoffs(root)
-        ancestor_norm_paths = _chain_ancestor_norm_paths(this_handoff)
-        other_open = [
-            h for h in open_handoffs
-            if _norm_path(str(h.get("_path") or "")) != this_norm_path
-            and _norm_path(str(h.get("_path") or "")) not in ancestor_norm_paths
-        ]
-
-        policy_result = load_policy(None)
-        return evaluate_commit_reality(this_handoff, root, policy_result.policy, other_open)
-    except _PROGRAMMING_ERROR_TYPES as exc:
-        # Review: coordinator:code-reviewer — a defect in this call site's
-        # own logic must not read forever as "policy unavailable this run"
-        # at a level easy to miss; log loud, still degrade rather than
-        # propagate (availability on the pickup path is the reason the wrap
-        # exists at all).
-        _LOG.exception(
-            "pickup_assemble: commit_reality check failed for %s — likely a "
-            "pickup_assemble programming error, not an environmental "
-            "failure; surfacing as unavailable rather than failing the brief",
-            artifact_live_path,
-        )
-        return {
-            "handoff_id": fm.get("id") or fm.get("title") or "",
-            "candidate_sha": None,
-            "confidence": "none",
-            "evidence": [f"commit_reality check unavailable (likely a pickup_assemble bug): {exc}"],
-            "verdict": "unavailable",
-        }
-    except Exception as exc:
-        _LOG.warning(
-            "pickup_assemble: commit_reality check failed for %s — %s; "
-            "surfacing as unavailable rather than failing the brief",
-            artifact_live_path,
-            exc,
-        )
-        return {
-            "handoff_id": fm.get("id") or fm.get("title") or "",
-            "candidate_sha": None,
-            "confidence": "none",
-            "evidence": [f"commit_reality check unavailable: {exc}"],
-            "verdict": "unavailable",
-        }
-
-
-def compute_successor_handoffs(
-    root: Path,
-    artifact_path: str,
-    *,
-    handoff_scan: Optional[list[dict[str, Any]]] = None,
-    liveness_cache: Optional[dict[str, bool]] = None,
-) -> dict[str, Any]:
-    """`gates.successor` (plan 2026-08-01-wsc-completeness-gate-and-pickup-
-    successor.md, C5/AC7) — a SEPARATE computation from
-    `compute_competing_claim`, not a widening of it: that function drops
-    every unclaimed candidate at `if not holder_sid: continue` (Anti-scope),
-    which is precisely why an incident's `ready_to_fire` successor — reaped,
-    unclaimed by definition — was structurally unreachable by that scan.
-    This function never looks at claim fields to decide whether a candidate
-    counts; it keys ONLY on `deployment_state` (never claim-emptiness), with
-    `park_note` surfaced as narration colour in the evidence, never as a
-    gate input.
-
-    A "successor" here is a handoff under `state/handoffs/` (archived
-    handoffs are never scanned — see below) whose `predecessor` /
-    `additional_predecessors` / `forked_from` / `predecessor_id` edge names
-    `artifact_path`, in any of its supported forms (quoted path, unquoted
-    path, bare basename, `predecessor_id`, or the `none`/`null` sentinels —
-    `dag.referenced_by` already understands every one of these; this
-    function does not hand-roll edge matching, per Anti-scope).
-
-    `state/handoffs/*.md` is the scan set `dag.referenced_by` walks (mirrors
-    `compute_competing_claim`'s own live-only scan) — an ordinary archived
-    successor (shipped/abandoned/closed) is therefore never a member of it,
-    which is what keeps an archived/terminal child from ever surfacing here
-    (AC8's "archived and terminal children surface neither gate nor JP"),
-    with no separate archival-status filter needed on top. ONE exception,
-    handled by `_walk_continued_chain`: a direct referencer stamped
-    `deployment_state: continued` is a DR-084 supersede LINK, not a dead
-    end — its `continued_into` names where the work actually went, and that
-    target (itself possibly `continued` again) is resolved and read
-    directly off disk, archived or not, so a live tip several `continued`
-    hops downstream of `artifact_path` still surfaces. The chain's terminal
-    node must still independently pass the SAME live-candidacy test below;
-    a `continued` node's own status/deployment_state never does, so AC8
-    holds for it exactly as it does for any other archived node.
-
-    A scanned candidate becomes a member of `candidates` iff:
-      - its `status` is one of `_SUCCESSOR_LIVE_STATUSES` (dual-tolerant
-        `open`/`active`, so an un-migrated DR-084 record still matches), AND
-      - its `deployment_state` is `"ready_to_fire"` (a reaped, unclaimed-by-
-        definition baton — claim keys are REMOVED, not blanked, by
-        `handoff_transition._unclaim`, so it is byte-indistinguishable from
-        a never-claimed baton; this function does not care either way), OR
-      - its `deployment_state` is `"in_flight"` AND its current holder
-        (`claimed_by`/`consumed_by`/`picked_up_by`) reads live via
-        `coordinator_core.session.liveness.session_live` — an `in_flight`
-        successor with a stale/dead holder is not a live successor and is
-        dropped.
-
-    Read-only throughout: reads disk/git state only, never mutates.
-    """
-    self_resolved = str((root / artifact_path).resolve())
-    handoffs_dir = root / "state" / "handoffs"
-    if not handoffs_dir.is_dir():
-        return {"candidates": []}
-
-    # `self` MUST stay in the scan set passed to `dag.referenced_by`, not be
-    # filtered out before the call — a `predecessor_id:`-only edge resolves
-    # via `build_handoff_id_index(live_set)`, which reads each scanned
-    # path's own `handoff_id:` field; excluding `self` here would make its
-    # `handoff_id` invisible to that index and silently break
-    # `predecessor_id`-only successor matching. Mirrors the verified
-    # substrate note on `_collect_handoff_paths` (the candidate itself is
-    # always enumerated into `live_paths` before any reverse-membership
-    # check runs).
-    #
-    # `handoff_scan`, when passed by the caller, is the SAME pre-parsed
-    # `_scan_handoff_dir` result `compute_competing_claim` consumes (Review:
-    # coordinatorcode-reviewer-91d7b9ae Finding 2) — this function still
-    # needs `live_set`/`fm_by_resolved` derived from it (not the raw scan)
-    # because `dag.referenced_by` wants a path list, and the per-candidate
-    # loop below wants fm keyed by resolved path.
-    scan = handoff_scan if handoff_scan is not None else _scan_handoff_dir(handoffs_dir)
-    if not scan:
-        return {"candidates": []}
-    live_set = [str(entry["resolved"]) for entry in scan]
-    fm_by_resolved = {str(entry["resolved"]): entry["fm"] for entry in scan}
-
-    # Function-local: `coordinator_core.dag` pulls a dependency graph that,
-    # if imported at module level, blows `pickup_assemble`'s cold-invocation
-    # budget (session-boot hot path) for every caller, including ones that
-    # never reach successor computation.
-    from coordinator_core.dag import referenced_by as _dag_referenced_by
-
-    ref = _dag_referenced_by(self_resolved, live_set, handoff_dir=str(handoffs_dir))
-
-    # A DIRECT `continued` referencer that the archive-and-move supersede
-    # already relocated out of `state/handoffs/` is invisible to the scan
-    # above by construction — it is simply absent from `live_set`. Re-run
-    # `referenced_by` against `live_set` plus a BOUNDED recent-archive scan
-    # (see `_scan_bounded_archive_handoff_dir`) and keep only the NEWLY
-    # found referencers with `deployment_state: continued` — every other
-    # archive-sourced referencer is discarded unlooked-at here, preserving
-    # AC8 ("archived and terminal children surface neither") for the
-    # ordinary case exactly as before; this second pass exists solely to
-    # find continuation LINKS, never to admit an archived node as a
-    # candidate directly.
-    archive_dir = root / "archive" / "handoffs"
-    archive_continued_referencers: list[tuple[str, dict[str, Any]]] = []
-    if archive_dir.is_dir():
-        archive_scan = _scan_bounded_archive_handoff_dir(archive_dir)
-        if archive_scan:
-            archive_fm_by_resolved = {str(entry["resolved"]): entry["fm"] for entry in archive_scan}
-            extended_live_set = live_set + list(archive_fm_by_resolved.keys())
-            archive_ref = _dag_referenced_by(self_resolved, extended_live_set, handoff_dir=str(handoffs_dir))
-            already_found = set(ref["referencedBy"])
-            for candidate_abs in archive_ref["referencedBy"]:
-                if candidate_abs == self_resolved or candidate_abs in already_found:
-                    continue
-                candidate_fm = archive_fm_by_resolved.get(candidate_abs)
-                if candidate_fm is None:
-                    continue
-                if str(candidate_fm.get("deployment_state") or "").strip().lower() == "continued":
-                    archive_continued_referencers.append((candidate_abs, candidate_fm))
-
-    liveness_by_sid: dict[str, bool] = liveness_cache if liveness_cache is not None else {}
-
-    candidates: list[dict[str, Any]] = []
-    referencer_entries: list[tuple[str, Optional[dict[str, Any]]]] = [
-        (candidate_abs, fm_by_resolved.get(candidate_abs))
-        for candidate_abs in ref["referencedBy"]
-        if candidate_abs != self_resolved
-    ] + archive_continued_referencers
-    for candidate_abs, candidate_fm in referencer_entries:
-        candidate_path = Path(candidate_abs)
-        if candidate_fm is None:
-            # Defensive fallback only — `dag.referenced_by` is documented to
-            # return members of the `live_set` we just gave it, so every
-            # `candidate_abs` should already be a `fm_by_resolved` key. Kept
-            # so a resolution mismatch degrades to the pre-consolidation
-            # direct-read behavior rather than dropping the candidate.
-            # Review: coordinatorcode-reviewer-240bf49d — folded onto
-            # `_read_handoff_fm` (same read+split+parse, `None` on any
-            # failure) so this module's third open-coded copy of that
-            # sequence is gone.
-            candidate_fm = _read_handoff_fm(candidate_path)
-            if candidate_fm is None:
-                continue
-
-        deployment_state = str(candidate_fm.get("deployment_state") or "").strip().lower()
-        if deployment_state == "continued":
-            # DR-084 supersede link, not a dead end — see this function's
-            # docstring and `_walk_continued_chain`'s own. Substitute the
-            # chain's terminal node (if any) for THIS iteration and re-derive
-            # every field the evaluation below reads from it; an
-            # unresolvable/cyclic/absent chain contributes no candidate.
-            walked = _walk_continued_chain(candidate_fm, handoffs_dir, root)
-            if walked is None:
-                continue
-            candidate_abs, candidate_fm = walked
-            candidate_path = Path(candidate_abs)
-            deployment_state = str(candidate_fm.get("deployment_state") or "").strip().lower()
-
-        status = str(candidate_fm.get("status") or "").strip().lower()
-        if status not in _SUCCESSOR_LIVE_STATUSES:
-            continue
-
-        if deployment_state not in _SUCCESSOR_LIVE_DEPLOYMENT_STATES:
-            continue
-
-        # Ledger-first (C11, row 19): the live-successor candidate's holder
-        # now resolves through `_resolve_ledger_first_holder` rather than a
-        # raw frontmatter scan, so an `in_flight` successor whose mirror
-        # reverted but whose ledger still holds a live claim is not dropped
-        # for want of a visible holder.
-        holder_sid = _resolve_ledger_first_holder(root, candidate_path, candidate_fm)
-
-        if deployment_state == "in_flight":
-            if not holder_sid:
-                continue
-            if holder_sid in liveness_by_sid:
-                holder_live = liveness_by_sid[holder_sid]
-            else:
-                try:
-                    holder_live = _liveness.session_live(holder_sid, str(root))
-                except (OSError, ValueError):
-                    holder_live = False
-                liveness_by_sid[holder_sid] = holder_live
-            if not holder_live:
-                continue
-            kind = "in_flight_live"
-        else:
-            kind = "ready_to_fire"
-
-        try:
-            display_path = rel_id(candidate_path, root)
-        except ValueError:
-            display_path = str(candidate_path)
-
-        candidates.append(
-            {
-                "path": display_path,
-                "kind": kind,
-                "status": status,
-                "deployment_state": deployment_state,
-                "claimed_by": holder_sid,
-                "park_note": candidate_fm.get("park_note"),
-            }
-        )
-
-    # Same shared, once-per-brief resolution as `compute_competing_claim`
-    # above -- `_resolve_send_message_addresses` (its own docstring carries
-    # the full negative-spec: `send_message_address` is NOT durable
-    # identity, never persist-and-reuse; `claimed_by` stays the durable
-    # identity). Advisory only: never raises, never changes `kind`/
-    # `status`/`deployment_state`.
-    _resolve_send_message_addresses(candidates)
-
-    return {"candidates": candidates}
-
-
-def build_successor_judgment_point(resolves: list[str]) -> dict[str, Any]:
-    """`jsucc` — the live-successor JUDGMENT entry (AC7/AC8). THREE distinct
-    disposition arms — NOT `build_liveness_judgment_point`'s two-arm
-    (`jshipped`-style) shape: that shape's non-blocking arm carries empty
-    `resolves` because it has no `d2`-equivalent to clear. This JP does have
-    one (this handoff's own claim directive), and must clear it on an
-    explicit, affirmative EM pick or every pickup with a live successor
-    deadlocks permanently — `apply_halt._directive_gate_open` clears a
-    `depends_on` member only when the CHOSEN disposition's own `resolves`
-    names it.
-
-    Only `acknowledge-and-proceed` clears `d2` (AC8) — the two
-    diversion-flavored arms (`divert-to-successor`, `stand-down-live-peer`)
-    both carry `resolves: []` deliberately: choosing either one means this
-    handoff is NOT being proceeded with right now, so `d2` (claim THIS
-    handoff) must stay unresolved.
-
-    Tier: `insufficient-evidence` — `gates.successor` is engine-read
-    frontmatter evidence (predecessor edges + `deployment_state`), not a
-    quote of untrusted body text, but whether the right move is to divert,
-    stand down, or proceed anyway is exactly the judgment this module never
-    mechanizes."""
-    return build_judgment_point(
-        "jsucc",
-        "A live successor handoff declares this one as its predecessor — "
-        "pick up the successor instead, stand down for a live peer already "
-        "on it, or proceed with this handoff anyway?",
-        "gates.successor",
-        [
-            {
-                "value": "divert-to-successor",
-                "resolves": [],
-                "guidance": "pick that up instead?",
-            },
-            {
-                "value": "stand-down-live-peer",
-                "resolves": [],
-                "guidance": "a live peer is already on the successor — stand down.",
-            },
-            {
-                "value": "acknowledge-and-proceed",
-                "resolves": resolves,
-                "guidance": "I know about the successor, proceed with THIS handoff.",
-            },
-        ],
-        None,
-        revalidate_at_dispatch=False,
-        reason="insufficient-evidence",
-    )
 
 
 def compute_addressee_gate(repo_root: Path, to_value: Optional[str]) -> dict[str, Any]:
@@ -8582,19 +8007,6 @@ def brief(
     staleness = compute_staleness(root)
     branch_gate = compute_branch_gate(root, classification=classification)
     liveness_fired = compute_liveness_signal(root, fm, artifact["path"])
-    # One glob+read+frontmatter-parse pass over `state/handoffs/*.md`, shared
-    # with `compute_successor_handoffs` below (Review: coordinatorcode-
-    # reviewer-91d7b9ae Finding 2) — `brief()` is on the session-boot hot
-    # path, so a second full-directory scan+parse per call is exactly the
-    # per-call cost its budget exists to catch. `compute_competing_claim`
-    # (the `gates.competing_claim` producer) was deleted outright (C2,
-    # docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): a
-    # reverse-reference scan of the control-plane skill corpus found no
-    # reader of that field, and `compute_claim_grant`/`held_by_self` was the
-    # only genuinely-consumed field this scan fed.
-    _handoffs_dir = root / "state" / "handoffs"
-    _handoff_scan = _scan_handoff_dir(_handoffs_dir) if _handoffs_dir.is_dir() else []
-    _handoff_liveness_cache: dict[str, bool] = {}
     execution_stamp_hit = compute_execution_stamp_match(root, fm, artifact["path"])
     execution_stamp_match = execution_stamp_hit[0] if execution_stamp_hit else None
     execution_stamp_target = execution_stamp_hit[1] if execution_stamp_hit else None
@@ -8602,7 +8014,6 @@ def brief(
     if classification in ("handoff", "spinoff"):
         artifact_live_path = root / artifact["path"]
         aging_verdict = compute_aging_verdict(artifact_live_path)
-        commit_reality = compute_commit_reality(root, fm, artifact_live_path)
         # Claim FIRST, then read the claim state: both reads below must see
         # the post-acquisition truth, or this brief would narrate "no
         # competing claim" about a lock it just took itself.
@@ -8767,7 +8178,6 @@ def brief(
                         "gate_notes": compute_gate_notes(fm),
                         "aging_verdict": aging_verdict,
                         "liveness_signal": liveness_fired,
-                        "commit_reality": commit_reality,
                         "coast": compute_coast(
                             live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
                         ),
@@ -8846,28 +8256,11 @@ def brief(
         if liveness_jp:
             judgment_points.append(liveness_jp)
 
-        # AC7/AC8 (plan 2026-08-01-wsc-completeness-gate-and-pickup-successor,
-        # C5) — `gates.successor`/`jsucc`: a SEPARATE computation from
-        # `compute_competing_claim` (see that function's docstring), keyed on
-        # `deployment_state`, never on claim-emptiness. Only surfaces (both
-        # the gate and the JP) when a live successor exists.
-        successor = compute_successor_handoffs(
-            root, artifact["path"], handoff_scan=_handoff_scan, liveness_cache=_handoff_liveness_cache
-        )
-        successor_jp = None
-        if successor["candidates"]:
-            successor_jp = build_successor_judgment_point(["d2"])
-            judgment_points.append(successor_jp)
-
         # `depends_on` for d2 (claim-handoff) — AND-semantics across every
         # blocking judgment point that independently claims to gate it
         # (contract § "The list form of `depends_on`"): `jgate` (awaiting_gate,
         # never co-occurs with `jshipped` — same frontmatter field), `jshipped`
-        # (shipped), `j1` (a firing liveness signal, orthogonal to both), and
-        # `jsucc` (a live successor, likewise orthogonal — AC8: only its
-        # `acknowledge-and-proceed` arm names `d2` in `resolves`, so `jsucc`
-        # joining this AND-list is what makes that arm the one that actually
-        # clears d2; the two diversion arms leave d2 gated).
+        # (shipped), and `j1` (a firing liveness signal, orthogonal to both).
         # A single blocker keeps the plain string form (contract: "do not
         # gratuitously wrap single gates in one-element lists"); zero blockers
         # -> unconditional (`None`), matching the pre-existing behavior this
@@ -8895,8 +8288,6 @@ def brief(
             blocking_ids.append("jshipped")
         if liveness_jp:
             blocking_ids.append("j1")
-        if successor_jp:
-            blocking_ids.append("jsucc")
 
         if not blocking_ids:
             directives[1]["depends_on"] = None
@@ -8940,7 +8331,6 @@ def brief(
             "gate_notes": compute_gate_notes(fm),
             "aging_verdict": aging_verdict,
             "liveness_signal": liveness_fired,
-            "commit_reality": commit_reality,
             "coast": compute_coast(judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence),
         }
         if gate_check is not None:
@@ -8949,8 +8339,6 @@ def brief(
             gates_obj["shipped_state"] = shipped_state
         if execution_stamp_match is not None:
             gates_obj["execution_stamp_match"] = execution_stamp_match
-        if successor["candidates"]:
-            gates_obj["successor"] = successor
 
         sizing_disposition = compute_sizing_disposition(root, fm)
 

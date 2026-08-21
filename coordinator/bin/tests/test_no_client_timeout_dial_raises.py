@@ -11,14 +11,16 @@ shared budget.
 against a rationale that had already expired. Two things make it worth a
 standing guard rather than a one-line deletion:
 
-  - It bought nothing even when written. `CC_INVOKE_TIMEOUT_SECS` is a FLOOR
-    on the client's wait (`cc_invoke.py::_op_timeout_ceiling`: the ceiling is
-    `max(FLOOR, engine_budget(op) + MARGIN)`), not a raise on the op's own
-    engine-side budget. `goals.reassess_krs` has no `ipc._OP_TIMEOUT_OVERRIDES`
-    row, so the engine still gives up at `ipc.DISPATCH_TIMEOUT_SECS`; the 70
-    only made the CLIENT keep waiting on a dispatch that had already died.
-    `cc_invoke.py::_timeout_exceeded_message` documents an operator who set
-    this to 300 and watched the same 30s-derived timeout recur.
+  - It bought nothing even when written. `CC_INVOKE_TIMEOUT_SECS` was a FLOOR
+    on the client's wait (`cc_invoke.py::_op_timeout_ceiling`, which now
+    computes the ceiling as `engine_budget(op) + _CLIENT_START_MARGIN_SECS`
+    with no env-read FLOOR or MARGIN in it at all), not a raise on the op's
+    own engine-side budget. `goals.reassess_krs` has no
+    `ipc._OP_TIMEOUT_OVERRIDES` row, so the engine still gives up at
+    `ipc.DISPATCH_TIMEOUT_SECS`; the 70 only made the CLIENT keep waiting on
+    a dispatch that had already died. `cc_invoke.py::_timeout_exceeded_message`
+    documents an operator who set this to 300 and watched the same
+    30s-derived timeout recur.
   - `setdefault` inverted the precedence it claimed to preserve. Its comment
     said it avoided clobbering an operator override, but the trampoline runs
     before the op and an operator export sets the var FIRST, so the 70 lost to

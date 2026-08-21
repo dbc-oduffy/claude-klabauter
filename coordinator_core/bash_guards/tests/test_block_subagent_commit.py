@@ -1943,7 +1943,7 @@ def test_ownership_leg_denial_names_path_and_classification(monkeypatch):
     scope_reason = (
         "path outside session sess1 scope: 'orphan.py' (orphan — dirty but "
         "claimed by no session); denied paths (1): 'orphan.py' (orphan — "
-        "dirty but claimed by no session); no committable remainder "
+        "no session holds a claim on it); no committable remainder "
         "(SC-DR-019) — every path in this pathspec was denied"
     )
     result = _gca_denies(

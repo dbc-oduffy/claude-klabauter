@@ -5,13 +5,14 @@ plus the in-process ownership helper used by the commit-confinement guard
 `ceremony.scoped_git_commit` sink (C4c) to decide whether a candidate commit
 pathspec is safe to stage.
 
-Purpose: composes `coordinator_core.ops.session.safe_commit_offer.compute_offer`
-— the ALREADY fail-closed, allow-list scope computation used by the
-unattended auto-commit path — into TWO surfaces:
+Purpose: TWO surfaces, which since the 2026-08-21 rebuild no longer share a
+source — read that as the load-bearing fact about this module, not a
+transitional state:
 
   (a) `session.scope_report` — a REGISTERED, read-only op. Reports the
       calling session's own claimed dirty paths (`safe_paths`) and the
-      narrated `excluded` set, straight from `compute_offer`. Mutates
+      narrated `excluded` set, straight from
+      `coordinator_core.ops.session.safe_commit_offer.compute_offer`. Mutates
       nothing. This is the surface a DISPATCHED AGENT reads (plan AC10) —
       never the guard's own transport (see Negative-spec).
 
@@ -50,11 +51,26 @@ so AC17/AC18's caller-confinement property is preserved rather than
 reopened. Recorded here so the permissive variant is not re-derived: it was
 tried, found unsound, and reverted.
 
-TWO OFFERS, AND THEY MUST NOT BE MERGED (2026-08-07, scoped-commit
-ownership-gate misclassification; bug-backlog `2026-08-06-scoped-commit-
-denial-names-unclassified-for-a-peer-held-path`).
-`assert_paths_in_session_scope` computes `compute_offer` twice on the DENY
-path, and the split is the whole safety property:
+THE TWO-OFFER SPLIT IS GONE, AND SO IS THE CLASS OF BUG IT MANAGED
+(2026-08-21 rebuild). What follows is kept because it names a shape that must
+not be rebuilt, not because it describes what runs.
+
+`assert_paths_in_session_scope` no longer composes `compute_offer` at all. It
+reads `coordinator_core.session.claim_index.classify_paths` — ONE zero-spawn
+index rebuild that answers about ANY path put to it, including one this
+session never touched. The old leg could not do that: `compute_scope` only
+answered about paths it had already adopted as candidates, so naming a live
+holder for a caller-supplied path required a SECOND, wider offer computed
+with the caller's own pathspec as `extra_candidates` — an offer that, by
+construction, adopts whatever it is handed. Two offers, one safe to read as
+a verdict and one catastrophic to, distinguished only by discipline. The
+second offer no longer exists, and neither does the merge that discipline
+was holding back. NEGATIVE SPEC: do not reintroduce a caller-supplied
+candidate set anywhere in this module.
+
+The historical split, recorded so the shape is recognizable if it recurs
+(2026-08-07, scoped-commit ownership-gate misclassification; bug-backlog
+`2026-08-06-scoped-commit-denial-names-unclassified-for-a-peer-held-path`):
 
   - The PRIMARY offer — `compute_offer(session_id, cwd)`, no
     `extra_candidates` — is the ONLY input to the verdict. Every set the
@@ -156,10 +172,8 @@ import os
 from typing import Optional, Sequence, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.session.safe_commit_offer import (
-    _MECHANISM_DISABLED,
-    compute_offer,
-)
+from coordinator_core.ops.session.safe_commit_offer import compute_offer
+from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
 
@@ -315,93 +329,58 @@ def assert_paths_in_session_scope(
     if not paths:
         return False, "paths is empty"
 
-    if _MECHANISM_DISABLED:
-        # The ownership leg STANDS DOWN while auto-commit attribution is
-        # disabled (safe_commit_offer._MECHANISM_DISABLED, PM ruling
-        # 2026-08-21). This is a deliberate, named suspension of a safety
-        # property, not a fallback.
-        #
-        # Why it cannot simply ride the disabled offer: this function is
-        # fail-CLOSED by design, so an empty `safe_paths` denies EVERY path
-        # for EVERY session -- measured, not assumed. That bricks
-        # `coordinator:git-commit-agent`, the one dispatchable committer, for
-        # the whole fleet, and narrates the denial as "this call's claim reads
-        # were degraded (an unreadable peer/agent claim...)", which would be
-        # a false cause: nothing was unreadable, nothing was read at all.
-        #
-        # WHAT IS SUSPENDED, stated plainly so it is not discovered later: a
-        # dispatched committer can now commit a path another session owns.
-        # The guard's OTHER legs are untouched and still fire -- compound
-        # command, missing pathspec, and sweeping pathspec
-        # (`block_subagent_commit`'s LEG 1/2 and `_pathspec_element_is_
-        # sweeping`) -- so the unbounded-pathspec class this guard exists for
-        # is still blocked. What is lost is per-path peer-ownership
-        # attribution, which is exactly the thing the disabled mechanism was
-        # the only source of.
-        #
-        # Restoring it is IN SCOPE for the rebuild, not a follow-up: the
-        # rebuilt attribution path must serve this gate at a cost that fits
-        # the brightline, because this gate runs on the COMMIT HOT PATH --
-        # every dispatched-committer invocation paid the disabled mechanism's
-        # 73 processes and 5,609ms CPU, which is its own defect and is why
-        # narrowing the kill to spare this caller was not an option.
-        return True, (
-            "ownership-scope check STOOD DOWN: auto-commit attribution is "
-            "disabled pending rebuild (PM ruling 2026-08-21). Peer-ownership "
-            "is NOT being checked for this pathspec; sweeping/compound "
-            "pathspec legs still apply."
-        )
-
+    # THE OWNERSHIP LEG, REBUILT (2026-08-21) on `claim_index.classify_paths`
+    # -- one zero-spawn index rebuild, answering this pathspec directly.
+    #
+    # It replaces a `compute_offer` composition that cost 73 processes and
+    # 5,609ms of CPU per call, on the COMMIT HOT PATH, and was stood down
+    # entirely between `e927d9463` and this change (the suspension is over;
+    # a dispatched committer is again prevented from committing a peer's
+    # path). The old shape needed TWO offers -- one for the verdict, one
+    # with the caller's own pathspec as `extra_candidates` purely so a
+    # holder could be NAMED for a path this session never touched -- because
+    # `compute_scope` could only answer about paths it had already adopted
+    # as candidates. `classify_paths` answers about any path put to it, so
+    # the second offer, and with it the whole class of bug where the two get
+    # merged into one membership test, no longer exists to be gotten wrong.
+    #
+    # The allow-list polarity is UNCHANGED (see "Allow-list polarity" in this
+    # module's docstring): allowed means positively attributed to THIS
+    # session, never "not proven foreign". `classify_paths` is fail-closed in
+    # both its directions -- an aborted walk yields neither `mine` nor
+    # `unclaimed`, and a peer claim denies whether or not the holder is still
+    # live -- so an empty or degraded index denies rather than admits.
     try:
-        offer = compute_offer(session_id, cwd)
+        answer = claim_index.classify_paths(
+            session_id, [p for p in paths if isinstance(p, str)], cwd=cwd
+        )
     except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error beneath
-        return False, "compute_offer raised: %s" % (exc,)
+        return False, "claim_index.classify_paths raised: %s" % (exc,)
 
-    safe_paths = offer.get("safe_paths")
-    if not isinstance(safe_paths, list):
-        return False, "compute_offer returned no readable safe_paths"
-
-    # Review: staff-eng F2/F3 — `allow_orphans` takes effect only given
+    # Review: staff-eng F2/F3 - `allow_orphans` takes effect only given
     # positive evidence `session_id` names a real, previously-initialized
     # session (see this function's own docstring paragraph). A fabricated
     # id, or a bare directory some non-tracked writer created with no
     # `meta.json`, degrades this to the same strict allow-list as
-    # `allow_orphans=False` — never to a wider one.
+    # `allow_orphans=False` - never to a wider one.
     verified_caller = (
         allow_orphans
         and _ORPHAN_ADOPTION_ENABLED
         and _session_has_positive_evidence(session_id, cwd)
     )
 
-    orphans = offer.get("orphans")
-    # Indeterminacy guard: an unreadable/missing orphans list must never be
-    # read as "every path is an orphan" — treat every path as NOT an orphan.
-    orphan_set = set(orphans) if verified_caller and isinstance(orphans, list) else set()
-
-    safe_set = set(safe_paths)
-    # No blanket "session scope is empty" short-circuit here (removed): an
-    # empty safe_set still needs the per-path loop below to run so the deny
-    # reason can NAME the classification (orphan vs. peer-claimed vs. never
-    # classified) instead of a generic message that erases it.
-    all_orphans = offer.get("orphans") if isinstance(offer.get("orphans"), list) else []
-
-    # Review: staff-eng R3 — an `allow_orphans` request this call did not
-    # honor (because `_session_has_positive_evidence` failed — see that
-    # function's own docstring) must not read the same as "you never asked".
-    # Threaded through so `_classify_denied_path` can name it distinctly.
+    # Review: staff-eng R3 - an `allow_orphans` request this call did not
+    # honor (because `_session_has_positive_evidence` failed) must not read
+    # the same as "you never asked". Threaded through so
+    # `_classify_denied_path` can name it distinctly.
     orphan_adoption_requested_but_unverified = allow_orphans and not verified_caller
 
-    # Review: staff-eng P3 (2026-08-03, pass 3) — `compute_offer` zeroes
-    # `orphans` OUTRIGHT when `ScopeResult.indeterminate` is set (R1's
-    # whole-call withhold), so a path that WAS a raw orphan pre-wipe is
-    # absent from `all_orphans` here with no other signal left behind. Left
-    # unthreaded, `_classify_denied_path` falls to its generic "unclaimed/
-    # never classified" message, which reads to an operator as "the system
-    # has never heard of this path" when the truth is "this call's claim
-    # reads were degraded and adoption was withheld call-wide" — the same
-    # kind of silent-degradation gap R3 closed for the positive-evidence
-    # check, now closed here for indeterminacy itself.
-    call_indeterminate = bool(offer.get("indeterminate"))
+    # An aborted walk is this gate's `indeterminate`: same meaning as
+    # `ScopeResult.indeterminate` carried before -- "this call's claim reads
+    # were degraded, so a path's classification is unresolved rather than
+    # unrecognized" -- and it is what stops a denial from being narrated as
+    # "the system has never heard of this path".
+    call_indeterminate = not answer.complete
 
     # `already_clean` (Half 2 of the mixed-pathspec fix) -- advisory naming
     # only, never a bypass: a path here still goes through the ordinary
@@ -411,7 +390,12 @@ def assert_paths_in_session_scope(
     denied_paths: list = []
     allowed: list = []
     for p in paths:
-        if isinstance(p, str) and (p in safe_set or p in orphan_set):
+        owned = answer.by_path.get(p) if isinstance(p, str) else None
+        verdict = owned.verdict if owned else claim_index.OWNERSHIP_UNANSWERABLE
+        if verdict == claim_index.OWNERSHIP_MINE:
+            allowed.append(p)
+            continue
+        if verdict == claim_index.OWNERSHIP_UNCLAIMED and verified_caller:
             allowed.append(p)
             continue
         denied_paths.append(p)
@@ -419,27 +403,33 @@ def assert_paths_in_session_scope(
     if not denied_paths:
         return True, ""
 
-    # TWO OFFERS (module docstring) — the verdict above is already decided,
-    # entirely from the PRIMARY offer. Only now, on a path that is going to
-    # deny regardless, is the classification offer computed: naming the
-    # caller's own pathspec as `extra_candidates` is what makes
-    # `compute_scope` consult its peer-claim read for a path this session
-    # never touched, which is the only way a live holder can be named. It is
-    # consumed by `_classify_denied_path` alone; feeding it back into any
-    # membership test would let the caller adopt whatever it named. Computed
-    # at most once, and never at all on the allow path — that early return
-    # above keeps the commit hot path on ONE `compute_offer` call, against
-    # the per-call invocation budget.
-    try:
-        classification_offer = compute_offer(
-            session_id,
-            cwd,
-            extra_candidates=[p for p in paths if isinstance(p, str)],
-        )
-    except Exception:  # noqa: BLE001 - wording is advisory; never fail a
-        # refusal message. Degrades to the primary offer, i.e. exactly the
-        # pre-2026-08-07 classification, never to a changed verdict.
-        classification_offer = offer
+    # `_classify_denied_path` reads ONE key (`excluded`) and the orphan list,
+    # and its three claimed-by branches -- including the earned-liveness
+    # wording every downstream consumer discriminates on via
+    # `CLAIMED_BY_SENTINELS` -- are the operator-facing contract. It is fed
+    # from the same answer that produced the verdict rather than from a
+    # second, wider offer: nothing here can widen what was already decided,
+    # because the classification runs only over paths already denied.
+    classification_offer = {
+        "excluded": [
+            {
+                "path": p,
+                "reason": "owned by session %s" % (answer.by_path[p].peers[0],),
+            }
+            for p in denied_paths
+            if isinstance(p, str)
+            and answer.by_path.get(p) is not None
+            and answer.by_path[p].verdict == claim_index.OWNERSHIP_PEER
+            and answer.by_path[p].peers
+        ]
+    }
+    all_orphans = [
+        p
+        for p in denied_paths
+        if isinstance(p, str)
+        and answer.by_path.get(p) is not None
+        and answer.by_path[p].verdict == claim_index.OWNERSHIP_UNCLAIMED
+    ]
 
     denied: list = []
     for p in denied_paths:
@@ -467,6 +457,24 @@ def assert_paths_in_session_scope(
             ["%r (%s)" % (p, c) for p, c in denied],
         ),
     )
+
+    # A path several peers hold gets ONE holder named by
+    # `_classify_denied_path` (its claimed-by branches take a single sid, and
+    # the earned-liveness wording only survives on a bare token). The rest
+    # would otherwise vanish from the refusal -- a silent omission in exactly
+    # the message an operator uses to decide who to go and talk to -- so they
+    # are named here instead of being dropped.
+    multi_held = [
+        (p, answer.by_path[p].peers)
+        for p in denied_paths
+        if isinstance(p, str)
+        and answer.by_path.get(p) is not None
+        and len(answer.by_path[p].peers) > 1
+    ]
+    if multi_held:
+        reason += "; additional holders: %s" % _format_pathspec_list(
+            ["%r also claimed by %s" % (p, ", ".join(peers[1:])) for p, peers in multi_held]
+        )
 
     if allowed:
         reason += "; committable now (SC-DR-019: scoped-commit refusal is " \
@@ -544,7 +552,7 @@ def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
 #: `assert_paths_in_session_scope` -- see this module's own history --
 #: before landing; none pattern-matches on word order, only on the presence
 #: of `"include_orphans ignored"` as a substring).
-_CLASSIFICATION_ORPHAN = "orphan — dirty but claimed by no session"
+_CLASSIFICATION_ORPHAN = "orphan — no session holds a claim on it"
 _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED = (
     "include_orphans ignored — orphan, but this session has no "
     "initialization record"
@@ -580,26 +588,25 @@ _CLASSIFICATION_ALREADY_CLEAN = (
 #: two-module change — grep for the fallback literal in
 #: `scoped_git_commit.py` before touching it.
 #:
-#: SUBSTRING COLLISION — this prefix ALONE is not a safe membership test:
-#: `_CLASSIFICATION_ORPHAN` reads "orphan — dirty but claimed by no session",
-#: which contains it mid-sentence, meaning the exact inverse of a holder
-#: being found. The named consumer happens to be disjoint from that string
-#: today (it only inspects `include_orphans` denials, where
-#: `_CLASSIFICATION_ORPHAN` is unreachable — an adoption-verified caller has
-#: its orphans ALLOWED and never classified, an unverified one gets
-#: `_CLASSIFICATION_INCLUDE_ORPHANS_IGNORED`), but that disjointness lives in
-#: a different module's control flow and is not a property this constant can
-#: offer. Consumers test :data:`CLAIMED_BY_SENTINELS` below instead; this
-#: prefix is for CONSTRUCTION.
+#: SUBSTRING COLLISION — this prefix ALONE is not a safe membership test.
+#: `_CLASSIFICATION_ORPHAN` used to read "orphan — dirty but claimed by no
+#: session", which contained this prefix mid-sentence while meaning the exact
+#: INVERSE of a holder being found. It no longer does (2026-08-21: the leg
+#: stopped reading dirtiness, so asserting it became unearned, and the
+#: reworded string happens to drop the collision too) — but the collision is
+#: a property of the prefix, not of any one classification string, and the
+#: next one written from the same vocabulary reintroduces it. Consumers test
+#: :data:`CLAIMED_BY_SENTINELS` below instead; this prefix is for
+#: CONSTRUCTION.
 CLAIMED_BY_PREFIX = "claimed by "
 
 #: The membership test a consumer actually uses: the full, unambiguous lead
 #: of each claimed-by branch, DERIVED from `CLAIMED_BY_PREFIX` rather than
 #: re-spelled, so the two cannot drift and a fourth branch built the same way
-#: is matched by construction. Neither sentinel is a substring of
-#: `_CLASSIFICATION_ORPHAN` ("claimed by NO session"), which is what makes
-#: this safe where the bare prefix is not — the collision is designed out
-#: rather than argued away by another module's reachability.
+#: is matched by construction. No sentinel is a substring of any
+#: `_CLASSIFICATION_*` string, which is what makes this safe where the bare
+#: prefix is not — the collision is designed out rather than argued away by
+#: another module's reachability.
 CLAIMED_BY_SENTINELS = tuple(
     CLAIMED_BY_PREFIX + suffix for suffix in ("live session ", "session ")
 )

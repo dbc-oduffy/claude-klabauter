@@ -4252,7 +4252,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #      Opens the newest op-latency generation read-only via
-    #      engine_report.iter_sink_entries and returns a computed aggregate.
+    #      _tail_entries's byte-seek tail read (not engine_report.iter_sink_entries --
+    #      see op_budget_breaches.py's module docstring for why) and returns a
+    #      computed aggregate.
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
@@ -4264,6 +4266,75 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      No subprocess, no network, no cache write -- unlike its
     #      op_census.report sibling, which persists a module index.
     "op_census.breaches": OpClass.COMPUTE_ONLY,
+    # hooks.cater_subagent_start — MUTATING: composes the SubagentStart
+    # additionalContext catering string and, in doing so, writes to disk.
+    # coordinator_core/hooks/cater_subagent_start.py::_resolve_sidecar_leg calls
+    # subagent_sandbox.provision_report._provision, which provisions (writes) a
+    # run-report sidecar file; and compose_catering's AC9 spill path
+    # (_spill_blocks_to_companion) opens a companion blocks file for write under
+    # state/subagent-share/<session_id>/ when the composed payload exceeds the
+    # additionalContext cap. Both writes land under state/subagent-share/, which
+    # is coordinator substrate (claude-klabauter disk-truth), never rag's workstate_store —
+    # no dual-write-ban obligation is violated by this classification.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   YES.
+    #      Sidecar provisioning + companion-file spill, both under state/subagent-share/.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              YES.
+    #   4. Mutates shared mutable state outside its own module?                 No
+    #      beyond the files it writes itself.
+    #   5. Persistent state changes observable across process boundaries?       YES.
+    #      The sidecar/companion files it writes are read by the dispatched child.
+    "hooks.cater_subagent_start": OpClass.MUTATING,
+    # op_census.report — MUTATING: unlike its op_census.breaches sibling (COMPUTE_ONLY,
+    # see that entry above), this op PERSISTS a module-summary cache index and a
+    # spawn-evidence index to disk on every call where persist_index resolves True
+    # (ops/op_census_report.py::census — module_summary.save_index(index, index_path),
+    # save_spawn_index(spawn_index, spawn_index_path)). persist_index defaults True and
+    # is gated only on the corpus's own `.git` directory existing, not disabled by
+    # default at the handler (ops/op_census_report.py::_op_census_report calls
+    # census(repo_root=repo_root) with persist_index left at its True default).
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   YES.
+    #      Writes a cache index file under the corpus's own .git-relative cache path
+    #      on the default (persist_index=True) call path.
+    #   2. Writes into rag's relational store?                                  No.
+    #      Cache index is local to the corpus tree, not rag's workstate_store.
+    #   3. Opens any file for write (including sentinel creation)?              YES.
+    #   4. Mutates shared mutable state outside its own module?                 No
+    #      beyond the cache files it writes itself.
+    #   5. Persistent state changes observable across process boundaries?       YES.
+    #      A later call reads the same cache index this call wrote.
+    "op_census.report": OpClass.MUTATING,
+    # plan.tasks.spine_drift_check — COMPUTE_ONLY, affirmed against the handler per
+    # DR-208 § Classification correctness discipline. The module's own NEGATIVE-SPEC
+    # states plainly: "Does NOT write, anywhere, under any code path. No locked_rmw,
+    # no _stamp_rows_in_body, no frontmatter mutation of any kind." — this op exists
+    # specifically as the read-only sibling of the mutating close_out_and_stamp
+    # oracle (module docstring, DR-263 "report-only by architectural boundary"),
+    # reusing close_out_and_stamp's read helpers without ever calling its write path.
+    # DR-208 five-question affirmation (all "no"):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #      The module carries no write primitive at all (see NEGATIVE-SPEC above).
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    "plan.tasks.spine_drift_check": OpClass.COMPUTE_ONLY,
+    # sizing.read_object_fields — COMPUTE_ONLY, affirmed against the handler per
+    # DR-208 § Classification correctness discipline. Whole-document YAML parse
+    # (yaml.safe_load) of a sizing-object under state/sizings/ or archive/sizings/,
+    # projected to the intent/estimate/scout_evidence/appetite quartet; the module's
+    # own negative-spec states it "never writes".
+    # DR-208 five-question affirmation (all "no"):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #      Reads and parses a sizing-object file; returns a projected dict.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #      The module carries no write primitive at all.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    "sizing.read_object_fields": OpClass.COMPUTE_ONLY,
 })
 
 

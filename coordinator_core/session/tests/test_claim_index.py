@@ -688,3 +688,126 @@ def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
     assert result.complete is False
     assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
     assert result.paths == []
+
+
+# ---------------------------------------------------------------------------
+# classify_paths — "is THIS path mine?" for a pathspec already in hand
+# ---------------------------------------------------------------------------
+
+
+def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path):
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "theirs.py")])
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["mine.py", "theirs.py", "nobody.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["mine.py"].verdict == claim_index.OWNERSHIP_MINE
+    assert answer.by_path["theirs.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert answer.by_path["theirs.py"].peers == ["sid-peer"]
+    assert answer.by_path["nobody.py"].verdict == claim_index.OWNERSHIP_UNCLAIMED
+    assert answer.complete is True
+
+
+def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
+    # Shared with a peer is NOT mine: `commit_set` withholds it, and the gate
+    # must refuse it, or the two answers disagree about the same path.
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py")])
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["shared.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["shared.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert answer.by_path["shared.py"].peers == ["sid-peer"]
+
+
+def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
+    tmp_path, monkeypatch
+):
+    # C10's fail-open, closed by construction: both of those verdicts are
+    # claims about what the walk did NOT find, and a walk that stopped early
+    # found nothing it did not reach.
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
+    real_rebuild = claim_index.rebuild
+
+    def _incomplete(*args, **kwargs):
+        state = real_rebuild(*args, **kwargs)
+        state.complete = False
+        state.abort_cause = claim_index.ABORT_CAUSE_CAP_EXCEEDED
+        return state
+
+    monkeypatch.setattr(claim_index, "rebuild", _incomplete)
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["mine.py", "nobody.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["mine.py"].verdict == claim_index.OWNERSHIP_UNANSWERABLE
+    assert answer.by_path["nobody.py"].verdict == claim_index.OWNERSHIP_UNANSWERABLE
+    assert answer.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+
+
+def test_classify_paths_still_names_a_peer_found_before_the_abort(tmp_path, monkeypatch):
+    # A peer claim this walk DID reach is a fact the abort does not undo.
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "theirs.py")])
+    real_rebuild = claim_index.rebuild
+
+    def _incomplete(*args, **kwargs):
+        state = real_rebuild(*args, **kwargs)
+        state.complete = False
+        state.abort_cause = claim_index.ABORT_CAUSE_IO_ERROR
+        return state
+
+    monkeypatch.setattr(claim_index, "rebuild", _incomplete)
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["theirs.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["theirs.py"].verdict == claim_index.OWNERSHIP_PEER
+
+
+def test_classify_paths_credits_this_sessions_agent(tmp_path):
+    _agent_touched(tmp_path, "agent-1", "sid-mine", [_touch_line("T", "worker.py")])
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["worker.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["worker.py"].verdict == claim_index.OWNERSHIP_MINE
+
+
+def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path):
+    # A backslashed pathspec and the forward-slash key touched.txt records are
+    # the same path; the answer is keyed by what the CALLER passed.
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "pkg/mod.py")])
+
+    answer = claim_index.classify_paths(
+        "sid-mine", [r"pkg\mod.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path[r"pkg\mod.py"].verdict == claim_index.OWNERSHIP_MINE
+
+
+def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
+    # This runs on the COMMIT HOT PATH -- every dispatched-committer
+    # invocation pays it. The mechanism it replaces cost 73 processes.
+    import subprocess
+
+    def _explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("classify_paths spawned a subprocess: %r" % (args,))
+
+    monkeypatch.setattr(subprocess, "run", _explode)
+    monkeypatch.setattr(subprocess, "Popen", _explode)
+    monkeypatch.setattr(subprocess, "check_output", _explode)
+
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "a.py")])
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["a.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["a.py"].verdict == claim_index.OWNERSHIP_MINE

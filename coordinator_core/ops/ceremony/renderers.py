@@ -13,6 +13,12 @@ imports it from this module rather than carrying its own compiled copy, so the
 two guards can never silently drift apart.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8c
+Spec backlink (generation half, AC14): pln-engine-half-of-the-roadmap-spr-188cdf § C6b
+
+C6b: ``refresh_roadmap_callout`` also GENERATES ``STUB-INDEX.md`` when it does not
+yet exist (the sprint-spine split's first sprint has no prior index to refresh),
+writing the canonical empty-callout template and expanding it in the same call —
+see that function's own docstring for the exact contract.
 
 Negative-spec (C8c, refresh_roadmap_callout):
   - Does NOT implement the full ``refresh-queries.js`` CLI surface (``--check``,
@@ -474,13 +480,37 @@ def _strip_matching_quotes(value: str) -> str:
     return value
 
 
+# Generated STUB-INDEX.md shape — matches the fixed template every hand-authored
+# roadmap index starts from (see e.g. state/roadmap/op-proportionality/STUB-INDEX.md
+# and this module's own golden fixtures): a title line, one blank line, and an
+# EMPTY handoff callout scoped to this roadmap_id, sorted by sprint. The callout
+# is expanded in the SAME call via ``_process_file`` below, so a freshly generated
+# index is never left with a stale/empty block on first render.
+_STUB_INDEX_TEMPLATE = (
+    "# STUB-INDEX — {roadmap_id}\n\n"
+    "<!-- BEGIN query: handoff where=roadmap_id={roadmap_id} sort=sprint -->\n"
+    "<!-- END query -->\n"
+)
+
+
 def refresh_roadmap_callout(worktree_root: Path, roadmap_id: str) -> dict[str, Any]:
-    """Re-render a roadmap's ``STUB-INDEX.md`` query callout, in-process.
+    """Re-render a roadmap's ``STUB-INDEX.md`` query callout, in-process —
+    GENERATING it first when it does not yet exist.
 
     Disposable render nicety — every failure mode degrades to a clean skip,
     matching the OLD ``_tail_refresh_roadmap_callout`` contract this
-    replaces. Never raises on a missing roadmap dir, a missing
-    callout, or an invalid ``roadmap_id``.
+    replaces. Never raises on a missing roadmap dir, a missing callout, or
+    an invalid ``roadmap_id``.
+
+    Generation half (AC14, C6b): a roadmap freshly created by the
+    sprint-spine split has no prior ``STUB-INDEX.md`` for its first sprint
+    to refresh — ``stub-index-not-found`` used to be the terminal state.
+    Now, when the file is absent (but its parent path resolves — i.e. it is
+    a plain "doesn't exist yet", not something else occupying that path),
+    this writes the canonical empty-callout template (creating the roadmap
+    dir as needed) and falls through into the SAME expansion pass used for
+    a refresh, so the first call for a new roadmap both creates and
+    populates the index in one action.
     """
     roadmap_id = _strip_matching_quotes(roadmap_id or "")
 
@@ -488,10 +518,28 @@ def refresh_roadmap_callout(worktree_root: Path, roadmap_id: str) -> dict[str, A
         return {"acted": [], "skipped": [f"{_OP_ROADMAP_CALLOUT}:no-roadmap-id"], "failed": []}
 
     stub_index = worktree_root / "state" / "roadmap" / roadmap_id / "STUB-INDEX.md"
+
+    generated = False
     if not stub_index.is_file():
-        return {
-            "acted": [], "skipped": [f"{_OP_ROADMAP_CALLOUT}:stub-index-not-found"], "failed": [],
-        }
+        if stub_index.exists():
+            # Something occupies the path that isn't a regular file (e.g. a
+            # directory) — not ours to clobber; same terminal skip as before.
+            return {
+                "acted": [], "skipped": [f"{_OP_ROADMAP_CALLOUT}:stub-index-not-found"], "failed": [],
+            }
+        try:
+            stub_index.parent.mkdir(parents=True, exist_ok=True)
+            stub_index.write_text(
+                _STUB_INDEX_TEMPLATE.format(roadmap_id=roadmap_id),
+                encoding="utf-8", newline="\n",
+            )
+        except OSError:
+            print(f"skip: refresh_roadmap_callout: generate stub_index template failed: {sys.exc_info()[1]}", file=sys.stderr)
+            return {
+                "acted": [], "skipped": [],
+                "failed": [f"{_OP_ROADMAP_CALLOUT}:stub-index-generate-failed"],
+            }
+        generated = True
 
     try:
         content = stub_index.read_text(encoding="utf-8", errors="replace")
@@ -512,7 +560,7 @@ def refresh_roadmap_callout(worktree_root: Path, roadmap_id: str) -> dict[str, A
             "failed": [f"{_OP_ROADMAP_CALLOUT}:{result['error_count']}-callout-error(s)"],
         }
 
-    if result["changed"]:
+    if result["changed"] or generated:
         return {
             "acted": [f"{_OP_ROADMAP_CALLOUT}:{rel_id(stub_index, worktree_root)}"],
             "skipped": [], "failed": [],

@@ -423,6 +423,93 @@ def _resolve_repo_root() -> str | None:
     return show_toplevel()
 
 
+def _canonical_branch_case(common_dir: Path, raw_branch: str) -> str:
+    """Find `raw_branch`'s on-disk case among `refs/heads/*` (loose refs,
+    then `packed-refs`) without spawning `git`, matching the case-insensitive
+    lookup `resolve_branch`'s docstring describes for `for-each-ref
+    --format=%(refname:short) refs/heads/`. Falls back to `raw_branch`
+    unchanged if no case-insensitive match is found on disk -- same fallback
+    `resolve_branch` already had for the spawn-based lookup.
+    """
+    raw_lower = raw_branch.lower()
+
+    heads_dir = common_dir / "refs" / "heads"
+    try:
+        if heads_dir.is_dir():
+            for path in heads_dir.rglob("*"):
+                if not path.is_file():
+                    continue
+                name = path.relative_to(heads_dir).as_posix()
+                if name.lower() == raw_lower:
+                    return name
+    except OSError:
+        pass
+
+    try:
+        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        packed_text = ""
+    for line in packed_text.splitlines():
+        line = line.strip()
+        if not line or line[0] in "#^":
+            continue
+        parts = line.split(" ", 1)
+        if len(parts) != 2:
+            continue
+        ref = parts[1].strip()
+        if ref.startswith("refs/heads/") and ref[len("refs/heads/"):].lower() == raw_lower:
+            return ref[len("refs/heads/"):]
+
+    return raw_branch
+
+
+def _resolve_branch_no_spawn(repo_root: str) -> tuple[bool, str | None]:
+    """Git-free branch resolution -- reads `HEAD` and `refs/heads/*` directly
+    instead of spawning `git branch --show-current` +
+    `git for-each-ref` (§ Corrections 7: two suppressed git spawns cost four
+    processes each, via `no_console_creationflags()`'s extra `conhost.exe`).
+
+    Returns `(resolved, branch)`. `resolved=True` means this function reached
+    a DEFINITIVE answer -- `branch` is the current branch name, or `None` for
+    a detached HEAD (a raw commit sha, or a symbolic ref onto anything other
+    than `refs/heads/*`) -- matching `git branch --show-current`'s
+    empty-stdout-on-detached contract exactly, so the caller must NOT fall
+    back to the spawn in that case. `resolved=False` means the walk could not
+    determine an answer at all (missing/unreadable `HEAD`, git-dir resolution
+    failure, or the `coordinator_core.git.git_dir` import failing) and the
+    caller should fall back to the spawn-based lookup as the safety net --
+    same fail-open posture as `_resolve_repo_root`'s import-failure fallback.
+    """
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+    except Exception:
+        return False, None
+
+    try:
+        head_path = resolve_git_dir(repo_root) / "HEAD"
+        head_text = head_path.read_text(encoding="utf-8")
+    except OSError:
+        return False, None
+
+    line = head_text.strip()
+    prefix = "ref: refs/heads/"
+    if not line.startswith(prefix):
+        # Detached HEAD (raw sha) or a symbolic ref outside refs/heads/ --
+        # both are a definitive "no current branch", not a walk failure.
+        return True, None
+
+    raw_branch = line[len(prefix):].strip()
+    if not raw_branch:
+        return True, None
+
+    try:
+        common_dir = resolve_git_common_dir(repo_root)
+    except OSError:
+        return False, None
+
+    return True, _canonical_branch_case(common_dir, raw_branch)
+
+
 def resolve_branch(repo_root: str | None) -> str | None:
     """Resolve the current branch name, canonicalizing its case.
 
@@ -431,10 +518,24 @@ def resolve_branch(repo_root: str | None) -> str | None:
     (`refs/heads/work/machine-a/...`). `git push` does ref lookups
     case-sensitively against the canonical name, so a mismatched HEAD makes
     `git push origin "$RAW_BRANCH"` fail with "cannot be resolved to branch."
-    `for-each-ref` returns the canonical case (the form the remote also
-    expects). If lookup fails for any reason, fall back to the raw branch
-    name so we don't regress on Linux/macOS where this hazard doesn't exist.
+    The canonical-case lookup returns the form the remote also expects. If
+    lookup fails for any reason, fall back to the raw branch name so we
+    don't regress on Linux/macOS where this hazard doesn't exist.
+
+    Tries `_resolve_branch_no_spawn` first -- zero git subprocesses in the
+    ordinary case (an ordinary repo with a resolvable `HEAD`/`refs/heads`) --
+    and falls back to the original two-spawn `git branch --show-current` +
+    `git for-each-ref` lookup only when the git-free walk could not reach a
+    definitive answer (see that function's docstring for exactly which cases
+    those are). `repo_root=None` (meaning "use cwd") reaches the fallback
+    unconditionally, since `_resolve_branch_no_spawn` needs a concrete path
+    to resolve a git-dir from.
     """
+    if repo_root:
+        resolved, branch = _resolve_branch_no_spawn(repo_root)
+        if resolved:
+            return branch
+
     raw_branch = _run_git(repo_root, ["branch", "--show-current"])
     if raw_branch is None or raw_branch == "":
         return None

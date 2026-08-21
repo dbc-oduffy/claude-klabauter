@@ -94,15 +94,27 @@ Negative-spec:
     - Do NOT add a mutating code path here. A finding that "the assembler
       should just do X" for any X that writes to disk, stages a commit, or
       calls an op belongs in `directives[]`, not in a new function body.
-    - NARROW READ-ONLY CARVE-OUT (C4, docs/plans/2026-08-01-wsc-completeness-
-      gate-and-pickup-successor.md): this module DOES dispatch the
-      `handoff.has_live_children` op in-process, by op name only — never
-      "ops may be called" generally. That op writes nothing to disk, stages
-      no commit, and mutates no state; it is a pure read used to build
-      `gates.consumed_handoff_completeness` evidence (leg B of the pre-
-      commit completeness judgment point below). This does not weaken the
-      prohibition above: any op whose contract includes a write is still
-      forbidden here and belongs in `directives[]`.
+    - RETARGETED (Ruling 4, C9, 2026-08-21 rebuild-the-three-ceremony-
+      assemblers plan): leg B of `gates.consumed_handoff_completeness`
+      (`_dispatch_has_live_children`) no longer dispatches the
+      `handoff.has_live_children` op — that op answered "does any live
+      handoff name me as predecessor" by walking state/handoffs/ +
+      archive/handoffs/ + archive/completed/ on every call, 1.6-1.7s across
+      this module's 3 call sites. The successor's mint already knows its
+      predecessor and already writes to the predecessor's own frontmatter
+      at that same moment (`baton_assemble/apply.py ::
+      _dispatch_handoff_supersede_predecessor`'s composed
+      `handoff.archive_transition` mode="supersede" call stamps
+      `continued_into` onto the predecessor, via `_supersede_continued`,
+      the ONE writer of that field) — so leg B now reads that single
+      write-time back-edge off the candidate's OWN frontmatter, a
+      single-file read, never a corpus walk and never a persisted reverse
+      index. Absent/unreadable back-edge degrades to the SAME
+      `exit_code=2` indeterminate leg-B shape the retired op dispatch
+      returned on its own failure ladder — it is never a signal to fall
+      back to scanning the corpus. This carve-out is otherwise unchanged
+      from the one it replaces: this module still never writes to disk,
+      stages a commit, or mutates state to answer this question.
     - Do NOT re-implement `wsc-session-disposition.py`'s 3-detector chain
       here — it is loaded and called, not ported a second time.
     - `resolve_repo_root` is now `coordinator_core.pickup_assemble.
@@ -229,7 +241,6 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point,
     partition_reportable,
 )
-from coordinator_core.dag import CONTINUATION_EDGE_KINDS
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import (
     LEGACY_PREDECESSOR_CONSUMED,
@@ -1814,82 +1825,71 @@ def _append_directive_dependency(directives: list[dict[str, Any]], directive_id:
 # ---------------------------------------------------------------------------
 
 
-# Leg B's edge set, deliberately NARROWER than `handoff.has_live_children`'s
-# own default (`predecessor,additional_predecessors,forked_from`) — see
-# `dag.ARCHIVAL_EDGE_KINDS` / `dag.CONTINUATION_EDGE_KINDS` for the full
-# archival-vs-conclusion rationale (example-cockpit-repo-em, 2026-08-05,
-# cross-repo/archive/2026-08-05-example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-
-# as-live-children.md). Same predicate, different question — the call site is
-# where that distinction has to be recorded, because the shared op cannot know
-# which one it is being asked.
-#
-# Imports `dag.CONTINUATION_EDGE_KINDS` directly rather than keeping a local
-# literal duplicate — measured, not assumed: `coordinator_core.dag` is ALREADY
-# resident in `sys.modules` by this point in `brief()`'s own cold-import
-# chain, well before this line executes. `from coordinator_core.pickup_
-# assemble import resolve_repo_root` (this module, top of file) triggers
-# `coordinator_core.ops`'s eager op-registration sweep, which imports
-# `ops/coverage_gate.py` -> `coverage.py` -> `dag.py` — confirmed via
-# `python3 -X importtime -c "import coordinator_core.workstream_complete"`
-# (`coordinator_core.dag` self-time 487us, nested under `coordinator_core.
-# coverage`'s 17.8ms, itself reached via the ops eager-import sweep) and via
-# `sys.modules` inspection after a bare `import coordinator_core.
-# workstream_complete` (`'coordinator_core.dag' in sys.modules` == True,
-# reproduced across repeated fresh-interpreter runs). This is NOT the same
-# situation as `_dispatch_has_live_children`'s avoidance of importing
-# `handoff_children` at module level just below — that module pulls IPC/
-# liveness/session's heavier transitive closure onto the path; `dag.py`
-# itself is stdlib-only and already unavoidably loaded here regardless of
-# what this line does. Deleting the local duplicate removes the "two CSV
-# strings must stay in sync" hazard for this site; see
-# coordinator_core/tests/test_dag_edge_kind_ssot.py for the drift guard
-# covering the sites that still keep their own representation.
-_LEG_B_EDGE_KINDS = ",".join(sorted(CONTINUATION_EDGE_KINDS))
-
-
 def _dispatch_has_live_children(root: Path, candidate: str) -> dict[str, Any]:
-    """Dispatches the `handoff.has_live_children` op in-process (leg B).
+    """Leg B, RETARGETED (Ruling 4, C9, 2026-08-21 rebuild-the-three-ceremony-
+    assemblers plan — supersedes the in-process `handoff.has_live_children`
+    op dispatch this function used to perform).
 
-    Passes `_LEG_B_EDGE_KINDS` explicitly rather than taking the op's default
-    — see that constant's negative spec for why the spinoff edge is excluded.
+    Reads the candidate's OWN frontmatter for the write-time back-edge
+    `continued_into`, stamped by `baton_assemble/apply.py ::
+    _dispatch_handoff_supersede_predecessor`'s composed
+    `handoff.archive_transition` mode="supersede" call at the successor's
+    mint (`_supersede_continued` is the ONE writer of this field, and its
+    own MutateAbort conflict guard means at most one continuation edge is
+    ever recorded per predecessor — see that function's docstring). A
+    successor's mint already knows its predecessor and is already writing
+    to the predecessor's frontmatter at that same moment; this is a read
+    of that same pass, not a second mechanism. Presence of a non-empty
+    `continued_into` therefore answers "does a live child exist" on its
+    own, without walking state/handoffs/ + archive/handoffs/ +
+    archive/completed/ the way the retired op dispatch did (1.6-1.7s
+    across this module's 3 call sites, per the spike verdict this retarget
+    cites).
 
-    Reuses the PATTERN from `baton_assemble/apply.py::_invoke_op_in_process`
-    — NOT a cross-package import of it. That function is a private,
-    underscore-prefixed helper living in a subprocess-bearing module;
-    importing it here would pull that module into `brief()`'s import path,
-    against this repo's cold-invocation budget (see module docstring's
-    narrow read-only carve-out for why calling the op itself, in-process,
-    is fine). `handoff.has_live_children` is `"common_dir"`-scoped
-    (`coordinator_core/op_scopes.py:71`), so `root` — the resolved WORKTREE
-    root, never a `.git`/common-dir path — is converted to the git common
-    dir before dispatch; the op itself converts back via
-    `main_worktree_root()` internally. Handing this a common-dir/.git path
-    instead of the worktree root is the footgun this mirrors
-    `_invoke_op_in_process`'s own docstring to avoid.
+    Deliberately narrower than a general "any edge" reader: `continued_into`
+    is stamped ONLY by the continuation (supersede) path, never by a
+    spinoff's `origin_handoff`/`forked_from` fields — so this reads as the
+    same `{"predecessor", "additional_predecessors"}` edge set the retired
+    op dispatch explicitly narrowed to (excluding `forked_from`; see
+    example-cockpit-repo-em, 2026-08-05, cross-repo/archive/2026-08-05-project-
+    cockpit-em-wsc-leg-b-counts-spinoffs-as-live-children.md), without
+    naming an edge-kinds parameter at all — a spinoff's own origin fields
+    never populate this candidate's `continued_into`.
 
-    Never raises: a dispatch failure (unregistered op, `root` not inside a
-    git worktree, or any other exception the op/its plumbing raises)
-    degrades to the SAME `exit_code=2` indeterminate shape the op's own
-    fail-closed ladder returns — AC5's non-blocking mapping applies
-    uniformly whether the op itself declined or this dispatch could not
-    reach it at all.
+    `exit_code` shape mirrors the retired op dispatch's own contract, so the
+    caller (`_evaluate_consumed_handoff_completeness_element`) needs no
+    change: `0` — a live child exists (`continued_into` present and
+    non-empty); `1` — no children (candidate resolved and read cleanly,
+    `continued_into` absent/empty); `2` — indeterminate (candidate could not
+    be resolved, read, or parsed).
 
-    Assumes a sync caller; revisit if `brief()` ever gains an async entry
-    point.
-    """
-    import asyncio
+    R1 (Absent back-edge -> warn, never fall back to the retired scan): an
+    unresolvable/unreadable/unparseable candidate degrades to `exit_code=2`
+    with `error` set — AC5's non-blocking mapping applies uniformly. This
+    function never re-derives the answer by scanning the corpus; a missing
+    back-edge on a resolvable, readable candidate is a genuine "no-children"
+    verdict (`exit_code=1`), not an occasion to fall back to a walk.
 
-    from coordinator_core.ipc import get_op_handler
-    from coordinator_core.lifecycle import git_common_dir
-
+    Never raises."""
     try:
-        handler = get_op_handler("handoff.has_live_children")
-        if handler is None:
-            return {"exit_code": 2, "error": "handoff.has_live_children op not registered"}
-        common_dir = git_common_dir(root)
-        return asyncio.run(handler({"candidate": candidate, "edge_kinds": _LEG_B_EDGE_KINDS}, common_dir))
+        resolved = _resolve_handoff_path_str(root, candidate)
+        if resolved is None:
+            return {"exit_code": 2, "error": f"could not resolve candidate handoff path {candidate!r}"}
+        text = resolved.read_text(encoding="utf-8")
+        frontmatter = parse_frontmatter(text).get("frontmatter")
+        if not isinstance(frontmatter, dict):
+            return {
+                "exit_code": 2,
+                "error": f"candidate handoff {candidate!r} carries no parseable frontmatter",
+            }
+        continued_into = frontmatter.get("continued_into")
+        if isinstance(continued_into, str) and continued_into.strip():
+            return {"exit_code": 0, "referenced": True}
+        return {"exit_code": 1, "referenced": False}
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"exit_code": 2, "error": f"could not read candidate handoff {candidate!r}: {exc}"}
     except Exception as exc:  # noqa: BLE001 - degrade to leg B indeterminate (AC5), never raise out of brief()
-        return {"exit_code": 2, "error": f"handoff.has_live_children dispatch failed: {exc}"}
+        return {"exit_code": 2, "error": f"has_live_children back-edge read failed: {exc}"}
 
 
 # Plan `status:` values a joined plan can carry that leg A treats as closed
@@ -2193,10 +2193,10 @@ def compute_landed_reconciliation_gate(
 def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -> dict[str, Any]:
     """AC3/AC3b/AC4/AC5 — evaluates ONE element of `gate.
     consumed_handoff_paths`: leg A (acceptance-criteria checkbox parse) and
-    leg B (`handoff.has_live_children`), independently. Leg B is dispatched
-    even when leg A's own read fails — the op performs its own path
-    resolution/containment under the worktree root, so a leg-A read
-    failure does not imply leg B cannot look.
+    leg B (`_dispatch_has_live_children`'s write-time back-edge read, C9
+    Ruling 4), independently. Leg B runs even when leg A's own read fails —
+    it performs its own path resolution under the worktree root, so a
+    leg-A read failure does not imply leg B cannot look.
 
     leg_a["verdict"] is one of:
         "open"           — leg A FIRES (blocking): for every kind except

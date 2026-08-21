@@ -82,7 +82,9 @@ Negative-spec:
       list form gives for free on Windows.
     - Does NOT accept `str` for `input`. Bytes-only, so that a `--stdin`
       caller cannot be newline-translated behind its back on Windows; see
-      `run_git`'s own `input` entry for the incident.
+      `run_git`'s own `input` entry for the incident. Enforced with an
+      immediate `TypeError`, not the `GitResult` failure path above -- a
+      wrong-typed argument is a caller bug, not something git did.
     - Does NOT implement DR-349 § 4's deadline threading (an op stamping a
       deadline at entry so stacked spawns cannot buy time by stacking).
       That is a real requirement and it is NOT built here: no caller stamps
@@ -302,7 +304,12 @@ def run_git(
     hypothetical: `coordinator/bin/percolate-round.py` carries the scar, and
     the failure surfaced between a publish round's real run and its commit.
     So there is no `str` overload to reach for -- build the bytes yourself
-    (`b"\\0".join(...)`) and what git reads is what you wrote.
+    (`b"\\0".join(...)`) and what git reads is what you wrote. Passing a
+    `str` here raises `TypeError` immediately, before any subprocess is
+    spawned -- a caller-contract violation, not a git-side failure, so it is
+    outside the negative-spec's "never raises" promise (that promise covers
+    what git itself can do: time out, be absent, exit non-zero; it was never
+    a promise to swallow a wrong-typed argument silently).
 
     Consequence of binary mode, stated because it is an asymmetry rather
     than a detail: with `input`, `stdout`/`stderr` are decoded here (utf-8,
@@ -319,7 +326,18 @@ def run_git(
     opposite directions.
 
     Never raises for a git-side failure -- see the module's negative spec.
+    Raises `TypeError` immediately if `input` is passed as `str`: that is a
+    caller-contract violation, checked before any subprocess is spawned, not
+    a failure path this function is promising to swallow.
     """
+    if input is not None and not isinstance(input, bytes):
+        raise TypeError(
+            f"run_git(input=...) is bytes-only, got {type(input).__name__}; "
+            "encode it yourself (e.g. b'\\0'.join(...)) -- see this "
+            "function's `input` docstring entry for why there is no str "
+            "overload."
+        )
+
     # Function-local: this module sits under `coordinator_core/git/`, on
     # `ipc`'s cold-start path, and `subprocess` drags ~10 transitive modules
     # (select/selectors/signal/threading/locale/math) with it. Importing a

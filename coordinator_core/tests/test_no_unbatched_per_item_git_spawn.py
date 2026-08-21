@@ -4043,7 +4043,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # class by SATISFYING A RATIONALE rather than by being unbatchable, and the shared
         # comment block was never re-read against the code beneath it.
         #
-        #   REFUTED (14) -- a working batch primitive exists at this call site:
+        #   REFUTED (13) -- a working batch primitive exists at this call site:
         #   `__init__.py::brief` -> `tip_author`: git for-each-ref --format='%(refname:short)
         #   %(authoremail)' returns every ref's tip author in one call; the callee's own
         #   docstring asserts no such form exists

@@ -537,28 +537,39 @@ class Move(NamedTuple):
     src and dst are absolute paths.  candidate_id is the repo-relative source
     path used as the wire 'id' field throughout the result envelope.
 
-    force=True adds `-f` to the git mv, permitting an existing dst to be
-    overwritten.  Callers MUST only set it when the overwrite is provably
-    lossless (e.g. a byte-identical duplicate delivery — see
-    _is_identical_duplicate in this module).  Default False preserves
-    the fail-on-existing-dst behaviour for every other archival family.
+    force=True permits an existing dst to be overwritten (os.replace always
+    clobbers an existing dst; archive_and_commit enforces fail-on-existing-dst
+    explicitly for force=False, since os.replace itself has no such mode).
+    Callers MUST only set it when the overwrite is provably lossless (e.g. a
+    byte-identical duplicate delivery — see _is_identical_duplicate in this
+    module).  Default False preserves the fail-on-existing-dst behaviour for
+    every other archival family.
 
-    restage_src=True tells archive_and_commit to run a targeted
-    `git add -- src` (against the private index only) immediately before this
-    move's `git mv`, so the move carries src's CURRENT on-disk content into the
-    commit rather than the private index's HEAD-seeded blob for src. Set this
-    ONLY when the caller itself just wrote src's content moments earlier (e.g.
-    a pre-move frontmatter stamp) — see archive_and_commit's "op-authored
-    pre-move content" note for why this is safe against FORWARD-B and does not
-    generalize to "stage everything". Default False preserves the plain
-    git-mv-carries-the-index-blob behaviour for every other move.
+    restage_src is STILL LOAD-BEARING after the F-5 os.replace swap (repair,
+    2026-08-21/C5-REPAIR) — but its job narrowed, not disappeared. The
+    original reason (routing around `git mv`'s re-keying of a private
+    index's stale HEAD-seeded blob for src) genuinely went away: os.replace
+    always moves src's CURRENT on-disk content, so there is no stale blob to
+    re-key. What survived is the disk/HEAD DRIFT REFUSAL that reason used to
+    gate: archive_and_commit now refuses (rather than commits) a
+    restage_src=False move whose src has uncommitted disk content diverging
+    from HEAD — see the batched drift check ahead of the move loop below.
+    restage_src=True is the caller's assertion that IT authored the current
+    on-disk content on purpose immediately before queuing the move (e.g.
+    archive_handoffs._stamp_heir_shipped stamping the candidate just before
+    archiving it), so drift is expected and legitimate rather than
+    suspicious — those moves are exempt from the refusal. Do NOT describe
+    restage_src as vestigial or unconsulted; a comment doing so previously
+    shipped a correctness regression (an archive-gate bypass on an
+    uncommitted `deployment_state: shipped` write — the drift check is the
+    ONLY thing that can refuse it once the SHA gate passes).
     """
 
     src: Path           # absolute source path (must exist and be git-tracked)
     dst: Path           # absolute destination path (parent directory will be created)
     candidate_id: str   # repo-relative source path — the wire 'id' (contract §2.1 :209-215)
-    force: bool = False  # pass `git mv -f` — lossless-overwrite opt-in only
-    restage_src: bool = False  # `git add -- src` before mv — op-authored pre-move content only
+    force: bool = False  # permit os.replace to clobber an existing dst — lossless-overwrite opt-in only
+    restage_src: bool = False  # True: caller authored src's current disk content on purpose — exempt from the disk/HEAD drift refusal below
 
 
 # ---------------------------------------------------------------------------
@@ -1478,61 +1489,69 @@ async def archive_and_commit(
     moves: List[Move],
     subject: str,
 ) -> Tuple[List[dict], List[dict]]:
-    """DR-211 D3/D4 git-archive helper: git-mv each Move and commit all successes.
+    """DR-211 D3/D4 git-archive helper: os.replace each Move in-process, stage
+    + commit the batch through a private index. (F-5 swap, 2026-08-21.)
 
-    Before the per-Move loop, two BATCHED (amplification burn-down C4, 2026-08-19)
-    spawns cover what used to be one spawn per move each:
-    - `git diff --name-only -- <every non-restage_src src>`: the disk/HEAD drift
-      guard's result set for the whole batch — see "Disk/HEAD drift guard" below.
-    - `git add -- <every restage_src src>`: the "op-authored pre-move content"
-      restage for the whole batch — see below.
-    Per-move attribution for both is recovered in the loop via membership test
-    (drift) or a stored batch-outcome flag (restage) — see each block's own
-    comment at the call site for why this preserves the per-item failed[]
-    classification exactly.
+    `git mv` against a private HEAD-seeded GIT_INDEX_FILE used to be the ONE
+    genuinely per-item spawn here — 68.65ms/file measured (F-5), against
+    0.33ms/file for `os.replace` (209x). The archival mover now does the
+    rename itself, in-process, and uses git only to STAGE the already-moved
+    paths and commit:
 
     For each Move:
-    1. Ensures dst.parent exists (git mv will not create directories).
-    2. If move.restage_src is False: consults the batched drift-check result
-       (membership test) — see "Disk/HEAD drift guard" below. If True: consults
-       the batched restage `git add` outcome — see "op-authored pre-move
-       content" below. Neither spawns per move any more.
-    3. Runs awaited asyncio.create_subprocess_exec("git", "mv", src, dst) with
-       GIT_INDEX_FILE pointing to a private temp-file index, isolating staging from
-       the main index so a concurrent 'git add -A' cannot absorb our staging
-       (DR-211 D3 :195-197; the reverse-absorption window). This remains the ONE
-       genuinely per-item spawn — per-move failure isolation (the reversal and
-       `failed[]` classification below) is exactly why it is not batched; see
-       state/audits/2026-08-19-amplification-register-remaining-fourteen-dispositions.md.
-    4. On per-item git mv failure: checks whether the disk rename happened and
-       reverses it (src absent + dst present → Path.rename back).  Item lands
-       in failed[]; processing continues for remaining moves.
+    1. Ensures dst.parent exists (os.replace will not create directories).
+    2. If move.force is False and dst already exists: fails the move
+       (`dst-exists`) rather than calling os.replace — os.replace has no
+       "fail if dst exists" mode (unlike `git mv` without `-f`, which does),
+       so that contract is enforced explicitly here.
+    3. Calls `os.replace(src, dst)` — one atomic, in-process syscall, no
+       subprocess. On OSError: item lands in failed[] (`replace-failed`);
+       processing continues for remaining moves. os.replace has no
+       split-failure mode (unlike `git mv`, which could rename on disk and
+       then fail its own index update) — it either lands whole or raises.
 
-    Op-authored pre-move content (C4c fix, 2026-07-27): `git mv` re-keys the
-    private index's EXISTING entry for src to dst — it does not rehash src's
-    current on-disk content, so it carries forward whatever blob the private
-    index held for src (that index was seeded by `git read-tree HEAD`, i.e.
-    src's LAST-COMMITTED content), not what is currently on disk at src. A
-    caller that writes to src's own file moments before appending its Move
-    (e.g. archive_handoffs._stamp_heir_shipped stamping deployment_state:
-    shipped on the candidate's own source path just before queuing it) would
-    therefore see that write silently dropped from the archival commit even
-    though the private-index-only commit form is otherwise correct — `git mv`
-    never picked it up in the first place. Move.restage_src=True closes this
-    for exactly that shape: a targeted `git add -- src` (private index only,
-    named path only) immediately before the git mv picks up src's current
-    on-disk content, so the git mv that follows re-keys the FRESH blob to dst.
-    This is content the op ITSELF just authored on a path the op ITSELF owns —
-    not a blanket re-read of the destination, and not FORWARD-B's shape (a
-    THIRD PARTY's edit absorbed from the destination after this function's own
-    mv). Callers opt a specific Move into this by setting restage_src=True only
-    at the moment they know they just wrote src — see Move's docstring.
+    This structurally removes the STALE-BLOB hazard (b3e61bd00) that the old
+    `git mv`-against-a-stale-index path required a guard for: `git mv`
+    re-keyed whichever blob the read-tree-HEAD-seeded private index held for
+    src (src's LAST-COMMITTED content), not what was on disk — os.replace
+    always moves current on-disk bytes, so there is no stale blob to re-key.
 
-    After all moves: ONE git commit from the private index with NO trailing pathspec —
-    the index built above (git mv against a HEAD-seeded private GIT_INDEX_FILE) is
-    already the exact scope of the commit; a `-- <paths>` pathspec on `git commit`
-    would re-read the WORKTREE for those paths, bypassing the index and re-opening the
-    FORWARD-B hazard this function exists to close (see the FORWARD-B note below).
+    That is NOT the whole of what the drift guard was doing, and removing
+    the guard entirely (2026-08-21 F-5 swap, corrected by the C5-REPAIR)
+    reopened a second, undocumented job it also did: refusing to archive a
+    candidate whose disk content has diverged from HEAD but was never
+    committed — a buggy op, a half-finished edit, or a peer session mid-write
+    on this shared branch writing e.g. `deployment_state: shipped` to disk
+    without staging or committing it. Without the guard, os.replace happily
+    relocates that uncommitted content: every terminality predicate reads
+    disk, so the SHA-gate/terminality re-verify passes, and archival proceeds
+    on a candidate nothing has actually finalised. That is an archive-gate
+    bypass, the same class b3e61bd00 named, reached by a different path.
+
+    So the batched disk/HEAD drift check (below, ahead of the per-move loop)
+    is RESTORED as a refusal gate for restage_src=False moves — it costs zero
+    additional spawns (it was already batched before the F-5 swap; see
+    _argv_path_chunks). restage_src=True moves are exempt: the caller
+    authored src's current on-disk content on purpose immediately before
+    queuing the move (e.g. a terminality stamp just written), so drift there
+    is expected, not suspicious. See Move.restage_src's docstring.
+
+    After all moves: ONE batched `git add -- <every acted src AND dst>`
+    stages the whole rename set into the private index in a single spawn —
+    an explicitly-named src that is now missing on disk stages as a
+    deletion (no `-A`/`-u` needed), so this one call captures both halves
+    of every rename. HARD CONSTRAINT: a src left out of this pathspec stages
+    only the add half, leaving the old path's deletion unstaged — the
+    artifact is duplicated, not moved. If this batched add fails: every
+    acted move (os.replace already landed on disk) is reversed via
+    `Path.rename` back to src and reclassified to failed[] — the one
+    post-move split-failure point os.replace itself cannot produce.
+
+    Then ONE git commit from the private index with NO trailing pathspec —
+    the index built by the batched `git add` above is already the exact
+    scope of the commit; a `-- <paths>` pathspec on `git commit` would
+    re-read the WORKTREE for those paths, bypassing the index and reopening
+    the FORWARD-B hazard this function exists to close (see below).
 
     If the commit fails: all acted items are reversed on disk and reclassified to
     failed[].
@@ -1547,50 +1566,36 @@ async def archive_and_commit(
     state/lessons/0000-00-00-commit-only-your-hunk-when-a-sibling-s-u.yaml (universal,
     EM-fan-out-collision context) — not a defect newly diagnosed here. The fix is to
     commit from the private index with no trailing pathspec (the index is already
-    scoped by construction), never to add `git add -- <paths>` in front of a
-    pathspec'd commit — that still reads worktree content for the named paths and
-    reproduces the hazard under a different call shape. FORWARD-B is distinct from
-    "the REVERSE residual" (a different, more tolerable hazard: a concurrent op
-    absorbing OUR staged paths, not us absorbing a foreign worktree edit) — do not
-    conflate the two when reasoning about this fix.
+    scoped by construction), never to add a trailing pathspec to `git commit` itself
+    — that still reads worktree content for the named paths and reproduces the
+    hazard under a different call shape. FORWARD-B is distinct from "the REVERSE
+    residual" (a different, more tolerable hazard: a concurrent op absorbing OUR
+    staged paths, not us absorbing a foreign worktree edit) — do not conflate the
+    two when reasoning about this fix.
 
-    Move.restage_src does NOT reopen FORWARD-B: it runs `git add -- <src>` (a
-    single named path, private index only) BEFORE git mv even starts for that
-    move — strictly earlier than, and disjoint from, the git-mv-to-commit
-    window FORWARD-B exploits on dst. It reads src, never dst, and only for
-    moves the caller explicitly opted in because the caller itself just wrote
-    src's content. See "op-authored pre-move content" above.
-
-    ACCEPTED RISK — restage_src's own absorption window (narrow, heir-only,
-    post-terminal-verify, not FORWARD-B): `git add -- src` reads src's ON-DISK
-    content at THIS call, not at the moment the caller's pre-move write
-    landed. Between those two points sit the rest of this function's
-    per-candidate loop (each move awaiting its own git mv, plus whatever the
-    caller awaited to verify terminal state before building the Move list). A
-    foreign edit landing on src inside that window would be absorbed by this
-    add, same mechanism as FORWARD-B, just on src instead of dst. This is
-    accepted, not closed: restage_src is opt-in per Move, used only by callers
-    archiving a path they hold exclusive short-lived ownership of immediately
-    after writing it (e.g. _stamp_heir_shipped's own handoff), so the window
-    is narrow and the collision surface is the same "two ops touch one file"
-    class every fleet archival family already tolerates elsewhere. Do not read
-    this as "restage_src is provably collision-free" — it is bounded, not
-    eliminated.
+    The batched `git add -- <src, dst>` does NOT reopen FORWARD-B: dst's content
+    at staging time IS this function's own os.replace output (content this call
+    itself just placed there), not a third party's worktree edit absorbed from
+    behind our back — the hazard FORWARD-B names is a foreign edit landing on a
+    path we did not just author, and staging our own just-completed rename is
+    the opposite of that.
 
     NEGATIVE-SPEC:
-    - NEVER uses git add -A or git add . — the private index is scoped by construction
-      via git mv against a HEAD-seeded index (DR-211 D3 Invariant 4, amended for
-      FORWARD-B: exact-pathspec commits are no longer sufficient on their own).
-      Move.restage_src's `git add -- <src>` is a single named-path exception to
-      this, not a relaxation of it — see the note above.
+    - NEVER uses git add -A or git add . — the private index is scoped by
+      construction via an explicit `git add -- <path...>` naming exactly the
+      acted moves' src and dst, never a wildcard.
     - NEVER commits with a trailing `-- <paths>` pathspec — that reads WORKTREE
       content and reopens FORWARD-B (see above). The private index IS the pathspec.
     - NEVER uses blocking subprocess.run — all git calls are asyncio.create_subprocess_exec
       + await (DR-211 D4 async mandate; ipc.py:80 "single asyncio event loop").
+    - NEVER uses `git mv` for the rename itself — os.replace is the mover;
+      rename detection at diff time is by content similarity and needs no
+      index hint. See F-5.
     - GIT_INDEX_FILE isolates staging; the main index is NEVER modified.
     - stdout/stderr captured as bytes (not text=True) — decoded with errors="replace" on failure.
 
-    Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4)
+    Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4);
+    docs/plans/2026-08-20-the-close-ceremony-stops-paying-for-the-join.md (C5, F-5 swap)
 
     Args:
         worktree_root: absolute path to the main git worktree (from main_worktree_root()).
@@ -1641,9 +1646,12 @@ async def archive_and_commit(
         # redirect vectors (LOW env-hardening fix; see _make_git_env).
         base_env = _make_git_env(idx_path=idx_path)
 
-        # Initialise the private index from HEAD so git mv can locate tracked source files.
-        # Without this, the empty temp file is an empty index and git mv fails with
-        # "not under version control".
+        # Initialise the private index from HEAD so the batched `git add -- src
+        # dst` below can find src's tracked index entry (needed to record its
+        # deletion, since os.replace has already removed src from disk by the
+        # time that add runs). Without this, the empty temp file is an empty
+        # index and `git add -- <missing src>` fails with "did not match any
+        # files".
         proc = await asyncio.create_subprocess_exec(
             "git", "read-tree", "HEAD",
             cwd=str(worktree_root),
@@ -1672,25 +1680,35 @@ async def archive_and_commit(
         created_dirs_by_id: dict = {}
 
         # ---------------------------------------------------------------
-        # Batched drift check + batched restage (amplification burn-down C4,
-        # fleet-common archive_and_commit residual — the exemption register's
-        # "git mv one src/dst pair" covered only the mv itself; these two were
-        # still spawning once per move). Both run ONCE for the whole batch,
-        # ahead of the per-move loop below, which now does a membership test
-        # (drift) or nothing at all (restage — already staged) instead of its
-        # own subprocess.
+        # Batched disk/HEAD drift check (RESTORED, C5-REPAIR 2026-08-21) —
+        # runs ONCE for the whole batch, ahead of the per-item move loop.
         #
-        # Drift check: `git diff --name-only -- <every non-restage_src src>`
-        # in one call. `--name-only` (not `--quiet`) so the single spawn
-        # yields the SET of drifted paths rather than a single pass/fail bit
-        # — per-move attribution is recovered below via membership test
-        # against that set (rel_id(move.src) against a git-diff-emitted path
-        # are both forward-slash, cwd-relative — cwd is worktree_root here,
-        # so "relative to cwd" and "relative to repo root" coincide). A batch
-        # failure (nonzero rc — a genuine git error, not "some files
-        # differ") is attributed to every non-restage_src move individually
-        # in the loop below, same "reason echoed per item" shape the
-        # existing _resync_main_index_for_moves/_reaps batch failures use.
+        # The F-5 os.replace swap correctly retired the STALE-BLOB hazard
+        # this check originally guarded (`git mv` re-keying a private
+        # index's last-committed blob instead of current disk content — see
+        # this function's docstring). It does NOT retire the check's second,
+        # undocumented job: refusing to archive a restage_src=False
+        # candidate whose disk content has diverged from HEAD but was never
+        # staged or committed. os.replace has no notion of "is this
+        # committed" — it moves whatever bytes are on disk unconditionally —
+        # so without this refusal, a buggy op, a half-finished edit, or a
+        # peer session mid-write on this shared branch can have its
+        # uncommitted terminality stamp (e.g. `deployment_state: shipped`)
+        # relocated into the archive the instant the (disk-reading)
+        # terminality predicate passes. That is the b3e61bd00
+        # archive-gate-bypass class again, reached through os.replace rather
+        # than through git mv's stale-blob path.
+        #
+        # `git diff --name-only -- <every restage_src=False move's src>` in
+        # one batched, chunked call (see _argv_path_chunks) yields the SET of
+        # drifted paths; membership is tested per move in the loop below.
+        # restage_src=True moves are exempt — the caller authored src's
+        # current disk content on purpose immediately before queuing the
+        # move (see Move.restage_src's docstring), so drift there is
+        # expected, not suspicious. A batch failure (nonzero rc — a genuine
+        # git error, not "some files differ") is attributed to every
+        # restage_src=False move individually in the loop below, the same
+        # "reason echoed per item" shape the resync batch failures use.
         plain_srcs = [m.src for m in moves if not m.restage_src]
         drift_batch_error: Optional[str] = None
         drifted_ids: set = set()
@@ -1721,90 +1739,40 @@ async def archive_and_commit(
                     if line.strip()
                 }
 
-        # Restage: `git add -- <every restage_src src>` in one call. Ordering
-        # is equivalent to the previous per-move placement (each add
-        # immediately before ITS OWN move's git mv): every add names only its
-        # own move's src — a path disjoint from every other move's src and
-        # dst — and every add already ran strictly before ANY git mv in
-        # program order, so moving them all earlier changes nothing about
-        # what content the mv loop below re-keys. See Move.restage_src's
-        # docstring for why this is safe against FORWARD-B (reads src, never
-        # dst, and only for op-authored content).
+        # ---------------------------------------------------------------
+        # Per-item move: os.replace, in-process (F-5 swap, 2026-08-21).
         #
-        # On batch failure the private index may hold a PARTIAL stage (git
-        # add validates pathspecs but can still stage some paths before
-        # erroring on another) — reset -- <all restage srcs> undoes exactly
-        # that before every restage_src move is failed below, mirroring the
-        # per-move reset the mv-failure branch already does for a move whose
-        # OWN add succeeded but whose mv then failed.
-        restage_moves = [m for m in moves if m.restage_src]
-        restage_batch_error: Optional[str] = None
-        if restage_moves:
-            for chunk in _argv_path_chunks([m.src for m in restage_moves]):
-                add_proc = await asyncio.create_subprocess_exec(
-                    "git", "add", "--", *chunk,
-                    cwd=str(worktree_root),
-                    env=base_env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _out, add_stderr = await add_proc.communicate()
-                if add_proc.returncode != 0:
-                    err_msg = add_stderr.decode(errors="replace").strip()
-                    restage_batch_error = (
-                        f"restage-src-failed: {err_msg}" if err_msg else "restage-src-failed"
-                    )
-                    break
-            if restage_batch_error is not None:
-                for chunk in _argv_path_chunks([m.src for m in restage_moves]):
-                    reset_proc = await asyncio.create_subprocess_exec(
-                        "git", "reset", "--", *chunk,
-                        cwd=str(worktree_root),
-                        env=base_env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _out, reset_stderr = await reset_proc.communicate()
-                    if reset_proc.returncode != 0:
-                        # Every chunk is still attempted: this reset is undoing
-                        # a PARTIAL stage, so stopping at the first failing
-                        # chunk would leave the rest of the partial stage in
-                        # the private index.
-                        _LOG.warning(
-                            "archive_and_commit: could not reset private index "
-                            "entries for restage_src batch after batched git add "
-                            "failure: %s",
-                            reset_stderr.decode(errors="replace").strip(),
-                        )
-
+        # `git mv` against the private index cost 68.65ms/file (F-5) for
+        # what is, on disk, a single rename syscall — 0.33ms via os.replace,
+        # a 209x difference. os.replace makes the restage_src STAGING
+        # machinery this block used to run (a targeted `git add -- src`
+        # before each move's own git mv) moot: that existed solely to make
+        # `git mv` re-key src's CURRENT on-disk content instead of the
+        # read-tree-HEAD blob, and os.replace always moves current on-disk
+        # bytes regardless, so there is nothing left for that staging to do
+        # — it is correctly gone (the new unconditional batched `git add --
+        # src dst` below stages current on-disk bytes for every move
+        # already). The disk/HEAD DRIFT CHECK above is a DIFFERENT
+        # mechanism (a refusal gate, not a staging optimisation) and is
+        # restored, not moot — see the block above and Move.restage_src's
+        # docstring for why.
+        #
+        # os.replace has no split-failure mode (unlike `git mv`, which could
+        # rename on disk and then fail the index update) — it is one atomic
+        # syscall that either lands or raises. The single remaining
+        # post-move split-failure point is the staging step below.
         for move in moves:
-            # Create destination directory — git mv will not mkdir. Tracked so
-            # a failed move (this loop) or a failed commit (below) can remove
-            # the empty tree it created rather than leaving destination residue.
+            # Create destination directory — os.replace will not mkdir.
+            # Tracked so a failed move (this loop), a failed stage (below),
+            # or a failed commit (further below) can remove the empty tree
+            # it created rather than leaving destination residue.
             created_dirs_by_id[move.candidate_id] = _mkdir_and_track_created(move.dst.parent)
 
             if not move.restage_src:
-                # Disk/HEAD drift guard (archive-gate bypass fix, b3e61bd00
-                # incident): every fleet terminality predicate re-verifies a
-                # candidate by reading its CURRENT ON-DISK content — but a
-                # plain `git mv` below re-keys whatever blob the
-                # read-tree-HEAD-seeded private index holds for src (see
-                # "op-authored pre-move content" above), which is src's
-                # LAST-COMMITTED content, not what was just verified. If disk
-                # content has drifted from HEAD (e.g. an uncommitted
-                # deployment_state/shipped_in stamp), a caller's disk-based
-                # verify can pass while this git mv silently commits STALE
-                # HEAD content to dst — the caller believes it archived what
-                # it just verified; it did not. `git diff --quiet -- src`
-                # against this HEAD-seeded private index detects exactly that
-                # mismatch. Skipped only for restage_src=True moves, which
-                # already restage src's current disk content into the index
-                # immediately below and so cannot exhibit this drift.
-                #
-                # Membership test against the batched `git diff --name-only`
-                # result computed once, above the loop — see that block's
-                # comment for why a batch failure is attributed per item here
-                # rather than re-spawning per move.
+                # Membership test against the batched drift check computed
+                # once, above this loop — see that block's comment for why a
+                # batch failure is attributed per item here rather than
+                # re-spawning per move.
                 if drift_batch_error is not None:
                     _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
                     failed.append({
@@ -1820,120 +1788,116 @@ async def archive_and_commit(
                             "disk/HEAD drift: src has uncommitted changes not "
                             "reflected in HEAD — refusing move (a terminality "
                             "check that read on-disk content would be "
-                            "misrepresented by committing stale HEAD content)"
+                            "misrepresented by archiving stale-relative-to-HEAD "
+                            "content that was never committed)"
                         ),
                     })
                     continue
 
-            if move.restage_src:
-                # `git add -- src` against the private index ONLY, so the git
-                # mv below re-keys src's CURRENT on-disk content (not the
-                # read-tree-HEAD blob) to dst — see this function's
-                # "op-authored pre-move content" docstring note. Already run,
-                # batched across every restage_src move, in the pre-loop
-                # block above (one spawn covering every move's own named src,
-                # not one spawn per move) — here we only consult that batch's
-                # outcome; a failure was already reset there so no stray
-                # staged entry from THIS move rides into the commit.
-                if restage_batch_error is not None:
-                    # Nothing landed at dst for this move — remove the empty
-                    # dir tree the mkdir above created (C9).
-                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
-                    failed.append({
-                        "id": move.candidate_id,
-                        "reason": restage_batch_error,
-                    })
-                    continue
-
-            mv_argv = ["git", "mv"]
-            if move.force:
-                mv_argv.append("-f")
-            mv_argv += [str(move.src), str(move.dst)]
-
-            proc = await asyncio.create_subprocess_exec(
-                *mv_argv,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _out, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                err_msg = stderr.decode(errors="replace").strip()
-                # git mv may have moved the file before failing on the index update.
-                # Reverse the disk rename if src is now absent and dst now present.
-                reversal_skipped_reason = None
-                if move.dst.exists() and not move.src.exists():
-                    try:
-                        move.dst.rename(move.src)
-                    except OSError as exc:
-                        _LOG.warning(
-                            "archive_and_commit: could not reverse partial rename "
-                            "%s → %s after git mv failure: %s",
-                            move.dst, move.src, exc,
-                        )
-                elif move.dst.exists():
-                    # src has reappeared — the rename-back cannot run without
-                    # clobbering it, so dst is left as an untracked orphan.
-                    _LOG.warning(
-                        "archive_and_commit: skipping reversal for %s → %s "
-                        "after git mv failure — source has reappeared, "
-                        "leaving destination orphaned",
-                        move.src, move.dst,
-                    )
-                    reversal_skipped_reason = "reversal-skipped-src-reappeared"
-                if move.restage_src:
-                    # The restage_src `git add -- src` above already staged src's
-                    # CURRENT on-disk content into the private index before this
-                    # git mv failed. Left alone, that stray staged entry has no
-                    # trailing pathspec to exclude it — it rides into the batch
-                    # commit below at src's ORIGINAL path, under a candidate the
-                    # caller was told (via failed[]) never got archived. Reset the
-                    # private index entry for src back to HEAD so a failed
-                    # restage_src move leaves no residue in the batch commit,
-                    # same as every other failed-move shape (finding 2026-07-27).
-                    reset_proc = await asyncio.create_subprocess_exec(
-                        "git", "reset", "--", str(move.src),
-                        cwd=str(worktree_root),
-                        env=base_env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _out, reset_stderr = await reset_proc.communicate()
-                    if reset_proc.returncode != 0:
-                        _LOG.warning(
-                            "archive_and_commit: could not reset private index "
-                            "entry for %s after restage_src + git mv failure: %s",
-                            move.src, reset_stderr.decode(errors="replace").strip(),
-                        )
-                # Only clean up the mkdir'd dir tree if dst genuinely ended up
-                # empty (either git mv never moved anything, or the reversal
-                # above succeeded) — never remove a dir that still holds the
-                # unreversed file from a failed rename-back.
-                if not move.dst.exists():
-                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
-                reason = err_msg if err_msg else "git-mv-failed"
-                if reversal_skipped_reason:
-                    reason = (
-                        f"{reason}; {reversal_skipped_reason}: "
-                        f"dst {move.dst} orphaned, src {move.src} reappeared"
-                    )
+            if not move.force and move.dst.exists():
+                # os.replace has no "fail if dst exists" mode (unlike plain
+                # `git mv` without `-f`) — it always clobbers. Preserve the
+                # force=False fail-on-existing-dst contract explicitly here.
+                _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
                 failed.append({
                     "id": move.candidate_id,
-                    "reason": reason,
+                    "reason": "dst-exists: refusing overwrite (force=False)",
                 })
-            else:
-                acted.append({"id": move.candidate_id, "archived": True})
+                continue
+
+            try:
+                os.replace(str(move.src), str(move.dst))
+            except OSError as exc:
+                _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
+                failed.append({
+                    "id": move.candidate_id,
+                    "reason": f"replace-failed: {exc}",
+                })
+                continue
+
+            acted.append({"id": move.candidate_id, "archived": True})
 
         if not acted:
             return acted, failed
 
         acted_ids = {a["id"] for a in acted}
+        acted_moves = [m for m in moves if m.candidate_id in acted_ids]
+
+        # Stage the rename into the private index: `git add -- <path>` on an
+        # EXPLICITLY named path stages a deletion too when the path is now
+        # missing on disk (no `-A`/`-u` needed, so this does not widen scope
+        # beyond the named paths) — so one batched `git add -- <every acted
+        # src AND dst>` call stages both halves of every rename in one spawn.
+        # This IS "the commit pathspec" the HARD CONSTRAINT names: the
+        # private index built here becomes the pathspec-less commit's exact
+        # scope below, so a src accidentally left out of this batch is a src
+        # left unstaged-as-deleted — duplicated, not moved. See _common.py
+        # module docstring / this function's own docstring for why the
+        # commit itself stays pathspec-less (FORWARD-B).
+        stage_paths: List[Path] = []
+        for m in acted_moves:
+            stage_paths.append(m.src)
+            stage_paths.append(m.dst)
+
+        stage_batch_error: Optional[str] = None
+        for chunk in _argv_path_chunks(stage_paths):
+            add_proc = await asyncio.create_subprocess_exec(
+                "git", "add", "--", *chunk,
+                cwd=str(worktree_root),
+                env=base_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _out, add_stderr = await add_proc.communicate()
+            if add_proc.returncode != 0:
+                err_msg = add_stderr.decode(errors="replace").strip()
+                stage_batch_error = f"stage-failed: {err_msg}" if err_msg else "stage-failed"
+                break
+
+        if stage_batch_error is not None:
+            # os.replace already landed on disk for every acted move — this
+            # is the one post-move split-failure point os.replace itself
+            # cannot have (see block docstring above). Reverse every acted
+            # move's disk rename and reclassify to failed[], same shape the
+            # git-mv-failure reversal used to provide.
+            for m in acted_moves:
+                reversal_skipped_reason = None
+                if m.dst.exists() and not m.src.exists():
+                    try:
+                        m.dst.rename(m.src)
+                    except OSError as exc:
+                        _LOG.warning(
+                            "archive_and_commit: could not reverse rename after "
+                            "stage failure %s → %s: %s",
+                            m.dst, m.src, exc,
+                        )
+                elif m.dst.exists():
+                    # src has reappeared — the rename-back cannot run without
+                    # clobbering it, so dst is left as an untracked orphan.
+                    _LOG.warning(
+                        "archive_and_commit: skipping reversal for %s → %s "
+                        "after stage failure — source has reappeared, "
+                        "leaving destination orphaned",
+                        m.src, m.dst,
+                    )
+                    reversal_skipped_reason = "reversal-skipped-src-reappeared"
+                if not m.dst.exists():
+                    _cleanup_created_dirs(created_dirs_by_id[m.candidate_id])
+                reason = stage_batch_error
+                if reversal_skipped_reason:
+                    reason = (
+                        f"{reason}; {reversal_skipped_reason}: "
+                        f"dst {m.dst} orphaned, src {m.src} reappeared"
+                    )
+                failed.append({
+                    "id": m.candidate_id,
+                    "reason": reason,
+                })
+            return [], failed
 
         # ONE commit from the private index — NO trailing pathspec. The index built
-        # above by the git mv loop already IS the exact scope (both src-deletion and
-        # dst-addition per successful rename); a `-- <paths>` pathspec here would make
+        # above by the batched `git add -- src dst` already IS the exact scope (both
+        # src-deletion and dst-addition per successful rename); a `-- <paths>` pathspec here would make
         # git read the WORKTREE for those paths instead, which is FORWARD-B (see the
         # module/function docstring) — the mechanism that laundered 34 hand-edited
         # frontmatter changes into fleet-archival commits on 2026-07-26.

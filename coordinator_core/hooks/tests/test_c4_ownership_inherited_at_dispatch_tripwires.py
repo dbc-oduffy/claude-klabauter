@@ -578,8 +578,8 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
 _LOOKUP_CALL_RE = re.compile(r"\bclaim_index\.lookup\(")
 
 
-def _census_claim_index_lookup_call_sites(root: Path) -> frozenset:
-    """AST-census `claim_index.lookup(...)` call sites under
+def _census_claim_index_call_sites(root: Path, attr: str) -> frozenset:
+    """AST-census `claim_index.<attr>(...)` call sites under
     `root/coordinator_core`, excluding `claim_index.py` itself (the
     definition) and any tests/test_ path. Matches only the attribute-access
     form `claim_index.lookup(...)` — the form every known caller uses — via
@@ -603,12 +603,36 @@ def _census_claim_index_lookup_call_sites(root: Path) -> frozenset:
             func = node.func
             if (
                 isinstance(func, ast.Attribute)
-                and func.attr == "lookup"
+                and func.attr == attr
                 and isinstance(func.value, ast.Name)
                 and func.value.id == "claim_index"
             ):
                 found.add((rel, qualname))
     return frozenset(found)
+
+
+def _census_claim_index_lookup_call_sites(root: Path) -> frozenset:
+    return _census_claim_index_call_sites(root, "lookup")
+
+
+#: The SECOND half of the same pin, added 2026-08-21 when the ownership leg
+#: was rebuilt. `lookup` is no longer the only way to ask claim_index an
+#: ownership question: `commit_set` ("what is mine to commit?") and
+#: `classify_paths` ("is THIS path mine?") are two more, and a census that
+#: watched only `lookup` would have let the rebuilt gate -- an
+#: ownership-gate-shaped check reached from a different sink, which is
+#: EXACTLY what the original pin exists to catch -- appear silently. Widened
+#: deliberately rather than routed around; the entry below IS the rebuilt
+#: leg, and a further one needs the same deliberate edit.
+_EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
+    {
+        (
+            "classify_paths",
+            "coordinator_core/ops/session/scope_report.py",
+            "assert_paths_in_session_scope",
+        ),
+    }
+)
 
 
 class TestClaimIndexLookupCallSitesDoNotWiden:
@@ -632,6 +656,24 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
             "ownership-gate-shaped check appearing outside "
             "scoped_git_commit.py — update "
             "_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES deliberately if that is "
+            "genuinely intended, with a decision record; do not delete this "
+            "pin."
+        )
+
+    def test_answer_surface_call_site_inventory_is_exactly_the_enumerated_set(self):
+        found = set()
+        for attr in ("commit_set", "classify_paths"):
+            for rel, qualname in _census_claim_index_call_sites(_REPO_ROOT, attr):
+                found.add((attr, rel, qualname))
+        assert found == set(_EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES), (
+            "claim_index's ownership-ANSWER call-site inventory changed — "
+            f"found={sorted(found)!r} expected="
+            f"{sorted(_EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES)!r}. Each triple "
+            "is (function, file, enclosing def). `commit_set` and "
+            "`classify_paths` answer the same ownership question `lookup` "
+            "does, so a new caller of either is the same silent widening the "
+            "sibling pin above catches — update "
+            "_EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES deliberately if that is "
             "genuinely intended, with a decision record; do not delete this "
             "pin."
         )

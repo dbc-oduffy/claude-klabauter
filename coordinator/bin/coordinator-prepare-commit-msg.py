@@ -155,6 +155,13 @@ Behaviour:
 
 NEVER blocks a commit — always exits 0. `git interpret-trailers` is core git ≥ 1.8.
 
+Sole implementation (C14, 2026-08-21): the extensionless sibling in this same
+directory, `coordinator-prepare-commit-msg` (no `.py` suffix), is a thin
+in-process delegate onto THIS file's `main()` — it carries no independent
+logic. Both names must keep resolving to the SAME behaviour by construction
+now (see that file's own module docstring for the divergence defect this
+replaced), not by hand-mirroring two copies in sync.
+
 Also emits ONE write-time advisory, unrelated to trailers and equally
 non-blocking: a subject shaped as a chunk-id RANGE (`C1-C5: ...`) is named on
 stderr with its enumerated form (`C1,C2,C3,C4,C5: ...`) attached — see

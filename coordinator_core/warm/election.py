@@ -720,6 +720,17 @@ def elect_unix_socket(
          with ``base`` supplied so ``coordinator/`` and ``coordinator/warm/``
          are verified as ours too. A 0700 leaf under a parent someone else
          can write is a directory they can rename aside and replace.
+
+         OUTSIDE THE LOCK, NECESSARILY -- not an oversight, and asked about
+         once in review already. ``_acquire_election_lock`` opens
+         ``<path><LOCK_SUFFIX>``, which lives IN this directory, so the
+         directory has to exist before the lock can be taken at all. The
+         step is safe outside because it is idempotent (``exist_ok=True``,
+         and a chmod to a mode already set) and because it VERIFIES rather
+         than trusts: two peers racing it both arrive at the same checked
+         state, and a peer that loses the lock a moment later has changed
+         nothing. Note what this means for the guarantee below: the lock
+         makes steps 3-5 atomic, NOT steps 1-5, and it is not claimed to.
       2. ``_acquire_election_lock`` -- makes steps 3-5 atomic against a peer
          running the same sequence, which is what stops two servers from each
          unlinking the other's freshly-bound socket.

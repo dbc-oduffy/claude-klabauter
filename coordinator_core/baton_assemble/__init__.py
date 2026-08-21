@@ -265,6 +265,50 @@ def _read_frontmatter(path: Path) -> str:
     return split.fm_text if split else ""
 
 
+_FM_BOUNDED_READ_CHUNK = 4096
+
+
+def _read_frontmatter_bounded(path: Path) -> str:
+    """Same return contract as `_read_frontmatter` (frontmatter text or
+    `""`), but reads `path` in growing `_FM_BOUNDED_READ_CHUNK`-byte
+    increments instead of the whole file, stopping as soon as
+    `split_frontmatter` finds a closing `---` in what has been read so far.
+
+    `_scan_deliverable_collision` (2026-08-21 budget fix, C13) is the sole
+    caller: it opens every non-excluded file under `state/handoffs/` (170+
+    on this box, ~10KB average body, some 38KB+) purely to read a ~10-line
+    frontmatter block it then discards -- `_read_frontmatter`'s
+    `path.read_text()` pulls the entire body across that walk for no reason.
+    Frontmatter lives at the top of the file by construction, so bounding
+    the read to what is needed to reach the closing delimiter (typically
+    well under one chunk) cuts the walk's bytes-read by the body/frontmatter
+    ratio without changing which candidates match -- same parser
+    (`split_frontmatter`), same frontmatter text out, just less of the file
+    pulled off disk to get it.
+
+    A malformed or delimiter-less file falls through to reading the whole
+    file (the loop keeps growing the buffer until `fh.read()` returns
+    empty), matching `_read_frontmatter`'s existing `None`-splits-to-`""`
+    behaviour for that case -- no new failure mode, only a bounded read on
+    the common (frontmatter-bearing) path.
+    """
+    if not path.is_file():
+        return ""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            text = fh.read(_FM_BOUNDED_READ_CHUNK)
+            while True:
+                split = split_frontmatter(text)
+                if split is not None:
+                    return split.fm_text
+                more = fh.read(_FM_BOUNDED_READ_CHUNK)
+                if not more:
+                    return ""
+                text += more
+    except OSError:
+        return ""
+
+
 def _resolve_qualified_path_or_raise(artifact_path: str, root: Path, kind: str = "") -> Path:
     """Resolve a QUALIFIED (non-bare-slug) `artifact_path` that is absent at
     its named on-disk location to the swept-archive copy of the same file,
@@ -1748,7 +1792,7 @@ def _scan_deliverable_collision(
         except OSError:
             continue
         try:
-            fm = _read_frontmatter(candidate)
+            fm = _read_frontmatter_bounded(candidate)
         except (OSError, UnicodeDecodeError):
             continue
         if not fm:

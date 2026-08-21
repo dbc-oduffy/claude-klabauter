@@ -464,15 +464,47 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     import asyncio
     import contextlib
     import io as _io
+    import time as _time
 
-    from coordinator_core.ipc import dispatch_message
+    from coordinator_core.ipc import (
+        MEASUREMENT_SCOPE_PROCESS_WIDE,
+        dispatch_message,
+        record_op_process_time,
+        resolve_caller_cwd,
+        resolve_request_repo,
+    )
 
     diagnostics: list = []
     _handler_stdout = _io.StringIO()
     _handler_stderr = _io.StringIO()
-    with per_request_state(session_id=session_id, diagnostics=diagnostics):
-        with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-            response = asyncio.run(dispatch_message(msg))
+    # C9: process-time measured on THIS thread only, but `WORKER_POOL_SIZE`
+    # threads in this accept process share one interpreter and one
+    # `time.process_time()` clock -- a delta taken here can include CPU spent
+    # dispatching a DIFFERENT op on a sibling thread during the same
+    # wall-clock span. That makes this figure process-wide, never this op's
+    # own uncontaminated CPU (contrast `_pool_dispatch_worker` below, which
+    # runs alone in its own process) -- recorded under
+    # MEASUREMENT_SCOPE_PROCESS_WIDE so no consumer can mistake it for a
+    # per-op figure. See `coordinator_core.ipc.record_op_process_time`'s own
+    # docstring for the full rationale.
+    _t_start = _time.time()
+    _process_start = _time.process_time()
+    try:
+        with per_request_state(session_id=session_id, diagnostics=diagnostics):
+            with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
+                response = asyncio.run(dispatch_message(msg))
+    finally:
+        _process_ms = (_time.process_time() - _process_start) * 1000.0
+        _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
+        method = msg.get("method") if isinstance(msg, dict) else None
+        record_op_process_time(
+            op=method if isinstance(method, str) else "<unknown>",
+            process_ms=_process_ms,
+            measurement_scope=MEASUREMENT_SCOPE_PROCESS_WIDE,
+            source_path="accept_thread",
+            t_start=_t_start,
+            repo_root=_repo_root,
+        )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
     # wire envelope is frozen (contract §2.1) and a setup error is defined to
@@ -538,15 +570,44 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     import asyncio
     import contextlib
     import io as _io
+    import time as _time
 
-    from coordinator_core.ipc import dispatch_message
+    from coordinator_core.ipc import (
+        MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        dispatch_message,
+        record_op_process_time,
+        resolve_caller_cwd,
+        resolve_request_repo,
+    )
 
     diagnostics: list = []
     _handler_stdout = _io.StringIO()
     _handler_stderr = _io.StringIO()
-    with per_request_state(session_id=session_id, diagnostics=diagnostics):
-        with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-            response = asyncio.run(dispatch_message(msg))
+    # C9: this function runs entirely inside a `ProcessPoolExecutor` worker
+    # process, one task at a time by the pool's own contract (this
+    # function's own docstring above) -- a `time.process_time()` delta taken
+    # around the dispatch call is that op's own CPU, uncontaminated by any
+    # peer (peers run in SEPARATE worker processes). Recorded under
+    # MEASUREMENT_SCOPE_PER_OP_PROCESS -- contrast `_run_dispatch` above,
+    # whose accept-process threads share one interpreter and one clock.
+    _t_start = _time.time()
+    _process_start = _time.process_time()
+    try:
+        with per_request_state(session_id=session_id, diagnostics=diagnostics):
+            with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
+                response = asyncio.run(dispatch_message(msg))
+    finally:
+        _process_ms = (_time.process_time() - _process_start) * 1000.0
+        _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
+        method = msg.get("method") if isinstance(msg, dict) else None
+        record_op_process_time(
+            op=method if isinstance(method, str) else "<unknown>",
+            process_ms=_process_ms,
+            measurement_scope=MEASUREMENT_SCOPE_PER_OP_PROCESS,
+            source_path="pool_worker",
+            t_start=_t_start,
+            repo_root=_repo_root,
+        )
 
     # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:
     # this worker's real `sys.stderr` (bound to `os.devnull` by

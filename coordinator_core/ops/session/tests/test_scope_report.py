@@ -97,8 +97,6 @@ def _dirty_status(repo):
 
 
 class TestAssertPathsInSessionScope:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_own_session_paths_allow(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -158,18 +156,21 @@ class TestAssertPathsInSessionScope:
         assert ok2 is False
         assert reason2
 
-    def test_compute_offer_error_denies(self, tmp_path, monkeypatch):
+    def test_claim_index_error_denies(self, tmp_path, monkeypatch):
+        # The ownership leg's source is `claim_index.classify_paths` since the
+        # 2026-08-21 rebuild; ANY error beneath it still denies rather than
+        # falling through to an empty-and-therefore-permissive answer.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
 
-        def _boom(session_id, cwd=None):
-            raise RuntimeError("simulated compute_offer failure")
+        def _boom(session_id, paths, sessions_dir=None, cwd=None):
+            raise RuntimeError("simulated claim-index failure")
 
-        monkeypatch.setattr(scope_report, "compute_offer", _boom)
+        monkeypatch.setattr(scope_report.claim_index, "classify_paths", _boom)
 
         ok, reason = assert_paths_in_session_scope("mine", ["a.py"], cwd=str(repo))
         assert ok is False
-        assert "simulated compute_offer failure" in reason
+        assert "simulated claim-index failure" in reason
 
     def test_partial_ownership_denies_whole_set(self, tmp_path):
         # Allow-list polarity: ONE path outside scope denies the whole
@@ -216,8 +217,6 @@ class TestAssertPathsInSessionScope:
         assert ok is False
         assert reason
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_multi_path_denial_enumerates_every_denied_path(self, tmp_path):
         """SC-DR-019: a scoped-commit refusal is per-path, not per-commit —
         the deny reason must name EVERY denied path, not just the first, so
@@ -251,8 +250,6 @@ class TestAssertPathsInSessionScope:
         assert "claimed by live session other" in reason
         assert "reapable" not in reason
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_allowed_remainder_named_as_committable_and_exact(self, tmp_path):
         """The uncontested remainder (allowed paths) appears in the message
         and is EXACTLY the subset that was not denied."""
@@ -273,8 +270,6 @@ class TestAssertPathsInSessionScope:
         committable_section = reason.split("committable now")[1]
         assert "orphan.py" not in committable_section
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_stable_prefix_still_matches_single_path_denial(self, tmp_path):
         """Regression guard for existing pinned callers: the message still
         STARTS WITH the stable prefix for the first (only) denied path."""
@@ -288,7 +283,7 @@ class TestAssertPathsInSessionScope:
         assert ok is False
         assert reason.startswith(
             "path outside session mine scope: 'orphan.py' "
-            "(orphan — dirty but claimed by no session)"
+            "(orphan — no session holds a claim on it)"
         )
 
     def test_empty_remainder_reads_sensibly_when_all_paths_denied(self, tmp_path):
@@ -331,8 +326,6 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         # claimed by no session at all), not merely mtime-excluded.
         return repo
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_orphan_default_mode_denies_and_names_orphan(self, tmp_path):
         repo = self._seed_orphan(tmp_path)
         ok, reason = assert_paths_in_session_scope("mine", ["orphan.py"], cwd=str(repo))
@@ -340,8 +333,6 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert "orphan" in reason
         assert "peer" not in reason and "live session" not in reason
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_orphan_allow_orphans_true_adopts_now_that_r1_is_closed(self, tmp_path):
         """Inverted per this test's own prior docstring: staff-eng R1
         (2026-08-03) is now closed (`ScopeResult.indeterminate` +
@@ -359,8 +350,6 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok is True
         assert reason == ""
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_peer_claimed_path_denies_in_both_modes(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -399,10 +388,10 @@ class TestAssertPathsInSessionScopeAllowOrphans:
     def test_degraded_read_denies_in_both_modes(self, tmp_path, monkeypatch):
         repo = self._seed_orphan(tmp_path)
 
-        def _boom(session_id, cwd=None):
-            raise RuntimeError("simulated compute_offer failure")
+        def _boom(session_id, paths, sessions_dir=None, cwd=None):
+            raise RuntimeError("simulated claim-index failure")
 
-        monkeypatch.setattr(scope_report, "compute_offer", _boom)
+        monkeypatch.setattr(scope_report.claim_index, "classify_paths", _boom)
 
         ok_default, _ = assert_paths_in_session_scope("mine", ["orphan.py"], cwd=str(repo))
         assert ok_default is False
@@ -411,16 +400,24 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         )
         assert ok_allow is False
 
-    def test_missing_orphans_list_denies_in_both_modes(self, tmp_path, monkeypatch):
+    def test_answer_not_covering_the_path_denies_in_both_modes(
+        self, tmp_path, monkeypatch
+    ):
+        # Post-rebuild analogue of the missing-`orphans`-key shape: an answer
+        # that simply has no entry for a path must never read as "unclaimed,
+        # therefore adoptable". A path the answer does not cover is
+        # unanswerable, and unanswerable denies -- in BOTH modes, so
+        # `allow_orphans` cannot turn a gap in the answer into a permission.
         repo = self._seed_orphan(tmp_path)
-        real_compute_offer = safe_commit_offer.compute_offer
 
-        def _no_orphans_key(session_id, cwd=None):
-            offer = dict(real_compute_offer(session_id, cwd))
-            offer.pop("orphans", None)
-            return offer
+        def _covers_nothing(session_id, paths, sessions_dir=None, cwd=None):
+            return scope_report.claim_index.OwnershipAnswer(
+                by_path={}, complete=True, abort_cause=None
+            )
 
-        monkeypatch.setattr(scope_report, "compute_offer", _no_orphans_key)
+        monkeypatch.setattr(
+            scope_report.claim_index, "classify_paths", _covers_nothing
+        )
 
         ok_default, _ = assert_paths_in_session_scope("mine", ["orphan.py"], cwd=str(repo))
         assert ok_default is False
@@ -462,9 +459,17 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         )
 
         core.init("peer", cwd=str(repo))
-        peer_touched = Path(core.session_dir("peer", cwd=str(repo))) / "touched.txt"
-        peer_touched.write_text("peer.md\n", encoding="utf-8")
         (repo / "peer.md").write_text("peer's own in-flight work")
+        # Claimed through the real writer, NOT a hand-written line. The
+        # pre-rebuild fixture wrote a bare `peer.md\n` -- the legacy
+        # verb-less touched.txt shape `scope.parse_touch_event` still accepts
+        # and `claim_index` deliberately does not (see `_last_verb_per_path`:
+        # "a NEW reader with no legacy bare-path-line compatibility
+        # obligation"). Against the rebuilt leg that fixture claimed nothing,
+        # so the test proved nothing; on-disk census 2026-08-21 found the
+        # bare shape only under `.archive/`, which the walk never reaches.
+        scope.touch("peer", "peer.md", cwd=str(repo))
+        peer_touched = Path(core.session_dir("peer", cwd=str(repo))) / "touched.txt"
         os.chmod(str(peer_touched), 0o000)
         try:
             ok, reason = assert_paths_in_session_scope(
@@ -597,17 +602,25 @@ class TestClassifyDeniedPathLiveness:
 
     def test_assert_paths_threads_cwd_through_to_the_oracle(self, monkeypatch):
         """End-to-end on the threading itself: the `cwd` the caller passes to
-        `assert_paths_in_session_scope` (already used for `compute_offer` and
-        the positive-evidence check) must be the same one the liveness oracle
-        answers for — they must not disagree about WHICH repo."""
+        `assert_paths_in_session_scope` (already used for the ownership leg's
+        own claim-index read and the positive-evidence check) must be the same
+        one the liveness oracle answers for — they must not disagree about
+        WHICH repo."""
         monkeypatch.setattr(
-            scope_report,
-            "compute_offer",
-            lambda session_id, cwd: {
-                "safe_paths": [],
-                "excluded": [{"path": "shared.py", "reason": "owned by session other"}],
-                "orphans": [],
-            },
+            scope_report.claim_index,
+            "classify_paths",
+            lambda session_id, paths, sessions_dir=None, cwd=None: (
+                scope_report.claim_index.OwnershipAnswer(
+                    by_path={
+                        "shared.py": scope_report.claim_index.PathOwnership(
+                            verdict=scope_report.claim_index.OWNERSHIP_PEER,
+                            peers=["other"],
+                        )
+                    },
+                    complete=True,
+                    abort_cause=None,
+                )
+            ),
         )
         seen = []
         monkeypatch.setattr(
@@ -1068,8 +1081,6 @@ class TestClassificationOffer:
             future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
         )
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_peer_held_path_never_touched_by_caller_names_the_holder(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1095,8 +1106,6 @@ class TestClassificationOffer:
         assert "peer" in reason
         assert scope_report._CLASSIFICATION_UNCLASSIFIED not in reason
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_orphan_still_classifies_as_orphan_and_still_denies(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1114,19 +1123,16 @@ class TestClassificationOffer:
         # allow here.
         assert ok is False
         assert scope_report._CLASSIFICATION_ORPHAN in reason
-        # Deliberately the PREDICATE, not `CLAIMED_BY_PREFIX not in reason`:
-        # the orphan wording reads "...dirty but claimed by no session" and
-        # contains that prefix mid-sentence while meaning its inverse. See
-        # `CLAIMED_BY_PREFIX`/`CLAIMED_BY_SENTINELS` for the collision.
-        assert scope_report.CLAIMED_BY_PREFIX in reason
+        # Deliberately the PREDICATE, not a bare `CLAIMED_BY_PREFIX not in
+        # reason`: the prefix alone was never the safe test (the pre-2026-08-21
+        # orphan wording, "dirty but claimed by no session", carried it
+        # mid-sentence while meaning its inverse), and the predicate is what
+        # every consumer discriminates on. See `CLAIMED_BY_SENTINELS`.
         assert scope_report.deny_reason_names_a_holder(reason) is False
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_orphan_classification_is_unreachable_with_include_orphans(self, tmp_path):
-        """`_CLASSIFICATION_ORPHAN` contains the literal `CLAIMED_BY_PREFIX`
-        substring, and `scoped_git_commit._include_orphans_ineffective_note`
-        discriminates on that substring -- but only ever on a denial where
+        """`scoped_git_commit._include_orphans_ineffective_note`
+        discriminates on a claimed-by substring -- but only ever on a denial where
         `include_orphans` was True. The two are disjoint BY CONSTRUCTION, and
         this pins it: with adoption requested, a verified caller has every
         orphan ALLOWED (so it is never classified at all), and an unverified
@@ -1210,3 +1216,85 @@ class TestClassificationOffer:
         ) == safe_commit_offer.compute_offer(
             "mine", cwd=str(repo), extra_candidates=None
         )
+
+
+class TestOwnershipLegRebuilt:
+    """The 2026-08-21 rebuild's own acceptance criteria: the ownership leg is
+    back in force, it is zero-spawn, and it names every holder it refuses
+    for."""
+
+    def test_the_stand_down_text_is_gone_from_the_source(self):
+        # The suspension was a NAMED, temporary loss of a safety property.
+        # Leaving its text behind after the property is restored is how a
+        # reader concludes the gate is still off. `_MECHANISM_DISABLED` is
+        # `safe_commit_offer`'s own and outlives this leg -- this pin is about
+        # the OWNERSHIP leg's stand-down only.
+        src = Path(scope_report.__file__).read_text(encoding="utf-8")
+        assert "STOOD DOWN" not in src
+        assert "_MECHANISM_DISABLED" not in src
+
+    def test_a_peers_path_is_refused_and_the_holder_is_named(self, tmp_path):
+        # The acceptance criterion in one line: a dispatched committer cannot
+        # commit a path another session owns. Between `e927d9463` and the
+        # rebuild it could.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "theirs.py").write_text("peer's in-flight work")
+        scope.touch("peer", "theirs.py", cwd=str(repo))
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["theirs.py"], cwd=str(repo)
+        )
+
+        assert ok is False
+        assert scope_report.deny_reason_names_a_holder(reason)
+        assert "peer" in reason
+
+    def test_a_path_two_peers_hold_names_both(self, tmp_path):
+        # `_classify_denied_path` can name only ONE holder (its earned-liveness
+        # wording needs a bare sid). The rest must not vanish from the refusal
+        # -- this is the message an operator uses to decide who to go talk to.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer-a", cwd=str(repo))
+        core.init("peer-b", cwd=str(repo))
+        (repo / "contested.py").write_text("two holders")
+        scope.touch("peer-a", "contested.py", cwd=str(repo))
+        scope.touch("peer-b", "contested.py", cwd=str(repo))
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["contested.py"], cwd=str(repo)
+        )
+
+        assert ok is False
+        assert "peer-a" in reason
+        assert "peer-b" in reason
+
+    def test_the_gate_spawns_no_subprocess(self, tmp_path, monkeypatch):
+        # This runs on the COMMIT HOT PATH. The mechanism it replaces cost 73
+        # processes and 5,609ms of CPU per call, paid by every
+        # dispatched-committer invocation.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+        # Warm every cached git-backed resolution (sessions_dir) BEFORE the
+        # trap, so what is measured is this call's own spawns, not a cold
+        # cache's.
+        assert assert_paths_in_session_scope("mine", ["a.py"], cwd=str(repo))[0] is True
+
+        def _explode(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the ownership gate spawned a subprocess")
+
+        monkeypatch.setattr(subprocess, "run", _explode)
+        monkeypatch.setattr(subprocess, "Popen", _explode)
+        monkeypatch.setattr(subprocess, "check_output", _explode)
+
+        ok, _ = assert_paths_in_session_scope("mine", ["a.py"], cwd=str(repo))
+        assert ok is True
+
+        denied_ok, _ = assert_paths_in_session_scope(
+            "mine", ["nobody-touched-this.py"], cwd=str(repo)
+        )
+        assert denied_ok is False

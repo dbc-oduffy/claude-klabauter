@@ -2,32 +2,44 @@
 coordinator_core.ops.fleet.tests.test_archive_and_commit_reversal_else_src_reappeared
 
 AC4 of docs/plans/2026-08-13-fleet-archive-dest-collision-vs-idempotent-
-replay.md: both post-`git mv`-failure reversal guards in `archive_and_commit`
-carry an `elif move.dst.exists():` alongside their original
-`if move.dst.exists() and not move.src.exists():` — deliberately an `elif`
-narrowing, not a bare `else`. When `git mv` fails because a destination
-collision means src never left in the first place (the same disk shape a
-transient reappearance produces: dst present, src also present), the
-reversal cannot run without clobbering dst, so it must WARN and land the
-orphaned dst in `failed[]` at creation time rather than silently no-op. When
-`git mv` fails BEFORE touching anything — dst never came into existence at
-all (e.g. a bad source pathspec) — the `elif`'s condition is false and the
-plain-failure path must stay quiet: no WARNING, no "reversal-skipped"
-annotation.
+replay.md: archive_and_commit's post-move reversal guard carries an
+`elif move.dst.exists():` alongside its original `if move.dst.exists() and
+not move.src.exists():` — deliberately an `elif` narrowing, not a bare
+`else`. When the destination has been clobbered back to a "src also still
+present" shape at reversal time, the reversal cannot run without clobbering
+dst, so it must WARN and land the orphaned dst in `failed[]` rather than
+silently no-op.
 
-Spawns real git — index/worktree divergence (a destination that already
-exists in HEAD, versus a src pathspec that git refuses before touching disk)
-cannot be exhibited by a mocked git, which has no index to diverge from; same
-argument test_archive_and_commit_disk_head_drift.py's docstring makes for its
-own existence. Deliberately its OWN small, scoped module (not an import of
+F-5 swap (2026-08-21, docs/plans/2026-08-20-the-close-ceremony-stops-paying-
+for-the-join.md C5): `git mv` is no longer the mover -- `os.replace` is, and
+it has no split-failure mode of its own (see _common.archive_and_commit's
+docstring). The reversal guard this module pins now sits at the ONE
+remaining post-move split-failure point: the batched `git add -- src dst`
+staging call that runs after every move's `os.replace` has already landed.
+This module carries that coverage forward onto the new failure point rather
+than dropping it:
+
+1. Quiet path (no reversal attempted at all): dst pre-exists and force is
+   False -- archive_and_commit refuses the move BEFORE calling os.replace
+   (see the `dst-exists` guard), so nothing moved and there is nothing to
+   reverse or WARN about.
+2. Elif-fires path: os.replace succeeds, then the batched stage step fails
+   (mocked -- a generic subprocess-failure shape, not an index/worktree
+   divergence, so no real-git requirement here) with a concurrent write
+   recreating src's original path before the reversal attempt runs. The
+   reversal cannot rename dst back over a reappeared src, so it WARNs and
+   leaves dst orphaned, landing the item in failed[] annotated
+   "reversal-skipped-src-reappeared".
+
+Real git is load-bearing for the repo scaffolding (a working tree +
+private-index staging) but not for either scenario's divergence -- both are
+now generic control-flow, so the stage-failure call is mocked directly
+rather than engineered through real index state. Deliberately its OWN
+small, scoped module (not an import of
 coordinator_core/ops/ceremony/tests/fixtures/real_git.py, which is reserved
-for the commit-mechanism selector's own tests) so this real-git usage stays
-visible in the diff, per the standing test-cull ruling
-(state/audits/2026-08-07-spawn-heavy-test-excision-ledger.md) that real-git
-fixtures must not go ambient again. Exactly ONE throwaway repo, ONE test
-function (covering both the elif-fires and elif-stays-quiet shapes, since
-both are necessary to pin the narrowing and neither alone would catch a
-regression to a bare `else`).
+for the commit-mechanism selector's own tests), per the standing test-cull
+ruling (state/audits/2026-08-07-spawn-heavy-test-excision-ledger.md) that
+real-git fixtures must not go ambient again.
 """
 
 from __future__ import annotations
@@ -36,18 +48,12 @@ import asyncio
 import logging
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
 
-# Real-git spawn is load-bearing: the elif narrowing being pinned depends on
-# index/worktree divergence (a destination `git mv` refuses upfront vs. a
-# src pathspec it refuses before touching disk) that a mocked git has no
-# index to diverge from. Single test, single repo -- no module-scope hoist
-# needed. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for this file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -68,14 +74,64 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_reversal_elif_narrowing_pins_reappeared_case_and_quiet_plain_failure(
-    tmp_path: Path, caplog,
-) -> None:
-    root = tmp_path / "repo"
+def _init_repo(root: Path) -> None:
     root.mkdir()
     _git(["init", "-q", "-b", "main"], root)
     _git(["config", "user.email", "test@example.invalid"], root)
     _git(["config", "user.name", "test"], root)
+
+
+def test_quiet_when_dst_exists_refusal_never_touches_disk(tmp_path: Path, caplog) -> None:
+    """force=False + pre-existing dst refuses BEFORE os.replace runs -- no
+    move happened, so there is nothing to reverse and no WARNING to log."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+
+    src_dir = root / "a"
+    src_dir.mkdir()
+    src = src_dir / "src.txt"
+    src.write_text("src content\n", encoding="utf-8")
+
+    dst_dir = root / "b"
+    dst_dir.mkdir()
+    dst = dst_dir / "dst.txt"
+    dst.write_text("real archived content\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "seed src+dst"], root)
+
+    with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.fleet._common"):
+        acted, failed = _run(archive_and_commit(
+            worktree_root=root,
+            moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
+            subject="test: dst-exists refusal is quiet",
+        ))
+
+    assert acted == []
+    assert len(failed) == 1
+    assert failed[0]["id"] == "a/src.txt"
+    assert "dst-exists" in failed[0]["reason"]
+    assert "reversal-skipped-src-reappeared" not in failed[0]["reason"]
+    assert not any(
+        "skipping reversal" in rec.message for rec in caplog.records
+    ), "a refusal that never called os.replace must not log a reversal WARNING"
+
+    # Both copies survive untouched -- no clobber, no phantom move.
+    assert src.exists()
+    assert src.read_text(encoding="utf-8") == "src content\n"
+    assert dst.exists()
+    assert dst.read_text(encoding="utf-8") == "real archived content\n"
+
+
+def test_reversal_elif_fires_when_src_reappears_before_stage_reversal(
+    tmp_path: Path, caplog,
+) -> None:
+    """os.replace succeeds, the batched stage (`git add -- src dst`) then
+    fails, and a concurrent writer recreates src's original path before the
+    reversal runs -- the elif must fire: WARN, leave dst orphaned, annotate
+    failed[] with "reversal-skipped-src-reappeared" rather than clobber the
+    reappeared src."""
+    root = tmp_path / "repo"
+    _init_repo(root)
 
     src_dir = root / "a"
     src_dir.mkdir()
@@ -84,24 +140,36 @@ def test_reversal_elif_narrowing_pins_reappeared_case_and_quiet_plain_failure(
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed src"], root)
 
-    # dst pre-exists and is tracked (real archived history) -- `git mv` (no
-    # force) refuses upfront: BOTH src and dst remain on disk. This is the
-    # same disk shape "src has reappeared" describes: the reversal branch's
-    # `if ... and not move.src.exists()` is false because src never left,
-    # and the elif must fire instead of silently no-op'ing.
-    dst_dir = root / "b"
-    dst_dir.mkdir()
-    dst = dst_dir / "dst.txt"
-    dst.write_text("real archived content\n", encoding="utf-8")
-    _git(["add", "-A"], root)
-    _git(["commit", "-q", "-m", "seed dst"], root)
+    dst = root / "b" / "dst.txt"
+
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def _spawn_and_reappear_src(*argv, **kwargs):
+        # Real staging spawn (`git add -- src dst`) is left to fail
+        # naturally: a bogus GIT_INDEX_FILE swap would be more invasive than
+        # this module needs to pin the elif narrowing, so instead the mock
+        # recreates src (simulating a concurrent writer landing on the
+        # vacated path) and returns a synthetic nonzero rc directly, without
+        # spawning real git for this one call.
+        if len(argv) >= 2 and argv[0] == "git" and argv[1] == "add":
+            src.write_text("concurrent writer content\n", encoding="utf-8")
+
+            class _FakeProc:
+                returncode = 1
+
+                async def communicate(self):
+                    return b"", b"synthetic stage failure"
+
+            return _FakeProc()
+        return await real_spawn(*argv, **kwargs)
 
     with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.fleet._common"):
-        acted, failed = _run(archive_and_commit(
-            worktree_root=root,
-            moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
-            subject="test: reappeared-src reversal",
-        ))
+        with patch("asyncio.create_subprocess_exec", side_effect=_spawn_and_reappear_src):
+            acted, failed = _run(archive_and_commit(
+                worktree_root=root,
+                moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
+                subject="test: reappeared-src reversal at stage-failure",
+            ))
 
     assert acted == []
     assert len(failed) == 1
@@ -112,37 +180,9 @@ def test_reversal_elif_narrowing_pins_reappeared_case_and_quiet_plain_failure(
         for rec in caplog.records
     ), "the elif branch must WARN naming the reappeared-source skip"
 
-    # Both copies survive untouched -- no clobber, no phantom move.
-    assert src.exists()
-    assert src.read_text(encoding="utf-8") == "src content\n"
+    # dst is left orphaned (os.replace's move already landed there) and the
+    # reappeared src is left untouched -- no clobber, no phantom reversal.
     assert dst.exists()
-    assert dst.read_text(encoding="utf-8") == "real archived content\n"
-
-    caplog.clear()
-
-    # Plain-failure case, narrowing's other half: git mv fails before
-    # touching ANYTHING (bad source pathspec) -- dst never comes into
-    # existence, so the elif's condition is false and the reversal path
-    # must stay quiet: no WARNING, no "reversal-skipped" annotation. A bare
-    # `else` (the regression this pins against) would fire here too and
-    # mis-warn about a dst that was never created.
-    new_dst = dst_dir / "never-created.txt"
-    with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.fleet._common"):
-        acted2, failed2 = _run(archive_and_commit(
-            worktree_root=root,
-            moves=[Move(
-                src=src_dir / "does-not-exist.txt",
-                dst=new_dst,
-                candidate_id="a/does-not-exist.txt",
-            )],
-            subject="test: plain git-mv failure, dst never created",
-        ))
-
-    assert acted2 == []
-    assert len(failed2) == 1
-    assert failed2[0]["id"] == "a/does-not-exist.txt"
-    assert "reversal-skipped-src-reappeared" not in failed2[0]["reason"]
-    assert not new_dst.exists()
-    assert not any(
-        "skipping reversal" in rec.message for rec in caplog.records
-    ), "the plain git-mv-failure-before-touching-anything case must stay quiet"
+    assert dst.read_text(encoding="utf-8") == "src content\n"
+    assert src.exists()
+    assert src.read_text(encoding="utf-8") == "concurrent writer content\n"

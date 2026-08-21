@@ -1189,36 +1189,59 @@ def _write_ac_handoff(tmp_path: Path, rel_path: str, body: str) -> None:
     handoff_path.write_text(f"---\nstatus: open\n---\n\n{body}\n", encoding="utf-8")
 
 
-def test_leg_b_dispatch_narrows_edge_kinds_so_a_live_spinoff_does_not_block_the_close(monkeypatch, tmp_path):
-    """Leg B must NOT inherit `has_live_children`'s archival default edge set.
+def test_leg_b_back_edge_dispatch_reads_continued_into_off_the_candidates_own_frontmatter(tmp_path):
+    """C9 Ruling 4 retarget: `_dispatch_has_live_children` no longer dispatches
+    the `handoff.has_live_children` op — it reads the candidate's OWN
+    frontmatter for `continued_into`, the write-time back-edge
+    `baton_assemble/apply.py :: _dispatch_handoff_supersede_predecessor`
+    stamps onto a predecessor at the successor's mint. This is a single-file
+    read, not a corpus walk: no op registry, no IPC dispatch, no
+    `git_common_dir` conversion. Every other leg-B test monkeypatches
+    `_dispatch_has_live_children` wholesale and so cannot see this.
 
-    `forked_from` is the spinoff edge. Archival legitimately blocks on it (it
-    would strand the spinoff's origin pointer); "may this workstream conclude?"
-    must not, because a spinoff is forked out precisely so the parent can
-    finish without it. Asserted on the params actually handed to the op —
-    every other leg-B test monkeypatches `_dispatch_has_live_children` wholesale
-    and so cannot see this.
-
-    Pre-existing regression coverage for shipped production code (`_dispatch_
-    has_live_children`, commit fb17badb3), outside this slice's two named
-    changes; landed intentionally, not a stray carry-over — see
-    `cross-repo/inbox/2026-08-05-example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md`.
+    Supersedes `test_leg_b_dispatch_narrows_edge_kinds_so_a_live_spinoff_does_
+    not_block_the_close` (commit fb17badb3) — that test asserted on the
+    `edge_kinds` param handed to the retired op dispatch; there is no such
+    param anymore. The spinoff-does-not-block invariant it guarded still
+    holds structurally: a spinoff's `forked_from`/`origin_handoff` fields
+    never populate the candidate's OWN `continued_into`, so a live spinoff
+    still cannot make this leg fire.
     """
-    captured: dict = {}
+    handoff_path = tmp_path / "state" / "handoffs" / "x.md"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(
+        '---\nstatus: claimed\ndeployment_state: continued\ncontinued_into: "state/handoffs/successor.md"\n---\n\nbody\n',
+        encoding="utf-8",
+    )
 
-    async def _fake_handler(params, common_dir):
-        captured.update(params)
-        return {"exit_code": 1, "referenced": False}
+    result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
 
-    monkeypatch.setattr("coordinator_core.ipc.get_op_handler", lambda name: _fake_handler)
-    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda root: root)
+    assert result["exit_code"] == 0
+    assert result["referenced"] is True
+
+
+def test_leg_b_back_edge_absent_is_no_children_not_a_fallback_scan(tmp_path):
+    """R1: an absent back-edge on a resolvable, readable candidate is a
+    genuine "no-children" verdict (`exit_code=1`) — never an occasion to
+    fall back to walking the corpus, which no longer happens at all."""
+    handoff_path = tmp_path / "state" / "handoffs" / "x.md"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text("---\nstatus: open\n---\n\nbody\n", encoding="utf-8")
 
     result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
 
     assert result["exit_code"] == 1
-    edge_kinds = {k.strip() for k in captured["edge_kinds"].split(",")}
-    assert edge_kinds == {"predecessor", "additional_predecessors"}
-    assert "forked_from" not in edge_kinds
+    assert result["referenced"] is False
+
+
+def test_leg_b_back_edge_unresolvable_candidate_is_indeterminate_not_a_raise(tmp_path):
+    """R1: an unresolvable candidate degrades to `exit_code=2` with `error`
+    set — the same indeterminate shape the retired op dispatch's own
+    fail-closed ladder returned — and never raises out of `brief()`."""
+    result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/does-not-exist.md")
+
+    assert result["exit_code"] == 2
+    assert result["error"]
 
 
 def test_consumed_handoff_completeness_clears_the_gate_when_all_boxes_ticked_and_no_live_child(monkeypatch, tmp_path):
@@ -5958,8 +5981,13 @@ def test_commit_count_measured_path_carries_no_scope_clause(monkeypatch, tmp_pat
     a caller override."""
     own_sid = "testsid123"  # matches `_gate()`'s fixed sid
     _init_git_repo(tmp_path)
+    # CODE-BEARING fixture, deliberately not `.md`. 507721c79 (2026-08-20) made a
+    # doc-only close resolve to EM discretion: when `code_loc` resolves to 0, row 4's
+    # commit-count and surface-count arms are suppressed by design. A `.md` fixture
+    # therefore exercises that suppression, not the commit-count arm this test names --
+    # and left the arm unverified for the code-bearing case anywhere in the suite.
     for i in range(6):
-        name = f"f{i}.md"
+        name = f"f{i}.py"
         (tmp_path / name).write_text(f"{i}\n", encoding="utf-8")
         subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
         subprocess.run(

@@ -2380,6 +2380,99 @@ async def dispatch_message(msg: dict) -> dict:
             )
 
 
+#: Discriminator values for `record_op_process_time`'s `measurement_scope` field
+#: (C9, state/dispatch-briefs/2026-08-21-the-cli-bootstrap-tax-dies-at-the-
+#: interpreter-floor/C9.md). `elapsed_ms` (op_latency.record_op_latency) stays
+#: wall clock, unchanged unit, unchanged consumers -- see that field's own
+#: module docstring. This is a SEPARATE key ("process_ms", row `kind`
+#: "process_time") for CPU time, never a redefinition of `elapsed_ms` in place:
+#: 187,074 existing wall-clock rows carry no schema version and no
+#: discriminator, and `telemetry/cost_census.py` + `telemetry/engine_report.py`
+#: (two sites) aggregate them as homogeneous -- silently mixing units under one
+#: name is the exact defect this row exists to remove, not reintroduce one
+#: level down.
+#:
+#: PER_OP_PROCESS: `time.process_time()` delta taken entirely inside a single
+#: process running exactly one op at a time for the delta's duration --
+#: uncontaminated by any peer op. True of the pool-worker path
+#: (`warm.server._pool_dispatch_worker`, one `ProcessPoolExecutor` task at a
+#: time per worker process) and the one-shot CLI path (`dispatch_from_hook`,
+#: `coordinator_core.invoke.__main__`'s cold path -- a whole process per op).
+#:
+#: PROCESS_WIDE: `time.process_time()` delta taken on an accept-process
+#: connection thread (`warm.server._run_dispatch`), where `WORKER_POOL_SIZE`
+#: threads share ONE interpreter and ONE `process_time()` clock -- the delta
+#: can include CPU spent on OTHER concurrently-dispatched ops on sibling
+#: threads during the same wall-clock span, so it is process-wide, not this
+#: op's own CPU. Recording it under the same name as PER_OP_PROCESS would be
+#: the identical unit-mixing hazard the wall-clock/process-time split exists
+#: to stop, one level down -- so the two never share a value under one
+#: unlabelled key; `measurement_scope` is the required discriminator.
+MEASUREMENT_SCOPE_PER_OP_PROCESS = "per_op_process"
+MEASUREMENT_SCOPE_PROCESS_WIDE = "process_wide"
+_MEASUREMENT_SCOPES = frozenset({MEASUREMENT_SCOPE_PER_OP_PROCESS, MEASUREMENT_SCOPE_PROCESS_WIDE})
+
+
+def record_op_process_time(
+    *,
+    op: str,
+    process_ms: float,
+    measurement_scope: str,
+    source_path: str,
+    t_start: float,
+    repo_root: Optional[Path] = None,
+    sid: Optional[str] = None,
+    corr_id: Optional[str] = None,
+) -> None:
+    """Append one durable process-time sample, alongside (never replacing) the
+    wall-clock `elapsed_ms` row `dispatch_message` already records.
+
+    Reuses `coordinator_core.telemetry.op_latency._write_entry` -- the
+    module's own single append discipline (kill switch, route stamping,
+    repo-key resolution, one atomic `atomic_append.append_line` call, never
+    raises) -- rather than re-deriving any of that here. Writes to the SAME
+    sink (`op-latency.jsonl`) under a DISTINCT row `kind`, `"process_time"`,
+    so the existing `kind != "complete"` skip already present at both
+    `cost_census.py::run_census` and `engine_report.py`'s four aggregation
+    sites (verified against source before this function was written, per
+    this row's own instruction) excludes these rows from every wall-clock
+    percentile automatically -- no consumer edit required, and no existing
+    percentile is diluted by a CPU-time sample entering its `elapsed_ms`
+    population.
+
+    `measurement_scope` MUST be one of `MEASUREMENT_SCOPE_PER_OP_PROCESS` /
+    `MEASUREMENT_SCOPE_PROCESS_WIDE` above -- an unrecognised value is
+    coerced to `"unknown"` rather than raising, matching this function's own
+    never-breaks-dispatch contract (an invalid label costs one
+    lower-confidence row, never a peer's op).
+
+    Never raises -- same fail-open contract as every other telemetry call on
+    this hot path (`record_op_started` / `record_op_latency` above).
+    """
+    try:
+        from coordinator_core.telemetry.op_latency import _write_entry
+        import os as _os
+
+        scope = measurement_scope if measurement_scope in _MEASUREMENT_SCOPES else "unknown"
+        entry = {
+            "op": op,
+            "t_start": t_start,
+            "process_ms": process_ms,
+            "measurement_scope": scope,
+            "source_path": source_path,
+            "pid": _os.getpid(),
+            "sid": sid,
+            "kind": "process_time",
+            "corr_id": corr_id,
+        }
+        _write_entry(entry, repo_root)
+    except Exception:
+        _log().debug(
+            "coordinator_core.ipc: process-time recording failed for %r", op,
+            exc_info=True,
+        )
+
+
 class HookDispatchError(Exception):
     """A JSON-RPC error response surfaced by ``dispatch_from_hook``.
 
@@ -2454,10 +2547,32 @@ def dispatch_from_hook(
     # asyncio import deferred to first use (not module scope) for the same ~9ms
     # import-cost reason documented in dispatch_message's own deferred import above.
     import asyncio
+    import time as _time
 
-    response = asyncio.run(
-        dispatch_message(_hook_envelope(op_name, params, origin_worktree))
-    )
+    envelope = _hook_envelope(op_name, params, origin_worktree)
+
+    # Per-op process time (C9): this function is a whole process per op (a
+    # DoE hook shim's one-shot cold spawn) -- the same uncontaminated-CPU
+    # argument as the pool-worker path applies trivially here. Measured
+    # around the SAME asyncio.run(dispatch_message(...)) call the docstring
+    # above already describes as this function's dispatch body, never inside
+    # dispatch_message itself (the async wrapper the C9 row's own dispatch
+    # site is deliberately NOT).
+    t_start = _time.time()
+    process_start = _time.process_time()
+    try:
+        response = asyncio.run(dispatch_message(envelope))
+    finally:
+        process_ms = (_time.process_time() - process_start) * 1000.0
+        request_repo = resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
+        record_op_process_time(
+            op=op_name,
+            process_ms=process_ms,
+            measurement_scope=MEASUREMENT_SCOPE_PER_OP_PROCESS,
+            source_path="one_shot_cli",
+            t_start=t_start,
+            repo_root=request_repo,
+        )
     return _unwrap_hook_response(op_name, response)
 
 

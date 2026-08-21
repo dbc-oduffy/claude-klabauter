@@ -207,6 +207,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 )
 from coordinator_core.bash_guards.commit_tripwires import _same_tree
 from coordinator_core.git.git_dir import common_dir_from_gitdir, resolve_git_common_dir
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -1542,11 +1543,57 @@ def _evaluate_foreign_repo_candidate(
     if target_is_under_claude_home(target_dir):
         return None
 
-    # Resolved once per candidate, reused below for the AC14 common-dir
-    # comparison (when `anchor_has_repo`) and unconditionally for
-    # `target_repo_label` -- see `_common_dir_cf_from_root`'s docstring
-    # for why this used to cost a second subprocess spawn per candidate.
-    probe_root = resolve_git_root(probe_dir)
+    # `probe_root` feeds ONLY `target_repo_label` below (a display label
+    # and a classification input for `target_is_publish_destination`/
+    # `publish_destination_owner`) -- it never gates allow-vs-deny.
+    # `destination_class` (further down) selects deny-message COPY only:
+    # both the PUBLISH and FOREIGN branches end at the same `return
+    # _deny(message)`. The AC14 SAME-REPO comparison above already
+    # answers its own question from `target_gitdir` alone and never reads
+    # this variable.
+    #
+    # Because a wrong answer here degrades a LABEL, never a verdict, this
+    # is the "MISS-MODE CALLERS ONLY" shape `resolve_git_root_cheap`
+    # documents for itself -- but this does NOT call that walker: its
+    # `os.path.exists` climb skips symlink resolution, which THAT
+    # docstring names this module's SAME-REPO comparison (a different
+    # site, above) as the caller that must never risk. `show_toplevel`
+    # below is a different, symlink-safe walker
+    # (`coordinator_core.git.repo_root`, already the delegate `write_
+    # guards._repo_root` uses for the identical reason): its cwd
+    # resolution runs `Path.resolve()`, matching real `git rev-parse
+    # --show-toplevel`'s own symlink handling. It also costs nothing
+    # incremental here -- `resolve_gitdir(probe_dir)` above already
+    # populated that module's shared per-cwd memo with the toplevel
+    # alongside the gitdir from the SAME walk, so this is a dict lookup,
+    # not a second climb.
+    #
+    # Four gitdir shapes, decided:
+    #   - ordinary repo (`<root>/.git` a directory) -- the walk finds it
+    #     at the first ancestor of `probe_dir` that has one and returns
+    #     that ancestor. Correct.
+    #   - linked worktree (`<worktree>/.git` a FILE naming `<main>/.git/
+    #     worktrees/<name>`) -- the walk stops at the FIRST `.git` entry
+    #     it meets, which is the worktree's OWN `.git` file, so it
+    #     returns the worktree's own root -- matching real `git rev-parse
+    #     --show-toplevel` run from inside that worktree, never the main
+    #     checkout's root.
+    #   - submodule (gitdir at `<super>/.git/modules/<name>`) -- same
+    #     walk, same reasoning: stops at the submodule's own `.git` file
+    #     and returns the submodule's own root, not the superproject's.
+    #   - separated gitdir / `GIT_DIR` naming a directory OUTSIDE any
+    #     worktree -- by the time `probe_dir` reaches this function,
+    #     `_git_subcommand_and_target_cwd`'s own `_worktree_root_for_
+    #     gitdir_override` has already turned a `.git`-suffixed override
+    #     into its PARENT (an ordinary worktree root, the first case
+    #     above). A non-`.git`-suffixed override (a bare-style separate
+    #     gitdir with no worktree binding) is left as typed, so the walk
+    #     lands ON the gitdir itself, which presents `HEAD`/`objects`/
+    #     `refs` exactly like a bare repo and correctly resolves to no
+    #     toplevel (`None`) -- degrading, below, to the pre-existing
+    #     `target_dir` fallback rather than asserting a worktree root
+    #     that does not exist for this shape.
+    probe_root = _show_toplevel(probe_dir)
 
     if anchor_has_repo:
         # AC14 -- compare COMMON dirs (worktree-safe), matching
@@ -1619,12 +1666,27 @@ def _evaluate_foreign_repo_candidate(
     # git_root(anchor)`, the SAME resolution `check_bump_foreign_repo_write`
     # already performs for `anchor_common_cf`) is the correct root for all
     # four: it is the session's own repo regardless of which foreign target
-    # this candidate names. Falls back to `marker_probe_root` only when the
-    # caller could not resolve an anchor root at all (`anchor_root` is
-    # `None`) -- matching this function's own fail-open posture rather than
-    # raising or silently using an empty string.
-    marker_probe_root = resolve_git_root(marker_probe)
-    session_root_for_marker = anchor_root if anchor_root is not None else marker_probe_root
+    # this candidate names. Falls back to a fresh `resolve_git_root(marker_
+    # probe)` only when the caller could not resolve an anchor root at all
+    # (`anchor_root` is `None`) -- matching this function's own fail-open
+    # posture rather than raising or silently using an empty string.
+    #
+    # SHORT-CIRCUITED, not merely named as a fallback (2026-08-21, this
+    # spawn-removal pass): the dominant case -- an anchor with its own repo,
+    # i.e. every deny path these tests exercise -- has `anchor_root is not
+    # None`, so `resolve_git_root(marker_probe)` is now skipped entirely
+    # rather than computed-and-discarded. Before `probe_root` (above) moved
+    # off `resolve_git_root`, this call was a coincidental CACHE HIT on the
+    # same `marker_probe`-equals-`probe_dir` cwd `probe_root` had just
+    # spawned for -- "free" only because that spawn ran first in this same
+    # function. Removing that spawn without also removing this call would
+    # have relocated it here instead of eliminating it (measured: it did,
+    # before this short-circuit was added -- the deny-path budget stayed at
+    # two). The `anchor_root is None` branch (a repo-less anchor) still
+    # spawns when reached; that path is outside this budget's dominant case.
+    session_root_for_marker = (
+        anchor_root if anchor_root is not None else resolve_git_root(marker_probe)
+    )
     if bump_is_cleared(
         marker_probe, session_id, git_root=session_root_for_marker, agent_id=agent_id
     ):

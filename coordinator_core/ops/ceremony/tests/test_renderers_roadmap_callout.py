@@ -170,6 +170,63 @@ class TestGoldenFixtureParity:
         assert result["failed"] == []
 
 
+class TestGeneratesMissingStubIndex:
+    """AC14 (C6b, pln-engine-half-of-the-roadmap-spr-188cdf): the sprint-spine
+    split's first sprint has no prior STUB-INDEX.md to refresh — a missing
+    index must be GENERATED (template written + expanded in the same call),
+    not just skipped as ``stub-index-not-found``."""
+
+    def test_generates_and_populates_in_one_call(self, tmp_path: Path):
+        _build_fixture_repo(tmp_path)
+        result = refresh_roadmap_callout(tmp_path, "testroadmap2")
+
+        stub_index = tmp_path / "state/roadmap/testroadmap2/STUB-INDEX.md"
+        assert stub_index.is_file()
+        assert stub_index.read_text(encoding="utf-8") == (
+            "# STUB-INDEX — testroadmap2\n\n"
+            "<!-- BEGIN query: handoff where=roadmap_id=testroadmap2 sort=sprint -->\n"
+            "<!-- END query -->\n"
+        )
+        assert result == {
+            "acted": ["renderers:refresh_roadmap_callout:state/roadmap/testroadmap2/STUB-INDEX.md"],
+            "skipped": [], "failed": [],
+        }
+
+    def test_generated_empty_result_set_still_reports_acted(self, tmp_path: Path):
+        _build_fixture_repo(tmp_path)
+        result = refresh_roadmap_callout(tmp_path, "no-such-roadmap")
+
+        stub_index = tmp_path / "state/roadmap/no-such-roadmap/STUB-INDEX.md"
+        assert stub_index.is_file()
+        assert stub_index.read_text(encoding="utf-8") == (
+            "# STUB-INDEX — no-such-roadmap\n\n"
+            "<!-- BEGIN query: handoff where=roadmap_id=no-such-roadmap sort=sprint -->\n"
+            "<!-- END query -->\n"
+        )
+        assert result == {
+            "acted": ["renderers:refresh_roadmap_callout:state/roadmap/no-such-roadmap/STUB-INDEX.md"],
+            "skipped": [], "failed": [],
+        }
+
+    def test_second_run_after_generation_is_up_to_date(self, tmp_path: Path):
+        _build_fixture_repo(tmp_path)
+        refresh_roadmap_callout(tmp_path, "no-such-roadmap")
+        result = refresh_roadmap_callout(tmp_path, "no-such-roadmap")
+
+        assert result == {
+            "acted": [], "skipped": ["renderers:refresh_roadmap_callout:up-to-date"], "failed": [],
+        }
+
+    def test_path_occupied_by_directory_is_not_clobbered(self, tmp_path: Path):
+        _build_fixture_repo(tmp_path)
+        (tmp_path / "state/roadmap/dirblocked/STUB-INDEX.md").mkdir(parents=True)
+
+        result = refresh_roadmap_callout(tmp_path, "dirblocked")
+        assert result == {
+            "acted": [], "skipped": ["renderers:refresh_roadmap_callout:stub-index-not-found"], "failed": [],
+        }
+
+
 class TestSkipAndGuardBehavior:
     def test_no_roadmap_id_skips_cleanly(self, tmp_path: Path):
         _build_fixture_repo(tmp_path)
@@ -192,13 +249,6 @@ class TestSkipAndGuardBehavior:
         _build_fixture_repo(tmp_path)
         result = refresh_roadmap_callout(tmp_path, '"testroadmap"')
         assert result["acted"] == ["renderers:refresh_roadmap_callout:state/roadmap/testroadmap/STUB-INDEX.md"]
-
-    def test_missing_stub_index_skips_cleanly(self, tmp_path: Path):
-        _build_fixture_repo(tmp_path)
-        result = refresh_roadmap_callout(tmp_path, "no-such-roadmap")
-        assert result == {
-            "acted": [], "skipped": ["renderers:refresh_roadmap_callout:stub-index-not-found"], "failed": [],
-        }
 
     def test_stub_index_without_callout_skips_cleanly(self, tmp_path: Path):
         _write(
