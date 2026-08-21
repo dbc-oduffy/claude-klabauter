@@ -191,8 +191,17 @@ _PY_SUBPROCESS_CALL_RE = re.compile(
 #: ``"git"`` list-element form (not just ``"git.exe"``) is matched because
 #: both audited miss sites spawn ``["git", "rev-parse", ...]``, not
 #: ``["git.exe", ...]``.
+#: The quote character is a CLASS, not a literal ``"``. Until 2026-08-21 this
+#: pattern hard-coded double quotes, so ``subprocess.Popen(['git','push'])`` --
+#: ordinary Python, and the form 19 files in this repo and 2 in DoE-claude
+#: actually use -- was structurally invisible to the guard. That is the same
+#: failure shape as the git exemption and the ``-WindowStyle Hidden`` blessing:
+#: the guard reported clean because of what it declined to look at, not because
+#: the code was clean. Proven by driving `evaluate_payload_json` with a
+#: single-quoted spawn and observing no fire; re-proven green after this change.
+#: negative-spec -- never re-narrow this to one quote character.
 _PY_CONSOLE_TARGET_RE = re.compile(
-    r'"(powershell\.exe|netstat\.exe|python\.exe|cmd\.exe|git\.exe|git)"'
+    r"[\"'](powershell\.exe|netstat\.exe|python\.exe|cmd\.exe|git\.exe|git)[\"']"
     r"|sys\.executable"
 )
 #: LOAD-BEARING (see note above _PY_SUBPROCESS_CALL_RE). Matches BOTH the

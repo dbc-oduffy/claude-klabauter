@@ -43,24 +43,56 @@ from pathlib import Path
 import pytest
 
 _ENGINE_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _ENGINE_ROOT.parent
 
-#: Scanned as live engine code. Test trees are excluded because a regression
-#: test's whole job is to assert the flag is ABSENT, which requires naming it.
-_EXCLUDED_DIR_NAMES = frozenset({"tests", "__pycache__", "_vendor"})
+#: Every tree in this repo that ships runnable Python, not just the engine
+#: package. negative-spec -- do NOT narrow this back to `coordinator_core/`.
+#: The three sites that carried the defect all happened to live there, and a
+#: guard scoped to where today's instances happen to be is the "reports clean
+#: because of what it declines to look at" failure this whole audit is about:
+#: a new detached spawn under `coordinator/bin/` or `bin/` would have been
+#: invisible. Add trees here as they appear; never remove one.
+_SCANNED_TREES = ("coordinator_core", "coordinator", "bin", "scripts")
+
+#: Test trees are excluded because a regression test's whole job is to assert
+#: the flag is ABSENT, which requires naming it.
+_EXCLUDED_DIR_NAMES = frozenset({"tests", "__pycache__", "_vendor", "node_modules"})
 
 _FORBIDDEN = "DETACHED_PROCESS"
 
 
 def _live_modules() -> list[Path]:
     out: list[Path] = []
-    for path in _ENGINE_ROOT.rglob("*.py"):
-        parts = set(path.relative_to(_ENGINE_ROOT).parts)
-        if parts & _EXCLUDED_DIR_NAMES:
+    for tree in _SCANNED_TREES:
+        root = _REPO_ROOT / tree
+        if not root.is_dir():
             continue
-        if path.name.startswith("test_"):
-            continue
-        out.append(path)
+        for path in root.rglob("*.py"):
+            parts = set(path.relative_to(root).parts)
+            if parts & _EXCLUDED_DIR_NAMES:
+                continue
+            if path.name.startswith("test_"):
+                continue
+            out.append(path)
     return sorted(out)
+
+
+def test_scan_actually_covers_the_trees_it_claims() -> None:
+    """The sweep must not pass by scanning nothing.
+
+    An empty or near-empty file list would make `test_no_live_module_references
+    _detached_process` vacuously green -- the precondition-measures-itself trap.
+    This asserts the sweep really reaches each declared tree.
+    """
+    modules = _live_modules()
+    assert len(modules) > 200, f"sweep collected only {len(modules)} modules -- scan is broken"
+    for tree in _SCANNED_TREES:
+        if not (_REPO_ROOT / tree).is_dir():
+            continue
+        assert any(
+            str(p).replace("\\", "/").find(f"/{tree}/") != -1 or p.is_relative_to(_REPO_ROOT / tree)
+            for p in modules
+        ), f"declared tree {tree!r} contributed no modules to the sweep"
 
 
 def _code_references(path: Path) -> list[int]:
@@ -94,8 +126,7 @@ def test_no_live_module_references_detached_process() -> None:
     offenders: list[str] = []
     for path in _live_modules():
         for lineno in _code_references(path):
-            rel = path.relative_to(_ENGINE_ROOT).as_posix()
-            offenders.append(f"coordinator_core/{rel}:{lineno}")
+            offenders.append(f"{path.relative_to(_REPO_ROOT).as_posix()}:{lineno}")
 
     assert not offenders, (
         "DETACHED_PROCESS is forbidden in live engine code -- it leaves the child "
