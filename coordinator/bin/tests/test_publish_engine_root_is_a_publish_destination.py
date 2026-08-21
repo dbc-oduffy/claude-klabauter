@@ -68,7 +68,20 @@ class TestDescribeEngineImportFailure:
 
         message = publish._describe_engine_import_failure(str(root), ImportError("boom"))
 
-        assert "CLAUDE_KLABAUTER_ROOT" in message
+        assert "COORDINATOR_ENGINE_ROOT" in message
+
+    def test_the_named_lever_survives_the_publish_transform(self, tmp_path):
+        """The only copy of this string that ever reaches this branch is the
+        MIRROR's, and publish rewrites every repo-token identifier including
+        env-var names -- so a message naming the repo-token lever would advise
+        the mirror's reader to set the MIRROR's own root variable. Rung 1 of
+        `cc_invoke.resolve_engine_root` reads the repo-neutral name first in
+        both trees; it is the only lever that reads the same wherever printed."""
+        root = _make_engine_root(tmp_path, with_percolate=False)
+
+        message = publish._describe_engine_import_failure(str(root), ImportError("boom"))
+
+        assert "CLAUDE_KLABAUTER_ROOT" not in message
 
     def test_root_with_percolate_engine_keeps_the_generic_cause(self, tmp_path):
         """A root that DOES carry the engine failed for some other reason — the real
