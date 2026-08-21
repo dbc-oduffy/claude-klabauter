@@ -249,6 +249,40 @@ def cmd_emit_cadence(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_publish_cadence(args: argparse.Namespace) -> int:
+    """Step 10.7: publish the on-disk emission artifact to cockpit's sink.
+
+    One of exactly two sanctioned scheduled publish call sites (the other is the
+    workweek-close sibling); everything else is cockpit pulling for themselves via
+    coordinator/bin/publish-emission.py. See docs/plans/2026-08-21-emission-publish-
+    producer.md § Trigger model for why the cadence is deliberately not tuned to
+    anyone's freshness needs.
+
+    Does NOT re-emit: run_publish_cadence transports whatever artifact is already on
+    disk. Refreshing it is emit-cadence's job (Step 10.6), which runs before this.
+
+    Always returns 0. run_publish_cadence fails LOUD and uncaught by design -- the
+    transport must never report success on a failure -- and choosing not to die on
+    that is the ceremony's call, made here rather than swallowed in the module, so a
+    real transport failure stays distinguishable from success in the log. An
+    unreachable sink is not a reason a workday cannot end.
+    """
+    from coordinator_core.ops.emit.publish_cadence import run_publish_cadence
+
+    try:
+        result = run_publish_cadence(str(_REPO_ROOT))
+    except Exception as exc:  # noqa: BLE001 -- best-effort by ceremony policy, loud by log
+        print(
+            f"ERROR: emission publish failed ({type(exc).__name__}: {exc}) — the "
+            "artifact was NOT published to cockpit's sink. The ceremony continues; "
+            "re-run coordinator/bin/publish-emission.py once the cause is cleared.",
+            file=sys.stderr,
+        )
+        return 0
+    print(f"emission published: {result}")
+    return 0
+
+
 def _dispatch_step9_row(
     date: str,
     span_flag: str | None,
@@ -392,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_emit = sub.add_parser("emit-cadence", help="Step 10.6: emission-cadence rc dispatch.")
     p_emit.set_defaults(func=cmd_emit_cadence)
+
+    p_publish = sub.add_parser(
+        "publish-cadence", help="Step 10.7: publish emission to cockpit's sink."
+    )
+    p_publish.set_defaults(func=cmd_publish_cadence)
 
     p_backfill = sub.add_parser(
         "backfill-dispatch-rows",

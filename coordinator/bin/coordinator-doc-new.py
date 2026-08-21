@@ -2693,6 +2693,14 @@ def _scaffold_goal_seed(
     sequencing gate. A deferred vision-slice under awaiting_gate must not also
     advertise pickup-readiness — that pairing is now a CROSS_FIELD_RULES error.
     Spec backlink: cross-repo/inbox/2026-08-06-example-market-data-repo-em-pickup-ready-true-under-unmet-gate.md
+
+    authoring_session (2026-08-21) is resolved off `_resolve_session_id()` when
+    the engine can supply it, same resolver `_scaffold_handoff`/`_scaffold_spinoff`
+    use for the same field. Unlike `_scaffold_spinoff`, an unresolvable session id
+    degrades to the prior hand-typed 'PLACEHOLDER' rather than exiting fail-loud --
+    this scaffolder fires from coordinator:goal-setting's Step 5b entry point, an
+    invocation context not audited by this fix, so resolve-or-degrade is applied
+    as a strict improvement without a new failure mode.
     """
     today = _today()
     placeholder_summary = "PLACEHOLDER — replace with one-line vision-slice summary (≤140 chars)"
@@ -2709,9 +2717,24 @@ def _scaffold_goal_seed(
         "deployment_state: awaiting_gate",
         f"category: {_category}",
         f"summary: {_yaml_quote(placeholder_summary)}",
-        "authoring_session: PLACEHOLDER",
-        "workstream: PLACEHOLDER",
     ]
+    # 2026-08-21 extension (same baton as _scaffold_spinoff's authoring_session
+    # fix): resolved off `_resolve_session_id()` when the engine can supply it,
+    # same as every other resolvable-fact seam in this file. Deliberately NOT
+    # given the spinoff's fail-loud arm -- goal-seed is minted by
+    # coordinator:goal-setting's Step 5b entry point, an invocation context
+    # this fix has not audited, so an unresolvable session id keeps the prior
+    # degrade (hand-typed PLACEHOLDER) rather than risking a hard exit inside
+    # an unverified ceremony.
+    _authoring_session_value = _resolve_session_id()
+    if _authoring_session_value != "em-unknown":
+        _display_name = _resolve_session_display_name()
+        if _display_name:
+            lines.append(f"# minted by {_display_name}")
+        lines.append(f"authoring_session: {_yaml_quote(_authoring_session_value)}")
+    else:
+        lines.append("authoring_session: PLACEHOLDER")
+    lines.append("workstream: PLACEHOLDER")
     # awaiting_gate requires at least one of gate_dependency (deprecated),
     # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
     # --gate-dependency writes the deprecated field as before; otherwise the
@@ -2828,6 +2851,15 @@ def _scaffold_roadmap_seed(
     sequencing gate. A roadmap-seed under awaiting_gate must not also advertise
     pickup-readiness — that pairing is now a CROSS_FIELD_RULES error.
     Spec backlink: cross-repo/inbox/2026-08-06-example-market-data-repo-em-pickup-ready-true-under-unmet-gate.md
+
+    authoring_session (2026-08-21) is resolved off `_resolve_session_id()` when
+    the engine can supply it, same resolver `_scaffold_handoff`/`_scaffold_spinoff`
+    use for the same field. Unlike `_scaffold_spinoff`, an unresolvable session id
+    degrades to the prior hand-typed 'PLACEHOLDER' rather than exiting fail-loud --
+    this scaffolder fires from coordinator:goal-setting's Step 5a entry point, an
+    invocation context not audited by this fix, so resolve-or-degrade is applied
+    as a strict improvement without a new failure mode. `workstream` stays a
+    hand-typed placeholder (operator-chosen roadmap slug), unaffected by this fix.
     """
     today = _today()
     placeholder_summary = "PLACEHOLDER — replace with one-line capability-arc summary (≤140 chars)"
@@ -2846,11 +2878,30 @@ def _scaffold_roadmap_seed(
         "deployment_state: awaiting_gate",
         f"category: {_category}",
         f"summary: {_yaml_quote(placeholder_summary)}",
-        "authoring_session: PLACEHOLDER",
+    ]
+    # 2026-08-21 extension (same baton as _scaffold_spinoff's authoring_session
+    # fix): resolved off `_resolve_session_id()` when the engine can supply it.
+    # Deliberately NOT given the spinoff's fail-loud arm -- roadmap-seed is
+    # minted by coordinator:goal-setting's Step 5a entry point, an invocation
+    # context this fix has not audited, so an unresolvable session id keeps
+    # the prior degrade (hand-typed PLACEHOLDER) rather than risking a hard
+    # exit inside an unverified ceremony. `workstream` here is left as an
+    # operator-typed placeholder on purpose -- "replace with roadmap short
+    # prefix slug" is an operator choice, not an engine-resolvable fact
+    # (matching _scaffold_roadmap_baton's identical field).
+    _authoring_session_value = _resolve_session_id()
+    if _authoring_session_value != "em-unknown":
+        _display_name = _resolve_session_display_name()
+        if _display_name:
+            lines.append(f"# minted by {_display_name}")
+        lines.append(f"authoring_session: {_yaml_quote(_authoring_session_value)}")
+    else:
+        lines.append("authoring_session: PLACEHOLDER")
+    lines.extend([
         "workstream: PLACEHOLDER  # replace with roadmap short prefix slug",
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
-    ]
+    ])
     # awaiting_gate requires at least one of gate_dependency (deprecated),
     # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
     # --gate-dependency writes the deprecated field as before; otherwise the

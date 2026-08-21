@@ -187,12 +187,52 @@ class TestMultiMatchDefectBReproduction:
         with pytest.raises(AmbiguousOriginHandoffError):
             _resolve_origin_handoff(handoffs_dir, session_id, repo_root=repo_root)
 
+    def test_naive_and_aware_claimed_at_mix_does_not_raise_type_error(self, tmp_path):
+        """Review: code-reviewer (Finding 1). A bare-date claimed_at (e.g.
+        ``2026-06-14``, a real seeded shape -- see
+        test_normalize_claimed_frontmatter.py) parses NAIVE via
+        datetime.fromisoformat, while a ledger-shaped Z-suffixed timestamp
+        parses AWARE. Before the fix, sorting a candidate list mixing the two
+        raised an unhandled TypeError instead of the intended graceful
+        AmbiguousOriginHandoffError/winner resolution. The bare-date
+        candidate here is the older claim, so recency must pick the
+        Z-suffixed (newer) candidate with no raise."""
+        repo_root = tmp_path / "repo"
+        _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        session_id = "sess-mixed-awareness"
+        _seed_handoff(
+            handoffs_dir,
+            "2026-06-14_080000_naive001.md",
+            claimed_by=session_id,
+            claimed_at="2026-06-14",
+            handoff_id="hnd-naive-000001",
+        )
+        _seed_handoff(
+            handoffs_dir,
+            "2026-08-20_120000_aware001.md",
+            claimed_by=session_id,
+            claimed_at="2026-08-20T12:00:00Z",
+            handoff_id="hnd-aware-000001",
+        )
+        origin_handoff, origin_handoff_id = _resolve_origin_handoff(
+            handoffs_dir, session_id, repo_root=repo_root
+        )
+        assert origin_handoff == "state/handoffs/2026-08-20_120000_aware001.md"
+        assert origin_handoff_id == "hnd-aware-000001"
+
 
 class TestMultiMatchSurfacesAsErrReply:
     """The op boundary (_handler / _handle_stamp) never lets
-    AmbiguousOriginHandoffError escape -- it is translated into the same
-    {"exit_code": 1, "error": ...} reply shape every other op-level failure
-    in this module uses."""
+    AmbiguousOriginHandoffError escape uncaught.  The two doors diverge on
+    purpose (review: code-reviewer, Finding 2): ``_handler`` has written
+    nothing yet, so it aborts loud with the same {"exit_code": 1, "error":
+    ...} reply shape every other op-level failure in this module uses.
+    ``_handle_stamp``'s target file already exists on disk, so an abort
+    there would leave it permanently unstamped with no signal -- it instead
+    degrades origin_handoff/origin_handoff_id to null and records a
+    "degraded" entry, exactly like its existing origin_plan_id/
+    origin_goal_id ambiguity handling."""
 
     def test_author_mode_returns_err_reply_not_raise(self, tmp_path, monkeypatch):
         repo_root = tmp_path / "repo"
@@ -223,7 +263,7 @@ class TestMultiMatchSurfacesAsErrReply:
         assert result.get("exit_code") == 1
         assert "state/handoffs" in result.get("error", "")
 
-    def test_stamp_mode_returns_err_reply_not_raise(self, tmp_path, monkeypatch):
+    def test_stamp_mode_degrades_origin_handoff_instead_of_aborting(self, tmp_path, monkeypatch):
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
         session_id = "sess-stamp-ambiguous"
@@ -244,5 +284,11 @@ class TestMultiMatchSurfacesAsErrReply:
                 common_dir,
             )
         )
-        assert result.get("exit_code") == 1
-        assert "state/handoffs" in result.get("error", "")
+        # No abort -- the target file already existed on disk; a hard error
+        # here would have left it permanently unstamped with no signal.
+        assert result.get("exit_code") is None
+        assert result.get("status") == "ok"
+        assert result.get("origin_handoff") is None
+        assert result.get("origin_handoff_id") is None
+        degraded_fields = {d["field"] for d in result.get("degraded", [])}
+        assert "origin_handoff" in degraded_fields

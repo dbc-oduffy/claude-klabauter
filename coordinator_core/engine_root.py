@@ -483,6 +483,15 @@ def engine_source_root() -> Optional[str]:
     existing repo-named ladder already resolves it correctly. Callers fall
     back to that ladder rather than treating None as an error.
 
+    NOT `coordinator_engine_source_root_env()`, in this same module. That is the
+    LOCATOR axis's read accessor and names the same concept in English, which
+    makes the pair easy to confuse — but it reads an ENVIRONMENT variable, and a
+    process-inherited value is the precise hazard this whole slate exists to
+    close: the warm server exports its own root into the environment it serves
+    from, which is how a mirror came to be labelled a live working tree. Write
+    routing must resolve off disk, where no other process's inheritance can
+    reach it. Same words, opposite trust model; do not collapse them.
+
     NEGATIVE SPEC — do not put this on `coordinator_engine_root()`'s ladder.
     Import resolution, `sys.path` setup and the warm-serving hot path all want
     the engine that is actually executing; substituting the source tree there

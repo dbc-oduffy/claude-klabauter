@@ -207,10 +207,16 @@ class AmbiguousOriginHandoffError(RuntimeError):
     Mirrors the module's existing fail-loud discipline for provenance-
     critical ambiguity (the ``OSError`` raised on an unreadable
     ``handoffs_dir`` — see ``_resolve_origin_handoff``'s own "Raises"
-    section): both ``_handler`` and ``_handle_stamp`` catch this and
-    surface it as an explicit ``_err(...)`` reply rather than silently
-    picking a candidate (defect B — see
+    section) rather than silently picking a candidate (defect B — see
     ``state/handoffs/2026-08-21-scaffold-knows-the-session.md`` spec 4).
+    Both ``_handler`` and ``_handle_stamp`` catch this, but the two doors
+    diverge on what they do with it (review: code-reviewer, Finding 2):
+    ``_handler`` has written nothing yet, so it surfaces an explicit
+    ``_err(...)`` reply. ``_handle_stamp``'s target file already exists on
+    disk, so an abort there would leave it permanently unstamped with no
+    signal — it instead degrades ``origin_handoff``/``origin_handoff_id`` to
+    ``null`` and records a ``degraded`` entry, matching its existing
+    ``origin_plan_id``/``origin_goal_id`` ambiguity handling.
     """
 
 
@@ -405,6 +411,18 @@ def _parse_claim_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
     ``datetime``. ``None`` on absence or any unparseable shape — degrade,
     never raise; the caller treats "cannot parse" identically to "cannot
     disambiguate" (see ``_resolve_origin_handoff``'s multi-match section).
+
+    A bare-date/offset-less value (e.g. ``claimed_at: 2026-06-14`` — a real,
+    seeded shape, see ``test_normalize_claimed_frontmatter.py``) parses as a
+    NAIVE ``datetime.fromisoformat`` result, while ledger writes are always
+    ``Z``-suffixed and therefore aware. A multi-match candidate set mixing
+    the two would hand ``sorted()`` a naive/aware pair, which raises
+    ``TypeError`` — unhandled at both op boundaries (``_handler`` and
+    ``_handle_stamp`` catch only ``OSError``/``AmbiguousOriginHandoffError``).
+    Review: code-reviewer (Finding 1). A naive parse is therefore normalized
+    to UTC-aware here so every value this function returns is comparable
+    against every other, honouring the "aware" promise this docstring
+    already made before the fix landed.
     """
     if not value:
         return None
@@ -414,9 +432,12 @@ def _parse_claim_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.datetime.fromisoformat(text)
+        parsed = datetime.datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
 
 
 def _resolve_origin_handoff(
@@ -811,7 +832,23 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
         except OSError as exc:
             return _err(f"cannot enumerate {handoffs_dir} to resolve origin_handoff: {exc}")
         except AmbiguousOriginHandoffError as exc:
-            return _err(str(exc))
+            # Degrade, not abort — the target file already exists on disk in
+            # stamp mode, so a hard error here would leave it permanently
+            # unstamped with no signal (the exact failure this stamping mode
+            # exists to eliminate; see this function's own docstring, which
+            # already documents degrade-not-abort for origin_plan_id/
+            # origin_goal_id ambiguity below). Review: code-reviewer
+            # (Finding 2) — this branch used to share _handler's hard
+            # _err(...) abort, which contradicted that documented contract.
+            # _handler (fresh-authoring, nothing written yet) keeps aborting;
+            # only this stamp-mode branch degrades.
+            origin_handoff = None
+            resolved_handoff_id = None
+            degraded.append({
+                "field": "origin_handoff",
+                "reason": f"{exc} — stamped null",
+                "candidates": [],
+            })
         if not origin_handoff_id:
             origin_handoff_id = resolved_handoff_id
 

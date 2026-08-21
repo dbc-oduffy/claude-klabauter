@@ -186,6 +186,87 @@ def test_unknown_category_fails_loud_naming_legal_values() -> None:
 
 
 
+def test_spinoff_workstream_resolves_through_the_cli() -> None:
+    """The `workstream` half of the placeholder gate below only ever exercises
+    the omit-path: its pinned `COORDINATOR_SESSION_ID` holds no baton, so
+    `_resolve_spinoff_workstream` returns `None` on every run and the "no
+    PLACEHOLDER" assertion is satisfied by absence, never by a real resolved
+    value surviving the CLI subprocess round-trip (code-review finding,
+    2026-08-21: `test_spinoff_resolvable_fields_never_scaffold_as_placeholder`
+    can pass vacuously for `workstream`).
+
+    This test closes that gap: seeds a real git repo with a
+    `state/handoffs/held.md` baton whose `claimed_by` mirror field matches the
+    invoked session id and carries a known `workstream:`, invokes the CLI with
+    that repo as cwd, and asserts the EMITTED bytes on disk carry the seeded
+    value verbatim -- proving the resolve arm, not just the omit arm, survives
+    the subprocess boundary. `_resolve_origin_handoff`'s mirror fallback (no
+    ledger claim dir exists in a fresh `git init`) is exercised for real, not
+    mocked -- the same seam `ResolveSpinoffWorkstreamTest` in
+    `tests/test_coordinator_doc_new_spinoff_resolvable_fields.py` only ever
+    mocks at the point of use.
+    """
+    with tempfile.TemporaryDirectory(prefix="coordinator-doc-new-spinoff-workstream-cli-") as tmp_repo:
+        init = subprocess.run(
+            ["git", "init", "-q", tmp_repo],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **no_console_creationflags(),
+        )
+        if init.returncode != 0:
+            raise AssertionError(f"git init failed for CLI-round-trip fixture repo: {init.stderr}")
+        handoffs_dir = os.path.join(tmp_repo, "state", "handoffs")
+        os.makedirs(handoffs_dir)
+        session_id = "cli-workstream-round-trip-session"
+        seeded_workstream = "cli-round-trip-workstream-slug"
+        with open(os.path.join(handoffs_dir, "held.md"), "w", encoding="utf-8") as f:
+            f.write(
+                "---\n"
+                "title: held\n"
+                f"claimed_by: {session_id}\n"
+                f"workstream: {seeded_workstream}\n"
+                "---\n"
+                "body\n"
+            )
+        out_path = os.path.join(tmp_repo, "spinoff-workstream-cli.md")
+        cmd = [
+            sys.executable,
+            _cli_path(),
+            "--type", "spinoff",
+            "--title", "smoke",
+            "--out", out_path,
+        ]
+        env = {**os.environ, "COORDINATOR_SESSION_ID": session_id}
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=tmp_repo,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+                **no_console_creationflags(),
+            )
+        except subprocess.TimeoutExpired:
+            raise AssertionError("spinoff scaffold invocation timed out after 60s")
+        combined = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0:
+            raise AssertionError(f"spinoff scaffold exited {result.returncode}, expected 0. Output: {combined.strip()[:500]}")
+        if not os.path.isfile(out_path):
+            raise AssertionError(f"spinoff scaffold exited 0 but {out_path} was not written")
+        with open(out_path, "r", encoding="utf-8") as f:
+            body = f.read()
+        expected_line = f'workstream: "{seeded_workstream}"'
+        if expected_line not in body:
+            raise AssertionError(
+                f"spinoff scaffolded through the CLI against a repo with a claimed baton "
+                f"carrying workstream: {seeded_workstream!r} did not emit {expected_line!r} -- "
+                f"the resolve arm did not survive the CLI subprocess round-trip. "
+                f"Output head: {body[:400]!r}"
+            )
+
+
 def test_spinoff_resolvable_fields_never_scaffold_as_placeholder() -> None:
     """Standing gate: a spinoff scaffolded THROUGH THE CLI never emits
     `PLACEHOLDER` in a field the engine can resolve.
@@ -206,9 +287,11 @@ def test_spinoff_resolvable_fields_never_scaffold_as_placeholder() -> None:
     Negative-spec: asserts only that these fields are ABSENT-or-real, never
     which session id or workstream resolves -- the values are environment-
     dependent by construction, and pinning them would make this gate a
-    fixture-parity test rather than a placeholder gate. `workstream` is
-    legitimately omitted when this session holds no baton carrying one, so its
-    absence is a pass; a `PLACEHOLDER` value is not.
+    fixture-parity test rather than a placeholder gate. This session holds no
+    baton, so `workstream` is satisfied here by absence on every run -- the
+    resolve arm surviving the CLI subprocess round-trip is proven separately by
+    `test_spinoff_workstream_resolves_through_the_cli` above, not by this test.
+    A `PLACEHOLDER` value is never a pass, for either field.
     """
     with tempfile.TemporaryDirectory(prefix="coordinator-doc-new-spinoff-gate-") as tmpdir:
         out_path = os.path.join(tmpdir, "spinoff-resolvable-fields.md")

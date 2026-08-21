@@ -310,6 +310,9 @@ def _skew_fixture(tmp_path, monkeypatch):
         if claude_klabauter:
             lines.append(f'claude_klabauter = "{live_dir.as_posix()}"')
         lines.append("")
+        lines.append("[engine]")
+        lines.append('target = "candidate"')
+        lines.append("")
         lines.append("[engine.working_repos]")
         lines.append(f'other = "{other_working_dir.as_posix()}"')
         (ml_dir / "registry.local.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -572,19 +575,36 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
     session_dir = tmp_path / "session"
     session_dir.mkdir()
 
-    def _write_registry(*, session_is_working_repo: bool) -> None:
+    def _write_registry(*, session_is_engine_source_tree: bool) -> None:
+        # C4 (2026-08-18 PM ruling) RETIRED `engine.working_repos.*` set
+        # membership as this gate's discriminant, replacing it with the
+        # structural question `_is_claude_klabauter_source_tree` asks: does THIS
+        # session's root equal the ONE resolved claude-klabauter root? So the axis
+        # below is expressed on `repos.claude_klabauter` -- the key the live-
+        # tree ladder actually resolves -- not on the working-repos locator,
+        # which survives for other callers but is no longer read here.
         lines = [
             "[repos]",
             f'claude_klabauter = "{published_dir.as_posix()}"',
-            "",
-            "[engine.working_repos]",
         ]
-        if session_is_working_repo:
+        if session_is_engine_source_tree:
+            # The session IS the engine's own checkout: session root and
+            # resolved claude-klabauter root are the same tree, so the gate returns
+            # True and the divert must not fire.
             lines.append(f'claude_klabauter = "{session_dir.as_posix()}"')
         else:
-            other_dir = tmp_path / "other-working-repo"
-            other_dir.mkdir(exist_ok=True)
-            lines.append(f'other = "{other_dir.as_posix()}"')
+            # A CONFIRMED not-the-source-tree session (literally False, not
+            # the undeterminable None): the claude-klabauter root resolves to a real
+            # tree that is NOT this session's.
+            lines.append(f'claude_klabauter = "{live_dir.as_posix()}"')
+        lines.append("")
+        lines.append("[engine]")
+        lines.append('target = "candidate"')
+        lines.append("")
+        lines.append("[engine.working_repos]")
+        other_dir = tmp_path / "other-working-repo"
+        other_dir.mkdir(exist_ok=True)
+        lines.append(f'other = "{other_dir.as_posix()}"')
         lines.append("")
         (ml_dir / "registry.local.toml").write_text("\n".join(lines), encoding="utf-8")
 
@@ -610,7 +630,7 @@ def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_
     today the wrapper returns the pointer's live tree instead, because rung
     1.5 fires before the gate is ever consulted."""
     fx = _dual_boot_fixture
-    fx.write_registry(session_is_working_repo=False)
+    fx.write_registry(session_is_engine_source_tree=False)
 
     root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
@@ -622,16 +642,27 @@ def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_
     assert cls == "resolved-engine"
 
 
-def test_dual_boot_live_tree_wins_when_session_is_working_repo(_dual_boot_fixture):
-    """AC2: same dual-boot registration, but the session root IS registered
-    under `engine.working_repos.*` -> the gate confirms it a working repo
-    and the wrapper must still return the live tree."""
+def test_dual_boot_live_tree_wins_when_session_is_the_engine_source_tree(_dual_boot_fixture):
+    """AC2: same dual-boot registration, but this session's root IS the
+    engine's own resolved source tree -> the gate returns True, the divert
+    does not fire, and the wrapper must still return the live tree.
+
+    MIGRATED 2026-08-21 with the fixture above. As written this test keyed
+    on `engine.working_repos.*` membership, which C4's PM ruling retired as
+    this gate's discriminant on 2026-08-18 -- so from C4 onward it asserted
+    a premise the code no longer had, and had been red ever since, carried
+    forward across four sessions as `pre-existing`. The AC it encodes is
+    unchanged (a session running the engine's own checkout is not diverted
+    to the mirror); only the way the fixture EXPRESSES that condition moved
+    onto the structural discriminant that replaced the membership one."""
     fx = _dual_boot_fixture
-    fx.write_registry(session_is_working_repo=True)
+    fx.write_registry(session_is_engine_source_tree=True)
 
     root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
 
-    assert root == str(fx.live_dir)
+    # Same as-posix-vs-WindowsPath trap AC1 documents above: the resolver
+    # returns the registry value verbatim, so compare as paths.
+    assert Path(root) == fx.session_dir
     assert cls == "live-working-tree"
 
 
@@ -658,7 +689,7 @@ def test_dual_boot_claude_klabauter_root_env_no_longer_wins(_dual_boot_fixture, 
     the old name. The old name is still read, but only to advise that it is
     retired — see `engine_root._maybe_emit_engine_root_retired`."""
     fx = _dual_boot_fixture
-    fx.write_registry(session_is_working_repo=False)
+    fx.write_registry(session_is_engine_source_tree=False)
 
     without_override = claude_klabauter_root.coordinator_engine_root_with_class()
 

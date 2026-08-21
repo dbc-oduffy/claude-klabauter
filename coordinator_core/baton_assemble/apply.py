@@ -91,7 +91,9 @@ from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import (
     APPLY_EXIT_OK,
     APPLY_EXIT_TRANSPORT_FAIL,
+    OutOfRepoPath,
     UnrecognizedDirective,
+    assert_in_repo_root,
 )
 from coordinator_core.baton_assemble import (
     _resolve_current_session_id,
@@ -1945,6 +1947,13 @@ def _cleanup_orphan_on_commit_pipeline_error(root: Path, artifact_rel_path: str)
     successor artifact when `_scoped_commit` raises AFTER every directive
     (including d3's `handoff.author_fork` stamp) has already landed on disk.
 
+    CALL-SITE PRECONDITION: the caller must only invoke this for a path this
+    run itself authored -- `lineage["output_path"]`, never the malformed-
+    envelope fallback to `effective_artifact_path` (the predecessor handoff
+    or the plan being handed off, a pre-existing artifact this run did not
+    create). Deleting that fallback path would be data loss, not orphan
+    cleanup; see the call site's own guard.
+
     THE GAP THIS CLOSES (spec 5,
     `state/handoffs/2026-08-21-scaffold-knows-the-session.md`). `_D1_
     COMPENSATORS` (`_compensate_d1_scaffold`) only fires from `apply_base
@@ -1977,17 +1986,39 @@ def _cleanup_orphan_on_commit_pipeline_error(root: Path, artifact_rel_path: str)
     guard exists to protect content a HUMAN added between runs; nothing
     human-authored can have touched this file within a single `apply()`
     call, so deleting it unconditionally here is safe -- it is exactly what
-    this run itself just wrote, and it was never staged or committed.
+    this run itself just wrote.
+
+    UNSTAGES AS WELL AS UNLINKS. `apply_base.scoped_commit` runs `git add`
+    then `git commit` as two independently-raising steps -- when `git add`
+    succeeded and `git commit` then failed (hook rejection, lock contention,
+    unrelated git error), the path IS staged at the moment this fires, so
+    `target.unlink()` alone would leave a stale staged blob in the index for
+    a path no longer on disk: a later broad `git add`/`git commit` (this run
+    or a peer's) could resurrect the "cleaned up" content into history,
+    defeating the whole anti-orphan purpose. `git reset -- <path>` undoes
+    the stage; best-effort, same posture as the unlink below, and run before
+    the unlink so a reset failure still leaves the unlink attempted.
 
     Best-effort, matching `_compensate_d1_scaffold`'s own posture: any
     failure removing the file (already gone, permission error, etc.) is a
     silent no-op -- this runs as a REACTION to an already-failed commit
     step, and must never mask or replace the original commit error the
-    caller re-raises after calling this.
+    caller re-raises after calling this. Path containment
+    (`assert_in_repo_root`) is checked for the same reason `apply_base.
+    scoped_commit` checks it before touching the path -- a malformed
+    `artifact_rel_path` must not walk this cleanup outside the repo; an
+    out-of-root path is treated as "nothing to clean up", not an error.
     """
     if not artifact_rel_path:
         return
-    target = root / artifact_rel_path
+    try:
+        target = assert_in_repo_root(Path(artifact_rel_path), root)
+    except OutOfRepoPath:
+        return
+    try:
+        _run_git(["reset", "--", artifact_rel_path], root)
+    except Exception:
+        pass
     try:
         if target.is_file():
             target.unlink()
@@ -2189,10 +2220,16 @@ def apply(
         # must not crash (see `test_apply_with_malformed_artifact_key_falls_back_
         # to_raw_artifact_path`).
         lineage_meta = artifact_meta.get("lineage") if isinstance(artifact_meta, dict) else None
-        committed_artifact_path = (
+        lineage_output_path = (
             lineage_meta.get("output_path") if isinstance(lineage_meta, dict) else None
-        ) or effective_artifact_path
+        )
+        committed_artifact_path = lineage_output_path or effective_artifact_path
         basename = Path(committed_artifact_path).name if committed_artifact_path else ""
+        # `_cleanup_orphan_on_commit_pipeline_error` may only ever delete an
+        # artifact this run authored -- true for `lineage_output_path`, NOT
+        # for the `effective_artifact_path` fallback above (a pre-existing
+        # predecessor handoff or plan). See that function's own docstring.
+        committed_path_is_run_authored = bool(lineage_output_path)
 
         # d1's own compensator (`_D1_COMPENSATORS`, wired into
         # `apply_base.execute_directives` via `_execute_directives` above)
@@ -2243,7 +2280,8 @@ def apply(
                 # commit-step failure here must not strand the just-scaffolded
                 # successor as an unclaimed, untracked orphan. See
                 # `_cleanup_orphan_on_commit_pipeline_error`'s own docstring.
-                _cleanup_orphan_on_commit_pipeline_error(root, committed_artifact_path)
+                if committed_path_is_run_authored:
+                    _cleanup_orphan_on_commit_pipeline_error(root, committed_artifact_path)
                 raise
             if report["commit_sha"]:
                 commits.append(
