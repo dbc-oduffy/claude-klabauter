@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.coverage import _DagChainResult, _resolve_numstat_row_path
-from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from coordinator_core.ops.review_brightline_gate import (
     _classify_surface,
     _is_noise_path,
@@ -420,39 +419,6 @@ def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypat
     assert "commits=1" in captured.out
     assert "filtered_to=1" in captured.out
     assert "VERDICT=single-reviewer-ok" in captured.out
-
-
-# ---------------------------------------------------------------------------
-# C13 (AC16/AC17) — _find_governing_plans deliverable_id join canonicalization.
-#
-# Manifest: state/audits/2026-08-03-deliverable-id-join-sites.md, row #1.
-# Pin: a DECLARED fork pair (baton on the loser leg, plan on the winner leg,
-# or vice versa) must still join — a missed equivalence here silently
-# mis-gates which plans "govern" a baton. An UNDECLARED pair (no equivalence
-# entry) must NOT join — canonicalize() never invents a merge.
-# ---------------------------------------------------------------------------
-
-
-# Review: coordinatorcode-reviewer-d28cb0a8 Finding 1 — the equivalence-map
-# memo is memoized at module scope for the process lifetime, so without a
-# reset on both setup and teardown the last test in this file to resolve it
-# pins that tmp_path root's map for every later test in the same pytest
-# worker. Mirrors the fixture in coordinator_core/ops/test_draft_plan_aging.py.
-@pytest.fixture(autouse=True)
-def _reset_equivalence_memo():
-    _reset_equivalence_map_cache()
-    yield
-    _reset_equivalence_map_cache()
-
-
-def _write_equivalence_map(repo_root: Path, loser: str, winner: str) -> None:
-    state_dir = repo_root / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "deliverable-equivalence.yaml").write_text(
-        f"entries:\n  - loser: {loser}\n    winner: {winner}\n    evidence: test\n",
-        encoding="utf-8",
-    )
-    _reset_equivalence_map_cache()
 
 
 def _write_governed_plan(repo_root: Path, deliverable_id: str) -> Path:

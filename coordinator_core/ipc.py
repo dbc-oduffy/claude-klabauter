@@ -495,34 +495,43 @@ extends to dispatch generally."""
 #: that child IS a live dispatch.
 _unstamped_dispatch_allowed = False
 
-#: DISARMED. The gate below is fully built and fully tested; this flag is the
-#: single seam that decides whether it REFUSES or merely stands ready.
+#: ARMED. PM ruling, verbatim: "for any live ops there should be no fallback to
+#: claude-klabauter. none whatsoever ... I want that shit to fail hard every time if it
+#: can't go via Klabauter." This flag is the single seam that decides whether
+#: the gate below REFUSES or merely stands ready, and it refuses.
 #:
-#: Why it is off: the 233 cold dispatches this gate was written to refuse were
-#: categorised after it first landed (`d179bfb39`) and are not ad-hoc
-#: diagnostics — they are `hooks.postuse_advisory_dispatch` and
-#: `hooks.track_touched_files` reaching `ipc.dispatch_from_hook()`, i.e. every
-#: PreToolUse/PostToolUse shim, in every session, on every tool call. They
-#: resolve `coordinator_core` through this box's bare editable pin rather than
-#: any of the four stamp-gated resolvers, so an armed gate refuses every tool
-#: call fleet-wide the moment the mirror carries it.
+#: History, so nobody re-derives it. The gate first landed in `30ac82322260`
+#: and was reverted by `d179bfb39` on the reading that the 233 recorded
+#: live-tree cold dispatches were `hooks.postuse_advisory_dispatch` and
+#: `hooks.track_touched_files`, which would make an armed gate refuse every
+#: tool call fleet-wide. That reading does not reproduce: both of those ops go
+#: through `DoE-claude/coordinator/hooks/scripts/postuse-advisory-dispatch.py`,
+#: which resolves via `_engine_root.resolve_claude_klabauter_root()` to the STAMPED
+#: klabauter mirror, and setuptools' `_EditableFinder` sits after `PathFinder`
+#: in `sys.meta_path`, so that script's `sys.path.insert(0, root)` wins over the
+#: machine-wide editable pin rather than losing to it.
 #:
-#: `d179bfb39` reverted the whole commit to stop that. It also took out two
-#: unrelated payloads riding the same commit — C7's `_CALLER_CWD_FIELD` /
-#: `resolve_caller_cwd` op-latency attribution and `_handler_exception_error`'s
-#: message-text fix — and left this module's four CONSUMERS behind
-#: (`conftest.py::pytest_configure`, `invoke/__main__.py`'s CLI flag, and two
-#: test modules), so `pytest_configure` raised ImportError and NO test in the
-#: repo collected, on every session on the branch. Restoring the code and
-#: disarming the one refusing branch fixes both without re-litigating the
-#: revert's fleet-safety call.
+#: The population that DOES resolve unstamped is a different family: the git
+#: hooks (`prepare-commit-msg`, `post-commit`, `pre-commit`, `pre-push`,
+#: `post-checkout`) exec through the settings-home forwarder, whose
+#: `_resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()` returns
+#: `(<live tree>, RESOLUTION_LIVE_WORKING_TREE)` by design. Those import the
+#: engine unstamped -- which is why they contribute `client-cold.jsonl` rows,
+#: `record_client_cold_fallback` keying `svc_dir` on `_engine_clone_root()` --
+#: but they do not dispatch ops: none of the CLIs they exec references
+#: `dispatch_ops_from_hook` or `ipc.dispatch`. A row in that file is evidence of
+#: an unstamped IMPORT, never of a gated DISPATCH, and conflating the two is
+#: what produced the original count.
 #:
-#: ARMING IT: flip this to True. The precondition is the hook shims doing their
-#: own documented job (DR-118: "resolve the engine root, hand over the raw
-#: payload") — that fix lives in the doctrine plane (`~/.claude`), not here.
-#: Arm only once a hook dispatch is observed reaching a stamped root; nothing
-#: else about the gate needs to change.
-_STAMP_GATE_ARMED = False
+#: The remaining sanctioned unstamped dispatcher is this repo's own test suite,
+#: which imports and dispatches against the live tree by construction and opts
+#: out explicitly in `conftest.py::pytest_configure` -- see
+#: `allow_unstamped_dispatch` for that carve-out and the CLI flag beside it.
+#:
+#: DISARMING IT: flip to False. Do that only to stop an actual observed
+#: fleet-wide refusal, and say so in the commit -- not to quiet a single
+#: caller, which should instead route through `coordinator-invoke`.
+_STAMP_GATE_ARMED = True
 
 
 def allow_unstamped_dispatch() -> None:
@@ -2053,10 +2062,9 @@ async def dispatch_message(msg: dict) -> dict:
     for what this enforces and `allow_unstamped_dispatch` for the two
     sanctioned ways past it.
 
-    THE GATE IS CURRENTLY DISARMED (`_STAMP_GATE_ARMED = False`) and refuses
-    nothing -- read that flag's own comment before treating its presence in
-    this function as enforcement. Its tests arm it explicitly and exercise
-    the real refusal; only the live default is off.
+    THE GATE IS ARMED (`_STAMP_GATE_ARMED = True`) -- it refuses for real.
+    Read that flag's own comment for the ruling it enforces and for which
+    caller families resolve stamped vs unstamped on this box.
     """
     if _STAMP_GATE_ARMED and not _unstamped_dispatch_allowed and not _is_dispatch_engine_stamped():
         request_id = msg.get("id") if isinstance(msg, dict) else None

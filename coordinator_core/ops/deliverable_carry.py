@@ -75,7 +75,6 @@ import os
 import sys
 
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
-from coordinator_core.ops.deliverable_equivalence import canonicalize
 
 # Accepted `kind` values for a genuine roadmap stub, at the session-state
 # parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
@@ -314,7 +313,6 @@ def resolve_deliverable_and_initiative(
     slug_suffix: str = "handoff",
     *,
     additional_predecessors: list[str] | None = None,
-    equivalence_map: dict[str, str] | None = None,
     predecessor_is_plan_input: bool = False,
     work_slug: str | None = None,
 ) -> tuple[str, str]:
@@ -356,18 +354,6 @@ def resolve_deliverable_and_initiative(
     `lineage["additional_predecessors"]` output, which resolves and appends them
     separately, after this function returns — see that assignment's own comment.
 
-    `equivalence_map` ({loser_id: winner_id}, from `deliverable_equivalence.
-    load_equivalence_map`) is consulted ONLY to decide whether two rungs' RAW ids
-    are the same declared entity — every comparison canonicalizes both sides via
-    `deliverable_equivalence.canonicalize()` before comparing. This is read/compare-
-    side ONLY: the returned `deliverable_id` (and the id handed to `mint(...)`) stays
-    the RAW winning value, and the raise message below reports RAW ids/paths, never
-    canonicalized ones — mirrors `execute_plan_assemble/close_out_and_stamp.py`'s own
-    canonicalize-both-sides-never-write-back discipline. `None`/omitted degrades to
-    `{}` (every id canonicalizes to itself), i.e. today's raw-comparison behaviour —
-    no fallback of this function's own is layered on top of `load_equivalence_map`'s
-    existing missing-artifact degrade.
-
     `predecessor_is_plan_input` (keyword-only, defaults `False` — every existing
     call site is unaffected): the CALLER's assertion that `predecessor` is itself
     a plan input (the plan->execute trigger's own plan, arriving on the
@@ -401,8 +387,6 @@ def resolve_deliverable_and_initiative(
         read_frontmatter_field(predecessor, "deliverable_id") if predecessor_active else ""
     )
 
-    _equivalence_map = equivalence_map or {}
-
     # Every rung of the cascade, in plan -> predecessor -> fan-in order. Each
     # additional-predecessor rung degrades to "" when its path is not a readable
     # file (R5) -- the SAME degrade the plan/predecessor rungs already apply above,
@@ -420,9 +404,9 @@ def resolve_deliverable_and_initiative(
         rungs.append((_extra_path, _extra_id))
 
     present_rungs = [(path, raw_id) for path, raw_id in rungs if raw_id]
-    canonical_values = {canonicalize(raw_id, _equivalence_map) for _, raw_id in present_rungs}
+    distinct_ids = {raw_id for _, raw_id in present_rungs}
 
-    if len(canonical_values) > 1:
+    if len(distinct_ids) > 1:
         # Windows-portability fix (discovered live re-running this stub's own
         # test on a Windows host): `path` is already a plain path STRING, not
         # a value that benefits from `!r`'s quoting -- reprising it double-

@@ -1131,9 +1131,9 @@ def test_stamp_gate_refuses_when_unstamped_and_opt_in_off(monkeypatch):
     """THE GATE ITSELF: an unstamped root, opt-in off -> refused with
     UNSTAMPED_ENGINE_ROOT_ERROR, and the handler never runs (the whole
     point -- a refused dispatch must not have executed anything)."""
-    # The gate ships DISARMED (`ipc._STAMP_GATE_ARMED`) so it cannot refuse
-    # fleet-wide; arm it here so this test exercises the real refusing branch
-    # rather than the disarmed no-op. Reverts at this test's own teardown.
+    # Pinned explicitly rather than inherited from the live default: this
+    # test asserts the REFUSING branch, so it must not silently turn into a
+    # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
     monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: False)
@@ -1154,9 +1154,9 @@ def test_stamp_gate_refuses_when_unstamped_and_opt_in_off(monkeypatch):
 def test_stamp_gate_allows_when_stamped(monkeypatch):
     """A stamped root dispatches normally even with the opt-in off -- the
     gate's own no-op path, proving it does not refuse everything."""
-    # The gate ships DISARMED (`ipc._STAMP_GATE_ARMED`) so it cannot refuse
-    # fleet-wide; arm it here so this test exercises the real refusing branch
-    # rather than the disarmed no-op. Reverts at this test's own teardown.
+    # Pinned explicitly rather than inherited from the live default: this
+    # test asserts the REFUSING branch, so it must not silently turn into a
+    # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
     monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: True)
@@ -1174,9 +1174,9 @@ def test_stamp_gate_bypassed_by_explicit_opt_in(monkeypatch):
     """An unstamped root still dispatches when the explicit opt-in is set --
     the manual-testing carve-out, exercised via the SAME public function
     conftest.py and the CLI flag both call."""
-    # The gate ships DISARMED (`ipc._STAMP_GATE_ARMED`) so it cannot refuse
-    # fleet-wide; arm it here so this test exercises the real refusing branch
-    # rather than the disarmed no-op. Reverts at this test's own teardown.
+    # Pinned explicitly rather than inherited from the live default: this
+    # test asserts the REFUSING branch, so it must not silently turn into a
+    # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
     monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: False)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
@@ -1198,9 +1198,9 @@ def test_stamp_verdict_is_memoized_across_dispatches(monkeypatch, tmp_path):
     module deliberately does not use here). Proven by counting real stat
     calls across three dispatches with the opt-in off (so the gate is
     actually consulted each time)."""
-    # The gate ships DISARMED (`ipc._STAMP_GATE_ARMED`) so it cannot refuse
-    # fleet-wide; arm it here so this test exercises the real refusing branch
-    # rather than the disarmed no-op. Reverts at this test's own teardown.
+    # Pinned explicitly rather than inherited from the live default: this
+    # test asserts the REFUSING branch, so it must not silently turn into a
+    # no-op assertion if `ipc._STAMP_GATE_ARMED` is ever flipped off.
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", True)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
 

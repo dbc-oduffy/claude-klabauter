@@ -327,3 +327,60 @@ def test_self_path_omitted_keeps_the_baton_behaviour(tmp_path: Path) -> None:
     verdict = compute_sizing_disposition(tmp_path, {"deliverable_id": "dlv-shared-abc123"})
 
     assert verdict["value"] == "execution"
+
+
+# ---------------------------------------------------------------------------
+# The null sentinel — both legs of the join
+# ---------------------------------------------------------------------------
+
+
+def test_null_sentinel_fk_does_not_match_a_null_stamped_plan(tmp_path: Path) -> None:
+    """The regression this module's `_real_id` exists for.
+
+    `docs/plans/*.md` really does contain a plan reading `plan_id: null
+    # stamped by a real /plan run`, and 80 live batons really do carry
+    `origin_plan_id` surviving frontmatter parsing as the string "null".
+    Matching those two by string equality stamped `execution` — "sized
+    upstream, re-litigate nothing" — citing an unrelated July draft. The
+    truthful answer is `unsized`, with no dangling-citation warning: a
+    null FK is an ABSENT citation, not a broken one.
+    """
+    _write_plan(tmp_path, "docs/plans/2026-07-19-unrelated-draft.md", "null")
+
+    verdict = compute_sizing_disposition(tmp_path, {"origin_plan_id": "null"})
+
+    assert verdict["value"] == "unsized"
+    assert verdict["basis"] is None
+    assert verdict["warning"] is None
+
+
+@pytest.mark.parametrize("sentinel", ["null", "NULL", "Null", "~", "  null  ", ""])
+def test_every_null_sentinel_spelling_is_an_absent_citation(tmp_path: Path, sentinel: str) -> None:
+    """`~` is YAML null too, and case is not load-bearing in a sentinel."""
+    _write_plan(tmp_path, "docs/plans/2026-07-19-unrelated-draft.md", "null")
+
+    verdict = compute_sizing_disposition(tmp_path, {"origin_plan_id": sentinel})
+
+    assert verdict["value"] == "unsized"
+    assert verdict["basis"] is None
+
+
+def test_null_stamped_plan_is_not_an_inheritance_target(tmp_path: Path) -> None:
+    """Target-side leg: a plan carrying `deliverable_id: null` must not be
+    inherited by a baton whose own id failed to parse into anything real."""
+    _write_plan_with_deliverable(tmp_path, "docs/plans/2026-07-19-unstamped.md", "null")
+
+    verdict = compute_sizing_disposition(tmp_path, {"deliverable_id": "null"})
+
+    assert verdict["value"] == "unsized"
+    assert verdict["basis"] is None
+
+
+def test_a_real_fk_still_resolves(tmp_path: Path) -> None:
+    """Negative control — the sentinel filter must not blunt the real join."""
+    _write_plan(tmp_path, "docs/plans/2026-08-20-real.md", "pln-real-abc123")
+
+    verdict = compute_sizing_disposition(tmp_path, {"origin_plan_id": "pln-real-abc123"})
+
+    assert verdict["value"] == "execution"
+    assert "docs/plans/2026-08-20-real.md" in verdict["basis"]

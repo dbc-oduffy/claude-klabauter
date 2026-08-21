@@ -41,6 +41,37 @@ _PLAN_ID_RE = re.compile(r"""^plan_id:\s*["']?([^"'\s]+)""", re.M)
 
 _PLAN_DELIVERABLE_RE = re.compile(r"""^deliverable_id:\s*["']?([^"'\s]+)""", re.M)
 
+#: Tokens that mean "this record carries no id", on BOTH sides of the join.
+#: Same set as `spec_backlink_resolve._real_id`, `deliverable_equivalence.
+#: _YAML_NULL_LITERALS`, and `ops/ceremony/renderers._ID_NULL_SENTINELS` —
+#: defined locally rather than imported because every one of those modules
+#: self-registers a JSON-RPC op on import, and this predicate is read by
+#: `plan`'s admission gate before any op registry exists.
+_NULL_SENTINELS = frozenset({"null", "~"})
+
+
+def _real_id(value: object) -> Optional[str]:
+    """`value` stripped, iff it is a non-empty string naming a real id.
+
+    Both legs of this module's join must apply it, and the failure when
+    either does not is not cosmetic. The scanned globs contain a plan whose
+    frontmatter reads `plan_id: null  # stamped by a real /plan run`, and
+    `_PLAN_ID_RE` captures the literal token `null` off it. A baton whose
+    own `origin_plan_id` survived frontmatter parsing as the STRING
+    `"null"` — 80 of the live corpus do — then matched that plan by string
+    equality and was stamped `execution`: "sized upstream, re-litigate
+    nothing", citing a stale unrelated draft as the authorization. A
+    fabricated citation is strictly worse than the `unsized` this now
+    returns, because the EM acts on it. See DR-344 § R1: absence is
+    information.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.lower() in _NULL_SENTINELS:
+        return None
+    return stripped
+
 #: The three values of the axis, in precedence order.
 SIZING_DISPOSITION_VALUES: tuple[str, ...] = ("execution", "sized", "unsized")
 
@@ -84,7 +115,7 @@ def _resolve_plan_by(
             if head is None:
                 continue
             match = pattern_re.search(head)
-            if match and match.group(1) == wanted:
+            if match and _real_id(match.group(1)) == wanted:
                 return candidate.relative_to(root).as_posix()
     return None
 
@@ -139,14 +170,15 @@ def cited_plan_fks(fm: dict[str, Any]) -> list[tuple[str, str]]:
     its fan-in sibling; neither supersedes the other, and a record may carry
     either, both, or neither."""
     cited: list[tuple[str, str]] = []
-    origin = fm.get("origin_plan_id")
-    if isinstance(origin, str) and origin.strip():
-        cited.append(("origin_plan_id", origin.strip()))
+    origin = _real_id(fm.get("origin_plan_id"))
+    if origin:
+        cited.append(("origin_plan_id", origin))
     plural = fm.get("plan_ids")
     if isinstance(plural, list):
         for entry in plural:
-            if isinstance(entry, str) and entry.strip():
-                cited.append(("plan_ids", entry.strip()))
+            real = _real_id(entry)
+            if real:
+                cited.append(("plan_ids", real))
     return cited
 
 
@@ -208,12 +240,7 @@ def compute_sizing_disposition(
                 "warning": None,
             }
 
-    deliverable_raw = fm.get("deliverable_id")
-    deliverable_id = (
-        deliverable_raw.strip()
-        if isinstance(deliverable_raw, str) and deliverable_raw.strip()
-        else None
-    )
+    deliverable_id = _real_id(fm.get("deliverable_id"))
     if deliverable_id:
         inherited = resolve_plan_by_deliverable(root, deliverable_id, self_path=self_path)
         if inherited:
