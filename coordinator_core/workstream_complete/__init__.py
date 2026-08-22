@@ -303,7 +303,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "scan_unresolved_ubt_records",
     "classify-dispatch-shape",
     "session-claim-cli",
-    "emit-cadence",
 )
 
 
@@ -1378,7 +1377,6 @@ def build_directives(
     )
     if release_plan_claim is not None:
         directives.append(release_plan_claim)
-    directives.append(directives_commit_tail.build_emit_cadence_directive())
 
     return directives
 

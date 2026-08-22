@@ -651,16 +651,28 @@ class CommitSet:
     distinction is the whole job: the answer exists to remove doubt, and a
     silent omission reintroduces it.
 
+    ``peers`` is every path this session does NOT hold that at least one
+    other session does. It is NOT part of the "what belongs to me" answer and
+    a caller rendering that answer should ignore it; it exists because a
+    caller classifying an ARBITRARY path -- a dirty-tree sweep deciding what
+    it may touch -- needs to tell "a peer owns this" from "nobody has claimed
+    this", and those two are indistinguishable from ``paths`` and
+    ``contested`` alone. Sized by the claim ledger, not by the tree: ~405
+    entries on this repo, 2026-08-21. Keep it OUT of anything that crosses
+    the op wire (~72KB as JSON at that size) -- in-process consumers only.
+
     ``complete`` mirrors ``_IndexState.complete``. False means the walk behind
     this answer was aborted or could not fully enumerate, so ``paths`` may be
-    SHORT and ``contested`` may under-report. A caller must say so rather than
-    presenting a partial answer as the answer; ``abort_cause`` names why.
+    SHORT and both ``contested`` and ``peers`` may under-report. A caller must
+    say so rather than presenting a partial answer as the answer;
+    ``abort_cause`` names why.
     """
 
     paths: List[str]
     contested: Dict[str, List[str]]
     complete: bool
     abort_cause: Optional[str] = None
+    peers: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
 
 
 def commit_set(
@@ -699,12 +711,15 @@ def commit_set(
     state = rebuild(sessions_dir=sessions_dir, cwd=cwd)
     mine: List[str] = []
     contested: Dict[str, List[str]] = {}
+    peer_only: Dict[str, List[str]] = {}
     for path, claimants in state.claims.items():
+        others = [c for c in claimants if c != session_id]
         if session_id not in claimants:
+            if others:
+                peer_only[path] = others
             continue
-        peers = [c for c in claimants if c != session_id]
-        if peers:
-            contested[path] = peers
+        if others:
+            contested[path] = others
         else:
             mine.append(path)
     mine.sort()
@@ -713,6 +728,7 @@ def commit_set(
         contested=contested,
         complete=state.complete,
         abort_cause=state.abort_cause,
+        peers=peer_only,
     )
 
 

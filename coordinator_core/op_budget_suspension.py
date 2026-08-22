@@ -28,6 +28,36 @@ REINSTATEMENT — the whole point of the table, and the only path back:
     warm numbers reinstates the defect with its evidence attached. Each op has a
     spinoff carrying its own reinstatement case; `spinoff` names it.
 
+    ON BOTH PLATFORMS, and this is one bar, not two. A case built on macOS
+    numbers alone does not discharge it, and neither does one built on Windows
+    numbers alone. Process creation — the dominant cost of every op in this table
+    — is far more expensive on Windows than on macOS, measured at roughly 50x for
+    the same work: `review_trail.write` reads p50 74.1ms / max 1484.5ms over
+    n=938 on one box's macOS sink and p50 3986.3ms / max 16558.8ms over n=108 in
+    the Windows measurement this table's own row carries. Both figures are
+    correct. A single-platform case therefore either under-reports the real cost
+    by that factor or condemns an op that is fine where it actually runs, and a
+    reader cannot tell which from the number alone.
+
+    What this is NOT: a per-platform threshold, a platform column in the roster,
+    or a suspension that lifts on one OS and holds on another. PM ruling,
+    2026-08-22: the bans stay until the ops are rebuilt to be performant on both
+    platforms, and an OS-aware ban mechanism was rejected outright — it is one
+    step from "this is fine on macOS, so un-ban it here", which converts a
+    fleet-wide correctness bar into a local opt-out and leaves the op slow on
+    Windows with nobody feeling it. The single uniform number is the feature.
+    This paragraph tightens the EVIDENCE a reinstatement case must carry; it
+    changes nothing about who the ban applies to, which is everyone.
+
+    That bar was UNSATISFIABLE for every op until 2026-08-22: macOS had no
+    instrument for spawn count or process time, so no case could ever carry
+    both halves, on any op, regardless of how it ran on Windows. This did NOT
+    make Windows-only evidence sufficient — it never was and still is not; the
+    bar was, and remains, one bar. What changed is that its macOS half now has
+    a sanctioned instrument: `coordinator_core/benchmarks/process_time.py ::
+    batched_process_time_ms`. A both-platforms case is now possible to build;
+    none has been.
+
     SPAWN COUNT IS THE LOAD-INVARIANT FIGURE, AND IT IS REQUIRED.
     A wall-clock number taken under load is mostly a measurement of this session's
     peers, not of the op. Measured on this box, 2026-08-21, same three git reads
@@ -63,9 +93,8 @@ REINSTATEMENT — the whole point of the table, and the only path back:
     The campaign narrative behind those rules — which five figures, how each failed,
     which were caught by their own author and which by a reader — is a dated record,
     not a contract, and lives in
-    `state/2026-08-21-ops-turned-off-for-the-2s-max-bar.md` and
-    `state/lessons/2026-08-21-a-relayed-number-is-not-a-checked-number.yaml`. Those
-    numbers go stale; the three rules do not.
+    `state/2026-08-21-ops-turned-off-for-the-2s-max-bar.md`. Those numbers go stale;
+    the three rules do not.
 
     So: p50 and p90 over a real n, or the case is not made. And prefer a CONTROL to
     a sample wherever one is available — the strongest evidence this campaign
@@ -101,6 +130,29 @@ Negative-spec:
     - The refusal message never names a bypass, and never offers "raise the
       timeout" as the alternative. There is no shape of this message in which
       that text is correct. Conforms to docs/wiki/guard-messaging.md § Register.
+
+      A SANCTIONED FALLBACK IS NOT A BYPASS, and the distinction is a PM ruling
+      of 2026-08-21, not an EM reading of this bullet: *"plain git commit is and
+      has to be the sanctioned fallback for now."* A bypass would defeat the
+      suspension — it would get the op's work done at the op's cost, which is
+      the box damage this table exists to stop. Plain `git commit` does not: it
+      is a different, cheaper mechanism that every EM in this repo already uses,
+      and the `prepare-commit-msg` hook attributes it identically (verified by
+      control, 2026-08-21 — six commits, plain git, zero op invocations, all
+      carrying `Deliverable-Id`). Naming it costs the ruling nothing.
+
+      "FOR NOW" IS PART OF THE RULING, so it is part of this bullet. The
+      fallback stands while the suspension does. If `ceremony.scoped_git_commit`
+      earns its way back, the `fallback` row leaves with it — this is not a
+      standing licence to hand-commit around a live op, and a reader who finds
+      this text after reinstatement is reading a stale carve-out.
+
+      The bar for adding a `fallback` to any other row: a mechanism that already
+      exists, that a caller can drive without the op, and that preserves what the
+      op guaranteed. Absent all three, the row carries none. An empty slot is the
+      correct answer far more often than a plausible-sounding one — the failure
+      this field was built for was an agent inventing a disposition, and an EM
+      inventing one here is the same error one layer up.
     - `measured` is EVIDENCE, not a threshold. Nothing reads these numbers to
       make a decision; they exist so the refused caller learns why without going
       to look, and so a reinstatement case has a baseline it must beat.
@@ -168,8 +220,14 @@ SUSPENSION_BAR_MS = 2000.0
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "ceremony.scoped_git_commit": {
         "measured": {"max_ms": 150021.1, "p50_ms": 30694.6, "n": 338},
-        "note": "Rode the 150s ceiling. Hourly p50 degraded 3-8s -> 85.4s over 2026-08-21.",
-        "spinoff": None,
+        "note": "Rode the 150s ceiling. Hourly p50 degraded 3-8s -> 85.4s over 2026-08-21. "
+                "n=338 is the BREACH population from `op_census.breaches` and is not this "
+                "op's invocation count: the same window read directly off op-latency gives "
+                "n=2668 and 30,266 box-seconds (8.4h), 1006 runs over 9.5s. Use the larger "
+                "figure for damage; a reinstatement still beats the max, not the count.",
+        "fallback": "Commit with plain `git commit`; the prepare-commit-msg hook "
+                    "attaches Deliverable-Id.",
+        "spinoff": "state/handoffs/2026-08-21-earn-ceremony-scoped-git-commit-back-und.md",
     },
     "ceremony.wsc_tail": {
         "measured": {"max_ms": 220191.7, "p50_ms": 30015.6, "n": 12},
@@ -179,11 +237,6 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "session.sweep_consumed_handoffs": {
         "measured": {"max_ms": 104963.8, "p50_ms": 30193.9, "n": 2},
         "note": "The 30s ceiling is the operating point, not the tail.",
-        "spinoff": None,
-    },
-    "artifact.emit": {
-        "measured": {"max_ms": 56645.9, "p50_ms": 1.6, "n": 43},
-        "note": "p50 1.6ms. The median proves nothing; the 56s max is the box damage.",
         "spinoff": None,
     },
     "probes.fork_census": {
@@ -233,11 +286,6 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": "26/26 breached.",
         "spinoff": None,
     },
-    "hooks.cater_subagent_start": {
-        "measured": {"max_ms": 6950.8, "p50_ms": 1415.6, "n": 247},
-        "note": "Fires on every subagent dispatch; 90% breach rate.",
-        "spinoff": None,
-    },
     "hooks.track_touched_files": {
         "measured": {"max_ms": 6939.7, "p50_ms": 11.1, "n": 3439},
         "note": "Fires on every edit. 3439 invocations, trend worsening.",
@@ -266,11 +314,27 @@ def refusal_message(method: str) -> str:
     """The caller-facing refusal for a suspended op.
 
     Register (docs/wiki/guard-messaging.md): one fact, once, then a terse
-    imperative. The alternative is the reinstatement bar — cold, not warm — and
-    never a way around the refusal, because there is not one.
+    imperative. The reinstatement bar — cold, not warm — is never a way around
+    the refusal, because there is not one.
+
+    TWO AUDIENCES, and the reinstatement bar only ever addressed the second.
+    A refused caller is mid-workflow and cannot reinstate anything; telling it
+    what a future candidate build must prove leaves it with nothing to do now.
+    Measured consequence (2026-08-21): a dispatched execution workflow halted
+    at its first commit gate and the commit agent, bound by its own definition
+    to `ceremony.scoped_git_commit` and forbidden a raw `git commit`, invented
+    the disposition it had not been given — "wait for the infrastructure to
+    recover", advice naming an event this hand-curated table cannot emit.
+
+    So a row MAY carry a `fallback`: the sanctioned path the caller takes right
+    now. It is rendered before the reinstatement bar, because the caller reads
+    in that order. Only `ceremony.scoped_git_commit` carries one — most of these
+    ops have no equivalent a caller can drive by hand, and inventing one to fill
+    the slot would be the same improvisation the field exists to prevent.
     """
     record = SUSPENDED_OPS.get(method)
     max_ms = 0.0
+    fallback = ""
     if isinstance(record, dict):
         measured = record.get("measured")
         if isinstance(measured, dict):
@@ -278,8 +342,13 @@ def refusal_message(method: str) -> str:
                 max_ms = float(measured.get("max_ms") or 0.0)
             except (TypeError, ValueError):
                 max_ms = 0.0
+        raw_fallback = record.get("fallback")
+        if isinstance(raw_fallback, str):
+            fallback = raw_fallback.strip()
     return (
         f"{method} is off: measured max {max_ms:.0f}ms against a "
-        f"{SUSPENSION_BAR_MS:.0f}ms bar. Prove it under "
-        f"{SUSPENSION_BAR_MS / 1000:.0f}s without the warm engine to bring it back."
+        f"{SUSPENSION_BAR_MS:.0f}ms bar. "
+        + (f"{fallback} " if fallback else "")
+        + f"Prove it under {SUSPENSION_BAR_MS / 1000:.0f}s without the warm "
+        "engine to bring it back."
     )

@@ -75,6 +75,43 @@ def test_warm_miss_fails_hard_when_enabled_and_not_opted_in(monkeypatch, tmp_pat
     assert "--allow-unstamped-dispatch" in stderr
 
 
+def test_permanent_cold_reason_replaces_the_retry_advice(monkeypatch, tmp_path):
+    """THE CONTRADICTION THIS CLOSES (observed 2026-08-22, every settings-home
+    `bin/` live op): the client says every call from this tree goes cold, then
+    this block says cold fallback is disabled and to retry in a moment --
+    neither half naming a path, and retrying never clearing it. When the
+    client has established a PERMANENT reason, that reason leads, and the
+    retry advice must not appear."""
+    reason = "warm engine: resolved engine root does not exist: /nowhere/klabauter"
+    monkeypatch.setattr(
+        "coordinator_core.warm.client.last_cold_reason", lambda: reason
+    )
+
+    stdout, stderr, code = _run(
+        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+    )
+
+    assert code != 0
+    assert stdout == ""
+    assert reason in stderr, "the fatal message must carry the path that failed to resolve"
+    assert "retry in a moment" not in stderr
+    assert "--allow-unstamped-dispatch" in stderr
+
+
+def test_transient_miss_keeps_the_retry_advice(monkeypatch, tmp_path):
+    """The other side of the same branch: with no permanent reason recorded,
+    the miss IS transient (server booting, busy, skew-evicted), a respawn is
+    already in flight, and "retry in a moment" is the correct remediation."""
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
+    stdout, stderr, code = _run(
+        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+    )
+
+    assert code != 0
+    assert "retry in a moment" in stderr
+
+
 def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):
     """The manual-testing carve-out: the SAME opt-in that bypasses the
     stamp gate also permits cold fallback on a warm miss."""

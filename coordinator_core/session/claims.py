@@ -98,6 +98,7 @@ from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
 from coordinator_core.session import liveness
+from coordinator_core.session import path_dialect
 from coordinator_core.session import scope
 from coordinator_core.session import shape
 
@@ -234,6 +235,50 @@ def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
     return common_dir.parent
 
 
+def canonical_claim_entry(entry: str) -> Optional[str]:
+    """Fold ``entry`` into the ONE ``touched.txt`` path dialect, or return
+    ``None`` when it is STILL absolute afterwards — the writer-side twin of
+    the reader's ``claim_index._normalize_key``, sharing the SAME
+    subprocess-free canonicalizer (``path_dialect.canonicalize_relative_path``)
+    so writer and reader cannot drift.
+
+    This is deliberately the TAIL of ``scope.normalize_touch_path`` — strip a
+    Windows extended-length prefix, canonicalize separators + ``normpath``,
+    then re-test absoluteness — reusing that module's own
+    ``_strip_extended_length_prefix`` / ``_is_absolute`` rather than growing a
+    second absoluteness dialect here. ``\\\\server\\share`` is caught because
+    canonicalization turns it into ``//server/share``, which the shared
+    ``_ABSOLUTE_RE`` matches; the raw backslash form does not.
+
+    Negative spec — why this is NOT a call to ``scope.normalize_touch_path``:
+    that function RELATIVIZES an absolute path, and pays a ``git ls-files``
+    spawn to do it whenever its five-clause zero-spawn guard declines (which
+    an out-of-worktree path always does — ``relpath`` across drive letters
+    raises before the guard can pass). This function is on the per-claim write
+    path, which is budgeted at ZERO spawns, so it refuses an absolute entry
+    instead of buying a normalization with a process. A caller holding an
+    absolute path and wanting it relativized must call :func:`self_claim`,
+    which owns that spawn deliberately.
+
+    Negative spec — a relative entry that escapes the worktree (``../x``) is
+    returned unchanged, not rejected: ``normalize_touch_path``'s relative arm
+    accepts it too, and diverging here would be exactly the second dialect
+    this function exists to prevent. Containment is a separate verdict and
+    belongs to whoever needs it, not to the canonicalizer.
+
+    Empty input returns ``None`` — ``posixpath.normpath("")`` is ``"."``, and
+    claiming the repo root is never what an empty argument meant.
+    """
+    if not entry:
+        return None
+    canonical = path_dialect.canonicalize_relative_path(
+        scope._strip_extended_length_prefix(entry)
+    )
+    if scope._is_absolute(canonical):
+        return None
+    return canonical
+
+
 def atomic_dedup_append(touched: str, entry: str) -> bool:
     """Port of ``cs_atomic_dedup_append <touched-file> <new-entry>`` (786-801),
     made EVENT-AWARE (EM ratification 2026-08-03, plan
@@ -276,18 +321,52 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
     resolution, same bounded timeout, same fail-open contract as C2's fix to
     ``scope.touch()`` — not a bespoke lock design for this second writer.
 
-    ``entry`` is a bare PATH, never a whole event line — but this is a
-    LOWER-LEVEL primitive, and only the ``self_claim`` caller is guaranteed
-    to have repo-relativized it first (via ``scope.normalize_touch_path``).
-    The other reachable caller (``js_bridge_cli._cmd_claim_path`` ->
-    ``coordinator/lib/coordinator_session.py::claim_path``) forwards its
-    ``entry`` argument verbatim, with NO normalization step of its own — an
-    absolute-path caller there writes an absolute-path entry, which will
-    never dedup-match a relative-form entry for the same file written via
-    ``self_claim``. Normalizing that caller is a separate, out-of-scope
-    change (Review: coordinatorcode-reviewer-7ca5d82a Finding 2) — the
-    caller owns normalization at this layer, this function does not
-    normalize on the caller's behalf.
+    ``entry`` is a bare PATH, never a whole event line, and it is folded
+    through :func:`canonical_claim_entry` before anything else — the same
+    dialect the reader (``claim_index._normalize_key``) compares against.
+    An entry that is STILL ABSOLUTE after that fold is REFUSED: no line is
+    written, an advisory stderr line names the path, and the return stays
+    ``True`` (this function's silent-failure contract is unchanged).
+
+    That refusal closes a REACHABLE hole. Until 2026-08-21 this primitive
+    normalized nothing, and its second caller
+    (``js_bridge_cli._cmd_claim_path``, reached by a Node/JS caller shelling
+    out to ``claim-path``) forwarded its argument verbatim -- so an absolute
+    path handed to that caller became an absolute claim key here. Such an
+    entry can never dedup-match, never satisfy an ownership lookup, and never
+    appear in a commit set: it is a claim that protects nothing while reading
+    as a claim.
+
+    It is a FORWARD GUARD, not a repair, and the distinction is load-bearing
+    because the baton that commissioned this fix asserted otherwise. Census
+    2026-08-21, across every ledger in this repo: exactly TWO verb-line
+    entries are non-relative, both in ARCHIVED ledgers, both the same
+    ``\\tmp\\probe_crlf.py`` test probe. This function writes
+    ``scope.format_touch_event("T", entry)``, so everything it has ever
+    written is verb-prefixed -- it has never poisoned a live ledger.
+
+    What DOES sit in the ledgers is a different shape from a different,
+    UNIDENTIFIED writer: 199 verb-LESS lines across 10 live ledgers (plus 351
+    archived), in four dialects -- ``../``-prefixed, bare-relative, and
+    absolute with single and doubled backslashes. Those are invisible to the
+    current reader, which skips any line not matching ``<T|R> <ts> <path>``
+    (``claim_index._last_verb_per_path``), so they are inert rather than
+    harmful. Nothing here closes them, and the writer that produced them is
+    still unfound. Do not read this docstring as having retired that.
+
+    Negative spec — why REFUSE and not RELATIVIZE. Relativizing an absolute
+    path means ``scope.normalize_touch_path``, which pays a ``git ls-files``
+    spawn on exactly the inputs at issue (see
+    :func:`canonical_claim_entry`), and this write path is budgeted at zero
+    spawns. Negative spec — why refuse and not RECORD-AND-WARN: recording it
+    is what produced the 33 entries; the reader has no correct relative form
+    to recover, so the entry is dead data either way and a visible refusal
+    beats an invisible dud. The refusal is loud on stderr precisely because
+    a silently dropped claim is a path nobody is protecting. A caller that
+    genuinely holds an absolute path and wants it claimed calls
+    :func:`self_claim`, which resolves and relativizes it (and skips on the
+    same still-absolute condition, fail-open — this is that contract, one
+    layer down, not a new one).
 
     Two steps:
       1. Fast-exit if ``entry`` is already CLAIMED — i.e. the LAST event recorded for
@@ -342,6 +421,16 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
         raise ValueError("touched-file required")
     if not entry:
         raise ValueError("new-entry required")
+
+    canonical = canonical_claim_entry(entry)
+    if canonical is None:
+        print(
+            f"coordinator-session: claim entry {entry!r} is absolute — not "
+            f"recorded; pass a repo-relative path or use self_claim()",
+            file=sys.stderr,
+        )
+        return True
+    entry = canonical
 
     def _dedup_scan_and_append() -> None:
         # Fast-exit: is the LAST event recorded for this path already 'T'?

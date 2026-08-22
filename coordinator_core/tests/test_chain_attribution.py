@@ -287,6 +287,72 @@ def test_foreign_shas_from_window_pure_no_git():
 
 
 # ---------------------------------------------------------------------------
+# window_needs_grep_signal — spawn-avoidance predicate over the same ladder
+# ---------------------------------------------------------------------------
+
+
+def _attr(sha, sid, is_merge=False, ambiguous=False):
+    return chain_attribution.CommitAttribution(sha, sid, is_merge, trailer_ambiguous=ambiguous)
+
+
+@pytest.mark.parametrize(
+    "window, expected",
+    [
+        ({}, False),
+        ({"a": _attr("a", "sid-mine")}, False),
+        ({"a": _attr("a", "sid-other")}, False),
+        ({"a": _attr("a", "sid-mine", ambiguous=True)}, False),
+        ({"a": _attr("a", None, is_merge=True)}, False),
+        ({"a": _attr("a", None)}, True),
+        ({"a": _attr("a", "sid-mine"), "b": _attr("b", None)}, True),
+    ],
+)
+def test_window_needs_grep_signal_matches_the_ladder(window, expected):
+    """True exactly when some commit is untrailered and not a merge — the only
+    shape `foreign_shas_from_window` consults `grep_attributed` for."""
+    assert chain_attribution.window_needs_grep_signal(window) is expected
+
+
+def test_elided_grep_leg_cannot_change_the_foreign_set():
+    """The property the elision rests on, exercised against the real ladder
+    rather than restated from it: when the predicate says no, EVERY possible
+    grep result — including one naming every sha in the window — produces the
+    same foreign set as the empty one. If a future edit widens which shapes
+    read `grep_attributed` without widening the predicate, this fails."""
+    window = {
+        "own": _attr("own", "sid-mine"),
+        "foreign": _attr("foreign", "sid-other"),
+        "merge": _attr("merge", None, is_merge=True),
+        "ambiguous": _attr("ambiguous", "sid-mine", ambiguous=True),
+    }
+    assert chain_attribution.window_needs_grep_signal(window) is False
+
+    elided = chain_attribution.foreign_shas_from_window(
+        window.keys(), "sid-mine", window, frozenset(),
+    )
+    maximal = chain_attribution.foreign_shas_from_window(
+        window.keys(), "sid-mine", window, frozenset(window.keys()),
+    )
+    assert elided == maximal
+
+
+def test_grep_leg_is_not_elided_when_it_would_change_the_answer():
+    """The converse, so the predicate cannot be "optimized" to always-False:
+    with an untrailered non-merge commit present the grep result IS load-
+    bearing, and the predicate says so."""
+    window = {"untrailered": _attr("untrailered", None)}
+    assert chain_attribution.window_needs_grep_signal(window) is True
+
+    without = chain_attribution.foreign_shas_from_window(
+        window.keys(), "sid-mine", window, frozenset(),
+    )
+    with_hit = chain_attribution.foreign_shas_from_window(
+        window.keys(), "sid-mine", window, frozenset({"untrailered"}),
+    )
+    assert without != with_hit
+
+
+# ---------------------------------------------------------------------------
 # unattributed_foreign_shas — per-range convenience form
 # ---------------------------------------------------------------------------
 

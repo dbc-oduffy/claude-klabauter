@@ -192,7 +192,16 @@ def test_artifact_commit_outcome_rendered_in_result(tmp_path, monkeypatch):
     assert artifact_result["failed"] == []
 
 
-# designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+# designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+# (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+# max 150021ms against a 2000ms bar). Reached here through the deliberately
+# un-mocked `auto_commit_session_async` -> `safe_commit_offer._commit_group`,
+# which resolves that op by key via `ipc.get_op_handler` and so takes
+# `OpSuspendedError`. `ceremony.wsc_tail`'s own suspension is NOT the cause --
+# this test calls `_handler` directly and never crosses dispatch. NOT the
+# attribution kill either: that was rebuilt and `_MECHANISM_DISABLED` is gone.
+# Re-greens when the op is proven under 2s and leaves the roster, and not
+# before; nothing in this module can lift it.
 @pytest.mark.designed_red
 def test_peer_claimed_artifact_survives_uncommitted(tmp_path, monkeypatch):
     """(d) -- real end-to-end run (no mock of `auto_commit_session_async`):

@@ -1,10 +1,10 @@
 """coordinator_core.warm.door.build_posix -- compiles the POSIX (macOS/Linux)
 native fast-path client.
 
-UNVERIFIED: this module has never been run, on any platform. It was authored
-on Windows alongside `door_posix.c`, which has never been compiled. See
-`README-posix.md` for what a Mac user should run and what is expected to
-break first.
+VERIFIED ON macOS 2026-08-22: this module built `door_posix.c` on macOS
+(arm64, Apple clang 21) with no source edits, and the resulting binary served
+a live warm engine. It has NOT been run on Linux. See `README-posix.md` for
+the build command, what was measured, and what remains unexercised there.
 
 WHY THIS IS A SEPARATE MODULE FROM `build.py` RATHER THAN A BRANCH IN IT.
 `build.py` is Windows-shaped end to end -- wide-string placeholders
@@ -109,11 +109,17 @@ def write_provenance(output: Path, compiler_path: str, engine_root: Path) -> Pat
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "engine_root": str(Path(engine_root).resolve()),
         "platform": sys.platform,
+        # Describes THIS ARTIFACT, not the source. It stays False on a fresh
+        # build by design: a successful compile is not a successful
+        # invocation, and this builder does not invoke what it produces. The
+        # SOURCE is no longer unverified -- see the module docstring -- so the
+        # note no longer claims it has never run anywhere.
         "verified": False,
         "verified_note": (
-            "door_posix.c was authored on Windows and has never been run on "
-            "macOS or Linux. A successful compile is not a successful "
-            "invocation -- see README-posix.md."
+            "compiled here, not invoked here. This builder does not exercise "
+            "the binary it writes; run the door against a live warm server, "
+            "or the read-deadline suite, to establish that -- see "
+            "README-posix.md."
         ),
     }
     provenance_path = output.parent / (output.name + _PROVENANCE_SUFFIX)
@@ -191,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build the POSIX warm-engine door and its engine-root sidecar. "
-            "UNVERIFIED -- never compiled or run on macOS/Linux by its author."
+            "Verified on macOS 2026-08-22; not yet run on Linux."
         )
     )
     parser.add_argument(
@@ -227,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         compiler=args.compiler,
         output=args.output,
     )
-    print(f"door build_posix: wrote {output} (UNVERIFIED -- see README-posix.md)")
+    print(f"door build_posix: wrote {output} (not yet invoked -- see README-posix.md)")
     return 0
 
 

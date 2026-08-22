@@ -43,9 +43,16 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+# NEGATIVE-SPEC: `fetch_origin_main` is deliberately NOT imported here. It was
+# deleted at the 2026-08-21 timeout kill (docs/problems/2026-08-21-the-over-
+# budget-timeout-hitlist.md § G5, DR-349) on the ruling that a `git fetch` on a
+# render path is the wrong mechanism at any bound; see
+# `coordinator_core.ops.emit.envelope`'s module docstring. This module called it
+# until 2026-08-22 and was uncollectable from the deletion onward. An absent
+# origin/main now yields an indeterminate git leg with narrated evidence — do
+# not restore a fetch here to make that leg decisive.
 from coordinator_core.ops.emit.envelope import (
     check_origin_main_reachable,
-    fetch_origin_main,
     resolve_ref,
     sha_on_origin_main,
 )
@@ -216,7 +223,10 @@ def verify_shipped(
         )
 
     if not check_origin_main_reachable(root):
-        fetch_origin_main(root)
+        evidence.append(
+            "git: origin/main is absent locally; this path performs no fetch, "
+            "so the git leg reads indeterminate. Run `git fetch origin main` first."
+        )
     git_on_main = sha_on_origin_main(root, resolved_sha)
     if git_on_main is None:
         evidence.append(

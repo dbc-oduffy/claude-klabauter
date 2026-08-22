@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import secrets
 import sys
@@ -59,7 +60,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from coordinator_core._settings_home import claude_config_dir, machine_local_dir
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
 from coordinator_core.snippet_sync.registry import (
     RegistryError,
@@ -442,6 +445,83 @@ _KNOWN_CONTRACT_PLACEHOLDERS = {"kind", "sidecar_path", "subagent_type"}
 _CONTRACT_PLACEHOLDER_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
+def resolve_plugin_root() -> Optional[str]:
+    """Resolve the coordinator-claude plugin's CONTENT root -- the directory
+    that directly contains ``snippets/``, ``subagent-sandbox-policy.yaml``,
+    and ``registry.toml`` -- independent of the spawning SESSION's git root.
+
+    Shared by this module's contract-block assembly leg and
+    ``coordinator_core.hooks.cater_subagent_start._resolve_role_append_snippet_path``
+    (C4/C5, state/dispatch-briefs/2026-08-21-catering-costs-what-the-work-
+    costs/): both legs need "where does the coordinator-claude plugin's
+    content live", not "where is the session's own repo" -- conflating the
+    two is the defect this resolver exists to fix. ``_assemble_contract_blocks``
+    used to join ``coordinator/snippets`` under the session's ``git_root``,
+    which only composes when the session happens to be running inside the
+    DoE-claude checkout itself and yields an empty snippets dir everywhere
+    else.
+
+    Resolution order:
+      1. ``CLAUDE_PLUGIN_ROOT`` env var -- harness-injected, already shaped
+         at content-root level (a DoE-side clone's ``coordinator/`` subdir,
+         never the one-level-up repo root; see
+         ``coordinator_core.install.check_install_singularity._to_plugin_root``
+         for the same shape documented from the installer side).
+      2. ``claude_config_dir()/plugins/coordinator-claude``, probed in both
+         of its known on-disk shapes -- a DoE dev-clone (content nested
+         under a ``coordinator/`` subdir) and a marketplace/OSS-mirror clone
+         (content directly at that root) -- mirroring
+         ``coordinator_root._resolve_plugin_root_for_machine_local``'s same
+         two-shape probe for a different artifact.
+      3. ``<machine_local_dir()>/.doe-root`` + ``coordinator`` -- the fleet's
+         own pointer file, an in-process read with no spawn. Required because
+         on a dev-clone box the live plugin root is a checkout OUTSIDE
+         ``.claude`` entirely (``X:\\DoE-claude\\coordinator``), which rungs 1
+         and 2 cannot see: rung 2's directory EXISTS there but holds only
+         ``coordinator/bin``.
+
+    EVERY rung PROBES FOR THIS RESOLVER'S OWN ARTIFACT (``snippets/``), never
+    for mere directory existence. That distinction is the whole correctness of
+    this function and it is not a style preference: an earlier revision
+    returned the first candidate that ``is_dir()``, which on this fleet's
+    dev-clone install returned ``~/.claude/plugins/coordinator-claude/
+    coordinator`` -- a real directory containing only ``bin`` -- and thereby
+    composed EMPTY contract blocks in every repo including DoE-claude itself,
+    which had worked before. A stand-in probe is exactly the failure
+    ``cater_subagent_start._resolve_role_append_snippet_path``'s own docstring
+    already warned against for the sibling artifact.
+
+    Returns ``None`` on a miss at every candidate -- callers fail open
+    (empty contract-block assembly / "" role-append path), never raise.
+    """
+
+    def _has_content(candidate: Path) -> bool:
+        return (candidate / "snippets").is_dir()
+
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env_root:
+        candidate = Path(env_root)
+        if _has_content(candidate):
+            return str(candidate)
+
+    plugin_base = claude_config_dir() / "plugins" / "coordinator-claude"
+    for candidate in (plugin_base / "coordinator", plugin_base):
+        if _has_content(candidate):
+            return str(candidate)
+
+    try:
+        pointer = machine_local_dir() / ".doe-root"
+        doe_root = pointer.read_text(encoding="utf-8").strip()
+    except OSError:
+        doe_root = ""
+    if doe_root:
+        candidate = Path(doe_root) / "coordinator"
+        if _has_content(candidate):
+            return str(candidate)
+
+    return None
+
+
 def _extract_contract_block_body(
     snippet_text: str, header_style: str, sentinel_begin: str, sentinel_end: str
 ) -> Optional[str]:
@@ -507,7 +587,7 @@ def _resolve_block_placeholders(text: str, values: Dict[str, str]) -> Optional[s
 def _assemble_contract_blocks(
     block_names: Sequence[str],
     *,
-    git_root: str,
+    plugin_root: str,
     subagent_type: str,
     sidecar_path: Optional[str],
     doc_type: Optional[str],
@@ -518,14 +598,18 @@ def _assemble_contract_blocks(
     partial contract).
 
     Bodies are extracted ``header_style``-aware off
-    ``coordinator/snippets/<name>.md`` under ``git_root`` (never off the
-    DoE policy file -- this module never re-reads
-    ``subagent-sandbox-policy.yaml`` for the block-name list itself, only
-    the already-resolved list the caller supplies), then have the closed
-    three-placeholder set resolved. No wrapper/header/delimiter text is
-    added around individual blocks; the join separator is exactly ``"\\n\\n"``.
+    ``<plugin_root>/snippets/<name>.md`` (never off the DoE policy file --
+    this module never re-reads ``subagent-sandbox-policy.yaml`` for the
+    block-name list itself, only the already-resolved list the caller
+    supplies), then have the closed three-placeholder set resolved. No
+    wrapper/header/delimiter text is added around individual blocks; the
+    join separator is exactly ``"\\n\\n"``. ``plugin_root`` is the
+    plugin's own CONTENT root (``resolve_plugin_root()``), NOT the spawning
+    session's git root -- the two only coincide when the session happens to
+    be running inside the DoE-claude checkout itself (see
+    ``resolve_plugin_root``'s docstring).
     """
-    snippets_dir = Path(git_root) / "coordinator" / "snippets"
+    snippets_dir = Path(plugin_root) / "snippets"
     registry_path = snippets_dir / "registry.toml"
 
     try:
@@ -633,8 +717,18 @@ def assemble_contract_blocks_for_payload(
         )
         return None
 
-    git_root = resolve_git_root(cwd)
+    # Non-spawning root read (C2, state/dispatch-briefs/2026-08-21-
+    # catering-costs-what-the-work-costs/C2.md): eligible per
+    # `resolve_git_root_cheap`'s own stated rule -- this leg (module
+    # docstring: "deliberately NOT threaded through from _provision")
+    # fails open to `None`/no-blocks on a miss, never a wrong VERDICT.
+    # `repo_root.show_toplevel` walks and never spawns.
+    git_root = _show_toplevel_no_spawn(cwd)
     if not git_root:
+        return None
+
+    plugin_root = resolve_plugin_root()
+    if not plugin_root:
         return None
 
     _agent_id, _agent_type, subagent_type = resolve_effective_types(payload, git_root)
@@ -642,7 +736,7 @@ def assemble_contract_blocks_for_payload(
 
     return _assemble_contract_blocks(
         block_names,
-        git_root=git_root,
+        plugin_root=plugin_root,
         subagent_type=subagent_type,
         sidecar_path=report_sidecar_path,
         doc_type=doc_type,

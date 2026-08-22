@@ -121,33 +121,37 @@ def test_known_non_scoped_ops_not_in_worktree_scoped_ops():
     assert "hooks.suggest_sonnet_research" not in WORKTREE_SCOPED_OPS
 
 
-def test_emit_ops_reclassified_to_common_dir():
-    """Emit ops must be common_dir-scoped (per-repo emission, 2026-07-07 cutover).
+def test_per_repo_state_writers_are_common_dir_scoped():
+    """backlog.record / goal.append must be common_dir-scoped (2026-07-07 cutover).
 
-    Prior to 2026-07-07, artifact.emit / backlog.record / goal.append were classified
-    "central" — bypassing the per-request repo key entirely. The per-repo-emission-cutover
-    plan (chunk C3) reclassified them to "common_dir" so each emitting repo's
-    _origin_worktree is used to derive the per-repo snapshot root. Emit ops now REQUIRE
-    _origin_worktree and appear in WORKTREE_SCOPED_OPS. A regression here would silently
-    route all emit ops to repo_root=None and re-introduce the hardlocked-to-~/.claude bug.
+    Prior to 2026-07-07 these were classified "central" — bypassing the per-request
+    repo key entirely. The per-repo-emission-cutover plan (chunk C3) reclassified them
+    to "common_dir" so each calling repo's _origin_worktree is used to derive the
+    per-repo state root. They REQUIRE _origin_worktree and appear in
+    WORKTREE_SCOPED_OPS. A regression here would silently route them to
+    repo_root=None and re-introduce the hardlocked-to-~/.claude bug.
+
+    `artifact.emit` and `emit.cadence` were pinned here too until 2026-08-22, when the
+    emission artifact was CUT — see docs/problems/2026-08-22-artifact-emit-cannot-be-
+    earned-back-in-its-current-shape.md. The surviving writers keep the invariant.
     Spec: docs/plans/2026-07-07-per-repo-emission-cutover.md § C3 / AC1
     """
-    assert _OP_KEY_SCOPE.get("artifact.emit") == "common_dir"
     assert _OP_KEY_SCOPE.get("backlog.record") == "common_dir"
     assert _OP_KEY_SCOPE.get("goal.append") == "common_dir"
-    assert "artifact.emit" in WORKTREE_SCOPED_OPS
     assert "backlog.record" in WORKTREE_SCOPED_OPS
     assert "goal.append" in WORKTREE_SCOPED_OPS
 
 
-def test_emit_cadence_is_common_dir_scoped():
-    """emit.cadence MUST be common_dir-scoped — it sequences backlog.record then artifact.emit
-    over the same common_dir key, deriving main_worktree_root(common_dir) exactly like its two
-    sub-ops. A missing/wrong scope entry would silently route it to repo_root=None.
-    Spec: cross-repo/inbox/2026-07-11-claude-central-em-backlog-record-cadence-relocation-reconcile.md
+def test_cut_emission_ops_have_no_scope_entry():
+    """The CUT emission ops must leave no scope row behind.
+
+    A stale `_OP_KEY_SCOPE` entry for a deleted op is not inert: it is the shape a
+    future re-registration would silently inherit, and it makes the roster read as
+    though the op still exists. Removal lands in the same commit as the op.
     """
-    assert _OP_KEY_SCOPE.get("emit.cadence") == "common_dir"
-    assert "emit.cadence" in WORKTREE_SCOPED_OPS
+    for op in ("artifact.emit", "emit.cadence", "emission.publish"):
+        assert _OP_KEY_SCOPE.get(op) is None, f"{op} still carries a scope row"
+        assert op not in WORKTREE_SCOPED_OPS
 
 
 # ---------------------------------------------------------------------------

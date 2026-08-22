@@ -466,12 +466,12 @@ def test_best_effort_directive_failure_lands_in_degraded_not_failed(
     modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "standup")
+    directive = _directive("d_best_effort", "standup")
     directive["best_effort"] = True
     exit_code, report = wc_apply._execute_directives([directive], [], {})
 
     assert report["failed"] == []
-    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_best_effort"]
     assert report["landed"] == []
 
 
@@ -489,18 +489,18 @@ def test_best_effort_directive_failure_alone_still_reaches_success(
         return 0
 
     modules = {
-        "emit-cadence": _fake_module(failing_main, "fake_cadence"),
+        "coordinator-ceremony-hook": _fake_module(failing_main, "fake_best_effort"),
         "workday-complete-step2_5-dirty-tree": _fake_module(clean_main, "fake_clean"),
     }
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    cadence = _directive("d_cadence", "emit-cadence")
+    cadence = _directive("d_best_effort", "coordinator-ceremony-hook")
     cadence["best_effort"] = True
     directives = [_directive("d_clean", "workday-complete-step2_5-dirty-tree"), cadence]
     exit_code, report = wc_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
-    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_best_effort"]
     assert report["landed"] == ["d_clean"]
     assert exit_code == int(wc_apply.WorkdayApplyExitCode.SUCCESS)
 
@@ -552,7 +552,7 @@ def test_degraded_entry_error_string_carries_captured_stderr(monkeypatch: pytest
     modules = {"standup": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "standup")
+    directive = _directive("d_best_effort", "standup")
     directive["best_effort"] = True
     _, report = wc_apply._execute_directives([directive], [], {})
 

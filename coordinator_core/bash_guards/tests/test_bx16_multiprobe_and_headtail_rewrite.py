@@ -240,6 +240,8 @@ def _run_python_c_with_faked_git_status(command: str, porcelain_lines) -> str:
     class _FakeResult:
         def __init__(self, stdout):
             self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
 
     class _FakeSubprocess:
         @staticmethod

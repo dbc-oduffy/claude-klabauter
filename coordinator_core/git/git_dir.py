@@ -55,6 +55,15 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
       join, silently (no print; this runs under a hook that must stay
       quiet). The degraded case is never worse than the pre-change
       behavior.
+
+    DELIBERATE TWIN, do not "consolidate": ``coordinator/bin/coordinator-
+    prepare-commit-msg.py::_resolve_git_dir`` derives the same answer by
+    hand and must keep doing so. It runs before that hook imports any
+    engine, and on a non-coordinator commit the hook exits without ever
+    importing one -- reusing this function there would add a
+    ``coordinator_core`` import to every commit on every machine. That
+    twin also honours ``$GIT_DIR`` and returns ``""`` on failure, neither
+    of which this function does. See its docstring for the full argument.
     """
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"

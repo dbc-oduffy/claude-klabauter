@@ -2416,3 +2416,79 @@ def test_execute_directives_progress_survives_a_directive_writing_its_own_stderr
     err = capsys.readouterr().err
     assert err.index("wsc-apply: d_noisy (archive-stamp-cli)") < err.index("cli-internal-noise")
     assert "wsc-apply: d_noisy exited 0 in " in err
+
+
+# ---------------------------------------------------------------------------
+# render_disabled_op_lines — a disabled op is its own class of event
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_op_line_names_the_op_and_the_directive() -> None:
+    """At exit 4 the report is sixty lines of JSON whose one load-bearing line is
+    an op refusal buried inside a `failed` entry's `error`. This names it."""
+    from coordinator_core.op_budget_suspension import refusal_message
+
+    report = {
+        "failed": [
+            {"id": "d_wsc_tail_write", "error": f"wsc-tail.py exited 3 — {refusal_message('review_trail.write')}"},
+            {"id": "d_other", "error": "some-cli exited 1 (args=[])"},
+        ],
+        "degraded": [],
+    }
+
+    lines = ws_apply.render_disabled_op_lines(report)
+
+    assert lines == [
+        "DISABLED OP review_trail.write — off for the op budget bar; "
+        "d_wsc_tail_write did not run."
+    ]
+
+
+def test_disabled_op_line_is_silent_on_an_ordinary_failure() -> None:
+    """A directive that failed on its own merits is NOT a disabled op, and must
+    not acquire a line claiming it was."""
+    report = {"failed": [{"id": "d_a", "error": "some-cli exited 1 (args=[])"}], "degraded": []}
+
+    assert ws_apply.render_disabled_op_lines(report) == []
+
+
+def test_disabled_op_line_covers_degraded_entries_too() -> None:
+    """A best_effort directive lands its refusal in `degraded`, not `failed`.
+    The operator still needs to know an op is off."""
+    from coordinator_core.op_budget_suspension import refusal_message
+
+    report = {
+        "failed": [],
+        "degraded": [{"id": "d_best_effort", "error": refusal_message("ceremony.wsc_tail")}],
+    }
+
+    lines = ws_apply.render_disabled_op_lines(report)
+
+    assert len(lines) == 1
+    assert "ceremony.wsc_tail" in lines[0]
+    assert "d_best_effort" in lines[0]
+
+
+def test_disabled_op_line_names_no_remedy() -> None:
+    """Negative-spec: only one row in `SUSPENDED_OPS` carries a sanctioned
+    `fallback`, and inventing a plausible one for the rest is the improvisation
+    that field exists to prevent. This renderer offers none."""
+    from coordinator_core.op_budget_suspension import refusal_message
+
+    report = {"failed": [{"id": "d", "error": refusal_message("review_trail.write")}], "degraded": []}
+
+    line = ws_apply.render_disabled_op_lines(report)[0]
+
+    for banned in ("instead", "run ", "try ", "override", "--"):
+        assert banned not in line.lower(), f"remedy-shaped text in a refusal line: {line!r}"
+
+
+def test_suspension_marker_still_matches_the_live_refusal_message() -> None:
+    """`render_disabled_op_lines` recognises a suspension refusal by op name plus
+    one phrase. A reworded refusal must fail a test rather than silently cost the
+    operator the line that says a directive failed because an op is OFF, not
+    because the directive is broken."""
+    from coordinator_core.op_budget_suspension import SUSPENDED_OPS, refusal_message
+
+    for op in SUSPENDED_OPS:
+        assert f"{op}{ws_apply._SUSPENSION_MARKER}" in refusal_message(op)

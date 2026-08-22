@@ -405,12 +405,33 @@ class TestInvokeSmokeProbe:
     (with required=False), not a hard BROKEN that drags the overall verdict down.
     """
 
-    def test_invoke_smoke_healthy_repo_emits_parseable_result(self) -> None:
-        """Probe emits a parseable _ProbeResult on the healthy development repo.
+    @pytest.fixture
+    def stamped_root(self, tmp_path: Path) -> Path:
+        """A root the probe will actually dispatch from.
 
-        Status is PASS (if coordinator_core.invoke ping works) or BROKEN
-        (if the invoke path has a problem) — either is a valid parseable result.
-        The test verifies the invariant; not the specific verdict.
+        The dispatch arms below run only on a STAMPED engine root (DR-331) --
+        `_REPO_ROOT` is a source clone and carries no stamp, so pointing them
+        there would exercise the unstamped SKIP instead of the arm each one
+        names. Patching the predicate is not an option: `_require_module()`
+        re-execs the probe file per call, so a monkeypatch lands on a
+        different module instance than the test's own.
+        """
+        stamp = tmp_path / "coordinator_core" / "_engine_stamp"
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text("sha-published")
+        return tmp_path
+
+    def test_live_source_clone_never_reports_broken(self) -> None:
+        """The live claude-klabauter checkout is a SOURCE clone, and a healthy one must
+        not read red.
+
+        `_REPO_ROOT` carries no engine build stamp, so `ipc.py`'s stamp gate
+        and `invoke.__main__`'s no-cold-fallback arm refuse dispatch from it
+        by ruling (DR-331, DR-315 § 2). The probe dispatches from the
+        published mirror instead (PASS/BROKEN on the mirror's real health),
+        or reports inconclusive when no mirror is registered on this box.
+        Grading the clone's own refusal is the one outcome ruled out, and it
+        is what this probe did on every install from a working tree.
         """
         mod = _require_module()
 
@@ -420,22 +441,22 @@ class TestInvokeSmokeProbe:
             "invoke smoke probe must always return a parseable _ProbeResult"
         )
         assert result.probe == "claude-klabauter.invoke.smoke"
-        # Review: code-reviewer — F9: removed INFO from valid set; INFO means skipped=True
-        # which must not happen on a healthy repo with a valid root (would be a probe bug).
-        assert result.status in {mod._PASS, mod._BROKEN}, (
-            f"Unexpected status {result.status!r}; expected PASS or BROKEN on a healthy repo "
-            "(INFO would indicate an unexpected skip, which is a probe bug)"
-        )
-        assert result.skipped is False, (
-            "skipped=True must not fire on a healthy repo with a valid CLAUDE_KLABAUTER_ROOT"
-        )
+        if result.data.get("dispatch_root") is None:
+            assert result.status == mod._INFO, (
+                f"no dispatch root is inconclusive, got {result.status!r}"
+            )
+            assert result.skipped is True
+        else:
+            assert Path(result.data["dispatch_root"]) != _REPO_ROOT, (
+                "an unstamped clone must never be its own dispatch root"
+            )
         # required=False is mandatory — spawn failure must not hold overall to BROKEN.
         assert result.required is False, (
             "claude-klabauter.invoke.smoke must always carry required=False (OPTIONAL probe)"
         )
 
     def test_invoke_smoke_spawn_failure_emits_skip_not_crash(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """SKIP (not a crash) when subprocess.run raises FileNotFoundError (interpreter absent).
 
@@ -449,7 +470,7 @@ class TestInvokeSmokeProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", _raise_fnf)
 
-        result = mod._run_probe_invoke_smoke(_REPO_ROOT)
+        result = mod._run_probe_invoke_smoke(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "spawn FileNotFoundError must produce a parseable _ProbeResult, not a crash"
@@ -469,7 +490,7 @@ class TestInvokeSmokeProbe:
         )
 
     def test_invoke_smoke_timeout_emits_broken_not_crash(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """BROKEN (not a crash) when subprocess.run raises TimeoutExpired.
 
@@ -484,7 +505,7 @@ class TestInvokeSmokeProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", _raise_timeout)
 
-        result = mod._run_probe_invoke_smoke(_REPO_ROOT)
+        result = mod._run_probe_invoke_smoke(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "TimeoutExpired must produce a parseable _ProbeResult, not a crash"
@@ -514,7 +535,7 @@ class TestInvokeSmokeProbe:
         assert result.required is False
 
     def test_invoke_smoke_nonzero_exit_is_broken_not_crash(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """BROKEN (not a crash) when the invoke subprocess exits non-zero.
 
@@ -530,7 +551,7 @@ class TestInvokeSmokeProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
 
-        result = mod._run_probe_invoke_smoke(_REPO_ROOT)
+        result = mod._run_probe_invoke_smoke(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "non-zero exit must produce a parseable _ProbeResult, not a crash"
@@ -542,7 +563,7 @@ class TestInvokeSmokeProbe:
         assert result.required is False
 
     def test_invoke_smoke_exit_zero_malformed_stdout_is_broken(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """BROKEN (not a crash) when subprocess exits 0 but stdout is not valid JSON.
 
@@ -560,7 +581,7 @@ class TestInvokeSmokeProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
 
-        result = mod._run_probe_invoke_smoke(_REPO_ROOT)
+        result = mod._run_probe_invoke_smoke(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "exit-0 with malformed stdout must produce a parseable _ProbeResult, not a crash"
@@ -573,7 +594,7 @@ class TestInvokeSmokeProbe:
         assert result.required is False
 
     def test_invoke_smoke_pass_verifies_ok_field(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """PASS when invoke returns a well-formed result envelope with result.ok=true.
 
@@ -596,7 +617,7 @@ class TestInvokeSmokeProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
 
-        result = mod._run_probe_invoke_smoke(_REPO_ROOT)
+        result = mod._run_probe_invoke_smoke(stamped_root)
 
         assert _is_parseable_probe_result(result)
         assert result.probe == "claude-klabauter.invoke.smoke"
@@ -823,3 +844,107 @@ class TestOrphanedExecnetGatewaysProbe:
             f"'assume alive' (not orphaned), got {result.status!r}"
         )
         assert result.data["orphaned_pids"] == []
+
+
+class TestInvokeSmokeDispatchRoot:
+    """WHICH tree the smoke probe dispatches from.
+
+    A source clone carries no build stamp, so `ipc.py`'s stamp gate and
+    `invoke.__main__`'s no-cold-fallback arm refuse every dispatch from it
+    (DR-331). Grading that refusal made the probe permanently red on every
+    install from a working tree. The published mirror is the tree an
+    operator's dispatch actually resolves to (DR-326), so that is what gets
+    graded instead -- and when neither is a stamped build, nothing does.
+    """
+
+    @staticmethod
+    def _stamp(root: Path) -> Path:
+        stamp = root / "coordinator_core" / "_engine_stamp"
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text("sha-published")
+        return root
+
+    def test_unstamped_clone_dispatches_from_the_published_mirror(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        mod = _require_module()
+
+        clone = tmp_path / "source-clone"
+        clone.mkdir()
+        mirror = self._stamp(tmp_path / "mirror")
+
+        from coordinator_core import engine_root as engine_root_mod
+
+        monkeypatch.setattr(
+            engine_root_mod, "published_engine_mirror_path", lambda: str(mirror)
+        )
+
+        cwds: list[object] = []
+
+        class _FakeResult:
+            returncode = 0
+            stdout = '{"result": {"ok": true, "ts": 1}}'
+            stderr = ""
+
+        def _capture(*a, **kw):
+            cwds.append(kw.get("cwd"))
+            return _FakeResult()
+
+        monkeypatch.setattr(mod.subprocess, "run", _capture)
+
+        result = mod._run_probe_invoke_smoke(clone)
+
+        assert result.status == mod._PASS
+        assert cwds == [str(mirror)], (
+            "an unstamped clone must dispatch from the published mirror, not itself"
+        )
+        assert result.data["dispatch_root"] == str(mirror)
+
+    def test_no_stamped_root_anywhere_is_inconclusive_not_broken(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No mirror checked out is absence of evidence, not a broken install."""
+        mod = _require_module()
+
+        from coordinator_core import engine_root as engine_root_mod
+
+        monkeypatch.setattr(
+            engine_root_mod, "published_engine_mirror_path", lambda: None
+        )
+
+        spawned: list[object] = []
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: spawned.append(a))
+
+        result = mod._run_probe_invoke_smoke(tmp_path)
+
+        assert _is_parseable_probe_result(result)
+        assert result.status == mod._INFO
+        assert result.skipped is True
+        assert result.required is False
+        assert result.data["dispatch_root"] is None
+        assert spawned == [], "nothing to dispatch from means nothing is spawned"
+
+    def test_stamped_root_dispatches_from_itself(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The klabauter case: the installer's own root IS the published build."""
+        mod = _require_module()
+
+        root = self._stamp(tmp_path)
+        cwds: list[object] = []
+
+        class _FakeResult:
+            returncode = 0
+            stdout = '{"result": {"ok": true, "ts": 1}}'
+            stderr = ""
+
+        def _capture(*a, **kw):
+            cwds.append(kw.get("cwd"))
+            return _FakeResult()
+
+        monkeypatch.setattr(mod.subprocess, "run", _capture)
+
+        result = mod._run_probe_invoke_smoke(root)
+
+        assert result.status == mod._PASS
+        assert cwds == [str(root)]

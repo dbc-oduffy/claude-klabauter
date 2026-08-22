@@ -201,6 +201,68 @@ def test_empty_pathspec_for_own_toplevel_fails_loud(monkeypatch):
         publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
 
 
+# ---------------------------------------------------------------------------
+# F1 regression (Review: code-reviewer): a contributing root tracked at
+# `sha` but absent from the LIVE working tree at pathspec-compute time
+# must still appear in the pathspec — the pre-fix code gated coverage on
+# `.is_dir()`/`.exists()` against the working tree, not `sha`, and would
+# silently drop it.
+# ---------------------------------------------------------------------------
+
+
+def test_root_tracked_at_sha_but_absent_from_working_tree_is_still_covered(tmp_path, monkeypatch):
+    # `_required_pathspec_for_toplevel` only scopes `toplevel == _REPO_ROOT`
+    # (§ docstring: any other toplevel is "not this pathspec's business").
+    # Point `_REPO_ROOT` at a disposable throwaway repo for the duration of
+    # this test so the fix is exercised through the same code path
+    # `_extract_git_archive` actually uses, without touching this repo's
+    # real tree.
+    root = tmp_path / "tracked-repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "c5-test@claude-klabauter.test"],
+        check=True,
+        creationflags=_NO_WINDOW,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.name", "C5 Test"],
+        check=True,
+        creationflags=_NO_WINDOW,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "commit.gpgsign", "false"],
+        check=True,
+        creationflags=_NO_WINDOW,
+    )
+    contributing = root / "src"
+    contributing.mkdir()
+    (contributing / "file.txt").write_bytes(b"hello\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True, creationflags=_NO_WINDOW
+    )
+    sha = publish._git_rev_parse(root, "HEAD")
+    assert sha is not None
+
+    import shutil
+
+    shutil.rmtree(contributing)
+    assert not contributing.is_dir(), "fixture setup failed: contributing root still on disk"
+
+    monkeypatch.setattr(publish, "_REPO_ROOT", root)
+    monkeypatch.setattr(publish, "load_targets", lambda *a, **k: [f"tracked-repo|copy|{contributing}|{tmp_path / 'dest'}"])
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    pathspec = publish._required_pathspec_for_toplevel(root, sha)
+
+    entry = publish._relative_pathspec_entry(contributing, root)
+    assert entry in pathspec, (
+        f"root {contributing} tracked at {sha} but absent from the working tree "
+        f"was dropped from the pathspec: {pathspec}"
+    )
+
+
 def test_foreign_toplevel_is_not_scoped_and_does_not_fail_loud(tmp_path):
     """A git toplevel this repo's own configuration declares no coverage
     for (a throwaway repo, e.g. the one `test_publish_git_archive_eol_

@@ -134,13 +134,16 @@ Negative-spec (hard-won, preserved from the bash originals):
     carried forward.
   - `tracked_at_head` (the Kept-claim existence check) is intentionally left
     UNSCOPED to `gate_paths` -- it is a HEAD snapshot, not staged state, and
-    the bash original scopes only the staged reads. Because it cannot be
-    narrowed, it is instead SKIPPED: the `ls-tree` walk and the staged
-    `--name-only` read that feed Assertion-2 are issued only when the parsed
-    message actually carries a Kept-claim, since no other assertion reads
-    either set. This is a spawn-count reduction, never a widening -- a
-    skipped read is only ever skipped when its consumer would have iterated
-    an empty claim list.
+    the bash original scopes only the staged reads. It is, however, scoped
+    to `parsed.kept_claimed` itself: since C3 (2026-08-21) both legs of
+    Assertion-2 route through `coordinator_core.git.git_state`
+    (`read_index` for the staged set, `head_blobs(cwd, parsed.kept_claimed)`
+    for HEAD membership -- a targeted lookup over the handful of
+    Kept-claimed paths, never `git`'s own unscopeable `ls-tree -r HEAD`
+    walk over the whole tree) with no `git` spawn at all. Both reads are
+    still issued only when the parsed message actually carries a
+    Kept-claim, since no other assertion consumes either set -- a spawn/
+    read-count reduction, never a widening.
 """
 
 from __future__ import annotations
@@ -154,13 +157,13 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Set, Union
 
 from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.git.git_state import IndexParseError, head_blobs, read_index
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.git_native import (
     GitResult,
+    _chunk_paths,
     _git,
-    diff_cached_name_only,
     diff_cached_name_status,
-    status_porcelain,
 )
 from coordinator_core.ops.handoff_carry_gate import CarryGateError, evaluate_gate, read_carried_items
 
@@ -419,24 +422,40 @@ def deletion_block_gate(
 
     # Assertion-2's two reads answer ONE question -- does a Kept-claimed path
     # still exist -- and nothing else in this function consumes either set, so
-    # a message with no Kept-claims skips both spawns outright rather than
-    # computing and discarding them. The `ls-tree` leg is the expensive one: an
-    # unscopeable full HEAD-tree walk (~27k paths / ~2MB of stdout on this
-    # repo) that `tracked_at_head`'s own negative-spec entry below forbids
-    # narrowing. Kept-claims are the rare shape on this commit path; the empty
-    # case is the hot one.
+    # a message with no Kept-claims skips both reads outright rather than
+    # computing and discarding them. Both legs are now index-vs-HEAD lookups
+    # via `git_state` (no `git` spawn for the staged-set leg; the HEAD-tree
+    # leg is `head_blobs`, scoped to exactly `parsed.kept_claimed` -- a
+    # membership check on a handful of paths, never the unscopeable full
+    # `ls-tree -r HEAD` walk (~27k paths on this repo) the old form issued).
+    # Kept-claims are the rare shape on this commit path; the empty case is
+    # the hot one.
     staged_all_set: Set[str] = set()
     tracked_at_head: Set[str] = set()
-    if parsed.kept_claimed:
-        name_only_result: GitResult = diff_cached_name_only(cwd)
-        all_staged = [p for p in name_only_result.stdout.splitlines() if p]
-        staged_all = [p for p in all_staged if p in gate_scope] if gate_scope else all_staged
-        staged_all_set = set(staged_all)
-
-        ls_tree_result = _git(["ls-tree", "-r", "HEAD", "--name-only"], cwd=cwd)
-        tracked_at_head = {p for p in ls_tree_result.stdout.splitlines() if p}
-
     diagnostics: List[str] = []
+    if parsed.kept_claimed:
+        # `read_index` raises `IndexParseError` on ANY unmerged (stage != 0)
+        # entry -- an ordinary mid-merge-conflict repo state, not only a
+        # malformed index (git_state.py:47-50's contract: it never degrades
+        # silently). Every other production caller of `read_index` /
+        # `_index_blobs` catches this; this gate must too, or a conflicted
+        # index turns "gate computes a refusal" into "the commit op crashes"
+        # (code-review finding F1). Matches `_index_blobs`'s own posture
+        # (git_native.py `_GIT_READ_FAILED`): a read it cannot answer is a
+        # refusal, never a pass, and the refusal stays visible in
+        # `diagnostics` rather than failing silently.
+        try:
+            all_staged = list(read_index(cwd).keys())
+        except IndexParseError as exc:
+            diagnostics.append(
+                f"Kept-claim check: staged index unreadable ({exc}) -- "
+                "degraded read, gate refuses rather than guessing"
+            )
+        else:
+            staged_all = [p for p in all_staged if p in gate_scope] if gate_scope else all_staged
+            staged_all_set = set(staged_all)
+
+        tracked_at_head = set(head_blobs(cwd, parsed.kept_claimed).keys())
 
     # Assertion-1: every Deleted-claimed path MUST be staged for deletion --
     # a bare `D` line, OR the vacated source of a staged rename (see
@@ -606,6 +625,82 @@ def _diff_name_only_worktree(cwd: Union[str, Path], paths: Sequence[str]) -> Git
     return _git(["diff", "--name-only", "--", *paths], cwd=cwd)
 
 
+def _status_porcelain_unquoted(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> GitResult:
+    """`git status --porcelain -z`, RAW/unquoted paths -- REGRESSION-2 fix.
+
+    `status_porcelain()` (git_native.py) deliberately keeps git's default
+    C-quoting (`"like\\ this"`-style escaping of a space/non-ASCII/control
+    byte in a path) so every OTHER caller of that shared wrapper keeps
+    parsing the same shape it always has -- see that function's own
+    docstring. `dirty_tree_gate` below cannot share that call: it keys
+    `read_index`/`head_blobs` lookups on the porcelain path verbatim, and
+    those two are never quoted (`read_index` decodes the index's raw UTF-8
+    bytes; `head_blobs` reads `ls-tree -z`, itself NUL-delimited/unquoted).
+    A quoted porcelain path therefore misses both lookups and falls through
+    to "unattributable" -- a real, clean tracked-unstaged edit silently
+    misreported as a phantom-widening false positive.
+
+    `-c core.quotepath=false` alone does NOT close this gap -- measured, not
+    assumed: it only suppresses octal-escaping of non-ASCII bytes, but git
+    still wraps a plain space-containing path in `"..."` quotes regardless
+    of that setting. `-z` is the only shape that disables quoting
+    unconditionally (git's own NUL-delimited machine-readable mode), per
+    this chunk's dispatch brief's preference for fixing at the source over
+    hand-writing a C-unquote decoder. `-z` changes the RECORD shape too, not
+    only the quoting: no trailing newline, and a rename/copy record is
+    `XY DEST\\0SRC\\0` (two NUL-terminated fields, dest first) instead of the
+    v1 human-readable `XY SRC -> DEST` line -- `_iter_porcelain_z_paths()`
+    below is the record-aware reader this shape requires; `_porcelain_path()`
+    (the ` -> ` splitter) is NOT reused here, it parses the other shape.
+
+    Chunked identically to `status_porcelain()` against the Windows argv
+    cap; any failed chunk short-circuits and is returned as-is."""
+    base = ["--no-optional-locks", "status", "--porcelain", "-z"]
+    if paths is None:
+        return _git(base, cwd=cwd)
+
+    combined: List[str] = []
+    for chunk in _chunk_paths(list(paths)):
+        result = _git([*base, "--", *chunk], cwd=cwd)
+        if not result.ok:
+            return result
+        combined.append(result.stdout)
+    return GitResult(returncode=0, stdout="".join(combined), stderr="")
+
+
+def _iter_porcelain_z_paths(stdout: str) -> List[str]:
+    """Read a `git status --porcelain -z` stream, yielding one DEST path per
+    record (matching `_porcelain_path()`'s "only the destination matters"
+    contract for the ` -> ` v1 shape, adapted to `-z`'s NUL-delimited
+    `XY DEST\\0SRC\\0` rename/copy record). A plain (non-rename) record is
+    `XY PATH\\0`, one field, RAW bytes -- no quoting to strip."""
+    fields = stdout.split("\x00")
+    paths: List[str] = []
+    i = 0
+    while i < len(fields):
+        field = fields[i]
+        if field == "":
+            i += 1
+            continue
+        # Fixed-width prefix, NOT `str.partition(" ")` -- the XY code's
+        # first slot is itself a literal space for most statuses (` M`,
+        # ` D`, ...), so partitioning on the first space would swallow the
+        # code into an empty string and treat "M" (or "D") as part of the
+        # path. `XY PATH` is exactly a 2-char code, one space, then the raw
+        # path -- position 2 is the space, position 3 is where PATH starts.
+        code = field[:2]
+        path = field[3:]
+        paths.append(path)
+        # A rename/copy record's first character class ("R"/"C" in either
+        # XY slot) is followed by a SECOND NUL-terminated field (the SOURCE
+        # path) that this reader must consume and discard so it is never
+        # mistaken for the next record's own field.
+        if "R" in code or "C" in code:
+            i += 1
+        i += 1
+    return paths
+
+
 def _porcelain_path(line: str) -> str:
     """Extract the (destination) path from one `git status --porcelain` line.
 
@@ -694,22 +789,51 @@ def dirty_tree_gate(
     # relied upon being redundant: a directory element in `gate_paths` makes
     # `git` emit that directory's children, which the exact-match filter
     # discards exactly as it does today under the whole-tree scan.
-    status_result = status_porcelain(root, sorted(gate_scope) if scoped else None)
-    parsed_lines: List[tuple] = []
-    phantom_candidates: List[str] = []
-    for line in status_result.stdout.splitlines():
-        if not line:
-            continue
+    status_result = _status_porcelain_unquoted(root, sorted(gate_scope) if scoped else None)
+    all_paths: List[str] = _iter_porcelain_z_paths(status_result.stdout)
 
-        xy = line[:2]
-        path = _porcelain_path(line)
-        x_char = xy[0] if xy else " "
-        parsed_lines.append((x_char, path))
+    # (a)'s "staged" classification no longer trusts git status's own X
+    # column -- it is recomputed from `read_index` + `head_blobs` (the
+    # index-vs-HEAD half, no worktree read), per this chunk's resolution
+    # of the worktree-axis fork: a path is staged iff its index entry
+    # diverges from (or is absent from) HEAD, or the path has vacated the
+    # index entirely while still present at HEAD (a staged deletion).
+    # `read_index` raises `IndexParseError` on ANY unmerged (stage != 0)
+    # entry -- an ordinary mid-merge-conflict repo state (git_state.py:47-50's
+    # contract: it never degrades silently). Left uncaught this turned "gate
+    # computes an unattributable verdict" into "the commit op crashes"
+    # (code-review finding F1). This gate's own stated preference for a read
+    # it cannot answer is "unattributable", never a silent pass -- fail
+    # toward that, with a marker entry so the degraded read stays visible in
+    # `unattributable` rather than looking like an ordinary clean tree.
+    try:
+        index_snapshot = read_index(root)
+    except IndexParseError as exc:
+        return DirtyTreeOutcome(
+            passed=False,
+            unattributable=[f"<index unreadable: {exc}>"],
+        )
+    head_result = head_blobs(root, all_paths) if all_paths else {}
 
-        # EOL phantom filter (tracked-unstaged only -- untracked files are
-        # never phantoms since there is no index entry to compare against).
-        if x_char == " ":
-            phantom_candidates.append(path)
+    def _is_staged(path: str) -> bool:
+        entry = index_snapshot.get(path)
+        head_entry = head_result.get(path)
+        if entry is not None:
+            if head_entry is None:
+                return True
+            return (entry.mode, entry.sha) != head_entry
+        return head_entry is not None
+
+    # EOL phantom filter (tracked-unstaged only -- untracked files are
+    # never phantoms since there is no index entry to compare against).
+    # "Tracked-unstaged" is now: present in the index AND not staged per
+    # `_is_staged` above (the index-vs-HEAD half), not the old x_char == ' '
+    # read off git status's own column.
+    phantom_candidates = [
+        path
+        for path in all_paths
+        if path in index_snapshot and not _is_staged(path)
+    ]
 
     # Batched EOL-phantom check (docs/plans/2026-08-07-n-plus-one-git-spawn-
     # class-and-amplification-gate.md § C1): ONE `git diff --name-only`
@@ -718,18 +842,20 @@ def dirty_tree_gate(
     # WITH a real diff; any candidate absent from it is a phantom -- see
     # `_diff_name_only_worktree()`'s own docstring for why this is the
     # correct inversion (not "pass all paths to one `git diff --quiet`",
-    # which loses per-path resolution).
+    # which loses per-path resolution). This is the retained worktree-axis
+    # spawn -- KEPT deliberately (see module/function docstring): no hash
+    # of on-disk bytes is ever compared to a git OID here.
     real_diff_paths: Set[str] = set()
     if phantom_candidates:
         diff_result = _diff_name_only_worktree(root, phantom_candidates)
         real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
 
-    for x_char, path in parsed_lines:
-        # (a) Staged: X status char not ' '/'?' -> this session's own pending commit.
-        if x_char not in (" ", "?"):
+    for path in all_paths:
+        # (a) Staged: this session's own pending commit.
+        if _is_staged(path):
             continue
 
-        if x_char == " " and path not in real_diff_paths:
+        if path in index_snapshot and path not in real_diff_paths:
             continue
 
         # (b) Known concurrent owner.

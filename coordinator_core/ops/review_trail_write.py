@@ -145,6 +145,7 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional
 
 from coordinator_core import chain_attribution, session_attribution
+from coordinator_core.git import repo_root as repo_root_seam
 from coordinator_core.session_attribution import GitLogFailed
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.ipc import CallerFacingValidationError, register_op
@@ -786,6 +787,12 @@ _WORKSTREAM_SLUG_RE = re.compile(r"[^A-Za-z0-9_-]")
 # Mirrors coverage.py's _HEX_TOKEN (the read-side counterpart).
 _HEX_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
 
+#: A FULL 40-char SHA, the only shape `git rev-parse` emits for a resolved ref.
+#: Stricter than `_HEX_TOKEN_RE` on purpose: this validates git's own OUTPUT in
+#: `_batch_resolve_ref_pair`, where an abbreviated or partial line means the
+#: batch did not resolve cleanly and the per-token path must run instead.
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
 
 # ---------------------------------------------------------------------------
 # Write-time symbolic-ref resolution (sha_range false-COVERED defect, write side)
@@ -863,11 +870,150 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
     return out
 
 
+def _has_commit_history(caller_worktree: Path) -> bool:
+    """True iff *caller_worktree* sits in a repo with real object storage —
+    the question ``git rev-parse --is-inside-work-tree`` used to be spawned to
+    answer. WALKS ONLY, never spawns.
+
+    Why not ``repo_root.is_inside_work_tree``: that seam ALWAYS spawns, by its
+    own documented design, to preserve a bare-repo distinction this call site
+    does not ask about.
+
+    Why not ``repo_root.show_toplevel`` alone: its walk stops at the first
+    directory holding a ``.git`` ENTRY of any kind, so a stray or half-created
+    ``.git`` directory reads as a repository when git itself refuses it ("not a
+    git repository"). That difference is not academic — it is exactly the shape
+    this module's own handler tests construct, and taking the walk's word for it
+    turned a documented no-op into a hard refusal. So the resolved common dir is
+    additionally checked for two of the three markers ``repo_root._looks_like_git_dir``
+    uses (``HEAD`` and ``objects``, deliberately not ``refs``) — this call site only
+    needs to rule out a stray/half-created ``.git``, not classify a bare repo, so the
+    weaker two-marker check is intentional and not full parity with that helper.
+
+    Test-isolation contract, unchanged from the spawn this replaces: a plain tmp
+    dir with synthetic SHAs has no history to check a range against, so the
+    caller no-ops rather than hard-failing against a non-repo.
+    """
+    common_dir = repo_root_seam.git_common_dir(str(caller_worktree))
+    if not common_dir:
+        return False
+    resolved = Path(common_dir)
+    return (resolved / "HEAD").exists() and (resolved / "objects").is_dir()
+
+
+def _batch_resolve_ref_pair(
+    left: str, right: str, cwd: Path
+) -> Optional[tuple[str, str]]:
+    """Concretize BOTH endpoints of a symbolic range in one ``git rev-parse``,
+    or return None so the caller falls back to the per-token path.
+
+    Why: a range with two symbolic endpoints (``HEAD~1..HEAD``, the shape a
+    hand-run review uses) paid one spawn per endpoint to ask git the same
+    question twice in a row. Process creation is the cost, not the query, and
+    ``git rev-parse`` takes as many revs as it is given.
+
+    ALL-OR-NOTHING by design, and the failure path is the reason. This function
+    returns a result only when git resolved both endpoints to full hex SHAs and
+    said so unambiguously; anything else — a non-zero exit, a missing line, a
+    line that is not a SHA, a spawn error — returns None and lets
+    ``_resolve_ref_to_sha`` run per token. That preserves the per-token
+    ``ValueError`` naming WHICH ref failed, which a batched call cannot say (git
+    reports the first bad rev and stops), and it keeps this fast path unable to
+    introduce a refusal shape of its own.
+
+    Both endpoints must be present and symbolic for the batch to be worth
+    making: a hex token needs no spawn at all (``_resolve_ref_to_sha``'s own
+    fast path), so a mixed range already costs exactly one spawn and batching
+    would not lower it.
+    """
+    if not left or not right:
+        return None
+    for token in (left, right):
+        head = re.split(r"[\^~]", token, maxsplit=1)[0]
+        if _HEX_TOKEN_RE.match(token) or (head and _HEX_TOKEN_RE.match(head)):
+            return None
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--revs-only", left, right],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            # Same pairing as `_resolve_ref_to_sha`: CREATE_NO_WINDOW alone
+            # hangs on Windows when stdin is inherited/invalid.
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if len(lines) != 2:
+        return None
+    if not all(_FULL_SHA_RE.match(line) for line in lines):
+        return None
+    return lines[0], lines[1]
+
+
+class _RangeWalk:
+    """ONE ``git log`` walk over one range, shared by every consumer of a write.
+
+    Purpose: this module asked git the same question about the same range twice
+    per write — ``git rev-list --count`` for the emptiness guard, then
+    ``git log --format=%H%x1f%P%x1f%(trailers:...)`` for the zero-credit
+    diagnostic — and the second walk already enumerates everything the first
+    counted. Process creation is the cost, not the query (CLAUDE.md § The
+    brightline), so two walks over the same commits is one spawn spent for
+    nothing. Measured on this box, 2026-08-22: ``git --version`` — the most
+    trivial spawn that exists — is 3.3ms at p50 on macOS, and the same op's
+    roster measurement on Windows is ~50x that per process, which is what puts
+    `review_trail.write` at a 16.5s max there and 74ms here.
+
+    Memoizes the FAILURE as well as the result: a caller that raises on
+    ``GitLogFailed`` and a caller that stays silent on it must see the same
+    verdict from the same walk, and a retry would be a second spawn.
+
+    Negative-spec: keyed to the ONE ``(sha_range, caller_worktree)`` it was
+    constructed for and never re-parameterized — this is a per-write cache, not
+    a process-lifetime one. A window cached across ranges is the over-credit
+    shape `chain_attribution`'s own anti-scope forbids, and a window cached
+    across writes would serve a stale commit set to a later caller.
+    """
+
+    __slots__ = ("_sha_range", "_cwd", "_window", "_failure", "_walked")
+
+    def __init__(self, sha_range: str, caller_worktree: Path) -> None:
+        self._sha_range = sha_range
+        self._cwd = str(caller_worktree)
+        self._window: Optional[Dict[str, "chain_attribution.CommitAttribution"]] = None
+        self._failure: Optional[GitLogFailed] = None
+        self._walked = False
+
+    def window(self) -> Dict[str, "chain_attribution.CommitAttribution"]:
+        """``{sha: CommitAttribution}`` for every commit in the range, merges
+        included. Raises ``GitLogFailed`` if git could not resolve the range —
+        propagated, never swallowed to an empty map, so a caller can tell
+        "unresolvable" from "resolves to nothing"."""
+        if not self._walked:
+            self._walked = True
+            try:
+                self._window = chain_attribution.bulk_commit_attribution_map(
+                    self._sha_range, self._cwd, _git_runner,
+                )
+            except GitLogFailed as exc:
+                self._failure = exc
+        if self._failure is not None:
+            raise self._failure
+        return self._window or {}
+
+
 def _reject_empty_sha_range(
     sha_range: str,
     caller_worktree: Optional[Path],
     *,
     batch_context: Optional[dict] = None,
+    walk: Optional[_RangeWalk] = None,
 ) -> None:
     """Refuse to write a record whose diff-shaped ``sha_range`` resolves to
     ZERO commits (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-
@@ -917,33 +1063,29 @@ def _reject_empty_sha_range(
     # against — skip rather than hard-fail on `git rev-list` erroring out
     # against a non-repo.
     # Security invariant (state/subagent-share/60a896a5-0b53-494d-b77a-
-    # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1):
-    # `is_work_tree_rc` is deliberately NOT read from `batch_context` here —
-    # this is a BLOCKING disposition, and `build_batch_attribution_context`
-    # never populates this key. Always re-derived, per call.
-    is_work_tree_rc, _out, _err = _git_runner(
-        ["git", "rev-parse", "--is-inside-work-tree"], str(caller_worktree),
-    )
-    if is_work_tree_rc != 0:
+    # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1): this
+    # verdict is deliberately NOT read from `batch_context` — this is a
+    # BLOCKING disposition, and `build_batch_attribution_context` never
+    # populates such a key. Always re-derived, per call.
+    if not _has_commit_history(caller_worktree):
         return
-    rc, out, err = _git_runner(
-        ["git", "rev-list", "--count", sha_range], str(caller_worktree),
-    )
-    if rc != 0:
+    # Counted off the SHARED range walk, not a `git rev-list --count` of its
+    # own: the zero-credit diagnostic below already walks these exact commits,
+    # and `len(window)` is the count this guard needs. One spawn, two consumers.
+    # `walk` is threaded in by `write_review_trail_entry`; a direct caller that
+    # passes none gets its own walk and the same verdict at the same cost this
+    # guard has always paid.
+    if walk is None:
+        walk = _RangeWalk(sha_range, caller_worktree)
+    try:
+        window = walk.window()
+    except GitLogFailed as exc:
         raise ValueError(
             f"review_trail.write: sha_range {sha_range!r} could not be resolved "
-            f"by `git rev-list` (rc={rc}: {err.strip()!r}) — refusing to persist "
-            "a record for an unresolvable range"
-        )
-    try:
-        count = int(out.strip())
-    except ValueError:
-        raise ValueError(
-            f"review_trail.write: sha_range {sha_range!r} — `git rev-list --count` "
-            f"returned a non-integer result ({out.strip()!r}) — refusing to persist "
-            "a record for an unresolvable range"
+            f"by `git log` ({exc}) — refusing to persist a record for an "
+            "unresolvable range"
         ) from None
-    if count == 0:
+    if not window:
         raise ValueError(
             f"review_trail.write: sha_range {sha_range!r} resolves to ZERO commits "
             "— refusing to persist a record that discharges nothing. This is the "
@@ -980,6 +1122,9 @@ def _resolve_symbolic_range(sha_range: str, caller_worktree: Optional[Path]) -> 
     if sep is None:
         return sha_range
     left, right = sha_range.split(sep, 1)
+    batched = _batch_resolve_ref_pair(left, right, caller_worktree)
+    if batched is not None:
+        return f"{batched[0]}{sep}{batched[1]}"
     resolved_left = _resolve_ref_to_sha(left, caller_worktree) if left else left
     resolved_right = _resolve_ref_to_sha(right, caller_worktree) if right else right
     return f"{resolved_left}{sep}{resolved_right}"
@@ -1456,7 +1601,7 @@ def build_batch_attribution_context(
 
 def _walk_range_commit_session_trailers(
     sha_range: str, own_session_id: str, caller_worktree: Path,
-    *, batch_context: Optional[dict] = None,
+    *, batch_context: Optional[dict] = None, walk: Optional[_RangeWalk] = None,
 ) -> Optional[dict[str, bool]]:
     """Return ``{sha: is_foreign}`` for every commit git resolves in
     ``sha_range``, or ``None`` if the range fails to resolve (unparseable,
@@ -1545,17 +1690,30 @@ def _walk_range_commit_session_trailers(
                 )
                 return {end_sha: (end_sha in foreign)}
 
+    # The SHARED walk `write_review_trail_entry` already paid for on this
+    # range — `_reject_empty_sha_range` counted its commits off the same
+    # window. A caller that passes none (a direct/test caller) gets its own.
+    if walk is None:
+        walk = _RangeWalk(sha_range, caller_worktree)
     try:
-        window = chain_attribution.bulk_commit_attribution_map(
-            sha_range, str(caller_worktree), _git_runner,
-        )
+        window = walk.window()
     except GitLogFailed:
         return None
     if not window:
         return None
-    grep_attributed = chain_attribution.bulk_grep_attributed_shas(
-        sha_range, own_session_id, str(caller_worktree), _git_runner,
-    )
+    # The grep leg is a SECOND `git log` over the same range, and it is read
+    # only for a commit that is untrailered and not a merge
+    # (`foreign_shas_from_window`'s last branch). When the window holds no such
+    # commit its result cannot change this function's answer, so the spawn buys
+    # nothing and is not made. `prepare-commit-msg` trailers every commit it
+    # sees, which makes the elided case the ordinary one here rather than a
+    # tuned-for edge.
+    if chain_attribution.window_needs_grep_signal(window):
+        grep_attributed = chain_attribution.bulk_grep_attributed_shas(
+            sha_range, own_session_id, str(caller_worktree), _git_runner,
+        )
+    else:
+        grep_attributed = frozenset()
     foreign = chain_attribution.foreign_shas_from_window(
         window.keys(), own_session_id, window, grep_attributed,
     )
@@ -1570,6 +1728,7 @@ def _diagnose_zero_chain_terminal_credit(
     caller_worktree: Optional[Path],
     *,
     batch_context: Optional[dict] = None,
+    walk: Optional[_RangeWalk] = None,
 ) -> Optional[dict]:
     """Predict, from write-time-available information only, whether this
     record is a PROVABLE zero-credit write at the chain-terminal discharge
@@ -1603,7 +1762,8 @@ def _diagnose_zero_chain_terminal_credit(
     if caller_worktree is None:
         return None
     foreign_map = _walk_range_commit_session_trailers(
-        sha_range, own_session_id, caller_worktree, batch_context=batch_context,
+        sha_range, own_session_id, caller_worktree,
+        batch_context=batch_context, walk=walk,
     )
     if not foreign_map:
         return None
@@ -2531,7 +2691,17 @@ def write_review_trail_entry(
     # failure this check exists to close, independent of and in addition to
     # the caller-side caret fix, so any OTHER path that mangles a range
     # reproduces the identical silent hole and is still caught here.
-    _reject_empty_sha_range(sha_range, caller_worktree, batch_context=_batch_context)
+    # ONE walk over this range for the whole write: the emptiness guard below
+    # counts its commits, and the zero-credit diagnostic at the tail classifies
+    # the same ones. Constructed after `_resolve_symbolic_range` so it is keyed
+    # to the CONCRETE range that actually gets persisted, never to a symbolic
+    # spelling of it.
+    range_walk = (
+        _RangeWalk(sha_range, caller_worktree) if caller_worktree is not None else None
+    )
+    _reject_empty_sha_range(
+        sha_range, caller_worktree, batch_context=_batch_context, walk=range_walk,
+    )
 
     # Resolve workstream.
     resolved_workstream = _resolve_workstream(workstream, caller_worktree, resolved_session_id)
@@ -2625,7 +2795,7 @@ def write_review_trail_entry(
     # persisting it into the record, re-opens the a76c9fa bypass class.
     zero_credit_diagnostic = _diagnose_zero_chain_terminal_credit(
         sha_range, scope, scope_kind, resolved_session_id, caller_worktree,
-        batch_context=_batch_context,
+        batch_context=_batch_context, walk=range_walk,
     )
     if zero_credit_diagnostic is not None:
         logger.warning(

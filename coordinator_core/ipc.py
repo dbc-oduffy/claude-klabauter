@@ -592,10 +592,11 @@ _DISPATCH_ENGINE_ROOT = Path(__file__).resolve().parent.parent
 
 #: Repo-relative parts to this process's own engine build stamp -- mirrors
 #: `warm.skew.ENGINE_STAMP_FILENAME` / `_engine_stamp_path` byte-for-byte in
-#: shape (also independently duplicated, for the identical reason, by
-#: `coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::
-#: _ENGINE_STAMP_RELATIVE_PARTS` -- keep all three in sync by hand if the
-#: stamp filename or location ever changes).
+#: shape. This is one of SIX independent copies of this value on this box
+#: (see `coordinator_core/tests/test_engine_stamp_predicate_pin.py`'s module
+#: docstring for the full list and why each cannot simply import the
+#: canonical one) -- keep all six in sync by hand if the stamp filename or
+#: location ever changes; that test is the drift guard.
 _ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
 
 #: Cached verdict: is `_DISPATCH_ENGINE_ROOT` a stamped engine build? `None`
@@ -1098,8 +1099,24 @@ def _resolve_dispatch_timeout_secs() -> float:
     return min(requested, DISPATCH_TIMEOUT_SECS)
 
 
-def _timeout_for(method: str) -> float:
+def _timeout_for(method: str, msg: Any = None) -> float:
     """Per-op dispatch timeout, with the ceremony budget applied as a hard ceiling.
+
+    THE PUBLISH-LANE CARVE-OUT comes first, and is the one resolution below that can
+    exceed `CEREMONY_BUDGET_SECS`. `coordinator_core.publish_lane.budget_for` returns a
+    number ONLY for a named op in `PUBLISH_LANE_OPS` inside a declared percolate/publish
+    round, and None — no opinion — for every other (op, caller) pair in the tree. So the
+    clamp below is untouched for every caller that is not a publish round, including
+    every close ceremony, and no environment variable can put a caller into the lane for
+    an op the closed list does not name. PM ruling 2026-08-21; DR-350.
+
+    `msg` is the JSON-RPC request envelope when one is in hand, and optional because the
+    lane's other signal is the environment. The warm SERVER cannot read the caller's env
+    (its own reflects whoever spawned it), so the envelope field is how a lane crosses
+    the pipe; the cold path and the `--dump-op-timeouts` probe inherit the env directly
+    and need pass nothing. Defaulting to None keeps every existing call site — and the
+    ratchet tests, which call this with a bare method name to prove the 2s clamp — byte
+    for byte unchanged in behaviour.
 
     Resolution order: `_OP_TIMEOUT_OVERRIDES[method]` if listed, else the global
     runaway-guard timeout re-resolved per request (C11) via
@@ -1126,6 +1143,9 @@ def _timeout_for(method: str) -> float:
     revoked 2026-08-21 by the budget). It is kept as a live table so a genuinely
     justified NON-ceremony widening has somewhere to land.
     """
+    lane_budget = publish_lane.budget_for(method, msg)
+    if lane_budget is not None:
+        return lane_budget
     if method in _OP_TIMEOUT_OVERRIDES:
         resolved = _OP_TIMEOUT_OVERRIDES[method]
     else:
@@ -1190,6 +1210,11 @@ from coordinator_core.op_scopes import (  # noqa: E402,F401
 # check runs on EVERY dispatch — a per-call import lookup would be the more expensive
 # of the two shapes.
 from coordinator_core import op_budget_suspension  # noqa: E402
+
+# Same shape and same reasoning as the suspension import above: stdlib-only, imports
+# nothing, and both of its consumers (`_timeout_for`, the two suspension doors) run on
+# every dispatch, so a per-call import lookup would cost more than the module does.
+from coordinator_core import publish_lane  # noqa: E402
 
 OP_TIMEOUT_OVERRIDES = _types.MappingProxyType(dict(_OP_TIMEOUT_OVERRIDES))
 
@@ -1711,7 +1736,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
 _REGISTRY: Dict[str, Callable] = {}
 
 
-def get_op_handler(name: str) -> Optional[Callable]:
+def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     """Return the registered handler callable for *name*, or None if not registered.
 
     Callers that need to invoke a fleet op by its public key string (e.g.
@@ -1733,7 +1758,25 @@ def get_op_handler(name: str) -> Optional[Callable]:
     via the public op key rather than accessing the op module's private handler
     function name directly.
     """
-    if op_budget_suspension.is_suspended(name):
+    # The suspension roster, less the publish-lane carve-out (DR-350). `budget_for`
+    # returns None — refuse as before — for every op the lane's closed list does not
+    # name and for every caller that is not a declared percolate/publish round.
+    #
+    # `msg` is threaded for the SAME reason `_timeout_for` takes it, and omitting it
+    # here was a live defect: `_dispatch_message_impl` yields to the lane at its own
+    # suspension check (which reads the envelope) and then calls THIS function to
+    # resolve the handler. On the warm path this process is the server, whose
+    # `os.environ` is its spawner's — so an env-only check refused a lane request that
+    # had just been admitted one step earlier, and the envelope field that exists
+    # precisely to carry the lane across the pipe was ignored at the second door. The
+    # cold path masked it (env is inherited there), which is why it survived a live
+    # 9-row publish round.
+    #
+    # Defaulting to None keeps the in-process "path 3" callers
+    # (`safe_commit_offer.py`, `tail_ops.py`) reading the environment alone, which is
+    # correct for them: those resolve in the CALLER's own process, where the env IS
+    # the caller's.
+    if op_budget_suspension.is_suspended(name) and publish_lane.budget_for(name, msg) is None:
         raise op_budget_suspension.OpSuspendedError(
             op_budget_suspension.refusal_message(name)
         )
@@ -1984,7 +2027,12 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # Consequence, stated rather than discovered: this fires for EVERY caller,
     # including the CLIs and hooks that wrap these ops. That is the ruling's intent —
     # the op stops firing, and the failure is what surfaces who actually needed it.
-    if op_budget_suspension.is_suspended(method):
+    #
+    # The publish-lane carve-out (DR-350) is the one caller this refusal yields to, and
+    # it is read from `msg` as well as the environment: on the warm path THIS process is
+    # the server, whose `os.environ` reflects whoever spawned it rather than the caller
+    # of this request, so the envelope field is the only honest signal available here.
+    if op_budget_suspension.is_suspended(method) and publish_lane.budget_for(method, msg) is None:
         _log().debug("coordinator_core.ipc: refusing suspended op %r", method)
         return {
             "jsonrpc": "2.0",
@@ -2007,7 +2055,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # the whole coordinator_core.ops package — today's eager behavior — and retry
     # once more. This makes the map a pure performance optimization: a stale or
     # incomplete map degrades to today's correctness, never to a broken dispatch.
-    handler = get_op_handler(method)
+    handler = get_op_handler(method, msg)
     if handler is None:
         # 2026-07-21 break-class fix: a registry MISS that survives both the
         # targeted lazy import AND the SAFE FALLBACK full eager import (see
@@ -2102,7 +2150,10 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # start_server_async removed by C5. is_draining/in_flight_increment/in_flight_decrement
     # no longer called from dispatch_message.
     # Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
-    op_timeout = _timeout_for(method)
+    # `msg` is threaded through so a warm-served request carries its own publish-lane
+    # declaration (DR-350): this process's environment is the SERVER's, not the
+    # caller's, so the envelope is the only place the lane can be read from here.
+    op_timeout = _timeout_for(method, msg)
     # DR-276: open a declare-write collection around the handler so an op may use
     # `session.declared_writes.declare_write()` and have it work identically here
     # and on the in-process path (`coordinator_core.cli_entry.run_op_main`). The

@@ -27,6 +27,25 @@ Audit 5 — dependency-order invariant: for every edge A blocked_by B (B ships
   either endpoint fails loud. Edges to absent stub_ids are unresolved (not
   silently dropped). Cycles fail loud.
 
+Sprint-scoped mode (C4, ``run_audit(..., sprint_id=...)`` / CLI ``--sprint``)
+— stubs now arrive one sprint at a time (docs/plans/2026-08-21-engine-half-
+of-the-roadmap-sprint-spine-split.md), so a whole-roadmap Audit 1/3/5 run
+before the LAST sprint has landed reports false violations against sprints
+whose spine descriptor legitimately has no stubs on disk yet
+(spine.schema.json's ABSENT-vs-``[]`` ``sprints[].stubs`` distinction). This
+mode reads ``state/roadmap/<run-id>/SPINE.md`` (``read_spine``) to scope
+Audit 1's coverage count and Audit 3's pm-gates cross-reference to one named
+sprint's own cluster (``sprints[].stubs``), sourcing both ``reconciliation.md``
+and ``pm-gates.md`` from that sprint's own ``sprint-<ordinal>/`` directory
+(mirroring C11's per-sprint ``OVERVIEW.md`` homing) rather than the roadmap
+root. Audit 5 resolves cross-sprint edges by reading the spine record ALONE
+(``check_cross_sprint_edge_order`` over ``sprints[].ordinal`` and
+``cross_sprint_edges[]``) — no dependency on the descriptor-altitude edge
+entity C5b resolves, so this mode is buildable, and usable, without C5b's
+answer once C3b's ``spine.schema.json`` lands. Audits 2 (ready_to_fire
+uniqueness) and 4 (pending-row reference) are whole-roadmap-only and are not
+run in sprint-scoped mode — the C4 body names only 1/3/5.
+
 DATA_ROOT resolution — ``--root`` flag wins; else derived from the per-repo
 state root (Rule 5, no ``--central``) for the CURRENT working directory's git
 repo: meta-repo (``~/.claude``) routes to claude-klabauter's ``state/``, dirname'd back
@@ -119,6 +138,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core._settings_home import machine_local_dir, settings_home
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
+from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.win_portability import same_path
@@ -494,6 +514,130 @@ def _detect_cycles(
 
 
 # ---------------------------------------------------------------------------
+# Sprint-scoped mode (C4) — reads state/roadmap/<run-id>/SPINE.md
+# (spine.schema.json, C3b) to answer "what is this sprint's own cluster
+# subset" and "how do cross-sprint gates order" WITHOUT waiting on C5b's
+# descriptor-altitude blocks-sprint edge entity. Stubs now arrive one sprint
+# at a time, so a whole-roadmap Audit 1/3/5 run before the LAST sprint has
+# landed reports false violations against sprints that legitimately have no
+# stubs on disk yet (spine.schema.json's ABSENT-vs-empty-array `stubs[]`
+# distinction). This mode instead scopes coverage/gate/order checks to one
+# named sprint's own descriptor.
+# ---------------------------------------------------------------------------
+
+
+def read_spine(spine_path: Path) -> Optional[Dict[str, Any]]:
+    """Read and parse `state/roadmap/<run-id>/SPINE.md`'s frontmatter.
+
+    Uses `coordinator_core.frontmatter.schema_validate.parse_frontmatter`
+    (full YAML, not the hand-rolled mapping-only parser in `coordinator_core.
+    dag`) — spine.schema.json's `sprints[]`/`cross_sprint_edges[]` are
+    nested list-of-dict shapes the mapping-only parser is not built to
+    reach. Returns None if the file is absent, unreadable, or does not
+    parse as a `kind: roadmap-spine` record — never raises.
+    """
+    try:
+        text = spine_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    parsed = parse_frontmatter(text)
+    fm = parsed.get("frontmatter")
+    if not isinstance(fm, dict) or fm.get("kind") != "roadmap-spine":
+        return None
+    return fm
+
+
+def _find_sprint_descriptor(spine: Dict[str, Any], sprint_id: str) -> Optional[Dict[str, Any]]:
+    for sprint in spine.get("sprints") or []:
+        if isinstance(sprint, dict) and sprint.get("id") == sprint_id:
+            return sprint
+    return None
+
+
+def check_cross_sprint_edge_order(spine: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify `spine['cross_sprint_edges']` is ordinal-monotone against
+    `spine['sprints'][].ordinal` — the sprint-descriptor-altitude analogue
+    of `check_dependency_order`, read entirely from the spine record.
+
+    Deliberately does NOT consult any stub's `blocked_by` or a
+    descriptor-altitude edge entity (that is C5b's, still gated on DoE) —
+    every input here comes from the spine's own `sprints[]`/
+    `cross_sprint_edges[]`, per the module's C4 mandate.
+
+    Returns {"ok": bool, "violations": [...], "unresolved": [...], "cycle": list|None}.
+    An edge naming a sprint id absent from `sprints[]` is "unresolved"
+    (never silently dropped); an edge whose `from` ordinal is not strictly
+    less than its `to` ordinal is a "violation"; a cycle among edges is
+    reported separately.
+    """
+    ordinal_by_id: Dict[str, Any] = {}
+    for sprint in spine.get("sprints") or []:
+        if isinstance(sprint, dict) and isinstance(sprint.get("id"), str):
+            ordinal_by_id[sprint["id"]] = sprint.get("ordinal")
+
+    violations: List[Dict[str, Any]] = []
+    unresolved: List[Dict[str, Any]] = []
+    adjacency: Dict[str, List[str]] = {}
+
+    for edge in spine.get("cross_sprint_edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        frm = edge.get("from")
+        to = edge.get("to")
+        if frm not in ordinal_by_id:
+            unresolved.append({"from": frm, "to": to, "which": "from"})
+            continue
+        if to not in ordinal_by_id:
+            unresolved.append({"from": frm, "to": to, "which": "to"})
+            continue
+        if not (ordinal_by_id[frm] < ordinal_by_id[to]):
+            violations.append(
+                {
+                    "from": frm,
+                    "to": to,
+                    "ordinalFrom": ordinal_by_id[frm],
+                    "ordinalTo": ordinal_by_id[to],
+                }
+            )
+        adjacency.setdefault(frm, []).append(to)
+
+    # Three-colour DFS cycle detection over the cross_sprint_edges adjacency
+    # — same shape as `_detect_cycles`, scoped to sprint ids instead of stub
+    # ids since this graph's nodes are sprint descriptors.
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: Dict[str, int] = {sid: WHITE for sid in ordinal_by_id}
+    cycle_found: Optional[List[str]] = None
+
+    def dfs(node_id: str, path: List[str]) -> None:
+        nonlocal cycle_found
+        if cycle_found is not None:
+            return
+        color[node_id] = GRAY
+        path.append(node_id)
+        for nxt in adjacency.get(node_id, []):
+            if cycle_found is not None:
+                return
+            c = color.get(nxt)
+            if c == GRAY:
+                start = path.index(nxt)
+                cycle_found = list(path[start:])
+                return
+            if c == WHITE:
+                dfs(nxt, path)
+        path.pop()
+        color[node_id] = BLACK
+
+    for sid in ordinal_by_id:
+        if cycle_found is not None:
+            break
+        if color[sid] == WHITE:
+            dfs(sid, [])
+
+    ok = not violations and not unresolved and cycle_found is None
+    return {"ok": ok, "violations": violations, "unresolved": unresolved, "cycle": cycle_found}
+
+
+# ---------------------------------------------------------------------------
 # Audit runner
 # ---------------------------------------------------------------------------
 
@@ -514,9 +658,29 @@ class _Reporter:
         self.stdout_lines.append(f"PASS: {msg}")
 
 
-def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path: Path) -> None:
+def _audit1_stub_coverage(
+    r: _Reporter,
+    run_id: str,
+    data_root: Path,
+    recon_path: Path,
+    stub_filter: Optional[set] = None,
+    scope_label: Optional[str] = None,
+) -> None:
+    """*stub_filter*/*scope_label* are the C4 sprint-scoped mode's hook: when
+    *stub_filter* is given (a set of stub_ids), coverage is counted against
+    that subset only — the sprint's own cluster, per its spine descriptor's
+    `stubs[]` — rather than every stub sharing *run_id*. Both default to
+    None, which reproduces the original whole-roadmap behaviour byte-for-byte
+    (message text unchanged; every existing whole-roadmap test pins this)."""
+    label = f" sprint={scope_label}" if scope_label else ""
     if not recon_path.is_file():
-        r.fail(f"reconciliation.md not found at {recon_path} — Phase 1 incomplete")
+        if scope_label:
+            r.fail(
+                f"reconciliation.md not found at {recon_path} for sprint={scope_label} "
+                f"— sprint-planning has not authored this sprint's reconciliation yet"
+            )
+        else:
+            r.fail(f"reconciliation.md not found at {recon_path} — Phase 1 incomplete")
         return
 
     text = recon_path.read_text(encoding="utf-8")
@@ -527,6 +691,19 @@ def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
     live_records = query_records("handoff", data_root, where=where)
     arch_records = query_records("handoff-archived", data_root, where=where)
+
+    if stub_filter is not None:
+        live_records = [
+            rec
+            for rec in live_records
+            if str(rec.get("frontmatter", {}).get("stub_id")) in stub_filter
+        ]
+        arch_records = [
+            rec
+            for rec in arch_records
+            if str(rec.get("frontmatter", {}).get("stub_id")) in stub_filter
+        ]
+
     live_count = len(live_records)
     arch_count = len(arch_records)
 
@@ -555,7 +732,7 @@ def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path
 
     if stub_count == 0 and expected == 0:
         r.fail(
-            f"Stub-coverage: 0 stubs on disk AND 0 KEEP/MERGE verdicts parsed from "
+            f"Stub-coverage{label}: 0 stubs on disk AND 0 KEEP/MERGE verdicts parsed from "
             f"{recon_path} — this is the dead-gate signature (a real roadmap never "
             f"legitimately has both sides zero at Phase 2 close). Check DATA_ROOT "
             f"rooting and the reconciliation.md verdict table format — the verdict "
@@ -566,14 +743,14 @@ def _audit1_stub_coverage(r: _Reporter, run_id: str, data_root: Path, recon_path
         )
     elif stub_count != expected:
         r.fail(
-            f"Stub-coverage mismatch: {stub_count} stubs on disk across "
+            f"Stub-coverage{label} mismatch: {stub_count} stubs on disk across "
             f"{record_count} record(s) ({live_count} live + {arch_count} "
             f"archived), {expected} expected (KEEP={keep_count} + MERGE={merge_count}). "
             f"See {recon_path}."
         )
     else:
         r.passed(
-            f"Stub-coverage: {stub_count} stubs across "
+            f"Stub-coverage{label}: {stub_count} stubs across "
             f"{record_count} record(s) ({live_count} live + {arch_count} "
             f"archived) match {expected} verdicts (KEEP={keep_count}, MERGE={merge_count})."
         )
@@ -613,10 +790,27 @@ def _audit2_ready_to_fire_uniqueness(r: _Reporter, run_id: str, data_root: Path)
 
 
 def _audit3_pm_gates_cross_reference(
-    r: _Reporter, run_id: str, data_root: Path, pmg_path: Path
+    r: _Reporter,
+    run_id: str,
+    data_root: Path,
+    pmg_path: Path,
+    stub_filter: Optional[set] = None,
+    scope_label: Optional[str] = None,
 ) -> None:
+    """*stub_filter*/*scope_label* mirror `_audit1_stub_coverage`'s C4 hook:
+    when *stub_filter* is given, only awaiting_gate stubs in that sprint's
+    own cluster are cross-referenced against *pmg_path* (the sprint's own
+    pm-gates.md, per the C4 body's "pm-gates.md moves to sprint-planning").
+    Both default to None, reproducing the whole-roadmap behaviour unchanged."""
+    label = f" (sprint={scope_label})" if scope_label else ""
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id} AND deployment_state=awaiting_gate"
     results = query_records("handoff", data_root, where=where)
+    if stub_filter is not None:
+        results = [
+            rec
+            for rec in results
+            if str(rec.get("frontmatter", {}).get("stub_id")) in stub_filter
+        ]
 
     pm_stub_ids: List[str] = []
     for rec in results:
@@ -639,7 +833,7 @@ def _audit3_pm_gates_cross_reference(
 
     if not pmg_path.is_file():
         r.fail(
-            f"pm-gates.md missing at {pmg_path} — found PM-prefixed gate_dependency "
+            f"pm-gates.md missing at {pmg_path}{label} — found PM-prefixed gate_dependency "
             f"on stub_ids: {pm_stub_ids_joined}"
         )
         return
@@ -650,7 +844,7 @@ def _audit3_pm_gates_cross_reference(
         if stub not in pmg_content:
             r.fail(
                 f"Stub {stub} has gate_dependency starting 'PM ' but is not "
-                f"cross-referenced in pm-gates.md"
+                f"cross-referenced in pm-gates.md{label}"
             )
             any_missing = True
 
@@ -660,7 +854,7 @@ def _audit3_pm_gates_cross_reference(
     # r.exit_code (not just this audit's local any_missing) for stdout-shape
     # parity with the oracle.
     if not any_missing and r.exit_code == 0:
-        r.passed(f"pm-gates.md cross-references: all {pm_stub_ids_joined} present.")
+        r.passed(f"pm-gates.md cross-references{label}: all {pm_stub_ids_joined} present.")
 
 
 def _audit4_pending_rows_reference_stubs(
@@ -812,12 +1006,155 @@ def _audit5_dependency_order(r: _Reporter, run_id: str, data_root: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def run_audit(run_id: str, data_root: Path, state_root: Path) -> Tuple[int, List[str], List[str]]:
-    """Run all 5 audits for *run_id*, accumulating failures. Never raises for
+def _audit5_cross_sprint_edge_order(
+    r: _Reporter, spine: Dict[str, Any], run_id: str, sprint_id: str
+) -> None:
+    """C4 sprint-scoped Audit 5 — resolves cross-sprint edges by reading
+    *spine* (`SPINE.md`'s parsed frontmatter) ALONE. No dependency on the
+    descriptor-altitude edge entity C5b resolves: `spine['cross_sprint_edges']`
+    is spine.schema.json's own required field, already present once C3b
+    lands, so this is buildable without C5b's answer."""
+    result = check_cross_sprint_edge_order(spine)
+    edge_count = len(spine.get("cross_sprint_edges") or [])
+
+    if result["ok"]:
+        r.passed(
+            f"Audit 5 (sprint-scoped, sprint={sprint_id}): cross-sprint edge order holds "
+            f"for roadmap_id={run_id} ({edge_count} cross_sprint_edges checked against "
+            f"spine sprints[] ordinal)."
+        )
+        return
+
+    for v in result["violations"]:
+        r.fail(
+            f"Audit 5 (sprint-scoped, sprint={sprint_id}): cross-sprint edge violation — "
+            f"sprint {v['from']!r} (ordinal={v['ordinalFrom']}) blocks sprint {v['to']!r} "
+            f"(ordinal={v['ordinalTo']}) but ordinal(from) is not strictly less than "
+            f"ordinal(to)"
+        )
+
+    for u in result["unresolved"]:
+        r.fail(
+            f"Audit 5 (sprint-scoped, sprint={sprint_id}): cross_sprint_edges entry "
+            f"{u['from']!r} -> {u['to']!r} names an unresolved sprint id on its {u['which']!r} "
+            f"side — not present in the spine's sprints[] for roadmap_id={run_id}"
+        )
+
+    if result["cycle"]:
+        r.fail(
+            f"Audit 5 (sprint-scoped, sprint={sprint_id}): cross-sprint edge cycle detected "
+            f"among sprint descriptors: {' → '.join(result['cycle'])}"
+        )
+
+
+def _sprint_scoped_fail_summary(
+    r: _Reporter, run_id: str, sprint_id: str
+) -> Tuple[int, List[str], List[str]]:
+    r.stdout_lines.append("")
+    r.stdout_lines.append(
+        f"audit-roadmap: one or more checks FAILED for roadmap_id={run_id} "
+        f"sprint={sprint_id} — Phase 3 dispatch is blocked"
+    )
+    return r.exit_code, r.stdout_lines, r.stderr_lines
+
+
+def _run_audit_sprint_scoped(
+    run_id: str, data_root: Path, state_root: Path, sprint_id: str
+) -> Tuple[int, List[str], List[str]]:
+    """C4 sprint-scoped mode: Audit 1 counts KEEP+MERGE against the named
+    sprint's own cluster subset (`spine['sprints'][].stubs`), Audit 3
+    cross-references pm-gates.md WITHIN the sprint (both files now sourced
+    from `state/roadmap/<run-id>/sprint-<ordinal>/`, mirroring C11's
+    per-sprint `OVERVIEW.md` homing), and Audit 5 resolves cross-sprint
+    edges from the spine record alone (`_audit5_cross_sprint_edge_order`).
+    Audits 2 and 4 are whole-roadmap-only (ready_to_fire uniqueness and
+    pm-gates pending-row reference are not named in the C4 body's sprint-
+    scoped list) and are not run here.
+    """
+    r = _Reporter()
+    spine_path = state_root / "roadmap" / run_id / "SPINE.md"
+    spine = read_spine(spine_path)
+    if spine is None:
+        r.fail(
+            f"SPINE.md not found or did not parse as a kind: roadmap-spine record at "
+            f"{spine_path} — sprint-scoped audit requires the roadmap's sprint spine (C3b)"
+        )
+        return _sprint_scoped_fail_summary(r, run_id, sprint_id)
+
+    sprint = _find_sprint_descriptor(spine, sprint_id)
+    if sprint is None:
+        known_ids = sorted(
+            s.get("id")
+            for s in (spine.get("sprints") or [])
+            if isinstance(s, dict) and isinstance(s.get("id"), str)
+        )
+        r.fail(
+            f"sprint_id={sprint_id!r} not found in {spine_path}'s sprints[] for "
+            f"roadmap_id={run_id} (known sprint ids: {known_ids})"
+        )
+        return _sprint_scoped_fail_summary(r, run_id, sprint_id)
+
+    ordinal = sprint.get("ordinal")
+    sprint_dir = state_root / "roadmap" / run_id / f"sprint-{ordinal}"
+    pmg_path = sprint_dir / "pm-gates.md"
+    recon_path = sprint_dir / "reconciliation.md"
+    # ABSENT is not `[]` — spine.schema.json fixes these as different facts and
+    # the audit must not collapse them. Absent means `sprint-planning` has not run
+    # for this sprint, so reconciliation.md and pm-gates.md legitimately do not
+    # exist and Audits 1/3 have nothing to check: running them anyway lands the
+    # both-sides-zero "dead-gate signature" fail, a FALSE violation of exactly the
+    # kind this sprint-scoped mode exists to remove. `[]` means it DID run and
+    # authored no stubs — a finding, and the dead-gate fail is then the correct
+    # verdict. Audit 5 runs either way: cross-sprint edges live on the spine
+    # record and are answerable whether or not any sprint has been planned.
+    raw_stubs = sprint.get("stubs")
+    if raw_stubs is None:
+        r.passed(
+            f"Stub-coverage[{sprint_id}]: skipped — sprints[].stubs is ABSENT, so "
+            f"sprint-planning has not run for this sprint and its stubs are "
+            f"legitimately not on disk. An authored-but-empty `stubs: []` is a "
+            f"different fact and is NOT skipped."
+        )
+    else:
+        sprint_stub_ids = {str(s) for s in raw_stubs}
+        _audit1_stub_coverage(
+            r, run_id, data_root, recon_path, stub_filter=sprint_stub_ids, scope_label=sprint_id
+        )
+        _audit3_pm_gates_cross_reference(
+            r, run_id, data_root, pmg_path, stub_filter=sprint_stub_ids, scope_label=sprint_id
+        )
+    _audit5_cross_sprint_edge_order(r, spine, run_id, sprint_id)
+
+    r.stdout_lines.append("")
+    if r.exit_code == 0:
+        r.stdout_lines.append(
+            f"audit-roadmap: all checks passed for roadmap_id={run_id} sprint={sprint_id}"
+        )
+    else:
+        r.stdout_lines.append(
+            f"audit-roadmap: one or more checks FAILED for roadmap_id={run_id} "
+            f"sprint={sprint_id} — Phase 3 dispatch is blocked"
+        )
+
+    return r.exit_code, r.stdout_lines, r.stderr_lines
+
+
+def run_audit(
+    run_id: str, data_root: Path, state_root: Path, sprint_id: Optional[str] = None
+) -> Tuple[int, List[str], List[str]]:
+    """Run the audits for *run_id*, accumulating failures. Never raises for
     an expected audit-fail — only an unexpected query error propagates.
+
+    *sprint_id* is the C4 sprint-scoped mode's entry point: when given,
+    delegates to `_run_audit_sprint_scoped` instead of running the
+    whole-roadmap 5-audit set. Default None reproduces the original
+    whole-roadmap behaviour unchanged.
 
     Returns (exit_code, stdout_lines, stderr_lines).
     """
+    if sprint_id is not None:
+        return _run_audit_sprint_scoped(run_id, data_root, state_root, sprint_id)
+
     pmg_path = state_root / "roadmap" / run_id / "pm-gates.md"
     recon_path = state_root / "roadmap" / run_id / "reconciliation.md"
 
@@ -842,11 +1179,21 @@ def run_audit(run_id: str, data_root: Path, state_root: Path) -> Tuple[int, List
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: ``audit-roadmap <run-id> [--root <dir>]``."""
+    """CLI entry: ``audit-roadmap <run-id> [--root <dir>] [--sprint <sprint-id>]``.
+
+    ``--sprint`` selects the C4 sprint-scoped mode (Audits 1/3/5 scoped to
+    one sprint descriptor's own cluster, reading `SPINE.md`) instead of the
+    whole-roadmap 5-audit set.
+    """
     if not argv:
-        print("Usage: audit-roadmap <run-id> [--root <dir>]", file=sys.stderr)
+        print("Usage: audit-roadmap <run-id> [--root <dir>] [--sprint <sprint-id>]", file=sys.stderr)
         print(
             "  Audits the roadmap with roadmap_id=<run-id> for Phase 2 close gates.",
+            file=sys.stderr,
+        )
+        print(
+            "  --sprint scopes Audits 1/3/5 to one sprint descriptor's own cluster "
+            "(spine.schema.json's sprints[]).",
             file=sys.stderr,
         )
         return 2
@@ -859,6 +1206,7 @@ def main(argv: List[str]) -> int:
 
     rest = argv[1:]
     root_flag: Optional[str] = None
+    sprint_flag: Optional[str] = None
     i = 0
     while i < len(rest):
         tok = rest[i]
@@ -867,6 +1215,13 @@ def main(argv: List[str]) -> int:
                 print("ERROR: --root requires a directory argument", file=sys.stderr)
                 return 2
             root_flag = rest[i + 1]
+            i += 2
+            continue
+        if tok == "--sprint":
+            if i + 1 >= len(rest) or not rest[i + 1]:
+                print("ERROR: --sprint requires a sprint-id argument", file=sys.stderr)
+                return 2
+            sprint_flag = rest[i + 1]
             i += 2
             continue
         print(f"ERROR: unexpected argument: {tok}", file=sys.stderr)
@@ -887,7 +1242,9 @@ def main(argv: List[str]) -> int:
 
     try:
         state_root = data_root / "state"
-        exit_code, stdout_lines, stderr_lines = run_audit(run_id, data_root, state_root)
+        exit_code, stdout_lines, stderr_lines = run_audit(
+            run_id, data_root, state_root, sprint_id=sprint_flag
+        )
     except Exception as exc:  # noqa: BLE001 — fail-loud on any unexpected query/IO error
         print(
             f"FAIL: audit-roadmap: hard error while auditing roadmap_id={run_id} — "

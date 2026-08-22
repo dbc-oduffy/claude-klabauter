@@ -816,6 +816,66 @@ class TestFailsLoudOnMisdirection:
             )
 
 
+#: Real code-reviewer self-scaffold frontmatter shape, modeled on the
+#: committed sidecars under
+#: state/subagent-share/41d66fda-8803-4abd-9454-a9e5e9b5ae24/2026-08-22-
+#: codereview-sliceS1-*.md (read 2026-08-22 during this fix). Distinguishing
+#: feature: `agent_type: review-findings` -- the doc-TYPE token
+#: `coordinator-doc-new --type review-findings` stamps on its self-persist
+#: fallback path, NOT a subagent_type name. This is the exact shape the op
+#: refused before this fix (`agent_type` not a member of
+#: `_REVIEWER_AGENT_TYPES`, which holds only agent-type names).
+_SELF_SCAFFOLD_FRONTMATTER = (
+    "---\n"
+    "status: open\n"
+    "agent_type: review-findings\n"
+    "spawned_at: 2026-08-22T14:51:07Z\n"
+    "lead_session_id: 41d66fda-8803-4abd-9454-a9e5e9b5ae24\n"
+    "divergence:\n"
+    "  diverged: false\n"
+    "commits: []\n"
+    "dispatch_feed:\n"
+    "  gate_kind: none\n"
+    "  write_files: []\n"
+    "---\n\n"
+)
+
+
+class TestSelfScaffoldedReviewFindingsDocTypeToken:
+    """Regression anchor for the live defect: `coordinator-doc-new --type
+    review-findings`'s self-persist fallback stamps the doc-TYPE token
+    `review-findings` into `agent_type:`, never an agent-type name — so the
+    accepted-set gate must admit that literal too, alongside the real
+    reviewer agent types. Fixture is the real frontmatter shape, not a
+    synthetic one, per this fix's own regression discipline."""
+
+    def test_self_scaffolded_review_findings_sidecar_is_dispositionable(self, tmp_path):
+        sidecar_dir = tmp_path / "state" / "subagent-share" / "41d66fda-8803-4abd-9454-a9e5e9b5ae24"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        sidecar = sidecar_dir / "2026-08-22-codereview-sliceS1-primitive.md"
+        sidecar.write_text(_SELF_SCAFFOLD_FRONTMATTER + _FINDINGS_BODY, encoding="utf-8")
+
+        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+        assert result["already_dispositioned"] is False
+        text = sidecar.read_text(encoding="utf-8")
+        assert mod._DISPOSITIONS_HEADING in text
+        assert "applied: [F1]" in text
+
+    def test_doc_type_token_membership_is_pinned(self):
+        assert mod._REVIEWER_DOC_TYPE_TOKENS == frozenset({"review-findings"})
+
+    def test_arbitrary_doc_type_token_is_still_refused(self, tmp_path):
+        """The gate is a pinned set, not "anything string-shaped" — a token
+        that isn't the real self-scaffold literal must still be refused."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "not-a-real-token.md",
+            agent_type="staff-eng-review", body=_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError, match="agent_type"):
+            mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+
 class TestCliEntrypoint:
     def test_cli_happy_path_exits_zero(self, tmp_path, capsys):
         sidecar = _write_sidecar(

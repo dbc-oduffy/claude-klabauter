@@ -163,7 +163,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "check-weekly-staleness",
     "goal-close-day",
     "coordinator-ceremony-hook",
-    "emit-cadence",
 )
 
 
@@ -601,7 +600,6 @@ def _build_directives(
     directives += [
         *build_ceremony_close_tail(
             post_command_hook_id="d_step10_5_post_command_hook",
-            emit_cadence_id="d_step10_6_emit_cadence",
             ceremony_name="workday-complete",
         ),
     ]

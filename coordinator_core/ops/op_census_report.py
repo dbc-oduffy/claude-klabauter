@@ -5,7 +5,7 @@ Purpose: C6 (`docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md` §C6,
 THE assembly point. Registers `op_census.report`, which composes C1's cached
 per-module summary, C2's spawn evidence, C4's timing dispositions, and C5's
 line-count ratchet into ONE machine-readable, per-op, four-axis disposition
-(spawns / process_time / invocation_tax / line_count, each `over_bar` /
+(spawns / handler_elapsed / invocation_tax / line_count, each `over_bar` /
 `under_bar` / `no_data`) — the artifact P2 consumes, never prose. It carries
 the corpus root and module count it was computed over (Finding 5, stays OPEN
 — see negative-spec below) and asserts its own process-time budget.
@@ -25,25 +25,81 @@ and the corpus-scan-scope-mismatch this avoids):
     |-------------------------------------|-------------------------------|
     | cache revalidate (C1 summarize_paths, includes sha256 + AST parse-on-miss + line count) | **125.0ms** |
     | summary aggregate (compute_distribution + spawn-evidence resolution over already-parsed summaries) | ~5-15ms |
-    | telemetry aggregate (C4 process_time_by_op over the current op-latency generation) | ~60ms (94/273 ops, 28,117-row spike figure; this repo's live figure varies with sink size) |
+    | telemetry aggregate (C4 handler_elapsed_by_op over the current op-latency generation) | ~60ms (94/273 ops, 28,117-row spike figure; this repo's live figure varies with sink size) |
     | line count | **0ms — INSIDE cache revalidate.** `module_summary._compute_module_summary` derives `line_count` from the same in-memory text `sites_in_source` reads (C1's own docstring); there is no second pass here. C5's separate "64ms" figure was a standalone measurement of the same cost this row already counts, not an addition to it. |
     | serialization (building + `json.dumps`-ready dict) | <5ms |
     | client door (cost for a client to REACH this op — not paid inside this handler; see `FROZEN_CLIENT_DOOR_MS`) | ~64.1ms (spike reconstruction, out-of-process, reference only) |
 
+    | path re-keying (`Path.resolve()` per corpus module + per op entrypoint) | **0ms — removed 2026-08-21.** See below. |
+
     Handler-only total (cache revalidate + summary aggregate + telemetry
-    aggregate + serialization, excludes client door): **~195-215ms measured**
-    on this repo's real non-test tree — comfortably under the 500ms
-    brightline (DR-344 constraint 1) and close to, but today still just over
-    in the worst case, DR-344 constraint 7's separate 200ms "one process
-    over 200ms needs a fix, not a rationale" bar. Reported honestly via
-    `self_assessment.under_per_process_bar`, never hedged (DR-344's own
-    negative-spec: "a breach is reported as a breach"). The dominant, floor
-    cost is the sha256-over-bytes read C1's own docstring calls
+    aggregate + serialization, excludes client door): **171.9-187.5ms
+    measured** on this repo's real non-test tree, under BOTH the 500ms
+    brightline (DR-344 constraint 1) and constraint 7's separate 200ms "one
+    process over 200ms needs a fix, not a rationale" bar. Reported honestly
+    via `self_assessment.under_per_process_bar`, never hedged (DR-344's own
+    negative-spec: "a breach is reported as a breach").
+
+    THE DOMINANT TERM WAS NOT WHAT THIS TABLE SAID, and the correction is
+    kept here because the wrong causal story is what let the breach sit.
+    The table claimed the floor cost was the sha256-over-bytes read C1 calls
     non-negotiable-downward (DR-236 forbids mtime keying for a
-    correctness-critical read), so it scales with corpus BYTES, which is
-    exactly why the byte-denominated assertion below exists — to route
-    future corpus growth into C5's ratchet, not into a widened census budget
-    (anti-scope: "Do not widen any DR-344 bar to make the census green").
+    correctness-critical read). Profiled on the warm path, sha256 is **8.7ms**
+    per run. The real cost was `Path.resolve()` in the re-keying loops —
+    1,177 calls and ~112ms here, plus ~283 calls and ~31ms in
+    `spawn_bearing_ops.resolve_op_entrypoints`, each one an
+    `nt._getfinalpathname` syscall on Windows. Removing the round-trip
+    (`_relpath_under`, which keeps `resolve()` as the second leg) took the
+    handler from ~281-328ms to the figure above. Anything re-added to this
+    loop is paid ~1,159 times: profile before believing a budget table,
+    including this one.
+
+    The byte-denominated assertion below still exists for the reason it
+    always did — to route future corpus growth into C5's ratchet, not into a
+    widened census budget (anti-scope: "Do not widen any DR-344 bar to make
+    the census green") — but note the sha256 read it denominates is now a
+    minor term, not the floor.
+
+    2026-08-22 note — a predecessor handoff reported this warm-path
+    self-assertion at 531-562ms of process time under real machine load
+    (~50 concurrent sessions), a figure NOT re-measured or reproduced on
+    this box (own negative-spec above: don't repeat the wrong-causal-story
+    mistake by asserting an inherited number as a measurement). The
+    handoff's own step had already been discharged before it was picked
+    up: `d45e93099` (this module's own entry above) took the warm total
+    from 281-328ms to 171.9-187.5ms by removing the `Path.resolve()`
+    re-keying, and `850f6906a` (landed same day, orphaned-session cleanup)
+    only extended two OTHER tests' Darwin support — neither commit touched
+    `test_census_budget`'s assertion, so the pass it reports is not hollow.
+    What this pass actually measured, on this box, before touching
+    anything: warm handler total 171.9-250ms over several runs
+    (`test_census_budget` / `test_census_cold_process_budget` both green
+    already, ~250-330ms of margin under the 500ms brightline — not a
+    hollow assertion, not thin; the 531-562ms figure simply did not
+    reproduce, likely a load-transient measurement, never established here
+    as a code regression). Optimised anyway, since the win was real and
+    free of tradeoffs once found: `_corpus_paths` walked the corpus with
+    `Path.rglob("*.py")`, which descends into EVERY directory first and
+    filters `__pycache__`/`tests` out only after listing them — 271 of 378
+    directories under `corpus_root` (72%) are exactly those two names, so
+    the walk was fully listing subtrees it kept zero files from. A second,
+    fully redundant
+    `p.stat()` pass then re-touched every kept file to compute
+    `bytes_scanned`, on top of the full-body read `compute_stamp` already
+    pays per file. Fix: `_walk_corpus` (this module) walks via `os.scandir`
+    with in-place directory pruning — a `__pycache__`/`tests` directory is
+    never entered, not entered-then-discarded — and yields `(path, size)`
+    together off the same `scandir` call, so `bytes_scanned` costs zero
+    additional syscalls. Re-measured warm-path handler total: **109-156ms**
+    (~350-390ms of margin under the brightline) — a further, measured cut
+    on top of an already-passing baseline, not a breach fix.
+    `_relpath_under` (this module) and its sibling
+    `spawn_bearing_ops._relpath_under_repo_root` also each dropped a
+    `PurePath.parts`-based `..`-membership check (a `Sequence`-mixin
+    fallback via `__iter__`/`__getitem__` in this interpreter's pathlib, not
+    a plain-tuple `in`) in favour of splitting the POSIX string already
+    computed for the return value — a smaller, additive win on the same
+    profiled path, not the dominant fix.
 
 Byte-denominated assertion (staff-eng Finding 4): `FROZEN_BYTE_SCAN_MS_PER_MB`
 freezes the measured cache-revalidate-ms-per-scanned-MB ratio
@@ -119,6 +175,7 @@ Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-o
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -148,7 +205,7 @@ from coordinator_core.op_census.timing import (
     NoDataReason,
     PROCESS_TIME_BAR_MS,
     invocation_tax_dispositions,
-    process_time_by_op,
+    handler_elapsed_by_op,
 )
 from coordinator_core.telemetry.op_latency import breach_summary
 
@@ -221,6 +278,56 @@ def _corpus_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _relpath_under(path: Path, root: Path, root_resolved: Path) -> Optional[str]:
+    """`path` as a POSIX string relative to the engine repo root, or None if outside.
+
+    The re-keying loop below runs once per corpus module — ~1,159 today — and
+    each `Path.resolve()` is a filesystem round-trip, one
+    `nt._getfinalpathname` syscall per call on Windows. Profiled on the warm
+    path it was 1,177 calls and ~112ms of a ~300ms run, the single largest
+    term in the census and larger than the sha256 corpus read this module's
+    budget table names as the dominant, floor cost. The paths being re-keyed
+    come from a walk rooted at `corpus_root`, so they already carry the root's
+    prefix and `relative_to` answers without touching disk.
+
+    `root_resolved` is kept as the second leg rather than dropped, and the
+    fast leg REFUSES any result still carrying a `..` component. `relative_to`
+    is a string operation: it happily answers `repo/pkg/../pkg/mod.py` relative
+    to `repo` with `pkg/../pkg/mod.py`, which keys the same module under a
+    second, different string. Only `resolve()` collapses that. Dropping the
+    second leg as a "simplification" would re-key such a module away from the
+    string the axes look it up by — staff-eng Finding 0's exact failure shape,
+    where a re-keying voided the line_count axis for every op without raising.
+
+    Known, accepted difference: for a path whose component is a SYMLINK into
+    the tree, the fast leg answers by path where `resolve()` answered by
+    physical location. The corpus walk this feeds produces physical paths under
+    `corpus_root`, so the case does not arise here; were it to, the fast leg's
+    answer is the more useful one — the old behaviour dropped such a module
+    from the axis silently.
+
+    The `..`-component check reads `relative_str.split("/")` rather than
+    `relative.parts` — profiled on the warm path, `PurePath.parts` (a
+    `Sequence`-mixin object in this interpreter's pathlib, not a plain
+    tuple) falls back to the ABC's `__contains__`, which walks it via
+    `__iter__`/`__getitem__` and re-parses on the way; splitting the POSIX
+    string already computed for the return value is the same check over a
+    real `list[str]`, at native `str.split`/`in` cost.
+    """
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = None
+    if relative is not None:
+        relative_str = relative.as_posix()
+        if ".." not in relative_str.split("/"):
+            return relative_str
+    try:
+        return path.resolve().relative_to(root_resolved).as_posix()
+    except ValueError:
+        return None
+
+
 def _index_path(corpus_root: Path) -> Path:
     """Persisted-tier index location — sibling to `op_latency.py`'s own
     `.git/coordinator-sessions/logs/` convention (never tracked, since
@@ -256,6 +363,58 @@ def _spawn_index_path(corpus_root: Path) -> Path:
     )
 
 
+#: Directory names `_corpus_paths` never descends into — pruned at the
+#: `os.scandir` level, not filtered after a full-tree walk. See that
+#: function's own docstring for why the distinction is the dominant cost.
+_PRUNED_DIR_NAMES = frozenset({"__pycache__", "tests"})
+
+
+def _walk_corpus(root: Path) -> Iterable["tuple[Path, int]"]:
+    """Yields `(path, size_bytes)` for every NON-TEST `.py` file under
+    `root`, using `os.scandir` directly rather than `Path.rglob`.
+
+    Profiled on the warm path (staff-eng finding, this pass): `rglob("*.py")`
+    over `corpus_root` walks the WHOLE tree first -- 378 directories, 8,658
+    files including every `__pycache__` and `tests` subtree -- and only
+    THEN filters down to the ~1,182 non-test modules this census actually
+    wants, via a `p.parts` membership check that itself re-parses each
+    `Path`. 271 of those 378 directories (72%) are `__pycache__`/`tests`
+    subtrees the census never keeps a single file from. `os.scandir` lets a
+    directory be excluded from the walk entirely the moment its name is
+    seen, before any of its children are ever listed -- the walk never
+    enters the pruned subtrees rather than entering and discarding them.
+
+    Each yielded size comes from `DirEntry.stat().st_size` -- on Windows this
+    is served from the same `FindNextFile` data the `scandir` call already
+    fetched, not a second `stat()` syscall per file (contrast the old
+    `_corpus_paths` + `p.stat().st_size` shape this replaces, which paid one
+    `Path.rglob` walk AND one dedicated `stat()` per kept file). Symlinked
+    directories are not followed (`entry.is_dir()` defaults to
+    `follow_symlinks=True` typed but this walk never creates or expects one
+    under `corpus_root`; matches `Path.rglob`'s own default `os.walk`-style
+    behaviour closely enough for a source tree that contains none).
+    """
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                if entry.name not in _PRUNED_DIR_NAMES:
+                    stack.append(Path(entry.path))
+                continue
+            if not entry.name.endswith(".py") or entry.name.startswith("test_"):
+                continue
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            yield Path(entry.path), size
+
+
 def _corpus_paths(corpus_root: Path) -> List[Path]:
     """Every NON-TEST `.py` file under `corpus_root` — excludes
     `__pycache__`, any path with a `tests` segment, and any `test_*.py`
@@ -265,12 +424,13 @@ def _corpus_paths(corpus_root: Path) -> List[Path]:
     WHOLE tree (including tests/) here would compare a ~2,800-file corpus
     against a ~1,135-file frozen figure and trip the ratchet on a scope
     mismatch, not a real regression. Sorted for a deterministic module count
-    and a deterministic `module_summary.summarize_paths` iteration order."""
-    return sorted(
-        p
-        for p in corpus_root.rglob("*.py")
-        if "__pycache__" not in p.parts and "tests" not in p.parts and not p.name.startswith("test_")
-    )
+    and a deterministic `module_summary.summarize_paths` iteration order.
+
+    Delegates the actual walk to `_walk_corpus` (pruned-descent `scandir`,
+    not `rglob` + post-filter) and discards the sizes it yields -- callers
+    wanting `census()`'s own `bytes_scanned` should call `_walk_corpus`
+    directly instead of pairing this with a second `stat()` pass."""
+    return sorted(path for path, _size in _walk_corpus(corpus_root))
 
 
 def _read_current_generation_entries(repo_root: Path) -> List[dict]:
@@ -378,7 +538,7 @@ def _serialize_axis(result: Optional[AxisResult]) -> dict:
 
 def _four_axis_report(
     spawns: Dict[str, AxisResult],
-    process_time: Dict[str, AxisResult],
+    handler_elapsed: Dict[str, AxisResult],
     invocation_tax: Dict[str, AxisResult],
     line_count: Dict[str, AxisResult],
 ) -> dict:
@@ -389,10 +549,10 @@ def _four_axis_report(
     eng Finding 7): an op with `no_data` on ANY axis can never appear in
     `cleared`, asserted at THIS emitted boundary, not only the in-memory
     enum."""
-    ops = sorted(set(spawns) | set(process_time) | set(invocation_tax) | set(line_count))
+    ops = sorted(set(spawns) | set(handler_elapsed) | set(invocation_tax) | set(line_count))
     axis_maps = {
         "spawns": spawns,
-        "process_time": process_time,
+        "handler_elapsed": handler_elapsed,
         "invocation_tax": invocation_tax,
         "line_count": line_count,
     }
@@ -489,8 +649,15 @@ def census(
     persist_index = persist_index and (corpus_root.parent / ".git").is_dir()
     index_path = _index_path(corpus_root)
     index = module_summary.load_index(index_path) if persist_index else {}
-    paths = _corpus_paths(corpus_root)
-    bytes_scanned = sum(p.stat().st_size for p in paths)
+    # `_walk_corpus` yields (path, size) together off ONE pruned-descent
+    # scandir walk -- see its docstring. Sorting here (rather than inside
+    # `_corpus_paths`, which now exists only as a thin, path-only wrapper
+    # kept for callers that want the walk without the sizes) keeps
+    # `summarize_paths`'s iteration order the same deterministic sort this
+    # module has always used.
+    walked = sorted(_walk_corpus(corpus_root), key=lambda pair: pair[0])
+    paths = [path for path, _size in walked]
+    bytes_scanned = sum(size for _path, size in walked)
     summaries = module_summary.summarize_paths(paths, index=index)
     if persist_index:
         module_summary.save_index(index, index_path)
@@ -523,12 +690,12 @@ def census(
     # resolved paths against). Review: staff-eng Finding 0 -- re-keying
     # against the dispatch-time repo_root made every relative_to() raise on
     # the real wire path, voiding the line_count axis for all ops silently.
-    engine_repo_root_resolved = corpus_root.parent.resolve()
+    engine_repo_root = corpus_root.parent
+    engine_repo_root_resolved = engine_repo_root.resolve()
     summaries_by_op_relpath: Dict[str, module_summary.ModuleSummary] = {}
     for path_str, summary in summaries.items():
-        try:
-            relpath = Path(path_str).resolve().relative_to(engine_repo_root_resolved).as_posix()
-        except ValueError:
+        relpath = _relpath_under(Path(path_str), engine_repo_root, engine_repo_root_resolved)
+        if relpath is None:
             continue
         summaries_by_op_relpath[relpath] = summary
 
@@ -541,7 +708,7 @@ def census(
     if telemetry_entries is None:
         telemetry_entries = _read_current_generation_entries(repo_root)
     telemetry_entries = list(telemetry_entries)
-    process_time_axis = process_time_by_op(telemetry_entries, op_names)
+    handler_elapsed_axis = handler_elapsed_by_op(telemetry_entries, op_names)
     invocation_tax_axis = invocation_tax_dispositions(op_names, measured_tax_ms=measured_tax_ms)
     # One extra pass over rows already in memory, never a second read. The
     # process_time axis says WHETHER an op is over the bar; this says how
@@ -553,7 +720,7 @@ def census(
 
     # --- serialization -------------------------------------------------------
     serialize_t0 = time.process_time()
-    dispositions = _four_axis_report(spawns_axis, process_time_axis, invocation_tax_axis, line_count_axis)
+    dispositions = _four_axis_report(spawns_axis, handler_elapsed_axis, invocation_tax_axis, line_count_axis)
     report = {
         "op": "op_census.report",
         "corpus": {
@@ -631,10 +798,14 @@ def measure_census_self_timing_ms(*, k: int = 5, timeout_secs: float = 60.0) -> 
     for `FROZEN_INVOCATION_TAX_MS` (see module docstring negative-spec).
 
     Returns `batched_process_time_ms`'s own dict shape
-    (`process_time_ms`/`wall_ms`/`procs_per_call`/`rc`/`k`). Raises
-    `NotImplementedError` off Windows and propagates any job-object API
-    failure -- never silently degrades to a wrong unit (see
-    `batched_process_time_ms`'s own contract).
+    (`process_time_ms`/`wall_ms`/`procs_per_call`/`rc`/`k`). This is the ONE
+    caller of `batched_process_time_ms` that does not guard on `IS_WINDOWS`
+    (every other call site skips off-Windows) -- it runs unconditionally,
+    reaching the job-object accounting path on Windows and the kqueue +
+    per-pid `wait4` path on Darwin (see `batched_process_time_ms`'s own
+    module docstring for both); it still raises `NotImplementedError` on any
+    OTHER platform, and propagates any primitive-level failure rather than
+    silently degrading to a wrong unit.
     """
     from coordinator_core.benchmarks.process_time import batched_process_time_ms
 

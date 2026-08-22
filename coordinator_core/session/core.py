@@ -1439,21 +1439,57 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
             # same `!= 0` guard is kept for the psutil-derived epoch too.
             stable_pid_start_epoch = str(epoch_i) if epoch_i != 0 else ""
 
+        # POSIX leg (b) — CLAUDE_PID. The parent-only check above holds only
+        # where the harness's ``sh -c "<cmd>"`` exec-replaces the shell,
+        # leaving ``claude`` as the hook subprocess's direct parent. Measured
+        # on macOS (2026-08-22, host `machine-b`): the wrapper the harness
+        # runs is a COMPOUND command (``source <snapshot> ... && eval '<cmd>'
+        # && pwd -P >| <file>``), so bash cannot exec-replace itself and a
+        # real bash rung persists between the hook and ``claude`` — the same
+        # shape the Windows trampoline has. Every session on that host
+        # stamped ``posix-parent-miss:name-mismatch`` and left ``stable_pid``
+        # empty, disarming ``session_live``'s Layer 1 and putting K-006's F0
+        # hazard back in play (``state/kill-ledger.md`` § K-006).
+        # ``CLAUDE_PID`` is exported into every hook environment and is
+        # comm-verified by the same predicate before being trusted, so it
+        # closes that gap without widening what counts as the harness
+        # process.
+        #
+        # Ordered SECOND here, unlike the Windows branch where it is
+        # preferred: on POSIX a direct parent that comm-verifies is the
+        # stronger witness wherever it exists, and leg (b) therefore only
+        # ever runs on a path that previously produced no stamp at all.
+        env_reason = ""
+        if not stable_pid:
+            try:
+                env_match, env_reason = _resolve_claude_pid_from_env()
+            except Exception as exc:
+                env_match, env_reason = None, f"env-miss:{type(exc).__name__}"
+            if env_match is not None:
+                env_pid, env_ct = env_match
+                stable_pid = str(env_pid)
+                epoch_i = int(env_ct)
+                stable_pid_start_epoch = str(epoch_i) if epoch_i != 0 else ""
+
         # POSIX breadcrumb (EM decision, C1 dispatch brief — AC1 says
         # "every run" and the plan's vocabulary was Windows-only; extended
         # rather than left silent). Computed from the SAME state the
         # stamping logic above already derived, in a block wrapped so it
         # can never itself raise into init() (AC3) — the stamping logic
         # above it is untouched and unwrapped, so behaviour is unchanged.
+        # When leg (b) ran, both halves are recorded "|"-joined exactly as
+        # the Windows branch joins its env and walk halves: leg (a)'s reason
+        # is never collapsed away by leg (b)'s answer.
         try:
             if posix_capture_exc is not None:
-                stable_pid_capture = f"posix-parent-miss:{type(posix_capture_exc).__name__}"
+                posix_reason = f"posix-parent-miss:{type(posix_capture_exc).__name__}"
             elif _is_harness_process(ppid_comm) and ppid_ct is not None:
-                stable_pid_capture = "posix-parent-hit"
+                posix_reason = "posix-parent-hit"
             elif not _is_harness_process(ppid_comm):
-                stable_pid_capture = "posix-parent-miss:name-mismatch"
+                posix_reason = "posix-parent-miss:name-mismatch"
             else:
-                stable_pid_capture = "posix-parent-miss:no-create-time"
+                posix_reason = "posix-parent-miss:no-create-time"
+            stable_pid_capture = f"{posix_reason}|{env_reason}" if env_reason else posix_reason
         except Exception:
             stable_pid_capture = "posix-parent-miss:unknown"
 

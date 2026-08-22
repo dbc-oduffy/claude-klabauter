@@ -633,20 +633,33 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
     # and reading it costs one more `open()`, honouring the no-subprocess bound
     # that made this rung gate-blind in the first place.
     _published_pointer_val = _read_pointer(".claude-klabauter-root")
-    if _published_pointer_val and os.path.isdir(_published_pointer_val):
+    if _published_pointer_val and os.path.isfile(
+        os.path.join(_published_pointer_val, "coordinator_core", "_engine_stamp")
+    ):
         return _published_pointer_val
 
     # Single-tree box (no published mirror installed): the live tree is the only
     # engine there is, and this rung keeps its pre-DR-326 behaviour byte-identical.
     #
-    # The `isdir` guard mirrors the published arm above (C4, AC7). Without it a bare
-    # truthiness check returns whatever the pointer file holds -- a stale path, or a
-    # path naming a FILE -- verbatim as the engine root, with no fall-through to
-    # Rung 2. That was unreachable in the live tree only because the published arm
-    # answers first; in the PUBLISHED MIRROR it is reachable and live, because the
-    # publish transform's bare 'claude-klabauter' -> 'claude-klabauter' row rewrote the string
-    # literal ".claude-klabauter-root" too, leaving the mirror reading the same pointer file
-    # on both arms and unable to fall back at all.
+    # The `isdir` guard mirrors the intent of the published arm above (C4, AC7;
+    # tightened by C3 to a stamp check for that arm -- see below). Without it a
+    # bare truthiness check returns whatever the pointer file holds -- a stale
+    # path, or a path naming a FILE -- verbatim as the engine root, with no
+    # fall-through to Rung 2. That was unreachable in the live tree only
+    # because the published arm answers first; in the PUBLISHED MIRROR it is
+    # reachable and live, because the publish transform's bare 'claude-klabauter' ->
+    # 'claude-klabauter' row rewrote the string literal ".claude-klabauter-root" too,
+    # leaving the mirror reading the same pointer file on both arms and unable
+    # to fall back at all.
+    #
+    # This live arm deliberately stays `isdir`, not a stamp check: DR-331
+    # makes `compute_client_token` RAISE on a single-tree (unstamped-by-design)
+    # box rather than fall back, and `test_rung1_5_pointer_file_no_spawn` pins
+    # this arm's isdir-only behaviour. The published arm above admits only a
+    # STAMPED root (C3, docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-
+    # the-interpreter-floor.md § C3) -- `isfile(<root>/coordinator_core/
+    # _engine_stamp)` strictly subsumes the prior `isdir` check there, so it
+    # was dropped rather than added to.
     _pointer_val = _read_pointer(".claude-klabauter-root")
     if _pointer_val and os.path.isdir(_pointer_val):
         return _pointer_val

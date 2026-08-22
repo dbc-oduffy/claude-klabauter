@@ -60,7 +60,6 @@ import pytest
 
 from coordinator_core.session import core, liveness, scope
 from coordinator_core.session import harness_registry
-from coordinator_core.pickup_assemble import compute_competing_claim
 from coordinator_core.session import holder_evidence as holder_evidence_mod
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
@@ -1861,9 +1860,8 @@ class TestComputeScopeEmptyVsIndeterminate:
 # ---------------------------------------------------------------------------
 # holder_evidence._liveness_basis reads off live_session_verdicts() (D5
 # single-liveness-key invariant restored — no independent core.stable_pid_alive
-# re-derivation outside liveness.py). Also pins the "fetched once per call,
-# not per candidate" contract and the absent-from-map -> not-live/"unknown"
-# disposition for compute_competing_claim's holders.
+# re-derivation outside liveness.py). Also pins the absent-from-map ->
+# not-live/"unknown" basis every claim-holder consumer reads.
 # ---------------------------------------------------------------------------
 
 
@@ -1907,108 +1905,38 @@ class TestHolderEvidenceLivenessBasisSeam:
             holder_evidence_mod._liveness_basis("was-live", cwd=str(repo)) == "unknown"
         )
 
-    def test_no_session_holder_produces_stale_claim_disposition_in_compute_competing_claim(
+    def test_holder_with_no_session_dir_at_all_reads_none_basis_not_unknown(
         self, tmp_path
     ):
+        """A holder sid with no session dir on disk short-circuits in
+        `holder_evidence` before `_liveness_basis` is ever consulted, so its
+        basis reads `None` — the literal `"unknown"` is reserved for a dir
+        that DOES exist but carries no verdict (the two tests above). Every
+        claim-holder consumer inherits this distinction, so an evidence gap
+        is never rendered as a resolved-but-unknown verdict.
+
+        NEGATIVE-SPEC (2026-08-22): this case previously asserted the same
+        distinction through `pickup_assemble.compute_competing_claim`'s
+        `stale-claim` candidate disposition. That producer was deleted at
+        aadef0e23 (chunk C2, docs/plans/2026-08-21-rebuild-the-three-ceremony-
+        assemblers.md), whose reverse-reference scan missed this module and
+        left it uncollectable at import. The surviving subject is
+        `holder_evidence` itself, asserted directly — do NOT repoint this at
+        a resurrected sibling-scan producer. Its companion case, which pinned
+        that function's per-distinct-sid `live_session_verdicts()` memo
+        ("fetched once per call, not per candidate"), is retired outright:
+        the memo was internal to the deleted function and no surviving code
+        path scans candidates.
+        """
         repo = _make_repo(tmp_path)
-        self_path = repo / "state" / "handoffs" / "self.md"
-        candidate_path = repo / "state" / "handoffs" / "peer.md"
-        candidate_path.parent.mkdir(parents=True, exist_ok=True)
-        # `_resolve_ledger_first_holder` (C11, ledger-first-authoritative-
-        # read) resolves the holder via `claim_state.resolve_claim_state`,
-        # which reads the mirror claim straight off DISK (`_read_mirror_claim`
-        # opens `handoff_path`) rather than trusting the `fm` dict a synthetic
-        # `handoff_scan` entry carries — so the candidate file must actually
-        # exist on disk with a matching `claimed_by:` line, or the ledger/
-        # mirror read finds nothing, `_resolve_ledger_first_holder` falls
-        # through to the `picked_up_by`-only mirror fallback (absent here),
-        # and the candidate is silently dropped before `compute_competing_claim`
-        # ever sees it.
-        candidate_path.write_text("claimed_by: no-session\nscope: []\n", encoding="utf-8")
-        scan = [
-            {
-                "path": candidate_path,
-                "resolved": candidate_path.resolve(),
-                "fm": {"claimed_by": "no-session", "scope": []},
-            }
-        ]
-        result = compute_competing_claim(
-            repo, {"scope": []}, str(self_path.relative_to(repo)), handoff_scan=scan
-        )
-        assert len(result["candidates"]) == 1
-        candidate = result["candidates"][0]
-        assert candidate["holder_live"] is False
-        assert candidate["disposition"] == "stale-claim"
-        # "no-session" has no session dir on disk at all -- `holder_evidence`
-        # short-circuits before ever reaching `_liveness_basis` (its own
-        # `sdir`/`is_dir()` guard), so the evidence field reads `None` here,
-        # not `"unknown"` -- that literal string is reserved for a session
-        # dir that DOES exist but has no verdict (see
-        # `test_holder_absent_from_map_reads_unknown_basis` and
-        # `test_archived_sid_absent_from_map_reads_unknown_and_not_live`
-        # above, which pin `_liveness_basis` directly for that case).
-        assert candidate["liveness_basis"] is None
+        assert core.session_dir("no-session", str(repo)) is None or not Path(
+            core.session_dir("no-session", str(repo))
+        ).is_dir()
 
-    def test_verdicts_seam_fetched_once_per_call_not_per_candidate(self, tmp_path):
-        """N sibling handoffs naming the SAME holder_sid must not multiply
-        the number of times `live_session_verdicts()` is consulted --
-        `compute_competing_claim`'s `cheap_evidence_by_sid`/
-        `full_evidence_by_sid` memos dedup the underlying `holder_evidence`/
-        `_liveness_basis` calls to a PER-DISTINCT-SID cost (one `cheap` +,
-        for a `live-peer`/`handover` disposition, one `full` -- both
-        `want_activity` variants of `holder_evidence` route through
-        `_liveness_basis`), never a per-candidate one. Proved by holding the
-        per-sid cost CONSTANT while the candidate count naming that one sid
-        varies, rather than asserting a specific literal call count that
-        would silently need updating if `holder_evidence`'s own internal
-        call shape changed."""
-        repo = _make_repo(tmp_path)
-        # holder-1 must have a real session dir -- `holder_evidence` short-
-        # circuits before ever consulting the verdicts seam for a sid whose
-        # dir doesn't exist (see the previous test), which would make this
-        # assertion vacuously true for the wrong reason.
-        _write_session(
-            repo, "holder-1", {"pid": "1", "last_activity": core.now_iso()}
-        )
-        self_path = repo / "state" / "handoffs" / "self.md"
+        evidence = holder_evidence_mod.holder_evidence("no-session", Path(repo))
 
-        def _scan(n):
-            out = []
-            for i in range(n):
-                p = repo / "state" / "handoffs" / f"c{i}.md"
-                p.parent.mkdir(parents=True, exist_ok=True)
-                # See the previous test's comment: `_resolve_ledger_first_holder`
-                # reads the mirror claim off DISK, so each synthetic candidate
-                # needs a real `claimed_by:` line, not just an in-memory `fm`.
-                p.write_text("claimed_by: holder-1\nscope: []\n", encoding="utf-8")
-                out.append(
-                    {
-                        "path": p,
-                        "resolved": p.resolve(),
-                        "fm": {"claimed_by": "holder-1", "scope": []},
-                    }
-                )
-            return out
-
-        verdicts_value = {"holder-1": (True, "recency-window", 5)}
-        with mock.patch.object(
-            liveness, "live_session_verdicts", return_value=verdicts_value
-        ) as mocked_one:
-            result_one = compute_competing_claim(
-                repo, {"scope": []}, str(self_path.relative_to(repo)),
-                handoff_scan=_scan(1),
-            )
-        with mock.patch.object(
-            liveness, "live_session_verdicts", return_value=verdicts_value
-        ) as mocked_three:
-            result_three = compute_competing_claim(
-                repo, {"scope": []}, str(self_path.relative_to(repo)),
-                handoff_scan=_scan(3),
-            )
-
-        assert len(result_one["candidates"]) == 1
-        assert len(result_three["candidates"]) == 3
-        assert mocked_one.call_count == mocked_three.call_count
+        assert evidence["liveness_basis"] is None
+        assert liveness.session_live("no-session", cwd=str(repo)) is False
 
 
 # ---------------------------------------------------------------------------

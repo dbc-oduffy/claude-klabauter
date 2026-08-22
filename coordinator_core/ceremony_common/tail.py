@@ -39,12 +39,11 @@ from typing import Any
 
 
 def build_ceremony_close_tail(
-    *, post_command_hook_id: str, emit_cadence_id: str, ceremony_name: str
+    *, post_command_hook_id: str, ceremony_name: str
 ) -> list[dict[str, Any]]:
-    """Builds the two ceremony-close directives (post-command hook, then
-    emit-cadence) in that order. Callers pass their own step-numbered ids
-    (workday: `d_step10_5_post_command_hook`/`d_step10_6_emit_cadence`;
-    workweek: `d_step13_5_post_command_hook`/`d_step13_6_emit_cadence`) —
+    """Builds the ceremony-close tail: the post-command hook directive.
+    Callers pass their own step-numbered id (workday:
+    `d_step10_5_post_command_hook`; workweek: `d_step13_5_post_command_hook`) —
     this module owns the shape (cli/args/depends_on/already_satisfied),
     never the numbering. `ceremony_name` is the canonical dashed ceremony
     name (`"workday-complete"` / `"workweek-complete"`) —
@@ -52,12 +51,12 @@ def build_ceremony_close_tail(
     (`argv[0]`) to resolve which `coordinator.local.md` key to dispatch;
     omitting it (the pre-2026-07-26 shape, `args=[]`) always resolved an
     empty ceremony name and silently no-opped regardless of which ceremony
-    ran it (arg-mismatch audit, class (c)). The emit-cadence entry alone
-    carries `best_effort: True` (2026-08-08 plan, AC8) — a non-zero exit
-    from it lands in the ceremony runner's `degraded` bucket rather than
-    `failed`, so it cannot move the ceremony's exit code. The
-    post-command-hook entry does not get the key: that step is not
-    documented as best-effort.
+    ran it (arg-mismatch audit, class (c)).
+
+    The emission-cadence directive this tail used to carry second was
+    removed with the emission artifact itself (2026-08-22 CUT); the tail is
+    a one-element list rather than a scalar so a future close step lands
+    here without re-shaping every caller.
     """
     return [
         {
@@ -66,13 +65,5 @@ def build_ceremony_close_tail(
             "args": [ceremony_name],
             "depends_on": None,
             "already_satisfied": False,
-        },
-        {
-            "id": emit_cadence_id,
-            "cli": "emit-cadence",
-            "args": [],
-            "depends_on": None,
-            "already_satisfied": False,
-            "best_effort": True,
         },
     ]

@@ -567,6 +567,31 @@ def test_point6_dependency_root_with_both_flag_and_env_passes(tmp_path, capsys):
     assert rc == 0, capsys.readouterr().err
 
 
+def test_point6_real_manifest_engine_door_installed_entry_passes(capsys):
+    """The real agent-install-manifest.json's engine_door_installed entry (added
+    beside engine_warm_enabled, docs/plans/2026-08-22-warm-engine-and-door-install-
+    from-published-root.md C7) must satisfy Point-6's shape gate — a new entry
+    needs a test that fails if it regresses, not just an external gate that
+    happens to run someday."""
+    manifest_path = (
+        Path(__file__).resolve().parents[2] / "docs" / "install" / "agent-install-manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    locations = manifest["configurable_locations"]
+    names = [loc.get("name") for loc in locations]
+    assert "engine_door_installed" in names
+
+    failures = vic._Failures()
+    vic._check_point6(manifest, failures)
+    err = capsys.readouterr().err
+    assert failures.count == 0, err
+
+    entry = next(loc for loc in locations if loc.get("name") == "engine_door_installed")
+    assert entry["discovery"]["candidates"]
+    assert entry["default"]
+    assert entry["override"].get("flag") or entry["override"].get("env")
+
+
 # ---------------------------------------------------------------------------
 # --repo-root default-path derivation
 # ---------------------------------------------------------------------------

@@ -74,7 +74,6 @@ from typing import Any, Dict, List, Optional
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.locked_write import LockTimeout, held_lock
-from coordinator_core.ops.resolve_swept_baton import _find_first_match
 from coordinator_core.session import core
 
 _LOG = logging.getLogger(__name__)
@@ -107,6 +106,34 @@ _MAX_LEGACY_FALLBACK_HOPS = 3
 #: a per-commit append must never itself become the slow op at this box's
 #: load norm.
 _LOCK_TIMEOUT_SECS = 2.0
+
+
+
+def _find_first_match(root, ref):
+    """Thin call-time delegator to ``ops.resolve_swept_baton._find_first_match``.
+
+    Deliberately NOT a module-scope ``from ... import``: this module is pulled
+    in by ``hooks/subagent_review_mark.py``, which the hooks package imports
+    EAGERLY, so a module-scope import here drags the whole op registry
+    (percolate engine, publish transport, close_out_and_stamp,
+    urllib.request, http.client, yaml) onto every SubagentStart catering fire
+    -- measured at ~329ms of CPU per fire for a graph that path never uses.
+
+    Kept as a same-named module-level function rather than inlining the import
+    at each of the three call sites so that this module's own attribute
+    surface is unchanged: ``store._find_first_match`` still resolves for any
+    caller or test that reaches for it (``commit_ledger/tests/test_oracle.py``
+    names it), and the three call sites read exactly as before.
+
+    Behaviour is the delegate's, unchanged -- this adds a lazy import, never a
+    second implementation. See docs/plans/2026-08-21-catering-costs-what-the-
+    work-costs.md C3.
+    """
+    from coordinator_core.ops.resolve_swept_baton import (
+        _find_first_match as _delegate,
+    )
+
+    return _delegate(root, ref)
 
 
 def ledger_dir(cwd: Optional[str] = None) -> Optional[Path]:

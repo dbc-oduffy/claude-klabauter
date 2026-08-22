@@ -7,9 +7,10 @@ Claude-klabauter's commit path — it is the sole entry in
 coordinator_core.ops.install_claude_klabauter_precommit_hook._GATE_REGISTRY, the
 registry that installs `.git/hooks/pre-commit`, which invokes this trampoline
 directly. See the module docstring on
-coordinator_core.ops.detect_staged_rollback for the two checks it runs (a
-staged-blob rollback detector and a staged mass-deletion tripwire), their
-thresholds, and their independent overrides.
+coordinator_core.ops.detect_staged_rollback for the check it runs (a staged
+mass-deletion tripwire) and its threshold/override. That module used to also
+run an exact-blob staged-rollback detector; that check was KILLED 2026-08-21
+(PM ruling) — see that module's own docstring for the full ruling.
 
 Usage:
     detect-staged-rollback [repo-root]
@@ -20,23 +21,17 @@ Usage:
     forwards argv verbatim so both callers (bareword CLI and `python -m`)
     get the same usage surface.
 
-Exit codes (2026-08-21 — split so a wrapper can tell WHICH check fired; see
-coordinator_core.ops.detect_staged_rollback's own "Exit-code contract" note):
-    0 — clean (no rollback candidates, or candidates below threshold, or
-        COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK set; and no
-        mass-deletion finding, or one below threshold, or
+Exit codes (see coordinator_core.ops.detect_staged_rollback's own
+"Exit-code contract" note):
+    0 — clean (no mass-deletion finding, or one below threshold, or
         COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION set)
-    1 — a staged-rollback finding crossed the breadth/depth threshold,
-        unresolved by its own override — no mass-deletion block
+    1 — a mass-deletion finding crossed the ratio/floor threshold, unresolved
+        by its own override
     2 — engine-root resolution / import failure (this trampoline's own
         transport failure) OR a usage error from the op (unknown option).
         Both mean "the check never ran"; the stderr message distinguishes
         them. Never a real check finding — a caller must not treat 2 as
-        overridable by either check's own key.
-    3 — a mass-deletion finding crossed the ratio/floor threshold, unresolved
-        by its own override — no rollback block
-    4 — BOTH a rollback finding and a mass-deletion finding, neither resolved
-        by its own override
+        overridable by the check's own key.
 
 Direct-import variant (mirrors coordinator/bin/check-registry-codename-leak.py
 and coordinator/bin/pickup-assemble): a plain in-process function call after

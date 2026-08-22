@@ -54,13 +54,17 @@ Invocation:
                          a request the engine already abandoned at 2s.
                          Source of truth is coordinator_core.ipc.
                          OP_TIMEOUT_OVERRIDES / DISPATCH_TIMEOUT_SECS /
-                         CEREMONY_BUDGET_SECS — the SAME module constants
-                         _timeout_for() uses, re-read live at call time (this
+                         CEREMONY_BUDGET_SECS, re-read live at call time (this
                          process is spawn-per-call per DR-215, so there is no
                          stale-value risk, but DISPATCH_TIMEOUT_SECS is
                          env-resolved at import time within THIS process, so
                          reading it here reflects the actual env this process
-                         saw).
+                         saw). OP_TIMEOUT_OVERRIDES is a value-snapshot of
+                         _timeout_for()'s own _OP_TIMEOUT_OVERRIDES (taken once
+                         at ipc.py import, not a live view of it) — true today
+                         because both are empty, but this dump would not
+                         reflect a hypothetical post-import mutation of the
+                         private table that _timeout_for() itself would see.
                          Precedence: this flag takes priority over <op> — if
                          both are passed (e.g. "ping --dump-op-timeouts"),
                          <op> is silently ignored and the dump is printed.
@@ -208,13 +212,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def _dump_op_timeouts() -> dict:
     """Build the op->timeout-budget JSON payload from the live dispatcher source of truth.
 
-    Reads coordinator_core.ipc.OP_TIMEOUT_OVERRIDES (the same MappingProxyType
-    _timeout_for() reads for per-op overrides) and DISPATCH_TIMEOUT_SECS (the
-    same module-level constant _timeout_for() falls back to). No second source
-    of truth is introduced -- this is a read-only projection of the dispatcher's
-    own timeout table, re-read live at call time rather than hardcoded, so a
-    process started with an overridden COORDINATOR_DISPATCH_TIMEOUT_SECS env
-    var reports the value it actually resolved to.
+    Reads coordinator_core.ipc.OP_TIMEOUT_OVERRIDES and DISPATCH_TIMEOUT_SECS,
+    the same module-level constant _timeout_for() falls back to. No second
+    source of truth is introduced -- this is a read-only projection of the
+    dispatcher's own timeout table, re-read live at call time rather than
+    hardcoded, so a process started with an overridden
+    COORDINATOR_DISPATCH_TIMEOUT_SECS env var reports the value it actually
+    resolved to. OP_TIMEOUT_OVERRIDES itself is a MappingProxyType built once
+    at ipc.py import as a value-snapshot of the private _OP_TIMEOUT_OVERRIDES
+    dict _timeout_for() reads -- not a live view of it. Harmless while both are
+    empty; a future dynamic mutation of the private table post-import would
+    not appear in this dump even though _timeout_for() would see it.
 
     Ceremony ops are projected EXPLICITLY at `ipc.CEREMONY_BUDGET_SECS` rather than
     left to fall through to "__default__". An external caller sizes its own kill
@@ -238,14 +246,36 @@ def _dump_op_timeouts() -> dict:
         is_ceremony_method,
     )
     from coordinator_core.op_scopes import OP_KEY_SCOPE
+    from coordinator_core import publish_lane
 
+    # A second clamp pass over `payload` (re-applying `min(budget,
+    # CEREMONY_BUDGET_SECS)` to every entry) was deliberately dropped here: it
+    # would only fire for a ceremony op present in `OP_TIMEOUT_OVERRIDES` but
+    # absent from `OP_KEY_SCOPE`, and `test_ceremony_budget_ratchet.py`
+    # enforces that no such row can ever land -- it fails the build on any
+    # edit that "admits a widening override row for a ceremony op." The same
+    # ratchet that makes `_timeout_for`'s clamp unconditional makes this dump
+    # loop's projection exact by construction: every ceremony op source is
+    # `OP_KEY_SCOPE`, already set to `CEREMONY_BUDGET_SECS` below.
     payload = dict(OP_TIMEOUT_OVERRIDES)
     for op in OP_KEY_SCOPE:
         if is_ceremony_method(op):
             payload[op] = CEREMONY_BUDGET_SECS
-    for op, budget in list(payload.items()):
-        if is_ceremony_method(op):
-            payload[op] = min(budget, CEREMONY_BUDGET_SECS)
+
+    # Publish-lane projection (DR-350). This dump is spawned as a CHILD of the caller
+    # sizing its own kill ceiling, so it inherits that caller's environment and can see
+    # the lane declaration directly -- no envelope, and no argument to thread through
+    # the CLI. Projecting it matters for the same reason ceremony ops are projected
+    # explicitly above: a lane op reporting 2s here would hand a publish round a ~4s
+    # client ceiling for a commit the engine is willing to spend ten minutes on, and the
+    # round would be killed by its own caller long before the engine gave up. Outside a
+    # declared round `budget_for` returns None for every op and this loop is a no-op, so
+    # the dump an ordinary caller reads is byte-identical to what it was before.
+    for op in publish_lane.PUBLISH_LANE_OPS:
+        lane_budget = publish_lane.budget_for(op)
+        if lane_budget is not None:
+            payload[op] = lane_budget
+
     payload["__default__"] = DISPATCH_TIMEOUT_SECS
     payload["__ceremony_budget__"] = CEREMONY_BUDGET_SECS
     return payload
@@ -658,6 +688,26 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 from coordinator_core.ipc import is_unstamped_dispatch_allowed
 
                 if not is_unstamped_dispatch_allowed():
+                    # "Retry in a moment" is the right remediation for a
+                    # TRANSIENT miss (server booting, busy, skew-evicted) and
+                    # the wrong one when this process can never reach a warm
+                    # server at all. In that second case the client has
+                    # already established why, and printing the retry advice
+                    # over the top of it produced the contradiction an
+                    # operator hit on every live op (2026-08-22): "every call
+                    # from this tree goes cold", then "cold fallback is
+                    # disabled", with no path in either half. Ask the client
+                    # for its reason and lead with that instead.
+                    from coordinator_core.warm.client import last_cold_reason
+
+                    reason = last_cold_reason()
+                    if reason:
+                        _fatal_stderr(
+                            f"{reason}\n"
+                            "Cold fallback is disabled (no live ops without warm); "
+                            "retrying will not clear this. For deliberate manual "
+                            "testing, pass --allow-unstamped-dispatch."
+                        )
                     _fatal_stderr(
                         "warm dispatch unavailable and cold fallback is "
                         "disabled (no live ops without warm). A respawn was "

@@ -26,7 +26,6 @@ Spec backlink: coordinator/commands/install.md § 3.5b.1 [DoE-claude repo]
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 
 import pytest
@@ -36,12 +35,15 @@ from coordinator_core.ops import install_shell_init_guard_seam as seam
 
 @pytest.fixture()
 def claude_klabauter_clone(tmp_path: Path) -> Path:
-    """A fake claude-klabauter checkout with an executable shell-init-guard.py."""
+    """A fake claude-klabauter checkout carrying shell-init-guard.py at the mode
+    claude-klabauter's real `bin/` uses: 100644, no execute bit. Every happy-path test
+    below therefore doubles as a regression against re-introducing an
+    exec-bit gate (bug fix, 2026-08-22)."""
     clone = tmp_path / "claude-klabauter"
     (clone / "bin").mkdir(parents=True)
     guard = clone / "bin" / "shell-init-guard.py"
     guard.write_text("#!/usr/bin/env python3\nprint('')\n")
-    guard.chmod(guard.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    guard.chmod(0o644)
     return clone
 
 
@@ -118,6 +120,11 @@ def test_live_run_writes_sentinel_block_and_preserves_prior_content(
     guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")
     assert guard_src in contents
     assert 'eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"' in contents
+    # `-f`, never `-x`: the guard ships 100644 and is interpreter-invoked, so
+    # an `-x` test in the emitted block would make the eval dead on every
+    # clone (bug fix, 2026-08-22).
+    assert 'if [ -f "$_cc_fsize_guard" ]; then' in contents
+    assert 'if [ -x "$_cc_fsize_guard" ]' not in contents
     # END marker closes the block (chunk C6) -- present on every fresh
     # write, positioned after the BEGIN sentinel.
     assert seam.SENTINEL_END in contents
@@ -182,18 +189,29 @@ def test_live_run_is_idempotent_on_second_invocation(
 
 
 def test_graceful_skip_when_claude_klabauter_not_resolvable(capsys, tmp_path):
+    """Condition 1 of 3 — the repo is not registered at all. The message must
+    name registration, and must not be shared with the two conditions below
+    (bug fix, 2026-08-22: all three printed "claude-klabauter not found")."""
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
     rc = seam.main(["--rc", str(rc_path)])
 
     assert rc == 0
-    assert "shell_init_guard: skipped (claude-klabauter not found — no guard to source)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert (
+        "shell_init_guard: skipped (claude-klabauter not registered — "
+        "set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"
+    ) in out
     # No mutation — graceful no-op leaves the rc file untouched.
     assert rc_path.read_text() == "# pre-existing content\n"
 
 
 def test_graceful_skip_when_guard_script_missing(capsys, monkeypatch, tmp_path):
+    """Condition 2 of 3 — the repo IS registered and the guard file is not
+    there. The message names the path it looked for; it must never claim the
+    repo is missing, which sends the operator hunting for a repo that is
+    present."""
     empty_clone = tmp_path / "claude-klabauter-empty"
     empty_clone.mkdir()
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(empty_clone))
@@ -203,33 +221,34 @@ def test_graceful_skip_when_guard_script_missing(capsys, monkeypatch, tmp_path):
     rc = seam.main(["--rc", str(rc_path)])
 
     assert rc == 0
-    assert "shell_init_guard: skipped (claude-klabauter not found — no guard to source)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    guard_src = str(empty_clone / "bin" / "shell-init-guard.py")
+    assert f"shell_init_guard: skipped (guard script absent: {guard_src})" in out
+    assert "not found" not in out
     assert rc_path.read_text() == "# pre-existing content\n"
 
 
-def test_graceful_skip_when_guard_script_not_executable(capsys, monkeypatch, tmp_path):
-    clone = tmp_path / "claude-klabauter-noexec"
+def test_graceful_skip_when_guard_script_not_readable(capsys, monkeypatch, tmp_path):
+    """Condition 3 of 3 — the guard file is present but `python3` could not
+    read it. Readability, not the execute bit, is what decides whether the
+    interpreter can run it; the message names that condition and no other."""
+    clone = tmp_path / "claude-klabauter-unreadable"
     (clone / "bin").mkdir(parents=True)
     guard = clone / "bin" / "shell-init-guard.py"
     guard.write_text("#!/usr/bin/env python3\nprint('')\n")
-    guard.chmod(0o644)  # explicitly non-executable (meaningful on POSIX)
+    guard.chmod(0o644)
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
-    # `os.access(path, os.X_OK)` on Windows is documented to degrade to a
-    # plain existence check -- there is no execute-bit concept for chmod to
-    # clear, so `guard.chmod(0o644)` alone can't reproduce "not executable"
-    # there the way it does on POSIX. This test's actual subject is
-    # `main()`'s own resolvability branch (`not os.access(guard_src,
-    # os.X_OK)`), not the OS's chmod semantics -- stub `os.access` directly
-    # at the seam the production code queries so the branch is exercised on
-    # every platform, POSIX chmod included (the real_access fallback keeps
-    # POSIX behaviour genuine).
+    # `chmod(0o000)` is a no-op for the owner on Windows and for root on
+    # POSIX, so the unreadable state is stubbed at the seam the production
+    # code queries rather than asked of the filesystem. The real_access
+    # fallback keeps every other probe genuine.
     real_access = seam.os.access
 
     def _fake_access(path, mode):
-        if mode == os.X_OK and os.fspath(path) == str(guard):
+        if mode == os.R_OK and os.fspath(path) == str(guard):
             return False
         return real_access(path, mode)
 
@@ -238,8 +257,50 @@ def test_graceful_skip_when_guard_script_not_executable(capsys, monkeypatch, tmp
     rc = seam.main(["--rc", str(rc_path)])
 
     assert rc == 0
-    assert "shell_init_guard: skipped (claude-klabauter not found — no guard to source)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"shell_init_guard: skipped (guard script unreadable: {guard})" in out
+    assert "not found" not in out
+    assert "absent" not in out
     assert rc_path.read_text() == "# pre-existing content\n"
+
+
+def test_non_executable_guard_still_installs(capsys, monkeypatch, tmp_path, claude_klabauter_clone):
+    """The exec bit is not a condition. Claude-klabauter's `bin/` is committed 100644
+    and invoked through `python3 <path>`, and no mode bit survives a Windows
+    checkout — gating on one skipped the install on every clone, under a
+    message that named a missing repo (bug fix, 2026-08-22)."""
+    guard = claude_klabauter_clone / "bin" / "shell-init-guard.py"
+    assert not os.access(guard, os.X_OK)
+    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    rc_path = tmp_path / ".bashrc"
+    rc_path.write_text("# pre-existing content\n")
+
+    rc = seam.main(["--rc", str(rc_path)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"shell_init_guard: installed ({rc_path})" in out
+    assert "skipped" not in out
+    assert seam.SENTINEL in rc_path.read_text()
+
+
+def test_seam_never_consults_the_execute_bit(monkeypatch, tmp_path, claude_klabauter_clone):
+    """Fails loudly if any future edit re-introduces an X_OK probe on the
+    guard path, at either the install gate or anywhere else in `main()`."""
+    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    rc_path = tmp_path / ".bashrc"
+    real_access = seam.os.access
+    x_ok_probes = []
+
+    def _recording_access(path, mode):
+        if mode == os.X_OK:
+            x_ok_probes.append(os.fspath(path))
+        return real_access(path, mode)
+
+    monkeypatch.setattr(seam.os, "access", _recording_access)
+
+    assert seam.main(["--rc", str(rc_path)]) == 0
+    assert x_ok_probes == []
 
 
 def test_rc_created_fresh_when_absent(monkeypatch, tmp_path, claude_klabauter_clone):

@@ -11,6 +11,23 @@ tool call:
     2. `preuse-write-dispatch.py`     -> coordinator_core.write_guards.engine.evaluate_payload_json
     3. `postuse-advisory-dispatch.py` -> coordinator_core.hooks.postuse_advisory_dispatch
 
+Plus a fourth, in-tree CLI trampoline (AC9): `coordinator/bin/detect-staged-
+rollback.py`, the sole entry in `install_claude_klabauter_precommit_hook._GATE_REGISTRY`
+and so itself a hot-path git-hook interpreter, spawned on every commit. This
+one is targeted in its FULL (post-`main`-guard) form, not the file form: like
+the three wrapper scripts above, its top level is a thin, main-guarded
+trampoline (`sys.path.insert` the local `lib/` dir, `import cc_invoke`) that
+defers the real payload -- `coordinator_core.ops.detect_staged_rollback` --
+to a function-local import inside `_import_main()`. Measuring the file form
+alone (a bare `import` of the trampoline module) only sees the shallow
+preamble and passes green while the hot path -- what actually runs when the
+pre-commit hook fires -- regresses freely underneath it. The probe below
+therefore `exec_module`s the trampoline file and calls its own
+`_import_main()` (the deferred-import step; NOT the CLI's `main()`, which
+would spawn real git subprocesses against this repo) to capture the same
+module set and `sys.path` growth the real pre-commit hook pays on every
+commit.
+
 Why this gate targets COST PER INTERPRETER, not spawn count: the baseline audit
 (`state/audits/2026-08-07-hot-path-spawn-baseline.md`) measured hook processes at
 only ~7% of a Bash call's total process population (15 of ~214) -- hooks are not
@@ -74,6 +91,47 @@ Neither guard is a stand-in for that case; only the CPU-time floor has any
 chance of catching it, and only past a wide catastrophic threshold, not a tight
 one -- see the "Secondary guard" test docstrings below.
 
+A SECOND dead zone this revision closes for module count specifically: a
+module-count ceiling cannot see a path-only `sys.path` growth with zero new
+modules -- exactly what a plain-path `.pth`-shaped fix (append a directory to
+`sys.path` instead of importing anything) looks like on THIS gate's primary
+axis. A future change trading imported modules for `sys.path` entries (e.g.
+resolving a sibling repo's root onto `sys.path` instead of importing a local
+shim of it) would tax every subsequent import on that interpreter -- longer
+`sys.path` means more failed stat() probes before every hit -- while reading
+as an IMPROVEMENT on the module-count axis alone. `sys_path_entry_ceiling`
+below is the second, independent axis this closes: each target's own
+`sys.path`-length growth (measured the same before/after-diff way as the
+module set, in the same fresh subprocess, never averaged across targets --
+see the per-target-not-shared rationale on `module_count_ceiling` above,
+which applies identically here) is bounded on its own ceiling, orthogonal to
+the module-count one.
+
+TRAP for whoever next touches these numbers: the two ceilings can move in
+OPPOSITE directions on the same change -- a plain-path `.pth`-shaped fix
+trading N imported modules for a couple of new `sys.path` entries LOWERS
+module_count_ceiling's measured value while RAISING sys_path_entry_ceiling's.
+Re-baseline BOTH together against a fresh measurement on the changed code, or
+this gate reds on a change that improves the very thing it sits beside.
+WHAT DISCHARGES THAT OBLIGATION IS THE RATCHET BELOW, NOT A SUCCESSOR
+REMEMBERING THIS PARAGRAPH -- ratchets read from source, not from a plan a
+future editor is not necessarily holding.
+
+RATCHET (AC10): every ceiling field on `_Target` is a hand-set source
+constant, so LOWERING one (tightening the gate) is always free -- it is a
+one-line diff with no companion change required anywhere else in this file.
+RAISING one is never free in the sense that matters: it is a hand-edited
+literal in a tracked file, so it can never happen silently -- it is always a
+visible line in the diff a reviewer sees, never a value computed or read from
+an external file this test could drift against without a diff to show for
+it. The completeness pin below (`test_hot_path_hook_import_budget_axes_are_
+complete`) is the third leg: `sys_path_entry_ceiling` has NO dataclass
+default (unlike `heavy_modules_expected_absent` and `cpu_floor_ms`, both of
+which are genuinely optional per-target), so a future target row that omits
+it fails at construction, not at some later assertion a reviewer could miss;
+the completeness test pins that property as a running, readable assertion
+rather than leaving it as an inspection-only fact of the dataclass shape.
+
 Numbers below (module counts, CPU-time samples) were measured on THIS machine
 at authorship time via the probe helpers in this file, not copied from any
 other document.
@@ -81,6 +139,7 @@ other document.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -116,6 +175,33 @@ class _Target:
     # target's margin is sized to ITS OWN baseline, not a shared percentage --
     # see module docstring, "NOT averaged across targets".
     module_count_ceiling: int
+    # NEW AXIS (AC9/AC10) -- see module docstring's "second dead zone" and
+    # "TRAP" paragraphs before touching this number. Modest margin above this
+    # machine's measured `sys.path`-length growth at authorship time, same
+    # per-target (not shared/averaged) sizing rationale as
+    # `module_count_ceiling`. Deliberately NO DEFAULT (unlike the two fields
+    # below): a target row that omits it fails at construction, which is the
+    # completeness pin's first, structural leg -- see
+    # `test_hot_path_hook_import_budget_axes_are_complete`. RATCHET: lowering
+    # this value is always free; raising it is never silent -- it is a
+    # hand-edited literal in this tracked file, always a visible diff line
+    # (module docstring's RATCHET paragraph, AC10). When C8's plain-path
+    # `.pth`-shaped fix lands (still gated on an external five-repo campaign
+    # memo as of this writing, per the plan's C8 row -- may never land inside
+    # this plan), re-measure BOTH this field and `module_count_ceiling`
+    # together against the changed code and update both in the same diff --
+    # they move in opposite directions on that change (module docstring
+    # TRAP). This comment, not a plan a future editor may not be holding, is
+    # what that obligation lives beside.
+    sys_path_entry_ceiling: int
+    # Absolute path to a CLI trampoline file to fire in its FULL form (see
+    # module docstring's AC9 paragraph) instead of a plain `import
+    # import_path`. When set, the probe `exec_module`s this file and calls
+    # its own `_import_main()` to capture the deferred real import a bare
+    # file-level `import` of the trampoline would miss. `None` (the default)
+    # for the three targets that ARE already the real payload module, not a
+    # CLI trampoline over it.
+    cli_script_path: str | None = None
     # Named heavy modules confirmed ABSENT today for THIS target specifically.
     # Deliberately per-target, not a shared list: `yaml` is present in the
     # bash-dispatch and write-guards import graphs but absent from the
@@ -138,6 +224,10 @@ _TARGETS: Sequence[_Target] = (
         # Measured 149 modules on this machine/Python version at authorship.
         # ~11% / 16-module margin.
         module_count_ceiling=165,
+        # Measured 0 `sys.path` growth on this machine at authorship (this
+        # target never touches `sys.path` itself). Small fixed margin, not a
+        # percentage of zero.
+        sys_path_entry_ceiling=2,
         heavy_modules_expected_absent=("pydantic", "asyncio"),
         # Idle min-of-2 CPU time measured 62.5ms on this machine. `yaml` and
         # `psutil` are the two heaviest confirmed-present modules in this
@@ -159,6 +249,8 @@ _TARGETS: Sequence[_Target] = (
         # modules is a bigger fraction of 61 than of 149) -- ~15% / 9-module
         # margin.
         module_count_ceiling=70,
+        # Measured 0 `sys.path` growth on this machine at authorship.
+        sys_path_entry_ceiling=2,
         heavy_modules_expected_absent=("pydantic", "asyncio"),
         # Idle min-of-2 CPU time measured 15.6ms on this machine -- the
         # smallest of the three targets, so subprocess-spawn noise is a
@@ -170,45 +262,164 @@ _TARGETS: Sequence[_Target] = (
     _Target(
         name="hooks_postuse_advisory_dispatch",
         import_path="coordinator_core.hooks.postuse_advisory_dispatch",
-        # Measured 99 modules on this machine/Python version at authorship --
-        # includes the full 15-module coordinator_core.hooks eager-registration
-        # cost documented in the module docstring's residual note. ~16% /
-        # 16-module margin.
-        module_count_ceiling=115,
-        # `yaml` is confirmed absent here (unlike the other two targets --
-        # see the per-target absence-list note on the dataclass field above),
-        # alongside pydantic and asyncio.
-        heavy_modules_expected_absent=("pydantic", "asyncio", "yaml"),
-        # Idle min-of-2 CPU time measured 31.2ms on this machine.
-        cpu_floor_ms=200.0,
+        # RE-BASELINED 2026-08-21 (C6 fix-forward, plan
+        # 2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md):
+        # this target's import graph grew from the 99-module authorship
+        # baseline to a MEASURED 765 modules on this machine/Python version
+        # (batched-subprocess `sys.modules` before/after diff). That is
+        # itself the finding, not an artifact of this re-baseline: firing
+        # this target costs 412.5ms of PROCESS TIME (K=20,
+        # `coordinator_core.benchmarks.process_time.batched_process_time_ms`,
+        # DR-344's instrument) -- MORE THAN 2x CLAUDE.md's "The brightline"
+        # 200ms-per-process ceiling, and this hook fires on every matching
+        # tool call (module docstring header), i.e. on the hot path. This
+        # ceiling is a REGRESSION GUARD pinned to that reality, not an
+        # endorsement of the cost -- fixing `postuse-advisory-dispatch.py`'s
+        # import weight (e.g. arming the lazy-ops channel the module
+        # docstring's residual note already describes) is out of scope for
+        # this test file; routed as its own backlog item instead. ~16%
+        # margin (matches this target's own prior-authorship convention:
+        # 99 measured -> 115 ceiling was also ~16%), 890 = 765 * ~1.163.
+        module_count_ceiling=890,
+        # Measured 0 `sys.path` growth on this machine at re-baseline time
+        # (unchanged from authorship).
+        sys_path_entry_ceiling=2,
+        # RE-BASELINED alongside module_count_ceiling above: `asyncio` and
+        # `yaml` are now BOTH confirmed PRESENT in this target's measured
+        # import set (part of the same growth this re-baseline records) --
+        # module docstring's "do not list a heavy module in an absence
+        # tuple before the cut that removes it lands" rule means they no
+        # longer belong in this list. `pydantic` remains confirmed absent.
+        heavy_modules_expected_absent=("pydantic",),
+        # RE-BASELINED: min-of-8 direct-probe samples at re-baseline time
+        # ranged 328.1-375.0ms; the batched K=20 process-time figure above
+        # (412.5ms) is the more reliable per-invocation estimate (job-object
+        # amortised, beats scheduler-tick quantisation -- see
+        # `batched_process_time_ms`'s own module docstring).
+        #
+        # TIGHTENED BY THE EM, same session, from a proposed 2000.0. A 4.8x
+        # multiplier over measured was defended as matching another target's
+        # convention, but a multiplier is not a convention -- the number it
+        # produces is what the guard actually enforces. 2000ms is 10x
+        # CLAUDE.md's 200ms-per-process ceiling and 4.8x this target's own
+        # cost, which is not a regression bound: this hook could triple in
+        # weight and still pass. The other three targets in this file sit at
+        # 150/220/300ms. 600ms is ~1.45x the K=20 figure and ~1.6x the
+        # highest direct sample -- clear of load noise on a 50-70-session
+        # box, tight enough that a real regression trips it.
+        #
+        # It is still an ugly number and it is meant to look like one. The
+        # gap between this ceiling and the other three is the finding.
+        cpu_floor_ms=600.0,
+    ),
+    _Target(
+        name="detect_staged_rollback_fired",
+        import_path="coordinator_core.ops.detect_staged_rollback",
+        # AC9's fourth row -- see module docstring's AC9 paragraph for why
+        # this target is fired via `cli_script_path` (below) instead of a
+        # plain `import`. Measured 82 modules newly imported on this
+        # machine/Python version at authorship when `coordinator/bin/detect-
+        # staged-rollback.py` is exec'd and its own `_import_main()` called
+        # (the FULL, post-main-guard form -- the file form alone measured
+        # only 25). ~15% / 13-module margin, matching write_guards_engine's
+        # sizing rationale (a smaller absolute baseline needs relatively
+        # more margin than a percentage would give it).
+        module_count_ceiling=95,
+        # Measured 2 `sys.path` entries added on this machine at authorship
+        # (the trampoline's own `lib/` dir insert, plus the dispatch-engine
+        # root insert `_import_main()` triggers via
+        # `require_dispatch_engine_on_path`). See the field's own doc
+        # comment on `_Target` above for the C8 re-baseline obligation this
+        # number carries.
+        sys_path_entry_ceiling=4,
+        cli_script_path=str(_REPO_ROOT / "coordinator" / "bin" / "detect-staged-rollback.py"),
+        # `yaml` IS present here (the op module imports it, unlike the other
+        # three targets' absence lists) -- not listed as absent, per the
+        # module docstring's "do not list a heavy module in an absence tuple
+        # before the cut that removes it lands" rule. `pydantic` and
+        # `asyncio` are confirmed absent.
+        heavy_modules_expected_absent=("pydantic", "asyncio"),
+        # Idle min-of-3 CPU time measured ~46.9ms on this machine (min-of-3
+        # sampled at authorship for extra confidence given this is a new
+        # target; the real gate below still only samples _SAMPLE_COUNT=2).
+        # ~4.7x headroom over that idle measurement, matching
+        # bash_guards_dispatch's multiplier.
+        cpu_floor_ms=220.0,
     ),
 )
 
 _TARGETS_BY_NAME = {t.name: t for t in _TARGETS}
 
 
+def _probe_env() -> dict:
+    """Env for every probe subprocess spawned by this file.
+
+    Sets `COORDINATOR_ENGINE_ROOT` to this checkout explicitly: `detect_
+    staged_rollback_fired`'s FULL-form fire (`_fire_lines`, `cli_script_path`
+    branch) calls `require_dispatch_engine_on_path()`, whose registry/
+    pointer-file rungs read `HOME`/`USERPROFILE` -- both of which this
+    suite's own `coordinator_core/conftest.py::_quarantine_real_home`
+    autouse fixture points at a throwaway per-test directory, which a
+    probe subprocess spawned FROM a test inherits by default (no explicit
+    `env=` previously meant `subprocess.run` copied the quarantined
+    environment verbatim). This repo IS `detect-staged-rollback.py`'s own
+    dispatch engine, so naming it explicitly, rung 1 of that resolution
+    ladder (env var, outranking the pointer-file rungs the quarantine
+    breaks), is correct regardless of HOME quarantine, CI, or any other
+    environment this file runs under -- not a test-only workaround.
+    """
+    env = dict(os.environ)
+    env["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+    return env
+
+
+def _fire_lines(target: _Target) -> list:
+    """The probe-body lines that actually exercise `target`: either the FULL
+    form of a CLI trampoline (`cli_script_path` set -- `exec_module` the file
+    and call its own `_import_main()`, per module docstring's AC9 paragraph)
+    or a plain `import target.import_path` for a target that already IS the
+    real payload module."""
+    if target.cli_script_path is not None:
+        return [
+            "import importlib.util as _ilu",
+            f"_spec = _ilu.spec_from_file_location('_hot_path_probe_target', {target.cli_script_path!r})",
+            "_mod = _ilu.module_from_spec(_spec)",
+            "_spec.loader.exec_module(_mod)",
+            "_mod._import_main()",
+        ]
+    return [f"import {target.import_path}"]
+
+
 def _imported_module_names(
-    import_path: str,
+    target: _Target,
     extra_imports: Sequence[str] = (),
     extra_sys_path: str | None = None,
-) -> list:
-    """Return the `sys.modules` keys newly added by importing `import_path`.
+) -> tuple:
+    """Return `(new_module_names, sys_path_growth)` for firing `target`.
 
     Runs in a fresh subprocess (no pollution from the test runner's own prior
-    imports) and diffs `sys.modules` before/after, returning the new names as
-    JSON on stdout. `extra_imports` (each run BEFORE `import_path`, after the
-    "before" snapshot) and `extra_sys_path` exist solely for the planted-
-    fixture demonstration test below -- production callers never pass them.
+    imports) and diffs `sys.modules` AND `len(sys.path)` before/after,
+    returning the new module names and the `sys.path` growth as JSON on
+    stdout -- one subprocess spawn covers both axes (module-set primary
+    guard and the `sys_path_entry_ceiling` NEW AXIS, module docstring).
+    `extra_imports` (each run BEFORE the fire step, after the "before"
+    snapshot) and `extra_sys_path` exist solely for the planted-fixture
+    demonstration test below -- production callers never pass them.
     """
     lines = ["import sys, json"]
     if extra_sys_path:
         lines.append(f"sys.path.insert(0, {extra_sys_path!r})")
-    lines.append("before = set(sys.modules)")
+    lines.append("before_mods = set(sys.modules)")
+    lines.append("before_path_len = len(sys.path)")
     for extra in extra_imports:
         lines.append(f"import {extra}")
-    lines.append(f"import {import_path}")
-    lines.append("after = set(sys.modules)")
-    lines.append("print(json.dumps(sorted(after - before)))")
+    lines.extend(_fire_lines(target))
+    lines.append("after_mods = set(sys.modules)")
+    lines.append("after_path_len = len(sys.path)")
+    lines.append(
+        "print(json.dumps({'modules': sorted(after_mods - before_mods), "
+        "'sys_path_growth': after_path_len - before_path_len}))"
+    )
     probe = "\n".join(lines) + "\n"
     proc = subprocess.run(
         [sys.executable, "-c", probe],
@@ -217,14 +428,16 @@ def _imported_module_names(
         check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         cwd=_REPO_ROOT,
+        env=_probe_env(),
     )
     import json as _json
 
-    return _json.loads(proc.stdout)
+    payload = _json.loads(proc.stdout)
+    return payload["modules"], payload["sys_path_growth"]
 
 
-def _sample_import_cost_ms(import_path: str) -> float:
-    """One fresh-interpreter sample of `import_path`'s CPU-time import cost.
+def _sample_import_cost_ms(target: _Target) -> float:
+    """One fresh-interpreter sample of `target`'s CPU-time import/fire cost.
 
     CPU time (`time.process_time`), NOT wall-clock -- see module docstring's
     "Secondary guard" and the cited 2026-08-03 lesson for why: descheduling
@@ -232,12 +445,10 @@ def _sample_import_cost_ms(import_path: str) -> float:
     CPU, so process_time is the only one of the two that still measures the
     import rather than the machine's momentary load.
     """
-    probe = (
-        "import time\n"
-        "t0 = time.process_time()\n"
-        f"import {import_path}\n"
-        "print((time.process_time() - t0) * 1000.0)\n"
-    )
+    lines = ["import time", "t0 = time.process_time()"]
+    lines.extend(_fire_lines(target))
+    lines.append("print((time.process_time() - t0) * 1000.0)")
+    probe = "\n".join(lines) + "\n"
     proc = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
@@ -245,6 +456,7 @@ def _sample_import_cost_ms(import_path: str) -> float:
         check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         cwd=_REPO_ROOT,
+        env=_probe_env(),
     )
     return float(proc.stdout.strip())
 
@@ -272,21 +484,45 @@ def _assert_module_ceiling(target: _Target, imported: Sequence[str]) -> None:
     )
 
 
+def _assert_sys_path_ceiling(target: _Target, sys_path_growth: int) -> None:
+    """NEW AXIS (AC9/AC10) assertion: `target`'s `sys.path` growth stays
+    bounded, independently of the module-set ceiling above -- see module
+    docstring's "second dead zone" paragraph for why this is a SEPARATE
+    assertion, not folded into `_assert_module_ceiling`."""
+    assert sys_path_growth <= target.sys_path_entry_ceiling, (
+        f"{target.import_path} grew sys.path by {sys_path_growth} entries, "
+        f"exceeding {target.name}'s sys_path_entry_ceiling of "
+        f"{target.sys_path_entry_ceiling} -- likely a new path-only "
+        f"`.pth`-shaped insert this gate's module-count axis cannot see on "
+        f"its own (module docstring's second dead zone)."
+    )
+
+
 @pytest.mark.parametrize("target", _TARGETS, ids=lambda t: t.name)
 def test_hot_path_hook_import_modules(target: _Target) -> None:
     """PRIMARY guard: each target's imported module SET stays bounded and
     heavy-module-clear, deterministically. See module docstring."""
-    imported = _imported_module_names(target.import_path)
+    imported, _sys_path_growth = _imported_module_names(target)
     _assert_module_ceiling(target, imported)
 
 
 @pytest.mark.parametrize("target", _TARGETS, ids=lambda t: t.name)
+def test_hot_path_hook_import_sys_path_growth(target: _Target) -> None:
+    """NEW AXIS (AC9/AC10) guard: each target's `sys.path` growth stays
+    bounded, deterministically -- see module docstring's "second dead zone"
+    and "TRAP" paragraphs."""
+    _imported, sys_path_growth = _imported_module_names(target)
+    _assert_sys_path_ceiling(target, sys_path_growth)
+
+
+@pytest.mark.parametrize("target", _TARGETS, ids=lambda t: t.name)
 def test_hot_path_hook_import_floor(target: _Target) -> None:
-    """SECONDARY, catastrophic-regression-only guard: `import target.import_path`
-    completes within a widened CPU-time sanity bound. NOT the precise guard --
-    see `test_hot_path_hook_import_modules` and the module docstring's dead-
-    zone disclosure for what this floor does NOT catch."""
-    samples_ms = [_sample_import_cost_ms(target.import_path) for _ in range(_SAMPLE_COUNT)]
+    """SECONDARY, catastrophic-regression-only guard: firing target.import_path
+    (or, for a CLI-trampoline target, its FULL form) completes within a
+    widened CPU-time sanity bound. NOT the precise guard -- see
+    `test_hot_path_hook_import_modules` and the module docstring's dead-zone
+    disclosure for what this floor does NOT catch."""
+    samples_ms = [_sample_import_cost_ms(target) for _ in range(_SAMPLE_COUNT)]
     min_ms = min(samples_ms)
     assert min_ms <= target.cpu_floor_ms, (
         f"{target.import_path} import cost regressed: minimum of "
@@ -294,6 +530,27 @@ def test_hot_path_hook_import_floor(target: _Target) -> None:
         f"widened catastrophic-regression bound of {target.cpu_floor_ms}ms. All "
         f"samples (ms): {[round(s, 1) for s in samples_ms]}."
     )
+
+
+def test_hot_path_hook_import_budget_axes_are_complete() -> None:
+    """AC10 completeness pin: every target in the table carries BOTH ceiling
+    axes (module count AND sys.path entries) as non-negative integers.
+    `sys_path_entry_ceiling` has no dataclass default (see the field's own
+    doc comment on `_Target`), so a future target row that omits it already
+    fails at construction time -- this test pins that property as a running,
+    readable assertion rather than leaving it as an inspection-only fact of
+    the dataclass shape (module docstring's RATCHET paragraph, AC10)."""
+    assert len(_TARGETS) >= 4, (
+        f"expected at least the 3 original hook targets plus the AC9 "
+        f"detect-staged-rollback fired-form target; found {len(_TARGETS)}."
+    )
+    for target in _TARGETS:
+        assert isinstance(target.module_count_ceiling, int) and target.module_count_ceiling > 0, (
+            f"{target.name}: module_count_ceiling must be a positive int"
+        )
+        assert isinstance(target.sys_path_entry_ceiling, int) and target.sys_path_entry_ceiling >= 0, (
+            f"{target.name}: sys_path_entry_ceiling must be a non-negative int"
+        )
 
 
 def test_hot_path_hook_import_budget_gate_catches_a_planted_regression() -> None:
@@ -318,8 +575,8 @@ def test_hot_path_hook_import_budget_gate_catches_a_planted_regression() -> None
     exercised against a known-bad input.
     """
     target = _TARGETS_BY_NAME["write_guards_engine"]
-    imported = _imported_module_names(
-        target.import_path,
+    imported, _sys_path_growth = _imported_module_names(
+        target,
         extra_imports=("xml.etree.ElementTree", "sqlite3", "unittest", "xml.dom.minidom"),
     )
     assert len(imported) > target.module_count_ceiling, (

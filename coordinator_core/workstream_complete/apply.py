@@ -767,6 +767,47 @@ def render_blocked_remedy_lines(blocked_remedy: dict[str, Any]) -> list[str]:
     return lines
 
 
+#: The phrase `op_budget_suspension.refusal_message` puts between the op name and
+#: its evidence. Paired with a name from `SUSPENDED_OPS`, it identifies a refusal
+#: that a suspension produced rather than one the directive itself produced.
+#: `test_apply.py` pins it against the live `refusal_message`, so a reworded
+#: refusal fails a test instead of silently costing the operator this line.
+_SUSPENSION_MARKER = " is off"
+
+
+def render_disabled_op_lines(report: dict[str, Any]) -> list[str]:
+    """Name, one line per occurrence, any directive that failed because an op is OFF.
+
+    A disabled op is not the same class of event as a directive that failed. Both
+    arrive in `report["failed"]` as an `error` string, and at exit 4 that report is
+    sixty lines of JSON whose single load-bearing line is a refusal buried inside
+    one entry's `error` — an operator reading it has to know the suspension table
+    exists to recognise what they are looking at. This renders the distinction
+    ahead of the JSON, where it is read first.
+
+    Membership comes from `op_budget_suspension.SUSPENDED_OPS`, never from a local
+    list: the table is the authority on what is off, and it is meant to shrink.
+
+    Negative-spec: names no remedy. Only one row in that table carries a sanctioned
+    `fallback`, and inventing a plausible one for the rest is the improvisation that
+    field exists to prevent.
+    """
+    from coordinator_core.op_budget_suspension import SUSPENDED_OPS
+
+    lines: list[str] = []
+    for bucket in ("failed", "degraded"):
+        for entry in report.get(bucket) or []:
+            error = str(entry.get("error", ""))
+            for op in SUSPENDED_OPS:
+                if f"{op}{_SUSPENSION_MARKER}" in error:
+                    lines.append(
+                        f"DISABLED OP {op} — off for the op budget bar; "
+                        f"{entry.get('id', '(unnamed directive)')} did not run."
+                    )
+                    break
+    return lines
+
+
 def _emit_progress(message: str) -> None:
     """Directive-granularity liveness signal on apply's own stderr.
 
@@ -1294,6 +1335,10 @@ def main(argv: list[str]) -> int:
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
 
     exit_code, report = apply(decisions=decisions)
+    # Ahead of the report, never after it: the JSON is the record, this is the
+    # one line that says what class of event the reader is looking at.
+    for line in render_disabled_op_lines(report):
+        print(line)
     print(json.dumps(report, indent=2, sort_keys=True))
     for line in render_blocked_remedy_lines(report.get("blocked_remedy") or {}):
         print(line)

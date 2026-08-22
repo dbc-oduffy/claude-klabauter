@@ -511,10 +511,9 @@ def coordinator_trusted_root_guard(
         diagnostics = _diagnose_untrusted(root, env)
         print(
             f"ERROR: {site} '{root}' outside trusted prefix — refusing to source; "
-            "re-run coordinator:install (or, ONLY after confirming every anchor below "
-            "resolved correctly, set COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a sanctioned "
-            "--plugin-dir spike -- if an anchor resolved EMPTY, fixing that is the real "
-            "fix; the override would just mask it)\n"
+            "re-run python3 <claude-klabauter>/scripts/setup.py -- an anchor below "
+            "resolving EMPTY is the defect, and COORDINATOR_PLUGIN_ROOT_TRUSTED=1 "
+            "masks it rather than fixing it\n"
             f"{diagnostics}",
             file=sys.stderr,
         )

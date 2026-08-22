@@ -34,11 +34,17 @@ mechanism-robust but ROUTING-NARROW, by construction.
 
 The fix was a second counter, not a reroute. `_count_op_spawns_both_ways`
 also substitutes the `subprocess.run` module attribute, scoped to the op
-invocation, and the `op_total_*` manifest keys pin the result: 23/24/28
-against the seam's 17/18/20. Rerouting those legs through `_git()` was
-the alternative and was rejected -- `auto_push` is a hook with callers
-outside this pipeline, so it would have changed their behaviour to buy a
-measurement.
+invocation, and the `op_total_*` manifest keys pin the result against the
+seam figure per shape -- see `budget-manifest.json`'s own
+`ceremony.scoped_git_commit` `_rationale`/`_op_total_rationale` for the
+current measured pair (re-baselined 2026-08-21, C5: the seam figures
+themselves fell by 5 on four shapes and 3 on the fifth once C2-C4's
+index/HEAD in-process reads landed ON the seam, not only on op_total, and
+the numbers in this docstring's own "MEASURED SHAPES" section below are
+kept current with that manifest, not restated inline here). Rerouting
+those legs through `_git()` was the alternative and was rejected --
+`auto_push` is a hook with callers outside this pipeline, so it would
+have changed their behaviour to buy a measurement.
 
 Three of the seven bypasses were counted this way first (2026-08-19, first
 pass). The remaining three -- `push_once`, `_is_ancestor` and
@@ -51,49 +57,51 @@ opro-03 C6 second pass) closes all three the same way: a due pending-push
 record naming a SECOND, synthetic branch the op never itself commits on,
 engineered non-fast-forward-superseded against origin, with a planted
 Cockpit-publish script and a schema-touching commit -- counted by
-`op_total_pending_drain_superseded` (39) against that shape's own seam
-figure (23). `repo_root :: _spawn_rev_parse` never spawns at all because
+`op_total_pending_drain_superseded` against that shape's own seam figure.
+`repo_root :: _spawn_rev_parse` never spawns at all because
 `show_toplevel` walks for any tree that has a `.git`, and stays uncounted
 by construction, not by fixture gap. All four are enumerated with their
 evidence in
 `coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py`.
 
-MEASURED-SHAPES CAVEAT: the `green_path: 17` figure and its siblings are
-not miscounts -- this fixture builds a repo with no remote and no
-upstream, so `_resolve_push_report` short-circuits; the numbers are
-correct for the shapes this fixture measures. Treating that as
-completeness is what was wrong, and `op_total_green_path: 23` is the part
-that now moves when a bypass grows.
+MEASURED-SHAPES CAVEAT: a fixture's own seam figure is not a miscount just
+because op_total sits above it -- this fixture builds a repo with no
+remote and no upstream, so `_resolve_push_report` short-circuits on the
+green/directory shapes; the numbers are correct for the shapes this
+fixture measures, and `op_total_*` is the part that moves when a bypass
+grows.
 
-MEASURED SHAPES (re-baselined 2026-08-18, this repo, matching
-`budget-manifest.json`'s `overrides["ceremony.scoped_git_commit"].
-spawn_count_budget`):
-  - green path (clean commit, no claim conflict): 17 spawns.
+MEASURED SHAPES (re-baselined 2026-08-21, C5, direct measurement against
+this repo -- see `budget-manifest.json`'s own `ceremony.scoped_git_commit`
+`_rationale`/`_op_total_rationale` for the authoritative current figures
+and the method; NOT restated as literals here to avoid a second place this
+docstring can drift out of sync with the manifest the way it did between
+2026-08-18 and 2026-08-21):
+  - green path (clean commit, no claim conflict).
   - refusal path (an UNANSWERABLE path -- unverified caller identity
     conflicting with a live claimant): 0 spawns -- `_handler` returns the
     rejection before any staging call is ever issued.
-  - a directory-pathspec-expansion invocation: 18 spawns -- the green
-    path's 17 plus the one extra pathspec-scoped `git status --porcelain
-    -- <dir>` `_expand_directory_pathspecs` issues up front.
-  - the push-raced path: 20 spawns and ZERO hot-path `time.sleep`. Was 24
-    and 1.0s while `_remote_sha_state` lived on it (opro-01 C-09 made it
-    countable, C-01/C-02 removed it).
-  - the pending-drain-superseded path (opro-03 C6, 2026-08-19): 23 spawns
-    on the `git_native._git` seam (this fixture's own green-path-shaped
-    commit on `work/main`, plus its extra branch/bookkeeping calls) and 39
-    on the whole-op `subprocess.run` counter -- the +16 is `push_once`,
-    `_is_ancestor`, and `_invoke_cockpit_publish` finally firing, along
-    with the rest of `auto_push`'s drain/retry bookkeeping.
+  - a directory-pathspec-expansion invocation: green path's cost plus the
+    one extra pathspec-scoped `git status --porcelain -- <dir>`
+    `_expand_directory_pathspecs` issues up front.
+  - the push-raced path: ZERO hot-path `time.sleep` (opro-01 C-01/C-02
+    removed the retry loop that used to sleep on it).
+  - the pending-drain-superseded path (opro-03 C6): this fixture's own
+    green-path-shaped commit on `work/main` plus its extra
+    branch/bookkeeping calls on the seam, and additionally `push_once`,
+    `_is_ancestor`, and `_invoke_cockpit_publish` firing (plus the rest of
+    `auto_push`'s drain/retry bookkeeping) on the whole-op counter.
 
-The first three were 12/0/13 when measured 2026-08-11. The +5 on the two
-non-zero shapes is the agree-branch CAS's doubled index/HEAD blob read
-(`_index_blobs`/`_head_blobs` at capture, re-read in
-`_agree_branch_cas_refusal` before the agree branch's `git add`) plus
-`interpret-trailers --no-divider --in-place` -- all of it landed between
-that date and 2026-08-18 without moving the budget. This module carries
-`pytest.mark.cadence`, so the fast tier never ran the assertion that
-would have caught it the day it drifted; that, not the count, is the
-part worth remembering.
+C2-C4 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-
+spawning-git.md) moved the index/HEAD-fact reads several of these shapes
+pay for onto in-process `read_index`/`head_blobs` lookups instead of a
+spawn, which is why the C5 re-baseline above lowers every seam figure
+rather than only op_total, unlike the 2026-08-18 re-baseline this
+paragraph used to describe (superseded, not restated -- see the manifest's
+own retained prior-entry provenance for that history). This module
+carries `pytest.mark.cadence`, so the fast tier does not run this
+assertion; that is why a manifest drift like this one is caught here and
+not sooner.
 
 These are exact-equality assertions, deliberately: the whole point of a
 spawn-COUNT budget is that it does not drift quietly. A future op change

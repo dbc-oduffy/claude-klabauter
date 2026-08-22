@@ -1897,6 +1897,7 @@ class TestStablePidCaptureBreadcrumb:
         repo.mkdir()
         _make_repo(repo)
         monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
 
         class HitParent:
             def __init__(self, pid):
@@ -1926,6 +1927,7 @@ class TestStablePidCaptureBreadcrumb:
         repo.mkdir()
         _make_repo(repo)
         monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
 
         class MissParent:
             def __init__(self, pid):
@@ -1943,7 +1945,7 @@ class TestStablePidCaptureBreadcrumb:
         assert ok is True
         sdir = Path(core.sessions_dir(cwd=str(repo))) / "bc-posix-name-mismatch"
         meta = json.loads((sdir / "meta.json").read_text())
-        assert meta["stable_pid_capture"] == "posix-parent-miss:name-mismatch"
+        assert meta["stable_pid_capture"] == "posix-parent-miss:name-mismatch|env-miss:absent"
         assert "stable_pid" not in meta
 
     @pytest.mark.skipif(
@@ -1957,6 +1959,7 @@ class TestStablePidCaptureBreadcrumb:
         repo.mkdir()
         _make_repo(repo)
         monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
 
         def _raise(pid):
             raise psutil.AccessDenied(pid)
@@ -1967,7 +1970,7 @@ class TestStablePidCaptureBreadcrumb:
         assert ok is True
         sdir = Path(core.sessions_dir(cwd=str(repo))) / "bc-posix-access-denied"
         meta = json.loads((sdir / "meta.json").read_text())
-        assert meta["stable_pid_capture"] == "posix-parent-miss:AccessDenied"
+        assert meta["stable_pid_capture"] == "posix-parent-miss:AccessDenied|env-miss:absent"
         assert "stable_pid" not in meta
 
     @pytest.mark.skipif(
@@ -1982,6 +1985,7 @@ class TestStablePidCaptureBreadcrumb:
         repo.mkdir()
         _make_repo(repo)
         monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
 
         class NoCreateTimeParent:
             def __init__(self, pid):
@@ -1999,8 +2003,95 @@ class TestStablePidCaptureBreadcrumb:
         assert ok is True
         sdir = Path(core.sessions_dir(cwd=str(repo))) / "bc-posix-no-create-time"
         meta = json.loads((sdir / "meta.json").read_text())
-        assert meta["stable_pid_capture"] == "posix-parent-miss:no-create-time"
+        assert meta["stable_pid_capture"] == "posix-parent-miss:no-create-time|env-miss:absent"
         assert "stable_pid" not in meta
+
+    @pytest.mark.skipif(
+        __import__("importlib").util.find_spec("psutil") is None,
+        reason="psutil (the POSIX liveness mechanism) not installed",
+    )
+    def test_posix_env_leg_rescues_a_non_exec_replaced_shell_rung(
+        self, tmp_path, monkeypatch
+    ):
+        """macOS/machine-b shape: the hook's direct parent is a persisting
+        bash rung, not ``claude``, so leg (a) can never comm-verify. Leg (b)
+        (``CLAUDE_PID``) must stamp ``stable_pid`` plus a Layer-1 witness so
+        ``session_live`` never falls through to the Layer-2 recency window
+        that K-006's F0 hazard rides on."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _make_repo(repo)
+        monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        claude_pid = os.getppid() + 4242
+        monkeypatch.setenv("CLAUDE_PID", str(claude_pid))
+
+        class Proc:
+            def __init__(self, pid):
+                self._pid = int(pid)
+
+            def cmdline(self):
+                if self._pid == claude_pid:
+                    return ["/Users/x/.local/bin/claude", "--plugin-dir", "/x"]
+                return ["/opt/homebrew/bin/bash", "-c", "source snapshot && eval x"]
+
+            def name(self):
+                return "2.1.234" if self._pid == claude_pid else "bash"
+
+            def create_time(self):
+                return 333.0 if self._pid == claude_pid else 111.0
+
+        monkeypatch.setattr(core._psutil(), "Process", Proc)
+
+        assert core.init("bc-posix-env-rescue", cwd=str(repo)) is True
+        sdir = Path(core.sessions_dir(cwd=str(repo))) / "bc-posix-env-rescue"
+        meta = json.loads((sdir / "meta.json").read_text())
+        assert meta["stable_pid_capture"] == "posix-parent-miss:name-mismatch|env-hit"
+        assert meta["stable_pid"] == str(claude_pid)
+        assert meta["stable_pid_start_epoch"] == "333"
+
+    @pytest.mark.skipif(
+        __import__("importlib").util.find_spec("psutil") is None,
+        reason="psutil (the POSIX liveness mechanism) not installed",
+    )
+    def test_posix_env_leg_stamp_reads_clean_to_the_stable_pid_watch(
+        self, tmp_path, monkeypatch
+    ):
+        """Producer/consumer contract: what ``init()`` writes on the leg-(b)
+        path is what ``scan_stable_pid_misses`` — the K-006 cadence watch —
+        counts as an armed Layer 1. A stamp that satisfied ``init()`` but
+        still read MISS to the watch would leave the hazard unwatched."""
+        from coordinator_core.session import stable_pid_watch
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _make_repo(repo)
+        monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        claude_pid = os.getppid() + 4243
+        monkeypatch.setenv("CLAUDE_PID", str(claude_pid))
+
+        class Proc:
+            def __init__(self, pid):
+                self._pid = int(pid)
+
+            def cmdline(self):
+                if self._pid == claude_pid:
+                    return ["/Users/x/.local/bin/claude"]
+                return ["/opt/homebrew/bin/bash", "-c", "x"]
+
+            def name(self):
+                return "2.1.234" if self._pid == claude_pid else "bash"
+
+            def create_time(self):
+                return 444.0 if self._pid == claude_pid else 111.0
+
+        monkeypatch.setattr(core._psutil(), "Process", Proc)
+
+        assert core.init("bc-posix-env-watch", cwd=str(repo)) is True
+        report = stable_pid_watch.scan_stable_pid_misses(
+            sessions_dir=Path(core.sessions_dir(cwd=str(repo)))
+        )
+        assert report["status"] == stable_pid_watch.STATUS_CLEAN, report["summary"]
+        assert report["misses"] == []
 
     # -- refresh path (AC4, AC10) -----------------------------------------
 
@@ -2015,6 +2106,7 @@ class TestStablePidCaptureBreadcrumb:
         repo.mkdir()
         _make_repo(repo)
         monkeypatch.setattr(core, "_IS_WINDOWS", False)
+        monkeypatch.delenv("CLAUDE_PID", raising=False)
         sid = "bc-posix-refresh-transition"
 
         class MissParent:
@@ -2031,7 +2123,7 @@ class TestStablePidCaptureBreadcrumb:
         assert core.init(sid, cwd=str(repo)) is True
         sdir = Path(core.sessions_dir(cwd=str(repo))) / sid
         meta = json.loads((sdir / "meta.json").read_text())
-        assert meta["stable_pid_capture"] == "posix-parent-miss:name-mismatch"
+        assert meta["stable_pid_capture"] == "posix-parent-miss:name-mismatch|env-miss:absent"
         assert "stable_pid" not in meta
 
         class HitParent:

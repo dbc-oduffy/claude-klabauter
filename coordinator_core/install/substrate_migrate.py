@@ -15,6 +15,15 @@ and `substrate.py`'s own percolation step writes the canonical copy there.
 Migrating `setup/` would create two diverging locations that the fail-loud
 divergent-file guard would then block on every re-run.
 
+Structural guard, ahead of the per-file walk (`_tracked_file_count`): if the
+git repo at `claude_base` TRACKS the legacy `machine-local` directory, this
+migration can never converge — its terminal state is that path replaced by a
+pointer, and a checkout restores a tracked directory every time. It fails
+loud naming that, and does NOT touch the operator's repository: `~/.claude`
+being a meta-repo synced across machines is precisely the case that produced
+the condition, and untracking it there is an operator decision with
+consequences on every other machine.
+
 Per-file guards (mirrors the bash `_copy_one_file` exactly):
     source-present AND destination-file-absent   -> copy (mode-preserving)
     both-present AND identical content           -> no-op (already migrated)
@@ -47,6 +56,8 @@ Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C3
 
 Negative-spec:
   - Does NOT migrate `setup/` — see header note above.
+  - Does NOT untrack, stage, commit, or otherwise mutate any git repository.
+    The structural guard above reports; the operator decides.
   - Does NOT resolve settings-home itself — callers pass `settings_home_path`
     (from `coordinator_core._settings_home.settings_home()`), no second
     resolver is introduced here.
@@ -60,11 +71,13 @@ from __future__ import annotations
 import filecmp
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.install._shared import is_pointer
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -85,9 +98,71 @@ compat pointer: `<claude_base>/machine-local`. A module-level constant so
 `migrate_substrate_to_settings_home` and `WRITE_SURFACE` read one spelling
 rather than each carrying their own literal."""
 
+_GIT_PROBE_TIMEOUT_SECS = 5.0
+"""Upper bound on the single `git ls-files` probe in `_tracked_file_count`.
+Bounded rather than unbounded because this runs inside an installer on a box
+carrying 50-70 concurrent sessions; a wedged git there would hang the install
+instead of degrading to the per-file message."""
+
 LEGACY_MANIFEST_FILENAME = "settings-manifest.md"
 """The legacy single-file migration target: `<claude_base>/settings-manifest.md`,
 copied (not moved) to `<settings_home>/settings-manifest.md`."""
+
+
+def _tracked_file_count(claude_base: Path, dirname: str) -> Optional[int]:
+    """How many files the git repo at `claude_base` TRACKS under `dirname`,
+    or None when `claude_base` is not a git work tree (or git cannot answer).
+
+    Why this exists: this migration's terminal state is `dirname` replaced by
+    a pointer to settings-home. A git repo that TRACKS `dirname` re-materialises
+    it as a real directory on every checkout and sync, so the terminal state is
+    unreachable by construction -- the migration does not "fail this run", it
+    fails every run, and the per-file divergence it reports is a symptom of
+    that, not the cause. `~/.claude` being a git-synced meta-repo across
+    machines is the shape that produced it (observed 2026-08-22).
+
+    One spawn, and only on a box that has not converged: the sole caller is
+    already inside the `legacy dir is a real directory` branch, which stops
+    firing the moment the pointer is in place. The `.git` probe short-circuits
+    the spawn entirely on the ordinary box where `claude_base` is not a repo.
+
+    Never raises: git being absent, slow, or unhappy is reported as "cannot
+    establish", and the caller degrades to the per-file message it had before.
+    """
+    if not (claude_base / ".git").exists():
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(claude_base), "ls-files", "--", dirname],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_PROBE_TIMEOUT_SECS,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return len([line for line in proc.stdout.splitlines() if line.strip()])
+
+
+def _unconvergeable_message(claude_base: Path, legacy_ml: Path, tracked: int) -> str:
+    """Guard-messaging register (`docs/wiki/guard-messaging.md` § Register):
+    the structural fact once, then one alternative. No apology, no
+    restatement of the per-file symptom -- the caller prints that only when
+    there is no structural cause to print instead."""
+    return (
+        "migrate-substrate-to-settings-home: cannot converge — "
+        f"{legacy_ml} is tracked by the git repo at {claude_base} "
+        f"({tracked} tracked files).\n"
+        "  This migration ends by replacing that directory with a pointer to "
+        "settings-home; a tracked directory is restored by every checkout, so "
+        "no run of this migration can reach that state.\n"
+        f"  Remediation: stop tracking {LEGACY_MACHINE_LOCAL_DIRNAME}/ in "
+        f"{claude_base} (untrack it and add an ignore rule), then re-run. "
+        "This migration will not do that for you: that repo syncs to other "
+        "machines."
+    )
 
 
 def _copy_one_file(src: Path, dst: Path, check_only: bool) -> int:
@@ -297,6 +372,16 @@ def migrate_substrate_to_settings_home(
     any_source_present = False
 
     if legacy_ml.is_dir() and not is_pointer(legacy_ml):
+        # Structural check BEFORE the per-file walk, not after it. A tracked
+        # legacy directory makes the terminal state unreachable whether or not
+        # any single file happens to diverge, and the divergent-file report
+        # that fired here on 2026-08-22 named a symptom the operator could
+        # reconcile by hand forever without the migration ever converging.
+        tracked = _tracked_file_count(claude_base, LEGACY_MACHINE_LOCAL_DIRNAME)
+        if tracked:
+            print(_unconvergeable_message(claude_base, legacy_ml, tracked), file=sys.stderr)
+            return 1
+
         performed: List[WriteSurfaceEntry] = []
         rc = _migrate_tree(legacy_ml, dst_ml, check_only, performed)
         # Journal what `_migrate_tree` actually performed, regardless of

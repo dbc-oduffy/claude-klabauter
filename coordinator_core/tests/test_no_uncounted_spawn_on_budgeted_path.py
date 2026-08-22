@@ -80,7 +80,7 @@ to build -- so it is reopened here, deliberately, over a MUCH smaller surface (s
 RESTRICTION AND ITS MEASURED EFFECT" below).
 
 THE ONE NEW PREDICATE: is a spawn site's enclosing function TRANSITIVELY reachable, through any
-number of hops, from one of the nine live budgeted entrypoints (`_BUDGETED_ENTRYPOINTS`)? This
+number of hops, from one of the eight live budgeted entrypoints (`_BUDGETED_ENTRYPOINTS`)? This
 gate builds that reachable-function set itself (`_reachable_functions`, a plain worklist BFS over
 a call graph, fixed-point over a finite domain the same way `_FuncIndex.spawn_bearing_params`
 terminates) -- reusing the OTHER module's per-file `func_defs` (every top-level function's own AST
@@ -127,12 +127,18 @@ call chains in this file's own run-report sidecar):
     `bin.reap_integrated_review_findings.tracked_untracked_split` (1),
     `bin.workday_complete_step2_5_dirty_tree.classify_main_pass` (1),
     `execute_plan_assemble.dispatch_ledger_delivered` (2), `ops.discover_working_repos` (1), plus
-    one of `execute_plan_assemble.sibling_committed_chunk_ids_memo`'s two (its `_run_git` site).
+    one of `execute_plan_assemble.sibling_committed_chunk_ids_memo`'s two (its `_run_git` site) --
+    that op (and its whole underlying mechanism, `_sibling_committed_chunk_ids` and friends) was
+    later deleted outright (2026-08-21 close-ceremony C3), taking both its `_BUDGETED_ENTRYPOINTS`
+    row and this `_LEGITIMIZED_SITES` entry with it; the `_run_git` site itself survives, still
+    legitimized, but now only under `dispatch_ledger_delivered`, which reaches the same physical
+    site independently.
   - 1 site (`sibling_committed_chunk_ids_memo`'s second hit, `git/repo_root.py::_spawn_rev_parse`)
     was NOT in the audit's own op-9 section but is a real hop the audit's own limits section
     predicted ("a different session re-running this same method could plausibly find 1-3 more
     sites") -- `_sibling_committed_chunk_ids` -> `_committed_chunk_ids` -> `_committed_chunk_shas`
-    reaches it 3-4 hops deep, past where the by-hand trace stopped.
+    reaches it 3-4 hops deep, past where the by-hand trace stopped. That whole call chain is gone
+    along with the op (see above); this site is no longer part of any budgeted op's reachable set.
   - 8 sites belong to `ceremony.scoped_git_commit`, which the C-08 audit called CLEAN (0 sites) --
     verified by hand-tracing every one back to `_handler`: `_handler` calls
     `run_commit_pipeline` (`commit_pipeline.py`, imported), which directly imports and calls
@@ -189,7 +195,7 @@ WHAT THIS GATE DELIBERATELY DOES NOT CATCH (negative spec):
   - The `coverage.diagnose_open_review_loop_dag_mode` manifest row. Its subject
     (`coverage._diagnose_open_review_loop`) is unreachable dead code (EM-verified addendum,
     `state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md`) with no registered op and no
-    live caller -- it is not one of the nine LIVE entrypoints this gate enforces, and removing that
+    live caller -- it is not one of the eight LIVE entrypoints this gate enforces, and removing that
     row/function is a different chunk's (C1/C2/C4) job. `_BUDGETED_ENTRYPOINTS` omits it on
     purpose, not by oversight.
 
@@ -244,12 +250,12 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     _load_file_records,
 )
 
-#: The nine LIVE `spawn_count_budget` rows in `coordinator_core/benchmarks/budget-manifest.json`,
+#: The eight LIVE `spawn_count_budget` rows in `coordinator_core/benchmarks/budget-manifest.json`,
 #: manifest key -> (relpath, tuple-of-top-level-entrypoint-function-names). Resolved and verified
 #: against `state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md`'s per-op sections and
 #: cross-checked against each row's own companion test (which function it actually exercises, not
 #: the manifest key's prose shape) -- see this file's own run-report sidecar for the per-row
-#: verification. The tenth manifest row, `coverage.diagnose_open_review_loop_dag_mode`, is
+#: verification. The ninth manifest row, `coverage.diagnose_open_review_loop_dag_mode`, is
 #: deliberately omitted -- see module docstring's negative spec.
 #:
 #: `ops.discover_working_repos` carries TWO entrypoints (`main()` calls both) -- the audit traced
@@ -282,10 +288,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "execute_plan_assemble.dispatch_ledger_delivered": (
         "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
         ("_dispatch_ledger_delivered",),
-    ),
-    "execute_plan_assemble.sibling_committed_chunk_ids_memo": (
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-        ("_sibling_committed_chunk_ids",),
     ),
     "ops.discover_working_repos": (
         "coordinator_core/ops/discover_working_repos.py",
@@ -376,10 +378,11 @@ class _Legitimation(typing.NamedTuple):
 #: Keyed on `(op_key, *site_key)`, NOT on `site_key` alone. Counting is a property of an (op,
 #: site) PAIR, because the counter belongs to an op: one physical call site can sit on two
 #: budgeted ops' reachable sets and be genuinely counted under one while invisible under the
-#: other. `close_out_and_stamp.py::_run_git` is exactly that -- measured executing under
-#: `dispatch_ledger_delivered`'s exact-equality counter, and never reached under
-#: `sibling_committed_chunk_ids_memo`'s memo-hit fixture. A site-keyed register cannot express
-#: that difference and must resolve it in one direction or the other: refusing both leaves a
+#: other. `close_out_and_stamp.py::_run_git` was exactly that while `sibling_committed_chunk_ids_
+#: memo` still existed (2026-08-19 through its 2026-08-21 C3 deletion): measured executing under
+#: `dispatch_ledger_delivered`'s exact-equality counter, and never reached under that op's own
+#: memo-hit fixture. A site-keyed register cannot express that kind of per-op difference and must
+#: resolve it in one direction or the other: refusing both leaves a
 #: correctly-counted site permanently undischargeable, and admitting both silently exempts a site
 #: nothing counts. Op-keying is what lets each pair carry its own verdict.
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
@@ -512,10 +515,10 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "git",
         0,
     ): _Legitimation(
-        # The SAME physical site is deliberately NOT legitimized under
+        # Until 2026-08-21 C3, the SAME physical site was deliberately NOT legitimized under
         # `execute_plan_assemble.sibling_committed_chunk_ids_memo` -- that op's fixture never
-        # reaches it. See `_UNCOUNTED_MEASURED_UNREACHED`, and the op-keying note above for why
-        # the register has to be able to say that.
+        # reached it. That op (and its whole call chain) was deleted in C3; this is now the only
+        # op that reaches this site.
         counter=_GLOBAL_SUBPROCESS_RUN,
         counted_by="coordinator_core/execute_plan_assemble/tests/"
         "test_dispatch_ledger_delivered_spawn_budget.py",
@@ -602,30 +605,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`op_total_pending_drain_superseded` (exact equality).",
     ),
     (
-        "execute_plan_assemble.sibling_committed_chunk_ids_memo",
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-        "_run_git",
-        "git",
-        0,
-    ): _Legitimation(
-        # Was red for want of a SHAPE, not a fixture precondition -- this op's only budgeted shape
-        # was `second_call_identical_inputs: 0`, the memo hit, which spawns nothing by
-        # construction, so no counter of it could ever see any site. The first-call shape added
-        # 2026-08-19 is what makes the op's own scan run at all. Note the counter here is the
-        # module attribute `coas.subprocess.run`, which is routing-narrow by construction: it sees
-        # this site precisely because the site spawns THROUGH that module's `subprocess`, and it
-        # is why `repo_root.py::_spawn_rev_parse` stays red under this same op rather than riding
-        # in on the same shape.
-        counter=_GLOBAL_SUBPROCESS_RUN,
-        counted_by="coordinator_core/execute_plan_assemble/tests/"
-        "test_sibling_committed_chunk_ids_memo_spawn_budget.py",
-        executed="Measured 2026-08-19: origin-recorded under a stack-recording `subprocess.run` "
-        "wrapper, 3 of 3 spawns attributed to `close_out_and_stamp.py::_run_git` "
-        "(`_chunk_evidence_log_range`'s merge-base plus two `_deliverable_log_records` "
-        "queries), under the exact-equality counter of "
-        "`test_first_call_with_one_sibling_spawn_count_matches_budget`.",
-    ),
-    (
         "ceremony.scoped_git_commit",
         "coordinator_core/hooks/auto_push.py",
         "_detach_and_run",
@@ -680,6 +659,46 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         executed="Measured 2026-08-19: origin-recorded at discover_working_repos.py:138 under all "
         "three whole-op counters, which assert exact equality against `call_count` AND "
         "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
+    ),
+    (
+        "ceremony.scoped_git_commit",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        # `coordinator_core.git.git_state.head_blobs` -- the C1 re-point's one retained spawn
+        # (2026-08-21, `state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-without-
+        # spawning-git/C1.md`) -- routes through `git/run.py::run_git` (its MANDATORY-REUSE seam,
+        # per that module's own docstring), never a private `subprocess.run` call and never
+        # `git_native._git`. `run_git` itself calls `subprocess.run(["git", *args], ...)` directly
+        # (line 370), so it is invisible to the routing-narrow `_SEAM` counter (`git_native._git`
+        # is never on this call's path) but sits squarely on the routing-agnostic
+        # `_GLOBAL_SUBPROCESS_RUN` counter's reach, the same shape as this op's other six
+        # `subprocess.run`-direct bypasses above.
+        #
+        # Disposition (executor report, regression-3 fix): rerouting `head_blobs` off `run_git`
+        # onto `git_native._git` was considered and REJECTED -- `git_state.py`'s own module
+        # docstring makes `run_git` a MANDATORY-REUSE contract for this module
+        # (`coordinator_core/tests/test_shared_git_runner.py` fails any new non-test module
+        # reaching a bare `["git", ...]` argv outside it), and `git_state.py` sits on `ipc`'s
+        # cold-start path where importing `git_native` (its `contextvars`/`tempfile`/`uuid`
+        # transitive weight) is refused by that module's own function-local-import comment.
+        # Legitimizing the site is the honest disposition, not a workaround for either
+        # constraint.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/ceremony/tests/test_commit_e2e_spawn_budget.py",
+        executed="Measured 2026-08-21 (executor report, regression-3 fix): a stack-recording "
+        "`subprocess.run` wrapper around `scoped_git_commit._handler`'s green-path fixture "
+        "(seed commit, one dirty tracked path, no claim) observed 4 real spawns whose enclosing "
+        "frame is `coordinator_core/git/run.py::run_git` at line 370, argv "
+        "`['git', 'ls-tree', '-z', 'HEAD', '--', 'a.txt']` -- two from `deletion_block_gate`'s "
+        "Kept-claim leg (skipped when empty; measured with `whole_index` reads present) and two "
+        "from `dirty_tree_gate`'s staged-classification leg, both already on `run_commit_"
+        "pipeline`'s green path. Counted by `op_total_green_path` (exact equality) -- the C5 "
+        "re-baseline's own recorded gap (seam 19->14, `op_total` 21->20, four spawns moving off "
+        "the seam without disappearing) is this site; see the manifest's own `_op_total_"
+        "rationale` for the figure, not edited here.",
     ),
 }
 
@@ -1157,7 +1176,7 @@ def test_plant_mechanism_drift_is_detected(tmp_path, monkeypatch):
 
 
 def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
-    """The C-13 gate, now STANDING. For each of the nine live budgeted entrypoints, every
+    """The C-13 gate, now STANDING. For each of the eight live budgeted entrypoints, every
     `spawn_policy`-detected spawn site whose enclosing function is transitively reachable from
     that entrypoint must carry a `_LEGITIMIZED_SITES` entry for THAT op.
 
@@ -1175,7 +1194,10 @@ def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
       2. GIVE THE OP A SHAPE AT ALL. `sibling_committed_chunk_ids_memo`'s only budgeted shape was
          `second_call_identical_inputs: 0`, the memo hit. A shape that spawns nothing by
          construction can never make ANY site visible to a counter, so its `_run_git` was
-         undischargeable for want of a shape, not a precondition.
+         undischargeable for want of a shape, not a precondition. (That op, and the mechanism it
+         budgeted, was deleted outright in 2026-08-21 C3 -- this route's example no longer has a
+         live `_BUDGETED_ENTRYPOINTS` row, kept here as the historical record of how it was
+         closed before it was cut.)
       3. GIVE THE OP A COUNTER THAT CAN SEE THE SITE. The first three `scoped_git_commit`
          bypasses left this way, via `op_total_*` keys counting `subprocess.run` globally rather
          than through the routing-narrow `git_native._git` seam.
@@ -1474,7 +1496,7 @@ def _live_unenrolled_spawn_site_keys():
     live op that is NOT a key of `_BUDGETED_ENTRYPOINTS` -- the population
     `_FROZEN_UNENROLLED_SPAWN_SITES` below freezes. Module-granularity
     evidence (`spawn_bearing_ops.ops_with_spawn_evidence`), not the
-    function-level BFS the rot guard above uses for its own nine entrypoints
+    function-level BFS the rot guard above uses for its own eight entrypoints
     -- see that module's docstring for why that coarser predicate is the
     deliberate choice here."""
     live_ops = spawn_bearing_ops.live_registry_op_names()
@@ -1501,7 +1523,7 @@ def _live_unenrolled_spawn_site_keys():
 #: against the live tree: 76 of 274 live ops carry module-granularity spawn
 #: evidence and are not a key of `_BUDGETED_ENTRYPOINTS`; their spawn sites
 #: collapse to 149 distinct `site_key`s (module-granularity evidence
-#: naturally produces MORE distinct sites than the nine-op rot guard's
+#: naturally produces MORE distinct sites than the eight-op rot guard's
 #: function-level BFS does, per that predicate's own over-report bias).
 #: Ratchets down from here, `_KNOWN_SITES`' 149 -> 94 -> 14 shape is the
 #: precedent -- draining this list (by enrolling the op with a real
@@ -1634,9 +1656,8 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/review_trail_readjudication_report.py", "_full_range_shas", "git", 0),
         ("coordinator_core/ops/review_trail_readjudication_report.py", "_resolve_repo_root", "git", 0),
         ("coordinator_core/ops/review_trail_readjudication_report.py", "_run", "<dynamic>", 0),
+        ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair", "git", 0),
         ("coordinator_core/ops/review_trail_write.py", "_git_runner", "<dynamic>", 0),
-        ("coordinator_core/ops/review_trail_write.py", "_reject_empty_sha_range", "git", 0),
-        ("coordinator_core/ops/review_trail_write.py", "_reject_empty_sha_range", "git", 1),
         ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha", "git", 0),
         ("coordinator_core/ops/run_pip_audit.py", "_run_pip_audit", "<dynamic>", 0),
         ("coordinator_core/ops/run_pre_ci_hooks.py", "_run_pre_ci_hooks", "<dynamic>", 0),
@@ -1682,7 +1703,17 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
 #: an op's future spawns forever" failure this section's own comment warns
 #: against -- this assertion is what makes that a test failure instead of a
 #: silent expansion.
-_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 149
+#: 149 -> 148 (2026-08-22): `review_trail.write`'s spawn reduction drained both
+#: `_reject_empty_sha_range` entries — its worktree probe became a filesystem
+#: walk and its commit count now comes off the range walk the zero-credit
+#: diagnostic already makes — and added one, `_batch_resolve_ref_pair`, which
+#: replaces two per-endpoint `git rev-parse` spawns with one for the pair. Net
+#: -1, so this comes down by exactly 1. It is deliberately NOT taken to the
+#: frozenset's current size: that set is smaller still because of drains this
+#: session did not make, and tightening the ratchet around another session's
+#: in-flight accounting would fail their commit on this constant rather than on
+#: their own work.
+_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 148
 
 
 def test_unenrolled_spawn_bearing_ops_are_declared_in_the_frozen_inventory():

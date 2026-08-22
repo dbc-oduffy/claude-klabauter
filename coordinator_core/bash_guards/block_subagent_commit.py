@@ -5372,6 +5372,85 @@ def _extract_trampoline_scoped_git_commit_paths(
     return _pathspec_tokens_before_redirection(rest[sep_idx + 1 :]), include_orphans
 
 
+#: 2026-08-22 PM ruling (`op_budget_suspension.py`'s `ceremony.scoped_git_
+#: commit` row, REINSTATEMENT + Negative-spec passages): while that op is
+#: suspended, "plain `git commit`; the prepare-commit-msg hook attaches
+#: Deliverable-Id" is the row's own named ``fallback`` -- "A SANCTIONED
+#: FALLBACK IS NOT A BYPASS". Before this leg existed, `coordinator:git-
+#: commit-agent`'s ONLY recognized shapes were the `ceremony.scoped_git_
+#: commit` invoke-module spelling and the `scoped-git-commit` trampoline
+#: (LEG 2/3 above) -- so a dispatched agent following the ruling's own
+#: prescribed fallback (`git commit -- <path>...`) fell through to `_LEG_NO_
+#: PATHSPEC` every time, deadlocked between a suspended op and a guard that
+#: could not recognise its own sanctioned escape. This leg teaches the guard
+#: that ONE additional shape, scoped exactly as narrowly as the trampoline
+#: leg already is: a bare ``git ... commit`` chain (walked the same way
+#: `_tokens_reach_commit_after_git` walks git global options, so `git -C x
+#: commit` is still recognised) requiring its own literal ``--`` separator
+#: before ANY pathspec is read -- never widened to accept a bare `git commit`
+#: with no separator, exactly like the trampoline leg it mirrors. A `-a`/
+#: `-A`/`--all` token appearing BEFORE that separator (a modifier on `commit`
+#: itself, never a pathspec element `_pathspec_element_is_sweeping` would
+#: ever see) is rejected outright here -- the row's fallback text says
+#: "plain `git commit`" with an explicit pathspec, not `git commit -a`, and
+#: `_pathspec_element_is_sweeping`'s own post-``--`` scan has no way to see a
+#: pre-``--`` flag. This is row-specific and does NOT widen what any OTHER
+#: commit-helper binary is allowed to do -- `_COMMIT_HELPER_BINARY_NAMES`
+#: (`coordinator-safe-commit`/`scoped-git-commit`) are untouched, and this
+#: leg only ever fires for `agent_type == _GIT_COMMIT_AGENT_TYPE` (LEG 1,
+#: `check()`'s own gate, unchanged).
+def _extract_plain_git_commit_paths(seg_tokens: list) -> Optional[Tuple[List[str], bool]]:
+    """LEG 4 (the sanctioned plain-``git commit`` fallback for a suspended
+    ``ceremony.scoped_git_commit``): peel wrapper/env/assignment/``python3``-
+    prefix noise via ``_peeled_effective_tokens`` (same peel LEG 2/3 use),
+    confirm the resulting head token boundary-matches the ``git`` binary
+    itself (NOT a member of ``_COMMIT_HELPER_BINARY_NAMES`` -- this leg is
+    for the bare git binary only), walk past any git GLOBAL options exactly
+    as ``_tokens_reach_commit_after_git`` does looking for the ``commit``
+    subcommand, then require a literal ``--`` separator among the tokens
+    that follow it.
+
+    Returns ``(paths, False)`` on a match (``include_orphans`` is always
+    ``False`` for this leg -- the plain-``git`` fallback has no
+    ``--include-orphans`` concept; SC-DR-022's orphan-adoption gate stays
+    fully closed for it). Returns ``None`` -- falling through to ``_LEG_NO_
+    PATHSPEC`` -- when: the head token is not ``git``; no ``commit``
+    subcommand is found; no ``--`` separator follows it; or a sweeping
+    modifier (``-a``/``-A``/``--all``) appears before that separator.
+    """
+    tokens = _peeled_effective_tokens(seg_tokens)
+    if not tokens:
+        return None
+    head = tokens[0]
+    rest = tokens[1:]
+    if not _token_matches_binary(head, _GIT_BINARY):
+        return None
+    n = len(rest)
+    i = 0
+    commit_idx = None
+    while i < n:
+        tok = rest[i]
+        if tok == "commit":
+            commit_idx = i
+            break
+        if not tok.startswith("-"):
+            return None
+        if tok in _GIT_GLOBAL_OPTS_WITH_SEP_ARG:
+            i += 2
+            continue
+        i += 1
+    if commit_idx is None:
+        return None
+    post_commit = rest[commit_idx + 1 :]
+    if "--" not in post_commit:
+        return None
+    sep_idx = post_commit.index("--")
+    if any(tok in _SWEEPING_FLAG_TOKENS for tok in post_commit[:sep_idx]):
+        return None
+    paths = _pathspec_tokens_before_redirection(post_commit[sep_idx + 1 :])
+    return paths, False
+
+
 #: A shell REDIRECTION token as `_command_tokenizer.tokenize_full_command`
 #: emits it -- `>file`, `>>file`, `2>file`, `<file`, and (post-
 #: `join_redirection_operator_tokens`) the fd-duplication spellings `2>&1`,
@@ -5487,15 +5566,18 @@ def _command_is_single_segment(cmd: str) -> bool:
 
 def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bool]]:
     """Scan every ``;``/``&``/``|``-delimited segment of ``cmd`` for a
-    genuine ``ceremony.scoped_git_commit`` invocation (either spelling) and
-    return ``(paths, include_orphans)`` on the first match -- both extracted
-    together by whichever of ``_extract_invoke_scoped_git_commit_paths`` /
-    ``_extract_trampoline_scoped_git_commit_paths`` matched, never
-    re-derived by a second pass over ``cmd`` (F0 fix, 2026-08-04: the
+    genuine ``ceremony.scoped_git_commit`` invocation (either spelling), OR
+    (2026-08-22) the sanctioned plain-``git commit`` fallback that row names
+    while it is suspended, and return ``(paths, include_orphans)`` on the
+    first match -- extracted together by whichever of
+    ``_extract_invoke_scoped_git_commit_paths`` / ``_extract_trampoline_
+    scoped_git_commit_paths`` / ``_extract_plain_git_commit_paths`` matched,
+    never re-derived by a second pass over ``cmd`` (F0 fix, 2026-08-04: the
     invocation's own ``--include-orphans``/``"include_orphans": true`` opt-in
-    is read from the SAME scan that already extracts the pathspec). Returns
-    ``None`` when no matching invocation is found anywhere in ``cmd``, OR
-    ``cmd`` itself is unparseable.
+    is read from the SAME scan that already extracts the pathspec -- the
+    plain-``git`` leg has no such opt-in and always returns ``False``).
+    Returns ``None`` when no matching invocation is found anywhere in
+    ``cmd``, OR ``cmd`` itself is unparseable.
 
     Deliberately does NOT unwrap ``sh -c``/``python -c`` payloads the way
     the three deny-side matchers do -- the allow predicate this feeds is the
@@ -5503,7 +5585,7 @@ def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bo
     conservative by construction: an indirected invocation this scan misses
     simply falls through to the ordinary deny path (still correct, since
     denying is always the safe direction here), rather than gaining a wider
-    ALLOW surface than the three legs strictly require.
+    ALLOW surface than the four legs strictly require.
     """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
@@ -5515,6 +5597,9 @@ def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bo
         if result is not None:
             return result
         result = _extract_trampoline_scoped_git_commit_paths(seg_tokens)
+        if result is not None:
+            return result
+        result = _extract_plain_git_commit_paths(seg_tokens)
         if result is not None:
             return result
     return None

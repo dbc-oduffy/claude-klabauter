@@ -216,6 +216,56 @@ def _sink_path(git_common_dir_path: Path) -> Path:
     return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "op-latency.jsonl"
 
 
+def tail_entries(path, *, tail_bytes: int, max_rows: int):
+    """Parse the LAST ``tail_bytes`` of one JSONL generation, newest rows kept.
+
+    Returns ``(entries, head_truncated)``. Promoted here (2026-08-21) from
+    ``ops.op_budget_breaches._tail_entries``, which still calls through under
+    its old name: it is a SINK READER, and two ops holding two copies of how
+    to read this sink is how the two drift into disagreeing about the same
+    rows. ``op_census_report`` read the whole generation head-first and paid
+    250-312ms of `json.loads` for it against DR-344's 200ms per-process bar,
+    while its sibling had already bounded the same read — the duplication is
+    what let one op carry a fix the other did not.
+
+    Why a byte bound and not ``engine_report.iter_sink_entries``'s row bound:
+    that reader walks generations OLDEST-first and caps total lines read, a
+    shape its own docstring flags as unable to protect recency, and a row cap
+    set above the live row count bounds nothing at all — the parse cost tracks
+    sink GROWTH. A byte bound is flat against growth, and recency is what both
+    consumers need.
+
+    No semantics live here. Which rows count, and as what, belongs entirely to
+    the caller's aggregator, so there is no second opinion about a row to drift
+    from the first. The first line after the seek is almost always a partial
+    row and is dropped. Never raises: a missing or unreadable generation yields
+    ``([], False)``.
+    """
+    entries: list = []
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            start = max(0, size - tail_bytes)
+            if start:
+                fh.seek(start)
+                fh.readline()
+            for raw_line in fh:
+                if len(entries) >= max_rows:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line.decode("utf-8", errors="replace"))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+    except OSError:
+        return [], False
+    return entries, size > tail_bytes
+
+
 def sink_generations(repo_root: Path) -> list:
     """The op-latency sink plus its rotated generations, NEWEST-FIRST.
 

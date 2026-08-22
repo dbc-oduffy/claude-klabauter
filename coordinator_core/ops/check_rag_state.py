@@ -125,14 +125,17 @@ def _doe_root_error(doe_root: str) -> Optional[str]:
     """Return the ERROR line for a missing/invalid DoE root, else None."""
     if doe_root and os.path.isdir(os.path.join(doe_root, "coordinator")):
         return None
-    return "ERROR: ~/.claude/.doe-root missing/invalid — re-run coordinator:install"
+    return (
+        "ERROR: ~/.claude/.doe-root missing/invalid — re-run "
+        "python3 <claude-klabauter>/scripts/setup.py"
+    )
 
 
 def _trust_error(plugin_root: str) -> str:
     return (
         f"ERROR: {_SITE_LABEL} '{plugin_root}' outside trusted prefix — refusing to "
-        "source; re-run coordinator:install (or set COORDINATOR_PLUGIN_ROOT_TRUSTED=1 "
-        "for a sanctioned --plugin-dir spike)"
+        "source; re-run python3 <claude-klabauter>/scripts/setup.py (or set "
+        "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a sanctioned --plugin-dir spike)"
     )
 
 

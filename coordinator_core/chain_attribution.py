@@ -278,6 +278,39 @@ def unattributed_foreign_shas(
     return result
 
 
+def window_needs_grep_signal(window: Mapping[str, CommitAttribution]) -> bool:
+    """True iff any commit in `window` can reach `foreign_shas_from_window`'s
+    grep branch — i.e. the grep leg's ONE `git log` spawn can still change an
+    answer. Pure set math, ZERO spawns.
+
+    Read `foreign_shas_from_window`'s rule ladder alongside this: `grep_
+    attributed` is consulted on the LAST branch only, for a commit that is in
+    the window, is not a merge, and carries no Session-Id trailer at all. Every
+    other shape is decided before the grep set is touched. So a window in which
+    no commit is untrailered-and-non-merge produces a byte-identical foreign set
+    whether `bulk_grep_attributed_shas` ran or returned the empty frozenset —
+    and running it spends a process to learn nothing.
+
+    That is the common shape in this repo, not an edge case: the
+    `prepare-commit-msg` hook attaches a `Session-Id` trailer to every commit it
+    sees, so a window of ordinary trailered commits skips the leg entirely.
+
+    Negative-spec: this is a SPAWN-AVOIDANCE predicate, never an attribution
+    one. It answers "can the grep signal still matter", never "is this commit
+    foreign" — a caller that treats a False here as an attribution verdict has
+    inverted its meaning. And it must stay in lockstep with
+    `foreign_shas_from_window`'s ladder: a future edit that widens which shapes
+    consult `grep_attributed` MUST widen this predicate in the same commit, or
+    the leg gets skipped where it would have changed the answer. `tests/
+    test_chain_attribution_grep_leg_elision.py` pins the two together by
+    exercising the ladder rather than by restating it.
+    """
+    for attribution in window.values():
+        if attribution.trailer_session_id is None and not attribution.is_merge:
+            return True
+    return False
+
+
 def foreign_shas_from_window(
     shas: Iterable[str],
     own_session_id: Optional[str],

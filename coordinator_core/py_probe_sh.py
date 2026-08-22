@@ -16,16 +16,23 @@ none of the three `sh`-emitted probes did, until 47c4c70b fixed the first of
 the three (the meta-repo installer) and this module generalized that fix into
 a shared primitive for the other two rather than a second and third hand-copy.
 
-CURRENT CONSUMERS ARE FOUR, NOT THREE. The paragraph above is ORIGIN HISTORY,
-not a census, and has been read as one -- a planning session inherited "three"
-from it and asserted the stale count as a checked fact. Today's callers of
-`python_probe_lines`: `coordinator.bin.lib.git_hook_install` (two sites),
-`coordinator_core.ops.install_meta_repo_precommit_hook`,
-`coordinator_core.ops.install_claude_klabauter_precommit_hook`, and
-`coordinator_core.ops.install_doe_claude_precommit_hook` -- the last consumed
-this primitive from the start rather than hand-rolling, which is why it is
-absent from the origin list. Grep `python_probe_lines` before quoting a count;
-this line drifts as consumers are added and is not a substitute for the grep.
+CURRENT CONSUMERS ARE THREE MODULES, FOUR CALL SITES -- NOT THE "THREE
+INDEPENDENT call sites" the origin paragraph above names, and not the FOUR
+this docstring itself asserted between 2026-08-2x and the C17 row of
+`docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md`.
+That earlier "four" count is now stale too: `coordinator_core.ops.
+install_claude_klabauter_precommit_hook` converted off this primitive at C17 -- git's
+own hook-exec contract still forces a shell for its emitted trampoline, but
+that trampoline now bakes `sys.executable` at install time (a real
+filesystem path the running installer already resolved) instead of walking
+`$PATH` in shell, so it no longer calls `python_probe_lines` at all. Today's
+callers: `coordinator.bin.lib.git_hook_install` (two sites),
+`coordinator_core.ops.install_meta_repo_precommit_hook`, and
+`coordinator_core.ops.install_doe_claude_precommit_hook` (DoE-claude's own
+hook -- another repo's surface, out of C17's scope; see that plan's C17 row
+for why only the claude-klabauter installer converts). Grep `python_probe_lines`
+before quoting a count; this line drifts as consumers are added or removed
+and is not a substitute for the grep.
 
 `_is_store_python`-equivalent filtering is mirrored here (case-insensitive
 `windowsapps` path-component check), not imported from

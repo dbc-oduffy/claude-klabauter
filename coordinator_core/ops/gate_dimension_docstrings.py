@@ -96,6 +96,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ops.gate_tool_resolve import resolve_tool
 from coordinator_core.ops.gate_validate_invocable import (
     DimensionResult,
@@ -104,8 +105,10 @@ from coordinator_core.ops.gate_validate_invocable import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-_RUFF_TIMEOUT_SECS = 120
-_INTERROGATE_TIMEOUT_SECS = 120
+_RUFF_SITE = "coordinator_core/ops/gate_dimension_docstrings.py :: _run_ruff"
+_INTERROGATE_SITE = "coordinator_core/ops/gate_dimension_docstrings.py :: _run_interrogate"
+_RUFF_TIMEOUT_SECS = bound_for(_RUFF_SITE)
+_INTERROGATE_TIMEOUT_SECS = bound_for(_INTERROGATE_SITE)
 _CREATIONFLAGS = no_console_creationflags()
 
 # Relative to repo_root (or cwd, when repo_root is None) -- never an absolute
@@ -179,7 +182,7 @@ def _run_ruff(
         return (
             -1,
             "",
-            f"ruff timed out after {_RUFF_TIMEOUT_SECS}s over {len(py_files)} file(s)",
+            f"ruff timed out after {_RUFF_TIMEOUT_SECS:.0f}s over {len(py_files)} file(s)",
         )
     except OSError as exc:
         print(f"skip: gate_dimension_docstrings._run_ruff failed: {exc}", file=sys.stderr)
@@ -206,7 +209,7 @@ def _run_interrogate(
         return (
             -1,
             "",
-            f"interrogate timed out after {_INTERROGATE_TIMEOUT_SECS}s over {len(py_files)} file(s)",
+            f"interrogate timed out after {_INTERROGATE_TIMEOUT_SECS:.0f}s over {len(py_files)} file(s)",
         )
     except OSError as exc:
         print(f"skip: gate_dimension_docstrings._run_interrogate failed: {exc}", file=sys.stderr)

@@ -1275,11 +1275,19 @@ def test_preexisting_v1_hook_with_raw_exit_dollar_question_is_refreshed(tmp_path
 
 
 def test_staged_rollback_gate_is_registered_with_its_own_override():
+    """2026-08-21, PM ruling: the gate script's own check 1 (exact-blob
+    rollback) was KILLED — see coordinator_core.ops.detect_staged_rollback's
+    module docstring. This registry entry's override key was repointed to
+    the sole surviving check's key (mass deletion); the old
+    COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK key is dead (no code
+    anywhere reads it any more) and this assertion previously pinned it,
+    GREEN on a key that blanket-suppressed the mass-deletion tripwire at the
+    hook level — see the bug this row filed against that defect."""
     gate = next((g for g in _GATE_REGISTRY if g.marker == "detect-staged-rollback"), None)
     assert gate is not None, "detect-staged-rollback must be registered in _GATE_REGISTRY"
     assert gate.filename == "detect-staged-rollback.py"
     assert gate.kind == "python"
-    assert gate.override_env == "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
+    assert gate.override_env == "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
 
 
 def test_staged_rollback_gate_runs_as_part_of_a_fresh_install(tmp_path, monkeypatch):

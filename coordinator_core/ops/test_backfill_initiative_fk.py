@@ -433,6 +433,46 @@ def test_batch_collapses_multiple_pairs_into_one_subprocess_call(tmp_path, monke
         assert f"initiative: {init_id}" in a.read_text()
 
 
+def test_attach_bound_is_flat_and_derives_from_the_engine_budget(tmp_path, monkeypatch):
+    """DR-349 § "Dials that raise themselves": the one batched attach spawn takes
+    ONE flat bound, derived from the engine's own end-to-end guard rather than
+    typed here. The retired shape was `_ATTACH_TIMEOUT_SECS * max(len(pairs), 1)`,
+    which authorised hours for a large batch against a cost model with no N in it
+    -- so the load-bearing assertion is that a 1-pair and a 3-pair batch resolve to
+    the SAME number.
+    """
+    from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
+
+    assert mod._ATTACH_TIMEOUT_SECS == DISPATCH_TIMEOUT_SECS
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _make_fake_coordinator_initiative(bin_dir, {"id-a", "id-b", "id-c"})
+    coordinator_initiative_path = os.path.join(str(bin_dir), "coordinator-initiative.py")
+
+    seen: list[float] = []
+
+    def _capture_run(cmd, *a, **kw):
+        seen.append(kw.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+    monkeypatch.setattr(mod.subprocess, "run", _capture_run)
+
+    for n in (1, 3):
+        artifacts = [tmp_path / f"batch{n}-{i}.md" for i in range(n)]
+        for a in artifacts:
+            _make_artifact(a)
+        _process_pairs(
+            [f"{a}\tid-a\n" for a in artifacts],
+            coordinator_initiative_path,
+            out=io.StringIO(),
+            err=io.StringIO(),
+        )
+
+    assert len(seen) == 2
+    assert seen[0] == seen[1] == mod._ATTACH_TIMEOUT_SECS
+
+
 def test_batch_mixed_success_and_failure_attributed_to_correct_pair(tmp_path):
     """A batch with one succeeding and one failing pair must attribute the
     failure to the RIGHT artifact/initiative-id, not conflate the two."""

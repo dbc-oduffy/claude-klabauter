@@ -53,6 +53,7 @@ def _warm_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client.election, "pipe_name", lambda token: r"\\.\pipe\fake")
     monkeypatch.setattr(client, "_spawned_this_process", False)
     monkeypatch.setattr(client, "_live_tree_cold", False)
+    monkeypatch.setattr(client, "_cold_reason", None)
     from coordinator_core.warm import breadcrumb
 
     monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: True)
@@ -217,6 +218,132 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     err = capsys.readouterr().err
     assert err.count("DR-315") == 1, "the ruling must be named exactly once, not per dispatch"
     assert "DR-326" in err and "DR-331" in err
+
+
+def _drive_one_cold_dispatch(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+    """Run a single dispatch whose token computation raises `exc` -- the
+    shared body of the cold-reason tests below.
+
+    The preamble past the token is stubbed out wholesale rather than at the
+    transport: on POSIX it computes a socket path, and this suite's
+    quarantined home makes that path exceed `sun_path` on macOS, which is
+    itself a permanent cold condition. Letting it run would mix a second
+    reason into a test about the first. `engine_token()` is still the REAL
+    function, so the classification under test is genuinely exercised."""
+    from coordinator_core.warm import skew
+
+    def _raise(repo_root=None):
+        raise exc
+
+    monkeypatch.setattr(skew, "compute_client_token", _raise)
+    monkeypatch.setattr(client, "engine_token", _REAL_ENGINE_TOKEN)
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: client.engine_token() and None)
+    assert client.try_warm_dispatch(_MSG) is None
+
+
+def test_absent_engine_root_names_the_path_and_cites_no_ruling(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path
+) -> None:
+    """THE 2026-08-22 INSTALL-DOGFOOD CASE. A root-resolution channel (a
+    pointer file carried in from another machine) named a path that does not
+    exist here, and the operator was told their clone carries no build stamp
+    -- a ruling, citing DR-315, for a condition DR-315 does not cover, with
+    no path anywhere in it. The message must name the path that failed to
+    resolve, and must NOT send the reader to a decision record."""
+    from coordinator_core.warm import skew
+
+    absent = tmp_path / "not-here"
+    _drive_one_cold_dispatch(
+        monkeypatch,
+        skew.UnstampedEngineRootError("no stamp", root=absent, root_exists=False),
+    )
+
+    err = capsys.readouterr().err
+    assert str(absent) in err, "the path that failed to resolve must be named"
+    assert "does not exist" in err
+    assert "DR-315" not in err, "no ruling covers a root that is not on disk"
+    assert "root_channel_reconcile" in err, "must route to the reader that shows which channel produced it"
+
+    assert client.last_cold_reason() is not None
+    assert str(absent) in client.last_cold_reason()
+
+
+def test_unstamped_but_present_root_keeps_the_ruling_and_gains_the_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path
+) -> None:
+    """The other arm, unchanged in substance: a live working tree that IS on
+    disk is cold BY RULING, and naming DR-315 there is the point. It gains
+    the resolved root so the reader can tell WHICH tree answered."""
+    from coordinator_core.warm import skew
+
+    present = tmp_path / "live-tree"
+    present.mkdir()
+    _drive_one_cold_dispatch(
+        monkeypatch,
+        skew.UnstampedEngineRootError("no stamp", root=present, root_exists=True),
+    )
+
+    err = capsys.readouterr().err
+    assert "DR-315" in err
+    assert str(present) in err
+
+
+def test_root_exists_unknown_keeps_the_ruling_not_the_absent_path_message(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path
+) -> None:
+    """THE LANDMINE THIS PINS. `root_exists` defaults to `None` (unknown), not
+    `True` (present) -- a future call site passing `root=` without
+    `root_exists=` must not have presence fabricated on its behalf, but it
+    also must not be told the path is absent on no evidence. Unknown falls
+    through to the same ruling-shaped message as an explicit `True`."""
+    from coordinator_core.warm import skew
+
+    present = tmp_path / "live-tree"
+    present.mkdir()
+    exc = skew.UnstampedEngineRootError("no stamp", root=present)
+    assert exc.root_exists is None
+
+    _drive_one_cold_dispatch(monkeypatch, exc)
+
+    err = capsys.readouterr().err
+    assert "DR-315" in err
+    assert str(present) in err
+    assert "does not exist" not in err
+
+
+def test_cold_reason_survives_past_the_one_shot_print(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The print is once per process; the REASON is read by a later caller
+    turning a miss into a fatal error. A reason that existed only for the
+    first dispatch would be missing from exactly the message that needs it."""
+    from coordinator_core.warm import skew
+
+    absent = tmp_path / "not-here"
+    exc = skew.UnstampedEngineRootError("no stamp", root=absent, root_exists=False)
+    _drive_one_cold_dispatch(monkeypatch, exc)
+    monkeypatch.setattr(client, "_cold_reason", None)
+    assert client.try_warm_dispatch(_MSG) is None
+
+    assert client.last_cold_reason() is not None
+    assert str(absent) in client.last_cold_reason()
+
+
+def test_transient_warm_miss_records_no_cold_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The discriminator the fail-hard caller branches on: an ordinary miss
+    (no pipe, server booting) is transient and MUST leave the reason unset,
+    so "retry in a moment" stays the advice for the case where retrying
+    actually works.
+
+    Stubs the whole preamble rather than just the transport: on POSIX the
+    real preamble computes a socket path first, and this suite's quarantined
+    home makes that path exceed `sun_path` on macOS -- a genuinely permanent
+    condition that would be recorded before any transport stub was reached.
+    The subject here is the classification, not the transport."""
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: None)
+
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client.last_cold_reason() is None
 
 
 def test_einval_without_231_never_spawns_and_never_prints(
@@ -639,3 +766,43 @@ def test_engine_skew_distinct_from_structural_pin_error() -> None:
 
     assert client.ENGINE_SKEW != ipc.STRUCTURAL_PIN_ERROR
     assert ipc.STRUCTURAL_PIN_ERROR == -32001
+
+
+def test_socket_path_too_long_is_a_permanent_reason_not_a_transient_miss(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """THE SECOND ROUTE to the same operator-facing contradiction. A runtime
+    base long enough to blow `sun_path` makes warm permanently unavailable
+    for every call from that base, and cold fallback is disabled -- so the
+    caller must not advise a retry that changes nothing. The reason must
+    carry the path and the byte budget the exception already measured."""
+    from coordinator_core.warm.election import SocketPathTooLongError
+
+    exc = SocketPathTooLongError(
+        "socket path is 168 bytes, over the 100-byte sun_path budget: '/very/long/faketoken.sock'"
+    )
+    monkeypatch.setattr(
+        client, "_try_warm_dispatch_inner", lambda msg: (_ for _ in ()).throw(exc)
+    )
+
+    assert client.try_warm_dispatch(_MSG) is None
+
+    reason = client.last_cold_reason()
+    assert reason is not None
+    assert "168 bytes" in reason and "sun_path" in reason
+    assert "/very/long/faketoken.sock" in reason
+    assert "COORDINATOR_WARM_RUNTIME_BASE" in reason
+
+
+def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The narrowness is the point: an unanticipated preamble failure is
+    exactly where "this recurs forever" is a guess, and a wrong permanent
+    verdict removes the retry advice that would have worked."""
+    monkeypatch.setattr(
+        client,
+        "_try_warm_dispatch_inner",
+        lambda msg: (_ for _ in ()).throw(RuntimeError("something unforeseen")),
+    )
+
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client.last_cold_reason() is None

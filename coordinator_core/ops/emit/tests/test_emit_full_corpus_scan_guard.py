@@ -80,7 +80,8 @@ What this test does NOT cover
 
 Spec backlink: state/handoffs/2026-08-10-emit-cadence-over-budget-design-call.md
 (acceptance criterion closed PARTIAL prior to this file; DR-287 halted the
-cadence itself but ``artifact.emit`` still runs on demand).
+cadence itself; the ``artifact.emit`` op was CUT 2026-08-22 and the
+builder below is now exercised only from here).
 """
 
 from __future__ import annotations

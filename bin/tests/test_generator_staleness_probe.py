@@ -307,6 +307,92 @@ class TestGeneratorStalenessProbe:
         assert result.status != mod._BROKEN
 
 
+class TestCoverageHonesty:
+    """`detail` must state how many swept entries were actually COMPARED.
+
+    The live population is dominated by verdicts with no single write target
+    (WRITE_TARGET_UNRESOLVED, MUTATES_DECLARED) — measured 2026-08-22: 4 of 99
+    entries compared. A `detail` line counting the swept population as
+    "checked" claims coverage the probe does not have.
+    """
+
+    def test_pass_detail_reports_compared_not_swept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mod = _require_module()
+        report = {"docs/exec-summary.md": _entry("docs/exec-summary.md", "FRESH")}
+        for i in range(9):
+            key = f"coordinator_core/mutator_{i}.py"
+            report[key] = _entry(None, "MUTATES_DECLARED")
+        _patch_compute(monkeypatch, report)
+
+        result = mod._run_probe_generator_output_staleness(_REPO_ROOT)
+
+        assert result.status == mod._PASS
+        assert "coverage 1/10 compared" in result.detail
+        assert "9 corpus mutator (no staleness contract)" in result.detail
+
+    def test_gap_detail_carries_the_split(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mod = _require_module()
+        _patch_compute(
+            monkeypatch,
+            {
+                "docs/exec-summary.md": _entry("docs/exec-summary.md", "FRESH"),
+                "coordinator_core/writer.py": _entry(None, "WRITE_TARGET_UNRESOLVED"),
+            },
+        )
+
+        result = mod._run_probe_generator_output_staleness(_REPO_ROOT)
+
+        assert result.status == mod._INFO
+        assert result.skipped is True
+        assert "coverage 1/2 compared" in result.detail
+        assert "1 write target unresolved" in result.detail
+
+    def test_stale_detail_carries_the_same_split(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mod = _require_module()
+        _patch_compute(
+            monkeypatch,
+            {
+                "state/orientation-cache.json": _entry("state/orientation-cache.json", "STALE"),
+                "coordinator_core/mutator.py": _entry(None, "MUTATES_DECLARED"),
+            },
+        )
+
+        result = mod._run_probe_generator_output_staleness(_REPO_ROOT)
+
+        assert result.status == mod._DEGRADED
+        assert "coverage 1/2 compared" in result.detail
+        assert "1 corpus mutator (no staleness contract)" in result.detail
+
+    def test_coverage_counts_only_compared_verdicts(self) -> None:
+        """UNSTAMPED and INDETERMINATE are swept, never compared."""
+        mod = _require_module()
+        data = {
+            "a": {"verdict": "FRESH"},
+            "b": {"verdict": "STALE"},
+            "c": {"verdict": "UNSTAMPED"},
+            "d": {"verdict": "INDETERMINATE"},
+            "e": {"verdict": "UNDECLARED"},
+        }
+
+        line = mod._generator_staleness_coverage(data)
+
+        assert line.startswith("coverage 2/5 compared;")
+        assert "1 no readable stamp" in line
+        assert "1 indeterminate" in line
+        assert "1 undeclared" in line
+
+    def test_coverage_line_omits_absent_categories(self) -> None:
+        mod = _require_module()
+
+        assert mod._generator_staleness_coverage({"a": {"verdict": "FRESH"}}) == (
+            "coverage 1/1 compared"
+        )
+
+
 class TestManifestRegistration:
     """The probe must be declared in bin/doctor-probes.toml, satisfying the
     triage/weight invariant, and never gating (AC7)."""

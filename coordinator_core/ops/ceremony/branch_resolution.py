@@ -52,7 +52,7 @@ import os
 import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -266,8 +266,24 @@ def _read_started_at(common_dir: Path, sid: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+#: Synthetic returncode `_git_run` uses for a TimeoutExpired specifically —
+#: distinct from the generic `returncode=2` an OSError (not-a-repo, git not
+#: on PATH, etc.) still gets. 124 mirrors the POSIX `timeout(1)` convention.
+#: Review: code-reviewer F1 — the two failure classes were indistinguishable
+#: by returncode alone, so a caller wanting to tell "git timed out" from "git
+#: failed some other way" had no signal to read. See _trailer_reliable /
+#: _started_at_candidate_range / _range_commit_count / _range_diff_loc /
+#: _range_touched_paths, the five callers this exists for.
+_GIT_TIMEOUT_RETURNCODE = 124
+
+
 def _git_run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Run a git subcommand, suppressing exceptions; return the CompletedProcess."""
+    """Run a git subcommand, suppressing exceptions; return the CompletedProcess.
+
+    A timeout gets its own returncode (`_GIT_TIMEOUT_RETURNCODE`), distinct
+    from the generic `returncode=2` any other OSError still produces — see
+    that constant's docstring for why the split exists.
+    """
     try:
         return subprocess.run(
             ["git"] + args,
@@ -283,7 +299,13 @@ def _git_run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
             **no_console_creationflags(),
             stdin=subprocess.DEVNULL,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        log.warning("wsc_resolve: git %s timed out: %s", args[0] if args else "?", exc)
+        proc = subprocess.CompletedProcess(args=["git"] + args, returncode=_GIT_TIMEOUT_RETURNCODE)
+        proc.stdout = ""
+        proc.stderr = str(exc)
+        return proc
+    except OSError as exc:
         # Return a synthetic failed result so callers can treat gracefully.
         log.warning("wsc_resolve: git %s failed: %s", args[0] if args else "?", exc)
         proc = subprocess.CompletedProcess(args=["git"] + args, returncode=2)
@@ -700,20 +722,56 @@ def _session_surface_count(paths: list[str]) -> int:
     return len(surfaces)
 
 
-def _range_commit_count(worktree_root: Path, candidate_range: str) -> int:
+def _record_git_timeout(result: subprocess.CompletedProcess, caller: str, warnings: list[str] | None) -> None:
+    """Append a degrade-loud entry to `warnings` iff `result` is a `_git_run` timeout.
+
+    Mirrors this module's `scan_errors` out-param idiom (see
+    `_find_all_consumed_handoffs`) rather than resolver.py's tuple-return
+    shape — these five call sites already return a bare scalar the ~4,450-
+    line test suite asserts on directly (`is True`, `== ""`, …), and an
+    optional out-param leaves that contract untouched. A `None` `warnings`
+    (the default) reproduces the pre-existing silent-degrade behaviour
+    exactly, for any caller that hasn't opted in yet.
+    """
+    if warnings is not None and result.returncode == _GIT_TIMEOUT_RETURNCODE:
+        warnings.append(f"{caller}: {result.stderr}")
+
+
+def _range_commit_count(
+    worktree_root: Path, candidate_range: str, *, warnings: list[str] | None = None
+) -> int | None:
     """Return the number of commits within candidate_range.
 
     Range-scoped counterpart to ``session_commit_count_attributed`` for the
     SCOPING_METHOD_STARTED_AT_RANGE branch, where the Session-Id trailer grep
     is a proven-unreliable signal (that unreliability is exactly why this
     branch is reached).  Uses ``git rev-list --count`` over candidate_range
-    rather than trailer-grep.  Returns 0 on any git failure (graceful-absent).
+    rather than trailer-grep.  Returns 0 on any NON-timeout git failure
+    (graceful-absent, unchanged pre-existing contract).
+
+    Returns `None` — NOT `0` — on a `_git_run` TIMEOUT (Review: EM
+    disposition on code-reviewer F1's live demonstration,
+    test_c3_trailerless_large_range_scores_partition_mandatory: this
+    function feeds the review-scale brightline directly, and `0` reads as
+    "measured small" — the opposite safety direction from "could not
+    measure". The caller (`_resolve_branches`' Branch 8) is the ONE place
+    that consumes this; it must coalesce `None` to a concrete int for the
+    receipt-facing field (never let `None` itself reach a `>=` comparison or
+    a JSON payload) while still forcing `partition_mandatory` from the
+    `None`, not from the coalesced value.
+
+    `warnings`: optional out-param — a `_git_run` TIMEOUT also appends one
+    entry here, in addition to the `None` return, so a caller wanting the
+    human-readable reason (not just the fact) has a signal to read. Same
+    "fold scan_errors into your own evidence" contract
+    `_find_all_consumed_handoffs` already documents.
     """
     if not candidate_range:
         return 0
     result = _git_run(["rev-list", "--count", candidate_range], cwd=worktree_root)
     if result.returncode != 0:
-        return 0
+        _record_git_timeout(result, "_range_commit_count", warnings)
+        return None if result.returncode == _GIT_TIMEOUT_RETURNCODE else 0
     try:
         return int(result.stdout.strip())
     except ValueError:
@@ -721,20 +779,31 @@ def _range_commit_count(worktree_root: Path, candidate_range: str) -> int:
         return 0
 
 
-def _range_diff_loc(worktree_root: Path, candidate_range: str) -> int:
+def _range_diff_loc(
+    worktree_root: Path, candidate_range: str, *, warnings: list[str] | None = None
+) -> int | None:
     """Approximate total lines-of-change within candidate_range.
 
     Range-scoped counterpart to ``_session_diff_loc`` for the
     SCOPING_METHOD_STARTED_AT_RANGE branch.  Uses ``git log --stat`` over
     candidate_range (not trailer-grep) and sums insertions + deletions from
     the summary lines, same parsing shape as ``_session_diff_loc``.  Returns 0
-    on any failure (graceful-absent).
+    on any NON-timeout failure (graceful-absent, unchanged pre-existing
+    contract).
+
+    Returns `None` — NOT `0` — on a `_git_run` TIMEOUT. See
+    `_range_commit_count`'s docstring for why, and for the caller's
+    obligation to coalesce `None` before it reaches a comparison or payload.
+
+    `warnings`: see `_range_commit_count`'s docstring — same degrade-loud
+    out-param, appended only on a `_git_run` timeout.
     """
     if not candidate_range:
         return 0
     result = _git_run(["log", "--stat", "--format=", candidate_range], cwd=worktree_root)
     if result.returncode != 0:
-        return 0
+        _record_git_timeout(result, "_range_diff_loc", warnings)
+        return None if result.returncode == _GIT_TIMEOUT_RETURNCODE else 0
     total = 0
     for line in result.stdout.splitlines():
         # Summary lines look like: "2 files changed, 47 insertions(+), 12 deletions(-)"
@@ -745,13 +814,24 @@ def _range_diff_loc(worktree_root: Path, candidate_range: str) -> int:
     return total
 
 
-def _range_touched_paths(worktree_root: Path, candidate_range: str) -> list[str]:
+def _range_touched_paths(
+    worktree_root: Path, candidate_range: str, *, warnings: list[str] | None = None
+) -> list[str] | None:
     """Return file paths touched within candidate_range.
 
     Range-scoped counterpart to ``_session_touched_paths`` for the
     SCOPING_METHOD_STARTED_AT_RANGE branch.  Uses ``git log --name-only`` over
-    candidate_range (not trailer-grep).  Deduped, order-preserving.  Returns []
-    on any git failure (graceful-absent).
+    candidate_range (not trailer-grep).  Deduped, order-preserving.  Returns
+    [] on any NON-timeout git failure (graceful-absent, unchanged
+    pre-existing contract).
+
+    Returns `None` — NOT `[]` — on a `_git_run` TIMEOUT. See
+    `_range_commit_count`'s docstring for why: `[]` feeds
+    `_session_surface_count`, which would silently read as "0 surfaces
+    touched" if a `None` were not coalesced first at the call site.
+
+    `warnings`: see `_range_commit_count`'s docstring — same degrade-loud
+    out-param, appended only on a `_git_run` timeout.
     """
     if not candidate_range:
         return []
@@ -760,7 +840,8 @@ def _range_touched_paths(worktree_root: Path, candidate_range: str) -> list[str]
         cwd=worktree_root,
     )
     if result.returncode != 0:
-        return []
+        _record_git_timeout(result, "_range_touched_paths", warnings)
+        return None if result.returncode == _GIT_TIMEOUT_RETURNCODE else []
     seen: set[str] = set()
     paths: list[str] = []
     for line in result.stdout.splitlines():
@@ -803,6 +884,14 @@ class ScopingVerdict:
         commits or after the last session commit up to HEAD).
       candidate_range: the started_at-bounded git revision range string
         (e.g. "<first-sha>^..HEAD"), or "" when it could not be derived.
+      warnings: one entry per `_git_run` TIMEOUT hit while computing this
+        verdict's own `_trailer_reliable` / `_started_at_candidate_range`
+        reads (Review: code-reviewer F1) — empty on a clean read. Mirrors
+        `resolver.py`'s `detect_git_provenance_consumed` degrade-loud
+        contract: a non-empty list here means `method`/`contiguous` were
+        computed under a fail-open default, not confirmed by a completed git
+        read, and the caller MUST fold this into its own evidence rather than
+        trusting the verdict as if the reads all succeeded.
 
     Not yet wired into the receipt (C3) — this is the pure analysis result.
     """
@@ -811,12 +900,15 @@ class ScopingVerdict:
     foreign_count: int
     contiguous: bool
     candidate_range: str
+    warnings: list[str] = field(default_factory=list)
 
 
 def _trailer_reliable(
     worktree_root: Path,
     sid: str,
     started_at: str | None,
+    *,
+    warnings: list[str] | None = None,
 ) -> bool:
     """Return whether the Session-Id trailer is a trustworthy scoping signal for sid.
 
@@ -832,6 +924,25 @@ def _trailer_reliable(
     so we do not downgrade reliability on that basis alone).
 
     Pure read — no receipt mutation, no X-node emission.
+
+    `warnings`: see `_range_commit_count`'s docstring — same degrade-loud
+    out-param.
+
+    TIMEOUT ON THE HEAD-MOVED CHECK RETURNS FALSE, NOT TRUE (Review: EM
+    disposition on code-reviewer F1's live demonstration,
+    test_c3_trailerless_large_range_scores_partition_mandatory). "Could not
+    tell whether HEAD moved" is INDETERMINATE, not "nothing moved" — and the
+    two have opposite safety consequences here: True keeps the (already-
+    proven-unreliable-by-construction, since this line is only reached when
+    the trailer grep found zero matches) trailer-grep numbers authoritative,
+    False routes the caller to the range-recompute/foreign-commit-check
+    pipeline, which itself fails toward SCOPING_METHOD_AMBIGUOUS (forces an
+    EM-supplied commit set) whenever ITS OWN reads are also indeterminate —
+    see `_started_at_candidate_range`'s docstring for why an empty range on
+    timeout already lands there safely with no further change needed. A
+    non-timeout git failure (git missing, not a repo) keeps the pre-existing
+    `True` — that failure class is unchanged from before this fix and stays
+    out of scope, per this function's other preexisting-fail-open note above.
     """
     # Preexisting fail-open behaviour at this in-module call site is left unchanged by
     # the C2 sub-task (docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md):
@@ -856,6 +967,9 @@ def _trailer_reliable(
 
     result = _git_run(["log", "-1", "--format=%ct"], cwd=worktree_root)
     if result.returncode != 0:
+        if result.returncode == _GIT_TIMEOUT_RETURNCODE:
+            _record_git_timeout(result, "_trailer_reliable", warnings)
+            return False
         return True
     head_ct_str = result.stdout.strip()
     if not head_ct_str:
@@ -874,6 +988,8 @@ def _trailer_reliable(
 def _started_at_candidate_range(
     worktree_root: Path,
     started_at: str | None,
+    *,
+    warnings: list[str] | None = None,
 ) -> str:
     """Derive the started_at-bounded candidate commit range for scoping.
 
@@ -887,6 +1003,23 @@ def _started_at_candidate_range(
     started_at sentinel, NOT git's very first commit in the repo — the first
     commit in the repo is almost never this session's boundary on a shared
     long-lived branch.
+
+    `warnings`: see `_range_commit_count`'s docstring — same degrade-loud
+    out-param. The `""` this returns on a timeout is deliberately left
+    indistinguishable from "nothing to scope" by return value alone — unlike
+    the three `_range_*` helpers (which return `None` on a timeout, see
+    `_range_commit_count`'s docstring), this function's return value never
+    needs that sentinel. Audited (EM disposition on code-reviewer F1):
+    `analyze_session_scoping` only branches on a non-empty `candidate_range`
+    when `_trailer_reliable` has ALREADY returned False (trailer proven
+    unreliable) — an empty range at that point, timeout or genuine, forces
+    `SCOPING_METHOD_AMBIGUOUS` (the EM-supplied-scope path, the safe
+    default) rather than `SCOPING_METHOD_STARTED_AT_RANGE`. When
+    `_trailer_reliable` returned True instead, this function's return value
+    only ever reaches the receipt as an audit-trail `sha_range` string — it
+    never feeds a brightline/partition computation on that path (the trailer
+    branch uses `_session_diff_loc`/`session_commit_count_attributed`
+    instead) — so a timed-out "" there is inert, not unsafe.
     """
     if started_at is None:
         return ""
@@ -904,6 +1037,7 @@ def _started_at_candidate_range(
         cwd=worktree_root,
     )
     if result.returncode != 0:
+        _record_git_timeout(result, "_started_at_candidate_range", warnings)
         return ""
     shas = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not shas:
@@ -976,19 +1110,27 @@ def analyze_session_scoping(
 
     Not yet wired into the receipt (C3 does that) — this is the pure decision
     function, callable in isolation for both wiring and unit testing.
+
+    Every `_git_run` TIMEOUT hit by `_trailer_reliable` /
+    `_started_at_candidate_range` while computing this verdict is collected
+    into the returned `ScopingVerdict.warnings` (Review: code-reviewer F1) —
+    see that field's docstring for why a caller must not treat a non-empty
+    list as an ordinary computed result.
     """
     if known_scope_paths is None:
         known_scope_paths = frozenset()
 
+    warnings: list[str] = []
     started_at = _read_started_at(common_dir, sid)
-    candidate_range = _started_at_candidate_range(worktree_root, started_at)
+    candidate_range = _started_at_candidate_range(worktree_root, started_at, warnings=warnings)
 
-    if _trailer_reliable(worktree_root, sid, started_at):
+    if _trailer_reliable(worktree_root, sid, started_at, warnings=warnings):
         return ScopingVerdict(
             method=SCOPING_METHOD_TRAILER,
             foreign_count=0,
             contiguous=True,
             candidate_range=candidate_range,
+            warnings=warnings,
         )
 
     foreign_shas = _detect_foreign_commits(
@@ -1006,6 +1148,7 @@ def analyze_session_scoping(
         foreign_count=len(foreign_shas),
         contiguous=contiguous,
         candidate_range=candidate_range,
+        warnings=warnings,
     )
 
 
@@ -2381,10 +2524,31 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
         # at the B-wave brightline gate.  See Finding 3,
         # docs/plans/2026-07-12-wsc-concurrent-tree-safety-hardening.md.
         sha_range = scoping_verdict.candidate_range
-        diff_loc = _range_diff_loc(worktree_root, sha_range)
-        commit_count = _range_commit_count(worktree_root, sha_range)
-        surface_count = _session_surface_count(_range_touched_paths(worktree_root, sha_range))
+        # scoping_git_warnings accumulates every _git_run TIMEOUT hit while
+        # deriving this branch's numbers — scoping_verdict.warnings covers the
+        # _trailer_reliable/_started_at_candidate_range reads that selected
+        # this branch; the three _range_* calls below add their own (Review:
+        # code-reviewer F1). Folded into the branch/B1 evidence below so a
+        # degraded diff_loc/commit_count/surface_count is never silently
+        # indistinguishable from a genuinely-computed one.
+        scoping_git_warnings = list(scoping_verdict.warnings)
+        diff_loc_raw = _range_diff_loc(worktree_root, sha_range, warnings=scoping_git_warnings)
+        commit_count_raw = _range_commit_count(worktree_root, sha_range, warnings=scoping_git_warnings)
+        touched_raw = _range_touched_paths(worktree_root, sha_range, warnings=scoping_git_warnings)
+        # Each of the three probes above returns `None` — NOT 0/[] — specifically when its
+        # `git` call TIMED OUT (see each function's own docstring); a `None` clears no
+        # threshold, it forces `partition_mandatory` directly, below. This is the single
+        # source of truth for "this range was unmeasurable" — no separate warnings-count
+        # heuristic. Every threshold comparison below reads the COALESCED value, never the
+        # raw one, so a `None` can never reach a `>=` or a JSON payload.
+        range_probe_indeterminate = (
+            diff_loc_raw is None or commit_count_raw is None or touched_raw is None
+        )
+        diff_loc = diff_loc_raw if diff_loc_raw is not None else 0
+        commit_count = commit_count_raw if commit_count_raw is not None else 0
+        surface_count = _session_surface_count(touched_raw if touched_raw is not None else [])
     else:
+        scoping_git_warnings = list(scoping_verdict.warnings)
         # SCOPING_METHOD_TRAILER — trailer scoping is reliable here; existing
         # grep helpers stay authoritative.
         # SCOPING_METHOD_AMBIGUOUS — sha_range is moot; the X-node path below
@@ -2402,9 +2566,20 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
             commit_count_record["value"] if not commit_count_record["degraded"] else 0
         )
         surface_count = _session_surface_count(touched_paths)
+        # Same inversion as the range branch above: a degraded read folds to 0, and 0
+        # argues for LESS review. Included here too because the rule is about the
+        # decision's safe direction, not about which branch produced the number.
+        range_probe_indeterminate = bool(commit_count_record["degraded"])
 
+    # An input we could not measure must never argue for less review. `0` is a measured
+    # value meaning "small"; "we could not check" is a different fact with the opposite
+    # safety consequence, and collapsing the two is how a large change slips through as
+    # single-reviewer-ok. Indeterminate therefore forces the mandate rather than clearing
+    # it — over-reviewing a small change costs a reviewer, under-reviewing a large one is
+    # what the brightline exists to prevent.
     partition_mandatory = (
-        diff_loc >= _BRIGHTLINE_LOC
+        range_probe_indeterminate
+        or diff_loc >= _BRIGHTLINE_LOC
         or commit_count >= _BRIGHTLINE_COMMITS
         or surface_count >= _BRIGHTLINE_SURFACES
     )
@@ -2435,12 +2610,18 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
                 "foreign_commit_count": scoping_verdict.foreign_count,
                 "contiguous": scoping_verdict.contiguous,
                 "candidate_range": scoping_verdict.candidate_range,
+                "scoping_git_warnings": scoping_git_warnings,
                 "note": (
                     "trailer unreliable and the started_at range is either "
                     "foreign-contaminated or non-contiguous — EM must supply "
                     "the true session commit set before the review wave can "
                     "be scoped; do NOT trust the trailer-grep diff_loc/"
                     "commit_count for this session"
+                ) + (
+                    " — NOTE: scoping_git_warnings is non-empty, so this "
+                    "verdict may itself be a git-timeout fail-open default "
+                    "rather than a confirmed ambiguous scope"
+                    if scoping_git_warnings else ""
                 ),
             },
         ))
@@ -2499,6 +2680,10 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
             "surface_count": surface_count,
             "doc_fragile_active": doc_fragile_active,
             "doc_fragile_reason": doc_fragile_reason,
+            # Non-empty iff a git read behind diff_loc/commit_count/surface_count
+            # above hit its timeout — see scoping_git_warnings' assembly comment
+            # above (Review: code-reviewer F1).
+            "scoping_git_warnings": scoping_git_warnings,
             "pre_resolved_evidence": b1_pre_resolved,
         }
         ctx.add_branch(BranchResolution(

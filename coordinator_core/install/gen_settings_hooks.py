@@ -210,6 +210,33 @@ and `WRITE_SURFACE` agree on one spelling."""
 _DRIVE_LETTER_RE = re.compile(r"[A-Za-z]:[\\/]")
 
 
+HOOK_TIMEOUT_CEILING_SECS = 10
+"""Hard ceiling on the per-hook ``timeout`` this generator will emit into
+settings.json.
+
+That field is the HARNESS's kill ceiling for a hook, and its value arrives
+from a plugin-side ``hooks.json`` that does not live in this repo — off-repo
+data, previously forwarded verbatim by `_build_new_generated`, setting how
+long a wedged hook may hold a session or a commit before the harness reclaims
+it. Nothing in this repo's own suite could see the number, and the oracle
+fixture carries a 120 on a ``SessionStart`` hook to prove the shape is
+reachable.
+
+Ten seconds is a BACKSTOP, not a budget, and it is sized off the two numbers
+CLAUDE.md already publishes rather than invented here: a hook is a process,
+`§ Load norm` forbids any process past 2s outright, and `§ The brightline`
+puts the fix bar at 200ms. A kill ceiling has to sit above the target it
+guards or it kills healthy work, so this is 5× the forbidden-process line —
+enough headroom for a cold interpreter start on a box running 50-70 sessions,
+and still inside a session start an operator would call stalled rather than
+broken. A value above it does not describe a slower hook; it describes one
+that is never killed.
+
+Enforced by CLAMP, not refusal (`_clamp_hook_timeout`): the input is another
+repo's artifact, and failing generation outright would take the whole install
+chain down over a field this generator can simply bound."""
+
+
 _HOOKS_MERGE_CLAUSE_INDEX = 0
 """Index of `WRITE_SURFACE`'s sole SHAPED clause (the `hooks.<event>`
 structured-file-key merge) — the only clause `generate()` journals against;
@@ -588,14 +615,48 @@ def _stray_check(
 # ---------------------------------------------------------------------------
 
 
+def _clamp_hook_timeout(
+    hook: Dict[str, Any], event: str, clamped: Optional[List[Tuple[str, str, Any]]] = None
+) -> None:
+    """Bound *hook*'s ``timeout`` to `HOOK_TIMEOUT_CEILING_SECS`, in place.
+
+    Appends an ``(event, command, original)`` row to *clamped* when it fires,
+    so `generate()` can name every entry it bounded in one message instead of
+    one per hook.
+
+    A ``timeout`` that is absent, non-numeric, boolean, or non-positive is
+    left exactly as it arrived — this function bounds a number the harness
+    will act on, and is not a schema validator for the sibling repo's file.
+    `bool` is excluded explicitly because it is an `int` subclass in Python
+    and ``"timeout": true`` is a malformed field, not a 1-second ceiling."""
+    value = hook.get("timeout")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return
+    if value <= 0 or value <= HOOK_TIMEOUT_CEILING_SECS:
+        return
+    if clamped is not None:
+        clamped.append((event, str(hook.get("command", "")), value))
+    hook["timeout"] = HOOK_TIMEOUT_CEILING_SECS
+
+
 def _build_new_generated(
-    hooks_json: Dict[str, Any], coordinator_root: str, python_bin_resolved: bool = False
+    hooks_json: Dict[str, Any],
+    coordinator_root: str,
+    python_bin_resolved: bool = False,
+    clamped: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """For each event/group in hooks.json: filter hooks to CPR commands only,
-    rewrite their ``.command``, drop the group if it filters to empty, strip
+    rewrite their ``.command``, bound their ``timeout`` to
+    `HOOK_TIMEOUT_CEILING_SECS`, drop the group if it filters to empty, strip
     ``_comment`` (not meaningful in settings.json), forward all other
     group-level fields (matcher, etc.) and all other per-hook fields
-    (timeout, async, ...) untouched."""
+    (async, ...) untouched.
+
+    ``timeout`` is the one forwarded field that stopped being a pass-through:
+    it sets the harness's kill ceiling for a hook on the session/commit hot
+    path, and it arrives from an off-repo ``hooks.json`` — see
+    `HOOK_TIMEOUT_CEILING_SECS`. *clamped*, when supplied, collects the
+    ``(event, command, original)`` rows `generate()` reports."""
     new_generated: Dict[str, List[Dict[str, Any]]] = {}
     for event, groups in (hooks_json.get("hooks") or {}).items():
         emitted_groups: List[Dict[str, Any]] = []
@@ -610,6 +671,7 @@ def _build_new_generated(
                         event=event,
                         python_bin_resolved=python_bin_resolved,
                     )
+                    _clamp_hook_timeout(new_hook, event, clamped)
                     filtered_hooks.append(new_hook)
             if not filtered_hooks:
                 continue
@@ -896,7 +958,21 @@ def generate(
         lines.append("             or add it to hooks.json so the generator manages it.")
         raise GenSettingsHooksError("\n".join(lines))
 
-    new_generated = _build_new_generated(hooks_json, coordinator_root, python_bin_resolved)
+    clamped_timeouts: List[Tuple[str, str, Any]] = []
+    new_generated = _build_new_generated(
+        hooks_json, coordinator_root, python_bin_resolved, clamped_timeouts
+    )
+    if clamped_timeouts:
+        print(
+            f"gen-settings-hooks: hook timeout over the {HOOK_TIMEOUT_CEILING_SECS}s "
+            f"ceiling, clamped in {len(clamped_timeouts)} entr"
+            f"{'y' if len(clamped_timeouts) == 1 else 'ies'}:",
+            file=sys.stderr,
+        )
+        for event, command, original in clamped_timeouts:
+            print(f"  event={event} timeout={original} command={command}", file=sys.stderr)
+        print(f"  Lower it in {hooks_json_path}, or make the hook faster.", file=sys.stderr)
+
     preserved = _extract_preserved(current_settings, generated_hooks_dir)
     merged_hooks = _merge_hooks(preserved, new_generated)
 

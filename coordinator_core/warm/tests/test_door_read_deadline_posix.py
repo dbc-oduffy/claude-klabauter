@@ -1,12 +1,15 @@
 """The POSIX door's read is BOUNDED, and its bound never re-runs a delivered request.
 
-> **THIS TEST HAS NEVER BEEN RUN, ON ANY PLATFORM.** It was authored on
-> Windows, where it cannot execute (it skips itself there) and where the
-> binary it exercises cannot be built. It is the macOS/Linux twin of
-> `test_door_read_deadline.py` and is meant to be the FIRST thing a Mac user
-> runs after `make check` -- see `coordinator_core/warm/door/README-posix.md`.
-> Expect it to need fixing before it passes; a green run is the deliverable,
-> not this file.
+> **First green run: macOS 26.5.2, arm64, Apple clang 21, 2026-08-22.** All
+> five cases pass. It is still Windows-skipped (it cannot execute there, and
+> the binary it exercises cannot be built there), and it remains the
+> macOS/Linux twin of `test_door_read_deadline.py` and the FIRST thing a Mac
+> user should run after the `door_core_selftest` -- see
+> `coordinator_core/warm/door/README-posix.md`.
+>
+> The one fix it needed was in the harness, not the assertions: see the
+> `runtime_base` fixture, which exists because pytest's `tmp_path` on macOS
+> overflows `sun_path` before any door is invoked.
 
 WHY A SEPARATE MODULE FROM `test_door_read_deadline.py`. Its stubs are
 `_winapi` named pipes end to end (`election.elect`, `ConnectNamedPipe`,
@@ -51,8 +54,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -94,6 +99,55 @@ def _door_deadline_ms(macro: str) -> int:
     match = re.search(rf"^#define\s+{macro}\s+(\d+)\s*$", source, re.MULTILINE)
     assert match, f"{macro} not found in {_DOOR_SOURCE} -- renamed or removed"
     return int(match.group(1))
+
+
+@pytest.fixture
+def runtime_base() -> Path:
+    """A runtime base short enough that the socket path under it fits
+    `sockaddr_un.sun_path`.
+
+    NOT `tmp_path`. pytest's per-test tmp root on macOS is
+    `/private/var/folders/<2>/<12>/T/pytest-of-<user>/pytest-<n>/<test-name><n>/`
+    -- around 130 bytes before this module appends
+    `runtime/coordinator/warm/<16>/<16>.sock`, i.e. 178 bytes measured against
+    a 100-byte budget. Every socket-bearing test in this file raised
+    `election.SocketPathTooLongError` for that reason alone, which made the
+    module unrunnable on the one platform it exists to cover. The door was
+    never in play.
+
+    This is the same `sun_path` ceiling README-posix.md predicts as failure
+    mode 2, reached through the harness rather than through a deep engine
+    root -- so the budget check is asserted here rather than left to surface
+    as a confusing failure inside a test about read deadlines.
+    """
+    from coordinator_core.warm.election import SUN_PATH_MAX_BYTES
+
+    # `$TMPDIR` on macOS IS the long per-user `/var/folders/...` root -- 116
+    # projected bytes against the 100-byte budget -- so `gettempdir()` alone
+    # reproduces the overflow it is being used to avoid. `/tmp` is tried
+    # first for that reason, and `realpath` is applied because it is a
+    # symlink to `/private/tmp` there: the C door reads the base out of the
+    # environment verbatim while Python resolves it, and a socket name the
+    # two spell differently connects to nothing.
+    roots = [r for r in ("/tmp", tempfile.gettempdir()) if os.path.isdir(r)]
+    roots.sort(key=lambda r: len(os.fsencode(os.path.realpath(r))))
+    base = Path(os.path.realpath(tempfile.mkdtemp(prefix="dr-", dir=roots[0])))
+
+    # `<base>/coordinator/warm/<16-hex>/<16-hex>.sock` is what `svc_dir` +
+    # `socket_path` append; 60 bytes, spelled as the measurement rather than
+    # a magic number so a change to either helper shows up as a skip here
+    # instead of an overflow six frames down.
+    projected = len(os.fsencode(str(base))) + len("/coordinator/warm/") + 16 + 1 + 16 + 5
+    if projected > SUN_PATH_MAX_BYTES:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(
+            f"temp root {str(base)!r} leaves no room under the "
+            f"{SUN_PATH_MAX_BYTES}-byte sun_path budget (projected {projected})"
+        )
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _make_stub_engine_root(tmp_path: Path) -> Path:
@@ -181,8 +235,9 @@ class _WedgedServer:
         try:
             self._accepted, _ = self._sock.accept()
             # Deliberately nothing else. Holding the accepted socket open is
-            # the whole fixture: closing it would make this a
-            # connection-reset test, which is a DIFFERENT post-delivery route.
+            # the whole fixture: closing it would make this a connection-reset
+            # test, which is the DIFFERENT post-delivery route covered by
+            # `test_peer_death_after_delivery_refuses_rather_than_re_running`.
         except OSError:
             pass
 
@@ -193,6 +248,57 @@ class _WedgedServer:
                     handle.close()
             except OSError:
                 pass
+        self._path.unlink(missing_ok=True)
+
+
+class _PeerDeathServer:
+    """Accepts, reads the whole request frame, then CLOSES without replying --
+    the server dying between delivery and its answer.
+
+    This is the route `_WedgedServer`'s docstring names and deliberately does
+    not take ("closing it would make this a connection-reset test, which is a
+    DIFFERENT post-delivery route"). It reaches `read_line_bounded`'s
+    `recv() == 0` arm rather than its deadline arm, so it is the same refusal
+    reached by a different path, and it is the one a real server produces when
+    it is `kill -9`'d mid-op -- far more common in the field than a wedge.
+
+    It must read the frame first. Closing before the read would leave the door
+    pre-delivery, where falling through is correct, and the test would assert
+    the opposite of the property."""
+
+    def __init__(self, sock_path: Path) -> None:
+        self._path = sock_path
+        self.request = b""
+        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._sock.bind(str(sock_path))
+        self._sock.listen(1)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        conn = None
+        try:
+            conn, _ = self._sock.accept()
+            while b"\n" not in self.request:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                self.request += chunk
+        except OSError:
+            pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        self._thread.join(timeout=10)
+        try:
+            self._sock.close()
+        except OSError:
+            pass
         self._path.unlink(missing_ok=True)
 
 
@@ -269,7 +375,7 @@ def _run_door(engine_root: Path, runtime_base: Path, timeout: float):
     )
 
 
-def test_pre_delivery_failure_still_falls_through(tmp_path: Path) -> None:
+def test_pre_delivery_failure_still_falls_through(tmp_path: Path, runtime_base: Path) -> None:
     """Nothing is listening, so the connect fails BEFORE any byte is written.
     That is ordinary doubt, and the door's answer to ordinary doubt is
     unchanged by the deadline: fall through silently to the Python
@@ -280,7 +386,7 @@ def test_pre_delivery_failure_still_falls_through(tmp_path: Path) -> None:
     NOT fire mean anything at all."""
     _require_binary()
     root = _make_stub_engine_root(tmp_path)
-    proc = _run_door(root, tmp_path / "runtime", timeout=60)
+    proc = _run_door(root, runtime_base, timeout=60)
 
     assert _FALLBACK_MARKER in proc.stdout
     assert proc.returncode == _FALLBACK_EXIT
@@ -288,7 +394,7 @@ def test_pre_delivery_failure_still_falls_through(tmp_path: Path) -> None:
     assert "warm dispatch indeterminate" not in proc.stdout
 
 
-def test_a_served_reply_still_round_trips(tmp_path: Path) -> None:
+def test_a_served_reply_still_round_trips(tmp_path: Path, runtime_base: Path) -> None:
     """The fast path. A bound on a read that stopped reading correctly is not
     a fix, so this asserts the whole exchange: the request the server received
     is a parseable `invoke.from_argv` frame (proving the bounded WRITE
@@ -298,7 +404,6 @@ def test_a_served_reply_still_round_trips(tmp_path: Path) -> None:
     import json
 
     root = _make_stub_engine_root(tmp_path)
-    runtime_base = tmp_path / "runtime"
     sock_path = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock_path)
 
@@ -322,14 +427,13 @@ def test_a_served_reply_still_round_trips(tmp_path: Path) -> None:
     assert _FALLBACK_MARKER not in proc.stdout
 
 
-def test_provably_undispatched_error_still_falls_through(tmp_path: Path) -> None:
+def test_provably_undispatched_error_still_falls_through(tmp_path: Path, runtime_base: Path) -> None:
     """The one post-delivery route still allowed to fall through: an error
     code `is_provably_undispatched` recognises as proof the server never
     invoked a handler. The port must not have collapsed this into the refusal
     branch."""
     _require_binary()
     root = _make_stub_engine_root(tmp_path)
-    runtime_base = tmp_path / "runtime"
     sock_path = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock_path)
 
@@ -349,7 +453,55 @@ def test_provably_undispatched_error_still_falls_through(tmp_path: Path) -> None
     assert "-32004" not in proc.stdout
 
 
-def test_a_world_readable_socket_dir_is_refused(tmp_path: Path) -> None:
+def test_peer_death_after_delivery_refuses_rather_than_re_running(
+    tmp_path: Path, runtime_base: Path
+) -> None:
+    """The server took the request and died before answering. The door must
+    refuse, NOT fall through — the op may well have run.
+
+    Same invariant as the wedged-server test, reached by the other arm:
+    `read_line_bounded` returns READ_FAILED on `recv() == 0` here, versus
+    READ_DEADLINE there. Both must land on `-32004`, and the wedged test alone
+    does not prove this one — a port that collapsed the `recv() == 0` arm into
+    a fall-through would keep the wedged test green while reintroducing the
+    2026-08-19 double-execution for the far more common failure. A server
+    `kill -9`'d mid-op produces exactly this, and a hard-killed server is
+    ordinary; a wedged one is not.
+
+    Unlike the wedged case this returns immediately, so it needs no deadline
+    wait and is not `cadence`-tiered by its own cost — it inherits the module's
+    markers, which is a small over-tiering accepted rather than splitting the
+    module's `pytestmark`."""
+    _require_binary()
+    root = _make_stub_engine_root(tmp_path)
+    sock_path = _socket_path_for(runtime_base, root)
+    _make_socket_dir(sock_path)
+
+    server = _PeerDeathServer(sock_path)
+    try:
+        proc = _run_door(root, runtime_base, timeout=60)
+    finally:
+        server.close()
+
+    # The frame must have been fully delivered, or this tests nothing: a door
+    # that failed pre-delivery is CORRECT to fall through, and the assertions
+    # below would then be asserting the wrong property.
+    assert server.request.endswith(b"\n"), (
+        "the request never fully arrived, so the door was still pre-delivery "
+        "and this test is not exercising the post-delivery refusal"
+    )
+
+    assert _FALLBACK_MARKER not in proc.stdout, (
+        "the door re-ran a request the server had already taken -- this is the "
+        "2026-08-19 double-execution shape, reached via peer death rather than "
+        "the read deadline"
+    )
+    assert "-32004" in proc.stdout
+    assert proc.returncode != 0
+    assert proc.returncode != _FALLBACK_EXIT
+
+
+def test_a_world_readable_socket_dir_is_refused(tmp_path: Path, runtime_base: Path) -> None:
     """POSIX-ONLY PROPERTY, with no Windows counterpart -- and the reason it
     has none is the point. On Windows the pipe's SDDL ACL is enforced by the
     kernel on connect. On POSIX a Unix socket's own mode is NOT reliably
@@ -361,7 +513,6 @@ def test_a_world_readable_socket_dir_is_refused(tmp_path: Path) -> None:
     silent: everything works, and the boundary is simply gone."""
     _require_binary()
     root = _make_stub_engine_root(tmp_path)
-    runtime_base = tmp_path / "runtime"
     sock_path = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock_path)
 
@@ -387,7 +538,48 @@ def test_a_world_readable_socket_dir_is_refused(tmp_path: Path) -> None:
     assert proc.stdout.count("pong") == 0
 
 
-def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path) -> None:
+def test_a_suspended_op_refusal_never_reads_as_a_maybe_completed_mutation(
+    tmp_path: Path, runtime_base: Path
+) -> None:
+    """-32006 OP_SUSPENDED must fall through, NOT become a -32004.
+
+    The regression this pins was measured on the real binary 2026-08-21,
+    before -32006 was on `is_provably_undispatched`'s list: the door
+    discarded the server's refusal and emitted its own "the op may have
+    COMPLETED, reconcile against real state" envelope. For
+    `ceremony.scoped_git_commit` -- one of the 17 ops the 2s-max ruling
+    suspended -- that told an operator whose commit was refused BEFORE
+    anything ran that it might have landed, while the actual reason and the
+    bar to reinstate the op never reached them at all.
+
+    Asserted as an ABSENCE of the -32004 shape rather than a presence of
+    the refusal text, because the fall-through hands the request to the
+    cold engine, and it is the cold engine's own `_dispatch_message_impl`
+    -- the same one that refused here -- that renders the message. What
+    this door owes is not swallowing it."""
+    _require_binary()
+    root = _make_stub_engine_root(tmp_path)
+    sock_path = _socket_path_for(runtime_base, root)
+    _make_socket_dir(sock_path)
+
+    reply = (
+        '{"jsonrpc":"2.0","id":1,"error":{"code":-32006,'
+        '"message":"ceremony.scoped_git_commit is suspended: over the 2s max bar."}}\n'
+    ).encode("utf-8")
+
+    server = _ReplyingServer(sock_path, reply)
+    try:
+        proc = _run_door(root, runtime_base, timeout=60)
+    finally:
+        server.close()
+
+    assert _FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == _FALLBACK_EXIT
+    assert "-32004" not in proc.stdout
+    assert "may have COMPLETED" not in proc.stdout
+
+
+def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path, runtime_base: Path) -> None:
     """The server accepts and never answers. The door must stop -- and must
     stop by REFUSING, never by re-running a request it already delivered.
 
@@ -399,7 +591,6 @@ def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path) -> 
     module is `cadence`-tiered and off the per-commit path."""
     _require_binary()
     root = _make_stub_engine_root(tmp_path)
-    runtime_base = tmp_path / "runtime"
     sock_path = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock_path)
 

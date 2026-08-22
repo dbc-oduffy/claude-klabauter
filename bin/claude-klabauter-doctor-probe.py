@@ -24,6 +24,8 @@ prerequisites before any selection is applied — see `_ensure_core_importable`)
                          submodule coordinator_core.client correctly absent.
   claude-klabauter.invoke.smoke    OPTIONAL — spawn-per-call dispatch smoke via coordinator_core.invoke
                          ping; proves entrypoint can dispatch (not session liveness).
+                         SKIP on an unstamped engine root — DR-331 rules such a tree
+                         ineligible to dispatch, so there is nothing to grade.
   claude-klabauter.strategic.draft_staleness  OPTIONAL — nudges when state/strategic/self-description
                          .draft.yaml is missing (SKIP, not a fault) or older than the newest
                          state/week-changelog/*.md entry (INFO nudge).
@@ -39,7 +41,7 @@ prerequisites before any selection is applied — see `_ensure_core_importable`)
   claude-klabauter.invoke.latency  OPTIONAL — measures a single coordinator_core.invoke round-trip
                          against a 2000 ms per-invoke budget (hooks share a ~3-5 s total
                          budget across multiple invokes); DEGRADED (not BROKEN) over budget
-                         or on timeout.
+                         or on timeout; SKIP on an unstamped engine root (DR-331).
   claude-klabauter.commitments.recheck  OPTIONAL — re-resolves state/cross-repo-commitments/ evidence:
                          strings live against each record's committing sibling (DEGRADED when
                          any record's evidence resolves truthy while status: is still open;
@@ -922,6 +924,7 @@ def _run_probe_settings_home_complete(claude_klabauter_root: Path | None) -> _Pr
         "forwarder_expected": report.forwarder_expected,
         "forwarder_present": report.forwarder_present,
         "forwarder_missing_count": len(report.forwarder_missing),
+        "forwarder_unverified_count": len(report.forwarder_unverified),
         "forwarder_derivation_error": report.forwarder_derivation_error,
     }
 
@@ -930,7 +933,7 @@ def _run_probe_settings_home_complete(claude_klabauter_root: Path | None) -> _Pr
             probe=_SETTINGS_HOME_COMPLETE_PROBE,
             status=_PASS,
             detail=f"Settings home complete at {settings_home_path} "
-                   f"({report.forwarder_present}/{report.forwarder_expected} bin/ forwarders present).",
+                   f"({report.forwarder_present}/{report.forwarder_expected} bin/ forwarders verified).",
             remediation="—",
             required=False,
             data=data,
@@ -939,11 +942,17 @@ def _run_probe_settings_home_complete(claude_klabauter_root: Path | None) -> _Pr
     problems: list[str] = [m.label for m in report.fixed_missing]
     if report.forwarder_derivation_error is not None:
         problems.append(f"bin/ forwarder set undeterminable: {report.forwarder_derivation_error}")
-    elif report.forwarder_missing:
-        problems.append(
-            f"{len(report.forwarder_missing)}/{report.forwarder_expected} bin/ forwarders missing "
-            f"(e.g. {', '.join(report.forwarder_missing[:5])})"
-        )
+    else:
+        if report.forwarder_missing:
+            problems.append(
+                f"{len(report.forwarder_missing)}/{report.forwarder_expected} bin/ forwarders missing "
+                f"(e.g. {', '.join(report.forwarder_missing[:5])})"
+            )
+        if report.forwarder_unverified:
+            problems.append(
+                f"{len(report.forwarder_unverified)}/{report.forwarder_expected} bin/ forwarders carry "
+                f"another engine root's body (e.g. {', '.join(report.forwarder_unverified[:5])})"
+            )
 
     return _ProbeResult(
         probe=_SETTINGS_HOME_COMPLETE_PROBE,
@@ -1440,6 +1449,96 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
 
 _INVOKE_SMOKE_PROBE = "claude-klabauter.invoke.smoke"
 
+#: Repo-relative parts to an engine build stamp. One of SIX independent
+#: copies of `coordinator_core.warm.skew`'s constant on this box (see
+#: `coordinator_core/tests/test_engine_stamp_predicate_pin.py`'s module
+#: docstring for the full list): this probe is stdlib-only at module scope
+#: and must grade a tree it may not be able to import. Keep in sync by hand
+#: if the stamp filename or location changes; that test is the drift guard.
+_ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+#: The one detail sentence both invoke probes emit when neither this tree nor
+#: a published mirror can serve the dispatch.
+_NO_DISPATCH_ROOT_DETAIL = (
+    "no stamped engine root to dispatch from: {root} carries no build stamp "
+    "(DR-331 § Decision; DR-315 § 2, the ruled state of a source clone), and no "
+    "published mirror is registered and usable on this machine. Absence of a "
+    "mirror clone is not evidence the engine is broken — cannot tell."
+)
+
+#: Remediation for the same case. Names a runnable registration, never a slash
+#: command: this fires from a bare CLI before any session exists.
+_NO_DISPATCH_ROOT_REMEDIATION = (
+    "Register the published mirror: machine-local set repos.claude_klabauter "
+    "<path-to-clone>, then re-run this probe."
+)
+
+
+def _engine_root_is_stamped(engine_root: Path) -> bool:
+    """Is `engine_root` a published engine build (DR-331 — an engine root is a
+    stamped build)?
+
+    Pure local read, never raises. The two invoke probes call this as a
+    pre-flight: an unstamped clone refuses every live dispatch at
+    `ipc.py`'s stamp gate and at `invoke.__main__`'s no-cold-fallback arm,
+    so measuring dispatch from one grades a ruled-unavailable path.
+
+    Negative-spec:
+      - Does NOT import `coordinator_core.warm.skew` — this file is
+        stdlib-only at module scope and runs against trees whose import may
+        itself be the thing under test (`claude-klabauter.core.import`).
+      - Does NOT opt out of the stamp gate. `--allow-unstamped-dispatch` has
+        two PM-sanctioned callers (`ipc.py :: allow_unstamped_dispatch`);
+        an automated probe passing it would make an explicitly
+        per-invocation carve-out ambient.
+    """
+    try:
+        return engine_root.joinpath(*_ENGINE_STAMP_RELATIVE_PARTS).stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _resolve_dispatch_root(claude_klabauter_root: Path) -> Path | None:
+    """The tree the two invoke probes should actually dispatch from, or None
+    when no stamped root is reachable.
+
+    `claude_klabauter_root` (COORDINATOR_ENGINE_ROOT) wins when it is itself a published
+    build -- that is the klabauter case, where the installer's own root IS the
+    engine. From a source clone it never can be (DR-331), and dispatching from
+    it grades a refusal rather than the engine: so the probes fall through to
+    the registered published mirror, which is the tree every operator's
+    dispatch actually resolves to (DR-326 -- the engine does not resolve via
+    claude-klabauter). Measured on machine-b 2026-08-22: `ping` from the mirror returns
+    ok=true in 65ms end-to-end, from this clone it returns the
+    no-cold-fallback refusal.
+
+    `published_engine_mirror_path` is the SINGLE registered-and-usable
+    resolver (`coordinator_core.engine_root`) -- imported lazily, never
+    re-derived here, and never raising (its own fail-open contract). Its
+    verdict is still stamp-checked: a registered path that is not a published
+    build is not a dispatch root either.
+
+    Negative-spec:
+      - Does NOT fall back to `claude_klabauter_root` when the mirror is absent. A
+        refusal measured from an unstamped clone is what made these probes
+        permanently red; returning None so the caller reports inconclusive is
+        the point.
+      - Does NOT spawn anything to resolve (1.7ms, registry read only).
+    """
+    if _engine_root_is_stamped(claude_klabauter_root):
+        return claude_klabauter_root
+
+    try:
+        from coordinator_core.engine_root import published_engine_mirror_path
+        mirror = published_engine_mirror_path()
+    except Exception:
+        return None
+
+    if not mirror:
+        return None
+    mirror_path = Path(mirror)
+    return mirror_path if _engine_root_is_stamped(mirror_path) else None
+
 
 def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.invoke.smoke — OPTIONAL (required=False).
@@ -1451,6 +1550,12 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     PASS when the subprocess returns a well-formed result envelope
     (JSON dict with ok=True).  On spawn failure (interpreter/module absent),
     emits a SKIP result — never a bare crash.
+
+    Pre-flight, `_engine_root_is_stamped`: an UNSTAMPED root skips rather
+    than grades. DR-331 rules such a tree ineligible to dispatch, so the
+    refusal envelope it returns is the ruling landing, not a broken
+    entrypoint — grading it BROKEN made this probe permanently red in every
+    source clone.
 
     Probe detail explicitly states: GREEN proves the entrypoint CAN dispatch,
     NOT that a live session IS connected.  Post-DR-215 there is no resident
@@ -1486,13 +1591,25 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                 skipped=True,
             )
 
+        dispatch_root = _resolve_dispatch_root(claude_klabauter_root)
+        if dispatch_root is None:
+            return _ProbeResult(
+                probe=_INVOKE_SMOKE_PROBE,
+                status=_INFO,
+                detail=_NO_DISPATCH_ROOT_DETAIL.format(root=claude_klabauter_root),
+                remediation=_NO_DISPATCH_ROOT_REMEDIATION,
+                required=False,
+                skipped=True,
+                data={"engine_root": str(claude_klabauter_root), "dispatch_root": None},
+            )
+
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd=str(claude_klabauter_root),
+                cwd=str(dispatch_root),
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except FileNotFoundError:
@@ -1513,7 +1630,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     "Spawn-per-call dispatch should complete in well under 1 s."
                 ),
                 remediation=(
-                    "Run manually from COORDINATOR_ENGINE_ROOT: "
+                    f"Run manually from {dispatch_root}: "
                     "python3 -m coordinator_core.invoke ping '{}'. "
                     "Investigate hangs or missing dependencies."
                 ),
@@ -1529,7 +1646,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     f"stderr: {result.stderr.strip()!r}"
                 ),
                 remediation=(
-                    "Run manually from COORDINATOR_ENGINE_ROOT: "
+                    f"Run manually from {dispatch_root}: "
                     "python3 -m coordinator_core.invoke ping '{}'. "
                     "Verify claude-klabauter.core.import and claude-klabauter.version.sanity probes pass first."
                 ),
@@ -1577,15 +1694,20 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
             probe=_INVOKE_SMOKE_PROBE,
             status=_PASS,
             detail=(
-                "spawn-per-call dispatch smoke PASS: the coordinator_core.invoke ping op "
-                f"returned a well-formed result envelope (ok=true, ts={payload.get('ts')!r}). "
+                "dispatch smoke PASS: the coordinator_core.invoke ping op "
+                f"returned a well-formed result envelope (ok=true, ts={payload.get('ts')!r}) "
+                f"from {dispatch_root}. "
                 "GREEN proves the entrypoint CAN dispatch (cheapest registered "
                 "COMPUTE_ONLY op: ping) — NOT that a live session IS connected. "
                 "Post-DR-215: no resident process; session-binding is not a concept here."
             ),
             remediation="—",
             required=False,
-            data={"ok": payload.get("ok"), "ts": payload.get("ts")},
+            data={
+                "ok": payload.get("ok"),
+                "ts": payload.get("ts"),
+                "dispatch_root": str(dispatch_root),
+            },
         )
     except Exception as exc:
         # Probe-authoring invariant: optional probe unexpected failure → SKIP envelope.
@@ -2078,6 +2200,53 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
 
 _GENERATOR_STALENESS_PROBE = "claude-klabauter.generator.output_staleness"
 
+_GENERATOR_STALENESS_COMPARED = ("STALE", "FRESH")
+
+_GENERATOR_STALENESS_UNCOMPARED_LABELS = (
+    ("WRITE_TARGET_UNRESOLVED", "write target unresolved"),
+    ("MUTATES_DECLARED", "corpus mutator (no staleness contract)"),
+    ("UNDECLARED", "undeclared"),
+    ("UNSTAMPED", "no readable stamp"),
+    ("INDETERMINATE", "indeterminate"),
+)
+
+
+def _generator_staleness_coverage(data: dict) -> str:
+    """Render the compared-vs-swept split for the staleness probe's `detail`.
+
+    Only STALE and FRESH entries carry an actual since-range comparison: every
+    other verdict means the pair was swept but never compared, either because
+    the sweep found no single write target to key on (WRITE_TARGET_UNRESOLVED,
+    MUTATES_DECLARED, UNDECLARED) or because the comparison could not run
+    (UNSTAMPED, INDETERMINATE). A `detail` line counting the whole swept
+    population as "checked" reads as coverage the probe does not have.
+    """
+    counts: dict[str, int] = {}
+    for entry in data.values():
+        verdict = entry.get("verdict")
+        counts[verdict] = counts.get(verdict, 0) + 1
+
+    compared = sum(counts.get(name, 0) for name in _GENERATOR_STALENESS_COMPARED)
+    known = set(_GENERATOR_STALENESS_COMPARED) | {
+        name for name, _label in _GENERATOR_STALENESS_UNCOMPARED_LABELS
+    }
+    parts = [
+        f"{counts[name]} {label}"
+        for name, label in _GENERATOR_STALENESS_UNCOMPARED_LABELS
+        if counts.get(name)
+    ]
+    # An unrecognised verdict still counts toward `len(data)` above (so
+    # compared/len(data) stays arithmetically correct) but has no entry in
+    # either table above -- surface it by name rather than let it vanish
+    # from the breakdown silently.
+    unrecognised = sorted(
+        (verdict, count) for verdict, count in counts.items() if verdict not in known
+    )
+    parts.extend(f"{count} unrecognised ({verdict!r})" for verdict, count in unrecognised)
+    rest = ", ".join(parts)
+    line = f"coverage {compared}/{len(data)} compared"
+    return f"{line}; {rest}" if rest else line
+
 
 def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.generator.output_staleness — OPTIONAL (required=False); never gating.
@@ -2123,6 +2292,12 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
                             path, closer to FRESH than to UNDECLARED for reporting purposes.
       empty dict (no
         declared pairs)  -> PASS — a repo with nothing declared has nothing stale.
+
+    Every non-empty `detail` carries `_generator_staleness_coverage`'s
+    compared-vs-swept split: STALE and FRESH are the only verdicts that come
+    from an actual since-range comparison, and the swept population is
+    dominated by entries with no single write target to key on. A count of
+    the whole population reads as coverage the probe does not have.
 
     Negative-spec (AC7):
       - NEVER a non-zero process exit, a commit hook, or a gate — this probe REPORTS,
@@ -2199,7 +2374,10 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
             return _ProbeResult(
                 probe=_GENERATOR_STALENESS_PROBE,
                 status=_DEGRADED,
-                detail=f"Generator/output pair(s) STALE: {names}",
+                detail=(
+                    f"Generator/output pair(s) STALE: {names} "
+                    f"({_generator_staleness_coverage(data)})"
+                ),
                 remediation=(
                     "A generator moved after the artifact it emits was last stamped. "
                     "Re-run the generator named in the pair's `detail` field to "
@@ -2219,7 +2397,10 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
             return _ProbeResult(
                 probe=_GENERATOR_STALENESS_PROBE,
                 status=_INFO,
-                detail=f"Generator/output staleness verdict incomplete for: {names}",
+                detail=(
+                    f"Generator/output staleness verdict incomplete "
+                    f"({_generator_staleness_coverage(data)}) for: {names}"
+                ),
                 remediation=(
                     "UNDECLARED means a discovered generator writes a resolved tracked "
                     "path with no GENERATES declaration; WRITE_TARGET_UNRESOLVED means a "
@@ -2238,7 +2419,8 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
             probe=_GENERATOR_STALENESS_PROBE,
             status=_PASS,
             detail=(
-                f"{len(data)} generator/output pair(s) checked; none STALE."
+                f"No STALE pair among {len(data)} swept generator(s) "
+                f"({_generator_staleness_coverage(data)})."
                 if data
                 else "No declared generator/output pairs found."
             ),
@@ -2394,6 +2576,54 @@ _EOL_CENSUS_SENTINEL_NAME = "coordinator-eol-census-last-run.json"
 # still catching a rider that has been silent for hours past its window.
 _EOL_STALE_WINDOW_MULTIPLE = 3
 
+# Both eol riders are legs of ONE op. A sentinel-absent reading therefore has
+# two distinct causes that "boot a session" only discharges one of: the rider
+# has genuinely not had a cadence slot yet, or its host op is suspended and no
+# boot on this machine will ever reach it (measured on macOS `machine-b`,
+# 2026-08-22 — every boot refused with -32006 and no sentinel or cadence
+# marker existed anywhere in the tree).
+_EOL_RIDER_HOST_OP = "session.boot_sweep"
+
+
+def _eol_rider_host_suspension(claude_klabauter_root: Path) -> dict | None:
+    """Return `session.boot_sweep`'s suspension record, or None if it is live.
+
+    Never raises: an unimportable or absent suspension table degrades to None,
+    leaving the caller's original sentinel-absent wording intact.
+
+    Spec backlink: coordinator_core/op_budget_suspension.py § REINSTATEMENT.
+    """
+    try:
+        root_str = str(claude_klabauter_root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+        from coordinator_core.op_budget_suspension import (  # type: ignore[import]
+            suspension_record,
+        )
+
+        return suspension_record(_EOL_RIDER_HOST_OP)
+    except Exception:
+        return None
+
+
+def _eol_suspended_host_detail(probe_op: str, sentinel_path: Path, record: dict) -> str:
+    measured = record.get("measured") or {}
+    max_ms = measured.get("max_ms")
+    measured_txt = f", measured max {max_ms:.0f}ms" if isinstance(max_ms, (int, float)) else ""
+    return (
+        f"No {probe_op} sentinel at {sentinel_path}. Its cadence rider is a leg of "
+        f"{_EOL_RIDER_HOST_OP}, which is suspended{measured_txt} — no session boot "
+        "reaches the rider on this machine."
+    )
+
+
+def _eol_suspended_host_remediation(probe_op: str) -> str:
+    return (
+        f"Invoke {probe_op} directly against this worktree for a current verdict; the "
+        f"sentinel returns when {_EOL_RIDER_HOST_OP} is reinstated "
+        "(coordinator_core/op_budget_suspension.py § REINSTATEMENT)."
+    )
+
 
 def _eol_sentinel_age_seconds(written_at: object) -> float | None:
     """Parse a sentinel's `written_at` ISO-8601 timestamp and return its age
@@ -2490,6 +2720,16 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
         common_dir = git_common_dir(claude_klabauter_root)
         sentinel_path = common_dir / _EOL_CENSUS_SENTINEL_NAME
         if not sentinel_path.is_file():
+            suspended = _eol_rider_host_suspension(claude_klabauter_root)
+            if suspended is not None:
+                return _ProbeResult(
+                    probe=_EOL_CENSUS_PROBE,
+                    status=_INFO,
+                    detail=_eol_suspended_host_detail("eol.census", sentinel_path, suspended),
+                    remediation=_eol_suspended_host_remediation("eol.census"),
+                    required=False,
+                    skipped=True,
+                )
             return _ProbeResult(
                 probe=_EOL_CENSUS_PROBE,
                 status=_INFO,
@@ -2688,6 +2928,18 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
         common_dir = git_common_dir(claude_klabauter_root)
         sentinel_path = common_dir / _EOL_AUDIT_PRODUCERS_SENTINEL_NAME
         if not sentinel_path.is_file():
+            suspended = _eol_rider_host_suspension(claude_klabauter_root)
+            if suspended is not None:
+                return _ProbeResult(
+                    probe=_EOL_DRIFT_PROBE,
+                    status=_INFO,
+                    detail=_eol_suspended_host_detail(
+                        "eol.audit_producers", sentinel_path, suspended
+                    ),
+                    remediation=_eol_suspended_host_remediation("eol.audit_producers"),
+                    required=False,
+                    skipped=True,
+                )
             return _ProbeResult(
                 probe=_EOL_DRIFT_PROBE,
                 status=_INFO,
@@ -3053,6 +3305,83 @@ def _run_probe_engine_target_rollout() -> _ProbeResult:
         required=False,
         data={"repos.claude_klabauter": klabauter_mirror, "engine.target": None},
     )
+
+
+_ROOT_CHANNELS_PROBE = "claude-klabauter.root.channels_reconciled"
+
+
+def _run_probe_root_channels_reconciled(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.root.channels_reconciled — do the channels that each
+    answer "where is root X?" agree, and does each name a path that is here?
+
+    Consumes the shared oracle `coordinator_core.root_channel_reconcile`; the
+    other consumer is that module's own CLI, which is the runnable cold-path
+    remediation `warm.client` names. This probe is the chain-walk half.
+
+    Distinct from `claude-klabauter.root.pointer`, which compares ONE pointer file
+    against the ladder answer this probe script itself resolved. This one
+    compares the channels against EACH OTHER, across every root the box
+    writes down more than once — the split that made a correct
+    `repos.claude_klabauter` and a foreign-platform
+    `.claude-klabauter-root` coexist silently until every live op failed.
+
+    Verdict shape:
+      - Every channel agrees, or only one channel spoke -> PASS.
+      - Two channels name different paths, or a channel names a path that is
+        not a directory here -> DEGRADED. Not BROKEN: a resolver ladder still
+        answers, and which of the two paths is the real one is an operator
+        decision this probe must not guess at.
+
+    Negative-spec:
+      - Does NOT repair or normalise any channel. One of them lives in an
+        operator's git-synced meta-repo, shared across machines.
+      - Does NOT cite a decision record. Channels disagreeing is a data
+        condition; a ruling reference would send the reader to a decision
+        record instead of to the file named in the detail.
+    """
+    try:
+        from coordinator_core.root_channel_reconcile import disagreement_message, reconcile_all
+
+        reports = reconcile_all()
+        message = disagreement_message(reports)
+        data = {
+            report.root: {
+                channel.origin: {"value": channel.value, "exists": channel.exists}
+                for channel in report.channels
+            }
+            for report in reports
+        }
+
+        if message is None:
+            return _ProbeResult(
+                probe=_ROOT_CHANNELS_PROBE,
+                status=_PASS,
+                detail="every root-resolution channel agrees and names a path that exists.",
+                remediation="—",
+                required=False,
+                data=data,
+            )
+
+        return _ProbeResult(
+            probe=_ROOT_CHANNELS_PROBE,
+            status=_DEGRADED,
+            detail=message,
+            remediation=(
+                "Correct the channel named above, then re-check with "
+                "python3 -m coordinator_core.root_channel_reconcile."
+            ),
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_ROOT_CHANNELS_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in root channel reconciliation probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
 
 
 _ROOT_POINTER_PROBE = "claude-klabauter.root.pointer"
@@ -3459,6 +3788,10 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
     per-invoke bash-fallback hang (claude-klabauter.root.pointer) surfaced as a latency measurement
     rather than a static presence check.
 
+    Pre-flight, `_engine_root_is_stamped`: an UNSTAMPED root skips rather than
+    measures — a dispatch refused at the stamp gate times the refusal, not the
+    round-trip this budget is about (DR-331).
+
     Bounded-measurement invariant: the subprocess call is timeout-guarded (5 s) so this
     probe itself can never hang the doctor — a timeout IS the failure being detected and
     is reported as the over-budget (DEGRADED) case, not re-raised.
@@ -3486,6 +3819,18 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 skipped=True,
             )
 
+        dispatch_root = _resolve_dispatch_root(claude_klabauter_root)
+        if dispatch_root is None:
+            return _ProbeResult(
+                probe=_INVOKE_LATENCY_PROBE,
+                status=_INFO,
+                detail=_NO_DISPATCH_ROOT_DETAIL.format(root=claude_klabauter_root),
+                remediation=_NO_DISPATCH_ROOT_REMEDIATION,
+                required=False,
+                skipped=True,
+                data={"engine_root": str(claude_klabauter_root), "dispatch_root": None},
+            )
+
         # Bounded timeout (5 s) so a hang IS the failure being measured, never a hang
         # of this probe itself.
         _TIMEOUT_SECONDS = 5
@@ -3496,7 +3841,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 capture_output=True,
                 text=True,
                 timeout=_TIMEOUT_SECONDS,
-                cwd=str(claude_klabauter_root),
+                cwd=str(dispatch_root),
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except FileNotFoundError:
@@ -3544,7 +3889,12 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                     "Verify claude-klabauter.invoke.smoke passes first."
                 ),
                 required=False,
-                data={"elapsed_ms": elapsed_ms, "budget_ms": _INVOKE_LATENCY_BUDGET_MS, "timed_out": False},
+                data={
+                    "elapsed_ms": elapsed_ms,
+                    "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
+                    "timed_out": False,
+                    "dispatch_root": str(dispatch_root),
+                },
             )
 
         if elapsed_ms > _INVOKE_LATENCY_BUDGET_MS:
@@ -3564,7 +3914,12 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                     "docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
                 ),
                 required=False,
-                data={"elapsed_ms": elapsed_ms, "budget_ms": _INVOKE_LATENCY_BUDGET_MS, "timed_out": False},
+                data={
+                    "elapsed_ms": elapsed_ms,
+                    "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
+                    "timed_out": False,
+                    "dispatch_root": str(dispatch_root),
+                },
             )
 
         return _ProbeResult(
@@ -3576,7 +3931,12 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
             ),
             remediation="—",
             required=False,
-            data={"elapsed_ms": elapsed_ms, "budget_ms": _INVOKE_LATENCY_BUDGET_MS, "timed_out": False},
+            data={
+                "elapsed_ms": elapsed_ms,
+                "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
+                "timed_out": False,
+                "dispatch_root": str(dispatch_root),
+            },
         )
     except Exception as exc:
         return _ProbeResult(
@@ -4193,6 +4553,16 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
     advisory-rendering both read directly. A "cannot tell" (skipped)
     result here is `required=True`.
 
+    The ONE arm that is `required=False` is the stale-generation DEGRADED
+    arm, and its own remediation is the reason: a stale generation drains
+    via warm.idle's superseded-generation arm and names no action.
+    `required` is what `_sz_severity` maps to step-zero `hard`, and
+    `scripts/setup.py` exits 94 on any hard probe that is not `pass` — so
+    leaving that arm required made every install on a box with an in-flight
+    warm server exit non-zero for a condition nobody can act on. Status
+    stays DEGRADED: the reading is still reported, it stops gating. Every
+    other arm, PASS and cannot-tell alike, remains `required=True`.
+
     Probe-authoring invariant: wraps all logic so unexpected exceptions
     become an INFO+skipped verdict, never an unhandled crash.
 
@@ -4338,7 +4708,7 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
                     "A stale generation drains on its own via warm.idle's superseded-"
                     "generation arm once a fresh server binds; no direct action is named here."
                 ),
-                required=True,
+                required=False,
                 data={"servers": servers_data, "stale_pids": stale_pids},
             )
 
@@ -5135,6 +5505,7 @@ def run_probes(
     _add(_EOL_DRIFT_PROBE, _run_probe_eol_audit_producers, claude_klabauter_root)
     _add(_EOL_CENSUS_PROBE, _run_probe_eol_census, claude_klabauter_root)
     _add(_ROOT_POINTER_PROBE, _run_probe_root_pointer, claude_klabauter_root)
+    _add(_ROOT_CHANNELS_PROBE, _run_probe_root_channels_reconciled, claude_klabauter_root)
     _add(_PUBLISH_PROVENANCE_PROBE, _run_probe_publish_provenance, claude_klabauter_root)
     _add(_ENGINE_TARGET_ROLLOUT_PROBE, _run_probe_engine_target_rollout)
     _add(_INVOKE_LATENCY_PROBE, _run_probe_invoke_latency, claude_klabauter_root)

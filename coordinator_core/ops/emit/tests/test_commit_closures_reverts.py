@@ -231,3 +231,38 @@ def test_revert_arm_adds_no_second_subprocess_call(tmp_path: Path) -> None:
         f"got {spy.call_count} calls: {spy.call_args_list!r}"
     )
     assert len(records) == 2
+
+
+# --------------------------------------------------------------------------- G5: marker pre-filter
+def test_marker_pre_filter_keeps_the_record_set_and_drops_the_rest(tmp_path: Path) -> None:
+    """The ``--grep`` disjunction is a pre-filter, not a narrowing: every commit that
+    could contribute a row still does, and commits carrying neither marker never reach
+    Python at all.
+
+    The unfiltered form read 15.9 MB of ``%B`` bodies for 23,446 commits on this repo to
+    produce 3 contributing ones (hitlist § G5). Filtering server-side is safe BY
+    CONSTRUCTION — collect() skips any commit with no trailer values and any body
+    ``_REVERT_LINE_RE`` does not match — so this pins the construction rather than a
+    measurement: a close row, a revert row, and a noise commit that must be filtered out.
+    """
+    _init_closure_test_repo(tmp_path)
+    closure_sha = _commit_with_message(
+        tmp_path, "fix: close an item\n\nCloses: RECS-9\n", "content-5\n"
+    )
+    revert_sha = _revert_commit(tmp_path, closure_sha)
+    _commit_with_message(tmp_path, "chore: neither marker here\n", "content-6\n")
+    noise_sha = _run_git_or_raise(tmp_path, "rev-parse", "HEAD").strip()
+    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", noise_sha)
+
+    ctx = _closure_test_ctx(tmp_path)
+    commits, malformed = commit_closures._extract_closure_commits(ctx)
+
+    assert malformed == []
+    walked = {sha for sha, _tv, _body in commits}
+    assert walked == {closure_sha, revert_sha}, (
+        "the pre-filter must admit exactly the two marker-carrying commits"
+    )
+    assert noise_sha not in walked, "a commit with neither marker must not reach Python"
+
+    records, _ = commit_closures.collect(ctx)
+    assert {r["sha"] for r in records} == {closure_sha, revert_sha}

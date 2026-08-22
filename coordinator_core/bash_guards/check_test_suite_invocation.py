@@ -815,15 +815,61 @@ def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[st
     if dialect is _Dialect.POWERSHELL:
         segments = _resolve_segments_for_dialect(cmd, dialect, guard_name="check_test_suite_invocation")
         if segments is not None:
-            return [seg for seg, _pipe_before in segments if seg]
+            return [_strip_redirections(seg) for seg, _pipe_before in segments if seg]
     tokens = _tokenize_full_command(cmd)
     if tokens is not None:
-        return [seg for seg in _segments_from_tokens_simple(tokens) if seg]
+        return [_strip_redirections(seg) for seg in _segments_from_tokens_simple(tokens) if seg]
     out: List[List[str]] = []
     for segment in _segments(cmd):
         if not segment.strip():
             continue
-        out.append(_tokens(segment))
+        out.append(_strip_redirections(_tokens(segment)))
+    return out
+
+
+#: A shell redirection token as the shared tokenizer hands it back:
+#: ``>``/``>>``/``<``/``<<`` with an optional leading fd number or ``&``
+#: (bash's combine-redirect), an optional ``&`` before the target (fd
+#: duplication, ``2>&1``), and an optionally ATTACHED target (``2>/dev/null``,
+#: ``>>out.log``). Anchored at the token head so a positional or flag operand
+#: that merely CONTAINS the character (``-k "a>b"``, a filename with an angle
+#: bracket) is never mistaken for one.
+_REDIRECTION_RE = re.compile(r"^(?:\d+|&)?(?:>>?|<<?)&?(?P<target>.*)$")
+
+
+def _strip_redirections(argv: Sequence[str]) -> List[str]:
+    """Drop shell redirection operators, and the operands they consume, from
+    one segment's argv.
+
+    A redirection is shell plumbing, never an argument the runner sees, but
+    every classifier below reads argv positionally -- so an unstripped
+    ``2>&1`` was walked as a pytest POSITIONAL, and the positional's breadth
+    governs (``_classify_pytest``). ``pytest -k expr`` classified Tier T and
+    ``pytest -k expr 2>&1`` classified suite-shaped, from the same run with
+    the same scope. That is a false deny on the narrowest form this guard's
+    own deny text offers as the alternative, and it fires on the most common
+    way an agent captures output. The same token cut the other way one
+    classifier over: ``python -m unittest 2>&1`` read ``2>&1`` as a dotted
+    test target (``_classify_unittest``) and ALLOWED an unscoped suite run.
+
+    Sited here, at the one seam every classification leg draws its argv
+    from, rather than in each runner's own grammar -- a per-runner fix would
+    have to be written once per grammar and would drift on the next one
+    added.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(argv)
+    while i < n:
+        tok = argv[i]
+        match = _REDIRECTION_RE.match(tok) if not tok.startswith("-") else None
+        if match is None:
+            out.append(tok)
+            i += 1
+            continue
+        i += 1
+        if not match.group("target"):
+            i += 1
     return out
 
 
@@ -2079,9 +2125,9 @@ def _deny_reason_subagent(
     return (
         "Run the tests you actually touched: full-suite subagent runs are "
         "denied (concurrency degrades the machine) -- use these instead:\n"
-        "  pytest path/to/your/test_file.py\n"
-        "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-        "  pytest -k the_behaviour_you_changed\n"
+        "  python3 -m pytest path/to/your/test_file.py\n"
+        "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
+        "  python3 -m pytest -k the_behaviour_you_changed\n"
         + _override_line
         + "  Detected: %s -- no test file, directory, or node-id scope\n"
         "  Command:  %s\n\n"
@@ -2189,7 +2235,7 @@ def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> 
     return (
         "Wait for the in-flight suite run, or scope this to what you touched "
         "in the meantime:\n"
-        "  pytest path/to/your/test_file.py\n\n"
+        "  python3 -m pytest path/to/your/test_file.py\n\n"
         "A suite run already holds the machine-wide test mutex — one at a "
         "time, machine-wide. Concurrent runs on this fleet do not merely cost "
         "wall-clock; they produce untrustworthy output (mid-edit reads, and "
@@ -2349,9 +2395,9 @@ def _deny_reason_grant(
                 "No Tier-F escape -- get the PM's Tier-U authorization grant, "
                 "or run what you touched:\n"
                 "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
-                "  pytest path/to/your/test_file.py\n"
-                "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-                "  pytest -k the_behaviour_you_changed\n\n"
+                "  python3 -m pytest path/to/your/test_file.py\n"
+                "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
+                "  python3 -m pytest -k the_behaviour_you_changed\n\n"
                 "  Detected: %s\n"
                 "  Command:  %s\n\n"
                 "Grant detail: %s"
@@ -2364,9 +2410,9 @@ def _deny_reason_grant(
             "Ask the PM for a Tier-U authorization grant (their exact words go "
             "in the quotes), or run only what you touched:\n"
             "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
-            "  pytest path/to/your/test_file.py\n"
-            "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-            "  pytest -k the_behaviour_you_changed\n\n"
+            "  python3 -m pytest path/to/your/test_file.py\n"
+            "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
+            "  python3 -m pytest -k the_behaviour_you_changed\n\n"
             "  Detected: %s\n"
             "  Command:  %s\n\n"
             "Full grant detail (ceremonies, session scope, authority vs. "
@@ -2601,15 +2647,15 @@ def _deny_reason_subagent_directory(
         more = len(touched_tests) - len(shown)
         alternative = (
             "Run the test files YOU touched:\n"
-            + "".join("  pytest %s\n" % p for p in shown)
+            + "".join("  python3 -m pytest %s\n" % p for p in shown)
             + ("  ... and %d more in your touched set\n" % more if more > 0 else "")
         )
     else:
         alternative = (
             "You have touched no test files yet. Name the specific file or "
             "node id you mean:\n"
-            "  pytest path/to/test_file.py\n"
-            "  pytest path/to/test_file.py::test_the_case_you_changed\n"
+            "  python3 -m pytest path/to/test_file.py\n"
+            "  python3 -m pytest path/to/test_file.py::test_the_case_you_changed\n"
         )
     _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     return (
@@ -3105,9 +3151,9 @@ def _remediation_text(tier: str, detected: str) -> str:
     return (
         "Scope this to what was actually touched instead of the whole "
         "suite:\n"
-        "  pytest path/to/the/test_file.py\n"
-        "  pytest path/to/the/test_file.py::test_the_case_that_changed\n"
-        "  pytest -k the_behaviour_that_changed\n\n"
+        "  python3 -m pytest path/to/the/test_file.py\n"
+        "  python3 -m pytest path/to/the/test_file.py::test_the_case_that_changed\n"
+        "  python3 -m pytest -k the_behaviour_that_changed\n\n"
         "Unscoped/full-suite runs require a Tier-U grant and are reserved "
         "for the top-level EM -- never a dispatched subagent or a bare "
         "dispatch-brief instruction."

@@ -8,7 +8,7 @@ the two literal bash fences at lines 932 and 950 of the source doc.
 Purpose (unchanged from the doc): resolve `claude-klabauter`'s root
 (`REPO_CLAUDE_KLABAUTER` env override, then `machine-local get
 repos.claude_klabauter`), and — only if `<claude_klabauter_root>/bin/shell-init-guard.py`
-exists and is executable — write an idempotent, sentinel-guarded block into
+exists and is readable — write an idempotent, sentinel-guarded block into
 the operator's interactive rc (selected from the SHELL env var: zsh picks
 .zshrc, bash picks .bashrc, same selection idiom as install.md's other
 rc-writing steps) that
@@ -29,11 +29,20 @@ Negative-spec:
     - Does NOT strip or update a previously-written block — append-only,
       sentinel-guarded idempotency (a second run with the sentinel already
       present is a silent no-op), matching the doc block's own contract.
-    - Does NOT itself invoke/import `shell-init-guard.py` — only checks its
-      presence + exec bit and bakes its path into the written rc snippet;
+    - Does NOT itself invoke/import `shell-init-guard.py` — only checks that
+      the file is present and readable, and bakes its path into the written
+      rc snippet;
       the guard's own stdout-emitter logic is claude-klabauter-resident and entirely
       out of scope for this seam (DR-047: claude-klabauter owns the engine, DoE owns
       the rc-eval seam that sources it).
+    - Does NOT gate on the guard script's execute bit, at install time or in
+      the emitted rc block. Claude-klabauter's `bin/` is a pure-Python shop invoked
+      through `python3 <path>`: every file there is committed 100644, and a
+      mode bit does not survive a Windows checkout at all. Readability is the
+      condition that actually decides whether `python3` can run the guard
+      (bug fix, 2026-08-22: an `is_executable()` gate skipped the install on
+      every clone, under a message that named a MISSING REPO).
+
     - Emits a POSIX-shell block ONLY. There is no PowerShell counterpart, so on
       a Windows box whose shell of record is pwsh this seam covers Git Bash
       sessions and nothing else. The status row says so rather than reporting a
@@ -55,7 +64,6 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import is_executable
 
 GENERATES = []  # appends only to the operator's ~/.zshrc or ~/.bashrc, outside any git repo
 
@@ -188,8 +196,19 @@ def main(argv: List[str]) -> int:
     claude_klabauter_clone = resolve_claude_klabauter_clone()
     guard_src = os.path.join(claude_klabauter_clone, "bin", "shell-init-guard.py") if claude_klabauter_clone else ""
 
-    if not claude_klabauter_clone or not os.path.isfile(guard_src) or not is_executable(guard_src):
-        print("shell_init_guard: skipped (claude-klabauter not found — no guard to source)")
+    if not claude_klabauter_clone:
+        print(
+            "shell_init_guard: skipped (claude-klabauter not registered — "
+            "set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"
+        )
+        return 0
+
+    if not os.path.isfile(guard_src):
+        print(f"shell_init_guard: skipped (guard script absent: {guard_src})")
+        return 0
+
+    if not os.access(guard_src, os.R_OK):
+        print(f"shell_init_guard: skipped (guard script unreadable: {guard_src})")
         return 0
 
     rc_path = _resolve_rc_path(rc_override)
@@ -204,10 +223,11 @@ def main(argv: List[str]) -> int:
 
     block = (
         f"\n{SENTINEL}\n"
-        "# Graceful no-op if claude-klabauter absent or python3 missing: the -x check + eval's 2>/dev/null +\n"
+        "# Graceful no-op if claude-klabauter absent or python3 missing: the -f check + eval's 2>/dev/null +\n"
         "# the emitter's own fail-open behavior combine to make this safe to source unconditionally.\n"
+        "# -f, not -x: the guard is interpreter-invoked and ships 100644 like the rest of claude-klabauter's bin/.\n"
         f'_cc_fsize_guard="{guard_src}"\n'
-        'if [ -x "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
+        'if [ -f "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
         "unset _cc_fsize_guard\n"
         f"{SENTINEL_END}\n"
     )

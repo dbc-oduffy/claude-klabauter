@@ -95,6 +95,33 @@ required = false
 severity_if_fail = "degraded"
 remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-root with the resolved CLAUDE_KLABAUTER_ROOT path"
 
+# claude-klabauter.root.channels_reconciled -- do the several places this box writes a
+# root down AGREE, and does each name a path that is actually here? Distinct
+# from claude-klabauter.root.pointer above, which compares ONE pointer file against the
+# ladder answer this script resolved; this probe compares the channels against
+# EACH OTHER (registry key, pointer file, publish-destination key), which is
+# the comparison neither resolver performs. Built from two same-day incidents
+# (2026-08-22): a correct repos.claude_klabauter coexisting silently with a
+# foreign-platform .claude-klabauter-root until every settings-home bin/ live
+# op failed, and two claude-klabauter-root ladders that disagree by construction.
+# Consumes the shared oracle coordinator_core.root_channel_reconcile, whose own
+# CLI is the runnable remediation. weight = "cheap": file reads and registry
+# TOML reads only, no subprocess.
+[[probe]]
+id = "claude-klabauter.root.channels_reconciled"
+cluster = "registry"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (correct whichever channel is wrong -- which of two paths is real is an operator decision, never a guess)"
+symptom_keywords = ["pointer disagrees with registry", "root resolution disagreement", "wrong drive letter", "path from another machine", "no engine build stamp", "engine root does not exist", "synced ~/.claude meta-repo"]
+# triage=true: cheap, and a channel split is upstream of the dispatch failures
+# an operator actually arrives with -- surfacing it late costs a whole session.
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_channels_reconciled"
+required = false
+severity_if_fail = "degraded"
+remediation = "Run python3 -m coordinator_core.root_channel_reconcile to list every channel and the path it names, then correct the one that is wrong"
+
 [[probe]]
 id = "claude-klabauter.publish.provenance"
 cluster = "registry"

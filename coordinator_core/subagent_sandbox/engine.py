@@ -440,6 +440,29 @@ def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
     return ""
 
 
+def _dispatch_files_for_session(sessions_base: Path, em_sid: str) -> list[Path]:
+    """Every ``dispatched-agents.txt`` belonging to ``em_sid`` — live dir plus archive.
+
+    A session directory does not stay at ``coordinator-sessions/<em_sid>/``. The
+    archival cadence relocates it to ``coordinator-sessions/.archive/<em_sid>-<date>/``,
+    and a lookup that knows only the live path resolves nothing from that moment on —
+    measured on this box at 1000 of 1250 back-pointers unresolvable for that reason
+    alone. The archived rows are the SAME session's dispatch log, byte-identical to
+    what the live path served the day before; reading them is a relocation-follow, not
+    a widening of which sessions may answer for an ``agent_id``.
+
+    Returns existing paths only, live first. The caller pools the rows and applies its
+    own single-match rule across the pool, so a duplicate ``agent_id`` spanning live and
+    archived copies stays ambiguous (fail-closed) rather than resolving by file order.
+    """
+    found = []
+    live = sessions_base / em_sid / "dispatched-agents.txt"
+    if live.exists():
+        found.append(live)
+    found.extend(sorted(sessions_base.glob(f".archive/{em_sid}-*/dispatched-agents.txt")))
+    return found
+
+
 def _read_backpointer_subagent_type(
     git_root: str, agent_id: str, expected_em_session_id: str = ""
 ) -> str:
@@ -475,10 +498,14 @@ def _read_backpointer_subagent_type(
     if expected_em_session_id and em_sid != expected_em_session_id:
         return ""
 
-    dispatch_file = Path(git_root) / ".git" / "coordinator-sessions" / em_sid / "dispatched-agents.txt"
-    try:
-        rows = dispatch_file.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    sessions_base = Path(git_root) / ".git" / "coordinator-sessions"
+    rows: list[str] = []
+    for dispatch_file in _dispatch_files_for_session(sessions_base, em_sid):
+        try:
+            rows.extend(dispatch_file.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            continue
+    if not rows:
         return ""
 
     # Review: coordinator:code-reviewer (2026-08-14, P3, duplicate-row

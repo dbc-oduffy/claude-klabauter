@@ -1,17 +1,26 @@
 """coordinator_core.op_census.tests.test_spawn_bearing_ops — tests for the
-op-registry-derived spawn-evidence layer (C2).
+op-registry-derived spawn-evidence layer (C2), plus C1's function-granular
+narrowing of `ops_with_spawn_evidence`.
 
 Covers: authoritative vs fast-path op-name derivation, registry-divergence
 comparison, per-op entrypoint resolution (success and every named failure
-mode), and module-granularity spawn evidence over a synthetic corpus.
+mode), module-granularity spawn evidence over a synthetic corpus, and (C1)
+`function_granular=True`'s (op, site)-keyed narrowing plus its width probe.
 
 Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-op/C2.md
+               state/dispatch-briefs/2026-08-22-the-composition-gate-counts-processes-across-the-op-graph/C1.md
 """
 
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from coordinator_core.op_census import spawn_bearing_ops
 from coordinator_core.op_census.spawn_bearing_ops import OpEntrypoint, RegistryDivergence
+from coordinator_core.tests import test_no_uncounted_spawn_on_budgeted_path as _gate
+from coordinator_core.tests import test_no_unbatched_per_item_git_spawn as _gate_scope
 
 
 def _fake_handler(module_name: str, func_name: str):
@@ -193,3 +202,173 @@ def test_ops_with_spawn_evidence_empty_when_no_module_spawns(tmp_path, monkeypat
     quiet.write_text("def handler():\n    return None\n", encoding="utf-8")
     entrypoints = {"op.only": OpEntrypoint("op.only", "quiet.py", "handler")}
     assert spawn_bearing_ops.ops_with_spawn_evidence(entrypoints) == {}
+
+
+# --------------------------------------------------------------------------
+# ops_with_spawn_evidence(function_granular=True) -- C1, (op, site)-keyed
+# --------------------------------------------------------------------------
+
+
+def _synthetic_scope(monkeypatch, tmp_path):
+    """Points the reused gate module's own corpus builder
+    (`_build_corpus`/`_scope_roots`) at an isolated `tmp_path/coordinator_core`
+    tree instead of the live repo -- both `_REPO_ROOT` and `_GATE_SCOPE_ROOTS`
+    are plain module-level names imported by name into the gate module, so
+    monkeypatching them there (not on `spawn_bearing_ops`, which never reads
+    either) is what actually redirects `_build_corpus`."""
+    monkeypatch.setattr(_gate, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(_gate, "_GATE_SCOPE_ROOTS", ("coordinator_core",))
+    # `_relpath` (in `test_no_unbatched_per_item_git_spawn.py`) tries its OWN
+    # module's `_REPO_ROOT` first, only falling back to root-relative (which
+    # drops the `coordinator_core/` prefix `OpEntrypoint.relpath` always
+    # carries) when that fails -- patch it too so `func_defs` keys land on
+    # the SAME repo-root-relative strings entrypoint resolution produces.
+    monkeypatch.setattr(_gate_scope, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
+    root = tmp_path / "coordinator_core"
+    root.mkdir()
+    return root
+
+
+def test_ops_with_spawn_evidence_function_granular_keys_on_op_site_pair(tmp_path, monkeypatch):
+    """AC4/AC4b/AC4c's real property: `handler_a` reaches the spawn site,
+    `handler_b` in the SAME module does not call it at all -- module
+    granularity (the default) reports evidence for both; `function_granular`
+    narrows to the op whose OWN reachable set actually contains the site,
+    proving the assertion is keyed on the (op, site) pair and not on "does
+    some op in this module reach it."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    shared = root / "shared.py"
+    shared.write_text(
+        "import subprocess\n"
+        "def handler_a():\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "def handler_b():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+
+    entrypoints = {
+        "op.a": OpEntrypoint("op.a", "coordinator_core/shared.py", "handler_a"),
+        "op.b": OpEntrypoint("op.b", "coordinator_core/shared.py", "handler_b"),
+    }
+
+    module_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints)
+    assert set(module_granular) == {"op.a", "op.b"}
+
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(function_granular) == {"op.a"}
+    assert len(function_granular["op.a"]) == 1
+    assert function_granular["op.a"][0].enclosing == "handler_a"
+
+
+def test_ops_with_spawn_evidence_function_granular_follows_transitive_call(tmp_path, monkeypatch):
+    """The predicate is transitive, not one-hop: `handler` calls `helper`,
+    which spawns -- the site's enclosing function is `helper`, not `handler`,
+    and it must still surface under `handler`'s own op."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    mod = root / "chain.py"
+    mod.write_text(
+        "import subprocess\n"
+        "def helper():\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "def handler():\n"
+        "    return helper()\n",
+        encoding="utf-8",
+    )
+    entrypoints = {"op.chain": OpEntrypoint("op.chain", "coordinator_core/chain.py", "handler")}
+    result = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(result) == {"op.chain"}
+    assert result["op.chain"][0].enclosing == "helper"
+
+
+def test_ops_with_spawn_evidence_function_granular_unresolvable_entry_is_omitted_not_widened(
+    tmp_path, monkeypatch
+):
+    """AC3/negative-spec: an op whose `function_name` does not match a
+    top-level `def` in the reused corpus's `func_defs` (e.g. resolved to a
+    module the reused gate module's own scope roots do not cover) reports NO
+    function-granular evidence -- never a silent fall-back to the module-wide
+    over-approximation, even though that module DOES carry a spawn site."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    shared = root / "shared2.py"
+    shared.write_text(
+        "import subprocess\n"
+        "def real_handler():\n"
+        "    return subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    entrypoints = {
+        "op.unresolvable": OpEntrypoint(
+            "op.unresolvable", "coordinator_core/shared2.py", "no_such_top_level_function"
+        )
+    }
+    module_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints)
+    assert "op.unresolvable" in module_granular  # module lens still over-reports, as documented
+
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert function_granular == {}
+
+
+def test_ops_with_spawn_evidence_function_granular_nested_site_attributes_to_top_level(
+    tmp_path, monkeypatch
+):
+    """AC3 pin on shipped behaviour: a spawn nested inside a closure still
+    attributes to its TOP-LEVEL enclosing function
+    (`site.enclosing.split(".")[0]`, the C-13 gate's own reused predicate),
+    matching the named oracles `_commit_delivered_memo._unstage_delivered_memo`
+    and `_verify_scoped_to_sha_resolvable._rev_parse` that already resolve
+    correctly today on the live tree."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    mod = root / "nested.py"
+    mod.write_text(
+        "import subprocess\n"
+        "def outer():\n"
+        "    def _inner():\n"
+        "        return subprocess.run(['git', 'status'])\n"
+        "    return _inner()\n",
+        encoding="utf-8",
+    )
+    entrypoints = {"op.nested": OpEntrypoint("op.nested", "coordinator_core/nested.py", "outer")}
+    result = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(result) == {"op.nested"}
+    assert result["op.nested"][0].enclosing == "outer._inner"
+
+
+@pytest.mark.cadence
+def test_function_granular_width_probe_timing():
+    """AC10's width probe: this chunk holds the function-granular result and
+    needs no enrolment to run it, so it times a single `_reachable_functions`
+    closure and the full pass at sampled widths of 8, ~40, and 277 against
+    the LIVE tree -- C2 must not commit to a width before this number exists.
+    `cadence`-marked (heavy, live-corpus scan): never in the fast tier, same
+    posture `test_no_uncounted_spawn_on_budgeted_path.py`'s own docstring
+    names for its leg-3 measurement work."""
+    live_ops = sorted(spawn_bearing_ops.live_registry_op_names())
+    all_entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live_ops)
+    resolved = [
+        (name, ep)
+        for name, ep in all_entrypoints.items()
+        if ep.relpath is not None and ep.function_name is not None
+    ]
+
+    t0 = time.perf_counter()
+    single = dict(resolved[:1])
+    spawn_bearing_ops.ops_with_spawn_evidence(single, function_granular=True)
+    single_closure_s = time.perf_counter() - t0
+
+    timings: dict[int, float] = {}
+    for width in (8, min(40, len(resolved)), len(resolved)):
+        sample = dict(resolved[:width])
+        t0 = time.perf_counter()
+        spawn_bearing_ops.ops_with_spawn_evidence(sample, function_granular=True)
+        timings[width] = time.perf_counter() - t0
+
+    print(f"[C1 width probe] single closure: {single_closure_s:.3f}s")
+    for width, elapsed in timings.items():
+        print(f"[C1 width probe] width={width}: {elapsed:.3f}s")
+
+    # Soft sanity only -- the width probe's job is to PRODUCE the number for
+    # C2's own decision, not to gate on one here.
+    assert single_closure_s >= 0
+    assert all(elapsed >= 0 for elapsed in timings.values())

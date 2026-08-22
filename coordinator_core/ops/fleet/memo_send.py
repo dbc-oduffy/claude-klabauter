@@ -184,6 +184,8 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.git import git_state
+from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.ops.ceremony import git_native
@@ -1653,12 +1655,108 @@ async def _verify_scoped_to_sha_resolvable(
 # 2026-07-21)
 # ---------------------------------------------------------------------------
 
-# Full 40-hex-char sha shape, guarding `_commit_delivered_memo`'s
-# `git log --format=%H` output before it is trusted as `committed_sha` —
-# mirrors `ops/ceremony/commit_pipeline.py`'s own `_FULL_SHA_RE` use, kept
-# as a separate module-local constant rather than imported (this module
-# does not otherwise depend on commit_pipeline).
+# Full 40-hex-char sha shape, guarding `_commit_delivered_memo`'s resolved
+# sha (see `_resolve_committed_sha` below, and the pathspec-scoped fallback
+# spawn it falls back to) before it is trusted as `committed_sha` — mirrors
+# `ops/ceremony/commit_pipeline.py`'s own `_FULL_SHA_RE` use, kept as a
+# separate module-local constant rather than imported (this module does not
+# otherwise depend on commit_pipeline).
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+# `git commit`'s own stdout carries the new commit's ABBREVIATED sha inside
+# the leading `[<branch> [(root-commit) ]<abbrev-sha>] <subject>` banner —
+# e.g. `[main 3e83778] x` or `[main (root-commit) 3e83778] x`. Captures the
+# bracket's contents; the abbreviated sha is always its LAST whitespace
+# token (branch names never contain spaces, and `(root-commit)` is the only
+# other token git ever inserts there).
+_COMMIT_STDOUT_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+
+# Floor of 7, NOT git's own minimum of 4, and the difference is a
+# correctness one rather than a style one. `_resolve_committed_sha` trusts
+# this token only as a PREFIX of HEAD's full sha, so a short abbreviation
+# makes that prefix test cheap to satisfy by accident: at 4 hex chars a
+# concurrent sibling's commit collides with ours once in ~65k, and when it
+# does the function returns THEIR sha as ours — silently, and precisely in
+# the concurrent-sibling window the whole design exists to survive. The
+# abbreviation width is the RECEIVER's `core.abbrev`, in a foreign repo
+# this op does not own and must not reconfigure; `core.abbrev = 4` really
+# does emit `[main c7e6] subject` (measured 2026-08-21). Rejecting a short
+# token here costs one fallback spawn in such a repo and keeps the answer
+# correct, which is the same trade this function already makes everywhere
+# else. 7 is git's own default floor, where a collision is ~1 in 268M.
+_MIN_TRUSTED_ABBREV_LEN = 7
+_ABBREV_SHA_TOKEN_RE = re.compile(
+    r"^[0-9a-f]{%d,40}$" % _MIN_TRUSTED_ABBREV_LEN
+)
+
+
+def _parse_abbrev_sha_from_commit_stdout(commit_stdout: str) -> Optional[str]:
+    """Extract the abbreviated sha `git commit` printed for its own new
+    commit, or `None` if the banner is not in the expected shape. Never
+    raises — an unparseable banner degrades to `None`, which
+    `_resolve_committed_sha` treats as "fall back to the spawn", never as a
+    resolved (and therefore wrong-width) sha.
+    """
+    match = _COMMIT_STDOUT_BRACKET_RE.search(commit_stdout)
+    if not match:
+        return None
+    tokens = match.group(1).split()
+    if not tokens:
+        return None
+    candidate = tokens[-1]
+    return candidate if _ABBREV_SHA_TOKEN_RE.fullmatch(candidate) else None
+
+
+async def _resolve_committed_sha(
+    receiver_repo_path: Path, memo_relpath: str, commit_stdout: str, env: dict,
+) -> Optional[str]:
+    """Resolve the full 40-char sha `_commit_delivered_memo`'s own `git
+    commit` call just created, in-process on the common path and with
+    exactly one fallback spawn on the rare path — see `CommitOutcome.
+    committed_sha`'s docstring for why a blind HEAD read is wrong here.
+
+    Common path (zero spawns): parse the ABBREVIATED sha out of `git
+    commit`'s own stdout (`_parse_abbrev_sha_from_commit_stdout`; that
+    commit is already paid for and the sha is ours by construction), then
+    ask `git_state.head_sha` for HEAD's current full sha. If HEAD's sha
+    STARTS WITH our abbreviated prefix, HEAD still names our commit and the
+    full-width value is trustworthy — resolved, not padded, not guessed.
+
+    Rare path (one fallback spawn): the prefix check fails to confirm —
+    either the abbreviated sha could not be parsed, or a concurrent sibling
+    committed to the SAME path in the narrow window between our `git
+    commit` returning and this read, moving HEAD out from under us (the
+    exact hazard `CommitOutcome.committed_sha`'s docstring names). Falls
+    back to the original pathspec-scoped `git log -1 --format=%H --
+    <memo_relpath>` spawn, which is immune to that race by construction —
+    correctness over spawn count whenever the two are actually in tension.
+    """
+    abbrev_sha = _parse_abbrev_sha_from_commit_stdout(commit_stdout)
+    if abbrev_sha:
+        head = git_state.head_sha(receiver_repo_path)
+        if head and head.startswith(abbrev_sha) and _FULL_SHA_RE.fullmatch(head):
+            return head
+
+    try:
+        # Pathspec-scoped, not a blind HEAD read — see `CommitOutcome.
+        # committed_sha`'s own docstring for the concurrent-sibling
+        # rationale. Best-effort: an unresolved sha degrades to None, never
+        # a failed send (this function's own never-raise contract).
+        sha_proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(receiver_repo_path),
+            "log", "-1", "--format=%H", "--", memo_relpath,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        sha_out, _sha_err = await sha_proc.communicate()
+        if sha_proc.returncode == 0:
+            resolved = sha_out.decode(errors="replace").strip()
+            if _FULL_SHA_RE.fullmatch(resolved):
+                return resolved
+    except OSError:
+        pass
+    return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1685,15 +1783,19 @@ class CommitOutcome:
         (docs/plans cross-repo memo, example-retrieval-repo-em, 2026-08-15, "pickup
         cannot resolve a memo by its delivery sha") — `None` whenever the
         sha cannot be attributed to THIS call with confidence, never a
-        guess. Deliberately NEVER a blind post-commit `git rev-parse HEAD`
+        guess. Deliberately NEVER a blind post-commit HEAD read on its own
         (same concurrent-sibling hazard `ops/ceremony/commit_pipeline.py::
         CommitOutcome.committed_sha` documents at C11 — a receiver repo is
         a foreign, concurrently-written tree, so HEAD alone could pick up a
         peer's own commit landing in the same window). Resolved instead via
-        `git log -1 --format=%H -- <memo_relpath>`, pathspec-scoped to the
-        exact file this call just added — collision-free in practice
-        because a delivery's inbox filename is unique per send, unlike a
-        bare HEAD read. `None` on the idempotent "nothing to commit" no-op
+        `_resolve_committed_sha`: in-process, spawn-free on the common path
+        by cross-checking `git_state.head_sha` against the abbreviated sha
+        `git commit`'s own stdout already carries, falling back to the
+        original pathspec-scoped `git log -1 --format=%H -- <memo_relpath>`
+        spawn — which IS collision-free by construction, unlike a bare HEAD
+        read — only when that cross-check cannot confirm HEAD is still ours
+        (unparseable commit banner, or a concurrent sibling's commit moved
+        HEAD in the narrow post-commit window). `None` on the idempotent "nothing to commit" no-op
         (a real success, but not THIS call's own commit — the file was
         already committed by an earlier call or a peer, so backfilling the
         pre-existing HEAD here would misattribute it) and on any failure
@@ -1781,9 +1883,10 @@ async def _commit_delivered_memo(
     receiver's own session-init sweep to notice.
 
     Graceful degradation (best-effort, NEVER fails the send):
-      - detached HEAD / bare repo / no commits yet (git symbolic-ref -q HEAD
-        fails) → SKIP the commit, log WARNING, leave the file
-        written+uncommitted. No branch is created or switched.
+      - detached HEAD (receiver's `HEAD` file is not a symbolic ref — the
+        in-process equivalent of `git symbolic-ref -q HEAD` failing) → SKIP
+        the commit, log WARNING, leave the file written+uncommitted. No
+        branch is created or switched.
       - on `main`/`master` (existing active branch) → still commit (branch
         discipline is the receiver's to resolve, not this op's) — WARNING
         notes it so the caller can log it.
@@ -1844,14 +1947,21 @@ async def _commit_delivered_memo(
         except OSError:
             pass
 
+    # In-process equivalent of `git symbolic-ref -q HEAD` (spawn removed,
+    # docs/plans/2026-08-21-memo-send-stops-asking-git-what-it-already-
+    # knows.md C1): `symbolic-ref -q HEAD` succeeds iff `HEAD` is a symbolic
+    # ref (its content starts with `ref:`), REGARDLESS of whether the target
+    # ref resolves to a commit — empirically true for a bare repo and an
+    # unborn branch alike (both hold `ref: refs/heads/<x>` in `HEAD`), and it
+    # fails only on a detached HEAD (`HEAD` holds a raw sha, no `ref:`
+    # prefix). `resolve_git_dir` is used directly rather than
+    # `git_state.head_sha` — that function follows the ref hop and would
+    # collapse "symref present, target unresolved" (success here) into
+    # `None` (which would misread as failure), a behaviour change this
+    # in-process read must not make.
+    gitdir = resolve_git_dir(receiver_repo_path)
     try:
-        head_check = await asyncio.create_subprocess_exec(
-            "git", "-C", str(receiver_repo_path), "symbolic-ref", "-q", "HEAD",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        head_out, _head_err = await head_check.communicate()
+        head_content = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
     except OSError as exc:
         reason = f"could not read receiver HEAD (symbolic-ref): {exc}"
         _LOG.warning(
@@ -1861,9 +1971,24 @@ async def _commit_delivered_memo(
         )
         return CommitOutcome(committed=False, branch=None, reason=reason)
 
-    if head_check.returncode != 0:
-        # Detached HEAD, bare repo, or no commits yet (symbolic-ref -q fails
-        # silently on all three) — SKIP rather than create/switch a branch
+    if not head_content.startswith("ref:"):
+        # Detached HEAD only. `symbolic-ref -q HEAD` fails on a detached HEAD
+        # and SUCCEEDS on a bare repo and an unborn branch alike — all three
+        # verified 2026-08-21 (rc=1, rc=0, rc=0; bare and unborn both hold
+        # `ref: refs/heads/<x>`), so the older comment here claiming it "fails
+        # silently on all three" was wrong before the spawn was ever removed,
+        # and the in-process `ref:` test above reproduces git's real behaviour
+        # exactly rather than the comment's.
+        #
+        # The `reason` string below still enumerates all three and is
+        # DELIBERATELY LEFT ALONE: it is not prose. It is written verbatim
+        # into `state/memo-outbox/sent-ledger.jsonl` as
+        # `delivery_commit_reason`, has a byte-identical twin at
+        # `ops/tracker/push_suggestion.py`, and is quoted in DR-214. Narrowing
+        # it is a contract change with three call sites, not a comment fix —
+        # do not "correct" it in passing.
+        #
+        # SKIP rather than create/switch a branch
         # (removed 2026-07-21 per the Staff Engineer REQUIRES_CHANGES: branch-creation in
         # a foreign repo is an unacceptable mutation). Leave the file
         # written+uncommitted for the receiver's own session-init sweep.
@@ -1876,7 +2001,7 @@ async def _commit_delivered_memo(
         )
         return CommitOutcome(committed=False, branch=None, reason=reason)
 
-    ref = head_out.decode(errors="replace").strip()
+    ref = head_content[len("ref:"):].strip()
     branch_name = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
     if branch_name in ("main", "master"):
         _LOG.warning(
@@ -1979,26 +2104,10 @@ async def _commit_delivered_memo(
         )
         return CommitOutcome(committed=False, branch=None, reason=reason)
 
-    committed_sha: Optional[str] = None
-    try:
-        # Pathspec-scoped, not a blind HEAD read — see `CommitOutcome.
-        # committed_sha`'s own docstring for the concurrent-sibling
-        # rationale. Best-effort: an unresolved sha degrades to None, never
-        # a failed send (this function's own never-raise contract).
-        sha_proc = await asyncio.create_subprocess_exec(
-            "git", "-C", str(receiver_repo_path),
-            "log", "-1", "--format=%H", "--", memo_relpath,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        sha_out, _sha_err = await sha_proc.communicate()
-        if sha_proc.returncode == 0:
-            resolved = sha_out.decode(errors="replace").strip()
-            if _FULL_SHA_RE.fullmatch(resolved):
-                committed_sha = resolved
-    except OSError:
-        pass
+    committed_sha = await _resolve_committed_sha(
+        receiver_repo_path, memo_relpath,
+        commit_out.decode(errors="replace"), env,
+    )
 
     return CommitOutcome(
         committed=True, branch=branch_name, reason=None,

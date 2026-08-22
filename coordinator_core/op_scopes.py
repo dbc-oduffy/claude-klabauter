@@ -56,26 +56,13 @@ from typing import Dict
 # ---------------------------------------------------------------------------
 _OP_KEY_SCOPE: Dict[str, str] = {
     # Working-tree, keyed on git_common_dir (shared across linked worktrees)
-    # Emit ops (artifact.emit, backlog.record, goal.append): per-repo emission —
-    # each emitting repo supplies _origin_worktree so the handler resolves
-    # main_worktree_root(common_dir) and attributes the snapshot to the emitting repo.
+    # backlog.record / goal.append: per-repo writes — each calling repo supplies
+    # _origin_worktree so the handler resolves main_worktree_root(common_dir) and
+    # attributes the row to the calling repo.
     # Reclassified from "central" → "common_dir" per 2026-07-07 per-repo-emission-cutover.
-    "artifact.emit":                         "common_dir",
     "backlog.record":                        "common_dir",
     "goal.append":                           "common_dir",
     "orientation.regenerate_cache":          "common_dir",
-    # emit.cadence — sequences backlog.record then artifact.emit over the same common_dir
-    # key (derives main_worktree_root(common_dir) exactly like its two sub-ops).
-    "emit.cadence":                          "common_dir",
-    # emission.publish — TRANSPORTS the artifact artifact.emit produced, so it must key on
-    # the same scope that produced it: it resolves main_worktree_root(repo_root) and reads
-    # state/cockpit-emission.json off the main-worktree-rooted state/ tree, exactly as
-    # artifact_emit._artifact_emit does. "show_top" would key per-worktree and let a linked
-    # worktree publish a different (or absent) artifact than the one the emit ops wrote;
-    # "none" would deny the handler the repo_root it needs to find the artifact at all.
-    # It is a WRITE (outbound, to cockpit's sink) but writes nothing repo-local, so the
-    # scope question is purely about which tree it READS from — that is the common dir.
-    "emission.publish":                      "common_dir",
     # workflow.fire / workflow.fire_status — the fire registry and its logs live
     # under <git-common-dir>/coordinator-sessions/workflow-fires (fire.py::_registry_dir
     # walks from the envelope's repo_root), so every linked worktree of a repo must

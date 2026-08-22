@@ -795,16 +795,27 @@ def test_composite_entrypoints_never_call_subprocess_run_directly():
 
 def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_wrapper(tmp_path):
     """`commit_authored_content()` never reaches `subprocess.run` directly --
-    every step of its `rev-parse`/`ls-tree`/`hash-object`/`read-tree`/
-    `update-index`/`write-tree`/`commit-tree`/`update-ref` sequence goes
-    through this module's own `_git()` (whose Windows-safe-flag contract is
-    already independently covered by `test_git_returns_typed_result_on_
-    success` and friends above), so patching `subprocess.run` directly here
-    would double-count that contract and, worse, would also catch unrelated
-    background subprocess activity elsewhere in the process (`git_native.
-    subprocess` IS the shared stdlib module object, not a private import).
-    This asserts the composite's actual call sequence instead -- the genuine
-    coverage gap `test_all_public_wrappers_are_covered` flagged."""
+    every step of its `hash-object`/`read-tree`/`update-index`/`write-tree`/
+    `commit-tree`/`update-ref` sequence goes through this module's own
+    `_git()` (whose Windows-safe-flag contract is already independently
+    covered by `test_git_returns_typed_result_on_success` and friends
+    above), so patching `subprocess.run` directly here would double-count
+    that contract and, worse, would also catch unrelated background
+    subprocess activity elsewhere in the process (`git_native.subprocess`
+    IS the shared stdlib module object, not a private import). This
+    asserts the composite's actual call sequence instead -- the genuine
+    coverage gap `test_all_public_wrappers_are_covered` flagged.
+
+    C3 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-
+    spawning-git.md): the former leading `rev-parse`/`ls-tree` pair is gone
+    from THIS wrapper's own call sequence. `rev-parse HEAD` is now a direct
+    `.git/HEAD` file read (`git_state.head_sha`, zero spawns -- asserted
+    separately below by patching `_git` to fail loud on any `rev-parse`
+    call). `ls-tree HEAD -- <path>` still spawns git -- it is `git_state.
+    head_blobs`'s own documented "one retained spawn" -- but now goes
+    through `coordinator_core.git.run.run_git`, not this module's private
+    `_git()`, so it is spied on separately and asserted to precede the
+    `_git()`-routed sequence below."""
     repo = _init_real_repo(tmp_path)
     (repo / "file.txt").write_text("original\n", encoding="utf-8")
     _real_git(["add", "--", "file.txt"], repo)
@@ -817,19 +828,35 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
     git_argvs = []
 
     def _spy(args, **kwargs):
+        assert args[0] != "rev-parse", (
+            "commit_authored_content must not spawn `git rev-parse HEAD` any "
+            "more -- head_sha() is a direct file read (C3)"
+        )
         git_argvs.append(list(args))
         return real_git(args, **kwargs)
 
-    with patch.object(git_native, "_git", side_effect=_spy):
+    from coordinator_core.git import git_state as _git_state_module
+
+    real_run_git = _git_state_module.run_git
+    run_git_argvs = []
+
+    def _run_git_spy(args, **kwargs):
+        run_git_argvs.append(list(args))
+        return real_run_git(args, **kwargs)
+
+    with patch.object(git_native, "_git", side_effect=_spy), \
+         patch.object(_git_state_module, "run_git", side_effect=_run_git_spy):
         result = git_native.commit_authored_content(
             "file.txt", "AUTHORED CONTENT\n", msg_file, repo
         )
 
     assert result.ok, result.stderr
+    assert [argv[0] for argv in run_git_argvs] == ["ls-tree"], (
+        "the one retained read spawn for HEAD's tree entry should route "
+        "through git_state's shared run_git, not git_native._git"
+    )
     verbs = [argv[0] for argv in git_argvs]
     assert verbs == [
-        "rev-parse",
-        "ls-tree",
         "read-tree",
         "update-index",
         "write-tree",
@@ -839,6 +866,75 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
         "update-index",
     ]
     assert _committed_content_at_head(repo, "file.txt") == "AUTHORED CONTENT\n"
+
+
+def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path):
+    """C3: `head_sha`/`head_blobs` replace the `rev-parse`/`ls-tree` reads,
+    but the reserved-noun "does not exist in HEAD" refusal this entrypoint's
+    own docstring names (`commit_authored_content` is for in-place mutation
+    of an EXISTING file, not creating a new one) must still fire -- exercise
+    it on a repo whose HEAD genuinely lacks the path, the easy case to hit:
+    a fresh repo with one committed file and no `ledger.txt` at all."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "other.txt").write_text("seed\n", encoding="utf-8")
+    _real_git(["add", "--", "other.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("a commit message\n", encoding="utf-8")
+
+    result = git_native.commit_authored_content(
+        "ledger.txt", "NEW LEDGER CONTENT\n", msg_file, repo
+    )
+
+    assert not result.ok
+    assert "does not exist in HEAD" in result.stderr
+    assert "ledger.txt" in result.stderr
+
+
+def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tmp_path):
+    """C3's swap of `rev-parse HEAD` for `git_state.head_sha()` must not
+    weaken `update-ref`'s own compare-and-swap: `old_head` (however it was
+    obtained) is passed as `update-ref`'s old-value argument, and git
+    refuses atomically if the ref no longer matches it at call time. Force
+    exactly that race by advancing HEAD (a concurrent sibling's commit) in
+    the window between `commit_authored_content`'s own `old_head` read and
+    its `update-ref` call, and assert the CAS still refuses loud rather
+    than silently orphaning the sibling's commit."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("a commit message\n", encoding="utf-8")
+
+    real_update_ref = git_native._git
+
+    def _sibling_commits_first(args, **kwargs):
+        if args[0] == "update-ref":
+            (repo / "sibling.txt").write_text("sibling\n", encoding="utf-8")
+            _real_git(["add", "--", "sibling.txt"], repo)
+            _real_git(["commit", "-q", "-m", "concurrent sibling commit"], repo)
+        return real_update_ref(args, **kwargs)
+
+    with patch.object(git_native, "_git", side_effect=_sibling_commits_first):
+        result = git_native.commit_authored_content(
+            "file.txt", "AUTHORED CONTENT\n", msg_file, repo
+        )
+
+    assert not result.ok
+    assert "compare-and-swap" in result.stderr
+    assert "concurrently" in result.stderr
+    # The sibling's own commit must still be HEAD's tip -- a silently
+    # orphaned peer commit is exactly the hazard this CAS exists to prevent.
+    head_now = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    subject_now = subprocess.run(
+        ["git", "log", "-1", "--format=%s", head_now], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert subject_now == "concurrent sibling commit"
 
 
 def _committed_content_at_head(repo, rel: str) -> str:
@@ -1168,3 +1264,185 @@ def test_validate_explicit_deliverable_id_rejects_unresolvable_pln(tmp_path):
 
     assert result is not None
     assert "does not resolve to any real artifact" in result
+
+
+# ---------------------------------------------------------------------------
+# (h) C2 (2026-08-21): `_index_blobs`/`_head_blobs`/`_resolve_mode_for_paths`
+# re-pointed onto `coordinator_core.git.git_state` -- index side spawn-free,
+# HEAD side keeps its single `ls-tree` behind `git_state.head_blobs`.
+# state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-without-
+# spawning-git/C2.md
+# ---------------------------------------------------------------------------
+
+
+def test_index_blobs_reads_staged_sha_with_no_git_spawn(tmp_path, monkeypatch):
+    """`_index_blobs` must answer from `git_state.read_index` alone -- no
+    `_git()` subprocess call reachable from this function any more (the
+    INDEX side becomes spawn-free per this chunk's own AC)."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+
+    def _fail(*_a, **_kw):
+        raise AssertionError("_index_blobs must not spawn git")
+
+    monkeypatch.setattr(git_native, "_git", _fail)
+
+    blobs = git_native._index_blobs(repo, ["a.txt", "missing.txt"])
+
+    assert blobs["missing.txt"] is None
+    assert blobs["a.txt"] is not None
+    assert blobs["a.txt"] != git_native._GIT_READ_FAILED
+    assert blobs["a.txt"] != git_native._GIT_PATH_UNRECONCILED
+
+
+def test_index_blobs_empty_paths_returns_empty_dict_no_read(tmp_path, monkeypatch):
+    def _fail(*_a, **_kw):
+        raise AssertionError("read_index must not be reached for empty paths")
+
+    monkeypatch.setattr(git_native, "read_index", _fail)
+
+    assert git_native._index_blobs(tmp_path, []) == {}
+
+
+def test_index_blobs_maps_parse_failure_to_git_read_failed_sentinel(tmp_path, monkeypatch):
+    """A `read_index` failure (`IndexParseError`) must degrade EVERY
+    requested path to `_GIT_READ_FAILED`, never a plain `None` -- the exact
+    "degraded reads" P1 this sentinel exists to close (see `_index_blobs`'s
+    own docstring)."""
+    repo = _init_real_repo(tmp_path)
+
+    def _raise(*_a, **_kw):
+        raise git_native.IndexParseError("boom")
+
+    monkeypatch.setattr(git_native, "read_index", _raise)
+
+    blobs = git_native._index_blobs(repo, ["a.txt", "b.txt"])
+
+    assert blobs["a.txt"] is git_native._GIT_READ_FAILED
+    assert blobs["b.txt"] is git_native._GIT_READ_FAILED
+
+
+def test_head_blobs_reads_committed_sha_via_git_state_reader(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    blobs = git_native._head_blobs(repo, ["a.txt", "untracked.txt"])
+
+    assert blobs["a.txt"] is not None
+    assert blobs["untracked.txt"] is None
+
+
+def test_head_blobs_unborn_branch_reads_as_absent_not_read_failed(tmp_path):
+    """No commits yet -- `git_state.head_blobs` folds the "not a valid
+    object name HEAD" case into an ordinary empty answer; this must still
+    read as `None` (absent), never `_GIT_READ_FAILED`, matching pre-C2
+    behaviour for the unborn-branch case."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+
+    blobs = git_native._head_blobs(repo, ["a.txt"])
+
+    assert blobs["a.txt"] is None
+
+
+def test_head_blobs_infra_failure_maps_to_git_read_failed_sentinel(tmp_path, monkeypatch):
+    """A genuine infrastructure failure below `git_state.head_blobs` (e.g.
+    an unresolvable `.git` dir) must still surface as `_GIT_READ_FAILED`,
+    never silently downgraded to `None`."""
+    repo = _init_real_repo(tmp_path)
+
+    def _raise(*_a, **_kw):
+        raise OSError("boom")
+
+    monkeypatch.setattr(git_native, "_git_state_head_blobs", _raise)
+
+    blobs = git_native._head_blobs(repo, ["a.txt"])
+
+    assert blobs["a.txt"] is git_native._GIT_READ_FAILED
+
+
+def test_resolve_mode_for_paths_prefers_index_over_head(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    (repo / "exe.sh").write_text("#!/bin/sh\n")
+    _real_git(["add", "--", "exe.sh"], repo)
+    _real_git(["update-index", "--chmod=+x", "exe.sh"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    modes = git_native._resolve_mode_for_paths(repo, ["exe.sh"])
+
+    assert modes["exe.sh"] == "100755"
+
+
+def test_resolve_mode_for_paths_falls_back_to_head_when_no_index_entry(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    (repo / "exe.sh").write_text("#!/bin/sh\n")
+    _real_git(["add", "--", "exe.sh"], repo)
+    _real_git(["update-index", "--chmod=+x", "exe.sh"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+    _real_git(["rm", "--cached", "-q", "exe.sh"], repo)
+
+    modes = git_native._resolve_mode_for_paths(repo, ["exe.sh"])
+
+    assert modes["exe.sh"] == "100755"
+
+
+def test_resolve_mode_for_paths_absent_path_omitted(tmp_path):
+    repo = _init_real_repo(tmp_path)
+
+    modes = git_native._resolve_mode_for_paths(repo, ["nowhere.txt"])
+
+    assert "nowhere.txt" not in modes
+
+
+def test_agree_branch_cas_refusal_second_index_read_is_a_fresh_observation(tmp_path):
+    """THE LOAD-BEARING CONSTRAINT (C2 brief): `_agree_branch_cas_refusal`'s
+    SECOND `_index_blobs` call, taken immediately before the agree branch's
+    own `git add`, must remain a genuine fresh observation once re-pointed
+    onto `git_state.read_index` -- not a cached/stale snapshot. Mutates the
+    index strictly BETWEEN the pre-snapshot and the CAS re-check and asserts
+    the refusal still fires."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    pre_index_blobs = git_native._index_blobs(repo, ["a.txt"])
+    pre_head_blobs = git_native._head_blobs(repo, ["a.txt"])
+
+    # A peer's own write lands strictly between the pre-snapshot above and
+    # the CAS re-check below -- the exact check-then-act window this
+    # function exists to close.
+    (repo / "a.txt").write_text("two\n")
+    _real_git(["add", "--", "a.txt"], repo)
+
+    result = git_native._agree_branch_cas_refusal(
+        repo, ["a.txt"], pre_index_blobs, pre_head_blobs
+    )
+
+    assert result is not None
+    assert result.ok is False
+    assert "a.txt" in result.stderr
+    assert "index entry changed since this call's own snapshot" in result.stderr
+
+
+def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_path):
+    """Sibling control case: with nothing mutated between the two reads, the
+    CAS re-check must NOT refuse -- proves the fresh-observation test above
+    is actually detecting the mutation, not just always refusing."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    pre_index_blobs = git_native._index_blobs(repo, ["a.txt"])
+    pre_head_blobs = git_native._head_blobs(repo, ["a.txt"])
+
+    result = git_native._agree_branch_cas_refusal(
+        repo, ["a.txt"], pre_index_blobs, pre_head_blobs
+    )
+
+    assert result is None

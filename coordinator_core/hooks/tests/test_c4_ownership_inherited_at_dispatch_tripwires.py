@@ -631,6 +631,16 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
             "coordinator_core/ops/session/scope_report.py",
             "assert_paths_in_session_scope",
         ),
+        (
+            "commit_set",
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "compute_offer",
+        ),
+        (
+            "commit_set",
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "full_ownership_map",
+        ),
     }
 )
 

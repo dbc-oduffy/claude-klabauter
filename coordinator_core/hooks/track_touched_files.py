@@ -89,7 +89,6 @@ from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
-from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session.scope import format_touch_event, normalize_touch_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -662,6 +661,18 @@ async def _handler(params: dict, repo_root=None) -> dict:
             #     write is advisory and idempotent (a real dispatch-time record always
             #     wins), and an identity ladder that disagrees with the canonical one
             #     is the defect class this whole seam is being swept for.
+            # Function-local: this hooks module is eagerly imported by the
+            # hooks package sweep, but ops.session_context (and the ops
+            # registry it drags in — percolate engine, publish transport,
+            # close_out_and_stamp, urllib.request, http.client, yaml) is
+            # otherwise unused by any catering fire. Moving the import to
+            # call time (this branch fires only for subagent tool calls)
+            # keeps the ops graph off the top-level catering hook path.
+            # WHAT this resolves is unchanged — only WHEN the module loads.
+            from coordinator_core.ops.session_context import (
+                resolve_current_session_id,
+            )
+
             _em_session_id = resolve_current_session_id() or ""
             if _em_session_id and _em_session_id != session_id:
                 await asyncio.to_thread(

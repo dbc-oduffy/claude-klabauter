@@ -420,7 +420,9 @@ def _resolve_claim_context(
         AMBIGUOUS" verbatim.
     """
     try:
-        from coordinator_core.ops.session.safe_commit_offer import compute_offer
+        from coordinator_core.ops.session.safe_commit_offer import (
+            full_ownership_map,
+        )
         from coordinator_core.session import core as _session_core
     except Exception:
         return None
@@ -432,16 +434,17 @@ def _resolve_claim_context(
     if not sid:
         return None
 
+    # `full_ownership_map`, not `compute_offer(...)["ownership"]` (2026-08-21):
+    # the offer's `peer` bucket is scoped to paths the CLOSING session itself
+    # holds, and this loop asks about paths it got from `git status` instead.
+    # Read off the offer, a peer's in-flight file that this session never
+    # touched is absent from `peer` entirely and classifies AMBIGUOUS -- which
+    # is how an unattended sweep gets nudged toward committing it. See that
+    # function's own docstring for why the wider map is in-process only.
     try:
-        offer = compute_offer(sid, repo_root)
+        mine_paths, peer_map = full_ownership_map(sid, repo_root)
     except Exception:
         return None
-
-    ownership = offer.get("ownership") or {}
-    mine_paths: FrozenSet[str] = frozenset(ownership.get("mine") or [])
-    peer_map: Dict[str, dict] = {
-        entry["path"]: entry for entry in (ownership.get("peer") or [])
-    }
     return mine_paths, peer_map
 
 

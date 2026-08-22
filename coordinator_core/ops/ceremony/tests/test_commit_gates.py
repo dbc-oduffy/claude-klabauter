@@ -43,6 +43,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.ceremony import commit_gates as _cg
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -54,6 +55,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
     parse_step267_blocks,
 )
+from coordinator_core.ops.ceremony.git_native import status_porcelain as _status_porcelain
 
 # Real-git spawn is load-bearing: dirty_tree_gate classifies real porcelain
 # output (staged/EOL-phantom/rename-destination-only), which a mocked git
@@ -81,6 +83,36 @@ def _seed_file(repo: Path, rel_path: str, content: str) -> None:
     p = repo / rel_path
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
+
+
+def _make_conflicted_repo(tmp_path: Path) -> Path:
+    """A repo whose index carries an unmerged (stage != 0) entry -- an
+    ordinary mid-merge-conflict state, not a malformed index. `read_index`
+    raises `IndexParseError` on this by contract (git_state.py:47-50); F1
+    fixture repos exercise that this is a live, unresolved-merge condition,
+    never a crash."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "conflict.md", "base\n")
+    _git(["add", "--", "conflict.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    base_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    _git(["checkout", "-q", "-b", "side"], repo)
+    _seed_file(repo, "conflict.md", "side change\n")
+    _git(["commit", "-q", "-am", "side change"], repo)
+
+    _git(["checkout", "-q", base_branch], repo)
+    _seed_file(repo, "conflict.md", "main change\n")
+    _git(["commit", "-q", "-am", "main change"], repo)
+
+    # Left deliberately unresolved -- `git merge` exits non-zero here, which
+    # is the point: the index now carries stage-1/2/3 entries for
+    # conflict.md, never committed or resolved.
+    subprocess.run(["git", "merge", "-q", "side"], cwd=str(repo), capture_output=True, text=True)
+    return repo
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +392,26 @@ def test_deletion_gate_f3_inverse_check_trips_on_own_unblocked_deletion(tmp_path
     assert any("no Step 2.67 block" in d for d in outcome.diagnostics)
 
 
+def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
+    """F1 (code-review, P1): `read_index` raises `IndexParseError` on ANY
+    unmerged (stage != 0) index entry -- an ordinary mid-merge-conflict repo
+    state. Assertion-2's index read (only reached when the message carries a
+    Kept-claim) must degrade to a refusal, never propagate the raise up
+    through `commit_pipeline.commit()` and crash the op."""
+    repo = _make_conflicted_repo(tmp_path)
+
+    msg = (
+        "subject\n"
+        "\n"
+        "Kept (Step 2.67):\n"
+        f"conflict.md{_EM_DASH}still needed\n"
+        "--- end Step 2.67 blocks ---\n"
+    )
+    outcome = deletion_block_gate(msg, gate_paths=["conflict.md"], cwd=repo)
+    assert outcome.passed is False
+    assert any("staged index unreadable" in d for d in outcome.diagnostics)
+
+
 # ---------------------------------------------------------------------------
 # dirty_tree_gate -- porcelain classification
 # ---------------------------------------------------------------------------
@@ -390,6 +442,21 @@ def test_dirty_tree_gate_untracked_unattributable(tmp_path):
     outcome = dirty_tree_gate(repo)
     assert outcome.passed is False
     assert outcome.unattributable == ["orphan.txt"]
+
+
+def test_dirty_tree_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
+    """F1 (code-review, P1): `read_index` raises `IndexParseError` on ANY
+    unmerged (stage != 0) index entry -- an ordinary mid-merge-conflict repo
+    state. This gate's read is unconditional (unlike deletion_block_gate's
+    Kept-claim-gated read), so this is the more directly reachable of the
+    two sites. Must degrade to the gate's own "unattributable" verdict, never
+    propagate the raise and crash the commit op."""
+    repo = _make_conflicted_repo(tmp_path)
+
+    outcome = dirty_tree_gate(repo)
+    assert outcome.passed is False
+    assert len(outcome.unattributable) == 1
+    assert "index unreadable" in outcome.unattributable[0]
 
 
 def test_dirty_tree_gate_eol_phantom_skipped(tmp_path):
@@ -998,3 +1065,436 @@ def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, mon
         _REGISTRY_RELPATH in line and "simulated unreadable file" in line
         for line in outcome.diagnostics
     )
+
+
+# ---------------------------------------------------------------------------
+# C3 equivalence fixture -- pre-re-point vs post-re-point parity
+#
+# C3 re-pointed dirty_tree_gate's staged classification and
+# deletion_block_gate's Kept-claim (Assertion-2) HEAD-membership leg onto
+# `coordinator_core.git.git_state` (read_index / head_blobs) with no `git`
+# process, but landed with NO new tests -- the 48 pre-existing tests above
+# predate the re-point and were never written to catch it changing an
+# answer. This section is that missing equivalence proof: an oracle,
+# reconstructed verbatim from the pre-re-point implementation (recovered via
+# `git show 69f92af34^:coordinator_core/ops/ceremony/commit_gates.py`), run
+# side-by-side with the live gate over every shape the re-point's own
+# module docstring calls out as load-bearing (mode-only divergence, content
+# divergence, staged/worktree/add/delete, a clean path, a path with a
+# space, a non-ASCII path, a CRLF EOL-phantom, a symlink, and a submodule
+# gitlink).
+#
+# The oracle reuses every helper the re-point did NOT touch
+# (`_build_known_scope`, `_diff_name_only_worktree`, `_porcelain_path`,
+# `parse_step267_blocks`, `_parse_name_status_deletions`,
+# `_parse_name_status_rename_sources`) and only re-implements the two legs
+# that changed: `dirty_tree_gate`'s X-column staged check (was `git status
+# --porcelain`'s own X char), and `deletion_block_gate`'s Kept-claim
+# HEAD-membership check (was an unscoped `git ls-tree -r HEAD --name-only`
+# walk, not the blob-type-filtered `head_blobs()`).
+# ---------------------------------------------------------------------------
+
+
+def _old_dirty_tree_gate(worktree_root, gate_paths=None) -> DirtyTreeOutcome:
+    """Oracle: `dirty_tree_gate` as it read BEFORE C3 -- staged classified by
+    `git status --porcelain`'s own X column, not index-vs-HEAD comparison.
+    """
+    root = Path(worktree_root)
+    known_scope = _cg._build_known_scope(root)
+    scoped = gate_paths is not None
+    gate_scope = set(gate_paths) if gate_paths else set()
+
+    if scoped and not gate_scope:
+        return DirtyTreeOutcome(passed=True, unattributable=[])
+
+    status_result = _status_porcelain(root, sorted(gate_scope) if scoped else None)
+    parsed_lines = []
+    phantom_candidates = []
+    for line in status_result.stdout.splitlines():
+        if not line:
+            continue
+        xy = line[:2]
+        path = _cg._porcelain_path(line)
+        x_char = xy[0] if xy else " "
+        parsed_lines.append((x_char, path))
+        if x_char == " ":
+            phantom_candidates.append(path)
+
+    real_diff_paths = set()
+    if phantom_candidates:
+        diff_result = _cg._diff_name_only_worktree(root, phantom_candidates)
+        real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
+
+    unattributable = []
+    for x_char, path in parsed_lines:
+        if x_char not in (" ", "?"):
+            continue
+        if x_char == " " and path not in real_diff_paths:
+            continue
+        if path in known_scope:
+            continue
+        if scoped and path not in gate_scope:
+            continue
+        unattributable.append(path)
+
+    return DirtyTreeOutcome(passed=not unattributable, unattributable=unattributable)
+
+
+def _old_deletion_block_gate(
+    msg_text: str, gate_paths, *, cwd, whole_index: bool = False
+) -> GateOutcome:
+    """Oracle: `deletion_block_gate` as it read BEFORE C3 -- Assertion-2's
+    HEAD-membership leg was an unscoped `git ls-tree -r HEAD --name-only`
+    walk over the WHOLE tree (every path, any object type), not
+    `head_blobs()`'s targeted, blob-type-filtered lookup. Assertion-1 and
+    Assertion-3 are UNCHANGED by C3 and are reproduced verbatim here only so
+    this oracle is a complete, callable stand-in.
+    """
+    has_block = has_step267_block(msg_text)
+    gate_scope = set(gate_paths)
+
+    if not whole_index and not gate_paths and not has_block:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    parsed = parse_step267_blocks(msg_text)
+
+    name_status_result = _cg.diff_cached_name_status(cwd, find_renames=True)
+    all_staged_deletions = _cg._parse_name_status_deletions(name_status_result.stdout)
+    staged_deletions = (
+        [p for p in all_staged_deletions if p in gate_scope]
+        if gate_scope
+        else all_staged_deletions
+    )
+    staged_deletions_set = set(staged_deletions)
+
+    all_rename_sources = _cg._parse_name_status_rename_sources(name_status_result.stdout)
+    rename_sources = (
+        [p for p in all_rename_sources if p in gate_scope] if gate_scope else all_rename_sources
+    )
+    staged_or_renamed_away_set = staged_deletions_set | set(rename_sources)
+
+    staged_all_set = set()
+    tracked_at_head = set()
+    if parsed.kept_claimed:
+        name_only_result = _cg._git(["diff", "--cached", "--name-only"], cwd=cwd)
+        all_staged = [p for p in name_only_result.stdout.splitlines() if p]
+        staged_all = [p for p in all_staged if p in gate_scope] if gate_scope else all_staged
+        staged_all_set = set(staged_all)
+
+        ls_tree_result = _cg._git(["ls-tree", "-r", "HEAD", "--name-only"], cwd=cwd)
+        tracked_at_head = {p for p in ls_tree_result.stdout.splitlines() if p}
+
+    diagnostics = []
+    for path in parsed.deleted_claimed:
+        if path not in staged_or_renamed_away_set:
+            diagnostics.append(f"Deleted-claim NOT staged for deletion: {path}")
+
+    for path in parsed.kept_claimed:
+        if path not in tracked_at_head and path not in staged_all_set:
+            diagnostics.append(f"Kept-claim does not exist at HEAD or in staged set: {path}")
+
+    for raw in parsed.kept_malformed:
+        diagnostics.append(
+            "Kept-line has no em-dash separator (unparseable, expected "
+            f"'<path> — <reason>'): {raw}"
+        )
+
+    if staged_deletions and not has_block:
+        diagnostics.append("Staged deletions present but commit body has no Step 2.67 block:")
+        for path in staged_deletions:
+            diagnostics.append(f"  {path}")
+
+    return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
+
+
+def _git_stdout(args, cwd) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+# --- dirty_tree_gate shape builders ----------------------------------------
+
+
+def _shape_mode_toggle(tmp_path):
+    """Pure mode-only divergence: `--chmod=+x` on the INDEX entry, no
+    worktree write -- this repo runs core.filemode=false, so a worktree
+    `chmod` would never reach git's own dirty classification at all."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "exec-me.sh", "echo hi\n")
+    _git(["add", "--", "exec-me.sh"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["update-index", "--chmod=+x", "exec-me.sh"], repo)
+    return repo
+
+
+def _shape_content_divergence(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "diverge.txt", "original\n")
+    _git(["add", "--", "diverge.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    (repo / "diverge.txt").write_text("changed unstaged\n", encoding="utf-8")
+    return repo
+
+
+def _shape_staged_only(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "staged.txt", "v1\n")
+    _git(["add", "--", "staged.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "staged.txt", "v2\n")
+    _git(["add", "--", "staged.txt"], repo)
+    return repo
+
+
+def _shape_worktree_only(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "worktree-only.txt", "base\n")
+    _git(["add", "--", "worktree-only.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "worktree-only.txt", "edited unstaged\n")
+    return repo
+
+
+def _shape_add(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "brand-new.txt", "new\n")
+    _git(["add", "--", "brand-new.txt"], repo)
+    return repo
+
+
+def _shape_delete(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "to-delete.txt", "bye\n")
+    _git(["add", "--", "to-delete.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["rm", "-q", "to-delete.txt"], repo)
+    return repo
+
+
+def _shape_clean(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "clean.txt", "unchanged\n")
+    _git(["add", "--", "clean.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    return repo
+
+
+def _shape_space_path(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a dir/has space.txt", "base\n")
+    _git(["add", "--", "a dir/has space.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "a dir/has space.txt", "edited\n")
+    return repo
+
+
+def _shape_nonascii_path(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "café-résumé.txt", "base\n")
+    _git(["add", "--", "café-résumé.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "café-résumé.txt", "edited\n")
+    return repo
+
+
+def _shape_crlf_eol_phantom(tmp_path):
+    """core.autocrlf=true here -- a naive on-disk hash disagrees with the
+    index OID on a measured 24.5% of clean blobs; this is the shape
+    `_diff_name_only_worktree`'s EOL-phantom filter exists to suppress."""
+    repo = _init_repo(tmp_path)
+    _git(["config", "core.autocrlf", "true"], repo)
+    content = b"line1\r\nline2\r\n"
+    p = repo / "crlf.txt"
+    p.write_bytes(content)
+    _git(["add", "--", "crlf.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    # Re-write byte-identical content -- a tracked-unstaged phantom.
+    p.write_bytes(content)
+    return repo
+
+
+def _shape_symlink(tmp_path):
+    """A symlink (mode 120000) tracked at HEAD, SYNTHESISED via a direct
+    index write -- this repo runs core.symlinks=false, so a worktree
+    symlink would never round-trip through git as one."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    # cacheinfo needs stdin text, not argv -- git hash-object reads stdin.
+    proc = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo), input="target.txt", capture_output=True, text=True, check=True,
+    )
+    blob = proc.stdout.strip()
+    _git(["update-index", "--add", "--cacheinfo", f"120000,{blob},link-me"], repo)
+    _git(["commit", "-q", "-m", "add symlink"], repo)
+    return repo
+
+
+def _shape_gitlink(tmp_path):
+    """A submodule gitlink (mode 160000) tracked at HEAD, SYNTHESISED via a
+    direct index write -- this repo's own index contains no 160000 entry at
+    all to build a fixture from. The pointed-to sha need not be a real
+    submodule commit; git's gitlink object never resolves it locally."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    head_sha = _git_stdout(["rev-parse", "HEAD"], repo)
+    _git(["update-index", "--add", "--cacheinfo", f"160000,{head_sha},vendor/sub"], repo)
+    _git(["commit", "-q", "-m", "add gitlink"], repo)
+    return repo
+
+
+_DIRTY_TREE_SHAPES = [
+    pytest.param(_shape_mode_toggle, id="mode_toggle_chmod"),
+    pytest.param(_shape_content_divergence, id="content_divergence"),
+    pytest.param(_shape_staged_only, id="staged_only"),
+    pytest.param(_shape_worktree_only, id="worktree_only"),
+    pytest.param(_shape_add, id="add"),
+    pytest.param(_shape_delete, id="delete"),
+    pytest.param(_shape_clean, id="clean_path"),
+    pytest.param(_shape_space_path, id="path_with_space"),
+    pytest.param(_shape_nonascii_path, id="nonascii_path"),
+    pytest.param(_shape_crlf_eol_phantom, id="crlf_eol_phantom"),
+    pytest.param(_shape_symlink, id="symlink_120000"),
+    pytest.param(_shape_gitlink, id="gitlink_160000"),
+]
+
+
+#: KNOWN, REPORTED DIVERGENCE (executor report, REGRESSION-2 fix): the
+#: pre-re-point oracle keys `_diff_name_only_worktree`'s EOL-phantom lookup
+#: on `git status --porcelain`'s own C-QUOTED path (`"a dir/has space.txt"`)
+#: -- that quoted literal never matches the real (unquoted) worktree path as
+#: a `git diff --name-only` pathspec, so the oracle's `real_diff_paths`
+#: lookup misses and the genuinely dirty space-containing path is silently
+#: swallowed as an EOL phantom (passed). The live gate (now reading `-z`,
+#: unquoted) resolves the same lookup correctly and reports the path
+#: unattributable -- a CORRECT answer, not bug-for-bug parity with the buggy
+#: oracle. Only `path_with_space` hits this in practice: `nonascii_path`'s
+#: C-quoted, octal-escaped literal (`"caf\303\251..."`) does NOT reproduce
+#: the same miss when fed to `git diff --name-only` as a pathspec -- both
+#: live and oracle agree there (verified by a real run, not assumed; the
+#: mechanism is presumably git's own pathspec parser recognising and
+#: unquoting the C-quoted literal, unlike a plain-text name-list compare) --
+#: so `nonascii_path` is deliberately absent from this set.
+_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS = {"path_with_space"}
+
+
+@pytest.mark.parametrize("shape", _DIRTY_TREE_SHAPES)
+def test_dirty_tree_gate_matches_pre_c3_oracle(tmp_path, shape, request):
+    """AC (undischarged by C3): `dirty_tree_gate`'s re-pointed staged
+    classification returns a SET-IDENTICAL answer to the pre-re-point
+    (`git status --porcelain` X-column) implementation, across every shape
+    named in the C3 dispatch brief.
+
+    EXCEPT `_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS` -- see that constant's
+    docstring: the oracle itself misclassifies a quoted dirty path as a
+    phantom, and the live gate's more-correct answer is asserted directly
+    instead of parity with that bug.
+    """
+    case_id = request.node.callspec.id
+    repo = shape(tmp_path)
+    live = dirty_tree_gate(repo)
+    oracle = _old_dirty_tree_gate(repo)
+
+    if case_id in _DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS:
+        assert oracle.unattributable == [], (
+            f"oracle={oracle!r} -- expected the oracle's C-quoted lookup to "
+            "keep silently swallowing this path as a phantom; if this now "
+            "fails, the oracle's own bug may have been fixed elsewhere and "
+            "this special-case should be removed"
+        )
+        assert live.unattributable != [], (
+            f"live={live!r} -- expected the live (unquoted, `-z`) gate to "
+            "correctly report this genuinely dirty path as unattributable"
+        )
+        return
+
+    assert live.unattributable == oracle.unattributable
+    assert live.passed == oracle.passed
+
+
+def test_dirty_tree_gate_crlf_phantom_still_suppressed(tmp_path):
+    """The load-bearing assertion named in the brief: the EOL-phantom filter
+    must still suppress a CRLF phantom under core.autocrlf=true, on the LIVE
+    gate (not just parity with the oracle above)."""
+    repo = _shape_crlf_eol_phantom(tmp_path)
+    outcome = dirty_tree_gate(repo)
+    assert outcome.passed is True
+    assert outcome.unattributable == []
+
+
+# --- deletion_block_gate Kept-claim shape builders --------------------------
+
+
+def _kept_claim_message(path: str) -> str:
+    return (
+        "subject\n"
+        "\n"
+        "Kept (Step 2.67):\n"
+        f"{path}{_EM_DASH}still needed\n"
+        "--- end Step 2.67 blocks ---\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "shape,path",
+    [
+        pytest.param(_shape_clean, "clean.txt", id="clean_path"),
+        pytest.param(_shape_space_path, "a dir/has space.txt", id="path_with_space"),
+        pytest.param(_shape_nonascii_path, "café-résumé.txt", id="nonascii_path"),
+        pytest.param(_shape_symlink, "link-me", id="symlink_120000"),
+        pytest.param(_shape_gitlink, "vendor/sub", id="gitlink_160000"),
+    ],
+)
+def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path, shape, path):
+    """AC (undischarged by C3): `deletion_block_gate`'s Assertion-2
+    (Kept-claim) re-pointed HEAD-membership leg (`head_blobs`) returns a
+    SET-IDENTICAL answer to the pre-re-point (unscoped `git ls-tree -r HEAD
+    --name-only`, no type filter) implementation.
+
+    `head_blobs()` was patched (REGRESSION-1 fix) to admit `obj_type ==
+    "commit"` (a 160000 gitlink) alongside `"blob"` -- only `"tree"` is
+    excluded now -- so `gitlink_160000` matches the oracle here exactly, no
+    special-case needed.
+
+    KNOWN, REPORTED DIVERGENCE (REGRESSION-2 fix; not silently dropped --
+    see the executor report): the oracle's HEAD-membership leg is an
+    unscoped, UNQUOTED-nothing `git ls-tree -r HEAD --name-only` walk --
+    default C-quoting applies, so a non-ASCII Kept-claimed path never
+    matches the oracle's `tracked_at_head` set and the oracle wrongly
+    reports it missing. `nonascii_path` is EXPECTED TO DIVERGE from the
+    oracle here in ONE direction only (live.passed=True, oracle.passed=
+    False) -- the live gate (`head_blobs`, unquoted `ls-tree -z`) is the
+    CORRECT answer, not bug-for-bug parity with the oracle's own quoting bug.
+    """
+    repo = shape(tmp_path)
+    msg = _kept_claim_message(path)
+    live = deletion_block_gate(msg, gate_paths=[path], cwd=repo)
+    oracle = _old_deletion_block_gate(msg, gate_paths=[path], cwd=repo)
+
+    if path == "café-résumé.txt":
+        assert oracle.passed is False, (
+            f"oracle={oracle!r} -- expected the oracle's C-quoted ls-tree "
+            "lookup to keep missing this non-ASCII path; if this now "
+            "passes, the oracle's own bug may have been fixed elsewhere "
+            "and this special-case should be removed"
+        )
+        assert live.passed is True, (
+            f"live={live!r} -- expected the live (unquoted `ls-tree -z` via "
+            "head_blobs) gate to correctly find this Kept-claim at HEAD"
+        )
+        return
+
+    assert live.passed == oracle.passed, (
+        f"live={live!r} oracle={oracle!r} -- head_blobs() vs unscoped "
+        "ls-tree diverged on Kept-claim HEAD membership (see this test's "
+        "own docstring)"
+    )
+    assert live.diagnostics == oracle.diagnostics

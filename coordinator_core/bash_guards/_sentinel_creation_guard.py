@@ -34,7 +34,7 @@ HARDENING" section (2026-07-21) fixed for the destructive-git/rm/chmod
 surfaces. Rather than re-deriving that unwrap logic a second time, this
 module REUSES its primitives directly -- `_strip_env_prefix`,
 `_strip_heredoc_bodies`, `_normalize_interpreter_basename`,
-`_has_noexec_flag_before_script`, `_BUNDLED_C_FLAG_RE`,
+`_has_noexec_flag_before_script`, `_has_script_operand`, `_BUNDLED_C_FLAG_RE`,
 `_C_FLAG_INTERPRETERS`, `_SHELL_FILE_INTERPRETERS`,
 `_MAX_INDIRECTION_DEPTH` -- and drives them with a SENTINEL-specific leaf
 classifier (`SentinelCreationDetector._segment_denies`, the four base rules
@@ -204,6 +204,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _MAX_INDIRECTION_DEPTH,
     _SHELL_FILE_INTERPRETERS,
     _has_noexec_flag_before_script,
+    _has_script_operand,
     _normalize_executable_basename,
     _normalize_interpreter_basename,
     _segments_from_tokens,
@@ -579,7 +580,9 @@ class SentinelCreationDetector:
                 if verdict is not None:
                     return f"{norm_head} -c '<inline>' -> {verdict}"
                 return None
-            if norm_head in _SHELL_FILE_INTERPRETERS and len(working) >= 2:
+            if norm_head in _SHELL_FILE_INTERPRETERS and _has_script_operand(
+                working[1:]
+            ):
                 return (
                     f"{norm_head} <file> (interpreter-invoked script -- "
                     "indirection wrapper, script content unexamined)"

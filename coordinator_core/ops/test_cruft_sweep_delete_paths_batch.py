@@ -84,10 +84,12 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
     assert len(calls) == 2
     assert calls[0][0] == cruft_sweep._DELETE_BATCH_CHUNK_SIZE
     assert calls[1][0] == 3
-    # Every chunk's own timeout stays bounded by ITS OWN size, not the
-    # whole batch's size -- the fixed ceiling the fix exists to give.
-    assert calls[0][1] == cruft_sweep._DELETE_TIMEOUT_SECS * cruft_sweep._DELETE_BATCH_CHUNK_SIZE
-    assert calls[1][1] == cruft_sweep._DELETE_TIMEOUT_SECS * 3
+    # Every chunk's timeout is the SAME flat bound regardless of how many
+    # targets it carries -- the DR-349 fix. A per-item multiplier here
+    # (`_DELETE_TIMEOUT_SECS * len(chunk)`) would make these two differ.
+    assert calls[0][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)
+    assert calls[1][1] == float(cruft_sweep._DELETE_TIMEOUT_SECS)
+    assert calls[0][1] == calls[1][1]
     assert all(results.values())
     assert not any(p.exists() for p in targets)
 
@@ -122,3 +124,82 @@ def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
     assert all(results[str(p)] is True for p in second_chunk)
     assert all(p.exists() for p in first_chunk)
     assert not any(p.exists() for p in second_chunk)
+
+
+# ---------------------------------------------------------------------------
+# DR-349 § 4 -- the deletion phase derives its bound from the sweep's deadline
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatch):
+    """A supplied watchdog's REMAINDER caps each chunk's bound, so stacking
+    chunks cannot buy more time than the phase's own ceiling grants."""
+    a, b = (tmp_path / n for n in ("a.txt", "b.txt"))
+    for p in (a, b):
+        _touch(p)
+
+    calls = []
+
+    def _fake_run(argv, timeout=None, **kwargs):
+        calls.append(timeout)
+        for t in argv[2:]:
+            Path(t).unlink(missing_ok=True)
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", _fake_run)
+
+    wd = cruft_sweep._Watchdog(ceiling_secs=1.5)
+    cruft_sweep._delete_paths_batch([a, b], watchdog=wd)
+
+    assert len(calls) == 1
+    assert 0.0 < calls[0] <= 1.5
+    assert calls[0] < cruft_sweep._DELETE_TIMEOUT_SECS
+
+
+def test_exhausted_watchdog_skips_the_spawn_but_still_reports_every_target(
+    tmp_path, monkeypatch
+):
+    """Past the deadline no `rm -rf` is spawned at all -- the phase stops
+    occupying the box -- and every target still gets a verdict from its own
+    post-hoc `exists()` check, so the return shape is unchanged."""
+    a, b = (tmp_path / n for n in ("a.txt", "b.txt"))
+    _touch(a)
+    _touch(b)
+    b.unlink()
+
+    def _fake_run(argv, **kwargs):  # pragma: no cover - must never be reached
+        raise AssertionError("spawned rm -rf past the watchdog deadline")
+
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", _fake_run)
+
+    wd = cruft_sweep._Watchdog(ceiling_secs=0.0)
+    results = cruft_sweep._delete_paths_batch([a, b], watchdog=wd)
+
+    assert results == {str(a): False, str(b): True}
+    assert a.exists()
+
+
+def test_watchdog_env_knob_may_lower_the_ceiling_but_never_raise_it(monkeypatch):
+    """DR-349 § 3: `CRUFT_SWEEP_WATCHDOG_CEILING_SECS` is narrow-only. A stale
+    `export` in a sibling repo must not be able to grant this sweep more of a
+    box already carrying 50-70 concurrent sessions."""
+    default = float(cruft_sweep._WATCHDOG_CEILING_SECS_DEFAULT)
+
+    monkeypatch.setenv("CRUFT_SWEEP_WATCHDOG_CEILING_SECS", "5")
+    assert cruft_sweep._resolve_watchdog_ceiling_secs() == 5.0
+
+    monkeypatch.setenv("CRUFT_SWEEP_WATCHDOG_CEILING_SECS", str(default * 10))
+    assert cruft_sweep._resolve_watchdog_ceiling_secs() == default
+
+    monkeypatch.setenv("CRUFT_SWEEP_WATCHDOG_CEILING_SECS", "not-a-number")
+    assert cruft_sweep._resolve_watchdog_ceiling_secs() == default
+
+    monkeypatch.delenv("CRUFT_SWEEP_WATCHDOG_CEILING_SECS")
+    assert cruft_sweep._resolve_watchdog_ceiling_secs() == default
+
+
+def test_watchdog_remaining_is_floored_at_zero():
+    """`remaining()` is handed straight to `min()`; a negative remainder would
+    silently invert the clamp into a widening."""
+    assert cruft_sweep._Watchdog(ceiling_secs=-10.0).remaining() == 0.0
+    assert cruft_sweep._Watchdog(ceiling_secs=30.0).remaining() > 0.0

@@ -41,10 +41,22 @@ re-deriving a threshold) can see which number is MEASURED
 this chunk's own dispatch brief: "Write the floor and the margins into the
 test as named constants with the reasoning beside them."
 
-WINDOWS-ONLY, STATED EXPLICITLY. Every process-time assertion in this file
-skips off Windows: `batched_process_time_ms` is a Windows job-object
-primitive with no POSIX equivalent (`process_time.py` module docstring),
-and DR-344's brightline is itself scoped to this box.
+WINDOWS AND DARWIN, STATED EXPLICITLY (C9, docs/plans/2026-08-22-the-
+brightlines-instrument-exists-on-the-fleet-floor.md, AC20/AC24). Every
+process-time assertion in this file skips off both: `batched_process_time_
+ms` implements a Windows job-object primitive and a Darwin kqueue+`wait4`
+primitive, nothing else (`process_time.py` module docstring); DR-344's
+brightline itself carries no platform scoping (checked against the ruling
+text directly), so `DISPATCH_PROCESS_TIME_CEILING_MS` below is the SAME
+500ms constant on both platforms -- the Windows figure is UNTOUCHED by
+this addition. What is per-platform is the MEASURED evidence that the
+dispatch entrypoint clears the bar, not the bar itself: measured this
+session (2026-08-22, this box, Darwin, `batched_process_time_quantiles
+(k=20, n=15)` per corpus row, AC20's "measured pin cites n, p50, p90, and
+the date"): `bash_echo_hello` p50=60.1ms/p90=62.1ms, `bash_cat_pyproject_
+head` p50=64.5ms/p90=71.2ms, `powershell_get_childitem` p50=61.9ms/
+p90=65.9ms -- every row comfortably under the 500ms brightline, with wide
+headroom (>6x at p90).
 
 THE TWO HARNESS TRAPS THIS FILE AVOIDS (already burned in this repo,
 `process_time.py` module docstring):
@@ -86,7 +98,11 @@ from coordinator_core.benchmarks.bash_dispatch_probe import (
     enumerate_spawn_set_for_corpus,
     measure_derived_floor,
 )
-from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+from coordinator_core.benchmarks.process_time import (
+    IS_DARWIN,
+    IS_WINDOWS,
+    batched_process_time_ms,
+)
 
 # Spawns real external processes (K=20 batches, plus one unbatched
 # verification run per corpus payload) and constructs real git repos via
@@ -119,9 +135,16 @@ contribution in this class; not consumed as a gate in this file, recorded
 for C3's own point-of-use derivation (AC8)."""
 
 
-def _require_windows() -> None:
-    if not IS_WINDOWS:
-        pytest.skip("process-time job-object accounting is a Windows-only primitive")
+def _require_supported_platform() -> None:
+    """Windows (job object) or Darwin (kqueue + `wait4`) -- the two
+    platforms `coordinator_core.benchmarks.process_time` implements
+    (`batched_process_time_ms`'s own module docstring). Every other
+    platform still has no process-time primitive here at all."""
+    if not (IS_WINDOWS or IS_DARWIN):
+        pytest.skip(
+            "process-time accounting has no primitive for this platform "
+            "-- see coordinator_core.benchmarks.process_time module docstring"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +193,7 @@ _KNOWN_OVER_BUDGET_PRE_FIX: set = set()
     ],
 )
 def test_dispatch_entrypoint_process_time_is_under_the_brightline(label):
-    _require_windows()
+    _require_supported_platform()
     payload = CORPUS_PAYLOADS[label]
     argv, env = _dispatch_cmd(payload)
     _verify_single_invocation_succeeds(argv, env)
@@ -195,7 +218,7 @@ def test_derived_floor_components_are_monotonically_increasing():
     definition of the three legs) -- a sanity check that the floor
     measurement itself is coherent, not a specific-value assertion (which
     would be machine-pinned and re-fail on every box this gate runs on)."""
-    _require_windows()
+    _require_supported_platform()
     floor = measure_derived_floor(k=K_INVOCATIONS)
     bare_ms = floor.bare_interpreter["process_time_ms"]
     closure_ms = floor.import_closure["process_time_ms"]

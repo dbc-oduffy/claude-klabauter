@@ -1839,6 +1839,16 @@ async def archive_and_commit(
             stage_paths.append(m.src)
             stage_paths.append(m.dst)
 
+        # `_argv_path_chunks` splits this flat [src, dst, src, dst, ...] list by
+        # raw path count, so a chunk boundary CAN fall between one move's src and
+        # its own dst. That is safe here, unlike in `_argv_group_chunks`, whose
+        # docstring makes pair-locality a requirement for its other callers:
+        # correctness does not depend on the two halves sharing a chunk, because
+        # ANY chunk's failure sets `stage_batch_error`, which reverses every acted
+        # move and returns before the commit runs — and the private index is a
+        # per-call tempfile discarded whole either way. There is no path on which
+        # a half-staged rename reaches a commit. Stated because the asymmetry with
+        # the sibling helper is otherwise a reasonable thing to stop and check.
         stage_batch_error: Optional[str] = None
         for chunk in _argv_path_chunks(stage_paths):
             add_proc = await asyncio.create_subprocess_exec(

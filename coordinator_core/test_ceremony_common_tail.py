@@ -6,17 +6,20 @@ that replaced their hand-maintained tail copies with it.
 
 Covers, per assembler (`workday_complete.brief`, `workweek_complete.brief`):
   - brief() calls resolve_operator_config() and returns a directives[] list
-    (never raises) with the two ceremony-close directives present, at the
-    expected step ids, with the correct cli/args/depends_on shape.
-  - both tail directives' `cli` values are members of that module's own
+    (never raises) with the ceremony-close directive present, at the
+    expected step id, with the correct cli/args/depends_on shape.
+  - the tail directive's `cli` value is a member of that module's own
     CONSUMES_MANIFEST (AC15c: no phantom verbs — the shared builder must not
     let either consumer drift off its manifest).
   - the hard_block invariant the refactor could silently break: workweek's
-    tail directives carry `hard_block: False` (workweek's own uniform
+    tail directive carries `hard_block: False` (workweek's own uniform
     post-build pass stamps `hard_block` onto every directive it builds,
-    tail included), while workday's tail directives carry NO `hard_block`
-    key at all (workday never had that concept — the shared tail builder
-    itself does not know about `hard_block`, per its own negative-spec).
+    tail included), while workday's carries NO `hard_block` key at all
+    (workday never had that concept — the shared tail builder itself does
+    not know about `hard_block`, per its own negative-spec).
+
+The emission-cadence half of this tail was removed with the emission
+artifact itself (2026-08-22 CUT); what remains is the post-command hook.
 
 Spec backlink: DoE-claude DoE-claude:pln-b1-ceremony-complete-computed--9ffa54,
 chunk C5, AC9
@@ -30,10 +33,6 @@ from typing import Any
 import coordinator_core.workday_complete.brief as workday_brief
 import coordinator_core.workweek_complete.brief as workweek_brief
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
-from coordinator_core.workstream_complete.directives_commit_tail import (
-    build_emit_cadence_directive,
-)
-
 import pytest
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -54,14 +53,10 @@ def _find(directives: list[dict[str, Any]], directive_id: str) -> dict[str, Any]
 def test_build_ceremony_close_tail_shape():
     tail = build_ceremony_close_tail(
         post_command_hook_id="d_step_x_post_command_hook",
-        emit_cadence_id="d_step_x_emit_cadence",
         ceremony_name="workday-complete",
     )
-    assert [entry["id"] for entry in tail] == [
-        "d_step_x_post_command_hook",
-        "d_step_x_emit_cadence",
-    ]
-    hook, cadence = tail
+    assert [entry["id"] for entry in tail] == ["d_step_x_post_command_hook"]
+    (hook,) = tail
     assert hook["cli"] == "coordinator-ceremony-hook"
     # 2026-07-26 arg-mismatch audit, class (c): the hook reads its one
     # positional (argv[0]) as the ceremony name — `args=[]` always resolved
@@ -71,17 +66,9 @@ def test_build_ceremony_close_tail_shape():
     assert hook["already_satisfied"] is False
     assert "hard_block" not in hook
 
-    assert cadence["cli"] == "emit-cadence"
-    assert cadence["args"] == []
-    assert cadence["depends_on"] is None
-    assert cadence["already_satisfied"] is False
-    assert "hard_block" not in cadence
-
-    # AC8: the emit-cadence entry declares itself best-effort so a
-    # non-zero exit lands in the ceremony runner's `degraded` bucket
-    # rather than `failed` — the post-command-hook entry does NOT get
-    # the key, since that step is not documented as best-effort.
-    assert cadence["best_effort"] is True
+    # The post-command-hook step is NOT best-effort — it never carried the
+    # key. The one entry that did was the emission-cadence directive, gone
+    # with the artifact (2026-08-22 CUT).
     assert "best_effort" not in hook
 
 
@@ -96,16 +83,9 @@ def test_workday_complete_tail_directives():
     assert hook["depends_on"] is None
     assert hook["cli"] in workday_brief.CONSUMES_MANIFEST
 
-    cadence = _find(directives, "d_step10_6_emit_cadence")
-    assert cadence["cli"] == "emit-cadence"
-    assert cadence["args"] == []
-    assert cadence["depends_on"] is None
-    assert cadence["cli"] in workday_brief.CONSUMES_MANIFEST
-
     # workday's assembler never stamps hard_block onto anything — the
     # invariant a silent regression in the refactor could break.
     assert "hard_block" not in hook
-    assert "hard_block" not in cadence
 
 
 def test_workweek_complete_tail_directives():
@@ -117,27 +97,11 @@ def test_workweek_complete_tail_directives():
     assert hook["depends_on"] is None
     assert hook["cli"] in workweek_brief.CONSUMES_MANIFEST
 
-    cadence = _find(directives, "d_step13_6_emit_cadence")
-    assert cadence["cli"] == "emit-cadence"
-    assert cadence["args"] == []
-    assert cadence["depends_on"] is None
-    assert cadence["cli"] in workweek_brief.CONSUMES_MANIFEST
-
     # workweek's uniform post-build pass stamps hard_block onto EVERY
-    # directive it builds, tail included — neither tail directive is a
-    # hard-block gate, so both must read False, never missing.
+    # directive it builds, tail included — the tail directive is not a
+    # hard-block gate, so it must read False, never missing.
     assert hook["hard_block"] is False
-    assert cadence["hard_block"] is False
 
-
-def test_workstream_complete_emit_cadence_directive_is_best_effort():
-    # AC8: workstream_complete takes only build_ceremony_close_tail's
-    # emit-cadence element (it has no post-command-hook step of its own)
-    # and must inherit best_effort: True from that shared factor rather
-    # than losing it across the re-point of depends_on/args.
-    cadence = build_emit_cadence_directive()
-    assert cadence["cli"] == "emit-cadence"
-    assert cadence["best_effort"] is True
 
 
 def test_workday_brief_envelope_contains_tail(monkeypatch):
@@ -150,7 +114,6 @@ def test_workday_brief_envelope_contains_tail(monkeypatch):
     assert exit_code == int(workday_brief.WorkdayExitCode.SUCCESS)
     directive_ids = [entry["id"] for entry in envelope["directives"]]
     assert "d_step10_5_post_command_hook" in directive_ids
-    assert "d_step10_6_emit_cadence" in directive_ids
 
 
 def test_workweek_brief_envelope_contains_tail(monkeypatch):
@@ -159,4 +122,3 @@ def test_workweek_brief_envelope_contains_tail(monkeypatch):
     assert exit_code == int(workweek_brief.WorkweekExitCode.SUCCESS)
     directive_ids = [entry["id"] for entry in envelope["directives"]]
     assert "d_step13_5_post_command_hook" in directive_ids
-    assert "d_step13_6_emit_cadence" in directive_ids

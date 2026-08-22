@@ -1,4 +1,4 @@
-"""coordinator_core.op_census.timing — process-time and invocation-tax axes,
+"""coordinator_core.op_census.timing — handler-elapsed and invocation-tax axes,
 with the three-state rule.
 
 Purpose: the two timing axes DR-344 names — "process time per op" and
@@ -38,7 +38,7 @@ Negative-spec:
       `time.process_time()` instead (see `test_no_data_is_not_a_pass.py`'s
       regression guard).
     - CORRECTED 2026-08-21, recorded rather than swapped out. This block
-      previously read: "Never wall clock. `process_time_by_op` reads
+      previously read: "Never wall clock. `handler_elapsed_by_op` reads
       `elapsed_ms`, which is itself server-side process time by
       construction of its writer (`ipc.dispatch_message`)." That is FALSE.
       `ipc.dispatch_message` computes `elapsed_ms` from `_time.perf_counter()`
@@ -64,6 +64,25 @@ Negative-spec:
       DR-344's load-independence requirement binds the CENSUS's own
       self-assertion (see C6); what it does NOT do is license naming this
       axis after a clock it does not use.
+    - RENAMED 2026-08-21, closing the line directly above: the axis, its
+      function, and its emitted key are `handler_elapsed`, not
+      `process_time`. Two reasons, and the second is the load-bearing one.
+      First, the old name asserted a clock this axis has never read.
+      Second, `process_time` was ALREADY TAKEN by real data:
+      `ipc.record_op_process_time` writes genuine per-op CPU samples to this
+      same sink under row `kind: "process_time"`, with a
+      `measurement_scope` discriminator separating per-op from process-wide.
+      One name over two different quantities in one sink is the exact
+      unit-mixing hazard that row was created to avoid, and it had been
+      reintroduced one level up, in the artifact a consumer reads.
+      NOT substituted, and this was measured rather than assumed: those true
+      CPU rows cover 13 of 109 ops in the live sink today (173 rows, 121 of
+      them `per_op_process`), against 29,479 `complete` rows. Repointing this
+      axis at them now would blank 88% of the population to `no_data`. The
+      substitution becomes correct when coverage arrives, and at that point
+      it is a NEW axis alongside this one, keyed `process_time` honestly —
+      not a redefinition of `handler_elapsed` in place, for the same reason
+      `process_ms` was never a redefinition of `elapsed_ms`.
     - `no_data` never collapses into `under_bar`. `cleared_ops` dispatches
       the three `Disposition` states exhaustively with an explicit
       `RuntimeError` else-branch — no default branch — so a fourth state
@@ -107,7 +126,7 @@ __all__ = [
     "PROCESS_TIME_BAR_MS",
     "INVOCATION_TAX_BAR_MS",
     "routed_entries",
-    "process_time_by_op",
+    "handler_elapsed_by_op",
     "measure_invocation_tax_ms",
     "invocation_tax_dispositions",
     "cleared_ops",
@@ -127,7 +146,7 @@ class NoDataReason(enum.Enum):
     """Why an op reports `no_data` — staff-eng Finding 8.
 
     `NOT_ESTABLISHED_UNDER_LOAD` (added alongside the module docstring's
-    2026-08-21 wall-clock correction): `process_time_by_op` reads
+    2026-08-21 wall-clock correction): `handler_elapsed_by_op` reads
     `elapsed_ms`, which is wall clock, not process time (see module
     docstring). Under this repo's load norm, wall time accruing past
     `PROCESS_TIME_BAR_MS` can reflect a busy neighbour, not the op's own
@@ -186,7 +205,7 @@ def routed_entries(entries: Iterable[dict]) -> List[dict]:
     return [e for e in entries if isinstance(e, dict) and e.get("route") in EXECUTION_ROUTES]
 
 
-def process_time_by_op(
+def handler_elapsed_by_op(
     entries: Iterable[dict],
     ops: Iterable[str],
     *,
@@ -337,7 +356,7 @@ def invocation_tax_dispositions(
 
 
 def cleared_ops(
-    process_time: Dict[str, AxisResult],
+    handler_elapsed: Dict[str, AxisResult],
     invocation_tax: Dict[str, AxisResult],
 ) -> set:
     """Ops CLEARED across both axes — every axis `UNDER_BAR`, none `NO_DATA`.
@@ -355,8 +374,8 @@ def cleared_ops(
     of data must never read as a pass.
     """
     cleared: set = set()
-    for op in process_time.keys() | invocation_tax.keys():
-        pt = process_time.get(op)
+    for op in handler_elapsed.keys() | invocation_tax.keys():
+        pt = handler_elapsed.get(op)
         tax = invocation_tax.get(op)
         if pt is None or tax is None:
             continue
@@ -396,7 +415,7 @@ def _serialize_axis(result: Optional[AxisResult]) -> dict:
 
 
 def emit_dispositions(
-    process_time: Dict[str, AxisResult],
+    handler_elapsed: Dict[str, AxisResult],
     invocation_tax: Dict[str, AxisResult],
 ) -> dict:
     """Serialize per-op axis dispositions to the machine-readable shape C6 assembles.
@@ -409,12 +428,12 @@ def emit_dispositions(
     checked against THIS emitted shape, not only the in-memory `Disposition`
     enum.
     """
-    ops = sorted(process_time.keys() | invocation_tax.keys())
-    passing = cleared_ops(process_time, invocation_tax)
+    ops = sorted(handler_elapsed.keys() | invocation_tax.keys())
+    passing = cleared_ops(handler_elapsed, invocation_tax)
     return {
         "ops": {
             op: {
-                "process_time": _serialize_axis(process_time.get(op)),
+                "handler_elapsed": _serialize_axis(handler_elapsed.get(op)),
                 "invocation_tax": _serialize_axis(invocation_tax.get(op)),
             }
             for op in ops

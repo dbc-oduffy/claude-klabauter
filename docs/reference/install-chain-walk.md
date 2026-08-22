@@ -53,6 +53,14 @@ commands in their prompts; the actual dispatch primitive the walker invokes is
 `standalone_setup_script` (`agent-install-contract.md § Skill chain-walker`). A reader who assumes
 the walker "runs the setup skill" has the wrong mental model of the dispatch mechanism.
 
+**A second, related trap: the warm engine's door is not a chain node either.** claude-klabauter's
+`scripts/setup.py` (its `standalone_setup_script`) installs a native front door
+(`coordinator-invoke[.exe]`) for the warm engine as one internal step of that script, alongside
+`offer_warm_opt_in`. Neither is a `direct_deps` entry the recursive walker above resolves, nor a
+`kind: spinoff` baton the rendezvous below discovers — there is no chain edge here for the walker
+to look for, and it will not find one. See `INSTALL.md` § Warm engine and door for what that step
+actually does and its platform boundaries.
+
 **Cycle safety.** Because each recursive subagent dispatch runs as an independent process with no
 access to its parent's in-memory state, cycle/diamond-DAG detection is a disk-resident visited-set
 file, not anything held in memory:

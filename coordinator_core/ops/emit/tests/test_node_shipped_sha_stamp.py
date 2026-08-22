@@ -18,6 +18,7 @@ from unittest.mock import call, patch
 
 import pytest
 
+from coordinator_core.ops.emit import envelope
 from coordinator_core.ops.emit.envelope import _stamp_node_shipped_sha
 
 # ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ def test_node_stamp_sets_null_when_sha_not_on_main(tmp_path: Path) -> None:
 
 
 def test_node_stamp_degrades_all_to_null_when_offline(tmp_path: Path) -> None:
-    """All shipped_sha values become null when origin/main is unreachable after one fetch.
+    """All shipped_sha values become null when origin/main is not locally reachable.
 
     Mirrors the offline-degrade contract of _stamp_shipped_sha on handoffs.
     """
@@ -114,9 +115,8 @@ def test_node_stamp_degrades_all_to_null_when_offline(tmp_path: Path) -> None:
     node_a = _make_node(shipped_sha=sha_a)
     node_b = _make_node(shipped_sha=sha_b)
 
-    with (
-        patch("coordinator_core.ops.emit.envelope._check_origin_main_reachable", return_value=False),
-        patch("coordinator_core.ops.emit.envelope._fetch_origin_main"),
+    with patch(
+        "coordinator_core.ops.emit.envelope._check_origin_main_reachable", return_value=False
     ):
         _stamp_node_shipped_sha([node_a, node_b], tmp_path)
 
@@ -229,18 +229,32 @@ def test_node_stamp_empty_list_is_noop(tmp_path: Path) -> None:
     mock_git.assert_not_called()
 
 
-def test_node_stamp_one_fetch_attempt_when_initially_unreachable(tmp_path: Path) -> None:
-    """origin/main is probed once; one fetch is attempted; second probe confirms unreachable."""
+def test_node_stamp_probes_origin_once_and_never_fetches(tmp_path: Path) -> None:
+    """origin/main is probed exactly once, and no fetch is attempted behind a False probe.
+
+    Was ``test_node_stamp_one_fetch_attempt_when_initially_unreachable``, which asserted
+    the opposite: an unreachable origin/main triggered one ``git fetch`` and a re-probe.
+    That network leg is deleted (hitlist § G5) — a `git fetch` under a 120s bound on an
+    artifact-render path is the mechanism that made `artifact.emit` peak at 56,646 ms.
+    The single probe now decides on its own, so this asserts the call count as well as
+    the degradation: a re-probe would mean something reintroduced a fetch between them.
+    """
     sha = "abc1234567890abcdef"
     node = _make_node(shipped_sha=sha)
 
-    with (
-        patch("coordinator_core.ops.emit.envelope._check_origin_main_reachable", return_value=False),
-        patch("coordinator_core.ops.emit.envelope._fetch_origin_main") as mock_fetch,
-    ):
+    assert not hasattr(envelope, "_fetch_origin_main"), (
+        "_fetch_origin_main must stay deleted — emit renders what the local repo knows"
+    )
+    assert not hasattr(envelope, "fetch_origin_main"), (
+        "fetch_origin_main must stay deleted — see check_origin_main_reachable's negative spec"
+    )
+
+    with patch(
+        "coordinator_core.ops.emit.envelope._check_origin_main_reachable", return_value=False
+    ) as mock_probe:
         _stamp_node_shipped_sha([node], tmp_path)
 
-    mock_fetch.assert_called_once()
+    assert mock_probe.call_count == 1
     assert node["shipped_sha"] is None
 
 

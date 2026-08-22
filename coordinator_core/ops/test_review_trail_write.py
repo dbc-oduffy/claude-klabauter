@@ -22,20 +22,27 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import review_trail_write
 from coordinator_core.ops.review_trail_write import (
+    _RangeWalk,
+    _batch_resolve_ref_pair,
     _build_json_record,
     _compute_timestamp,
     _reject_empty_sha_range,
+    _resolve_ref_to_sha,
+    _resolve_symbolic_range,
     _review_trail_write_handler,
     _scan_workstream,
     _validate,
     write_review_trail_entry,
 )
+from coordinator_core.session_attribution import GitLogFailed
 
 # Declared, not excused: this file spawns a real git process because
 # `_reject_empty_sha_range` under test only engages against a real
@@ -719,3 +726,207 @@ def test_handler_rejects_non_integer_diff_loc(
     }
     with pytest.raises(ValueError, match="diff_loc must be a non-negative integer"):
         asyncio.run(_review_trail_write_handler(params, repo_root=git_common_dir))
+
+
+# ---------------------------------------------------------------------------
+# Spawn budget (2026-08-22) — the axis that decides whether this op is
+# affordable on Windows, where process creation is the dominant cost
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo_with_two_commits(worktree: Path) -> tuple:
+    """A real two-commit repo; returns ``(first_sha, second_sha)``. The second
+    commit carries a ``Session-Id`` trailer, which is what an ordinary commit in
+    this fleet looks like — ``prepare-commit-msg`` attaches one — and therefore
+    what the spawn budget below must be measured against."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    kwargs = dict(cwd=str(worktree), capture_output=True, text=True, **no_console_creationflags())
+    first = _init_git_repo_with_one_commit(worktree)
+    (worktree / "f.txt").write_text("second", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m",
+         "second\n\nSession-Id: aaaabbbb-0000-0000-0000-000000000001"],
+        **kwargs, check=True,
+    )
+    second = subprocess.run(["git", "rev-parse", "HEAD"], **kwargs, check=True).stdout.strip()
+    return first, second
+
+
+def _record_git_spawns(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Record every ``git`` process the code under test creates.
+
+    Patches ``Popen``, not ``subprocess.run``: ``run`` is built on ``Popen``, so
+    a site reaching for either is seen, and so is one that skips ``run``."""
+    import subprocess
+
+    spawned: list = []
+    real_popen = subprocess.Popen
+
+    class RecordingPopen(real_popen):  # type: ignore[misc,valid-type]
+        def __init__(self, args, *a, **kw):
+            argv = list(args) if not isinstance(args, str) else [args]
+            if argv and str(argv[0]).endswith("git"):
+                spawned.append(argv)
+            super().__init__(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", RecordingPopen)
+    return spawned
+
+
+def test_write_spends_one_git_spawn_on_a_concrete_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EXACT equality, not a bound: a new spawn must FAIL this, not fit under it.
+
+    This is the op's whole reinstatement axis. The same shape measured 4 spawns
+    before 2026-08-22 — ``git rev-parse --is-inside-work-tree``, ``git rev-list
+    --count``, the trailer walk, and the grep leg — of which three asked git
+    something already known or already answered. At ~3.3ms per spawn on macOS
+    that read as a 74ms op; the same four processes on Windows are what put its
+    roster measurement at a 16.5s max.
+
+    Spawn count, not wall clock, is what is asserted: it is the load-invariant
+    figure (CLAUDE.md § The brightline), and the only one that means the same
+    thing on both platforms."""
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaabbbb-0000-0000-0000-000000000001")
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    first, second = _init_git_repo_with_two_commits(worktree)
+    monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path / "out"))
+
+    spawned = _record_git_spawns(monkeypatch)
+    write_review_trail_entry(
+        sha_range=f"{first}..{second}",
+        reviewer="em-verified",
+        scope="chain",
+        verdict="ok",
+        diff_loc=3,
+        reviewer_evidence="spawn-budget fixture; nothing was delegated to a reviewer here",
+        caller_worktree=worktree,
+    )
+
+    assert len(spawned) == 1, f"expected one git spawn, got {len(spawned)}: {spawned}"
+    assert spawned[0][:2] == ["git", "log"]
+
+
+def test_symbolic_range_resolves_both_endpoints_in_one_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A two-symbolic-endpoint range paid one ``git rev-parse`` per endpoint to
+    ask the same binary the same question twice. Two spawns total now: the
+    batched rev-parse, then the shared range walk."""
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaabbbb-0000-0000-0000-000000000001")
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _init_git_repo_with_two_commits(worktree)
+    monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path / "out"))
+
+    spawned = _record_git_spawns(monkeypatch)
+    result = write_review_trail_entry(
+        sha_range="HEAD~1..HEAD",
+        reviewer="em-verified",
+        scope="chain",
+        verdict="ok",
+        diff_loc=3,
+        reviewer_evidence="spawn-budget fixture; nothing was delegated to a reviewer here",
+        caller_worktree=worktree,
+    )
+
+    assert len(spawned) == 2, f"expected two git spawns, got {len(spawned)}: {spawned}"
+    # The persisted range must still be CONCRETE — the batched resolve cannot
+    # regress `_resolve_symbolic_range`'s reason for existing.
+    left, right = result["sha_range"].split("..")
+    assert re.fullmatch(r"[0-9a-f]{40}", left) is not None
+    assert re.fullmatch(r"[0-9a-f]{40}", right) is not None
+
+
+def test_batched_ref_resolve_matches_the_per_token_path(tmp_path: Path) -> None:
+    """Parity with the path it replaces, against a real repo: the fast path is
+    an optimization, never a second answer."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _init_git_repo_with_two_commits(worktree)
+
+    batched = _batch_resolve_ref_pair("HEAD~1", "HEAD", worktree)
+    assert batched is not None
+    assert batched == (
+        _resolve_ref_to_sha("HEAD~1", worktree),
+        _resolve_ref_to_sha("HEAD", worktree),
+    )
+
+
+def test_batched_ref_resolve_defers_when_an_endpoint_is_concrete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hex endpoint needs no spawn at all, so a mixed range already costs one
+    and batching cannot lower it. Deferring also keeps the per-token error,
+    which names WHICH ref failed — something a batched call cannot report."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _, second = _init_git_repo_with_two_commits(worktree)
+
+    spawned = _record_git_spawns(monkeypatch)
+    assert _batch_resolve_ref_pair(second, "HEAD", worktree) is None
+    assert spawned == []
+
+
+def test_batched_ref_resolve_defers_on_an_unresolvable_ref(tmp_path: Path) -> None:
+    """An unresolvable endpoint returns None rather than inventing a refusal of
+    its own; ``_resolve_symbolic_range`` then falls through to the per-token
+    path, whose ValueError names the offending token."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _init_git_repo_with_two_commits(worktree)
+
+    assert _batch_resolve_ref_pair("HEAD", "no-such-ref-anywhere", worktree) is None
+    with pytest.raises(ValueError, match="no-such-ref-anywhere"):
+        _resolve_symbolic_range("HEAD..no-such-ref-anywhere", worktree)
+
+
+def test_range_walk_walks_once_and_memoizes_its_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both the emptiness guard and the zero-credit diagnostic ask this object
+    for the same window. A second walk would be a second spawn — and so would a
+    retried FAILURE, which is why the failure is memoized alongside the result."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _init_git_repo_with_two_commits(worktree)
+
+    walk = _RangeWalk("no-such-ref..also-missing", worktree)
+    calls: list = []
+    original = review_trail_write._git_runner
+
+    def _counting_runner(args, cwd):
+        calls.append(args)
+        return original(args, cwd)
+
+    monkeypatch.setattr(review_trail_write, "_git_runner", _counting_runner)
+    for _ in range(3):
+        with pytest.raises(GitLogFailed):
+            walk.window()
+
+    assert len(calls) == 1, f"the failed walk was retried: {calls}"
+
+
+def test_the_shared_walk_serves_both_consumers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reduction's load-bearing claim, stated as a property rather than a
+    count: the emptiness guard and the zero-credit diagnostic see the SAME
+    window object, so the second consumer costs nothing."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    _init_git_repo_with_two_commits(worktree)
+
+    walk = _RangeWalk("HEAD~1..HEAD", worktree)
+    spawned = _record_git_spawns(monkeypatch)
+    first_window = walk.window()
+    second_window = walk.window()
+
+    assert first_window is second_window
+    assert len(spawned) == 1, f"expected one walk, got {len(spawned)}: {spawned}"

@@ -112,7 +112,28 @@ int main(void) {
      * boundary is the one that actually breaks hand-written SHA-1, and the
      * three vectors above straddle it (0, 3, 56 bytes). */
 
-    /* ---- 2. Envelope reader.
+    /* ---- 2. Sidecar trailing-whitespace trim. This is a SHA-1 input for
+     * the clone hash (see door_core.h); a divergence between the two doors
+     * that call it would derive different socket names from the same
+     * sidecar file, silently and permanently. */
+    {
+        char a[] = "root\n\r \t";
+        check_int("trim/mixed_trailing", (long)trim_sidecar_trailing(a, strlen(a)), 4);
+        check_str("trim/mixed_trailing_bytes", a, "root");
+
+        char b[] = "root";
+        check_int("trim/no_trailing", (long)trim_sidecar_trailing(b, strlen(b)), 4);
+        check_str("trim/no_trailing_bytes", b, "root");
+
+        char c[] = " \t\n\r";
+        check_int("trim/all_whitespace", (long)trim_sidecar_trailing(c, strlen(c)), 0);
+
+        char d[] = "ro ot\n";
+        check_int("trim/interior_preserved", (long)trim_sidecar_trailing(d, strlen(d)), 5);
+        check_str("trim/interior_preserved_bytes", d, "ro ot");
+    }
+
+    /* ---- 3. Envelope reader.
      *      name                 json                                                              ok he code    exit stdout */
     check_envelope("ok",
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"stdout\":\"hi\\n\",\"stderr\":\"\",\"exit_code\":0}}",
@@ -149,7 +170,7 @@ int main(void) {
     check_envelope("garbage", "not json at all", 0, 0, 0, 0, "");
     check_envelope("truncated", "{\"result\":{\"stdout\":\"o", 0, 0, 0, 0, "");
 
-    /* ---- 3. The safety classification. Getting a row of this table wrong
+    /* ---- 4. The safety classification. Getting a row of this table wrong
      * is how a delivered mutation gets re-run cold -- the 2026-08-19
      * double-commit. The EXCLUSIONS matter as much as the inclusions:
      * -32602 and -32603 can both be raised from inside a handler that has
@@ -159,6 +180,11 @@ int main(void) {
     check_int("classify/-32601_no_method", is_provably_undispatched(JSONRPC_METHOD_NOT_FOUND), 1);
     check_int("classify/-32002_skew", is_provably_undispatched(JSONRPC_ENGINE_SKEW), 1);
     check_int("classify/-32003_untrusted", is_provably_undispatched(JSONRPC_UNTRUSTED_CALLER), 1);
+    /* The stamp gate is `dispatch_message`'s first statement, ahead of the
+     * `_dispatch_message_impl` await that could ever produce -32601 or
+     * -32006. A 0 here is the door telling an operator a never-dispatched
+     * request may have completed. */
+    check_int("classify/-32005_unstamped", is_provably_undispatched(JSONRPC_UNSTAMPED_ENGINE_ROOT), 1);
     /* Refused one branch BEFORE the -32601 lookup above, so at least as
      * strong a proof of non-dispatch. A 0 here is the door telling an
      * operator a suspended commit may have landed. */
@@ -170,7 +196,7 @@ int main(void) {
     check_int("classify/0", is_provably_undispatched(0), 0);
     check_int("classify/unknown", is_provably_undispatched(-31337), 0);
 
-    /* ---- 4. The refusal envelope, including escaping of a detail that
+    /* ---- 5. The refusal envelope, including escaping of a detail that
      * carries every character JSON requires escaped. A malformed envelope
      * here is a caller that cannot read why its op was refused. */
     {

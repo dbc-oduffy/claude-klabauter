@@ -121,7 +121,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core._settings_home import claude_config_dir
+from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
@@ -180,10 +181,6 @@ NAMED_DISPATCH_ROW_RESOLVED_MARKER = "named_dispatch_contract_blocks_resolved: 1
 #: Snippet path, relative to the coordinator-claude plugin root, in either
 #: of its two known on-disk shapes (see `_resolve_role_append_snippet_path`).
 _ROLE_APPEND_RELATIVE = ("snippets", "agent-role-dispatched.md")
-
-#: Plugin directory name under `<claude_config_dir>/plugins/`.
-_PLUGIN_DIR_NAME = "coordinator-claude"
-
 
 def _compose_sidecar_offer_text(sidecar_path: str) -> str:
     """Port of `enforce-agent-dispatch-mode.py ::
@@ -244,7 +241,15 @@ def _resolve_blocks_companion_path(
     uses and mint an independent nonce-suffixed name -- the 2026-08-15
     concurrent-same-type incident is exactly what a nonce exists to prevent.
     """
-    git_root = resolve_git_root(cwd)
+    # `repo_root.show_toplevel` walks and never spawns -- the same repoint C2
+    # made on the main compose path, applied here too. This leg was MISSED by
+    # that pass and only fires on the over-cap companion spill, so a probe on
+    # an under-cap agent type (code-reviewer) reads zero spawns while an
+    # over-cap one (staff-eng) still pays a `git rev-parse`. Eligibility is the
+    # same as C2's: this resolver feeding a lookup whose wrong answer is a
+    # MISS, never a wrong verdict -- the function returns None and the caller
+    # falls back to inline blocks.
+    git_root = _show_toplevel_no_spawn(cwd)
     if not git_root:
         return None
     session_id = payload.get("session_id") or None
@@ -286,30 +291,69 @@ def _spill_blocks_to_companion(
 
 
 def _resolve_role_append_snippet_path() -> Optional[Path]:
-    """Locate `snippets/agent-role-dispatched.md` under the settings root --
-    never a hardcoded plugin path. This module lives in claude-klabauter, a different
-    on-disk checkout than the coordinator-claude plugin the snippet ships
-    in, so the Agent-path hook's own `Path(__file__).resolve().parents[2]`
-    colocated resolution (that hook lives INSIDE the plugin it reads from)
-    has nothing to anchor against here.
+    """Locate `snippets/agent-role-dispatched.md` under the coordinator-claude
+    plugin's CONTENT root -- never a hardcoded plugin path. This module lives
+    in claude-klabauter, a different on-disk checkout than the coordinator-claude
+    plugin the snippet ships in, so the Agent-path hook's own
+    `Path(__file__).resolve().parents[2]` colocated resolution (that hook
+    lives INSIDE the plugin it reads from) has nothing to anchor against
+    here.
 
-    Probes both known plugin-root shapes for the SAME `<claude_config_dir>/
-    plugins/coordinator-claude` root -- a DoE dev-clone shape (`.../
-    coordinator-claude/coordinator/snippets/...`) and a marketplace/OSS-
-    mirror shape (`.../coordinator-claude/snippets/...`), the same two
-    shapes `coordinator_root._resolve_plugin_root_for_machine_local`
-    already names for a DIFFERENT artifact (`templates/bin/
-    _machine_local.py`) -- probing here for THIS function's own artifact
-    directly rather than a different file standing in as a proxy (see that
-    module's own docstring for why a proxy probe is the wrong shape).
-    Returns ``None`` on no match; the caller fails open to "" (Concern D's
-    role-framing leg simply does not fire).
+    Mirrors `provision_report.resolve_plugin_root()`'s (C4) fleet-fixing
+    THIRD rung ADDED to the two shapes this function already probed --
+    `<claude_config_dir>/plugins/coordinator-claude` in both known shapes
+    (DoE dev-clone nested under `coordinator/`, marketplace/OSS-mirror at
+    that root directly), then the fleet's own `.doe-root` pointer file (the
+    rung this defect's fleet-box case needs: a plugin root whose live clone
+    sits OUTSIDE `.claude` entirely, where `<claude_config_dir>/plugins/
+    coordinator-claude` holds only `coordinator/bin`). Does NOT add
+    `resolve_plugin_root`'s own leading `CLAUDE_PLUGIN_ROOT` env-var rung --
+    that rung is scoped to the contract-blocks leg's own test fixtures
+    (`git_repo`, `coordinator_core/hooks/tests/test_cater_subagent_start_
+    named_dispatch.py`), which legitimately point it at a snippets root
+    that carries contract-block snippets but not this artifact; consulting
+    it here would wrongly prefer that root over one that actually has
+    `agent-role-dispatched.md`. AC6 ("0 additional process spawns", this
+    module's own budget test) additionally treats a bare `import os` as a
+    spawn-shaped signature regardless of use, ruling that rung out on this
+    leg on process-budget grounds too.
+
+    Does NOT delegate to `resolve_plugin_root()` itself, and does not
+    duplicate its `_has_content` probe (`snippets/` existing as a
+    directory): that function is shared with the contract-blocks leg, whose
+    own test fixtures legitimately point `CLAUDE_PLUGIN_ROOT` at a
+    snippets directory that holds contract-block snippets but NOT
+    `agent-role-dispatched.md` -- stopping at the first rung with a
+    `snippets/` dir (as `resolve_plugin_root` does) would wrongly short-
+    circuit before reaching the rung that actually has this artifact. Kept
+    (module's own docstring, and this function's own prior version):
+    probe for THIS function's own artifact directly at every rung, not a
+    directory's mere existence standing in as a proxy for it.
+
+    Returns ``None`` on no match at any rung; the caller fails open to ""
+    (Concern D's role-framing leg simply does not fire).
     """
-    plugin_base = claude_config_dir() / "plugins" / _PLUGIN_DIR_NAME
+
+    def _artifact_at(root: Path) -> Optional[Path]:
+        candidate = root.joinpath(*_ROLE_APPEND_RELATIVE)
+        return candidate if candidate.is_file() else None
+
+    plugin_base = claude_config_dir() / "plugins" / "coordinator-claude"
     for candidate_root in (plugin_base / "coordinator", plugin_base):
-        candidate = candidate_root.joinpath(*_ROLE_APPEND_RELATIVE)
-        if candidate.is_file():
-            return candidate
+        found = _artifact_at(candidate_root)
+        if found is not None:
+            return found
+
+    try:
+        pointer = machine_local_dir() / ".doe-root"
+        doe_root = pointer.read_text(encoding="utf-8").strip()
+    except OSError:
+        doe_root = ""
+    if doe_root:
+        found = _artifact_at(Path(doe_root) / "coordinator")
+        if found is not None:
+            return found
+
     return None
 
 
@@ -455,7 +499,13 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     agent_type = ""
     subagent_type = ""
     try:
-        git_root = resolve_git_root(cwd)
+        # Non-spawning root read (C2, state/dispatch-briefs/2026-08-21-
+        # catering-costs-what-the-work-costs/C2.md): eligible per
+        # `resolve_git_root_cheap`'s own stated rule -- every leg fed by
+        # `agent_type`/`subagent_type` below fails open to "" on a miss, so a
+        # wrong/absent root here only means "this lookup missed", never a
+        # wrong VERDICT. `repo_root.show_toplevel` walks and never spawns.
+        git_root = _show_toplevel_no_spawn(cwd)
         _agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)
     except Exception:
         agent_type, subagent_type = "", ""

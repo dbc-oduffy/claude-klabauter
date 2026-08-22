@@ -132,7 +132,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workweek-complete-close",
     "check-version-consistency",
     "coordinator-ceremony-hook",
-    "emit-cadence",
     "workweek-complete-doc-staleness",
     "workweek-complete-doc-verify",
     "tier-u-grant-cli",
@@ -607,7 +606,6 @@ def _build_directives(
         ),
         *build_ceremony_close_tail(
             post_command_hook_id="d_step13_5_post_command_hook",
-            emit_cadence_id="d_step13_6_emit_cadence",
             ceremony_name=_CEREMONY_NAME,
         ),
         _directive(

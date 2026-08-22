@@ -733,12 +733,26 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     """
     reason = (
         f"{phase_title} did not land a commit -- halting before the next wave "
-        "writes over uncommitted work. Clear the cause, then resume with "
-        "resumeFromRunId."
+        "writes over uncommitted work. Commit this wave's pathspec, then "
+        "re-emit and fire a fresh run: resumeFromRunId replays this phase's "
+        "cached refusal without re-running it."
     )
+    # The test is an ANCHORED match on a whole line, never a substring.
+    # Measured 2026-08-21: a bare `.includes(token)` fails OPEN. Subagents may
+    # not commit at all (caller-identity enforced), and the refusing agent
+    # quoted its own instruction -- "end your report with the line
+    # 'COMMIT-LANDED <sha>'" -- back in the refusal. The substring matched, the
+    # gate passed, and the next wave ran over an uncommitted one. The bias
+    # reasoned about on `_COMMIT_LANDED_TOKEN` above is the right bias; a
+    # substring test simply does not implement it, because the token appears in
+    # the prompt that every commit agent is holding while it writes its report.
+    #
+    # Requiring the token at line start AND a real 7-40 hex sha after it means
+    # a quotation cannot satisfy the gate: the instruction text carries the
+    # literal placeholder `<sha>`, not a sha, and appears mid-sentence.
     return (
         f"  if (!{commit_var} || "
-        f"!String({commit_var}).includes({_js_string_literal(_COMMIT_LANDED_TOKEN)})) {{\n"
+        f"!/^{_COMMIT_LANDED_TOKEN} +[0-9a-f]{{7,40}} *$/m.test(String({commit_var}))) {{\n"
         f"    return {{ halted: {_js_string_literal(reason)} + "
         f'" Agent report: " + String({commit_var} ?? "agent returned null") }};\n'
         "  }"

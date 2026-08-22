@@ -4,15 +4,14 @@
  *
  * Spec backlink: state/handoffs/2026-08-21_103635_reaching-the-warm-engine.md
  *
- * ===================== READ THIS FIRST: UNVERIFIED =======================
- * This file was authored on Windows and has NEVER been compiled, linked,
- * run, or measured on macOS or Linux. Not once. No number in this file's
- * comments is a POSIX measurement -- every measurement cited is a WINDOWS
- * measurement of door.c, kept because the budget it justifies is an ENGINE
- * budget (a Python-side constant) rather than a hardware one. See
- * README-posix.md for what a Mac user must run, and for what is expected to
- * break first. Anything claiming this path "works" without a run on real
- * Apple hardware is claiming something nobody has checked.
+ * ===================== READ THIS FIRST: VERIFIED ON macOS =================
+ * Built and run on macOS (arm64) on 2026-08-22: `door_core_selftest`
+ * passes, this file compiles clean under `-Wall -Wextra -std=c11`, and the
+ * POSIX read-deadline test suite passes 7/7. Numbers still cited from a
+ * Windows measurement of door.c are labeled as such where they appear --
+ * kept because the budget they justify is an ENGINE budget (a Python-side
+ * constant) rather than a hardware one. See README-posix.md for the build
+ * command, what was run, and what remains unmeasured.
  * =========================================================================
  *
  * WHAT THIS IS. The same relay door.c is: argv in, one JSON-RPC line to a
@@ -61,22 +60,25 @@
  * doubt like any other -- fall through, never connect.
  *
  * <runtime-base> mirrors `warm/breadcrumb.py :: _runtime_base()` EXACTLY as
- * that function is written today -- `$COORDINATOR_WARM_RUNTIME_BASE` if
- * set and non-empty, else `$LOCALAPPDATA` (never set on POSIX, honoured
- * anyway so the two implementations are the same function), else
- * `$HOME/.cache`. The `<clone-hash>` component is `svc_dir()`'s own, same
- * derivation. This is deliberately NOT a second scheme invented for the
- * door: the server writes its breadcrumb under that path today, and a door
- * that guessed differently would connect to nothing forever while looking
- * healthy.
+ * that function is written today -- `$COORDINATOR_WARM_RUNTIME_BASE`
+ * (stripped of leading/trailing whitespace, same as Python's `.strip()`)
+ * if set and non-empty after stripping, else `$LOCALAPPDATA` (never set on
+ * POSIX, honoured anyway so the two implementations are the same
+ * function), else `$HOME/.cache`. The `<clone-hash>` component is
+ * `svc_dir()`'s own, same derivation. This is deliberately NOT a second
+ * scheme invented for the door: the server writes its breadcrumb under
+ * that path today, and a door that guessed differently would connect to
+ * nothing forever while looking healthy.
  *
- * `$XDG_RUNTIME_DIR` is probed as a SECOND candidate (Linux only, in
- * practice -- macOS never sets it) purely because it is where a POSIX
- * server MIGHT reasonably be told to bind later. Probing a second path is
- * safe by construction: everything before the write is pre-delivery, so a
- * miss costs one failed `connect()` and then a fall-through. It is a
- * tolerance, not a competing convention -- if `_runtime_base()` ever grows
- * an XDG branch, delete the second candidate here and mirror it instead.
+ * `$XDG_RUNTIME_DIR` IS DELIBERATELY NOT A CANDIDATE, ON EITHER SIDE. See
+ * `_runtime_base()`'s docstring: this is a two-implementation agreement,
+ * the binder (Python) and the door (C) must derive the SAME path, and a
+ * path they disagree about raises NO ERROR ANYWHERE -- the door finds
+ * nothing, falls through to cold dispatch forever, and every surface stays
+ * green while the warm engine is silently unreachable. PM-locked
+ * 2026-08-21. It is a contract, not a preference: an XDG branch added on
+ * one side only is exactly the failure this file exists to avoid, so
+ * changing it means changing both halves in one move, never one alone.
  *
  * SOCKET PATH LENGTH is a hard, silent POSIX limit: `sun_path` is 104 bytes
  * on macOS and 108 on Linux, and a too-long path does not error usefully,
@@ -194,11 +196,20 @@ extern char **environ;
  *   - 40000ms is `ipc.DISPATCH_TIMEOUT_SECS` (30s, the server's own global
  *     runaway guard, past which IT stops waiting and answers with an error
  *     envelope) plus `cc_invoke.py::_op_timeout_ceiling`'s own 10s MARGIN
- *     -- the identical `engine_budget + MARGIN` ceiling the COLD client
- *     already applies to an op whose budget it cannot narrow.
- * So warm and cold agree on how long an operator waits before being told
- * something is wrong, on both platforms, rather than each door inventing
- * its own number.
+ *     -- NOT a per-op wait either client actually uses. Both real clients
+ *     size their own wait from the op, not from this global: cold's
+ *     `_op_timeout_ceiling` is `engine_budget(op) + MARGIN` (a ceremony op
+ *     is 2+2=4s, nowhere near 40), and warm's own
+ *     `client.py::_mutation_deadline_for` clamps to `min(30, derived)`,
+ *     with a compute-only op landing at 2s before it ever goes cold. This
+ *     door cannot match either, because it deliberately never parses the
+ *     method out of its own request -- see `is_provably_undispatched`'s
+ *     doc comment in door_core.h for why that parse is out of scope here
+ *     too. With no op name to key a per-op budget on, the server's global
+ *     runaway ceiling is the only single value this door can hold that is
+ *     safe for every op: firing earlier would manufacture -32004 refusals
+ *     for ops the server was going to answer correctly within their own,
+ *     narrower, per-op budget.
  *
  * ON THE MEASUREMENT THAT IS *NOT* IN THESE NUMBERS. On the Windows box,
  * 2026-08-21, against a healthy 30-worker server, the door's PROCESS time
@@ -210,13 +221,15 @@ extern char **environ;
  * for ops the server was going to answer correctly, and tuning to 3.9s
  * would encode one box's bad afternoon as a protocol constant.
  *
- * THE ONE NUMBER THAT NEEDS A MAC. The 2s WRITE deadline is a liveness
- * probe on the send path, and on a Unix socket a full send buffer under
- * heavy load is the way it could fire spuriously. Firing it is SAFE by
- * construction (a short write is pre-delivery -- see `write_frame_bounded`)
- * but it costs a fall-through, i.e. the slow path. If a Mac run shows
- * write-deadline fall-throughs at any measurable rate, that is the number
- * to revisit, and it is the only one. Provisional pending that run.
+ * THE WRITE DEADLINE, NOW MEASURED ON macOS. The 2s WRITE deadline is a
+ * liveness probe on the send path, and on a Unix socket a full send buffer
+ * under heavy load is the way it could fire spuriously. Firing it is SAFE
+ * by construction (a short write is pre-delivery -- see
+ * `write_frame_bounded`) but it costs a fall-through, i.e. the slow path.
+ * 200 consecutive calls on 2026-08-22 produced zero write-deadline fires,
+ * worst wall sample 23.4ms -- comfortably inside the 2000ms budget. Sound
+ * as configured; revisit only if a future run shows fall-throughs at a
+ * measurable rate.
  *
  * MECHANISM: `poll()` against a single monotonic budget, NOT `SO_RCVTIMEO`.
  * `SO_RCVTIMEO` restarts its timer on every `recv()`, so a server dribbling
@@ -354,11 +367,7 @@ static char *read_sidecar(const char *own_dir, size_t *out_len) {
     char *buf = read_whole_file(sidecar_path, &len, 4096);
     if (!buf) return NULL;
 
-    while (len > 0 &&
-           (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
-            buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
-        buf[--len] = '\0';
-    }
+    len = trim_sidecar_trailing(buf, len);
     if (len == 0) { free(buf); return NULL; }
     *out_len = len;
     return buf;
@@ -421,11 +430,38 @@ static int resolve_engine_root(char **out, size_t *out_len) {
  * Socket path derivation + the directory privacy boundary
  * ========================================================================= */
 
+/* Trims leading and trailing ASCII whitespace (space, \t, \n, \r, \f, \v)
+ * from `s` in place and returns it -- the same set Python's `str.strip()`
+ * treats as whitespace with no locale/argument, which is the overload
+ * `_runtime_base()` calls. Mirrors it byte-for-byte so a padded or
+ * whitespace-only `$COORDINATOR_WARM_RUNTIME_BASE` resolves to the SAME
+ * verdict ("unset" or "this literal base") on both sides of the contract;
+ * see the TRANSPORT block above for what a disagreement there costs. */
+static char *strip_ascii_whitespace(char *s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' ||
+           *s == '\f' || *s == '\v') {
+        s++;
+    }
+    size_t len = strlen(s);
+    while (len > 0) {
+        char c = s[len - 1];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+            c == '\f' || c == '\v') {
+            s[--len] = '\0';
+        } else {
+            break;
+        }
+    }
+    return s;
+}
+
 /* Fills `out[0..max)` with the runtime-base candidates, most-authoritative
- * first, and returns how many were written. See the TRANSPORT block: the
- * first candidate mirrors `breadcrumb.py::_runtime_base()` exactly; the
- * second is the XDG tolerance, and exists only because probing it is free
- * (pre-delivery) and a wrong guess would otherwise be silent forever. */
+ * first, and returns how many were written (at most one -- see the
+ * TRANSPORT block: `$XDG_RUNTIME_DIR` is deliberately not a candidate on
+ * either side of this contract). Kept as a fill-an-array shape rather than
+ * a single-value return so a future PM-ratified change to the contract
+ * (adding a real second candidate to BOTH implementations) does not need
+ * to re-plumb every caller's signature. */
 static int runtime_base_candidates(char out[][PATH_MAX], int max) {
     int count = 0;
 
@@ -440,12 +476,22 @@ static int runtime_base_candidates(char out[][PATH_MAX], int max) {
             }                                                             \
         } while (0)
 
-    const char *override = getenv(RUNTIME_BASE_ENV);
-    if (override && override[0] != '\0') {
-        /* An explicit override is exactly that -- one candidate, no
-         * probing. `_runtime_base()` returns early on it too. */
-        ADD_BASE("%s", override);
-        return count;
+    const char *override_env = getenv(RUNTIME_BASE_ENV);
+    if (override_env) {
+        char override_buf[PATH_MAX];
+        int n = snprintf(override_buf, sizeof(override_buf), "%s", override_env);
+        if (n > 0 && (size_t)n < sizeof(override_buf)) {
+            char *stripped = strip_ascii_whitespace(override_buf);
+            if (stripped[0] != '\0') {
+                /* An explicit override is exactly that -- one candidate,
+                 * no probing. `_runtime_base()` returns early on it too. */
+                ADD_BASE("%s", stripped);
+                return count;
+            }
+        }
+        /* An all-whitespace (or unfit) override is "unset" to Python's
+         * `.strip()` check, so it must be "unset" here too rather than
+         * falling through to a raw, unstripped `getenv` read below. */
     }
 
     const char *local = getenv("LOCALAPPDATA");
@@ -455,9 +501,6 @@ static int runtime_base_candidates(char out[][PATH_MAX], int max) {
         const char *home = getenv("HOME");
         if (home && home[0] != '\0') ADD_BASE("%s/.cache", home);
     }
-
-    const char *xdg = getenv("XDG_RUNTIME_DIR");
-    if (xdg && xdg[0] != '\0') ADD_BASE("%s", xdg);
 
     #undef ADD_BASE
     return count;
@@ -793,7 +836,23 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
      * entrypoint under the SAME conditions as a cold caller -- that is the
      * whole premise of "behaviour can never regress, only speed changes" --
      * so the disposition is reset in the child, not left leaking out of an
-     * implementation detail of the fast path. */
+     * implementation detail of the fast path.
+     *
+     * WHERE THIS RESET CAN FAIL, AND WHY THAT DOES NOT REFUSE THE SPAWN.
+     * `posix_spawnattr_init`/`_setsigdefault`/`_setflags` document ENOMEM as
+     * their only failure. On that path `attrp` stays NULL and the child
+     * inherits SIG_IGN -- the invariant above genuinely does not hold, and
+     * this says so rather than implying otherwise. Spawning anyway is still
+     * the right trade, and NOT the same case as `spawn_argv`'s `calloc`
+     * above: a failed `calloc` means there is no argv, so no spawn is
+     * possible at all; a failed `attr` means the spawn is entirely possible
+     * and only the SIGPIPE disposition is degraded. Refusing here would convert
+     * a runnable op into a silent `exit 1` under memory pressure, which is
+     * strictly worse than a subtly different SIGPIPE disposition -- and
+     * violates this section's own rule that the fallback must never fail to
+     * at least TRY. If memory really is that tight, `posix_spawnp` fails on
+     * its own a few lines down and says so loudly with exit 127, which beats
+     * an unexplained 1. */
     posix_spawnattr_t attr;
     posix_spawnattr_t *attrp = NULL;
     sigset_t default_signals;
@@ -884,6 +943,11 @@ int main(int argc, char **argv) {
     if (!buf_init(&token_input, stamp_len + 16) ||
         !buf_append_cstr(&token_input, "engine-stamp:") ||
         !buf_append(&token_input, stamp_bytes, stamp_len)) {
+        /* `token_input.data` is NULL if `buf_init` itself is what failed
+         * (short-circuited before allocating) and a live buffer otherwise
+         * (a later `buf_append*` failing leaves what was already grown
+         * intact) -- freeing it here is correct in both cases. */
+        free(token_input.data);
         free(stamp_bytes);
         int rc = fall_through(argc, argv, engine_root);
         free(engine_root);
@@ -906,9 +970,10 @@ int main(int argc, char **argv) {
 
     /* ---- 4. socket path, and 5. connect -- no retry, no wait: absent,
      * refused, or non-private all mean "fall through", per the safety
-     * property. Two candidate bases at most; see `runtime_base_candidates`
-     * for why probing a second one is safe and why it is a tolerance rather
-     * than a second convention. */
+     * property. `runtime_base_candidates` yields at most one base today
+     * (see the TRANSPORT block); the array-of-candidates shape is kept
+     * rather than collapsed to a single value so this loop does not need
+     * to change if the contract it mirrors ever ratifies a second one. */
     char bases[2][PATH_MAX];
     int base_count = runtime_base_candidates(bases, 2);
     int fd = -1;

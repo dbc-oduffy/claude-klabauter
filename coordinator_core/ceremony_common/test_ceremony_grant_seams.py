@@ -107,7 +107,6 @@ def test_the_shared_close_tail_carries_no_handback():
 
     tail = build_ceremony_close_tail(
         post_command_hook_id="d_hook",
-        emit_cadence_id="d_cadence",
         ceremony_name="workweek-complete",
     )
     assert not [d for d in tail if d["cli"] in _GRANT_CLIS]

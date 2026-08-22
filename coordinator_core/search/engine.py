@@ -42,6 +42,9 @@ Negative-spec -- what this module deliberately does NOT do:
     wrong answer, which is worse than any refusal -- see `Stage.needs_complete_input`.
   - Does NOT emit or apply a rewrite. It either answers fully and faithfully, or returns
     None and lets existing guard behaviour proceed untouched.
+  - Does NOT treat an unreadable file as an empty one. A file the process cannot open
+    is a hole in the result set, not an absence of matches, and under concurrent peers
+    the holes land on the files being edited. See `_read_text`.
   - Does NOT treat an operand the shell would have resolved as an opaque filename. See
     `_expand_targets`: an unexpanded glob or a nonexistent operand refuses, because both
     otherwise render as an authoritative "(no matches)" for a search that never ran.
@@ -826,11 +829,22 @@ def _render_line(path: str, lineno: int, line: str, spec: SearchSpec,
 
 
 def _read_text(path: str) -> Optional[str]:
-    """Read a file as text, or None if unreadable or binary.
+    """Read a file as text, None if binary, or raise Unanswerable if unreadable.
 
     Binary detection mirrors grep's own NUL-byte heuristic rather than guessing at
     encodings -- grep prints `Binary file X matches` and does not dump content, so
-    skipping is closer to the caller's expectation than emitting mojibake.
+    skipping is closer to the caller's expectation than emitting mojibake. A binary
+    file contributing nothing is FAITHFUL; the caller keeps scanning.
+
+    An OSError is not. This used to return None for both cases, which made a file
+    the process could not open indistinguishable from a file with no matches -- and
+    on Windows the dominant cause of that OSError is a sharing violation from one of
+    the peers concurrently editing the same tree, so the omission is not random but
+    concentrated on exactly the files under active work. The caller was then handed
+    an authoritative `(no matches)` for a search that skipped them, the identical
+    confidently-wrong shape `_expand_targets` exists to close. Real grep reports the
+    unreadable path on stderr and exits 2; this seam has no stderr, so it refuses
+    and the caller pays one bash spawn for a complete answer.
     """
     try:
         with open(path, "rb") as handle:
@@ -838,6 +852,6 @@ def _read_text(path: str) -> Optional[str]:
             if b"\x00" in head:
                 return None
             rest = handle.read()
-    except OSError:
-        return None
+    except OSError as exc:
+        raise Unanswerable("cannot read %r: %s" % (path, exc))
     return (head + rest).decode("utf-8", errors="replace")

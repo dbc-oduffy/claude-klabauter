@@ -237,6 +237,69 @@ class TestAtomicDedupAppend:
         with pytest.raises(ValueError):
             claims.atomic_dedup_append(str(tmp_path / "t.txt"), "")
 
+    def test_entry_is_canonicalized_at_the_write(self, tmp_path):
+        # One dialect at the write, shared with the reader's key normalizer.
+        f = tmp_path / "touched.txt"
+        assert claims.atomic_dedup_append(str(f), r"a\b\c.py") is True
+        assert claims.atomic_dedup_append(str(f), "a/b/c.py") is True
+        lines = f.read_text().splitlines()
+        assert len(lines) == 1
+        assert scope.parse_touch_event(lines[0])[2] == "a/b/c.py"
+
+    def test_absolute_entry_is_refused_and_reported(self, tmp_path, capsys):
+        # Refuse-not-record: an absolute entry can never dedup-match, never
+        # satisfy an ownership lookup, and never join a commit set -- it reads
+        # as a claim while protecting nothing. Return stays True (the
+        # silent-failure contract is about the CALLER, not about visibility).
+        f = tmp_path / "touched.txt"
+        entry = r"C:\Users\x\.claude\memory\MEMORY.md"  # abs-path-ok: fixture
+
+        assert claims.atomic_dedup_append(str(f), entry) is True
+
+        assert not f.exists()
+        err = capsys.readouterr().err
+        assert "is absolute" in err
+        assert repr(entry) in err  # the refused path is NAMED, not just counted
+
+
+class TestCanonicalClaimEntry:
+    @pytest.mark.parametrize(
+        "entry,expected",
+        [
+            (r"a\b.py", "a/b.py"),
+            ("a/./b.py", "a/b.py"),
+            ("../peer/x.py", "../peer/x.py"),
+            (r"C:\Users\x\f.md", None),  # abs-path-ok: fixture
+            ("/etc/hosts", None),  # abs-path-ok: fixture
+            (r"\\?\C:\Users\x\f.md", None),  # abs-path-ok: fixture
+            (r"\\?\UNC\server\share\f.md", None),  # abs-path-ok: fixture
+            (r"\\server\share\f.md", None),  # abs-path-ok: fixture
+            ("", None),
+        ],
+    )
+    def test_folds_relative_and_refuses_absolute(self, entry, expected):
+        assert claims.canonical_claim_entry(entry) == expected
+
+    def test_agrees_with_the_readers_key_normalizer(self):
+        # Writer and reader must not drift: whatever the writer records, the
+        # reader's key normalizer must be a no-op on it.
+        from coordinator_core.session import claim_index
+
+        for entry in (r"a\b.py", "a/./b.py", "pkg/mod.py"):
+            written = claims.canonical_claim_entry(entry)
+            assert claim_index._normalize_key(written) == written
+
+    def test_spawns_no_subprocess(self, monkeypatch):
+        def _explode(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("canonical_claim_entry spawned: %r" % (args,))
+
+        monkeypatch.setattr(subprocess, "run", _explode)
+        monkeypatch.setattr(subprocess, "Popen", _explode)
+        monkeypatch.setattr(subprocess, "check_output", _explode)
+
+        assert claims.canonical_claim_entry(r"a\b.py") == "a/b.py"
+        assert claims.canonical_claim_entry(r"C:\x\y.md") is None  # abs-path-ok: fixture
+
 
 # ---------------------------------------------------------------------------
 # atomic_dedup_append — the LOCKED branch (C6). Every test above targets a
@@ -2187,14 +2250,20 @@ class TestRelocateTouchedPath:
     def test_raw_shutil_move_strands_the_new_path_unclaimed(self, tmp_path):
         """CHARACTERIZATION, NOT PERTURBATION: same tracked-file-A-claimed
         setup, but the relocation is a raw shutil.move rather than the
-        helper. Pre-existing stranded shape: A stays in safe_paths (its own
-        T-claim never expires just because the file is gone), B is EXCLUDED
-        with reason "untouched by this session" because nothing ever wrote a
-        claim for the new path. This test is GREEN BOTH BEFORE AND AFTER C1
-        lands -- C1 does not change what a raw shutil.move does, it only
-        gives callers an alternative that re-declares the claim. This is a
-        characterization of pre-existing behaviour, not a red-before/
-        green-after proof."""
+        helper. Stranded shape: A stays in safe_paths (its own T-claim never
+        expires just because the file is gone) and B is not this session's,
+        because nothing ever wrote a claim for the new path. C1 does not
+        change what a raw shutil.move does; it only gives callers an
+        alternative that re-declares the claim.
+
+        UPDATED 2026-08-21 (47b3c1f8b). B used to be asserted present in
+        `excluded` with reason "untouched by this session" -- the orphan
+        narration `compute_offer` produced when it still enumerated the dirty
+        tree. It no longer reads the worktree at all (dirtiness left that
+        answer by PM ruling), so an unclaimed path is absent from EVERY
+        bucket rather than named in one. The characterized behaviour is
+        unchanged -- B is not committable by this session either way -- so
+        this asserts the absence directly instead."""
         repo = _make_repo(tmp_path)
         _add_and_commit_tracked(repo, "a.py", "original\n")
         core.init("mine", cwd=str(repo))
@@ -2205,9 +2274,8 @@ class TestRelocateTouchedPath:
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert "a.py" in offer["safe_paths"]
         assert "b.py" not in offer["safe_paths"]
-        assert {"path": "b.py", "reason": "untouched by this session"} in offer[
-            "excluded"
-        ]
+        assert "b.py" not in {e["path"] for e in offer["excluded"]}
+        assert "b.py" not in offer["ownership"]["unattributed"]
 
     def test_unclaimed_source_writes_no_claim_event(self, tmp_path):
         """The conditional-claim precondition: relocating a path this

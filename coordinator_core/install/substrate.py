@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple
 
 from coordinator_core import machine_resolver
-from coordinator_core._settings_home import settings_home
+from coordinator_core._settings_home import machine_local_dir, settings_home
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.locked_write import held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -101,7 +101,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.install.policy_gate import PolicyGateVerdict, evaluate_policy_gate
-from coordinator_core.engine_root import coordinator_engine_root_with_class
+from coordinator_core.engine_root import _registry_mtime_pair, coordinator_engine_root_with_class
 
 # Generator-provenance declaration (generator_provenance.py). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -1054,6 +1054,83 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # full survey and what was deliberately left out. Extend BOTH sets together
 # -- `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_
 # substrate_targets` is the drift guard.
+
+# DISPATCH-ROOT LAUNCHER CACHE (C15, docs/plans/2026-08-21-the-cli-bootstrap-
+# tax-dies-at-the-interpreter-floor.md). MIRRORED, NOT IMPORTED, against
+# `coordinator/bin/gen-launcher-shim.py`'s `dispatch_root_cache_path` /
+# `_engine_stamp_bytes` -- same reasoning as `_RAW_CMDLINE_TARGETS` above:
+# that module is hyphenated-filename with no ordinary `import` form, and this
+# module already declines to import it (see this file's own docstring on the
+# `.ps1` leg). This module is the one write site (install time, where the
+# gate-resolved root is already on hand from `coordinator_engine_root_with_class()`
+# a few lines above its call site below) -- `gen-launcher-shim.py` owns the
+# read side (`read_dispatch_root_cache`), since it is the shared surface a
+# future Python-side consumer reaches for. Keep the on-disk shape (dict keys,
+# composite key derivation) identical by hand if either side changes; there
+# is no drift guard test for this pair yet the way
+# `test_raw_cmdline_entrypoints_matches_substrate_targets` guards the set
+# above -- see `coordinator/bin/tests/test_gen_launcher_shim_dispatch_bake.py`
+# for the read/write round-trip this module's write must stay compatible with.
+_DISPATCH_ROOT_CACHE_DIRNAME = "coordinator"
+_DISPATCH_ROOT_CACHE_FILENAME = "dispatch-root-cache.json"
+_ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+
+def _dispatch_root_cache_path() -> Optional[Path]:
+    """Mirror of `gen-launcher-shim.py::dispatch_root_cache_path` -- `None`
+    when `LOCALAPPDATA` is unset (non-Windows / a stripped environment)."""
+    local = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local:
+        return None
+    return Path(local) / _DISPATCH_ROOT_CACHE_DIRNAME / _DISPATCH_ROOT_CACHE_FILENAME
+
+
+def _dispatch_engine_stamp_bytes(engine_root: Path) -> bytes:
+    """Mirror of `gen-launcher-shim.py::_engine_stamp_bytes` -- `b""` when
+    the stamp is absent/unreadable (a normal, unstamped-tree state, never an
+    error)."""
+    stamp_path = engine_root.joinpath(*_ENGINE_STAMP_RELATIVE_PARTS)
+    try:
+        return stamp_path.read_bytes()
+    except OSError:
+        return b""
+
+
+def _write_dispatch_root_bake(engine_root: Path, root: str, resolution_class: str) -> None:
+    """Persist the gate-resolved `(root, resolution_class)` this install run
+    already resolved, keyed on the engine build stamp PLUS
+    `_registry_mtime_pair`'s float triple (AC17) -- a stamp alone misses a
+    `machine-local set repos.*` redirect that changes which engine executes
+    WITHOUT touching any stamp (HARD CONSTRAINT 2). Best-effort: any failure
+    to write is swallowed and install proceeds exactly as it did before this
+    mechanism existed -- this is a fast-path accelerator for a later Python
+    reader, never a required write. Writes NOTHING into any tracked
+    `.cmd`/`.ps1` body; only this self-healing, never-synced `%LOCALAPPDATA%`
+    file carries the value (see this row's own plan body)."""
+    path = _dispatch_root_cache_path()
+    if path is None:
+        return
+    ml_dir = machine_local_dir()
+    payload = {
+        "stamp": _dispatch_engine_stamp_bytes(engine_root).hex(),
+        "registry_mtime": list(_registry_mtime_pair(ml_dir)),
+        "root": root,
+        "resolution_class": resolution_class,
+    }
+    tmp_path: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.parent / f".{_DISPATCH_ROOT_CACHE_FILENAME}.{os.getpid()}.tmp"
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 _RAW_CMDLINE_TARGETS = frozenset(
     {
         "coordinator-write-review-trail.py",
@@ -2573,6 +2650,8 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    _write_dispatch_root_bake(claude_klabauter_root, _claude_klabauter_root_str, _resolution_class)
 
     claude_klabauter_lib = claude_klabauter_root / "coordinator" / "lib"
     if not claude_klabauter_lib.is_dir():

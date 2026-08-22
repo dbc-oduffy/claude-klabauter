@@ -62,6 +62,11 @@ def _load_round_module():
 
 _round = _load_round_module()
 
+# Imported AFTER `_load_round_module()`, deliberately: that call is what puts the engine
+# on `sys.path` for this process (`percolate-round.py` inserts `coordinator/lib` at its
+# own import time), so `coordinator_core` is not resolvable above this line.
+from coordinator_core import publish_lane  # noqa: E402  type: ignore[import-not-found]
+
 
 def _mirror_groups(percolate_root: str) -> Dict[str, List[str]]:
     """Registered target names grouped by the git WORKTREE ROOT their dest
@@ -405,6 +410,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Declared here and not inherited from `percolate-round`: this module imports that
+    # one by path for its helpers and never calls its `main()`, so the round's own
+    # declaration does not run for a mirror publish — and this driver spawns
+    # `scoped-git-commit` itself (`_commit_mirror`), which is the one leg the lane
+    # exists for. PM ruling 2026-08-21, DR-350; mechanism in
+    # `coordinator_core.publish_lane`.
+    publish_lane.declare_lane()
+
     args = _build_parser().parse_args(argv)
 
     # `_resolve_percolate_root` owns the override precedence itself (it returns

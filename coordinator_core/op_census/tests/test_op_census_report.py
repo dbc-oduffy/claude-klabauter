@@ -199,13 +199,58 @@ def test_census_reports_tripped_ratchet_on_real_tree_when_corpus_has_grown_past_
 # deltas, never wall clock (anti-scope) — `census()` self-reports these via
 # `self_assessment`; this test cross-checks that self-report against an
 # independent measurement taken around the same call, and separately
-# exercises the Windows job-object harness (`batched_process_time_ms`) for
-# the one genuinely subprocess-shaped piece of the budget: the reference
-# `FROZEN_CLIENT_DOOR_MS` / `FROZEN_INVOCATION_TAX_MS` figures' own
-# provenance (`timing.measure_invocation_tax_ms`'s underlying probe script),
-# per the dispatch brief's explicit ask to use the harness "not repeated
-# single samples."
+# exercises the batched process-time harness (`batched_process_time_ms`,
+# Windows job-object OR Darwin kqueue+wait4) for the one genuinely
+# subprocess-shaped piece of the budget: the reference `FROZEN_CLIENT_
+# DOOR_MS` / `FROZEN_INVOCATION_TAX_MS` figures' own provenance
+# (`timing.measure_invocation_tax_ms`'s underlying probe script), per the
+# dispatch brief's explicit ask to use the harness "not repeated single
+# samples."
 # ---------------------------------------------------------------------------
+
+
+def test_relpath_under_fast_leg_matches_the_resolving_leg(tmp_path: Path):
+    """The cheap `relative_to` leg and the `resolve()` leg must agree on an
+    ordinary absolute path. If they ever diverge, the fast leg is silently
+    re-keying modules under a different string than the axes expect."""
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True)
+    module = root / "pkg" / "mod.py"
+    module.write_text("x = 1\n", encoding="utf-8")
+
+    fast = ocr._relpath_under(module, root, root.resolve())
+    resolving = module.resolve().relative_to(root.resolve()).as_posix()
+    assert fast == resolving == "pkg/mod.py"
+
+
+def test_relpath_under_keeps_the_resolving_fallback_for_indirect_paths(tmp_path: Path):
+    """`relative_to` is a STRING operation: it answers a `..`-carrying path
+    with a `..`-carrying relative path instead of raising, which would key one
+    module under two different strings. Only `resolve()` collapses it. Dropping
+    that second leg as a "simplification" re-keys such a module away from the
+    string the axes look it up by -- staff-eng Finding 0's exact failure
+    shape."""
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True)
+    module = root / "pkg" / "mod.py"
+    module.write_text("x = 1\n", encoding="utf-8")
+    indirect = root / "pkg" / ".." / "pkg" / "mod.py"
+
+    # The fast leg does not raise here -- it answers WRONG, which is why the
+    # helper rejects a `..`-carrying result rather than trusting it.
+    assert indirect.relative_to(root).as_posix() == "pkg/../pkg/mod.py"
+    assert ocr._relpath_under(indirect, root, root.resolve()) == "pkg/mod.py"
+
+
+def test_relpath_under_returns_none_outside_the_root(tmp_path: Path):
+    """Neither leg may claim a path that genuinely sits outside the root."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "mod.py"
+    outside.parent.mkdir()
+    outside.write_text("x = 1\n", encoding="utf-8")
+
+    assert ocr._relpath_under(outside, root, root.resolve()) is None
 
 
 def test_census_budget():
@@ -263,17 +308,18 @@ def test_census_self_assessment_reports_against_both_dr344_bars():
 
 
 def test_batched_process_time_ms_harness_available_for_client_door_provenance():
-    """Pins that the Windows job-object harness the dispatch brief names
+    """Pins that the job-object/kqueue harness the dispatch brief names
     (`coordinator_core.benchmarks.process_time.batched_process_time_ms`) is
     importable and usable from this package -- the harness itself is
     covered by its own test suite (`coordinator_core/benchmarks/tests/`);
     this only pins the dependency this chunk's budget-table provenance
-    relies on, not the harness's own correctness."""
-    from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+    relies on, not the harness's own correctness. Import-only: never
+    platform-gated, since the module itself is importable everywhere (it is
+    only `batched_process_time_ms`'s own CALL that is Windows/Darwin-scoped,
+    per its module docstring's three-way platform dispatch)."""
+    from coordinator_core.benchmarks.process_time import batched_process_time_ms
 
     assert callable(batched_process_time_ms)
-    if not IS_WINDOWS:
-        pytest.skip("batched_process_time_ms is a Windows job-object primitive")
 
 
 def test_measure_census_self_timing_ms_uses_the_batched_harness():
@@ -282,11 +328,16 @@ def test_measure_census_self_timing_ms_uses_the_batched_harness():
     census() site, mirroring `timing.measure_invocation_tax_ms`'s worked
     example — pins the wiring (`k=1` to keep this test cheap; the harness's
     own averaging correctness is covered by its own test suite) rather than
-    re-deriving a specific figure."""
-    from coordinator_core.benchmarks.process_time import IS_WINDOWS
+    re-deriving a specific figure. `measure_census_self_timing_ms` is
+    explicitly the one caller that does NOT guard on `IS_WINDOWS` (its own
+    docstring) -- it runs the batched harness's Windows job-object path AND
+    its Darwin kqueue/wait4 path alike, so this test follows suit and only
+    skips on a platform neither implements (`batched_process_time_ms` raises
+    `NotImplementedError` there per its module docstring)."""
+    from coordinator_core.benchmarks.process_time import IS_DARWIN, IS_WINDOWS
 
-    if not IS_WINDOWS:
-        pytest.skip("batched_process_time_ms is a Windows job-object primitive")
+    if not (IS_WINDOWS or IS_DARWIN):
+        pytest.skip("batched_process_time_ms is Windows/Darwin-only (NotImplementedError elsewhere)")
 
     result = ocr.measure_census_self_timing_ms(k=1)
     assert result["k"] == 1
@@ -330,7 +381,10 @@ def test_census_cold_process_budget():
     indexes with one un-measured in-process call first -- exactly
     `test_census_budget`'s own "first call pays the cold build, excluded"
     convention -- then spawns `k=3` FRESH child processes via
-    `benchmarks.process_time.batched_process_time_ms` (module docstring:
+    `benchmarks.process_time.batched_process_time_ms` (Windows job-object
+    on Windows, kqueue+wait4 on Darwin -- this test runs on both, skipping
+    only where the harness itself raises `NotImplementedError`; module
+    docstring:
     the correct primitive for a sub-150ms `time.process_time()` reading a
     single sample cannot resolve past the ~15.625ms scheduler tick; also
     the SAME chokepoint `test_measure_census_self_timing_ms_uses_the_
@@ -379,10 +433,10 @@ def test_census_cold_process_budget():
     import os
     import tempfile
 
-    from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+    from coordinator_core.benchmarks.process_time import IS_DARWIN, IS_WINDOWS, batched_process_time_ms
 
-    if not IS_WINDOWS:
-        pytest.skip("batched_process_time_ms is a Windows job-object primitive")
+    if not (IS_WINDOWS or IS_DARWIN):
+        pytest.skip("batched_process_time_ms is Windows/Darwin-only (NotImplementedError elsewhere)")
 
     ocr.census(telemetry_entries=[], persist_index=True)  # primes the on-disk indexes
 

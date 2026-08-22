@@ -249,7 +249,9 @@ class TestWarmGenerationProbe:
         assert result.status == mod._DEGRADED, (
             f"AC8: a stale breadcrumb token must be reported DEGRADED, got {result.status!r}"
         )
-        assert result.required is True
+        assert result.required is False, (
+            "the stale arm names no action and must not gate setup.py's exit 94"
+        )
         assert result.data["stale_pids"] == [902]
         assert connect_called == [], "AC8: the C5a connect helper must never be called by this probe"
         assert elect_called == [], "election.elect() must never be called by a read-only probe"
@@ -383,6 +385,32 @@ class TestWarmGenerationProbe:
         assert result.status == mod._DEGRADED
         assert result.data["stale_pids"] == [907]
         assert len(result.data["servers"]) == 2
+
+    def test_stale_generation_does_not_gate_step_zero_exit(self) -> None:
+        """A remediation naming no action cannot be an install gate.
+
+        `_sz_severity` maps `required` to step-zero `hard`, and
+        `scripts/setup.py` returns EXIT_HEALTH_PROBE_HARD_FAILURE (94) for
+        any hard probe whose status is not `pass`. The stale-generation arm
+        drains on its own, so it must emit `advisory` and leave the exit
+        code at 0 — otherwise every install on a box with an in-flight warm
+        server reports failure.
+        """
+        mod = _require_module()
+
+        stale = mod._ProbeResult(
+            probe=mod._WARM_GENERATION_PROBE,
+            status=mod._DEGRADED,
+            detail="1 resident warm server process(es) have a stale generation token.",
+            remediation=(
+                "A stale generation drains on its own via warm.idle's superseded-"
+                "generation arm once a fresh server binds; no direct action is named here."
+            ),
+            required=False,
+        )
+
+        assert mod._sz_severity(stale) == mod._SZ_ADVISORY
+        assert mod.emit_step_zero([stale]) == 0
 
     def test_psutil_never_reaches_election_elect_module_wide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

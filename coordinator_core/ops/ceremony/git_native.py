@@ -62,6 +62,12 @@ from coordinator_core.git.divergence import (
     diverging_paths,
     parse_v2_records,
 )
+from coordinator_core.git.git_state import (
+    IndexParseError,
+    head_blobs as _git_state_head_blobs,
+    head_sha as _git_state_head_sha,
+    read_index,
+)
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -1650,115 +1656,115 @@ def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Option
 
 
 def _index_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
-    """Return `{path: index-blob-sha}` for `paths`, via `git ls-files -s -z`.
-    A path with no index entry (untracked, or deleted-from-index) maps to
-    `None`. On a `git` failure, EVERY entry maps to `_GIT_READ_FAILED` --
-    NOT `None` -- so a caller comparing against a prior snapshot can never
-    read a degraded read as "genuinely absent" (code-reviewer finding,
+    """Return `{path: index-blob-sha}` for `paths`, read via
+    `coordinator_core.git.git_state.read_index` -- SPAWN-FREE (C2,
+    2026-08-21, docs/plans/2026-08-16-one-engine-for-the-whole-box.md;
+    state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-
+    without-spawning-git/C2.md). A path with no index entry (untracked, or
+    deleted-from-index) maps to `None`. On a `read_index` failure
+    (`IndexParseError` -- a malformed/unsupported/split index, or any
+    unmerged entry), EVERY entry maps to `_GIT_READ_FAILED` -- NOT `None`
+    -- so a caller comparing against a prior snapshot can never read a
+    degraded read as "genuinely absent" (code-reviewer finding,
     bf7bab8ce37c review, P1 "degraded reads": the previous all-`None`
     degrade was claimed refuse-leaning but was not -- see
     `_agree_branch_cas_refusal`'s own use of this sentinel for the two
-    directions that claim was false in).
+    directions that claim was false in). `read_index` itself never returns
+    a partial/empty result on a parse failure (see its own docstring); a
+    genuinely absent `.git/index` (unborn repo) is the one legitimate
+    empty-result case and reads as ordinary `None` for every path here,
+    same as before.
 
-    `-z` (never the newline-separated default) means git prints each path
-    UNQUOTED, and the result is reconciled back to the caller's own key
-    string via `_normalize_path_key` (a `./`-prefix or backslash-separator
-    difference no longer leaves the caller's key permanently unmatched --
-    code-reviewer finding, bf7bab8ce37c review, P1 "path-key mismatch"). A
-    printed path that still cannot be reconciled to any caller key is kept
-    under its own git-printed key AS DIAGNOSTICS (visible, never dropped),
-    and every caller path it could plausibly answer for is forced to
-    `_GIT_PATH_UNRECONCILED` (never left at `None`) -- see
-    `_GIT_PATH_UNRECONCILED`'s own docstring for the case-divergence hazard
-    this closes (PM follow-up, bf7bab8ce37c review P1).
+    Reconciled back to the caller's own key string via `_normalize_path_key`
+    (a `./`-prefix or backslash-separator difference no longer leaves the
+    caller's key permanently unmatched -- code-reviewer finding, bf7bab8ce37c
+    review, P1 "path-key mismatch"). The `git`-PRINTED-output shape of
+    `_GIT_PATH_UNRECONCILED` (a printed path this function cannot tie back to
+    any caller key) is structurally unreachable here -- there is no git
+    output to fail to key back, `read_index` hands back the WHOLE index as a
+    plain dict this function looks up directly. Its CASE-DIVERGENCE cause
+    remains fully reachable, though, now detected in-memory instead of via a
+    second `:(icase)` git spawn: `read_index` already returns every tracked
+    path in one call, so a caller key with no exact normalized match is
+    checked against the SAME snapshot's casefolded keys before falling back
+    to `None` -- deviation from this chunk's own brief aside (which read this
+    sentinel as index-side-unreachable outright); dropping it silently
+    regressed `test_agree_branch_cas_refuses_case_divergent_caller_path` /
+    `test_op_surfaces_case_divergent_cas_refusal_as_a_failure_not_a_noop`
+    (test_scoped_git_commit.py) -- the exact "git add silently reuses an
+    existing differently-cased index entry" hazard this sentinel exists to
+    catch (see `_GIT_PATH_UNRECONCILED`'s own module-level docstring) is an
+    INDEX-side fact end to end, so losing it here loses it entirely, not just
+    losing one detection route. The sentinel itself is never deleted
+    (`_head_blobs`, below, also still reaches it) -- see that function's own
+    docstring.
 
-    Chunked (2026-08-15, `_chunk_paths()` -- same packer/budget `_diverging_
-    paths_chunked()` uses, promoted here from `commit_pipeline.py`): this
-    function's own `pre_index_blobs`/`current_index_blobs` snapshot reads,
-    taken by `commit_scoped()`'s Layer-1 CAS (`_agree_branch_cas_refusal`)
-    BEFORE and immediately before the agree branch's own `git add`, put the
-    WHOLE `paths` list on `git ls-files -s -z --` argv -- at percolate-
-    publish scale this blows the same 32767-char Windows `CreateProcess` cap
-    the divergence check does, and a `git` failure here degrades EVERY path
-    to `_GIT_READ_FAILED`, which `_agree_branch_cas_refusal` reads as
-    "moved" -- so an unchunked call here would make the agree branch refuse
-    EVERY commit at this scale, not just fail to detect a real race.
-    Chunking is per-chunk-failure, not whole-batch: a `git` failure in one
-    chunk marks only that chunk's paths `_GIT_READ_FAILED` (mirrors
-    `commit_pipeline._ls_files_deleted_chunked`'s own established per-chunk-
-    failure idiom), so an argv-length artifact in a later chunk no longer
-    taints paths a healthy earlier chunk already answered for. The `:(icase)`
-    rescan (`still_null`, below) is chunked identically, for the same reason.
+    No `_chunk_paths()` batching here -- unlike the old `git ls-files -s -z`
+    spawn, `read_index` takes no per-call argv at all (it parses the whole
+    on-disk index file once), so the Windows `CreateProcess` argv-length
+    hazard chunking existed to avoid does not apply to this read.
     """
     if not paths:
         return {}
-    blobs: Dict[str, object] = {p: None for p in paths}
-    key_by_normalized = {_normalize_path_key(p): p for p in paths}
-    matched: Set[str] = set()
-    unreconciled: List[Tuple[str, str]] = []
-    for chunk in _chunk_paths(list(paths)):
-        result = _git(["ls-files", "-s", "-z", "--", *chunk], cwd=root)
-        if not result.ok:
-            for p in chunk:
-                blobs[p] = _GIT_READ_FAILED
-            continue
-        for parts, path in _parse_git_z_cacheinfo(result.stdout):
-            if len(parts) != 3:
-                continue
-            mode, sha, _stage = parts
-            norm = _normalize_path_key(path)
-            key = key_by_normalized.get(norm)
-            if key is not None:
-                blobs[key] = sha
-                matched.add(norm)
-            else:
-                blobs[path] = sha
-                unreconciled.append((path, sha))
-
-    still_null = [p for p in paths if blobs[p] is None]
-    for rescan_chunk in _chunk_paths(still_null):
-        rescanned = _case_insensitive_rescan(root, ["ls-files", "-s", "-z"], rescan_chunk)
-        if rescanned is None:
-            for p in rescan_chunk:
-                blobs[p] = _GIT_READ_FAILED
+    try:
+        snapshot = read_index(root)
+    except IndexParseError:
+        return {p: _GIT_READ_FAILED for p in paths}
+    index_by_normalized = {_normalize_path_key(p): entry for p, entry in snapshot.items()}
+    blobs: Dict[str, object] = {}
+    unmatched: List[str] = []
+    for p in paths:
+        entry = index_by_normalized.get(_normalize_path_key(p))
+        if entry is not None:
+            blobs[p] = entry.sha
         else:
-            for parts, path in rescanned:
-                if len(parts) != 3:
-                    continue
-                unreconciled.append((path, parts[1]))
-
-    if unreconciled:
-        _mark_unreconciled(blobs, paths, matched, unreconciled)
+            blobs[p] = None
+            unmatched.append(p)
+    if unmatched:
+        casefolded_keys = {norm.casefold() for norm in index_by_normalized}
+        for p in unmatched:
+            if _normalize_path_key(p).casefold() in casefolded_keys:
+                blobs[p] = _GIT_PATH_UNRECONCILED
     return blobs
 
 
 def _head_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
-    """Return `{path: HEAD-blob-sha}` for `paths`, via `git ls-tree HEAD -z`.
-    A path absent from HEAD (new/untracked) maps to `None`. Same
-    `_GIT_READ_FAILED`-on-failure, `-z`+`_normalize_path_key`-reconciliation
-    posture as `_index_blobs` above -- see that function's own docstring;
-    both route through the shared `_parse_git_z_cacheinfo` primitive so a
-    porcelain-format fix never has to be applied to one and re-forgotten on
-    the other (code-reviewer finding, bf7bab8ce37c review, P2).
+    """Return `{path: HEAD-blob-sha}` for `paths`, via
+    `coordinator_core.git.git_state.head_blobs` -- C1's ONE retained
+    `git ls-tree` spawn (C2, 2026-08-21; see this module's `_index_blobs`
+    for the sibling INDEX-side re-point onto `read_index`, and
+    `state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-
+    without-spawning-git/C2.md`). A path absent from HEAD (new/untracked,
+    or an unborn branch with no commits yet -- `git_state.head_blobs`
+    folds `"not a valid object name HEAD"` into the same "chunk answered
+    nothing" shape as any other per-chunk git failure, so both read as the
+    ordinary absent-from-HEAD `None` here, matching this function's
+    pre-C2 behaviour for the unborn case) maps to `None`.
 
-    One legitimate non-`git`-failure cause of `not result.ok` here: an
-    UNBORN branch (no commit has ever landed on this ref yet -- the very
-    first `commit_scoped()` call in a fresh repo, exercised by this repo's
-    own `test_op_schema_accepts_string_deliverable_id`). Git's stable
-    diagnostic for that case is `"fatal: Not a valid object name HEAD"`
-    (verified empirically against this repo's own git, 2026-08-14) --
-    matched here and treated as the ordinary "every path absent from HEAD"
-    answer (`None`, not `_GIT_READ_FAILED`), since there genuinely is no
-    HEAD tree to have failed to read. Any OTHER non-zero exit (git missing,
-    corrupt repo, timeout, permission error) still maps to
-    `_GIT_READ_FAILED`.
+    Reconciliation posture matches `_index_blobs` above: `git_state.
+    head_blobs` hands back `{path-as-git-printed-it: (mode, sha)}`, and this
+    function reconciles that back to the caller's own key string via
+    `_normalize_path_key` exactly as before -- `_GIT_PATH_UNRECONCILED`
+    REMAINS REACHABLE here (unlike on the INDEX side, see `_index_blobs`'s
+    own docstring): `git ls-tree` is still a real git invocation whose
+    printed path can still diverge from the caller's key (case, primarily),
+    so the case-divergence hazard this sentinel exists to catch is still
+    live on this side.
+
+    `_GIT_READ_FAILED` here now covers a narrower case than before C2:
+    `git_state.head_blobs` is documented to never raise on an ordinary
+    per-chunk `git` failure (it folds that into "this chunk answered
+    nothing", the same shape as the unborn-HEAD case above -- see its own
+    docstring's "never raises" contract) -- there is no longer a
+    `result.ok`/stderr signal at this call site to distinguish "git itself
+    failed" from "genuinely absent". `_GIT_READ_FAILED` is still reachable
+    for a genuine INFRASTRUCTURE failure below `head_blobs` itself (e.g. the
+    `.git` directory cannot be resolved) -- caught here and forced onto
+    every requested path, never silently downgraded to `None`.
 
     Deliberately has NO `:(icase)` rescan of its own, unlike `_index_blobs`
-    -- `git ls-tree` REJECTS that pathspec magic outright (`fatal: pathspec
-    magic not supported by this command: 'icase'`, verified empirically,
-    2026-08-14; an earlier version of this fix tried it here and broke
-    every ordinary new-file commit, since the rescan's own git failure was
-    then indistinguishable from a real `_GIT_READ_FAILED`). Not a gap: the
+    -- unchanged from pre-C2: `git ls-tree` REJECTS that pathspec magic
+    outright (verified empirically, 2026-08-14). Not a gap: the
     case-divergence hazard this exists to catch (`git add` silently reusing
     an EXISTING INDEX entry under a different case) is entirely an
     index-side fact -- `_index_blobs`'s own `:(icase)` rescan already forces
@@ -1766,43 +1772,31 @@ def _head_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
     for that path, which `_agree_branch_cas_refusal` already refuses on
     before `_head_blobs`'s answer for that same path is ever consulted.
 
-    Chunked (2026-08-15) for the identical percolate-publish-scale argv-
-    length reason `_index_blobs()`'s own docstring documents -- same
-    `_chunk_paths()` packer, same per-chunk-failure posture (a `git`
-    failure in one chunk marks only that chunk's paths `_GIT_READ_FAILED`,
-    never the whole batch). The unborn-HEAD case (`"not a valid object name
-    head"`) is checked PER CHUNK, not once up front: an unborn branch fails
-    identically on every chunk's own `git ls-tree HEAD` call, so this is
-    behaviour-preserving (every path still resolves to the ordinary
-    "absent from HEAD" `None`, never `_GIT_READ_FAILED`) while staying
-    chunk-local like every other failure branch here.
+    No `_chunk_paths()` call at THIS call site any more -- `git_state.
+    head_blobs` chunks internally (via a function-local import of this
+    module's own `_chunk_paths`, to keep `coordinator_core.git.*` off the
+    cold-start import path; see its own docstring), so this function passes
+    the whole `paths` sequence through in one call.
     """
     if not paths:
         return {}
     blobs: Dict[str, object] = {p: None for p in paths}
     key_by_normalized = {_normalize_path_key(p): p for p in paths}
+    try:
+        raw = _git_state_head_blobs(root, paths)
+    except Exception:
+        return {p: _GIT_READ_FAILED for p in paths}
     matched: Set[str] = set()
     unreconciled: List[Tuple[str, str]] = []
-    for chunk in _chunk_paths(list(paths)):
-        result = _git(["ls-tree", "HEAD", "-z", "--", *chunk], cwd=root)
-        if not result.ok:
-            if "not a valid object name head" in result.stderr.strip().lower():
-                continue
-            for p in chunk:
-                blobs[p] = _GIT_READ_FAILED
-            continue
-        for parts, path in _parse_git_z_cacheinfo(result.stdout):
-            if len(parts) != 3:
-                continue
-            _mode, _type, sha = parts
-            norm = _normalize_path_key(path)
-            key = key_by_normalized.get(norm)
-            if key is not None:
-                blobs[key] = sha
-                matched.add(norm)
-            else:
-                blobs[path] = sha
-                unreconciled.append((path, sha))
+    for path, (_mode, sha) in raw.items():
+        norm = _normalize_path_key(path)
+        key = key_by_normalized.get(norm)
+        if key is not None:
+            blobs[key] = sha
+            matched.add(norm)
+        else:
+            blobs[path] = sha
+            unreconciled.append((path, sha))
     if unreconciled:
         _mark_unreconciled(blobs, paths, matched, unreconciled)
     return blobs
@@ -1959,32 +1953,49 @@ def _resolve_mode_for_paths(root: Path, paths: Sequence[str]) -> Dict[str, str]:
 
     Read-only against the REAL repo state -- never the private temp index
     `_commit_scoped_private_index` is mid-building when this is called --
-    same source `staged_paths`' own `ls-files -s` read (a few lines up in
-    that function) already uses, so a supplied-blob path and a staged-blob
-    path resolve their mode from the identical vantage point.
+    same source the index side now reads via `git_state.read_index()`
+    (C2, 2026-08-21 -- re-pointed off the `git ls-files -s` spawn this
+    function's own INDEX lookup previously issued; see `_index_blobs`'s
+    docstring for the shared rationale), so a supplied-blob path and a
+    staged-blob path resolve their mode from the identical vantage point.
 
     Unchunked -- `supplied_paths` is bounded by the same pathspec every
     other real read in `_commit_scoped_private_index` is scoped to, never
     the whole-repo scale `_diverging_paths_chunked()` exists for. A path
     absent from BOTH the index and HEAD is simply absent from the returned
     dict -- callers fall back to `_SUPPLIED_BLOB_MODE` for it, never a
-    guessed entry here.
+    guessed entry here. The HEAD-side fallback still goes through
+    `git_state.head_blobs()`'s one retained `git ls-tree` spawn -- see
+    `_head_blobs`'s own docstring for that call's failure/reconciliation
+    posture, mirrored here at a smaller scale (a missing/failed read for a
+    path here is simply absent from the returned dict, never a distinct
+    sentinel -- this function's own contract, unlike `_index_blobs`/
+    `_head_blobs`, was never sentinel-bearing).
     """
     if not paths:
         return {}
     modes: Dict[str, str] = {}
-    index_result = _git(["ls-files", "-s", "--", *paths], cwd=root)
-    if index_result.ok:
-        for mode, _sha, path in _parse_ls_files_cacheinfo(index_result.stdout):
-            modes[path] = mode
+    try:
+        snapshot = read_index(root)
+    except IndexParseError:
+        snapshot = None
+    if snapshot is not None:
+        index_by_normalized = {_normalize_path_key(p): entry for p, entry in snapshot.items()}
+        for p in paths:
+            entry = index_by_normalized.get(_normalize_path_key(p))
+            if entry is not None:
+                modes[p] = f"{entry.mode:06o}"
     missing = [p for p in paths if p not in modes]
     if missing:
-        head_result = _git(["ls-tree", "HEAD", "-z", "--", *missing], cwd=root)
-        if head_result.ok:
-            for parts, path in _parse_git_z_cacheinfo(head_result.stdout):
-                if len(parts) == 3:
-                    mode, _type, _sha = parts
-                    modes[path] = mode
+        try:
+            raw = _git_state_head_blobs(root, missing)
+        except Exception:
+            raw = {}
+        key_by_normalized = {_normalize_path_key(p): p for p in missing}
+        for path, (mode, _sha) in raw.items():
+            key = key_by_normalized.get(_normalize_path_key(path))
+            if key is not None:
+                modes[key] = f"{mode:06o}"
     return modes
 
 
@@ -3485,16 +3496,37 @@ def commit_authored_content(
             stderr=f"commit_authored_content: {directory_pathspec_diagnostic(normalized)}",
         )
 
-    old_head_result = _git(["rev-parse", "HEAD"], cwd=root)
-    if not old_head_result.ok:
-        return old_head_result
-    old_head = old_head_result.stdout.strip()
+    # C3 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-
+    # spawning-git.md): `git rev-parse HEAD` replaced by a direct `.git/HEAD`
+    # file read -- zero spawns, not a subprocess swap. `old_head` still
+    # serves both roles the single prior read served (commit-tree's `-p`
+    # parent AND `update-ref`'s CAS old-value argument below); the atomicity
+    # guarantee comes from `update-ref`'s own compare-and-swap against the
+    # LIVE ref at call time, not from re-observing HEAD a second time here,
+    # so this swap changes nothing about that guarantee.
+    old_head = _git_state_head_sha(root)
+    if old_head is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                "commit_authored_content: HEAD has no resolvable commit "
+                "(unborn branch or a symref with no loose ref and no "
+                "packed-refs entry) -- this entrypoint requires an existing "
+                "HEAD commit to read the parent and the reserved-noun's "
+                "current mode from"
+            ),
+        )
 
-    ls_tree_result = _git(["ls-tree", "HEAD", "--", normalized], cwd=root)
-    if not ls_tree_result.ok:
-        return ls_tree_result
-    ls_tree_line = ls_tree_result.stdout.strip()
-    if not ls_tree_line:
+    # `git ls-tree HEAD -- <path>` -> `git_state.head_blobs()`. NOTE this is
+    # NOT a spawn elimination like the read above -- `head_blobs()` is "the
+    # one retained spawn" in `git_state.py` (its own docstring), still
+    # issuing `git ls-tree` via `run_git`. The win here is routing through
+    # the shared, ratchet-tracked runner instead of this module's private
+    # `_git()` wrapper, and consolidating this read behind git_state's one
+    # call site -- not a process-count reduction.
+    head_entry = _git_state_head_blobs(root, [normalized]).get(normalized)
+    if head_entry is None:
         return GitResult(
             returncode=-1,
             stdout="",
@@ -3504,8 +3536,8 @@ def commit_authored_content(
                 "of an existing reserved-noun file, not for creating a new one"
             ),
         )
-    ls_tree_meta, _, _ls_tree_path = ls_tree_line.splitlines()[0].partition("\t")
-    mode, _obj_type, _old_sha = ls_tree_meta.split()
+    mode_int, _old_sha = head_entry
+    mode = f"{mode_int:06o}"
 
     hash_result = _hash_object_stdin_bytes(content.encode("utf-8"), normalized, cwd=root)
     if not hash_result.ok:

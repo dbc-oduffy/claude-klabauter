@@ -51,8 +51,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
-    "artifact.emit":                          "coordinator_core.ops.artifact_emit",
-    "emission.publish":                       "coordinator_core.ops.emission_publish",
     "op_census.report":                       "coordinator_core.ops.op_census_report",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
@@ -88,7 +86,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_sidecar_fill_check":      "coordinator_core.hooks",
     "hooks.cater_subagent_start":             "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
-    "emit.cadence":                           "coordinator_core.ops.emit_cadence",
     "goal.append":                            "coordinator_core.ops.goal_append",
     "goal.close_day":                         "coordinator_core.ops.goal_close_day",
     "goal.close_day_apply":                   "coordinator_core.ops.goal_close_day",

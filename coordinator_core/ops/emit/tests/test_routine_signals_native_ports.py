@@ -30,6 +30,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.emit.sections import routine_signals
 from coordinator_core.ops.emit.sections.routine_signals import (
     _count_distill_backlog,
@@ -230,7 +231,11 @@ class TestCollectDistillBacklogUsesRepoRoot:
 
         monkeypatch.setattr(routine_signals, "_run_staleness_native", lambda *a, **k: "fresh")
         monkeypatch.setattr(routine_signals, "_resolve_coordinator_state_root", lambda root: None)
-        monkeypatch.setattr(routine_signals, "_commits_since_last", lambda *a, **k: 0)
+        monkeypatch.setattr(
+            routine_signals,
+            "_commits_since_last_batch",
+            lambda _root, patterns: {name: 0 for name in patterns},
+        )
 
         ctx = MagicMock()
         ctx.repo_name = "owner/repo"
@@ -313,7 +318,11 @@ class TestCountDistillBacklogUnreadableSubtree:
         )
         monkeypatch.setattr(routine_signals, "_run_staleness_native", lambda *a, **k: "fresh")
         monkeypatch.setattr(routine_signals, "_resolve_coordinator_state_root", lambda root: None)
-        monkeypatch.setattr(routine_signals, "_commits_since_last", lambda *a, **k: 0)
+        monkeypatch.setattr(
+            routine_signals,
+            "_commits_since_last_batch",
+            lambda _root, patterns: {name: 0 for name in patterns},
+        )
 
         ctx = MagicMock()
         ctx.repo_name = "owner/repo"
@@ -436,6 +445,86 @@ class TestResolveCoordinatorStateRoot:
         monkeypatch.setattr(routine_signals, "_cws_claude_home", lambda: str(tmp_path))
         monkeypatch.setattr(routine_signals, "_cws_claude_klabauter_root", lambda: None)
         assert _resolve_coordinator_state_root(tmp_path) is None
+
+
+class TestCommitsSinceLastBatch:
+    """Locks the rebuilt cadence scan (hitlist § G5): ONE spawn for every pattern, a
+    depth-capped read of HEAD's own ancestry, and the ``_VERY_STALE`` sentinel where a
+    marker is absent. The shape this replaced ran two ``git log`` spawns PER pattern —
+    four per emit — the second of them a ``--grep`` over every ref's full history,
+    measured at 593.8 ms of process time against 23,402 commits."""
+
+    def _repo(self, tmp_path: Path, subjects: list[str]) -> Path:
+        """Build a throwaway repo whose commits carry *subjects*, oldest first."""
+        root = tmp_path / "cadence-repo"
+        root.mkdir()
+        run_git(["-C", str(root), "init", "-q"])
+        run_git(["-C", str(root), "config", "user.email", "t@example.invalid"])
+        run_git(["-C", str(root), "config", "user.name", "t"])
+        for n, subject in enumerate(subjects):
+            (root / f"f{n}.txt").write_text(str(n), encoding="utf-8")
+            run_git(["-C", str(root), "add", "-A"])
+            run_git(["-C", str(root), "commit", "-q", "-m", subject])
+        return root
+
+    def test_counts_commits_since_each_marker_in_one_spawn(self, tmp_path, monkeypatch) -> None:
+        root = self._repo(tmp_path, ["chore: base", "update-docs run", "feat: a",
+                                     "bug-sweep pass", "feat: b", "feat: c"])
+
+        spawns = []
+        real = routine_signals.run_git
+        monkeypatch.setattr(
+            routine_signals, "run_git",
+            lambda args, **kw: (spawns.append(list(args)), real(args, **kw))[1],
+        )
+        result = routine_signals._commits_since_last_batch(
+            root, {"docs": "update-docs", "bug": "bug-sweep|bug_sweep"}
+        )
+
+        # HEAD is "feat: c"; bug-sweep is 2 back, update-docs 4 back.
+        assert result == {"docs": 4, "bug": 2}
+        assert len(spawns) == 1, f"one spawn for all patterns, got {len(spawns)}: {spawns}"
+
+    def test_head_itself_matching_counts_zero(self, tmp_path: Path) -> None:
+        root = self._repo(tmp_path, ["chore: base", "update-docs run"])
+        assert routine_signals._commits_since_last_batch(root, {"docs": "update-docs"}) == {"docs": 0}
+
+    def test_absent_marker_is_the_very_stale_sentinel(self, tmp_path: Path) -> None:
+        root = self._repo(tmp_path, ["chore: base", "feat: a"])
+        result = routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
+        assert result == {"docs": routine_signals._VERY_STALE}
+
+    def test_marker_beyond_the_depth_cap_reads_very_stale(self, tmp_path, monkeypatch) -> None:
+        """Past the cap the honest integer and the sentinel say the same thing — both land
+        in the same 'stale / overdue' band, which is all `collect()` branches on."""
+        monkeypatch.setattr(routine_signals, "_SCAN_DEPTH", 3)
+        root = self._repo(tmp_path, ["update-docs run", "a", "b", "c", "d"])
+        result = routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
+        assert result == {"docs": routine_signals._VERY_STALE}
+
+    def test_not_a_git_repo_degrades_every_pattern(self, tmp_path: Path) -> None:
+        result = routine_signals._commits_since_last_batch(
+            tmp_path, {"docs": "update-docs", "bug": "bug-sweep"}
+        )
+        assert result == {"docs": routine_signals._VERY_STALE, "bug": routine_signals._VERY_STALE}
+
+    def test_never_asks_git_to_do_the_matching(self, tmp_path, monkeypatch) -> None:
+        """`--grep` is what made the walk history-scaled. Matching belongs in Python,
+        against a bounded slice — a reader reintroducing `--grep` here reintroduces the
+        O(repo history) cost this rebuild removed."""
+        root = self._repo(tmp_path, ["update-docs run"])
+        seen: list[list[str]] = []
+        real = routine_signals.run_git
+        monkeypatch.setattr(
+            routine_signals, "run_git",
+            lambda args, **kw: (seen.append(list(args)), real(args, **kw))[1],
+        )
+        routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
+
+        argv = seen[0]
+        assert not any(a.startswith("--grep") for a in argv), argv
+        assert "--all" not in argv, argv
+        assert "-n" in argv and argv[argv.index("-n") + 1] == str(routine_signals._SCAN_DEPTH)
 
 
 class TestLocalDayAndIsoWeek:

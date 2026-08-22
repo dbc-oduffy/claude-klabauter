@@ -449,7 +449,7 @@ def _doe_clone_unusable_reason(doe_root: Path) -> Optional[str]:
     Runs only AFTER a root resolved, so the module's zero-shell-out
     consumer-machine cost contract is unaffected.
     """
-    return foreign_repo_unusable_reason(doe_root, timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
+    return foreign_repo_unusable_reason(doe_root)
 
 
 # ---------------------------------------------------------------------------

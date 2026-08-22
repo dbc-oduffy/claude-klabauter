@@ -237,6 +237,28 @@ def _resolve_git_dir() -> str:
     available" and degrade gracefully, exactly as the spawn-based version
     did.
 
+    DELIBERATE TWIN OF ``coordinator_core.git.git_dir.resolve_git_dir``, kept
+    rather than collapsed (2026-08-21, EM, on the peer reuse finding relayed
+    by claude-klabauter-3a). That function resolves the same per-worktree
+    git-dir in-process and handles the same ``.git``-is-a-FILE case, and
+    "default to reusing" would ordinarily settle it. It does not here, for a
+    structural reason, not a stylistic one: **this call is the FIRST thing
+    ``main()`` does, and on a non-coordinator commit the hook returns 0 two
+    lines later having imported no engine at all.** ``_ensure_claude_klabauter_on_
+    syspath`` (and with it any ``coordinator_core`` import) is reached only
+    on the deliverable-id path, far below. Importing the engine here to save
+    ~40 lines would put an engine import on EVERY commit in EVERY repo
+    carrying this hook -- the exact cost
+    ``docs/plans/2026-08-21-a-commit-stops-paying-for-thirty-processes.md``
+    exists to cut, on a path already measured over budget (that plan's
+    § Corrections 8).
+
+    The two also differ where it matters, so a mechanical collapse would be
+    a behaviour change: this one honours ``$GIT_DIR`` (rung 1 below) and
+    returns ``""`` on failure, where the engine twin has no ``$GIT_DIR``
+    rung and fails open to a ``<repo_root>/.git`` join. Whoever revisits
+    this must keep both contracts, not just the parse.
+
     NOT via ``GIT_INDEX_FILE``: it names ``$GIT_DIR/index`` only by
     default, is relocated by ordinary git operations (and by porcelain
     staging through a temporary index) with no signal that it moved, and a

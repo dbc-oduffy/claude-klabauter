@@ -37,45 +37,52 @@ diverges from the meta-repo installer's `_gate_block`): that module's gates
 run `"$_py" "$_gate_script" || exit $?`, propagating the gate script's raw
 exit code verbatim. That is safe for THAT registry's four scripts, which
 only ever exit 0 or 1. It is NOT safe here: `detect-staged-rollback.py`'s own
-documented exit contract has FIVE values (0 clean / 1 rollback-only finding /
-2 transport failure / 3 mass-deletion-only finding / 4 both findings — see
-that module's own "Exit-code contract" docstring). A bare `|| exit $?` would
-let any of 2/3/4 escape straight out of this hook. A pre-commit hook exiting
-anything other than 0 or 1 is read by the Claude Code harness as a blocking
-DENY that kills Bash/Write/Edit together, INCLUDING the tools needed to
-repair the hook — this bricked the primary macOS box four times on
-2026-07-28 (see the dispatch brief this module was built from). So every
-gate block here captures `$?` into a variable and explicitly re-derives the
-branch from it via `_finding_branch`'s `case` statement: exactly 0 continues
-with no output, every other code (recognized or not) ends in exactly `exit
-1` on its BLOCKED leg — never the raw code.
+documented exit contract has THREE values (0 clean / 1 a mass-deletion
+finding / 2 usage error — see that module's own "Exit-code contract"
+docstring). A bare `|| exit $?` would let 2 escape straight out of this
+hook. A pre-commit hook exiting anything other than 0 or 1 is read by the
+Claude Code harness as a blocking DENY that kills Bash/Write/Edit together,
+INCLUDING the tools needed to repair the hook — this bricked the primary
+macOS box four times on 2026-07-28 (see the dispatch brief this module was
+built from). So every gate block here captures `$?` into a variable and
+explicitly re-derives the branch from it via `_finding_branch`'s `case`
+statement: exactly 0 continues with no output, every other code (recognized
+or not) ends in exactly `exit 1` on its BLOCKED leg — never the raw code.
 
-2026-08-21 fix — per-check override scoping (`_finding_branch`, replacing a
-single `gate.override_env` string previously reused for this branch too):
-before this fix, ANY nonzero `$_gate_rc` was gated on the ONE
-`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` key, so an operator with
-that var exported (real, observed habit from prior legitimate revert work —
-`70ed82e4aa6f`, `e167d08d14ad`, `0f37a6fac346`) had it silently bypass a
-mass-deletion-only BLOCK it never inspected, and
-`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` never reached any branch of
-this wrapper at all. `gate.finding_override_env` now maps each finding exit
-code to the override key(s) THAT code alone honors (`_finding_branch`'s own
-docstring has the full rationale); a code absent from that map — including
-`detect-staged-rollback.py`'s own transport-failure code, 2 — is never
+2026-08-21 — CHECK 1 (exact-blob rollback) KILLED, PM ruling; see
+`coordinator_core.ops.detect_staged_rollback`'s module docstring for the
+full ruling. `_Gate.override_env` and `gate.finding_override_env` here are
+now scoped to the ONE surviving check (mass deletion) and its ONE key,
+`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` — the earlier
+`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` key is dead everywhere in
+this file (no gate script reads it any more) and MUST NOT be reintroduced
+here on the theory that a future check might want it back; a new check gets
+a new key with its own registry entry, as this one had. BREAK-CLASS bug
+found and fixed in the same edit: `_Gate.override_env` used to be exactly
+`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK`, so a hook built from the
+pre-2026-08-21 `_finding_branch` scoping (below) still let that stale key
+blanket-suppress a mass-deletion BLOCK via the missing-script/missing-
+interpreter CANNOT-PROCEED branches. Repointing `override_env` to the mass-
+deletion key closes that.
+
+`gate.finding_override_env` still maps each finding exit code to the
+override key(s) THAT code alone honors (`_finding_branch`'s own docstring
+has the full rationale); a code absent from that map — including
+`detect-staged-rollback.py`'s own usage-error code, 2 — is never
 overridable here, by construction, matching the meta-repo installer's
 `_finding_branch` (which never honors ANY override on a real finding at
 all — see that module's own docstring). The gate script's OWN override
-handling (`detect_staged_rollback.main`'s internal per-check env reads)
-already makes a deliberate override exit 0 before this wrapper ever sees a
-nonzero code for that check — since the hook subprocess inherits this
-wrapper's own environment unchanged, this wrapper's per-code checks can only
-ever confirm what the script already resolved, never diverge from it; the
-wrapper-level check exists for symmetry with the missing-script/missing-
-interpreter CANNOT-PROCEED branches (`_cannot_proceed_branch`, unchanged by
-this fix) and for the BLOCKED banner naming which finding fired, not because
-it is reachable through any other path.
+handling (`detect_staged_rollback.main`'s internal env read) already makes
+a deliberate override exit 0 before this wrapper ever sees a nonzero code —
+since the hook subprocess inherits this wrapper's own environment
+unchanged, this wrapper's per-code check can only ever confirm what the
+script already resolved, never diverge from it; the wrapper-level check
+exists for symmetry with the missing-script/missing-interpreter
+CANNOT-PROCEED branches (`_cannot_proceed_branch`, unchanged by this fix)
+and for the BLOCKED banner naming which finding fired, not because it is
+reachable through any other path.
 
-Hooks already installed on disk keep the pre-fix single-key body until this
+Hooks already installed on disk keep the pre-fix key/body until this
 installer is RE-RUN — there is no separate migration step, because one
 already exists: `_install_or_append_hook`'s "ours_wholesale" path does a
 full byte-for-byte compare of the hook this installer itself wrote against
@@ -84,6 +91,30 @@ rewrites on any difference (`test_stale_gate_body_is_refreshed_not_reported_
 as_installed` pins this generically; this fix's own body change is picked up
 by the same mechanism with no dedicated version stamp needed, unlike the
 meta-repo installer's separate versioned-region system).
+
+2026-08-21 — C17 (`docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-
+interpreter-floor.md`): the emitted hook body no longer walks `$PATH` in
+shell to resolve an interpreter. `_py_resolve_line()` now bakes
+`sys.executable` — the interpreter this installer is ALREADY running
+under — at install time, forward-slash-normalized via
+`coordinator_core.win_portability.split_path`, instead of emitting
+`coordinator_core.py_probe_sh.python_probe_lines()`'s directory-by-directory
+`$PATH` walk. That walk's two load-bearing behaviours (per-directory
+candidate resolution, the case-insensitive `WindowsApps` exclusion) are
+DISCHARGED BY CONSTRUCTION here, not reproduced: a Microsoft Store App
+Execution Alias stub cannot be the process resolving this line, so there is
+no candidate set to walk in the first place — see `_py_resolve_line`'s own
+docstring for the measured cost this removes and the self-heal
+(`[ -x "$_py" ] || _py=""`) that keeps a moved/upgraded interpreter from
+silently wedging every future commit; a cleared `_py` still routes through
+the SAME missing-interpreter CANNOT-PROCEED branch `_gate_block` already
+had, exit-code-clamped like every other failure mode here. `py_probe_sh`
+itself is untouched — it remains the shared primitive for the sites that
+still need a real `$PATH` walk (see that module's own docstring for the
+current, corrected consumer count). Carve-out paperwork:
+`docs/reference/shell-out-carve-outs.md` § (b) now names this module's
+emitted interpreter-invocation lines explicitly, scoped to that line alone
+— not to candidate resolution, which lives in Python now.
 
 Negative-spec:
     - Never emits a hook body that can exit anything other than 0 or 1 — see
@@ -94,6 +125,11 @@ Negative-spec:
       and execs `$_py` directly, per claude-klabauter's CLAUDE.md § Runtime
       conventions (b) (sanctioned ONLY as a git-hook shim body that execs
       Python directly, never general script execution).
+    - Never re-introduces a `$PATH` walk into the emitted hook body — the
+      interpreter is resolved exactly once, at install time in Python
+      (`_baked_interpreter_path`), never at commit time in shell. A future
+      gate needing a DIFFERENT interpreter than the installer's own is a
+      new problem, not a reason to bring `python_probe_sh` back here.
     - Does not install into THIS session's own live repo — that is an
       explicit dispatch-brief carve-out; installing/verifying the live
       artifact is left to the invoking operator. This module and its CLI are
@@ -108,9 +144,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.win_portability import split_path
 # Cross-package import of the SSOT doc-pointer display string (same
 # precedent write_guards already uses for operator_override_note itself) --
 # emitted hook-body remediation text points readers at the doc that
@@ -144,22 +180,17 @@ _GATE_REGISTRY: List[_Gate] = [
         marker="detect-staged-rollback",
         filename="detect-staged-rollback.py",
         label="staged-rollback",
-        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",
+        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",
         # Mirrors coordinator_core.ops.detect_staged_rollback's own EXIT_*
-        # contract (2026-08-21): exit 1 is a rollback-only finding, exit 3
-        # is a mass-deletion-only finding, exit 4 is both at once (neither
-        # resolved by its own override — see that module's "Exit-code
-        # contract" docstring for why 4 can only be reached when neither
-        # per-check env var was already set at process launch). Exit 2 (that
-        # module's own transport-failure/usage-error code) is deliberately
-        # ABSENT from this mapping — see `_finding_branch`.
+        # contract: exit 1 is the (sole surviving) mass-deletion finding.
+        # Exit 2 (that module's own usage-error code) is deliberately ABSENT
+        # from this mapping — see `_finding_branch`. Check 1 (exact-blob
+        # rollback, exit codes 1/3/4 under the old contract) was KILLED
+        # 2026-08-21 (PM ruling) — see detect_staged_rollback's module
+        # docstring — so this mapping no longer carries a rollback-only or
+        # both-findings arm.
         finding_override_env={
-            1: ("COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",),
-            3: ("COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",),
-            4: (
-                "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",
-                "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",
-            ),
+            1: ("COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",),
         },
     ),
 ]
@@ -253,20 +284,78 @@ def _strip_trailing_exit0(text: str) -> str:
     return result
 
 
+def _sh_double_quote_escape(value: str) -> str:
+    """Escape `value` for embedding inside a POSIX-sh double-quoted string
+    literal (`_py="<value>"`). Escapes only the four characters `sh`'s own
+    double-quote grammar treats specially inside `"..."` — backslash,
+    double-quote, `$`, and backtick — and escapes backslash FIRST, so a
+    later substitution's own inserted backslash is never re-escaped by an
+    earlier one. Callers here always pass a forward-slash-normalized path
+    (see `_baked_interpreter_path`), so in practice this only ever needs to
+    guard `"`/`$`/backtick; the backslash leg exists for correctness against
+    an arbitrary string, not because a real baked path is expected to carry
+    one."""
+    out = value.replace("\\", "\\\\")
+    for ch in ('"', "$", "`"):
+        out = out.replace(ch, "\\" + ch)
+    return out
+
+
+def _baked_interpreter_path() -> str:
+    """The interpreter this installer itself is running under
+    (`sys.executable`), forward-slash-normalized via
+    `coordinator_core.win_portability.split_path` — reused rather than a
+    hand-rolled `.replace("\\\\", "/")`, per that module's own "one correct
+    implementation" rationale. Forward-slash form sidesteps the one real
+    hazard a native Windows path (backslashes, frequently a space from
+    `Program Files`) poses when embedded in a `#!/bin/sh` body that
+    git-for-Windows' bundled MSYS `sh` will `exec` — see module docstring,
+    "The commit-hot-path PATH walk this replaces"."""
+    return "/".join(split_path(sys.executable))
+
+
 def _py_resolve_line() -> str:
-    """POSIX `sh` interpreter probe, resolved in-order (python3, python, py)
-    and skipping any hit resolved under `WindowsApps` (case-insensitive,
-    mirroring `pyresolve._is_store_python`) — the previous bare
-    `command -v python3 || command -v python || command -v py` probe had no
-    such skip, so on Windows PATH commonly handed every gate below the
-    Microsoft Store's non-functional App Execution Alias stub instead of a
-    real interpreter (same defect fixed for the meta-repo installer in
-    47c4c70b; shared here, not re-hand-rolled — see
-    `coordinator_core.py_probe_sh`'s module docstring for the "why one
-    shared implementation" reasoning, and this module's own docstring,
-    "Kept as an independent module", for why only THIS probe is shared while
-    the surrounding gate-block machinery stays independently duplicated)."""
-    return _py_probe_sh.python_probe_lines("_py")
+    """Emit a BAKED interpreter assignment, not a `$PATH` walk.
+
+    Was: `coordinator_core.py_probe_sh.python_probe_lines("_py")`, a
+    directory-by-directory `$PATH` walk with a `WindowsApps` case-exclusion
+    (see that module's own docstring for why THAT shape is load-bearing
+    prior art for the sites that still need it). This installer does not
+    need it: `sys.executable` IS the interpreter the running installer is
+    already executing under, so there is no candidate SET to walk and no
+    WindowsApps-stub-vs-real-interpreter name collision to disambiguate —
+    a Microsoft Store App Execution Alias stub cannot be the process that is
+    resolving this line. Both of `python_probe_sh`'s load-bearing behaviours
+    (directory-by-directory walking, the WindowsApps exclusion) are
+    discharged BY CONSTRUCTION, not reproduced, exactly because there is
+    nothing left to filter.
+
+    Measured cost of the walk this removes (`batched_process_time_ms`,
+    k=20, this box, the pre-C17 `_py_resolve` body run standalone under
+    git-for-Windows' `sh.exe`): 67.188ms/call process time at 3.0
+    procs/call, against a 7.812ms/call `cmd /c exit` floor at 1.0
+    procs/call on the same box — roughly 59ms of PATH-walk-specific
+    process time paid on every one of the ~840 commits/day this fires
+    before ("THE FIRST THING ON THE COMMIT PATH") this plan's own other
+    savings can apply.
+
+    Self-heal, not a silent skip: a baked absolute path goes stale the
+    moment Python is upgraded or moved. `[ -x "$_py" ] || _py=""` re-tests
+    executability at COMMIT time (once, not per-candidate) and clears `_py`
+    on failure so the ALREADY-EXISTING missing-interpreter CANNOT-PROCEED
+    branch in `_gate_block` fires — same exit-code-clamping shape (BLOCKED
+    banner, `exit 1`, never a raw code) every other failure mode here
+    already uses, not a new mechanism. See `_gate_block`'s own
+    `elif [ -z "$_py" ]` arm for the (now baked-path-specific) remediation
+    text.
+    """
+    escaped = _sh_double_quote_escape(_baked_interpreter_path())
+    return "\n".join(
+        [
+            f'_py="{escaped}"',
+            '[ -x "$_py" ] || _py=""',
+        ]
+    )
 
 
 def _finding_branch(gate: _Gate) -> List[str]:
@@ -390,7 +479,8 @@ def _gate_block(gate: _Gate) -> List[str]:
     )
     lines.append('elif [ -z "$_py" ]; then')
     lines += _cannot_proceed_branch(
-        "no python interpreter found (python3/python/py) on PATH", "install Python, then retry"
+        "the interpreter baked in at install time is missing or was moved",
+        "re-run the coordinator installer (install-claude-klabauter-precommit-hook) to rebake it",
     )
     lines += [
         "else",

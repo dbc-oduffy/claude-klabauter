@@ -145,6 +145,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from coordinator_core._settings_home import normalize_native_path
 from coordinator_core.git import divergence as git_divergence
+from coordinator_core.git import git_state
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import (
@@ -267,14 +268,23 @@ def _reject_stale_index_paths(paths: List[str], worktree_root: str) -> Optional[
     is right for both -- the first must not land, and the second must not be
     swept away by a blanket `git restore --staged`.
 
-    Two batched git calls, independent of `len(paths)` -- the amplification
+    ONE retained git spawn now (the worktree-vs-HEAD half) -- the amplification
     gate (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
-    forbids the per-path probe the bug entry's `repro_steps` describe, and this
-    runs on the commit hot path.
+    forbids a per-path probe, and this stays batched, independent of
+    `len(paths)`. The index-vs-HEAD half no longer spawns at all: it reads
+    through `coordinator_core.git.git_state` (`read_index`/`head_blobs`),
+    which answers the same question from `.git/index` and `git ls-tree`'s ONE
+    retained spawn rather than a second `git diff --cached` process -- see
+    that module's docstring for the worktree-axis fork this does NOT reopen
+    (`git_state` deliberately has no `worktree_blob()`; hashing on-disk bytes
+    against a git OID is wrong under `core.autocrlf` on ~1 file in 4 of this
+    repo, so the worktree half above keeps its spawn).
 
-    Fails OPEN (returns `None`) when either probe errors -- an unanswerable
-    git must not wedge every commit on the box. The stale-index shape is
-    persistent, not transient, so a probe that fails now catches it next call.
+    Fails OPEN (returns `None`) when the worktree probe errors, or when
+    `git_state.read_index`/`head_blobs` cannot answer (`IndexParseError`) --
+    an unanswerable read must not wedge every commit on the box. The
+    stale-index shape is persistent, not transient, so a probe that fails now
+    catches it next call.
 
     Not applied under `stage_patch`: that path stages from a patch file under a
     process-private index and carries its own `stage_from_patch_cas_refusal`,
@@ -286,23 +296,31 @@ def _reject_stale_index_paths(paths: List[str], worktree_root: str) -> Optional[
         ["-c", "core.quotepath=false", "diff", "--name-only", "HEAD", "--", *paths],
         cwd=worktree_root,
     )
-    index_probe = git_native._git(
-        [
-            "-c", "core.quotepath=false",
-            "diff", "--cached", "--name-only", "HEAD", "--", *paths,
-        ],
-        cwd=worktree_root,
-    )
-    if not (worktree_probe.ok and index_probe.ok):
+    if not worktree_probe.ok:
+        return None
+
+    try:
+        index_snapshot = git_state.read_index(worktree_root)
+        head = git_state.head_blobs(worktree_root, paths)
+    except git_state.IndexParseError:
         return None
 
     worktree_changed = {
         line.strip() for line in worktree_probe.stdout.splitlines() if line.strip()
     }
-    staged_only = sorted(
-        {line.strip() for line in index_probe.stdout.splitlines() if line.strip()}
-        - worktree_changed
-    )
+    seen: Set[str] = set()
+    staged_only_list: List[str] = []
+    for p in paths:
+        if p in seen or p in worktree_changed:
+            continue
+        seen.add(p)
+        index_entry = index_snapshot.get(p)
+        head_entry = head.get(p)
+        index_sha = index_entry.sha if index_entry is not None else None
+        head_sha_for_path = head_entry[1] if head_entry is not None else None
+        if index_sha != head_sha_for_path:
+            staged_only_list.append(p)
+    staged_only = sorted(staged_only_list)
     if not staged_only:
         return None
 

@@ -217,6 +217,7 @@ import inspect
 import json
 import re
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from coordinator_core.win_portability import no_console_creationflags
 import sys
@@ -1172,7 +1173,9 @@ def _pytest_batch_timeout(n_refs: int) -> float:
     return min(120.0 + 15.0 * max(n_refs - 1, 0), 900.0)
 
 
-def _run_pytest_batch(root: Path, refs: Sequence[str]) -> dict[str, tuple[bool, str]]:
+def _run_pytest_batch(
+    root: Path, refs: Sequence[str], *, timeout_secs: Optional[float] = None
+) -> dict[str, tuple[bool, str]]:
     """Run ONE pytest invocation carrying every node id in `refs` under `root`.
 
     `-rA` forces a PASSED/FAILED/ERROR summary line per node id regardless of
@@ -1193,16 +1196,24 @@ def _run_pytest_batch(root: Path, refs: Sequence[str]) -> dict[str, tuple[bool, 
     as the single-ref call this replaces (deliberate pytest process isolation,
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md);
     batching does not change that boundary, only how many times it is crossed.
+
+    `timeout_secs` overrides the `_pytest_batch_timeout(len(refs))` default with
+    a caller-supplied DEADLINE REMAINDER (DR-349 § 4). It is narrow-only by
+    construction — `min`, never `max` — so a caller can only ever hand this call
+    less of the box than the batch bound already allows, never more.
     """
     if not refs:
         return {}
+    bound = _pytest_batch_timeout(len(refs))
+    if timeout_secs is not None:
+        bound = min(bound, timeout_secs)
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", *refs, "-q", "--no-header", "-rA"],
             cwd=str(root),
             capture_output=True,
             text=True,
-            timeout=_pytest_batch_timeout(len(refs)),
+            timeout=bound,
             stdin=subprocess.DEVNULL,
             env=pytest_child_env(),
             **no_console_creationflags(),
@@ -1284,8 +1295,26 @@ def _reverify_test_node_ids_batch(
                 # same collection-wide failure. A single-ref run localizes
                 # whichever ref(s) actually break collection without paying
                 # for the whole original batch again.
+                #
+                # The whole localization pass shares ONE deadline, sized as
+                # what re-running `missing` as a single batch would have been
+                # allowed (DR-349 § 4: the budget is a deadline, not a
+                # per-spawn timeout — stacking spawns must not buy time).
+                # Without it this loop is N unbounded-in-aggregate pytest
+                # spawns at up to `_pytest_batch_timeout(1)` each, which is
+                # the self-raising shape `_pytest_batch_timeout`'s own cap
+                # exists to prevent, reintroduced one call frame out.
+                # Exhausting the deadline is fail-SAFE, never fail-open: a
+                # ref that goes unlocalized falls through to the REFUSE below,
+                # exactly as it would have had its isolation run timed out.
+                deadline = time.monotonic() + _pytest_batch_timeout(len(missing))
                 for ref in list(missing):
-                    outcomes.update(_run_pytest_batch(root, [ref]))
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    outcomes.update(
+                        _run_pytest_batch(root, [ref], timeout_secs=remaining)
+                    )
                 missing = [r for r in missing if r not in outcomes]
             for ref in missing:
                 outcomes[ref] = (

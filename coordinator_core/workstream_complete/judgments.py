@@ -1118,7 +1118,7 @@ def build_session_work_summary_judgment_point() -> dict[str, Any]:
         id="session-work-summary",
         question="What 1-2 sentence summary captures what this session actually accomplished?",
         dispositions=[
-            build_disposition("drafted", resolves=["d-emit-cadence", "d-render-final-summary"]),
+            build_disposition("drafted", resolves=["d-render-final-summary"]),
             build_disposition("needs-second-pass", resolves=[]),
         ],
         evidence="the session's full commit/decision history",

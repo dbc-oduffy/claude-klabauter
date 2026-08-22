@@ -41,13 +41,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ipc import dispatch_message
-from coordinator_core.session import core, scope
+from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
 
 # Real git spawn is load-bearing: compute_offer's dirty-set math and
@@ -84,8 +85,6 @@ def _agent_dir(repo, aid):
 
 
 class TestComputeOffer:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_own_touched_files_are_safe(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -96,8 +95,6 @@ class TestComputeOffer:
         assert offer["excluded"] == []
         assert offer["session_id"] == "mine"
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_other_session_file_excluded_with_owner_reason(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -112,45 +109,53 @@ class TestComputeOffer:
         assert "shared.py" not in offer["safe_paths"]
         assert {"path": "shared.py", "reason": "owned by session other"} in offer["excluded"]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_unclaimed_dirty_since_start_is_declined_not_adopted(self, tmp_path):
-        """Prior name/assertion (`..._is_safe_not_excluded`) asserted the
-        OLD mtime-fallback disposition: an uncontested dirty file with no
-        touched.txt record anywhere silently joined `safe_paths` merely by
-        having a recent mtime. Inverted per DR-246 (2026-07-31) /
-        docs/plans/2026-07-31-unclaimed-dirty-file-adoption.md: `compute_scope`
-        Step 4 now routes a candidate that entered ONLY via the Step-2 mtime
-        scan to `orphans`, so it is withheld from `safe_paths` and reported
-        as an excluded orphan instead."""
+    def test_an_unclaimed_dirty_file_is_not_this_sessions_to_commit(self, tmp_path):
+        """A dirty file with no claim ANYWHERE is not this session's, and the
+        answer says so by omission -- it is absent from every bucket, not
+        reported as an orphan.
+
+        History, because this assertion has been inverted twice and the
+        reasons are not interchangeable. Originally an uncontested dirty file
+        with no `touched.txt` record joined `safe_paths` outright, by
+        `compute_scope`'s Step-2 mtime fallback: recent mtime read as "I
+        probably touched this and the hook missed it". DR-246 (2026-07-31)
+        narrowed that to route such a candidate to `orphans` -- declined
+        adoption, but still SEEN and reported. The 2026-08-21 rebuild removed
+        the worktree read entirely, so there is no longer a surface on which
+        this file is seen at all: the claim ledger decides, and the ledger has
+        nothing to say about it. Same verdict as DR-246 (not mine), reached
+        without a git spawn, and now unable to drift back -- there is no mtime
+        heuristic left to relax.
+        """
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         sdir = Path(core.session_dir("mine", cwd=str(repo)))
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
         (repo / "orphan.py").write_text("o")
+
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
         assert offer["safe_paths"] == []
-        assert {"path": "orphan.py", "reason": "untouched by this session"} in offer["excluded"]
+        assert offer["ownership"]["mine"] == []
+        assert [e for e in offer["excluded"] if e["path"] == "orphan.py"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_orphan_before_session_start_excluded_untouched(self, tmp_path):
-        import os
-        import time
-
+    def test_orphans_is_always_empty_and_that_is_the_contract(self, tmp_path):
+        """`orphans` is empty on EVERY call, including one with a dirty
+        unclaimed file sitting right there -- the shape that used to populate
+        it. Pinned as its own test so the emptiness reads as the contract it
+        is, rather than as a degradation a reader goes hunting for the cause
+        of. Repopulating it means re-adding a worktree read to this answer,
+        which is the trade `compute_offer`'s negative spec forbids.
+        """
         repo = _make_repo(tmp_path)
-        (repo / "old.py").write_text("z")
-        old_mtime = time.time() - 10_000
-        os.utime(repo / "old.py", (old_mtime, old_mtime))
         core.init("mine", cwd=str(repo))
-        sdir = Path(core.session_dir("mine", cwd=str(repo)))
-        (sdir / "started_at").write_text(core.now_iso())
-        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert "old.py" not in offer["safe_paths"]
-        assert {"path": "old.py", "reason": "untouched by this session"} in offer["excluded"]
+        (repo / "unclaimed_by_anyone.py").write_text("x")
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
+        assert offer["indeterminate"] is False
+        assert offer["orphans"] == []
+
     def test_empty_scope_is_a_valid_result(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -178,38 +183,6 @@ class TestComputeOffer:
     def test_required_session_id(self, tmp_path):
         with pytest.raises(ValueError):
             safe_commit_offer.compute_offer("", cwd=str(tmp_path))
-
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_unreadable_peer_touched_dedupes_to_one_excluded_entry(
-        self, tmp_path, monkeypatch
-    ):
-        # Review: code-reviewer (Finding 2) — a candidate withheld via
-        # `unreadable_other_sessions` (compute_scope Step 4) lands in BOTH
-        # `skipped` (owner "unknown (claims unreadable: ...)") and `orphans`
-        # (absent from my_scope, and not actually claimed) -- the dedupe in
-        # `compute_offer` must collapse this to exactly ONE `excluded` entry,
-        # carrying the more specific unreadable-owner reason.
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        core.init("other", cwd=str(repo))
-        (repo / "shared.py").write_text("s")
-
-        other_touched = Path(core.session_dir("other", cwd=str(repo))) / "touched.txt"
-        other_touched.write_text("shared.py\n")  # "other" actually owns it
-        orig_read_text = Path.read_text
-
-        def _boom(self, *a, **k):
-            if self == other_touched:
-                raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
-
-        monkeypatch.setattr(Path, "read_text", _boom)
-        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-
-        matches = [e for e in offer["excluded"] if e["path"] == "shared.py"]
-        assert len(matches) == 1
-        assert matches[0]["reason"] == "owned by session unknown (claims unreadable: other)"
 
     def test_orphan_skipped_via_unreadable_peer_claim_does_not_resurface(
         self, tmp_path, monkeypatch
@@ -265,76 +238,45 @@ class TestComputeOffer:
 
         assert "shared.py" not in offer["orphans"]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_genuine_uncontested_orphan_still_appears_filter_not_overbroad(
-        self, tmp_path
+    def test_unreadable_claim_set_makes_the_whole_answer_indeterminate(
+        self, tmp_path, monkeypatch
     ):
-        """Companion to the test above: pins that the F1 subtraction is
-        NOT over-broad — a genuine orphan (dirty, claimed by nobody,
-        withheld for no OTHER reason) must still surface in
-        ``offer["orphans"]``. Without this, a regression that simply made
-        ``compute_offer`` always return ``orphans: []`` would pass the
-        "does not resurface" test above vacuously.
+        """A claim set this call could not READ makes the whole answer
+        indeterminate -- not merely the path that could not be read. The walk
+        behind `compute_offer` is ONE index rebuild, so an unreadable claimant
+        means BOTH buckets may be short, and the caller must be told that
+        rather than handed a partial answer as the answer.
 
-        Same fixture shape as
-        ``test_mtime_fallback_orphan_adoption_is_now_declined_by_compute_scope``
-        (a dirty file with no ``touched.txt`` record anywhere, adopted only
-        via the Step-2 mtime scan) — single session, no peer, so
-        ``unreadable_other_sessions``/``agent_race_paths`` stay empty and
-        ``indeterminate`` is genuinely False, isolating the F1 subtraction's
-        behavior from the R1 whole-call gate.
-        """
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        sdir = Path(core.session_dir("mine", cwd=str(repo)))
-        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
-        (repo / "unclaimed_by_anyone.py").write_text("x")
-
-        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-
-        assert offer["indeterminate"] is False
-        assert offer["orphans"] == ["unclaimed_by_anyone.py"]
-
-    def test_indeterminate_call_withholds_orphans_outright(self, tmp_path, monkeypatch):
-        """Staff-eng R1 (2026-08-03, re-review pass 2) — the related
-        whole-call withhold: on an indeterminate call (here, an unreadable
-        peer claim set), ``orphans`` comes back EMPTY OUTRIGHT, not just
-        minus the specific withheld candidate. Checked before writing:
-        ``indeterminate`` itself is asserted at the ``compute_scope`` layer
-        (`coordinator_core/session/tests/test_scope.py::
-        test_indeterminate_...`) and at the ``compute_offer`` layer only for
-        the trivially-empty-everything case
-        (`test_empty_scope_is_a_valid_result`) — this module has no test
-        pinning the wider blast radius on a call that ALSO has a genuine,
-        unrelated orphan candidate, so this is new coverage, not a
-        duplicate.
-
-        ``unrelated_orphan.py`` is never a candidate touched by anyone and
-        is not the path that triggered the unreadable claim (``shared.py``)
-        — it would appear in ``orphans`` on its own (per the test above) if
-        this call were NOT indeterminate. Asserting it is ALSO withheld here
-        proves the gate is call-wide, not just a per-path subtraction.
+        Post-2026-08-21 this also pins the `orphans` contract from the other
+        side: it is empty here, as it is on EVERY call (see `compute_offer`'s
+        own contract), so a reader cannot mistake the empty list for "the
+        degradation emptied it" and go looking for the gate that did.
         """
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("other", cwd=str(repo))
         (repo / "shared.py").write_text("s")
-        (repo / "unrelated_orphan.py").write_text("u")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("other", "shared.py", cwd=str(repo))
 
-        other_touched = Path(core.session_dir("other", cwd=str(repo))) / "touched.txt"
-        other_touched.write_text("shared.py\n")
-        orig_read_text = Path.read_text
+        other_touched = os.path.join(
+            core.session_dir("other", cwd=str(repo)), "touched.txt"
+        )
+        real_reader = claim_index._read_lines_discard_torn_tail
 
-        def _boom(self, *a, **k):
-            if self == other_touched:
-                raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+        def _unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(other_touched):
+                return [], False
+            return real_reader(path)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
 
         assert offer["indeterminate"] is True
+        assert offer["ownership"]["degraded"] is True
+        # AC7: a call that could not finish its walk must not print an owner it
+        # cannot stand behind, so `peer` empties outright.
+        assert offer["ownership"]["peer"] == []
         assert offer["orphans"] == []
 
     def test_read_only_no_git_or_touched_mutation(self, tmp_path):
@@ -470,43 +412,35 @@ class TestExactModeOnly:
         assert candidates == ["coordinator/kept.py"]
         assert not any(c.startswith("T ") or c.startswith("R ") for c in candidates)
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_mtime_fallback_orphan_adoption_is_now_declined_by_compute_scope(self, tmp_path):
-        """Formerly `..._orphan_adoption_is_compute_scope_not_this_module`,
-        which documented (did NOT "fix" -- PM-accepted collateral at the
-        time) a hazard: a dirty file with NO touched.txt record ANYWHERE
-        (crashed peer, pruned/rotated record, a session that never ran the
-        touch hook) was indistinguishable, to `compute_scope`'s own
-        pre-existing Step-2 mtime fallback, from "a file I touched but the
-        hook missed recording" -- if its mtime was >= my own started_at, it
-        silently joined MY safe_paths.
+    def test_mtime_alone_never_makes_a_file_this_sessions(self, tmp_path):
+        """The paper trail for a hazard that has now been closed twice, kept
+        because it was a real incident shape and a future reader deserves to
+        know it was deliberately revisited rather than forgotten.
 
-        SUPERSEDED (DR-246, 2026-07-31 --
-        docs/plans/2026-07-31-unclaimed-dirty-file-adoption.md): C1a/C8
-        narrowed `compute_scope` Step 4 so a candidate that entered the
-        candidate set ONLY via the Step-2 mtime scan is routed to
-        `orphans`, not `my_scope` -- an unowned, mtime-only dirty file is
-        DECLINED adoption and reported as excluded ("untouched by this
-        session") rather than silently committed under a stranger's
-        session. Still orthogonal to the broadened/exact choice on
-        `my_agent_touched` (which only governs sub-agent fan-out, never
-        mtime-fallback candidates). Kept (inverted, not deleted) as the
-        paper trail that this was a known, deliberately-revisited hazard."""
+        A dirty file with NO `touched.txt` record anywhere -- a crashed peer,
+        a pruned record, a session that never ran the touch hook -- was
+        indistinguishable to `compute_scope`'s Step-2 mtime fallback from "a
+        file I touched but the hook missed recording", and joined MY
+        `safe_paths` if its mtime post-dated my `started_at`. DR-246
+        (2026-07-31) narrowed Step 4 so it was declined instead. The
+        2026-08-21 rebuild took `compute_offer` off `compute_scope` entirely,
+        so the fallback is not consulted here at all.
+
+        NOTE for anyone chasing this through: Step 2 still EXISTS in
+        `session.scope`, and `coordinator/bin/coordinator-safe-commit.py`
+        still reaches it. This test pins that THIS module's answer does not,
+        which is a narrower claim than "the fallback is gone".
+        """
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         sdir = Path(core.session_dir("mine", cwd=str(repo)))
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
-        # A dirty file with NO touched.txt record anywhere -- simulating a
-        # peer that crashed/rotated before recording it.
-        (repo / "unclaimed_by_anyone.py").write_text("x")
+        (repo / "nobodys_file.py").write_text("z")
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert "unclaimed_by_anyone.py" not in offer["safe_paths"]  # declined, by design
-        assert {
-            "path": "unclaimed_by_anyone.py",
-            "reason": "untouched by this session",
-        } in offer["excluded"]
+
+        assert "nobodys_file.py" not in offer["safe_paths"]
+
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +591,12 @@ class TestDirtyFilesUnderBatch:
 
 
 class TestAutoCommitSession:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_no_confirmation_step_lands_a_real_commit(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -679,6 +618,13 @@ class TestAutoCommitSession:
         ).stdout
         assert status == ""  # nothing left dirty
 
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
+    @pytest.mark.designed_red
     def test_commit_group_calls_the_sync_handler_without_awaiting_it(self, tmp_path):
         """Regression guard, 2026-08-07: `_commit_group` awaited the dict
         `ceremony.scoped_git_commit`'s handler returns, so EVERY invocation
@@ -711,7 +657,12 @@ class TestAutoCommitSession:
         assert result["error"] is None
         assert result["commit_failed"] is False
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_default_grouping_subject_stays_bounded_body_carries_the_list(self, tmp_path):
         """Regression guard for the enumerated-filenames-in-subject shape:
@@ -754,7 +705,12 @@ class TestAutoCommitSession:
         assert report["groups"] == []
         assert report["excluded"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_explicit_groups_never_widen_past_safe_paths(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -792,8 +748,6 @@ class TestAutoCommitSession:
         )
         assert report["groups"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_all_dropped_group_is_recorded_in_dropped_groups(self, tmp_path):
         # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- the
         # all-excluded group above vanished from `groups`, `failed_groups`,
@@ -815,7 +769,12 @@ class TestAutoCommitSession:
             {"message": "all-excluded group", "named": 1, "matched": 0}
         ]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_partially_dropped_group_is_also_recorded(self, tmp_path):
         # A group losing 4 of 5 paths is the same silence in miniature --
@@ -838,6 +797,13 @@ class TestAutoCommitSession:
         ]
         assert report["groups"][0]["paths"] == ["a.py"]
 
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
+    @pytest.mark.designed_red
     def test_default_groups_never_populate_dropped_groups(self, tmp_path):
         # `groups=None` (the unattended-trigger fallback) is computed FROM
         # `safe_paths` itself, so it can never lose a path to the filter --
@@ -850,7 +816,12 @@ class TestAutoCommitSession:
         report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
         assert report["dropped_groups"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_message_flag_produces_one_group(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -867,7 +838,12 @@ class TestAutoCommitSession:
         assert report["groups"][0]["message"] == "one subject"
         assert set(report["groups"][0]["paths"]) == {"a.py", "b.py"}
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_explicit_group_prose_reaches_the_commit_body(self, tmp_path):
         # Review: code-reviewer (Finding 4) — the explicit-`groups` branch of
@@ -902,8 +878,6 @@ class TestAutoCommitSession:
         report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
         assert report["failed_groups"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_commit_failure_surfaces_via_failed_groups_not_swallowed(self, tmp_path, monkeypatch):
         """2026-07-31 fix: `auto_commit_session_async` previously swallowed a
         genuine `commit_failed` group -- `_commit_group` only ever read
@@ -939,8 +913,6 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"]
         assert report["failed_groups"] == [report["groups"][0]]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_benign_already_committed_noop_group_does_not_cry_wolf(self, tmp_path, monkeypatch):
         """The ordinary already-committed no-op (`commit_failed: False`,
         `reason: "empty-commit-set"`) must stay quiet -- it must NOT appear
@@ -974,8 +946,6 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"] is None
         assert report["failed_groups"] == []
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_unregistered_handler_is_a_genuine_failure_not_a_quiet_noop(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -990,8 +960,6 @@ class TestAutoCommitSession:
         assert report["groups"][0]["commit_failed"] is True
         assert report["failed_groups"] == [report["groups"][0]]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_handler_level_validation_error_is_a_genuine_failure(self, tmp_path, monkeypatch):
         # Review: code-reviewer (Finding 2) — the `if not committed and error
         # and not commit_failed` defensive branch in `_commit_group` had no
@@ -1016,8 +984,6 @@ class TestAutoCommitSession:
         assert report["groups"][0]["error"] == "some validation error"
         assert report["failed_groups"] == [report["groups"][0]]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_reason_threaded_through_group_result(self, tmp_path, monkeypatch):
         # Review: code-reviewer (Finding 3) — `reason` (e.g.
         # "empty-commit-set") is computed by the op but was dropped before
@@ -1051,8 +1017,6 @@ class TestAutoCommitSession:
 
 
 class TestMain:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_dry_run_computes_without_committing(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1070,7 +1034,12 @@ class TestMain:
         ).stdout
         assert "a.py" in status  # NOT committed
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_message_flag_via_cli_commits(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
@@ -1089,7 +1058,12 @@ class TestMain:
         ).stdout
         assert status == ""
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_groups_json_flag(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
@@ -1131,8 +1105,6 @@ class TestMain:
         exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
         assert exit_code == 0
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_genuine_commit_failure_exits_4_and_logs_diagnostic(
         self, tmp_path, capsys, monkeypatch
     ):
@@ -1177,17 +1149,20 @@ class TestMain:
         exit_code = safe_commit_offer.main(["--bogus-flag"])
         assert exit_code == 2
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_declined_adoption_logs_diagnostic_and_stays_exit_0(self, tmp_path, capsys):
-        # Review: code-reviewer (Finding 1) — `_log_excluded_diagnostic` is
-        # the headline AC6 deliverable and had zero test coverage. A dirty
-        # unclaimed file must be logged AND must leave the exit code at 0 —
-        # a declined adoption is the correct outcome (DR-227), never a
-        # failure.
+    def test_withheld_contested_path_logs_diagnostic_and_stays_exit_0(
+        self, tmp_path, capsys
+    ):
+        # `_log_excluded_diagnostic` is the ONE sink the unattended SessionEnd
+        # hook can surface -- it reads the exit code and never stdout -- so a
+        # withheld path that never reaches it is a path nobody learns about.
+        # Exit code stays 0: withholding a contested path is the correct
+        # outcome (DR-227), never a failure.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        (repo / "orphan.py").write_text("o")
+        core.init("peer", cwd=str(repo))
+        (repo / "shared.py").write_text("s")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
 
         exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
         assert exit_code == 0
@@ -1202,25 +1177,26 @@ class TestMain:
         )
         assert log_file.is_file()
         contents = log_file.read_text()
-        assert "declined adoption" in contents
-        assert "orphan.py" in contents
-        assert "untouched by this session" in contents
+        assert "withheld" in contents
+        assert "shared.py" in contents
+        assert "owned by session peer" in contents
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_declined_adoption_preview_bound_enforced_on_written_log(self, tmp_path, capsys):
-        # Review: code-reviewer (Finding 1) — proves the preview bound is
-        # enforced on what is WRITTEN to the log, not merely on a rendered
-        # string: only `_EXCLUDED_LOG_PREVIEW_COUNT` path lines appear, and
-        # the remainder is named via an "and N more" tail.
+    def test_withheld_preview_bound_enforced_on_written_log(self, tmp_path, capsys):
+        # The bound is enforced on what is WRITTEN, not merely on a rendered
+        # string: only `_EXCLUDED_LOG_PREVIEW_COUNT` path lines appear and the
+        # remainder is NAMED via an "and N more" tail rather than dropped
+        # silently.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
         total = safe_commit_offer._EXCLUDED_LOG_PREVIEW_COUNT + 3
         paths = []
         for i in range(total):
-            p = "orphan_%02d.py" % i
-            (repo / p).write_text(str(i))
-            paths.append(p)
+            rel = "shared_%02d.py" % i
+            (repo / rel).write_text(str(i))
+            scope.touch("mine", rel, cwd=str(repo))
+            scope.touch("peer", rel, cwd=str(repo))
+            paths.append(rel)
 
         exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
         assert exit_code == 0
@@ -1235,11 +1211,9 @@ class TestMain:
         )
         contents = log_file.read_text()
         assert "... and 3 more" in contents
-        present = [p for p in paths if p in contents]
+        present = [rel for rel in paths if rel in contents]
         assert len(present) == safe_commit_offer._EXCLUDED_LOG_PREVIEW_COUNT
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_all_dropped_group_renders_named_matched_and_logs_and_stays_exit_0(
         self, tmp_path, capsys
     ):
@@ -1290,8 +1264,6 @@ class TestMain:
         assert "1 caller-supplied group(s) partially or fully dropped" in log_contents
         assert "all-excluded group — named 1 paths, 0 matched" in log_contents
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_dropped_groups_render_and_log_are_bounded(self, tmp_path, capsys):
         # Bounded-output guard: many dropped groups must still render (and
         # log) a bounded number of lines plus an "and N more group(s)" tail
@@ -1698,7 +1670,12 @@ def _make_memo_send_claude_home(tmp_path, receiver_repo):
 
 
 class TestMemoSendDeclaresOutboxWrites:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `memo.send` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 30016ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_sent_ledger_write_lands_in_compute_offer_safe_paths(
         self, tmp_path, monkeypatch
@@ -1791,7 +1768,12 @@ class TestDefaultGroupsInvokerFraming:
 
 
 class TestGroupsSuppliedPathIgnoresInvoker:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_explicit_groups_path_never_consults_invoker(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -1817,6 +1799,13 @@ class TestMainInvokerFlag:
         exit_code = safe_commit_offer.main(["--invoker", "bogus"])
         assert exit_code == 2
 
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
+    @pytest.mark.designed_red
     def test_accepts_attended_and_unattended(self, tmp_path, capsys):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1870,3 +1859,133 @@ class TestNothingToCommitDistinguishesSeenFromClean:
 
         assert "working tree clean" in rendered
         assert "seen and declined" not in rendered
+
+
+class TestFullOwnershipMap:
+    """The in-process map a dirty-tree sweep classifies against -- deliberately
+    NOT the same answer as `compute_offer`'s ownership readout."""
+
+    def test_names_a_peers_path_this_session_never_touched(self, tmp_path):
+        # The regression that made this exist: read off `compute_offer`, a
+        # peer's in-flight file the closing session never touched is in no
+        # bucket at all, so a sweep classifies it AMBIGUOUS and an operator is
+        # nudged toward committing it.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "theirs.py").write_text("t")
+        scope.touch("peer", "theirs.py", cwd=str(repo))
+
+        mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+
+        assert "theirs.py" not in mine
+        assert peer_map["theirs.py"]["owner"] == "peer"
+        assert peer_map["theirs.py"]["liveness"] == "live"
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+        assert "theirs.py" not in {e["path"] for e in offer["ownership"]["peer"]}
+
+    def test_mine_is_the_sole_claims_and_contested_is_a_peer_entry(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "solo.py").write_text("s")
+        (repo / "shared.py").write_text("h")
+        scope.touch("mine", "solo.py", cwd=str(repo))
+        scope.touch("mine", "shared.py", cwd=str(repo))
+        scope.touch("peer", "shared.py", cwd=str(repo))
+
+        mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+
+        assert mine == frozenset({"solo.py"})
+        assert peer_map["shared.py"]["owner"] == "peer"
+
+    def test_an_unclaimed_path_is_in_neither(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "nobodys.py").write_text("n")
+
+        mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+
+        assert "nobodys.py" not in mine
+        assert "nobodys.py" not in peer_map
+
+    def test_a_degraded_walk_empties_the_peer_map(self, tmp_path, monkeypatch):
+        # AC7 again, at this surface: a call that could not finish its walk
+        # must not print an owner. An empty map degrades the caller to "no
+        # claim awareness", which is its own fail-closed arm.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "theirs.py").write_text("t")
+        scope.touch("peer", "theirs.py", cwd=str(repo))
+
+        blinded = os.path.join(core.session_dir("peer", cwd=str(repo)), "touched.txt")
+        real_reader = claim_index._read_lines_discard_torn_tail
+
+        def _unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(blinded):
+                return [], False
+            return real_reader(path)
+
+        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
+
+        mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+
+        assert peer_map == {}
+
+    def test_spawns_no_subprocess(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("peer", cwd=str(repo))
+        (repo / "theirs.py").write_text("t")
+        scope.touch("peer", "theirs.py", cwd=str(repo))
+        safe_commit_offer.full_ownership_map("mine", cwd=str(repo))  # warm caches
+
+        def _explode(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("full_ownership_map spawned a subprocess")
+
+        monkeypatch.setattr(subprocess, "run", _explode)
+        monkeypatch.setattr(subprocess, "Popen", _explode)
+        monkeypatch.setattr(subprocess, "check_output", _explode)
+
+        _mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+        assert "theirs.py" in peer_map
+
+
+    def test_liveness_is_resolved_once_not_once_per_peer(self, tmp_path, monkeypatch):
+        """The amplification pin. `live_session_ids` is deliberately NOT
+        memoised (a cached live-set reopens the wrong-attribution race, per
+        its own negative spec), so calling it per entry re-walks every session
+        dir each time. Measured on the real ledger before the hoist, job
+        object, k=20: 23,910ms of process time across ~405 peer claims, in
+        ZERO subprocesses -- 48x the brightline, and per-item amplification of
+        exactly the shape this module was rebuilt to remove.
+
+        Counted, not timed: a wall-clock assertion here would measure peer load
+        on a box carrying ~50 sessions. The call COUNT is the invariant.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        for i in range(12):
+            core.init("peer-%02d" % i, cwd=str(repo))
+            rel = "theirs_%02d.py" % i
+            (repo / rel).write_text(str(i))
+            scope.touch("peer-%02d" % i, rel, cwd=str(repo))
+
+        calls = []
+        real = safe_commit_offer.live_session_ids
+
+        def _counted(cwd=None):
+            calls.append(cwd)
+            return real(cwd)
+
+        monkeypatch.setattr(safe_commit_offer, "live_session_ids", _counted)
+
+        _mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
+
+        assert len(peer_map) == 12
+        assert len(calls) == 1, (
+            "liveness resolved %d times for %d peer paths -- it must be "
+            "resolved once and answered from the set" % (len(calls), len(peer_map))
+        )

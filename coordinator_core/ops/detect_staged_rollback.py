@@ -1,60 +1,46 @@
 """
-coordinator_core.ops.detect_staged_rollback — staged-index exact-blob rollback
-detector, PLUS a staged mass-deletion tripwire.
+coordinator_core.ops.detect_staged_rollback — staged mass-deletion tripwire.
 
-Purpose: reads the caller's staged index (``git diff --cached``) and flags two
-distinct shapes:
+Purpose: reads the caller's staged index (``git diff --cached``) and flags a
+staged mass deletion (added 2026-08-10, see
+``state/bug-backlog/2026-08-10-nothing-on-the-commit-path-can-see-a-mas-486778a10476.yaml``)
+— the shape the 2026-07-28 incident's root cause actually produced: commit
+``0a3462b72`` staged git's canonical empty tree
+(``4b825dc642cb6eb9a060e54bf8d69288fbee4904``) against a parent holding
+18,506 files. See ``find_mass_deletion`` / ``MASS_DELETION_RATIO_THRESHOLD`` /
+``MASS_DELETION_ABS_FLOOR`` below for the detection logic and thresholds.
 
-1. Exact-blob rollback (the module's original purpose) — the shape a
-   2026-07-28 incident produced on this repo: an in-progress index whose
-   staged blobs, file by file, were byte-identical to an OLDER commit's blob
-   for that same path, silently reverting landed work had it been committed.
-2. Staged mass deletion (added 2026-08-10, see
-   ``state/bug-backlog/2026-08-10-nothing-on-the-commit-path-can-see-a-mas-486778a10476.yaml``)
-   — the shape the SAME incident's root cause actually produced: commit
-   ``0a3462b72`` staged git's canonical empty tree
-   (``4b825dc642cb6eb9a060e54bf8d69288fbee4904``) against a parent holding
-   18,506 files. That commit was invisible to check (1) above because
-   ``_staged_blobs`` skips status-``D`` entries BY DESIGN (a deletion has no
-   staged blob content to compare against history) — a commit that drops
-   every tracked file was, and without this check remains, invisible to this
-   module. See ``find_mass_deletion`` / ``MASS_DELETION_RATIO_THRESHOLD`` /
-   ``MASS_DELETION_ABS_FLOOR`` below for the detection logic and thresholds.
+KILLED CHECK (2026-08-21, PM ruling): this module used to also run an
+exact-blob rollback detector (the module's ORIGINAL purpose — staged blobs
+byte-identical to an older commit's blob for the same path). That check was
+deleted, not merely disabled: 11,380ms of process time on every commit
+(~2.66h/day at 840 commits/day, 98% of a commit) for a signal that fired
+correctly on roughly 1-in-22 of its real firings and was, by its own
+``_staged_blobs``'s by-design status-``D`` skip, BLIND to the very incident
+(``0a3462b72``) that motivated this module. The ruling was made on the
+mechanism (cost per inspection, and blindness to the founding incident), not
+on an absence of evidence — the gate DID make someone look, at least once
+(see ``70ed82e4aa6f``, ``e167d08d14ad``, ``0f37a6fac346``) — and not on the
+cross-session-clobber hazard being unreal (it is real; it is simply not this
+mechanism's to guard). See
+``docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md``
+chunk C16 for the full ruling and the shapes considered and refused
+(off-path move, a standing DR-344 exception) before landing on deletion.
 
 This module never mutates a repo — it is read-and-report only. It IS wired
 into a commit path: it is the sole entry in
 ``coordinator_core.ops.install_claude_klabauter_precommit_hook._GATE_REGISTRY``, the
 registry that installs this repo's own ``.git/hooks/pre-commit`` (via the
-``coordinator/bin/detect-staged-rollback.py`` trampoline). As of 2026-08-10
-this is the ONLY gate that fires on this repo's commit path — every commit
-into claude-klabauter runs through ``main()`` here before it can land. A prior
-version of this docstring claimed the opposite ("NOT wired into any commit
-path"); that claim was stale the moment the installer above shipped, and its
-staleness is exactly why check (2) went unnoticed for a full commit — see the
-bug-backlog entry cited above.
+``coordinator/bin/detect-staged-rollback.py`` trampoline). This remains the
+ONLY gate that fires on this repo's commit path — every commit into
+Claude-klabauter runs through ``main()`` here before it can land.
 
-Detection logic (rollback, check 1):
-    For each staged path, resolve its staged (index) blob sha, then walk that
-    path's own commit history (bounded by ``HISTORY_DEPTH_LIMIT`` — see that
-    constant's docstring for why 40) looking for an OLDER commit whose blob
-    for the same path is byte-identical to the staged blob. A match records
-    the matched commit and the "rollback depth" — how many commits touching
-    that path were skipped backwards to reach it (1 = the immediately prior
-    version of the file; deeper = further back).
-
-Threshold design (rollback): a single file matching an older blob is
-ordinary (``git revert``, undoing one bad edit, restoring one file) and must
-NOT fire alone unless the match is deep. The signal this module exists to
-catch is BREADTH (many files at once) or DEPTH (one file jumping back past
-several of its own intervening edits) — never a lone shallow match. See
-MIN_ROLLBACK_PATHS / MIN_ROLLBACK_DEPTH docstrings for the numbers.
-
-Detection logic (mass deletion, check 2):
-    Reads every staged status-``D`` path (the exact set check 1 discards) and
-    the tracked-file total at ``HEAD`` (the pre-commit tree). Fires when
-    EITHER the absolute deleted-path count crosses ``MASS_DELETION_ABS_FLOOR``
-    OR the deleted-path count is at least ``MASS_DELETION_RATIO_THRESHOLD`` of
-    the tracked total — an OR, not an AND, because either signal alone is
+Detection logic (mass deletion):
+    Reads every staged status-``D`` path and the tracked-file total at
+    ``HEAD`` (the pre-commit tree). Fires when EITHER the absolute
+    deleted-path count crosses ``MASS_DELETION_ABS_FLOOR`` OR the
+    deleted-path count is at least ``MASS_DELETION_RATIO_THRESHOLD`` of the
+    tracked total — an OR, not an AND, because either signal alone is
     sufficient evidence of an implausible deletion: a huge repo losing a
     proportionally-small-but-absolutely-enormous subtree should fire on the
     floor even if the ratio stays low, and a small repo (or subtree) losing
@@ -63,60 +49,49 @@ Detection logic (mass deletion, check 2):
     docstrings for the numbers and how they were derived from this repo's own
     commit history.
 
-Override (deliberate divergence from a no-override discipline, both checks):
-unlike a correctness guard, both checks here have a real and benign
-false-positive case — a DELIBERATE mass revert or a DELIBERATE large prune is
-legitimate work indistinguishable, from git alone, from the incidents these
-checks exist to catch. So this module takes two named override env vars,
-one per check, each spelled to match the sibling precommit gates' convention
+Override (deliberate divergence from a no-override discipline): unlike a
+correctness guard, this check has a real and benign false-positive case — a
+DELIBERATE large prune is legitimate work indistinguishable, from git alone,
+from the incident this check exists to catch. So this module takes one named
+override env var, spelled to match the sibling precommit gates' convention
 in ``coordinator_core.ops.install_meta_repo_precommit_hook._GATE_REGISTRY``:
-``COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK`` (check 1, pre-existing) and
-``COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION`` (check 2, new). Do NOT "fix"
-either into a hard, unoverridable block by analogy with a correctness guard
-— every one of a correctness guard's refusal cases is a genuine defect;
-neither of these is, by construction. A later reader who removes either
-override on that analogy would be reintroducing the exact false-positive
-these checks were built to tolerate. Per the 2026-08-10 bug-backlog ruling,
-BOTH overrides are biased toward NOT firing on plausible legitimate work —
-this repo runs ~50 concurrent sessions sharing one hook, and a false positive
-here blocks every one of them from committing. Missing a marginal real
-incident is the deliberately preferred failure mode over blocking legitimate
-work; see the threshold docstrings for the historical margin each one keeps.
+``COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION``. Do NOT "fix" this into a
+hard, unoverridable block by analogy with a correctness guard — every one of
+a correctness guard's refusal cases is a genuine defect; this is not, by
+construction. A later reader who removes the override on that analogy would
+be reintroducing the exact false-positive this check was built to tolerate.
+Per the 2026-08-10 bug-backlog ruling, the override is biased toward NOT
+firing on plausible legitimate work — this repo runs ~50 concurrent sessions
+sharing one hook, and a false positive here blocks every one of them from
+committing. Missing a marginal real incident is the deliberately preferred
+failure mode over blocking legitimate work; see the threshold docstrings for
+the historical margin it keeps.
 
-That bias governs the THRESHOLDS, not the spelling of the key. Either override
+That bias governs the THRESHOLDS, not the spelling of the key. The override
 arms on exactly ``"1"`` and on nothing else (``_override_armed``, PM-authorized
-2026-08-21): the earlier "anything but empty-or-0" form silently disarmed a
+2026-08-21): the earlier "anything but empty-or-0" form silently disarmed the
 tripwire for the operator who typed ``=false`` meaning the opposite, and
-disagreed with the generated hook's own ``[ "$KEY" = "1" ]``. Keeping an
+disagreed with the generated hook's own ``[ "$KEY" = "1" ]``. Keeping the
 override cheap to reach is the bias; guessing which string means yes is not
 part of it.
 
 Negative-spec:
     - NEVER runs a mutating git command (no ``git reset``, ``git checkout``,
       no staging/unstaging) — read-only over ``git diff --cached`` / ``git
-      log`` / ``git rev-parse`` / ``git ls-tree`` only.
-    - Does NOT walk the FULL repo history per path (check 1) — bounded by
-      ``HISTORY_DEPTH_LIMIT``; a path with a real rollback beyond that depth
-      is a known blind spot, not a silent success (see that constant's
-      docstring).
-    - Does NOT special-case renames (check 1) — invoked with ``--no-renames``
-      so a renamed file surfaces as a plain delete + add, not a moved match.
-      A rename false-negative (content moved to a new path) is out of scope:
-      this module's own remit is "the same path rolled back", not general
-      content provenance.
-    - Does NOT weight staged deletions by path (check 2) — a deletion of
-      ``README.md`` and a deletion of a 40MB generated artifact count
-      identically as "one path". Byte-weighting is a different, unbuilt
-      detector; this one answers "how much of the TREE, by path count, is
-      gone", which is what an empty-tree-shaped incident actually produces.
-    - Does NOT accumulate deletions across commits (check 2) — each
-      invocation measures only the CURRENT staged commit's deleted-path
-      count/ratio against the tracked total at that moment; nothing here
-      tracks a running total across a SEQUENCE of commits. A paced split
-      (e.g. ~900 deletions per commit across 20 commits on a repo whose
-      floor is 5127) can keep both the absolute-floor and ratio legs under
-      threshold on every single commit while still emptying the tree over
-      the sequence — the exact broader-gap shape the carried backlog item
+      rev-parse`` / ``git ls-tree`` only.
+    - Does NOT weight staged deletions by path — a deletion of ``README.md``
+      and a deletion of a 40MB generated artifact count identically as "one
+      path". Byte-weighting is a different, unbuilt detector; this one
+      answers "how much of the TREE, by path count, is gone", which is what
+      an empty-tree-shaped incident actually produces.
+    - Does NOT accumulate deletions across commits — each invocation
+      measures only the CURRENT staged commit's deleted-path count/ratio
+      against the tracked total at that moment; nothing here tracks a
+      running total across a SEQUENCE of commits. A paced split (e.g. ~900
+      deletions per commit across 20 commits on a repo whose floor is 5127)
+      can keep both the absolute-floor and ratio legs under threshold on
+      every single commit while still emptying the tree over the sequence —
+      the exact broader-gap shape the carried backlog item
       ``cf-deletion-tripwire-3a91c7`` names. EXECUTED AND CONFIRMED
       2026-08-11, no longer a reasoned-about gap —
       ``docs/research/spike-verdicts/2026-08-11-paced-deletion-evades-the-mass-deletion-tripwire.md``
@@ -134,17 +109,16 @@ Negative-spec:
       of staged-D counts across the last N pre-commit invocations), which is
       a distinct, unbuilt detector, not a fix to the per-commit measurement
       this module makes.
-    - Does NOT scope the mass-deletion check (or the rollback check) to the
-      pathspec a `git commit -- <path>` will actually write (check 2, also
-      check 1 via `_staged_blobs`) — both read the FULL staged index via an
-      unscoped ``git diff --cached --raw``, not the subset of the index a
-      pathspec-scoped commit will turn into tree content (git uses HEAD
-      content for unlisted paths in that mode). A developer with unrelated
-      deletions staged elsewhere who runs a narrow `git commit -- some/file`
-      is evaluated against the WHOLE staged set. This is NOT a fixable
-      oversight in this module: a standard git pre-commit hook is invoked
-      with no arguments and no environment variable carrying the commit's
-      pathspec (confirmed by reading
+    - Does NOT scope the mass-deletion check to the pathspec a
+      `git commit -- <path>` will actually write — it reads the FULL staged
+      index via an unscoped ``git diff --cached --raw``, not the subset of
+      the index a pathspec-scoped commit will turn into tree content (git
+      uses HEAD content for unlisted paths in that mode). A developer with
+      unrelated deletions staged elsewhere who runs a narrow
+      `git commit -- some/file` is evaluated against the WHOLE staged set.
+      This is NOT a fixable oversight in this module: a standard git
+      pre-commit hook is invoked with no arguments and no environment
+      variable carrying the commit's pathspec (confirmed by reading
       ``coordinator_core.ops.install_claude_klabauter_precommit_hook`` and
       ``coordinator/bin/detect-staged-rollback.py`` — both forward/receive
       only ``[repo-root]``, never the invoking `git commit`'s own argv) — a
@@ -155,11 +129,7 @@ Negative-spec:
       code — it is a read/report library plus a CLI; the installed hook
       (``coordinator_core.ops.install_claude_klabauter_precommit_hook``) clamps
       whatever nonzero code this module returns to exactly 1 at the commit
-      boundary (see that module's own docstring, "Exit-code clamping") —
-      the DISTINCT codes below (2026-08-21) exist so that wrapper can still
-      tell which check produced the nonzero code and scope its own
-      per-check override correctly, before it clamps the code it actually
-      propagates to sh.
+      boundary (see that module's own docstring, "Exit-code clamping").
 """
 
 from __future__ import annotations
@@ -169,7 +139,7 @@ import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 # Cross-package import of the SSOT doc-pointer display string -- the same
 # precedent `write_guards` already uses for `operator_override_note` itself
@@ -180,65 +150,17 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # docs/wiki/guard-messaging.md § Register).
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
-# Bound on how far back (in commits touching a given path) this module will
-# search for a matching blob. 40 is deep enough to catch every rollback shape
-# seen in practice (the 2026-07-28 incident's deepest single-path match was 5
-# commits back) with comfortable headroom, while keeping the per-path `git
-# log` call cheap and bounded regardless of a path's total lifetime history —
-# a repo where one file has thousands of historical revisions must not turn
-# one staged-path check into an unbounded walk.
-HISTORY_DEPTH_LIMIT = 40
-
-# Breadth threshold: fire when at least this many DISTINCT staged paths are
-# rollback candidates, regardless of any single path's depth. Justification:
-# the 2026-07-28 incident staged nine paths simultaneously, each an exact
-# older-commit match — no ordinary single-file operation (a manual revert, a
-# `git checkout HEAD~1 -- file`) produces multi-file breadth like this by
-# accident. 3 sits comfortably below that incident's 9 while staying above
-# the common "I fixed two related files and also reverted a stray edit in a
-# third" shape, which is still deliberate single-purpose work, not a
-# wholesale tree restore.
-MIN_ROLLBACK_PATHS = 3
-
-# Depth threshold: fire when ANY single path's match is at least this many
-# commits back, even if it is the only rollback candidate staged. 1 (the
-# immediately-prior version of a file) is the ordinary "undo my last edit"
-# case and must never fire alone. 2+ means the staged content skips past at
-# least one OTHER completed commit to that path, not just the most recent
-# one — verified against the incident: `install_meta_repo_precommit_hook.py`
-# staged its blob from commit `ba84e095`, five commits behind the path's
-# HEAD version (`f204c4a0`), and `resolve_target.py` similarly matched an
-# older commit several revisions back. Both clear this threshold by a wide
-# margin; an ordinary single-step undo (depth 1) does not.
-MIN_ROLLBACK_DEPTH = 2
-
-OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
-
-# --- Exit-code contract (2026-08-21) ------------------------------------
+# --- Exit-code contract ---------------------------------------------------
 #
-# `main()` used to collapse both checks into a single boolean "blocked"
-# before returning 0/1 — a caller reading the raw exit code (this module's
-# own CLI, and any wrapper shelling out to it, e.g.
-# `coordinator_core.ops.install_claude_klabauter_precommit_hook`) could not tell
-# WHICH check produced a nonzero code. That ambiguity is what let a single
-# wrapper-level override key (spelled for check 1 only) accidentally
-# bypass a check-2 finding it never even inspected — see
-# `install_claude_klabauter_precommit_hook`'s own "Exit-code clamping" section for
-# the live consequence. These constants split "blocked" into which check(s)
-# actually produced the block, so a caller can react to exactly one.
-#
-# 2 stays reserved for a usage error (pre-existing, `main`'s leading-dash
-# argv branch) and the trampoline's own transport failure
-# (`coordinator/bin/detect-staged-rollback.py`, engine-root resolution /
-# import failure) — neither of those is ever a real check finding, so no
-# business-logic code may reuse 2. A caller that sees 2 learns nothing
-# about which check fired, because neither did: the op never ran far
-# enough to know.
+# With only one check left (check 1, the exact-blob rollback detector, was
+# deleted 2026-08-21 — see module docstring), the exit contract collapses
+# back to the ordinary 0/1/2 shape: 0 clean, 1 a real finding (unresolved by
+# its override), 2 a usage error. There is no longer any ambiguity for a
+# caller to resolve between two checks, so there is nothing for a wider code
+# to disambiguate.
 EXIT_CLEAN = 0
-EXIT_ROLLBACK_FINDING = 1
+EXIT_MASS_DELETION_FINDING = 1
 EXIT_USAGE_ERROR = 2
-EXIT_MASS_DELETION_FINDING = 3
-EXIT_BOTH_FINDINGS = 4
 
 # --- Mass-deletion tripwire (2026-08-10) ---------------------------------
 #
@@ -291,26 +213,6 @@ MASS_DELETION_OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
 
 _PROG = "detect-staged-rollback"
 
-# Distinguishes the hash from the subject in a single `git log --format=...`
-# field without colliding with `-z`'s own NUL record terminator (see
-# `_path_history`'s docstring for the full record shape).
-_FIELD_SEP = "\x01"
-
-
-@dataclass(frozen=True)
-class SkippedCommit:
-    commit: str
-    subject: str
-
-
-@dataclass(frozen=True)
-class RollbackCandidate:
-    path: str
-    matched_commit: str
-    matched_subject: str
-    depth: int
-    skipped: Tuple[SkippedCommit, ...] = field(default_factory=tuple)
-
 
 def _run_git(args: Sequence[str], cwd: str, env: Optional[dict] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -324,17 +226,12 @@ def _run_git(args: Sequence[str], cwd: str, env: Optional[dict] = None) -> subpr
 
 
 def _staged_raw_diff(repo_root: str, env: Optional[dict] = None) -> List[str]:
-    """Shared ``git diff --cached --raw -z --no-renames --no-abbrev`` spawn,
+    """``git diff --cached --raw -z --no-renames --no-abbrev`` spawn,
     tokenized on NUL with the trailing empty token trimmed.
 
-    Both `_staged_blobs` and `_staged_deletions` need the identical staged-
-    index raw-diff scan — factored out here so `main()` pays for it once,
-    not twice, per commit (real cost on this repo's ~50-concurrent-session
-    load norm: every commit on every session was paying this spawn twice).
-    Deliberately returns the bare token list, not a parsed dict/list, so
-    neither caller's own parsing (and neither caller's return CONTRACT —
-    `_staged_blobs`'s dict shape is pinned by `find_rollback_candidates`'s
-    tests) has to change to use it.
+    `_staged_deletions` needs this staged-index raw-diff scan. Deliberately
+    returns the bare token list, not a parsed dict/list, so the caller's own
+    parsing does not have to change to use it.
     """
     result = _run_git(
         ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"],
@@ -347,315 +244,6 @@ def _staged_raw_diff(repo_root: str, env: Optional[dict] = None) -> List[str]:
     if tokens and tokens[-1] == "":
         tokens = tokens[:-1]
     return tokens
-
-
-def _staged_blobs(
-    repo_root: str,
-    env: Optional[dict] = None,
-    tokens: Optional[List[str]] = None,
-) -> Dict[str, str]:
-    """Path -> full staged (index) blob sha for every staged, non-deleted path.
-
-    One `git diff --cached --raw -z --no-renames --no-abbrev` call for the
-    WHOLE staged set — not one call per path — is the perf-critical piece:
-    this is O(1) git invocations in the number of staged paths, not O(N).
-    The spawn itself is shared with `_staged_deletions` via `_staged_raw_diff`;
-    pass a pre-fetched `tokens` (as `main()` does) to avoid paying for it a
-    second time, or omit it to have this function fetch its own (unchanged
-    standalone behavior, and what every existing caller/test still gets).
-
-    Record shape per staged path, NUL-delimited (`-z`):
-        ":<oldmode> <newmode> <oldsha> <newsha> <status>\\0<path>\\0"
-    concatenated back-to-back with no separator between records (confirmed
-    empirically — see this module's test fixtures). Splitting the whole
-    output on NUL therefore yields flat (rawline, path) pairs in sequence.
-
-    Deleted paths (status "D", newsha all-zero) are skipped — a deletion has
-    no staged content to compare against a historical blob.
-    """
-    if tokens is None:
-        tokens = _staged_raw_diff(repo_root, env=env)
-
-    blobs: Dict[str, str] = {}
-    i = 0
-    while i + 1 < len(tokens):
-        rawline = tokens[i]
-        path = tokens[i + 1]
-        i += 2
-        if not rawline.startswith(":"):
-            # Defensive: a malformed/unexpected record shape must not crash
-            # the scan — skip it rather than mis-parse the next pair.
-            continue
-        parts = rawline[1:].split(" ")
-        if len(parts) != 5:
-            continue
-        _old_mode, _new_mode, old_sha, new_sha, status = parts
-        if status.startswith("D"):
-            continue
-        if old_sha == new_sha:
-            # Mode-only change: the content is byte-identical to HEAD, so the
-            # only thing staged is a permission-bit flip. Such a path ALWAYS
-            # matches an older commit's blob — that is what "content unchanged"
-            # means — so scanning it can only ever produce a false positive.
-            # Observed live: `chmod -x` on a stray-exec-bit `.cmd` blocked with
-            # "1 staged path(s) exactly match an older commit's blob", naming a
-            # months-old commit as the thing being restored. A mode flip cannot
-            # roll content back, because it does not touch content.
-            continue
-        blobs[path] = new_sha
-    return blobs
-
-
-def _path_history(
-    repo_root: str,
-    path: str,
-    env: Optional[dict] = None,
-    limit: int = HISTORY_DEPTH_LIMIT,
-) -> List[Tuple[str, str, str]]:
-    """Most-recent-first list of (commit_hash, subject, blob_sha) for every
-    commit touching `path`, bounded to `limit` commits.
-
-    ONE `git log -n <limit> --format=%H<SEP>%s --raw --no-renames --no-abbrev
-    -z -- <path>` call per path returns both the commit metadata AND that
-    commit's blob sha for the path in a single subprocess invocation — commit
-    metadata and diff content interleaved as
-    "<hash><SEP><subject>\\n:<rawline>\\0<path>\\0" repeated, so history[i]
-    for i>=1 is always available at the cost of one process spawn per staged
-    path (the documented "one git log per staged path" budget), never a
-    second per-commit call to fetch a blob or subject separately.
-    """
-    result = _run_git(
-        [
-            "log",
-            f"-n{limit}",
-            f"--format=%H{_FIELD_SEP}%s",
-            "--raw",
-            "--no-renames",
-            "--no-abbrev",
-            "-z",
-            "--",
-            path,
-        ],
-        cwd=repo_root,
-        env=env,
-    )
-    if result.returncode != 0 or not result.stdout:
-        return []
-
-    tokens = result.stdout.split("\0")
-    if tokens and tokens[-1] == "":
-        tokens = tokens[:-1]
-
-    history: List[Tuple[str, str, str]] = []
-    i = 0
-    while i + 3 <= len(tokens):
-        header = tokens[i]
-        if _FIELD_SEP not in header:
-            # Malformed record — bail out on the remainder of this path's
-            # history rather than mis-parse; partial history degrades to a
-            # smaller search window, never a crash.
-            break
-        commit_hash, subject = header.split(_FIELD_SEP, 1)
-        # `git log`'s own body separator puts a leading "\n" on the raw-diff
-        # line that follows a custom --format header (empirically confirmed
-        # — see this module's tests): strip it before the ":" status check,
-        # or every record is silently misparsed as malformed.
-        rawline = tokens[i + 1].lstrip("\n")
-        # path = tokens[i + 2] — not needed; we already know the path.
-        i += 3
-        if not rawline.startswith(":"):
-            continue
-        parts = rawline[1:].split(" ")
-        if len(parts) != 5:
-            continue
-        _old_mode, _new_mode, _old_sha, new_sha, status = parts
-        history.append((commit_hash, subject, new_sha))
-    return history
-
-
-def _batch_path_history(
-    repo_root: str,
-    paths: Sequence[str],
-    env: Optional[dict] = None,
-) -> Dict[str, List[Tuple[str, str, str]]]:
-    """ONE `git log --format=%H<SEP>%s --raw --no-renames --no-abbrev -z --
-    <path1> <path2> ...` walk resolving every *paths* entry's full commit
-    history (most-recent-first, unbounded — no `-n<limit>` here; see below
-    for why) in a single subprocess invocation, batching what
-    `find_rollback_candidates` used to spend one `_path_history` spawn per
-    staged path on.
-
-    Shape: multi-pathspec / object-membership (the safe side of § Anti-scope
-    2), NOT range batching — `-- pathA pathB ...` asks "every commit
-    touching ANY of these paths" (union/OR semantics), the exact same shape
-    `draft_plan_aging._batch_git_commit_epochs` (C14, `bd6d14afc`) already
-    landed for its own N+1 fix; adapted here from a single first-touch-wins
-    epoch per path to a full per-path history list. No reachability/ancestry
-    arithmetic (`A..B`, `--not`) is used anywhere in this query, so § Anti-
-    scope 1/2's range-batching trap does not apply.
-
-    Deliberately UNBOUNDED (no `-n<limit>` on the git invocation itself,
-    unlike single-path `_path_history`'s `-n<limit>`): applying a git-level
-    `-n` to a multi-pathspec query caps the number of commits in the
-    INTERLEAVED walk across every requested path combined, not per path — a
-    path touched only by old commits could be starved to zero history while
-    a frequently-touched sibling path consumes the whole window. Every
-    commit touching ANY requested path is read once; the per-path cap
-    (`limit`, HISTORY_DEPTH_LIMIT by default) is applied in memory instead,
-    once each path's own list reaches that length no further commits are
-    appended to it (but the shared walk still proceeds for the other
-    paths — same complexity bound as before, `HISTORY_DEPTH_LIMIT` commits
-    per requested path, just re-homed from a `git log -n` argument to a
-    Python-side counter).
-
-    Returns `{path: [(commit_hash, subject, blob_sha), ...]}` — a *paths*
-    entry present in this dict but with an EMPTY list means git found no
-    commit touching it at all (never committed, or unreadable-by-git); an
-    entry present with a non-empty list is capped at `limit`. On any
-    subprocess failure/timeout/non-zero exit, returns `{}` (every requested
-    path reads as absent — same fail-open posture as `_batch_git_commit_epochs`
-    and as a `_path_history` per-path invocation failure, which already
-    returned `[]` for that one path).
-
-    § Anti-scope 25 reconciliation (caller-side, see
-    `find_rollback_candidates`): a path ABSENT from this dict, or present
-    with an empty list, is read as "no history found for this path" and the
-    caller treats it as NOT a rollback candidate — the same outcome a
-    single-path `_path_history` failure/empty-result already produced before
-    this batching change. Failure direction: this function detects
-    rollbacks, so a path wrongly resolved to "no history" SUPPRESSES a
-    rollback finding that should have fired, never fabricates one — no
-    regression from the pre-batch per-path behavior, which had the identical
-    fail-open shape one path at a time. Reference shape for the
-    absence-reconciliation pattern (cited, not re-derived):
-    `coordinator_core/ops/emit/sections/handoffs.py`'s
-    `_resolve_shipped_in_dates` (prefix-match plus a `matched` set).
-    """
-    if not paths:
-        return {}
-    try:
-        result = _run_git(
-            [
-                "log",
-                f"--format=%H{_FIELD_SEP}%s",
-                "--raw",
-                "--no-renames",
-                "--no-abbrev",
-                "-z",
-                "--",
-                *paths,
-            ],
-            cwd=repo_root,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    if result.returncode != 0 or not result.stdout:
-        return {}
-
-    wanted = set(paths)
-    history: Dict[str, List[Tuple[str, str, str]]] = {}
-
-    tokens = result.stdout.split("\0")
-    if tokens and tokens[-1] == "":
-        tokens = tokens[:-1]
-
-    # State-machine parse, driven by SHAPE (a rawline token always starts
-    # with ":" once its possible leading "\n" cushion is stripped; a header
-    # token never does) rather than hash-length/charset heuristics — a
-    # single commit touching MULTIPLE requested paths emits multiple
-    # rawline/path pairs back-to-back before the next header (empirically
-    # confirmed against this repo's own history; see this module's test
-    # fixtures), which a fixed-stride triple-grouping (`_path_history`'s
-    # single-path assumption) cannot parse.
-    current_commit: Optional[str] = None
-    current_subject: Optional[str] = None
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        stripped = token.lstrip("\n")
-        if stripped.startswith(":"):
-            # A raw-diff rawline/path pair for the CURRENT commit.
-            if current_commit is None or i + 1 >= len(tokens):
-                i += 1
-                continue
-            path = tokens[i + 1]
-            i += 2
-            if path not in wanted:
-                continue
-            parts = stripped[1:].split(" ")
-            if len(parts) != 5:
-                continue
-            _old_mode, _new_mode, _old_sha, new_sha, _status = parts
-            bucket = history.setdefault(path, [])
-            if len(bucket) < HISTORY_DEPTH_LIMIT:
-                bucket.append((current_commit, current_subject, new_sha))
-            continue
-        # A commit-header token: "<hash><SEP><subject>".
-        if _FIELD_SEP not in stripped:
-            # Malformed/unexpected record shape — skip rather than mis-parse.
-            i += 1
-            continue
-        current_commit, current_subject = stripped.split(_FIELD_SEP, 1)
-        i += 1
-
-    return history
-
-
-def find_rollback_candidates(
-    repo_root: str, env: Optional[dict] = None, tokens: Optional[List[str]] = None
-) -> List[RollbackCandidate]:
-    """Read-only scan of the staged index for exact-older-blob matches.
-
-    Never mutates the repo. Returns one `RollbackCandidate` per staged path
-    whose blob matches an older commit's blob for that same path — index 0
-    of a path's history is that path's OWN current (HEAD) content and is
-    never treated as a match target (see module docstring's threshold
-    rationale); the NEAREST older match (smallest depth) is recorded, since
-    that is the state actually being restored to.
-
-    History is resolved via ONE batched `_batch_path_history` walk over all
-    staged paths (not one `_path_history` spawn per path — the N+1 this
-    function used to pay) — see that function's docstring for the
-    multi-pathspec shape and the § Anti-scope 25 absence-reconciliation it
-    guarantees.
-
-    `tokens`, if given (as `main()` does), is a pre-fetched `_staged_raw_diff`
-    result forwarded straight to `_staged_blobs` to avoid a duplicate spawn;
-    omit it to have `_staged_blobs` fetch its own (unchanged standalone
-    behavior).
-    """
-    staged = _staged_blobs(repo_root, env=env, tokens=tokens)
-    all_history = _batch_path_history(repo_root, list(staged.keys()), env=env)
-    candidates: List[RollbackCandidate] = []
-    for path, staged_blob in staged.items():
-        history = all_history.get(path, [])
-        if len(history) < 2:
-            continue
-        for depth, (commit_hash, subject, blob) in enumerate(history):
-            if depth == 0:
-                continue
-            if blob == staged_blob:
-                skipped = tuple(
-                    SkippedCommit(commit=h, subject=s) for (h, s, _b) in history[:depth]
-                )
-                candidates.append(
-                    RollbackCandidate(
-                        path=path,
-                        matched_commit=commit_hash,
-                        matched_subject=subject,
-                        depth=depth,
-                        skipped=skipped,
-                    )
-                )
-                break
-    return candidates
-
-
-def _should_fire(candidates: Sequence[RollbackCandidate]) -> bool:
-    if len(candidates) >= MIN_ROLLBACK_PATHS:
-        return True
-    return any(c.depth >= MIN_ROLLBACK_DEPTH for c in candidates)
 
 
 @dataclass(frozen=True)
@@ -671,20 +259,12 @@ def _staged_deletions(
     env: Optional[dict] = None,
     tokens: Optional[List[str]] = None,
 ) -> List[str]:
-    """Every staged status-D path — the exact set `_staged_blobs` discards.
+    """Every staged status-D path.
 
     Same single `git diff --cached --raw -z --no-renames --no-abbrev` shape
-    (and the same record parsing) as `_staged_blobs`, kept as an independent
-    PARSING pass rather than folded into that function: `_staged_blobs` is a
-    hot path for the rollback check and its contract (deleted paths absent
-    from the returned dict) is depended on by `find_rollback_candidates` and
-    pinned by that function's own tests — branching its return shape to also
-    carry deletions would be a wider, riskier change for no shared benefit,
-    since this function's caller (`find_mass_deletion`) needs nothing else
-    from the diff. The SPAWN itself, however, is shared via
-    `_staged_raw_diff` — pass a pre-fetched `tokens` (as `main()` does) to
-    avoid a second `git diff --cached` process per commit; omit it to have
-    this function fetch its own (unchanged standalone behavior).
+    as `_staged_raw_diff` produces. Pass a pre-fetched `tokens` (as `main()`
+    does) to avoid a second `git diff --cached` process per commit; omit it
+    to have this function fetch its own (unchanged standalone behavior).
     """
     if tokens is None:
         tokens = _staged_raw_diff(repo_root, env=env)
@@ -732,8 +312,7 @@ def find_mass_deletion(
     Never mutates the repo. Returns None when nothing is staged for
     deletion — a `MassDeletionFinding` otherwise, regardless of whether it
     crosses either threshold (`_mass_deletion_should_fire` makes that call);
-    this function is measurement only, mirroring `find_rollback_candidates`'s
-    own separation of "what was found" from "does it fire".
+    this function is measurement only, kept separate from the fire decision.
 
     `tokens`, if given (as `main()` does), is a pre-fetched `_staged_raw_diff`
     result forwarded straight to `_staged_deletions` to avoid a duplicate
@@ -786,34 +365,6 @@ def _mass_deletion_report(finding: MassDeletionFinding, overridden: bool) -> str
     return "\n".join(lines)
 
 
-def _report(candidates: Sequence[RollbackCandidate], overridden: bool) -> str:
-    lines: List[str] = []
-    verb = "would flag" if overridden else "BLOCKED"
-    lines.append(
-        f"{_PROG}: {verb} — {len(candidates)} staged path(s) exactly match an older commit's blob:"
-    )
-    for c in sorted(candidates, key=lambda c: c.path):
-        lines.append(
-            f"  {c.path} -> matches {c.matched_commit[:12]} "
-            f"({c.depth} commit(s) touching this path skipped backwards)"
-        )
-        lines.append(f"    restoring: {c.matched_subject}")
-        if c.skipped:
-            lines.append("    work at risk if this is committed:")
-            for s in c.skipped:
-                lines.append(f"      {s.commit[:12]} {s.subject}")
-    if overridden:
-        lines.append(
-            f"{_PROG}: override is set — proceeding despite the above (deliberate mass revert)."
-        )
-    else:
-        lines.append(
-            f"{_PROG}: if this IS a deliberate mass revert, see {OVERRIDE_KEYS_DOC_DISPLAY} "
-            "for override options."
-        )
-    return "\n".join(lines)
-
-
 def _override_armed(env: dict, key: str) -> bool:
     """Is `key` set to the one value that arms an override — exactly ``"1"``?
 
@@ -837,20 +388,15 @@ def _override_armed(env: dict, key: str) -> bool:
 _USAGE = """\
 usage: detect-staged-rollback [repo-root]
 
-Read-and-report detector for two staged-index shapes: (1) blobs byte-identical
-to an older commit's — i.e. a silent rollback of landed work — and (2) a
-staged deletion covering an implausible share of the tracked tree. Never
-mutates a repo. repo-root defaults to the current working directory.
+Read-and-report detector for a staged deletion covering an implausible share
+of the tracked tree. Never mutates a repo. repo-root defaults to the current
+working directory.
 
 exit codes:
-  0  clean (no finding, below threshold, or the relevant override is set)
-  1  a rollback finding crossed the breadth/depth threshold, unresolved by
-     COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK — no mass-deletion block
+  0  clean (no finding, below threshold, or the override is set)
+  1  a mass-deletion finding crossed the ratio/floor threshold, unresolved by
+     COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION
   2  usage error
-  3  a mass-deletion finding crossed the ratio/floor threshold, unresolved by
-     COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION — no rollback block
-  4  BOTH a rollback finding and a mass-deletion finding, neither resolved by
-     its own override
 
 overrides:
   see {doc} for this CLI's override keys
@@ -878,50 +424,20 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
 
     repo_root = argv[0] if argv else "."
 
-    # ONE `git diff --cached --raw` spawn shared by both checks below — each
-    # of `_staged_blobs` and `_staged_deletions` used to run this identical
-    # command independently, doubling the per-commit git spawn count for no
-    # benefit (real cost at ~50 concurrent sessions, each paying it on every
-    # commit). See `_staged_raw_diff`'s docstring.
     raw_diff_tokens = _staged_raw_diff(repo_root, env=env)
-
-    # Both checks always run, independently — a commit can trip either, both,
-    # or neither, and each has its own override (see module docstring,
-    # "Override"). Neither check short-circuits the other: a rollback finding
-    # below its own threshold must not suppress a mass-deletion finding
-    # staged alongside it, and vice versa.
-    candidates = find_rollback_candidates(repo_root, env=env, tokens=raw_diff_tokens)
-    rollback_fires = bool(candidates) and _should_fire(candidates)
-    rollback_overridden = _override_armed(env, OVERRIDE_ENV)
 
     mass_finding = find_mass_deletion(repo_root, env=env, tokens=raw_diff_tokens)
     mass_fires = _mass_deletion_should_fire(mass_finding)
-    mass_overridden = _override_armed(env, MASS_DELETION_OVERRIDE_ENV)
-
-    if not rollback_fires and not mass_fires:
+    if not mass_fires:
         return EXIT_CLEAN
 
-    # Each check's own BLOCKING state is resolved independently, before
-    # either is folded into an exit code — this is the split `install_
-    # claude_klabauter_precommit_hook`'s wrapper reads to scope its own bypass to the
-    # check that actually fired (see EXIT_* constants' docstring above).
-    rollback_blocking = False
-    if rollback_fires:
-        print(_report(candidates, rollback_overridden), file=sys.stderr)
-        rollback_blocking = not rollback_overridden
-    mass_blocking = False
-    if mass_fires:
-        assert mass_finding is not None  # _mass_deletion_should_fire(None) is False
-        print(_mass_deletion_report(mass_finding, mass_overridden), file=sys.stderr)
-        mass_blocking = not mass_overridden
+    assert mass_finding is not None  # _mass_deletion_should_fire(None) is False
+    mass_overridden = _override_armed(env, MASS_DELETION_OVERRIDE_ENV)
+    print(_mass_deletion_report(mass_finding, mass_overridden), file=sys.stderr)
 
-    if rollback_blocking and mass_blocking:
-        return EXIT_BOTH_FINDINGS
-    if rollback_blocking:
-        return EXIT_ROLLBACK_FINDING
-    if mass_blocking:
-        return EXIT_MASS_DELETION_FINDING
-    return EXIT_CLEAN
+    if mass_overridden:
+        return EXIT_CLEAN
+    return EXIT_MASS_DELETION_FINDING
 
 
 if __name__ == "__main__":

@@ -269,13 +269,21 @@ READ_DEADLINE_SECS = 2.0
 #: un-derivable op's caller ceiling.
 MUTATION_READ_DEADLINE_SECS = 30.0
 
-#: Frozen at import time, never reassigned -- the yardstick `_mutation_deadline_for`
-#: compares `MUTATION_READ_DEADLINE_SECS` against to tell "nobody touched the
-#: constant, derive per-op" from "something (a test, an operator) explicitly
-#: overrode it, honor that override verbatim." Without this, a monkeypatched
-#: `MUTATION_READ_DEADLINE_SECS` would be silently ignored once the per-op
-#: derivation is in place -- it is not consulted at all when derivation
+#: Frozen at import time, never reassigned -- the yardstick
+#: `_mutation_deadline_for` compares `MUTATION_READ_DEADLINE_SECS` against to
+#: tell "nobody touched the constant" from "something (a test, an operator)
+#: reassigned it". Without this, a monkeypatched `MUTATION_READ_DEADLINE_SECS`
+#: would be invisible: it is not consulted at all when the per-op derivation
 #: succeeds.
+#:
+#: An override so detected may only NARROW (PM ruling 2026-08-21, no dial
+#: raises). Honoring it verbatim -- what this seam did until that ruling --
+#: skipped `ipc._timeout_for` entirely, and with it the `ceremony.*`
+#: `CEREMONY_BUDGET_SECS` clamp every ceremony op is held to, so any
+#: import-time reassignment of this module constant was a clamp bypass
+#: reachable without touching `ipc` at all. `min(override, derived)` keeps
+#: the seam that makes a test's lowered deadline real while removing the
+#: direction that widens one.
 _MUTATION_READ_DEADLINE_DEFAULT = MUTATION_READ_DEADLINE_SECS
 
 #: JSON-RPC error code for "your mutation was delivered and its outcome is
@@ -306,6 +314,60 @@ _LIVE_TREE_COLD_MESSAGE = (
     "by DR-326 and DR-331). Every call from this tree goes cold; no server "
     "will be spawned for it."
 )
+
+#: The last reason THIS process went permanently cold, as
+#: `_log_live_tree_cold_once` phrased it -- read back by
+#: `invoke.__main__`'s fail-hard block via `last_cold_reason()`.
+#:
+#: Without it the operator got both halves of a contradiction and neither
+#: half named a path: this module's "every call from this tree goes cold",
+#: immediately followed by `__main__`'s "cold fallback is disabled ... retry
+#: in a moment" (observed 2026-08-22, every settings-home `bin/` live op on
+#: `machine-b`). The retry advice is correct for a transient warm miss and
+#: wrong for this one -- the condition is permanent for the process
+#: population, and retrying it forever is what the operator actually did.
+_cold_reason: "str | None" = None
+
+
+def last_cold_reason() -> "str | None":
+    """Why this process can never reach a warm server, or None if the last
+    warm miss was an ordinary transient one (server booting, busy, evicted).
+
+    A caller turning a warm miss into a fatal error uses this to choose
+    between "retry in a moment" and a remediation that names the actual
+    broken thing. Never raises and never computes: it reports what
+    `_log_live_tree_cold_once` already observed."""
+    return _cold_reason
+
+
+def _live_tree_cold_message(exc: Exception) -> str:
+    """The stderr line for a clone that can never host a warm server.
+
+    TWO CONDITIONS, and conflating them is the defect being fixed. An
+    unstamped tree that IS on disk is the ruling, and naming DR-315 there is
+    the point (see `_LIVE_TREE_COLD_MESSAGE`). A resolved engine root that is
+    NOT on disk is a broken root-resolution channel; DR-315 does not cover
+    it, and citing the ruling for it sent an operator to a decision record
+    instead of to the pointer file holding a path from another machine. That
+    arm therefore names the path that failed to resolve and routes to the
+    reader that shows which channel produced it.
+
+    Only an explicit `root_exists=False` takes that arm. `root_exists` is
+    `None` (unknown) on a bare-message construction and on any future call
+    site that passes `root=` without `root_exists=`; unknown is not
+    evidence of absence, so it falls through to the ruling-shaped message
+    below, same as an explicit `True`.
+    """
+    root = getattr(exc, "root", None)
+    if root is not None and getattr(exc, "root_exists", None) is False:
+        return (
+            f"warm engine: resolved engine root does not exist: {root}. No warm "
+            "server can be hosted from it and none will be spawned. "
+            "Remediation: python3 -m coordinator_core.root_channel_reconcile"
+        )
+    if root is not None:
+        return f"{_LIVE_TREE_COLD_MESSAGE} Resolved engine root: {root}."
+    return _LIVE_TREE_COLD_MESSAGE
 
 
 def _engine_clone_root() -> Path:
@@ -364,24 +426,32 @@ def engine_token() -> str:
         return "unversioned"
     try:
         return compute_client_token()
-    except UnstampedEngineRootError:
-        _log_live_tree_cold_once()
+    except UnstampedEngineRootError as exc:
+        _log_live_tree_cold_once(exc)
         return "unversioned"
     except Exception:
         return "unversioned"
 
 
-def _log_live_tree_cold_once() -> None:
-    """Emit `_LIVE_TREE_COLD_MESSAGE` on this process's stderr exactly once,
-    and remember the fact on `_live_tree_cold` for `_spawn_once` to consult.
+def _log_live_tree_cold_once(exc: "Exception | None" = None) -> None:
+    """Emit the cold-forever reason on this process's stderr exactly once,
+    and remember it on `_live_tree_cold` (for `_spawn_once`) and on
+    `_cold_reason` (for whoever turns the miss into a fatal error).
 
     ONCE, deliberately: this is the permanent condition of a whole process
     population (every dispatch from an unstamped clone), not a per-call
     fact -- a per-call diagnostic here would be pure noise on the hot path
-    this module sits on."""
-    global _live_tree_cold
+    this module sits on.
+
+    `_cold_reason` is set on EVERY call, not only the first: it is read by a
+    later caller that may run after the one-shot print already happened, and
+    a reason that existed only for the first dispatch in a process would be
+    missing from exactly the message that needs it."""
+    global _live_tree_cold, _cold_reason
+    message = _live_tree_cold_message(exc) if exc is not None else _LIVE_TREE_COLD_MESSAGE
+    _cold_reason = message
     if not _live_tree_cold:
-        print(f"[warm-client] {_LIVE_TREE_COLD_MESSAGE}", file=sys.stderr)
+        print(f"[warm-client] {message}", file=sys.stderr)
     _live_tree_cold = True
 
 
@@ -631,28 +701,34 @@ def _mutation_deadline_for(method: Any) -> float:
     op, not just `ceremony.scoped_git_commit` -- see
     `MUTATION_READ_DEADLINE_SECS`'s own comment for the gap this closes.
 
-    Honors an explicit override first: if `MUTATION_READ_DEADLINE_SECS` no
-    longer equals `_MUTATION_READ_DEADLINE_DEFAULT`, something (a test, an
-    operator) deliberately set it, and that value wins verbatim -- this is
-    also what keeps the existing monkeypatch-based tests pinning real
-    behaviour rather than requiring them to reach into `ipc` as well.
+    THE DERIVATION ALWAYS RUNS. An explicit `MUTATION_READ_DEADLINE_SECS`
+    (a test, an operator) may only NARROW the result -- `min(override,
+    derived)` -- never widen it and never replace it. A monkeypatch that
+    lowers the deadline keeps working unchanged, which is what the existing
+    tests pin; a reassignment that raises it is inert, because raising a
+    dial to make a slow op fit is the habit the 2026-08-21 PM ruling bans,
+    and because honoring one verbatim skipped this derivation outright and
+    with it the `ceremony.*` `ipc.CEREMONY_BUDGET_SECS` clamp -- a clamp
+    bypass reachable from any import-time reassignment of a module constant.
 
     Imported lazily and ONLY from the post-delivery expiry path, matching
     `_op_may_mutate`'s own lazy-on-failure-path-only pattern above: this
     module is on every invocation's cold-start preamble and is
-    import-budget-guarded, and `ipc` is neither small nor free. Falls back
-    to `MUTATION_READ_DEADLINE_SECS` on any import or lookup failure --
-    fail safe toward the honest floor, never an unbounded or unresolved
+    import-budget-guarded, and `ipc` is neither small nor free. On any
+    import or lookup failure the derivation degrades to
+    `_MUTATION_READ_DEADLINE_DEFAULT` -- the fail-safe floor, still subject
+    to the same narrowing-only `min` -- never to an unbounded or unresolved
     wait.
     """
-    if MUTATION_READ_DEADLINE_SECS != _MUTATION_READ_DEADLINE_DEFAULT:
-        return MUTATION_READ_DEADLINE_SECS
     try:
         from coordinator_core.ipc import _timeout_for
 
-        return _timeout_for(method)
+        derived = _timeout_for(method)
     except Exception:
-        return MUTATION_READ_DEADLINE_SECS
+        derived = _MUTATION_READ_DEADLINE_DEFAULT
+    if MUTATION_READ_DEADLINE_SECS != _MUTATION_READ_DEADLINE_DEFAULT:
+        return min(MUTATION_READ_DEADLINE_SECS, derived)
+    return derived
 
 
 _MUTATION_INDETERMINATE_MESSAGE = (
@@ -713,10 +789,53 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
             f"[warm-client] preamble failed, falling back to cold: {exc!r}",
             file=sys.stderr,
         )
+        _record_permanent_preamble_failure(exc)
         result = None
     if result is None:
         _record_cold_fallback()
     return result
+
+
+def _record_permanent_preamble_failure(exc: Exception) -> None:
+    """Record `_cold_reason` for a Backstop 2 failure that will recur
+    identically on every retry, so the caller does not advise a retry.
+
+    THE SECOND ROUTE TO ONE CONTRADICTION. `SocketPathTooLongError` is
+    raised by `election.socket_path` when the runtime base makes the socket
+    path exceed `sun_path` -- a property of the base, not of this call. Left
+    unclassified it reached the caller as an ordinary transient miss, and
+    the operator got the same "go cold, and cold is forbidden" pair that the
+    absent-engine-root arm produced: warm unavailable, cold refused, retry
+    advised, nothing that changes on a retry. The exception already carries
+    both the path and the byte budget, so the reason wraps it verbatim
+    rather than re-deriving either.
+
+    Deliberately narrow. Every other Backstop 2 exception stays unclassified
+    and keeps the retry advice: an unanticipated failure in the preamble is
+    exactly the case where "this recurs forever" is a guess, and a wrong
+    permanent verdict removes the advice that would have worked.
+
+    NEVER OVERWRITES an already-established reason, and the asymmetry with
+    `_log_live_tree_cold_once` (which always writes) is deliberate. Both
+    conditions can hold at once -- an unstamped or absent engine root AND a
+    runtime base too long to bind -- and the root-resolution reason is the
+    one the operator must act on first, since it is upstream of which clone
+    is even being asked to host a server. First permanent reason wins here;
+    the root-resolution site outranks it and may replace it.
+    """
+    global _cold_reason
+    if _cold_reason is not None:
+        return
+    try:
+        from coordinator_core.warm.election import SocketPathTooLongError
+    except Exception:
+        return
+    if isinstance(exc, SocketPathTooLongError):
+        _cold_reason = (
+            f"warm engine: {exc}. No server can bind that path, so no call from this "
+            "runtime base reaches one. Remediation: set COORDINATOR_WARM_RUNTIME_BASE "
+            "to a shorter directory."
+        )
 
 
 def _record_cold_fallback() -> None:
@@ -754,6 +873,23 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     caller_sid = _caller_session_id()
     if caller_sid:
         request["_session_id"] = caller_sid
+    # Publish-lane seam (DR-350), the same shape and the same reason as `_session_id`
+    # directly above: a long-lived warm server's `os.environ` reflects whoever SPAWNED
+    # it, never the caller of any given request, so a fact about THIS caller has to
+    # cross the pipe explicitly rather than be re-resolved server-side. Stamped only
+    # when this client process is itself inside a declared percolate/publish round;
+    # absent otherwise, never sent as `false`, so a server reads absence exactly as it
+    # reads an older client -- not in the lane.
+    #
+    # Imported inside the function, not at module scope, because this module holds a
+    # strict import budget: it sits on every invocation's cold-start preamble and does
+    # not even carry a top-level `import os` (see `is_warm_enabled`). `publish_lane` is
+    # stdlib-only and its parent package is necessarily already loaded to have reached
+    # this module at all, so the cost after the first call is a `sys.modules` lookup.
+    from coordinator_core import publish_lane
+
+    if publish_lane.env_declares_lane():
+        request[publish_lane.PUBLISH_LANE_FIELD] = True
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
 
     # At most 2 attempts: the original open, plus the table's single

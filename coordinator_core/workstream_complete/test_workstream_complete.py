@@ -944,7 +944,7 @@ def test_build_write_trail_directives_names_reviewer_evidence_on_the_directive()
 # destroying once-per-session sentinels and the dispatch-evidence file.
 # Archival is now wired to session END (a SessionEnd hook, DoE-claude repo),
 # not this assembly. `d-emit-cadence` previously depended on the removed
-# directive; it must still have a satisfiable dependency after the removal.
+# directive; that directive is itself gone now (2026-08-22 emission CUT).
 # ---------------------------------------------------------------------------
 
 
@@ -959,22 +959,17 @@ def test_directive_list_no_longer_contains_archive_session_claim(monkeypatch, tm
         assert "d-archive-session-claim" not in ids
 
 
-def test_emit_cadence_repointed_onto_run_wsc_tail_after_archive_removal(monkeypatch, tmp_path):
-    """`d-emit-cadence` used to depend on `d-archive-session-claim`. With
-    that directive gone, it must depend on `d-run-wsc-tail` instead -- the
-    same directive `d-archive-session-claim` itself used to depend on -- so
-    the ordering guarantee (fires only after the Step 3 commit lands) is
-    preserved and the gate stays openable."""
+def test_emit_cadence_directive_is_gone_with_the_emission(monkeypatch, tmp_path):
+    """`d-emit-cadence` was CUT with the emission artifact (2026-08-22) --
+    docs/problems/2026-08-22-artifact-emit-cannot-be-earned-back-in-its-current-shape.md.
+
+    Asserted rather than merely deleted: a resurrected directive would name a CLI
+    that no longer exists on disk and fail every workstream close, and the
+    `d-run-wsc-tail` ordering it used to anchor has no other consumer left."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     directives_by_id = {d["id"]: d for d in decision_object["directives"]}
-    assert "d-emit-cadence" in directives_by_id
-    assert directives_by_id["d-emit-cadence"]["depends_on"] == "d-run-wsc-tail"
-    assert directives_by_id["d-emit-cadence"]["args"] == ["{d-run-wsc-tail.landed}"], (
-        "d-emit-cadence must carry the ordering-only producer-readiness token "
-        "so apply() refuses to dispatch it when d-run-wsc-tail never landed -- "
-        "see apply.py's _resolve_arg_tokens '.landed' field"
-    )
+    assert "d-emit-cadence" not in directives_by_id
 
 
 # ---------------------------------------------------------------------------

@@ -43,16 +43,12 @@ therefore free to trigger that import; nothing here re-imports
 `coordinator_core.ops` per call (it is idempotent via `sys.modules` regardless,
 but the negative-spec below states the intent plainly).
 
-MODULE GRANULARITY, DELIBERATELY (not function-level reachability). The
-existing gate module already ships a precise, function-level, transitive-BFS
-reachability predicate for its own nine live entrypoints (`_reachable_functions`
-in `test_no_uncounted_spawn_on_budgeted_path.py`) — reusing or duplicating that
-machinery for all ~274 live ops is explicitly NOT this chunk's job (the plan's
-own anti-scope: "do not build a second spawn inventory"). `ops_with_spawn_evidence`
-instead asks a cheaper, coarser question: does `spawn_policy.detect.sites_in_source`
-find ANY recognised spawn call site anywhere in the op's OWNING MODULE FILE (not
-narrowed to the registered handler function's own body)? This is a deliberate,
-named over-approximation: a module that registers several ops (e.g.
+MODULE GRANULARITY BY DEFAULT, FUNCTION GRANULARITY BEHIND `function_granular=True`
+(this chunk). `ops_with_spawn_evidence`'s default question is still the cheap,
+coarse one: does `spawn_policy.detect.sites_in_source` find ANY recognised spawn
+call site anywhere in the op's OWNING MODULE FILE (not narrowed to the
+registered handler function's own body)? This is a deliberate, named
+over-approximation: a module that registers several ops (e.g.
 `coordinator_core.hooks`, sixteen ops in one module) will report spawn evidence
 for every op it registers if the module contains a spawn site anywhere, even one
 that belongs to a sibling op's own handler. That bias is intentional and matches
@@ -60,9 +56,32 @@ this plan's own stated preference (`test_no_uncounted_spawn_on_budgeted_path.py`
 docstring: "it would rather over-report a site than silently drop one whose
 gating it cannot prove") — a false positive here means one more row enters the
 frozen inventory or gets enrolled; a false negative would recreate the exact
-invisibility bug this chunk exists to close. Narrowing this to function-level
-reachability for every live op, if ever wanted, is a future chunk's job, not a
-silent tightening here.
+invisibility bug this chunk exists to close. This module-level lens stays the
+default and stays reachable: existing callers depend on its over-approximating
+bias, and it remains the safer answer when a sharper one cannot be computed.
+
+`function_granular=True` reuses (never re-derives) the gate module's own
+transitive-BFS reachability predicate — `_reachable_functions`,
+`_build_corpus`, and `_on_path_spawn_sites` in
+`coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py` — over the
+same `(relpath, top-level function name)` domain that predicate already ships
+for its own nine live entrypoints, widened here to every op whose entrypoint
+resolves inside that gate module's own scope roots (`coordinator_core`,
+`coordinator/bin`). An op whose entrypoint function is not a TOP-LEVEL
+definition the reused index can see (a handler outside those scope roots, or
+whose registered `__name__` does not match its own `def` site because of a
+decorator that does not preserve it) reports NO function-granular evidence for
+that op — a named, accepted false negative rather than a silent fall-back to
+the module-level over-approximation, so that turning this flag on never
+quietly mixes the two lenses within one result. Callers that need the safer
+answer for such an op call `function_granular=False` (the default) instead.
+
+`function_granular=True` inherits every accepted false-negative gap
+`_reachable_functions`/`_import_function_aliases` already name in that
+module's own docstring (deeper relative imports, longer alias chains) — this
+is why the property this module now asks for is keyed on the `(op, site)`
+PAIR, never "does some op reach this site": a site a same-module sibling op
+reaches by a visible path must never stand in for "this op reaches it too."
 
 Negative-spec:
     - This module holds no `_LEGITIMIZED_SITES`-shaped exemption table and no
@@ -130,6 +149,48 @@ __all__ = [
 SpawnIndex = Dict[str, Tuple[str, Tuple[SpawnSite, ...]]]
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _relpath_under_repo_root(path: pathlib.Path) -> Optional[str]:
+    """`path` as a POSIX repo-relative string, or None if it sits outside the repo.
+
+    `Path.resolve()` is a filesystem round-trip -- on Windows one
+    `nt._getfinalpathname` syscall per call, ~35us each. Calling it per module
+    made it the single largest cost in the census: measured 1177 calls and
+    ~112ms of a ~300ms warm run in `op_census_report.census` alone, against a
+    200ms per-process bar, dwarfing the sha256 corpus read that module's budget
+    table names as the dominant term.
+
+    A module `__file__` is already absolute and already under `_REPO_ROOT` in
+    the ordinary case, so `relative_to` answers without touching disk.
+    `resolve()` is kept as the fallback, not dropped, and the fast leg refuses
+    any result still carrying a `..` component. `relative_to` is a string
+    operation and will answer `pkg/../pkg/mod.py` rather than raising, keying
+    one module under two different strings; only `resolve()` collapses that.
+    The caller reports a None as an unresolved entrypoint rather than crashing,
+    so a fast leg that answered alone would degrade silently.
+
+    The `..`-component check reads `relative_str.split("/")` rather than
+    `relative.parts` -- profiled on the warm path, `PurePath.parts` (a
+    `Sequence`-mixin object in this interpreter's pathlib, not a plain
+    tuple) falls back to the ABC's `__contains__`, which walks it via
+    `__iter__`/`__getitem__` and re-parses on the way; splitting the POSIX
+    string already computed for the return value is the same check over a
+    real `list[str]`, at native `str.split`/`in` cost (same finding as
+    `op_census_report._relpath_under`, this function's sibling).
+    """
+    try:
+        relative = path.relative_to(_REPO_ROOT)
+    except ValueError:
+        relative = None
+    if relative is not None:
+        relative_str = relative.as_posix()
+        if ".." not in relative_str.split("/"):
+            return relative_str
+    try:
+        return path.resolve().relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return None
 
 
 def live_registry_op_names() -> FrozenSet[str]:
@@ -239,9 +300,8 @@ def resolve_op_entrypoints(
             )
             continue
 
-        try:
-            relpath = pathlib.Path(module_file).resolve().relative_to(_REPO_ROOT).as_posix()
-        except ValueError:
+        relpath = _relpath_under_repo_root(pathlib.Path(module_file))
+        if relpath is None:
             out[op_name] = OpEntrypoint(
                 op_name, None, function_name, f"module file {module_file!r} is outside the repo root"
             )
@@ -374,17 +434,33 @@ def ops_with_spawn_evidence(
     entrypoints: Dict[str, OpEntrypoint],
     *,
     index: Optional[SpawnIndex] = None,
+    function_granular: bool = False,
 ) -> Dict[str, Tuple[SpawnSite, ...]]:
-    """`op_name -> spawn sites found in that op's owning module`, restricted
-    to ops whose owning module resolved (`relpath is not None`) AND contains
-    at least one recognised spawn site. This is MODULE granularity, not
-    handler-function granularity -- see module docstring's "MODULE
-    GRANULARITY" section for why that is the deliberate choice here.
+    """`op_name -> spawn sites found reachable from that op`, restricted to
+    ops whose owning module resolved (`relpath is not None`) AND reach at
+    least one recognised spawn site under the selected granularity.
 
-    `index`, passed straight through to `spawn_sites_by_relpath`, is
-    `None` by default (unchanged in-process-only behaviour); pass a
-    caller-owned `SpawnIndex` (e.g. from `load_spawn_index`) to revalidate
-    against a persisted, cross-process tier instead."""
+    `function_granular=False` (the default, unchanged behaviour) is MODULE
+    granularity: any recognised spawn site anywhere in the op's owning module
+    file counts, even one belonging to a sibling op's own handler -- see
+    module docstring's "MODULE GRANULARITY BY DEFAULT" section.
+
+    `function_granular=True` narrows to handler-FUNCTION granularity via a
+    transitive-BFS reachability closure reused from
+    `test_no_uncounted_spawn_on_budgeted_path.py` (see that section of this
+    module's own docstring for the reuse contract and its accepted
+    false-negative gaps). `index` is ignored under this mode -- the reused
+    corpus builder does its own file read/parse, independent of
+    `spawn_sites_by_relpath`'s cache tiers.
+
+    `index`, passed straight through to `spawn_sites_by_relpath` when
+    `function_granular` is `False`, is `None` by default (unchanged
+    in-process-only behaviour); pass a caller-owned `SpawnIndex` (e.g. from
+    `load_spawn_index`) to revalidate against a persisted, cross-process tier
+    instead."""
+    if function_granular:
+        return _ops_with_spawn_evidence_function_granular(entrypoints)
+
     relpaths = [ep.relpath for ep in entrypoints.values() if ep.relpath is not None]
     sites_by_relpath = spawn_sites_by_relpath(relpaths, index=index)
 
@@ -393,6 +469,63 @@ def ops_with_spawn_evidence(
         if ep.relpath is None:
             continue
         sites = sites_by_relpath.get(ep.relpath, ())
+        if sites:
+            out[op_name] = sites
+    return out
+
+
+def _ops_with_spawn_evidence_function_granular(
+    entrypoints: Dict[str, OpEntrypoint],
+) -> Dict[str, Tuple[SpawnSite, ...]]:
+    """`function_granular=True` leg of `ops_with_spawn_evidence`. Builds the
+    reused gate module's corpus (`_build_corpus`) ONCE for the whole call,
+    then for every op whose `(relpath, function_name)` resolves to a
+    TOP-LEVEL function definition in that corpus's own `func_defs`, computes
+    the transitive-BFS reachable-function set from that one entrypoint
+    (`_reachable_functions`) and narrows to the spawn sites whose own
+    top-level enclosing function is in that set (`_on_path_spawn_sites`, with
+    an empty exemption set -- this module holds no exemptions, see module
+    docstring's negative-spec).
+
+    An op whose entrypoint does not resolve to a `func_defs` key (outside the
+    reused gate module's own scope roots, or a decorator-obscured
+    `__name__`) is OMITTED here -- a named, accepted false negative, never a
+    silent fall-back to module granularity. Local import to break the
+    circular dependency: the gate module imports this module by name."""
+    from coordinator_core.tests.test_no_uncounted_spawn_on_budgeted_path import (
+        _build_corpus,
+        _on_path_spawn_sites,
+        _reachable_functions,
+    )
+
+    (
+        func_index,
+        spawn_sites_by_file,
+        import_aliases_by_file,
+        func_aliases_by_file,
+        local_aliases_by_file,
+    ) = _build_corpus()
+
+    reached_sites_by_entry: Dict[Tuple[str, str], Tuple[SpawnSite, ...]] = {}
+    out: Dict[str, Tuple[SpawnSite, ...]] = {}
+    for op_name, ep in entrypoints.items():
+        if ep.relpath is None or ep.function_name is None:
+            continue
+        entry_key = (ep.relpath, ep.function_name)
+        if entry_key not in func_index.func_defs:
+            continue
+        if entry_key not in reached_sites_by_entry:
+            reached = _reachable_functions(
+                {entry_key},
+                func_index,
+                import_aliases_by_file,
+                func_aliases_by_file,
+                local_aliases_by_file,
+            )
+            reached_sites_by_entry[entry_key] = tuple(
+                _on_path_spawn_sites(reached, spawn_sites_by_file, frozenset())
+            )
+        sites = reached_sites_by_entry[entry_key]
         if sites:
             out[op_name] = sites
     return out

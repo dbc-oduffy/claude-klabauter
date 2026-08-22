@@ -343,11 +343,7 @@ static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len) {
     if (!ok || got != len) { free(buf); return NULL; }
     buf[len] = '\0';
 
-    while (len > 0 &&
-           (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
-            buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
-        buf[--len] = '\0';
-    }
+    len = trim_sidecar_trailing(buf, len);
     if (len == 0) { free(buf); return NULL; }
     *out_len = len;
     return buf;

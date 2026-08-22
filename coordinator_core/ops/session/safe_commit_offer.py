@@ -21,89 +21,59 @@ TRIGGER reliability matters as much as the computation — see
 module's CLI is designed to be called from
 (`coordinator/hooks/scripts/sessionend-auto-commit.py`, DoE-claude side).
 
-Composition, not new computation — same two primitives as before:
-  - `coordinator_core.session.scope.compute_scope` — session-vs-session
-    ownership set math (`my_scope` / `skipped` / `orphans`).
-  - `coordinator_core.session.claims.my_agent_touched` — unions a dispatched
-    sub-agent's own fan-out into the session's claim.
+Composition, not new computation — ONE primitive since the 2026-08-21
+rebuild:
+  - `coordinator_core.session.claim_index.commit_set` — "what belongs to this
+    session to commit right now", a zero-spawn projection of the claim
+    index's own reverse map.
 
-CRITICAL — `my_agent_touched` mode MUST be `"exact"`, never `"broadened"`.
-Empirically confirmed (2026-07-31, on a live repo with 5 concurrent
-sessions): `"broadened"` returns an IDENTICAL union for every session id
-tested — it is candidate-set-only, not per-session attribution, by design
-(its own docstring: candidate set widens to every live session). `"exact"`
-gave genuine per-session attribution on the same corpus (0/1/0/2/14 owned
-paths across the 5 sessions). Driving an UNATTENDED auto-commit off
-`"broadened"` would hand the same dirty paths to whichever session's
-stop-event fires first and commit them under that session's message — an
-automated reproduction of the exact bare-commit sweep failure this
-mechanism exists to prevent. `coordinator_core.bash_guards.dispatch_checks`
-uses `"broadened"` at its own scope-staging WARNING (never commits, always
-human-reviewed before a `git commit` lands) — a materially different risk
-profile; that choice is not a precedent for an unattended committer and is
-NOT replicated here. (That guard's own broadened-mode false-positive
-behavior — "likely owned by session X" against a file the calling session's
-own sub-agent just wrote — is a separate, pre-existing defect on a
-DIFFERENT surface; out of scope for this module, flagged for separate
-routing.)
+(`session.claims.my_agent_touched` is still imported here, but only by the
+helpers `session.scope` borrows — see their section comment. Nothing on
+`compute_offer`'s own path reads it.)
 
-A DIFFERENT hazard, NOT resolved by the exact/broadened choice above: a
-dirty file with NO `touched.txt` record anywhere (a peer crashed before
-writing one, a record was pruned/rotated, or a session never ran the touch
-hook) is invisible to `my_agent_touched` in EITHER mode — that function can
-only return what some `.agents/*/touched.txt` actually recorded. Such a
-file instead flows through `compute_scope`'s OWN pre-existing Step-2 mtime
-fallback: if its mtime is `>= my own started_at`, it is indistinguishable
-from "a file I touched but the hook missed recording" and joins MY
-`safe_paths`. This is orthogonal to this module's mode choice, pre-dates it
-entirely, and is the same resolution direction `coordinator-safe-commit`'s
-own default path has always used — see
-`test_mtime_fallback_orphan_adoption_is_now_declined_by_compute_scope` for
-a live witness.
+WHAT THE REBUILD REMOVED, recorded here so a reader who finds a gap where a
+mechanism used to be does not helpfully rebuild it. `compute_offer` composed
+`session.scope.compute_scope` with `session.claims.my_agent_touched`, paying a
+git subprocess per candidate: 73 processes and 5,609ms of kernel+user CPU per
+call, twice per close ceremony, in the op every workstream in the fleet passes
+through. Killed at `e927d9463`, rebuilt here. Three things went with it, each
+deliberately:
 
-SUPERSEDED disposition (docs/decisions/DR-246-*, 2026-07-31): the mtime
-fallback above is narrowed elsewhere in this workstream (C1a,
-`coordinator_core.session.scope`) so an unclaimed dirty file no longer
-silently joins another session's `safe_paths` merely by having a recent
-mtime. The residual case this module now handles is the ADOPTION-DECLINED
-side of that narrowing: a dirty file that is nobody's claimed work is
-withheld from `safe_paths`, reported as an `excluded` orphan
-("untouched by this session"), and — since the unattended SessionEnd
-hook only inspects this CLI's exit code and never its stdout — also
-written to the `sessionend-auto-commit-diagnostics.log` sink (see
-`_log_excluded_diagnostic`) so a human reading the close actually sees it.
-This is NOT a return to the old "ask for confirmation" shape (still gone,
-per the PIVOT above): the file is simply left uncommitted and named, never
-gated or blocked (DR-227 — advisory only).
+  - THE EXACT/BROADENED MODE CHOICE, and the live hazard it carried.
+    `my_agent_touched("broadened")` returns an IDENTICAL union for every
+    session id (candidate-set-only, not per-session attribution, by its own
+    docstring — confirmed 2026-07-31 on a live repo with 5 concurrent
+    sessions), so an unattended committer driven off it would hand the same
+    dirty paths to whichever stop event fired first and commit them under
+    that session's message: an automated reproduction of the bare-commit
+    sweep this whole mechanism exists to prevent. It was correct only
+    because one call site passed one literal. `claim_index.rebuild` resolves
+    an agent's claim back to its owning EM session through the
+    `.agents/<aid>/em-session-id.txt` back-pointer, so per-session
+    attribution is no longer a MODE and cannot be selected wrongly.
 
-Path-format fix, SUPERSEDED 2026-07-31 (touched-path-poisoning-normalize-
-git-dir plan, C0/C2, atomic pair) — `.agents/<aid>/touched.txt` entries (the
-sub-agent fan-out `my_agent_touched` reads) were PREVIOUSLY believed to be
-recorded relative to the PLUGIN directory (`<repo>/coordinator`); that
-belief was only ever true by accident, because the writer
-(`coordinator_core.hooks.track_touched_files`) was itself poisoned — handed
-the git COMMON dir (`<repo>/.git`) as `git_root` instead of the worktree
-root — and every entry it wrote came out `../`-prefixed as a side effect of
-that bug. Joining onto `coordinator/` and normalizing happened to cancel
-that accidental prefix back out to the true repo-relative path. C2 fixes
-the writer to emit clean repo-relative entries directly (no `../` prefix at
-all); this function now treats every entry as ALREADY repo-relative, the
-same dialect as session-keyed `touched.txt` entries, with NO plugin-dir
-join. Keeping the old join here after C2 would silently turn a real entry
-like `state/foo.md` into `coordinator/state/foo.md` — a path that exists in
-no claude-klabauter checkout — dropping every peer sub-agent claim out of
-`compute_scope`'s Step 3b `other_owner` map and widening `my_scope` in the
-unsafe direction (the exact hazard this fix exists to prevent; see
-docs/plans/2026-07-31-touched-path-poisoning-normalize-git-dir.md § C0).
-An entry that escapes the repo root after normalization (e.g.
-`../../../../../private/tmp/...`, an out-of-repo scratch path, or a
-cross-repo `../sibling-repo/...` path) falls OUTSIDE this repo and is
-dropped — it can never be a valid pathspec here, cross-repo or not. A
-directory entry (trailing `/`) is expanded to the individual dirty files
-currently under it (git-queried, not assumed) so it gets the same
-candidate-level ownership check as everything else; a bare directory string
-would otherwise never equal any per-file dirty-path candidate and would
-silently attribute nothing (safe direction, but incomplete).
+  - THE STEP-2 MTIME FALLBACK, and with it the adoption question.
+    `compute_scope` treated a dirty file carrying no claim anywhere as
+    possibly-mine when its mtime post-dated this session's `started_at`.
+    The rebuilt answer reads claims and nothing else: an unclaimed file is
+    not this session's, whatever its mtime says. See `compute_offer`'s
+    `orphans` contract for why that key is now always empty, and why
+    repopulating it means re-adding a worktree read this answer must not
+    have.
+
+  - THE `.agents/<aid>/touched.txt` PATH-DIALECT JOIN, from THIS answer.
+    `claim_index` reads those files through the shared
+    `session.path_dialect` canonicalizer, so `compute_offer` no longer has a
+    dialect question of its own. The four helpers that answered it
+    (`_normalize_agent_touched_entry` and the dirty-directory expansion
+    around it) are still in this file and still correct -- `session.scope`
+    imports them by name -- but they are no longer this module's own path.
+    See their section comment below.
+
+What did NOT change: the SessionEnd trigger reliability this module's CLI
+exists for, and the advisory-only disposition of a path left uncommitted
+(DR-227) — it is named in the diagnostics sink (`_log_excluded_diagnostic`)
+and never gated or blocked.
 
 Read-only halves stay read-only; the mutating half
 (`auto_commit_session`/`auto_commit_session_async`) is the ONLY part of this
@@ -144,9 +114,10 @@ from typing import List, Literal, Optional, Sequence, TypedDict
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.session import claim_index
 from coordinator_core.session.claims import my_agent_touched
 from coordinator_core.session import scope as scope_module
-from coordinator_core.session.scope import compute_scope
+from coordinator_core.session.liveness import live_session_ids
 
 class ExcludedPath(TypedDict):
     path: str
@@ -164,11 +135,17 @@ class PeerOwnedPath(TypedDict):
     consumer never has to re-derive the mapping key -> value pairing by hand.
     `liveness`/`claim_source` mirror `OwnerFact`'s own `Literal` value sets
     verbatim -- see that class's docstring in `coordinator_core.session.scope`
-    for what each value means.
+    for what each value means. Since the 2026-08-21 rebuild `compute_offer`
+    only ever EMITS `claim_source="session"`: the claim index resolves an
+    agent's claim back to its owning EM session before any reader sees it, so
+    the `"agent"`/`"agent-race"` distinction has no producer left here. The
+    value set is kept whole rather than narrowed -- it is a wire shape two
+    sibling plans consume, and narrowing a Literal a consumer already
+    switches on is a breaking change for no gain.
 
-    Never constructed for a claim whose `claim_source` is `"unreadable"` --
-    see `_compute_ownership`'s docstring for why (AC7: never print an owner
-    this call cannot stand behind)."""
+    Never constructed for a claim this call cannot stand behind -- see
+    `compute_offer`'s ownership paragraph (AC7: never print an owner this
+    call cannot stand behind)."""
 
     path: str
     owner: str
@@ -180,35 +157,31 @@ class OwnershipReadout(TypedDict):
     """The four-bucket, per-session ownership readout (C5) -- EXTENDS the
     post-commit residue report C3 shipped (`AutoCommitReport.residue`,
     `SafeCommitOffer.excluded`), it does not replace either. Those stay
-    candidate-set-only, by their own docstrings; this is the first surface
-    on this module that answers "who does compute_scope's own `attribution`
-    sidecar say owns this path", not merely "is this path safe to adopt".
+    candidate-set-only, by their own docstrings; this is the surface that
+    answers "who does the claim index say holds this path", not merely "is
+    this path safe to adopt".
 
     Buckets, mutually exclusive by construction:
-      - ``mine``         — this session's own claimed dirty paths. Identical
+      - ``mine``         — this session's own claimed paths. Identical
         to `SafeCommitOffer.safe_paths` at the same call -- duplicated here
         (not a reference to the sibling key) so a caller consuming ONLY this
         one key gets a complete, self-contained four-bucket answer without
         also having to thread `safe_paths` through separately.
-      - ``peer``          — every OTHER dirty path this call could attribute
-        to a NAMED peer/agent claim, via `ScopeResult.attribution`
-        (`coordinator_core.session.scope.OwnerFact`, UNGATED by liveness or
-        the clean-path prune -- see that class's own docstring). A claim
-        whose `OwnerFact.claim_source` is `"unreadable"` is NEVER placed
-        here (AC7) -- it has no resolvable owner identity, so it renders as
-        ``unattributed`` instead, same as a path with no claim at all.
-      - ``unattributed``  — every other non-mine dirty path this call saw
-        (an `excluded` entry with no resolvable, non-`"unreadable"`
-        `OwnerFact`). Per DR-258 (`ScopeResult.orphans`'s own docstring)
-        this bucket can NEVER be emptied by any heuristic: a peer's
-        Bash-authored write carries no claim anywhere this function or
-        `compute_scope` can read, and is genuinely indistinguishable from
-        nobody's file. Do not chase it toward zero -- it is the honest
-        default, not residue to optimise away (see `_compute_ownership`).
-      - ``degraded``      — mirrors `SafeCommitOffer.indeterminate`
-        (`ScopeResult.indeterminate`) for THIS call. `True` means at least
-        one claim set this call needed was unreadable or an agent-race
-        overlap was unresolved -- when set, ``peer`` is returned empty
+      - ``peer``          — every CONTESTED path: one this session holds
+        that a peer holds too. Named with an EARNED liveness verdict (see
+        `_peer_liveness`) rather than an asserted one.
+      - ``unattributed``  — every contested path this call cannot stand
+        behind an owner name for, which post-rebuild means: every one of
+        them, whenever ``degraded`` is set, and none otherwise. Per DR-258
+        this bucket can NEVER be emptied by any heuristic in the general
+        case: a peer's Bash-authored write carries no claim anywhere any
+        reader can see, and is genuinely indistinguishable from nobody's
+        file. Do not chase it toward zero -- it is the honest default, not
+        residue to optimise away.
+      - ``degraded``      — mirrors `SafeCommitOffer.indeterminate` for
+        THIS call. `True` means the index walk behind this answer was
+        incomplete -- a claim set it could not read, an I/O error, or its
+        wall-clock cap -- so both other buckets may be SHORT. When set, ``peer`` is returned empty
         OUTRIGHT and every non-mine path this call saw (including one that
         DOES have a resolvable `OwnerFact` from some earlier, still-valid
         read) is folded into ``unattributed``: this call cannot stand
@@ -230,14 +203,11 @@ class SafeCommitOffer(TypedDict):
     safe_paths: List[str]
     excluded: List[ExcludedPath]
     orphans: List[str]
-    indeterminate: bool  # staff-eng P3 (2026-08-03, pass 3) — mirrors
-    # ScopeResult.indeterminate (coordinator_core.session.scope), surfaced
-    # here so a caller composing ONLY compute_offer (this module's own
-    # negative-spec forbids calling compute_scope directly) can still
-    # distinguish "this path is genuinely unclaimed" from "this call's claim
-    # reads were degraded, so adoption was withheld call-wide" — see
-    # `assert_paths_in_session_scope`'s deny-reason threading for the
-    # consumer this exists for.
+    indeterminate: bool  # staff-eng P3 (2026-08-03, pass 3) — mirrors the
+    # claim index walk's own `complete` bit, surfaced here so a caller
+    # composing ONLY compute_offer can still distinguish "this path is
+    # genuinely unclaimed" from "the walk behind this answer was incomplete,
+    # so it may be short". See `compute_offer`'s own contract.
     ownership: OwnershipReadout  # C5 (2026-08-05 in-process-writers-declare-
     # their-writes plan) — the four-bucket ownership readout (mine / named
     # peer / unattributed / degraded), extending C3's post-commit `residue`
@@ -245,8 +215,8 @@ class SafeCommitOffer(TypedDict):
     # on this TypedDict is unchanged in shape and meaning (two live sibling
     # plans consume this shape verbatim -- see the plan's § Cross-plan
     # coordination). See `OwnershipReadout`'s own docstring for the bucket
-    # contract and `_compute_ownership` for how it is derived from
-    # `ScopeResult.attribution`.
+    # contract and `compute_offer` for how it is derived from the claim
+    # index.
 
 
 class CommitGroup(TypedDict, total=False):
@@ -315,22 +285,21 @@ class CommitOutcome(TypedDict):
         every claimed path was already committed / dropped) and no
         degraded/conflict reason applied.
       - ``"skipped_indeterminate"`` -- (a) `offer["indeterminate"]` was
-        `True` this call: `compute_scope` withheld at least one claim it
-        could not attribute, so this call commits NOTHING -- a degraded
-        claim read means attribution is untrustworthy call-wide, not that
-        the unattributed paths are free. Mirrors `compute_offer`'s own
+        `True` this call: the claim index walk behind the answer was
+        incomplete, so this call commits NOTHING -- a degraded claim read
+        means attribution is untrustworthy call-wide, not that the
+        unattributed paths are free. Mirrors `compute_offer`'s own
         `indeterminate` contract; see that field's docstring.
       - ``"skipped_degraded"`` -- (a) `offer["ownership"]["degraded"]` was
-        `True` this call (same underlying `ScopeResult.indeterminate` signal,
-        read via the ownership readout instead) -- same fail-closed
-        response, nothing committed.
+        `True` this call (the same signal, read via the ownership readout
+        instead) -- same fail-closed response, nothing committed.
       - ``"dirty_conflict_skipped"`` -- (c) at least one claimed path was
         ALSO present in this same call's own `ownership["peer"]` bucket (a
         co-resident peer claim on a path this session also claims -- see
         `OwnershipReadout`'s own docstring: the two buckets are mutually
         exclusive by construction today, so this is a defensive belt-and-
         braces check against future drift in that invariant, not a path
-        expected to fire under the current `compute_scope` contract).
+        expected to fire under the current `compute_offer` contract).
         `conflicted_paths` names what was withheld; anything else this call
         claimed still committed normally, so a call CAN be both
         `"dirty_conflict_skipped"` (partial withhold) and still land some
@@ -417,6 +386,21 @@ class AutoCommitReport(TypedDict):
 
 # ---------------------------------------------------------------------------
 # Path normalization for the `.agents/*/touched.txt` fan-out
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent fan-out candidate resolution -- NO LONGER THIS MODULE'S OWN.
+#
+# The 2026-08-21 rebuild took `compute_offer` off these four helpers entirely
+# (see its docstring for what went and why). They stay here because
+# `coordinator_core.session.scope` imports them BY NAME at three call sites
+# (`compute_scope`'s own Step 3b candidate resolution), and that module -- still
+# reached by `coordinator/bin/coordinator-safe-commit.py` -- is now their ONLY
+# consumer. They were left in place rather than moved: relocating them into
+# `scope.py` means untangling a two-way import, which is its own change and not
+# this one. What must NOT happen is `compute_offer` growing a call back to them
+# -- that is the 73-process shape, reassembled.
 # ---------------------------------------------------------------------------
 
 
@@ -630,346 +614,217 @@ def _resolve_agent_touched_candidates(session_id: str, cwd: Optional[str]) -> Li
     return out
 
 
-def _compute_ownership(
-    result: "scope_module.ScopeResult",
-    safe_paths: List[str],
-    excluded: List[ExcludedPath],
-) -> OwnershipReadout:
-    """Derive the four-bucket ownership readout from a single already-
-    computed `ScopeResult` and its `compute_offer`-shaped `excluded` list --
-    see `OwnershipReadout`'s own docstring for the bucket contract this
-    implements.
-
-    Deliberately NOT built from `result.other_owner`: that dict is
-    subtraction-only (compute_scope's own docstring: it drops a dead peer's
-    claim and a clean-path-pruned claim entirely) and would silently
-    under-report a peer that `ScopeResult.attribution` still names. Built
-    from `result.attribution` instead -- the UNGATED sidecar that carries
-    every peer/agent claim Step 3/3b's loop ever read, including the ones
-    `other_owner` had to drop for its own (correct, unrelated) reasons.
-
-    `excluded` is the caller's own `compute_offer`-built list -- every
-    non-mine dirty path this call saw, already deduped between the
-    `result.skipped` (peer-owned) and `result.orphans` (unattributed)
-    shapes (see `compute_offer`'s own docstring for that de-dup). Iterating
-    it here, rather than `result.skipped ∪ result.orphans` directly, means
-    this function never has to re-derive that de-dup a second time and can
-    never disagree with what `excluded` itself reports.
-
-    `result.indeterminate` is checked ONCE, call-wide, before iterating --
-    not per-path. AC7's requirement ("never print an owner you cannot stand
-    behind") is call-wide, not path-by-path: a claim read that succeeded for
-    path A this call says nothing about whether the SAME call's read for
-    path B was degraded, and `ScopeResult.indeterminate` itself is already a
-    whole-call flag (see that field's own docstring) -- there is no
-    per-path finer-grained signal to key off here. When set, `peer` is
-    returned empty outright and every excluded path folds into
-    `unattributed`, regardless of what `result.attribution` happens to
-    contain for it."""
-    degraded = bool(result.indeterminate)
-    peer: List[PeerOwnedPath] = []
-    unattributed: List[str] = []
-    for entry in excluded:
-        path = entry["path"]
-        fact = None if degraded else result.attribution.get(path)
-        if fact is not None and fact.claim_source != "unreadable":
-            peer.append(
-                {
-                    "path": path,
-                    "owner": fact.owner,
-                    "liveness": fact.liveness,
-                    "claim_source": fact.claim_source,
-                }
-            )
-        else:
-            unattributed.append(path)
-    return {
-        "mine": list(safe_paths),
-        "peer": peer,
-        "unattributed": unattributed,
-        "degraded": degraded,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Pathspec computation (pure, read-only)
 # ---------------------------------------------------------------------------
 
 
-#: PM ruling 2026-08-21: this mechanism is OFF until it is rebuilt.
-#:
-#: Not a tactical guard, not a tunable, and deliberately not an env var --
-#: there is no override key and none is to be added. The rebuild removes this
-#: constant; nothing else may set it.
-#:
-#: What was measured (docs/research/spike-verdicts/2026-08-21-ceremony-tail-
-#: session-artifact-commit-cost.md): ONE `compute_offer` call created **73
-#: processes** and burned **5,609ms of kernel+user CPU**, and the close
-#: ceremony calls it twice per pass. 33 of its 35 `subprocess.run` calls were
-#: `git ls-files --full-name` over a single absolute `touched.txt` entry each,
-#: at a 1,411ms mean -- and 25 of 25 sampled entries were not under the
-#: worktree root at all, returning `None` and being dropped regardless. The
-#: op was spawning a git process per entry to be told, slowly, that a file on
-#: another drive is not in this repo.
-#:
-#: Against CLAUDE.md's brightline -- 500ms end-to-end, one process over 200ms
-#: needs a fix, >1s is deleted and rebuilt from first principles -- 5.6s of
-#: CPU across 73 processes is multiple kill-bar breaches at once, in the op
-#: every workstream in the fleet must pass through to close.
-#:
-#: NOT sanctioned as the fix: short-circuiting the out-of-tree case, passing
-#: `root=` to engage `normalize_touch_path`'s fast arm (measured: still
-#: spawns 25 of 25), or any other single-site patch. A tactical fix leaves
-#: every mechanism that produced this shape intact -- including the ones that
-#: let it reach production unmeasured. See § Rebuild pointer below.
-#:
-#: Blast radius, accepted by the PM when ruling: sessions no longer
-#: auto-commit their own artifacts. `ceremony.wsc_tail`'s
-#: `session_artifact_commit`, `/quick-wrap`'s close commit, the
-#: `safe-commit-offer` CLI, and the cadence auto-committer all now take their
-#: existing fail-open "could not attribute, committed nothing" arm. Work is
-#: committed explicitly instead. Nothing loses data: paths stay dirty on disk
-#: and surface in the next session's own dirty-tree read.
-#:
-#: Rebuild pointer: state/sizings/2026-08-21-the-ceremony-tail-must-close-in-
-#: two-seco.yaml (route=plan) and its `spike_amendments`.
-_MECHANISM_DISABLED = True
+def _peer_liveness(peers, cwd: Optional[str]) -> str:
+    """The ONE liveness verdict this module prints for a peer claim, earned
+    rather than asserted (the rule `scope_report._classify_denied_path`
+    already carries, applied here at the other surface that names owners).
 
-#: Reason string surfaced through every disabled readout, so a caller
-#: rendering a degraded banner names the disable rather than implying a
-#: genuine claim-read failure.
-_DISABLED_REASON = (
-    "auto-commit attribution is DISABLED (PM ruling 2026-08-21): the mechanism "
-    "cost 73 processes and 5,609ms CPU per call and is off pending rebuild. "
-    "Nothing was committed and nothing was lost -- commit explicitly instead."
-)
-
-
-def _disabled_offer(session_id: str) -> SafeCommitOffer:
-    """The zero-spawn readout `compute_offer` returns while the mechanism is
-    disabled (`_MECHANISM_DISABLED`).
-
-    `indeterminate` and `ownership.degraded` are `True` because they are
-    LITERALLY true here, not as a convenient reuse of an existing enum: both
-    already mean "this call could not tell you who owns these paths", which
-    is exactly the state of a call that did not look. Every consumer of this
-    shape already has a tested fail-open arm for it --
-    `auto_commit_session_async`'s hardening (a) returns
-    `skipped_indeterminate` with no groups and no `ceremony.scoped_git_commit`
-    call at all, and `scope_report` narrates degraded reads rather than
-    trusting an empty `peer` bucket as "nobody else has claims".
-
-    Every bucket is empty rather than populated-but-unattributed: a disabled
-    call has NO candidate set, so claiming otherwise would invent a readout
-    it never computed.
+    ``"undetermined"`` on an EMPTY live set as well as on a raise:
+    ``live_session_ids``' documented contract returns an empty frozenset on
+    error, which is indistinguishable from "nothing is live", so an empty
+    result is UNKNOWN and never DEAD. In-process (psutil, not git) -- this
+    adds no subprocess to the answer.
     """
-    return {
-        "session_id": session_id,
-        "safe_paths": [],
-        "excluded": [],
-        "orphans": [],
-        "indeterminate": True,
-        "ownership": {
-            "mine": [],
-            "peer": [],
-            "unattributed": [],
-            "degraded": True,
-        },
-    }
+    try:
+        live = live_session_ids(cwd)
+    except Exception:  # noqa: BLE001 - a readout must never raise
+        return "undetermined"
+    return _liveness_from_set(peers, live)
 
 
-def compute_offer(
-    session_id: str,
-    cwd: Optional[str] = None,
-    *,
-    extra_candidates: Optional[Sequence[str]] = None,
-) -> SafeCommitOffer:
-    """Compute this session's safe pathspec and the excluded-path narration.
+def _liveness_from_set(owner: str, live) -> str:
+    """The verdict itself, against an ALREADY-RESOLVED live set -- so a caller
+    with many owners to label resolves that set once instead of once per owner
+    (see `full_ownership_map` for the 23,910ms this split removed).
 
-    ``safe_paths`` — this session's claimed dirty paths (touched.txt ∪
-    mtime-since-start dirty files ∪ this session's OWN dispatched sub-agent
-    fan-out, exact-mode only), with any path another live session's touch
-    list claims already subtracted by ``compute_scope``.
+    ``None`` or an EMPTY set both read ``"undetermined"``, never ``"dead"``:
+    `live_session_ids` returns an empty frozenset on error, which is
+    indistinguishable from "nothing is live", and a wrong DEAD is the verdict
+    that gets a live peer's work committed over.
+    """
+    if not live:
+        return "undetermined"
+    return "live" if owner in live else "dead"
 
-    ``excluded`` — every OTHER dirty path, each with a reason:
-      - ``"owned by session <id>"`` — another session's touched.txt claims
-        it. ``<id>`` reads as ``unknown (claims unreadable: ...)`` when that
-        session's touched.txt could not be read; fail-closed, so the path is
-        withheld rather than assumed safe.
-      - ``"untouched by this session"`` — a dirty orphan: not in this
-        session's own claim set, not claimed by any other session either.
 
-    ``orphans`` — every dirty path claimed by no session at all (NOT a
-    peer-owned path, which stays in ``result.skipped``/``excluded`` instead).
-    Purely additive — a path in ``orphans`` is, by construction, NEVER also
-    in ``safe_paths`` (``compute_scope``'s Step 4/5 routing never puts the
-    same path in both ``my_scope`` and ``orphans``). Added for
-    ``coordinator_core.ops.session.scope_report.assert_paths_in_session_scope``'s
-    ``allow_orphans`` mode — this function itself makes no policy decision
-    about orphan adoption.
+def full_ownership_map(session_id: str, cwd: Optional[str] = None):
+    """``(paths this session solely holds, {path: PeerOwnedPath})`` over the
+    WHOLE claim ledger -- the in-process answer for a caller classifying paths
+    it found some other way.
 
-    ``indeterminate`` — mirrors ``ScopeResult.indeterminate`` verbatim
-    (staff-eng P3, 2026-08-03 pass 3): ``True`` iff THIS call withheld at
-    least one claim it could not attribute (an unreadable peer/agent claim
-    set, or an unresolved agent-race overlap). Surfaced here — not just
-    consumed internally to zero ``orphans`` below — so a caller composing
-    ONLY this function (this module's own negative-spec forbids calling
-    ``compute_scope`` directly) can still tell "this call's claim reads were
-    degraded, so adoption was withheld call-wide" apart from "this path is
-    genuinely unclaimed" in its own deny narration. See
-    ``coordinator_core.ops.session.scope_report._classify_denied_path`` for
-    the consumer this exists for.
+    Why this is not just `compute_offer(...)["ownership"]`: that readout is
+    scoped to paths THIS session holds, because it answers "what is mine and
+    why is something of mine missing". A dirty-tree sweep asks a different
+    question about a path it did not get from here at all, and needs "a peer
+    owns this" told apart from "nobody has claimed this" -- a distinction the
+    offer's own buckets cannot make for a path it never considered. Collapsing
+    the two reads a peer's in-flight file as unattributed, which is how an
+    unattended sweep gets nudged into committing it.
 
-    Review: staff-eng F1 (2026-08-03) — this is ``result.orphans`` MINUS
-    ``skipped_paths``, NOT ``result.orphans`` verbatim. ``ScopeResult.orphans``
-    means "unattributed", not "unclaimed" (see that field's own docstring):
-    every fail-closed withhold arm in ``compute_scope`` Step 3/3b/4 (an
-    unreadable peer ``touched.txt``, an unresolved sub-agent race-window
-    overlap, a liveness-enumeration indeterminacy) also drains into it by
-    construction, and every one of those same candidates is ALSO recorded in
-    ``result.skipped`` (with a reason naming which withhold arm produced it —
-    see ``compute_scope``'s own Step 4/5). Returning ``result.orphans``
-    verbatim here let a caller's ``allow_orphans`` mode admit a path
-    ``compute_scope`` deliberately withheld rather than genuinely found
-    unclaimed (incident 62e9a1f73's degraded-read variant). Subtracting
-    ``skipped_paths`` (the same set already computed above for the
-    ``excluded`` de-dup) removes exactly the withheld candidates while
-    leaving genuine "nobody's claim" orphans untouched.
+    IN-PROCESS ONLY, and the split exists for that reason: the peer map is
+    sized by the ledger rather than by this session (~405 entries, ~72KB as
+    JSON on this repo, 2026-08-21), and putting it on `compute_offer`'s return
+    would put it on the `session.scope_report` op's wire for every caller,
+    most of which never look at it. One index rebuild, zero git spawns, same
+    as every other answer in this module.
 
-    Review: staff-eng R1 (2026-08-03, re-review pass 2) — the
-    ``skipped_paths`` subtraction above closes the withheld-candidate shape
-    ONLY: it can only remove a path that entered ``touched_set`` and
-    therefore got a ``skipped`` counterpart from ``compute_scope`` Step 4. A
-    dirty path never adopted as a candidate at all this call (``started_at``
-    in the future, unreadable, or an mtime predating session start) bypasses
-    Step 4 entirely, gets no ``skipped`` entry for the subtraction to
-    remove, and reached ``result.orphans`` even while a live peer's claim
-    set was unreadable — committing that peer's in-flight file (incident
-    62e9a1f73's non-candidate variant). Closed here by reading
-    ``result.indeterminate``: when ``compute_scope`` withheld ANYTHING
-    unattributably this call (an unreadable claim set, or an unresolved
-    agent-race overlap), ``orphans`` is returned empty OUTRIGHT — the whole
-    call's orphan set is untrustworthy for adoption, not just the specific
-    candidate the subtraction above already knew to exclude. This is a
-    wider blast radius than per-path narrowing, deliberately: nothing here
-    can attribute WHICH of this call's orphans are actually safe once any
-    claim set was unreadable, so withholding all of them is the only sound
-    default. The pre-existing liveness-enumeration under-report residual
-    (documented in ``compute_scope``'s own docstring, and confirmed NOT
-    widened by this fix) is NOT chased here — a peer claim that residual
-    releases never sets ``result.indeterminate`` either, so it stays outside
-    this function's fix; see ``ScopeResult.indeterminate``'s own docstring.
+    Liveness on each entry is EARNED (see :func:`_peer_liveness`), never
+    asserted. ``claim_source`` is always ``"session"`` -- see
+    :class:`PeerOwnedPath` for why the index has no other value left to
+    report. Degraded walk: the peer map comes back EMPTY, matching
+    `compute_offer`'s own AC7 fold -- a call that cannot finish its walk must
+    not print an owner it cannot stand behind, and an empty map degrades this
+    caller to "no claim awareness", never to a wider verdict.
+    """
+    answer = claim_index.commit_set(session_id, cwd=cwd)
+    mine = frozenset(answer.paths)
+    if not answer.complete:
+        return mine, {}
 
-    ``ownership`` — (C5, additive) the four-bucket per-session ownership
-    readout (mine / named peer / unattributed / degraded), derived from
-    ``ScopeResult.attribution`` and this same ``excluded`` list. See
-    ``OwnershipReadout``'s own docstring for the bucket contract and
-    ``_compute_ownership`` for the derivation. Extends, does not replace,
-    ``excluded``/``orphans`` above or ``AutoCommitReport.residue`` (C3).
+    # The live set is resolved ONCE, here, and every entry below is answered
+    # from it. Measured 2026-08-21, job object, k=20: calling `_peer_liveness`
+    # per entry instead cost 23,910ms of process time on this repo's ~405 peer
+    # claims -- 48x the 500ms brightline, in ZERO subprocesses, because
+    # `live_session_ids` is documented as deliberately un-memoised (a cached
+    # live-set reopens the wrong-attribution race) and re-walks every session
+    # dir on each call. That is per-item amplification of exactly the shape
+    # this whole rebuild exists to remove, reintroduced inside the fix for it.
+    # NEGATIVE SPEC: do not move a liveness call back inside this loop, and do
+    # not "fix" the cost by memoising `live_session_ids` -- the hoist is free
+    # and correct; the cache is neither.
+    try:
+        live = live_session_ids(cwd)
+    except Exception:  # noqa: BLE001 - a readout must never raise
+        live = None
 
-    ``extra_candidates`` — THE CLASSIFICATION SEAM (2026-08-07, scoped-commit
-    ownership-gate misclassification). Keyword-only, defaulting to ``None``,
-    which reproduces this function's pre-existing behaviour byte-for-byte:
-    the candidate set stays this session's ``touched.txt`` union its own
-    dispatched sub-agent fan-out. A caller that passes its own pathspec here
-    is asking ONE question — "who holds these paths?" — and gets an answer
-    only ``excluded``/``ownership`` can carry. It is asking that because a
-    path NOBODY in this call's candidate set ever touched is invisible to
-    ``compute_scope`` Step 3/Step 4 entirely: it never becomes a candidate,
-    so it gets no ``skipped`` entry naming its peer holder, and Step 5 routes
-    it away from ``orphans`` too (``other_owner`` has it). It is therefore
-    absent from every key of this dict, and a consumer narrating a denial has
-    nothing to name. Passing the pathspec as ``extra_candidates`` puts those
-    paths through Step 1 adoption so Step 3/3b's peer-claim read is actually
-    consulted for them.
+    peer_map = {}
+    for path, holders in list(answer.peers.items()) + list(answer.contested.items()):
+        peer_map[path] = {
+            "path": path,
+            "owner": holders[0],
+            "liveness": _liveness_from_set(holders[0], live),
+            "claim_source": "session",
+        }
+    return mine, peer_map
 
-    That is also exactly why the RESULT IS NOT AN ALLOW-LIST FOR THE CALLER
-    THAT NAMED THE PATHS. Step 1 adoption is unconditional: a named path that
-    no peer claims and no ``other_owner`` entry covers is adopted into
-    ``my_scope``, and lands in this call's ``safe_paths`` — by construction,
-    because the caller named it, not because the caller owns it. Reading
-    ``safe_paths``/``orphans`` off such a call as a membership test would let
-    any caller own any dirty path in the tree by putting it in its own
-    pathspec — the same unsound shape
-    ``coordinator_core.ops.session.scope_report``'s module docstring records
-    under "REVERTED 2026-08-03", reached by a different route.
 
-    NEGATIVE SPEC: never pass a caller-supplied pathspec to the
-    ``compute_offer`` call whose ``safe_paths``/``orphans`` gate a commit. A
-    consumer that wants both answers computes TWO offers — the primary one
-    (no ``extra_candidates``) for the verdict, a second one for wording only
-    — and never merges them. See
-    ``coordinator_core.ops.session.scope_report.assert_paths_in_session_scope``
-    for the one in-tree consumer of this parameter and the invariant test
-    that pins the split.
+def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer:
+    """Compute this session's commit pathspec and the withheld-path narration.
 
-    Read-only: makes no git or ``touched.txt`` mutation. Raises
-    ``ValueError`` if ``session_id`` is empty.
+    REBUILT 2026-08-21 on ``coordinator_core.session.claim_index.commit_set``
+    -- one zero-spawn index rebuild. The mechanism it replaces cost **73
+    processes and 5,609ms of kernel+user CPU per call**, in the op every
+    workstream in the fleet passes through to close, which the close ceremony
+    calls TWICE per pass: multiple simultaneous breaches of CLAUDE.md's
+    brightline (500ms end-to-end; one process over 200ms needs a fix; >1s is
+    deleted and rebuilt from first principles). 33 of its 35 ``subprocess.run``
+    calls were ``git ls-files --full-name`` over a single absolute
+    ``touched.txt`` entry each, at a 1,411ms mean, and 25 of 25 sampled
+    entries were not under the worktree root at all -- it was spawning a git
+    process per entry to be told, slowly, that a file on another drive is not
+    in this repo. Verdict record:
+    docs/research/spike-verdicts/2026-08-21-ceremony-tail-session-artifact-
+    commit-cost.md; disabled at ``e927d9463``, rebuilt here.
 
-    DISABLED 2026-08-21 -- see ``_MECHANISM_DISABLED`` above. Every arm
-    described in this docstring is the behaviour this function had when it
-    was measured at 73 processes and 5,609ms of CPU per call, and is the
-    behaviour the rebuild must restore. It is documentation of intent right
-    now, not of what runs.
+    ``safe_paths`` -- what belongs to THIS session to commit right now:
+    ``commit_set().paths``, i.e. every path whose current claim verb is ``T``
+    for this session and for no other. Agent fan-out is already folded in
+    (``rebuild`` resolves ``.agents/<aid>/em-session-id.txt`` back-pointers)
+    and so is last-event-wins, so neither is re-derived here.
+
+    ``excluded`` -- every CONTESTED path: one this session holds that a peer
+    holds too. Withheld from ``safe_paths`` (a peer's path is not yours) but
+    NAMED, because a silent omission reintroduces exactly the doubt this
+    answer exists to remove.
+
+    ``orphans`` -- ALWAYS EMPTY, and that is the contract, not a degradation.
+    An orphan is a DIRTY path claimed by nobody; dirtiness left this answer by
+    PM ruling (2026-08-21) and this function no longer reads the worktree, so
+    it has no basis on which to enumerate one. The key is kept rather than
+    dropped because consumers destructure this shape, and an absent key reads
+    as an error where an empty list reads as "none to report". NEGATIVE SPEC:
+    do not repopulate it by adding a dirty read here -- "what belongs to me"
+    and "what is dirty" are two different questions, and fusing them is
+    precisely the trade that justified the 73-process shape in the first
+    place. A caller that wants the dirty view asks for it separately;
+    ``_compute_residue`` below is the in-module example, and it takes its own
+    read AFTER the commits land rather than borrowing this one.
+
+    ``indeterminate`` -- ``True`` iff the index walk behind this answer was
+    incomplete (aborted on its wall-clock cap, an I/O error, or an
+    unresolvable base). Both ``safe_paths`` and ``excluded`` may then be SHORT,
+    so a caller must say so rather than presenting a partial answer as the
+    answer; ``auto_commit_session_async``'s hardening (a) commits nothing at
+    all on it.
+
+    ``ownership`` -- the same four buckets as before (mine / named peer /
+    unattributed / degraded), now derived from the claim index. ``peer``
+    carries an EARNED liveness verdict (see :func:`_peer_liveness`); on a
+    degraded call it is emptied outright and every contested path folds into
+    ``unattributed``, because a call that cannot stand behind an owner name
+    must not print one (AC7).
+
+    REMOVED IN THE REBUILD -- ``extra_candidates``. It existed because
+    ``compute_scope`` could only answer about paths it had already adopted as
+    candidates, so naming a holder for a caller-supplied path required
+    feeding that pathspec back in, producing an offer that adopted whatever it
+    was handed and was catastrophic to read as a verdict. The gate that needed
+    it now asks ``claim_index.classify_paths`` directly (see
+    ``coordinator_core.ops.session.scope_report``). NEGATIVE SPEC: never
+    reintroduce a caller-supplied candidate set on this function -- it is the
+    shape that let any caller own any path by naming it.
+
+    Read-only: makes no git or ``touched.txt`` mutation, and spawns no
+    subprocess. Raises ``ValueError`` if ``session_id`` is empty.
     """
     if not session_id:
         raise ValueError("session_id is required")
-    if _MECHANISM_DISABLED:
-        return _disabled_offer(session_id)
-    candidates = _resolve_agent_touched_candidates(session_id, cwd)
-    if extra_candidates:
-        seen = set(candidates)
-        for path in extra_candidates:
-            if isinstance(path, str) and path and path not in seen:
-                seen.add(path)
-                candidates.append(path)
-    result = compute_scope(session_id, cwd, extra_candidates=candidates)
 
-    # A candidate withheld via `unreadable_other_sessions` (compute_scope
-    # Step 4) lands in BOTH `result.skipped` (owner "unknown (claims
-    # unreadable: ...)") and `result.orphans` (Step 5: absent from
-    # my_scope_set, and `other_owner.get(dfile)` is None since it was never
-    # actually claimed by another session, only indeterminate) -- the same
-    # path would otherwise appear twice in `excluded` with contradictory
-    # reasons. `skipped` is built first and is the more specific of the two
-    # (it names WHY the candidate was withheld, not just that it wasn't
-    # adopted), so an orphan already present via `skipped` is dropped here.
-    excluded: List[ExcludedPath] = [
-        {"path": path, "reason": "owned by session %s" % owner}
-        for path, owner in result.skipped
-    ]
-    skipped_paths = {path for path, _owner in result.skipped}
-    excluded.extend(
-        {"path": path, "reason": "untouched by this session"}
-        for path in result.orphans
-        if path not in skipped_paths
-    )
+    answer = claim_index.commit_set(session_id, cwd=cwd)
+    degraded = not answer.complete
 
-    # Review: staff-eng F1 — see this function's own docstring, "orphans"
-    # paragraph. Never return `result.orphans` verbatim: it is unattributed,
-    # not unclaimed, and a withheld candidate that lands in BOTH
-    # `result.skipped` and `result.orphans` must not resurface here as a
-    # genuine orphan.
-    #
-    # Review: staff-eng R1 — the subtraction above only recovers a withheld
-    # CANDIDATE. `result.indeterminate` covers the non-candidate shape (and
-    # the agent-race non-candidate shape) in one gate: if this call withheld
-    # anything unattributably at all, treat every orphan this call reports
-    # as unsafe to adopt, not just the ones the subtraction already knew to
-    # exclude. See this function's own docstring for the full accounting.
-    true_orphans = (
-        []
-        if result.indeterminate
-        else [path for path in result.orphans if path not in skipped_paths]
-    )
+    excluded: List[ExcludedPath] = []
+    peer: List[PeerOwnedPath] = []
+    unattributed: List[str] = []
+    for path in sorted(answer.contested):
+        holders = answer.contested[path]
+        excluded.append(
+            {"path": path, "reason": "owned by session %s" % (holders[0],)}
+        )
+        if degraded:
+            unattributed.append(path)
+            continue
+        peer.append(
+            {
+                "path": path,
+                "owner": holders[0],
+                "liveness": _peer_liveness(holders[0], cwd),
+                # Every claim the index carries is a session claim by the time
+                # it is read: `rebuild` has already resolved an agent's claim
+                # back to the EM session that owns it, so there is no
+                # `"agent"`/`"agent-race"` distinction left to report here and
+                # inventing one would be a wire value nothing measured.
+                "claim_source": "session",
+            }
+        )
 
     return {
         "session_id": session_id,
-        "safe_paths": list(result.my_scope),
+        "safe_paths": list(answer.paths),
         "excluded": excluded,
-        "orphans": true_orphans,
-        "indeterminate": result.indeterminate,
-        "ownership": _compute_ownership(result, result.my_scope, excluded),
+        "orphans": [],
+        "indeterminate": degraded,
+        "ownership": {
+            "mine": list(answer.paths),
+            "peer": peer,
+            "unattributed": unattributed,
+            "degraded": degraded,
+        },
     }
 
 
@@ -1109,14 +964,14 @@ def _default_groups(
 
 def _current_dirty_paths(cwd: Optional[str]) -> List[str]:
     """Repo-relative paths `git status --porcelain` reports dirty RIGHT NOW
-    -- a fresh, POST-commit re-read, deliberately not reused from any
-    pre-commit scan (`compute_scope`'s own dirty-file enumeration runs
-    before the commit groups in this same call land). ``core.quotepath=false``
-    matches every other git invocation in this module (see
-    `_dirty_files_under`'s own docstring for why the two dialects must
-    agree). A rename line (`R  old -> new`) reports only the NEW path — the
-    old path is gone from the tree and cannot be residue. Fails closed
-    (empty list) on any git error, same as `_dirty_files_under`; a residue
+    -- a fresh, POST-commit re-read. It is now the ONLY worktree read left
+    in this module: the pre-commit dirty enumeration the 2026-08-21 rebuild
+    removed is not to be reintroduced by reusing this one earlier (see
+    `compute_offer`'s `orphans` negative spec). ``core.quotepath=false``
+    matches every other git invocation in this module, so the two path
+    dialects agree. A rename line (`R  old -> new`) reports only the NEW
+    path — the old path is gone from the tree and cannot be residue. Fails
+    closed (empty list) on any git error; a residue
     report that under-counts on a git hiccup is safe (REPORT-ONLY, never
     gates), one that raised would not be.
 
@@ -1253,8 +1108,39 @@ async def _commit_group(
     `commit_failed` values a caller can act on without re-deriving them.
     """
     from coordinator_core.ipc import get_op_handler
+    from coordinator_core.op_budget_suspension import OpSuspendedError
 
-    handler = get_op_handler("ceremony.scoped_git_commit")
+    try:
+        handler = get_op_handler("ceremony.scoped_git_commit")
+    except OpSuspendedError as exc:
+        # A SUSPENDED op is registered and would work; it is refused because it
+        # blew the box budget (`coordinator_core.op_budget_suspension`). That
+        # refusal is meant to be LOUD, and it stays loud here: the group lands
+        # in `failed_groups` carrying the refusal message verbatim, the report
+        # renders it, `_log_failed_groups_diagnostic` writes it to the sink the
+        # unattended SessionEnd hook can actually surface, and `main` exits
+        # non-zero on it.
+        #
+        # Loud is not the same as UNCAUGHT, and the difference is this
+        # function's whole reason for catching. `auto_commit_session_async`
+        # documents that it never raises (DR-227, advisory-only), and its
+        # production caller is a SessionEnd hook that reads an exit code and
+        # nothing else. Let the exception through and that hook gets a
+        # traceback on a path whose contract is "report why, change nothing" --
+        # the operator learns less, not more, than the refusal message would
+        # have told them. Kept DISTINCT from the `handler is None` arm below
+        # for the same reason `OpSuspendedError` exists at all: "suspended"
+        # and "never registered" are different facts and must not collapse.
+        return {
+            "paths": group["paths"],
+            "message": group["message"],
+            "committed": False,
+            "sha": None,
+            "push_state": None,
+            "error": str(exc),
+            "commit_failed": True,
+            "reason": None,
+        }
     if handler is None:
         return {
             "paths": group["paths"],
@@ -1360,29 +1246,6 @@ async def auto_commit_session_async(
     staged then rolled back. Named in the returned ``outcome`` as
     ``conflicted_paths``.
     """
-    if _MECHANISM_DISABLED:
-        # PM ruling 2026-08-21 -- see `_MECHANISM_DISABLED`. Returned here,
-        # ahead of `compute_offer`, rather than riding its disabled offer down
-        # into hardening (a) below: that arm's detail says "this call's own
-        # claim reads were indeterminate", which would report a claim-read
-        # FAILURE for a call that deliberately never read anything. Same
-        # zero-commit, zero-group, non-raising shape as (a) -- only the
-        # narration differs, because the reason differs.
-        return {
-            "session_id": session_id,
-            "groups": [],
-            "excluded": [],
-            "failed_groups": [],
-            "dropped_groups": [],
-            "residue": OrderedDict(),
-            "outcome": {
-                "status": "skipped_degraded",
-                "detail": _DISABLED_REASON,
-                "committed_paths": [],
-                "conflicted_paths": [],
-            },
-        }
-
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
 
@@ -1579,28 +1442,22 @@ def _log_failed_groups_diagnostic(
         return
 
 
-#: Bound on how many excluded (declined-adoption) paths get named inline in
-#: the diagnostics-log entry -- after C1a's scope narrowing, `excluded` can
-#: hold roughly every unclaimed dirty path in the tree on every session
-#: close (dozens, observed live on this working tree). Naming a count plus
-#: this many paths plus a pointer to the CLI's own bounded `--json`/text
-#: output keeps the log entry itself bounded; it is a breadcrumb pointing at
-#: full detail, not the full detail (DR-227 -- advisory only, see
-#: `_log_excluded_diagnostic`).
+#: Bound on how many withheld paths get named inline in the diagnostics-log
+#: entry. The log line is a breadcrumb pointing at full detail, not the full
+#: detail (DR-227 -- advisory only, see `_log_excluded_diagnostic`); the CLI's
+#: own bounded `--dry-run --json` output is where the whole list lives.
 #:
-#: Review: code-reviewer (Finding 4) — `excluded` is built `skipped`-derived
-#: ("owned by session X") entries first, then `orphans`-derived ("untouched
-#: by this session") entries (see `compute_offer`). A plain `excluded[:N]`
-#: slice is therefore order-dependent: >=N legitimately owned-by-a-peer
-#: paths would fill the whole preview and push every newly-declined orphan
-#: — the exact case AC6 exists to surface loudly — into the "...and N more"
-#: tail. `_log_excluded_diagnostic` deliberately biases the preview toward
-#: "untouched by this session" entries first: those paths were NOT visible
-#: before this slice (nobody claimed them, nothing else reports them), while
-#: "owned by session X" paths were already visible via that owning session's
-#: own reporting. Do not "simplify" this back to a plain slice — the preview
-#: is intentionally NOT representative of `excluded`'s raw order, only of
-#: which reason class is more urgent to surface.
+#: HISTORY, because the bound's justification changed even though its value
+#: did not. Pre-2026-08-21, `excluded` held roughly every unclaimed dirty path
+#: in the tree on every close (dozens, observed live), and a code-reviewer
+#: finding required the preview to BIAS toward the orphan-derived entries so
+#: a newly-declined orphan could not be pushed into the "and N more" tail by
+#: peer-owned paths that were already visible elsewhere. `compute_offer` no
+#: longer reports orphans at all (see its own contract), so `excluded` is
+#: contested paths only, that bias had exactly one class left to sort, and it
+#: was removed rather than left as a no-op sort a reader would take for a
+#: live invariant. The BOUND stays: a session sharing many paths with a peer
+#: is an ordinary shape, and an unbounded log line is still unbounded.
 _EXCLUDED_LOG_PREVIEW_COUNT = 10
 
 
@@ -1610,17 +1467,25 @@ def _log_excluded_diagnostic(
     """Best-effort write to the SAME
     ``coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log`` file
     `_log_failed_groups_diagnostic` appends to (mirrors its directory
-    resolution, exception-swallowing, and append shape exactly) -- naming
-    declined-adoption paths in the ONE sink the unattended SessionEnd hook
-    can actually surface, since that hook only inspects the subprocess exit
-    code and never reads this CLI's stdout (see `_log_failed_groups_diagnostic`'s
-    own docstring). Never raises; a diagnostics-write failure must not break
-    the CLI's own exit path.
+    resolution, exception-swallowing, and append shape exactly) -- naming the
+    withheld paths in the ONE sink the unattended SessionEnd hook can actually
+    surface, since that hook only inspects the subprocess exit code and never
+    reads this CLI's stdout (see `_log_failed_groups_diagnostic`'s own
+    docstring). Never raises; a diagnostics-write failure must not break the
+    CLI's own exit path.
+
+    WHAT IS BEING NAMED, post-2026-08-21: a path this session holds that a
+    PEER holds too. It is withheld because a shared path is not solely this
+    session's to commit, and it is named because a silent omission is exactly
+    the doubt this whole answer exists to remove. That is a different fact
+    from the one this sink used to carry ("declined adoption" -- a dirty file
+    nobody had claimed), and the wording follows the fact rather than the
+    other way round.
 
     DR-227 -- advisory ONLY. This never changes `main`'s exit code and must
-    never be wired to do so: a declined adoption is the correct, expected
-    outcome of C1a's narrowing (per this module's wolf-crying constraint,
-    see the module docstring), not a failure. Do not promote this to a gate.
+    never be wired to do so: withholding a contested path is the correct,
+    expected outcome (per this module's wolf-crying constraint, see the module
+    docstring), not a failure. Do not promote this to a gate.
     """
     if not excluded:
         return
@@ -1631,17 +1496,11 @@ def _log_excluded_diagnostic(
         log_dir = common_dir / "coordinator-sessions" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        # Review: code-reviewer (Finding 4) — bias the preview toward
-        # "untouched by this session" (orphan-derived) entries first; see
-        # `_EXCLUDED_LOG_PREVIEW_COUNT`'s comment for why. Total bound is
-        # unchanged; only the ordering fed into the slice changes.
-        untouched = [e for e in excluded if e["reason"] == "untouched by this session"]
-        other = [e for e in excluded if e["reason"] != "untouched by this session"]
-        preview = (untouched + other)[:_EXCLUDED_LOG_PREVIEW_COUNT]
+        preview = excluded[:_EXCLUDED_LOG_PREVIEW_COUNT]
         lines = [
-            "[%s] safe-commit-offer: %d file(s) declined adoption for "
-            "session %s (not committed -- advisory only, DR-227, exit code "
-            "unaffected):" % (stamp, len(excluded), session_id)
+            "[%s] safe-commit-offer: %d file(s) withheld for session %s -- "
+            "also claimed by another session (not committed -- advisory only, "
+            "DR-227, exit code unaffected):" % (stamp, len(excluded), session_id)
         ]
         lines.extend("  - %s — %s" % (e["path"], e["reason"]) for e in preview)
         remaining = len(excluded) - len(preview)

@@ -241,8 +241,15 @@ _GATE_REGISTRY: List[_Gate] = [
         filename="detect-staged-rollback.py",
         kind="python",
         label="staged-rollback",
-        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK",
-        version=1,
+        # 2026-08-21, PM ruling: the gate script's exact-blob rollback check
+        # (check 1) was KILLED -- see coordinator_core.ops.detect_staged_
+        # rollback's module docstring for the full ruling. The only check
+        # left in that script is the mass-deletion tripwire, so this entry's
+        # CANNOT-RUN override key repoints to that check's own key; the old
+        # STAGED_ROLLBACK key is dead (no code anywhere reads it any more)
+        # and must not be reintroduced by analogy for a future check.
+        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",
+        version=2,
     ),
 ]
 
@@ -699,8 +706,8 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
         # is PM-ruled to bypass only "could not run", never a genuine
         # finding (see this function's own docstring); a gate that wants its
         # findings to be overridable exposes its OWN content-check override
-        # (as detect-staged-rollback's COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_
-        # ROLLBACK does internally, before this wrapper ever sees a nonzero
+        # (as detect-staged-rollback's COORDINATOR_OVERRIDE_PRECOMMIT_MASS_
+        # DELETION does internally, before this wrapper ever sees a nonzero
         # code). This is exit-code CLAMPING only: any nonzero `$_gate_rc`
         # (1, 2, or a future surprise value) surfaces as exactly 1, never the
         # raw code — see module docstring's "Exit-code clamping".

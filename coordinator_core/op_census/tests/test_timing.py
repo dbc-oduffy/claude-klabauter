@@ -21,7 +21,7 @@ from coordinator_core.op_census.timing import (
     NoDataReason,
     cleared_ops,
     invocation_tax_dispositions,
-    process_time_by_op,
+    handler_elapsed_by_op,
     routed_entries,
 )
 
@@ -52,9 +52,9 @@ def test_axis_result_forbids_reason_outside_no_data():
         AxisResult(disposition=Disposition.UNDER_BAR, no_data_reason=NoDataReason.NEVER_OBSERVED)
 
 
-def test_process_time_by_op_under_bar():
+def test_handler_elapsed_by_op_under_bar():
     entries = [_row("op.a", 10.0), _row("op.a", 20.0), _row("op.a", 30.0)]
-    result = process_time_by_op(entries, ["op.a"])
+    result = handler_elapsed_by_op(entries, ["op.a"])
     r = result["op.a"]
     assert r.disposition is Disposition.UNDER_BAR
     assert r.p50_ms == 20.0
@@ -62,43 +62,43 @@ def test_process_time_by_op_under_bar():
     assert r.sample_count == 3
 
 
-def test_process_time_by_op_breach_on_max_reports_not_established_never_over_bar():
+def test_handler_elapsed_by_op_breach_on_max_reports_not_established_never_over_bar():
     """`elapsed_ms` is wall clock (module docstring) -- a breach on either
     p50 or max is reported as NO_DATA/NOT_ESTABLISHED_UNDER_LOAD, never
     OVER_BAR, because peer load alone can produce it and this axis cannot
     tell the two apart."""
     entries = [_row("op.a", 10.0), _row("op.a", 10.0), _row("op.a", PROCESS_TIME_BAR_MS + 1)]
-    result = process_time_by_op(entries, ["op.a"])
+    result = handler_elapsed_by_op(entries, ["op.a"])
     r = result["op.a"]
     assert r.disposition is Disposition.NO_DATA
     assert r.no_data_reason is NoDataReason.NOT_ESTABLISHED_UNDER_LOAD
 
 
-def test_process_time_by_op_no_data_for_unobserved_op():
+def test_handler_elapsed_by_op_no_data_for_unobserved_op():
     entries = [_row("op.a", 10.0)]
-    result = process_time_by_op(entries, ["op.a", "op.never_run"])
+    result = handler_elapsed_by_op(entries, ["op.a", "op.never_run"])
     never = result["op.never_run"]
     assert never.disposition is Disposition.NO_DATA
     assert never.no_data_reason is NoDataReason.NEVER_OBSERVED
 
 
-def test_process_time_by_op_rotated_generation_reason():
+def test_handler_elapsed_by_op_rotated_generation_reason():
     entries = []
-    result = process_time_by_op(entries, ["op.rotated"], rotated_generation_ops=["op.rotated"])
+    result = handler_elapsed_by_op(entries, ["op.rotated"], rotated_generation_ops=["op.rotated"])
     r = result["op.rotated"]
     assert r.disposition is Disposition.NO_DATA
     assert r.no_data_reason is NoDataReason.NOT_IN_CURRENT_GENERATION
 
 
-def test_process_time_by_op_ignores_null_route_rows():
+def test_handler_elapsed_by_op_ignores_null_route_rows():
     entries = [_row("op.a", 10.0, route=None), _row("op.a", 20.0, route=None)]
-    result = process_time_by_op(entries, ["op.a"])
+    result = handler_elapsed_by_op(entries, ["op.a"])
     assert result["op.a"].disposition is Disposition.NO_DATA
 
 
-def test_process_time_by_op_ignores_started_rows():
+def test_handler_elapsed_by_op_ignores_started_rows():
     entries = [_row("op.a", 10.0, kind="started"), _row("op.a", 20.0, kind="complete")]
-    result = process_time_by_op(entries, ["op.a"])
+    result = handler_elapsed_by_op(entries, ["op.a"])
     assert result["op.a"].sample_count == 1
     assert result["op.a"].p50_ms == 20.0
 

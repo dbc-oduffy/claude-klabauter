@@ -47,12 +47,46 @@ Subcommands (mirror the three JS exports 1:1, with one deliberate divergence):
     claim-path <touched_file> <entry> → claimPath(touchedFile, entry): best-
                                         effort atomic-dedup-append; never
                                         raises, exit 0 always (matches JS
-                                        "NEVER throws" contract).
+                                        "NEVER throws" contract). ``entry``
+                                        is folded through
+                                        ``claims.canonical_claim_entry``
+                                        first, and an entry still ABSOLUTE
+                                        after that fold is REFUSED (stderr,
+                                        no write) — see below.
     self-claim <path>                → selfClaim(writtenPath): best-effort
                                         resolve-session + claim; never raises,
                                         exit 0 always.
 
 Negative-spec:
+    - ``claim-path`` normalizes at the WRITE, and drops what it cannot
+      normalize. Until 2026-08-21 this subcommand forwarded ``entry`` to
+      ``claims.atomic_dedup_append`` verbatim, with no normalization of its
+      own, so a Node caller holding an absolute path could write an absolute
+      claim key -- one that can never dedup-match, never satisfy an ownership
+      lookup, and never appear in a commit set: a claim that protects nothing
+      while reading as a claim. The hole was reachable; whether anything ever
+      fell through it is a separate question, answered below.
+
+      The census that should have accompanied this fix, run 2026-08-21 after
+      the fact: across every ledger in this repo, live and archived, exactly
+      TWO verb-line entries are non-relative, both archived, both the same
+      `\\tmp\\probe_crlf.py` test probe. `atomic_dedup_append` writes
+      `scope.format_touch_event("T", entry)`, so anything it ever wrote is
+      verb-prefixed -- which means it has never poisoned a live ledger. This
+      is a FORWARD GUARD on a reachable hole, not a repair of a realised one,
+      and saying otherwise would retire a question that is still open.
+
+      Fixing the READERS to tolerate an absolute key is how this class of gap
+      survives -- every prior compensation paid a git spawn per entry. Do NOT
+      re-add a reader-side tolerance, and do NOT re-derive a normalization
+      dialect here: the fold is ``claims.canonical_claim_entry``, shared with
+      the reader (``claim_index._normalize_key``) and subprocess-free by
+      construction.
+    - A refused entry is REPORTED, never silently swallowed — a dropped claim
+      is a path nobody is protecting, so the stderr line names it and names
+      the alternative (``self-claim``, which relativizes and pays the spawn
+      to do it). Exit stays 0: refusal is not a failure of the "never throws"
+      contract, it is that contract applied to an unusable argument.
     - Do NOT re-implement claim/liveness logic here — this module is a THIN
       argv/stdout adapter over ``coordinator_core.session.{core,liveness,
       claims}``. Any behavioral fix belongs in those modules, not here.
@@ -93,8 +127,15 @@ def _cmd_claim_path(args: List[str]) -> int:
         )
         return 0
     touched_file, entry = args
+    normalized = claims.canonical_claim_entry(entry)
+    if entry and normalized is None:
+        sys.stderr.write(
+            f"js_bridge_cli: claim-path entry {entry!r} is absolute — not claimed; "
+            f"pass a repo-relative path or use `self-claim <path>`\n"
+        )
+        return 0
     try:
-        claims.atomic_dedup_append(touched_file, entry)
+        claims.atomic_dedup_append(touched_file, normalized or "")
     except (OSError, ValueError) as exc:
         sys.stderr.write(
             f"js_bridge_cli: atomic_dedup_append failed — skipping self-claim for {entry}: {exc}\n"

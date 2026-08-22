@@ -85,6 +85,7 @@ from coordinator_core.contract.cockpit_schema.common import (
     _ISO_DATE_PATTERN,
     _ISO_DATETIME_PATTERN,
 )
+from coordinator_core.frontmatter.baton_class import baton_class
 
 # Generator-provenance declaration ONLY (C2, generator_provenance.py's AST
 # reader) -- this module is a HARD EXTERNAL DEPENDENCY (DoE's sole
@@ -283,7 +284,25 @@ GENERATES = [
 # rejects the whole payload. Their vendored copy is 3.12.0 at time of writing;
 # flipping the switch on the assumption they will have re-vendored by then is
 # exactly the failure mode the switch exists to foreclose.
-CONTRACT_VERSION = "3.13.0"
+#
+# MINOR bump 3.13.0 -> 3.14.0 (x-baton-class travels to the tools that vendor
+# it, C1/C2): adds a top-level `x-baton-class` object (`mapping` + `description`)
+# to the emitted `handoff-summary.schema.json` (and, via the bundle-assembly
+# loop, to its `$defs` entry inside `cockpit-contract.schema.json`). GENERATED
+# at emit time in `emit_schemas()` (C1, landed bcdb9e5f4) from this schema's
+# own emitted `properties.kind.enum` resolved through
+# `frontmatter.baton_class.baton_class()` — never a second hand-typed
+# `kind -> class` table. Additive-only: no existing key changed, narrowed, or
+# removed, same class as the 3.8.0->3.9.0 `baton_class` field bump above.
+# Ships the derivation a consumer vendoring only the emitted contract
+# (example-cockpit-repo) previously had no way to compute — see
+# cross-repo/inbox/2026-08-21-example-cockpit-repo-em-vendored-contract-lacks-x-baton-class-mapping.md.
+# claude-klabauter's own vendored copy under `ops/emit/_vendor/cockpit-contract/` is
+# NOT refreshed by this bump (C2 leaves that open) — the refresh script pulls
+# from DoE's tagged release, which does not carry this change until
+# claude-central-em regens + re-tags (the not-yet-sent C3 memo).
+# Spec backlink: docs/plans/2026-08-21-x-baton-class-travels-to-the-tools-that-vendor-it.md § C1/C2.
+CONTRACT_VERSION = "3.14.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from
@@ -860,6 +879,47 @@ def assert_no_version_desync(
 
 
 # ---------------------------------------------------------------------------
+# x-baton-class — GENERATED, never hand-typed (x-baton-class-travels plan § C1).
+#
+# Applied to the `handoff-summary` entity only, in `emit_schemas()` below —
+# deliberately AFTER `build_entity_schema()` returns rather than via a pydantic
+# `model_config.json_schema_extra` on `HandoffSummary` itself. `HandoffSummary`
+# is also nested as `SnapshotEnvelope.handoffs: list[HandoffSummary]`
+# (entities/snapshot_envelope.py); a class-level `json_schema_extra` would
+# leak this object into every inlined-by-`_resolve_refs` nesting site too
+# (snapshot-envelope.schema.json's `properties.handoffs.items`), reshaping an
+# entity this plan's Anti-scope forbids touching. Adding it here, once, only
+# for the "handoff-summary" top-level entity, keeps the change scoped to
+# exactly the one schema file AC1 names.
+# ---------------------------------------------------------------------------
+
+
+def _build_x_baton_class_annotation(kind_enum: list[str]) -> dict[str, Any]:
+    """Build the `x-baton-class` object for one call: `{description, mapping}`
+    with one `mapping` entry per member of `kind_enum` (the emitted
+    `handoff-summary.schema.json`'s own `properties.kind.enum`), each valued
+    at exactly what `frontmatter.baton_class.baton_class()` returns for it
+    (`spike-result` -> `None`, emitted as JSON `null`, never omitted).
+
+    `kind_enum` is read from the freshly-built entity schema, not
+    re-declared here — the enum this maps over is always the one actually
+    emitted, so the two can never drift apart (AC2/AC3)."""
+    return {
+        "description": (
+            "kind -> baton_class derivation map. Generated from "
+            "frontmatter/schemas/handoff.schema.json's own x-baton-class.mapping key, "
+            "resolved through coordinator_core.frontmatter.baton_class.baton_class() "
+            "(which also folds in that function's pre-rename kind-alias resolution). "
+            "One entry per member of this schema's own properties.kind.enum; a null "
+            "value means baton_class() returns null for that kind (it is not a baton, "
+            "e.g. 'spike-result'). Do not hand-author a copy of this map — it is "
+            "generated at emit time from the one canonical source above."
+        ),
+        "mapping": {kind: baton_class(kind) for kind in kind_enum},
+    }
+
+
+# ---------------------------------------------------------------------------
 # Emission loop + bundle assembly
 # ---------------------------------------------------------------------------
 
@@ -914,6 +974,19 @@ def emit_schemas(
 
     for name, entity in entity_schemas.items():
         shaped = build_entity_schema(entity)
+        if name == "handoff-summary":
+            kind_enum = shaped.get("properties", {}).get("kind", {}).get("enum")
+            if not isinstance(kind_enum, list) or not kind_enum:
+                raise RuntimeError(
+                    "emit_schema: handoff-summary schema has no usable "
+                    "properties.kind.enum to build x-baton-class from — "
+                    "the emitted shape changed in a way this generator did not "
+                    "expect. Fix the generator, do not hand-author a fallback map."
+                )
+            shaped = {
+                **shaped,
+                "x-baton-class": _build_x_baton_class_annotation(kind_enum),
+            }
         json_doc = {**shaped, "version": CONTRACT_VERSION}
         json_doc = _reorder(json_doc)
         out_path = schema_dir / f"{name}.schema.json"

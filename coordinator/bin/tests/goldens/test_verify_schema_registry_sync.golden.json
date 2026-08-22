@@ -368,7 +368,7 @@
       "stdout": "[\n  {\n    \"path\": \"state/roadmap/lifecycle-vocab/OVERVIEW.md\",\n    \"frontmatter\": {\n      \"title\": \"Lifecycle-vocab roadmap \u2014 architectural OVERVIEW (target vocabulary spec + fork resolutions)\",\n      \"run_id\": \"lifecycle-vocab\",\n      \"initiative\": null,\n      \"created\": \"2026-07-08\",\n      \"date\": \"2026-07-08\",\n      \"kind\": \"roadmap-overview\",\n      \"status\": \"active\",\n      \"research_depth\": \"internal\",\n      \"research_corpus\": [\n        \"state/roadmap/lifecycle-vocab/research-corpus/internal-prior-art.md\"\n      ],\n      \"oracle\": \"docs/problems/2026-07-08-artifact-lifecycle-vocabulary-unificatio.md\",\n      \"phase1_artifacts\": [\n        \"state/roadmap/lifecycle-vocab/inventory.md\",\n        \"state/roadmap/lifecycle-vocab/clusters.md\",\n        \"state/roadmap/lifecycle-vocab/reconciliation.md\"\n      ],\n      \"shape_approved_by\": \"PM\",\n      \"shape_approved_at\": \"2026-07-08\",\n      \"final_approved_by\": \"PM\",\n      \"final_approved_at\": \"2026-07-08\",\n      \"liveness\": \"LIVE\"\n    }\n  }\n]\n",
       "stderr": "",
       "schema_file": "roadmap.schema.json",
-      "applies_to": "state/roadmap/*/OVERVIEW.md",
+      "applies_to": "state/roadmap/**/OVERVIEW.md",
       "query_type": "roadmap",
       "type_recognised": true
     },

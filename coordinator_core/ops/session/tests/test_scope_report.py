@@ -55,7 +55,7 @@ from coordinator_core.ops.session.scope_report import (
     _handler,
     assert_paths_in_session_scope,
 )
-from coordinator_core.session import core, scope
+from coordinator_core.session import claim_index, core, scope
 
 # Real git spawn is load-bearing: assert_paths_in_session_scope and
 # session.scope_report both delegate to compute_offer, which reads real
@@ -481,8 +481,6 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok is False
         assert reason
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_compute_offer_existing_keys_unchanged(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -753,7 +751,12 @@ class TestPostCommitResidueReport:
     residue (the exact harm case AC5 exists to prevent: nudging an operator
     into sweeping a peer's in-flight work)."""
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_residue_names_uncommitted_path_and_attributes_peer_owned_path(
         self, tmp_path
@@ -822,7 +825,12 @@ class TestPostCommitResidueReport:
         # instead, not duplicated as residue).
         assert "peer.py" not in rendered
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_residue_rendering_bounded_across_many_classes(self, tmp_path):
         """Review: code-reviewer (Finding 1/Finding 5) regression guard —
@@ -857,7 +865,12 @@ class TestPostCommitResidueReport:
         )
         assert "more class(es)" in rendered
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
+    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
+    # proven under 2s and leaves the roster, and not before; nothing in this
+    # module can lift it.
     @pytest.mark.designed_red
     def test_residue_class_sample_capped_with_many_paths_in_one_class(
         self, tmp_path
@@ -899,8 +912,6 @@ class TestPostCommitResidueReport:
 
 
 class TestOwnershipReadout:
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_mine_bucket_mirrors_safe_paths(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -912,8 +923,6 @@ class TestOwnershipReadout:
         assert ownership["mine"] == offer["safe_paths"] == ["a.py"]
         assert ownership["degraded"] is False
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
     def test_peer_bucket_names_a_live_peers_claim(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -932,290 +941,91 @@ class TestOwnershipReadout:
         assert entry["claim_source"] in ("session", "agent", "agent-race")
         assert entry["liveness"] in ("live", "dead", "undetermined")
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_unattributed_bucket_names_an_unclaimed_dirty_path(self, tmp_path):
-        """DR-258 (ScopeResult.orphans's own docstring): a dirty path nobody
-        ever claimed lands here, never in `peer` (there is no owner to
-        stand behind) and never adopted into `mine`."""
+    def test_an_unclaimed_path_lands_in_no_bucket_at_all(self, tmp_path):
+        """DR-258 said a dirty path nobody ever claimed must never be adopted
+        into `mine` and never invented into `peer`, and put it in
+        `unattributed` so it was at least SEEN. Post-2026-08-21 it is in no
+        bucket: `compute_offer` reads the claim ledger and nothing else, so a
+        file nobody claimed is not a thing this answer knows about.
+
+        The DR-258 constraint itself is untouched and is what this still pins
+        -- not adopted, no owner invented. What changed is that the honest
+        answer is now silence rather than a named-but-unattributed entry, and
+        the surface that DOES enumerate dirty-but-unclaimed paths is the
+        post-commit residue report, which takes its own worktree read.
+        """
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        sdir = Path(core.session_dir("mine", cwd=str(repo)))
-        (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
         (repo / "orphan.py").write_text("o")
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         ownership = offer["ownership"]
+
         assert ownership["degraded"] is False
         assert "orphan.py" not in ownership["mine"]
         assert "orphan.py" not in {p["path"] for p in ownership["peer"]}
-        assert "orphan.py" in ownership["unattributed"]
+        assert "orphan.py" not in ownership["unattributed"]
 
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_degraded_forces_every_non_mine_path_into_unattributed(
+    def test_degraded_forces_every_contested_path_into_unattributed(
         self, tmp_path, monkeypatch
     ):
-        """Perturbation-proof of the peer-vs-unattributed distinction (AC7):
-        make one peer's claim set unreadable this call, and prove an
-        OTHERWISE-resolvable peer claim (`other_claimed.py`, contrast with
-        `test_peer_bucket_names_a_live_peers_claim` above, where the exact
-        same claim shape lands in `peer`) is denied that attribution and
-        folded into `unattributed` instead -- this call cannot stand behind
-        ANY owner name it would otherwise print, not just the one it could
-        not read.
+        """AC7's binding requirement, perturbation-proved: make ONE claimant's
+        file unreadable and an OTHERWISE-resolvable peer claim is denied
+        attribution too -- this call cannot stand behind ANY owner name it
+        would print, not merely the one it could not read.
 
-        NOT `os.chmod(path, 0o000)`: Windows does not honour POSIX mode
-        bits for the owning user, so the chmod'd file stays readable there
-        and the test's own precondition (an unreadable touched.txt) never
-        establishes itself -- `compute_offer` then correctly reports
-        ``degraded is False``, and the test goes red for a reason that has
-        nothing to do with the code under test (see
-        state/bug-backlog/2026-08-07-ownership-degraded-test-uses-posix-only-chmod-and-is-red-on-windows.yaml).
-        Instead, monkeypatch the exact read seam `compute_scope` uses for a
-        peer's ``touched.txt`` (``pathlib.Path.read_text``) to raise
-        `PermissionError` for THIS peer's file only, leaving every other
-        session's ``touched.txt`` read in this fixture (``mine``,
-        `other`) untouched -- the same platform-neutral simulated failure
-        on Windows and POSIX alike, pinning the identical property either
-        way."""
+        The read seam moved with the 2026-08-21 rebuild. It is no longer
+        `pathlib.Path.read_text` (which `compute_scope` used) but
+        `claim_index._read_lines_discard_torn_tail`, the claim index's own
+        reader, which reports unreadability as a `(lines, ok)` pair rather
+        than by raising. NOT `os.chmod(path, 0o000)` either way: Windows does
+        not honour POSIX mode bits for the owning user, so the chmod'd file
+        stays readable and the test's own precondition never establishes
+        itself -- the test then goes red for a reason unrelated to the code
+        under test (state/bug-backlog/2026-08-07-ownership-degraded-test-uses-
+        posix-only-chmod-and-is-red-on-windows.yaml).
+        """
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("other", cwd=str(repo))
-        core.init("peer", cwd=str(repo))
-
-        (repo / "mine.py").write_text("m")
-        scope.touch("mine", "mine.py", cwd=str(repo))
-
-        (repo / "other_claimed.py").write_text("s")
+        core.init("unreadable-peer", cwd=str(repo))
+        (repo / "other_claimed.py").write_text("x")
+        scope.touch("mine", "other_claimed.py", cwd=str(repo))
         scope.touch("other", "other_claimed.py", cwd=str(repo))
+        (repo / "hidden.py").write_text("y")
+        scope.touch("unreadable-peer", "hidden.py", cwd=str(repo))
 
-        peer_touched = Path(core.session_dir("peer", cwd=str(repo))) / "touched.txt"
-        peer_touched.write_text("unreadable.md\n", encoding="utf-8")
-        (repo / "unreadable.md").write_text("peer's own in-flight work")
+        blinded = os.path.join(
+            core.session_dir("unreadable-peer", cwd=str(repo)), "touched.txt"
+        )
+        real_reader = claim_index._read_lines_discard_torn_tail
 
-        real_read_text = Path.read_text
+        def _unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(blinded):
+                return [], False
+            return real_reader(path)
 
-        def _read_text_deny_peer_only(self, *args, **kwargs):
-            if self == peer_touched:
-                raise PermissionError(
-                    f"simulated unreadable touched.txt: {self}"
-                )
-            return real_read_text(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "read_text", _read_text_deny_peer_only)
+        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-
         ownership = offer["ownership"]
+
         assert ownership["degraded"] is True
         assert ownership["peer"] == []
-        # `mine` always mirrors `safe_paths` verbatim -- this call's own
-        # fail-closed withhold of uncontested candidates (see the captured
-        # stderr diagnostic) is compute_scope's pre-existing behavior, not
-        # something this bucket adds or corrects; it is asserted equal here,
-        # not asserted non-empty, so a change to that pre-existing withhold
-        # does not make this test lie about what `ownership` promises.
-        assert ownership["mine"] == offer["safe_paths"]
         assert "other_claimed.py" in ownership["unattributed"]
-        assert "unreadable.md" in ownership["unattributed"]
-
-    def test_ownership_key_is_additive_existing_keys_unchanged(self, tmp_path):
-        """WIRE SHAPE (C5): `ownership` is an ADDED key -- every pre-existing
-        `SafeCommitOffer` key stays byte-identical in shape, since two live
-        sibling plans consume this shape verbatim (see the plan's § Cross-
-        plan coordination)."""
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        (repo / "a.py").write_text("a")
-        scope.touch("mine", "a.py", cwd=str(repo))
-
-        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert set(offer.keys()) == {
-            "session_id",
-            "safe_paths",
-            "excluded",
-            "orphans",
-            "indeterminate",
-            "ownership",
-        }
-        assert set(offer["ownership"].keys()) == {"mine", "peer", "unattributed", "degraded"}
-
-
-class TestClassificationOffer:
-    """The 2026-08-07 classification-offer fix (bug-backlog `2026-08-06-
-    scoped-commit-denial-names-unclassified-for-a-peer-held-path`).
-
-    `compute_offer`'s candidate set is the calling session's own claim plus
-    its own sub-agent fan-out -- never the pathspec the caller named. A path
-    the caller never touched, whose mtime predates its `started_at`, is
-    therefore not a `compute_scope` candidate at all: Step 3/3b's peer-claim
-    read is never consulted for it, Step 4 mints no `skipped` entry naming
-    its holder, and Step 5 keeps it out of `orphans` (`other_owner` has it).
-    It is absent from every key of the offer, so `_classify_denied_path` fell
-    through to `_CLASSIFICATION_UNCLASSIFIED` for a path a live peer
-    demonstrably held -- pointing an operator at `include_orphans: true`, a
-    remedy that provably cannot help a peer-claimed path.
-
-    Negative-spec: these tests pin the WORDING of a denial and, in
-    `test_classification_offer_never_widens_the_verdict`, the fact that the
-    verdict itself is untouched. Nothing here may be read as licence to feed
-    the classification offer back into the allow-list -- see
-    `scope_report`'s "TWO OFFERS" module-docstring paragraph.
-    """
-
-    @staticmethod
-    def _started_at_in_the_future(repo, session_id):
-        """Push `session_id`'s `started_at` past now, so a file dirtied after
-        this call never satisfies `compute_scope` Step 2's `mtime >=
-        started_at_epoch` test and never becomes a candidate for it. Same
-        recipe as `TestOrphanAdoptionPositiveEvidence`'s non-candidate probe
-        above -- the shape the live reproduction hit."""
-        from datetime import datetime, timezone
-
-        sdir = Path(core.session_dir(session_id, cwd=str(repo)))
-        future = datetime.fromtimestamp(
-            datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
-        )
-        (sdir / "started_at").write_text(
-            future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
-        )
-
-    def test_peer_held_path_never_touched_by_caller_names_the_holder(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        core.init("peer", cwd=str(repo))
-        self._started_at_in_the_future(repo, "mine")
-
-        (repo / "peer-held.md").write_text("peer's in-flight work")
-        scope.touch("peer", "peer-held.md", cwd=str(repo))
-
-        # The defect's own premise, asserted rather than assumed: the path is
-        # absent from EVERY key of the caller's primary offer.
-        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert "peer-held.md" not in offer["safe_paths"]
-        assert "peer-held.md" not in (offer["orphans"] or [])
-        assert "peer-held.md" not in {e["path"] for e in offer["excluded"]}
-
-        ok, reason = assert_paths_in_session_scope(
-            "mine", ["peer-held.md"], cwd=str(repo)
-        )
-
-        assert ok is False
-        assert scope_report.deny_reason_names_a_holder(reason) is True
-        assert "peer" in reason
-        assert scope_report._CLASSIFICATION_UNCLASSIFIED not in reason
-
-    def test_orphan_still_classifies_as_orphan_and_still_denies(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        self._started_at_in_the_future(repo, "mine")
-
-        (repo / "orphan.md").write_text("nobody's")
-
-        ok, reason = assert_paths_in_session_scope(
-            "mine", ["orphan.md"], cwd=str(repo), allow_orphans=False
-        )
-
-        # The regression that matters is the BOOLEAN, not the string: the
-        # classification offer adopts a caller-named unclaimed path into its
-        # OWN safe_paths by construction, so a verdict read off it would
-        # allow here.
-        assert ok is False
-        assert scope_report._CLASSIFICATION_ORPHAN in reason
-        # Deliberately the PREDICATE, not a bare `CLAIMED_BY_PREFIX not in
-        # reason`: the prefix alone was never the safe test (the pre-2026-08-21
-        # orphan wording, "dirty but claimed by no session", carried it
-        # mid-sentence while meaning its inverse), and the predicate is what
-        # every consumer discriminates on. See `CLAIMED_BY_SENTINELS`.
-        assert scope_report.deny_reason_names_a_holder(reason) is False
-
-    def test_orphan_classification_is_unreachable_with_include_orphans(self, tmp_path):
-        """`scoped_git_commit._include_orphans_ineffective_note`
-        discriminates on a claimed-by substring -- but only ever on a denial where
-        `include_orphans` was True. The two are disjoint BY CONSTRUCTION, and
-        this pins it: with adoption requested, a verified caller has every
-        orphan ALLOWED (so it is never classified at all), and an unverified
-        one gets `_CLASSIFICATION_INCLUDE_ORPHANS_IGNORED`, which carries no
-        claimed-by wording. Reachable `_CLASSIFICATION_ORPHAN` therefore
-        implies `include_orphans` was False, where the note is silent anyway.
-        """
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        self._started_at_in_the_future(repo, "mine")
-        (repo / "orphan.md").write_text("nobody's")
-
-        # Verified caller (core.init wrote meta.json) -- adoption succeeds,
-        # so there is no denial to word at all.
-        ok, _reason = assert_paths_in_session_scope(
-            "mine", ["orphan.md"], cwd=str(repo), allow_orphans=True
-        )
-        assert ok is True
-
-        # Unverified caller (no session dir, hence no meta.json) -- denial
-        # names the unmet ASK, never a holder.
-        ok, reason = assert_paths_in_session_scope(
-            "never-initialized", ["orphan.md"], cwd=str(repo), allow_orphans=True
-        )
-        assert ok is False
-        assert scope_report._CLASSIFICATION_ORPHAN not in reason
-        assert scope_report.deny_reason_names_a_holder(reason) is False
-
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_genuinely_unknown_path_stays_unclassified(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-
-        # Clean at HEAD and named by no session anywhere -- there is nothing
-        # for either offer to say about it, and saying nothing is correct.
-        ok, reason = assert_paths_in_session_scope(
-            "mine", ["README.md"], cwd=str(repo)
-        )
-
-        assert ok is False
-        assert scope_report._CLASSIFICATION_UNCLASSIFIED in reason
-        assert scope_report.deny_reason_names_a_holder(reason) is False
-
-    # designed_red: auto-commit attribution disabled 2026-08-21 (safe_commit_offer._MECHANISM_DISABLED); re-greens with the rebuild.
-    @pytest.mark.designed_red
-    def test_classification_offer_never_widens_the_verdict(self, tmp_path):
-        """THE invariant test. `extra_candidates` feeds `compute_scope` Step
-        1, so every path below IS a member of the classification offer's own
-        `safe_paths` -- adopted because the caller named it, not because the
-        caller owns it. If someone later "simplifies" the two `compute_offer`
-        calls into one, this allows, and any caller can own any dirty path in
-        the tree by putting it in its own pathspec.
-        """
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        self._started_at_in_the_future(repo, "mine")
-
-        named = ["unclaimed-a.md", "unclaimed-b.md"]
-        for path in named:
-            (repo / path).write_text("dirty, claimed by nobody")
-
-        classification_offer = safe_commit_offer.compute_offer(
-            "mine", cwd=str(repo), extra_candidates=named
-        )
-        assert set(named) <= set(classification_offer["safe_paths"])
-
-        ok, _reason = assert_paths_in_session_scope(
-            "mine", named, cwd=str(repo), allow_orphans=False
-        )
-        assert ok is False
-
-    def test_default_compute_offer_is_byte_for_byte_unchanged(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        (repo / "a.py").write_text("a")
-        scope.touch("mine", "a.py", cwd=str(repo))
-
-        assert safe_commit_offer.compute_offer(
-            "mine", cwd=str(repo)
-        ) == safe_commit_offer.compute_offer(
-            "mine", cwd=str(repo), extra_candidates=None
-        )
+# ---------------------------------------------------------------------------
+# TestClassificationOffer -- DELETED 2026-08-21 with the shape it pinned.
+#
+# It covered the TWO-OFFER split: a second `compute_offer` computed with the
+# caller's own pathspec as `extra_candidates`, safe to read for WORDING and
+# catastrophic to read as a verdict, kept apart from the primary offer by
+# discipline alone. `assert_paths_in_session_scope` now asks
+# `claim_index.classify_paths` about the pathspec directly, so there is no
+# second offer to widen anything and `extra_candidates` no longer exists as a
+# parameter. Tests of a deleted parameter are not coverage; the negative spec
+# that replaced them lives on `compute_offer` and in this module's own
+# docstring, and `TestOwnershipLegRebuilt` below pins the behaviour.
+# ---------------------------------------------------------------------------
 
 
 class TestOwnershipLegRebuilt:

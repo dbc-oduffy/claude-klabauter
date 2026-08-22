@@ -64,6 +64,9 @@ class _RealEngineClaudeKlabauter:
     mktcache_gate_env = staticmethod(pct_engine.mktcache_gate_env)
     run_entrypoint_gate = staticmethod(pct_engine.run_entrypoint_gate)
     enumerate_gate_entrypoints = staticmethod(pct_engine.enumerate_gate_entrypoints)
+    # Review: code-reviewer — pinned to 1 for hermetic test determinism
+    # (also inherited by _NoOpEngineClaudeKlabauter below); not the production
+    # default, so tuning the real worker-cap default will NOT show up here.
     derive_worker_cap = staticmethod(lambda: 1)
 
 

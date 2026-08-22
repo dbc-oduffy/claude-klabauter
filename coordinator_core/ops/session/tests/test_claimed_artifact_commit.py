@@ -20,12 +20,13 @@ Spec backlink: coordinator_core/ops/session/safe_commit_offer.py
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import core, scope
+from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
 
 # Real git spawn is load-bearing, same rationale as test_safe_commit_offer.py.
@@ -43,6 +44,14 @@ def _make_repo(tmp_path):
 
 
 class TestAC6PeerIsolationSameDirectory:
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). Red at HEAD before this workstream
+    # touched anything, and left unmarked by the change that suspended the op --
+    # marked here because an unexplained red is a worklist entry nobody can
+    # action. NOT the attribution kill: that was rebuilt and
+    # `_MECHANISM_DISABLED` is gone. Re-greens when the op leaves the roster.
+    @pytest.mark.designed_red
     def test_peer_claimed_artifact_beside_own_survives_uncommitted(self, tmp_path):
         """AC6: place a peer-claimed artifact beside this session's own in
         the SAME directory, run the op, assert the peer's file is still
@@ -85,16 +94,26 @@ class TestDegradedOrIndeterminateCommitsNothing:
         (repo / "shared.py").write_text("s")
         scope.touch("mine", "mine.py", cwd=str(repo))
 
-        other_touched = Path(core.session_dir("other", cwd=str(repo))) / "touched.txt"
-        other_touched.write_text("shared.py\n")
-        orig_read_text = Path.read_text
+        # The read seam moved with the 2026-08-21 rebuild: `compute_offer`
+        # reads claims through `claim_index`, whose reader reports
+        # unreadability as a `(lines, ok)` pair rather than by raising and
+        # does not go through `pathlib.Path.read_text` at all. Patching the
+        # old seam leaves the precondition unestablished and takes the test
+        # red for a reason unrelated to the code under test.
+        scope.touch("other", "shared.py", cwd=str(repo))
+        other_touched = os.path.join(
+            core.session_dir("other", cwd=str(repo)), "touched.txt"
+        )
+        real_reader = claim_index._read_lines_discard_torn_tail
 
-        def _boom(self, *a, **k):
-            if self == other_touched:
-                raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+        def _unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(other_touched):
+                return [], False
+            return real_reader(path)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(
+            claim_index, "_read_lines_discard_torn_tail", _unreadable
+        )
 
         report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
 
@@ -119,16 +138,26 @@ class TestDegradedOrIndeterminateCommitsNothing:
         (repo / "shared.py").write_text("s")
         scope.touch("mine", "mine.py", cwd=str(repo))
 
-        other_touched = Path(core.session_dir("other", cwd=str(repo))) / "touched.txt"
-        other_touched.write_text("shared.py\n")
-        orig_read_text = Path.read_text
+        # The read seam moved with the 2026-08-21 rebuild: `compute_offer`
+        # reads claims through `claim_index`, whose reader reports
+        # unreadability as a `(lines, ok)` pair rather than by raising and
+        # does not go through `pathlib.Path.read_text` at all. Patching the
+        # old seam leaves the precondition unestablished and takes the test
+        # red for a reason unrelated to the code under test.
+        scope.touch("other", "shared.py", cwd=str(repo))
+        other_touched = os.path.join(
+            core.session_dir("other", cwd=str(repo)), "touched.txt"
+        )
+        real_reader = claim_index._read_lines_discard_torn_tail
 
-        def _boom(self, *a, **k):
-            if self == other_touched:
-                raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+        def _unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(other_touched):
+                return [], False
+            return real_reader(path)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(
+            claim_index, "_read_lines_discard_torn_tail", _unreadable
+        )
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert offer["ownership"]["degraded"] is True  # precondition for this test
@@ -181,6 +210,14 @@ class TestStagedSetMismatchDeferred:
 
 
 class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
+    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
+    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
+    # max 150021ms against a 2000ms bar). Red at HEAD before this workstream
+    # touched anything, and left unmarked by the change that suspended the op --
+    # marked here because an unexplained red is a worklist entry nobody can
+    # action. NOT the attribution kill: that was rebuilt and
+    # `_MECHANISM_DISABLED` is gone. Re-greens when the op leaves the roster.
+    @pytest.mark.designed_red
     def test_claimed_path_also_seen_as_peer_claim_is_withheld(self, tmp_path):
         """(c): a defensive check -- if a path this session claims as
         "mine" is ALSO present in this same call's own

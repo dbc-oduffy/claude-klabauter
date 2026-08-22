@@ -15,7 +15,11 @@ both only observable under OVERLAPPING dispatch:
      `COORDINATOR_DISPATCH_TIMEOUT_SECS` from `os.environ` on every call
      rather than trusting the value the module constant snapshotted at
      import — a warm, long-lived process must be able to retune this knob
-     without a restart.
+     without a restart. Since 2026-08-21 that retune is NARROW-ONLY: the env
+     var may lower the guard and can no longer raise it above the built-in
+     default. The ratchet at the end of this module is the enforcement, and
+     it is the half that was previously vacuous — the override-row sweeps
+     preceding it iterate an empty table.
   3. `_OP_TIMEOUT_OVERRIDES` remains live after the C11 change: an override
      row, when one exists, must still resolve regardless of the global
      knob's per-request re-resolution. Both rows this docstring used to name
@@ -34,6 +38,8 @@ Spec backlink: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.ipc import dispatch_message, _REGISTRY
@@ -158,13 +164,19 @@ def test_declared_writes_var_reset_after_dispatch_completes():
 
 def test_resolve_dispatch_timeout_secs_reads_env_live(monkeypatch):
     """`_resolve_dispatch_timeout_secs()` picks up a live env-var change on
-    the very next call — no reliance on the import-time snapshot."""
+    the very next call — no reliance on the import-time snapshot.
+
+    Both probes narrow, because narrowing is now the only direction the knob
+    has (see the ratchet section below). This test used to probe with 77 and
+    assert 77 — a value ABOVE the built-in default, which is exactly what the
+    narrow-only clamp exists to refuse. Liveness and widening were never the
+    same property; only liveness is under test here."""
     monkeypatch.delenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", raising=False)
     baseline = ipc._resolve_dispatch_timeout_secs()
     assert baseline == ipc.DISPATCH_TIMEOUT_SECS
 
-    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "77")
-    assert ipc._resolve_dispatch_timeout_secs() == 77.0
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "7")
+    assert ipc._resolve_dispatch_timeout_secs() == 7.0
 
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "12.5")
     assert ipc._resolve_dispatch_timeout_secs() == 12.5
@@ -276,4 +288,101 @@ def test_timeout_high_water_table_covers_every_override():
     assert not missing, (
         f"new _OP_TIMEOUT_OVERRIDES rows with no high-water mark: {sorted(missing)}. "
         f"Add each to _TIMEOUT_HIGH_WATER_SECS at the value it enters with."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The global knob is narrow-only — the half of the ratchet that was vacuous.
+#
+# The two ratchet tests above sweep `_OP_TIMEOUT_OVERRIDES`, which is empty and
+# has been since DEC-2. They pass by iterating nothing. That is not a latent
+# guard waiting for a row: it is a guard aimed at the surface nobody uses, while
+# the surface everybody uses -- `COORDINATOR_DISPATCH_TIMEOUT_SECS`, re-read live
+# on every request, effective with no restart, settable from any sibling repo --
+# carried no ceiling at all. `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` was obeyed
+# immediately, and the ratchet above had nothing to say about it.
+#
+# The tests below put the knob itself under the ratchet. Same rule as every other
+# budget here: it may be LOWERED freely, and raising it is an edit to a pinned
+# literal that a reviewer reads as the argument it is.
+# ---------------------------------------------------------------------------
+
+#: The built-in default's high-water mark, as an independent second literal --
+#: deliberately NOT `ipc.DISPATCH_TIMEOUT_SECS`, since importing the value under
+#: test would make this file agree with any number whatsoever. Lowering the engine
+#: default below this is permitted and needs no edit here; raising it above 30s
+#: fails the suite.
+_GLOBAL_TIMEOUT_HIGH_WATER_SECS = 30.0
+
+
+def test_the_builtin_dispatch_default_is_at_or_below_its_high_water_mark():
+    assert ipc.DISPATCH_TIMEOUT_SECS <= _GLOBAL_TIMEOUT_HIGH_WATER_SECS, (
+        f"DISPATCH_TIMEOUT_SECS raised to {ipc.DISPATCH_TIMEOUT_SECS}s over its "
+        f"{_GLOBAL_TIMEOUT_HIGH_WATER_SECS}s high-water mark. An op that does not "
+        f"fit the guard is a kill candidate, not a budget raise -- see "
+        f"docs/wiki/cost-budgets-and-the-kill-disposition.md."
+    )
+
+
+@pytest.mark.parametrize("requested", ["31", "60", "420", "9999", "1e9", "inf"])
+def test_the_env_knob_cannot_raise_the_dispatch_timeout(monkeypatch, requested):
+    """Every widening value the knob can carry resolves to at most the default.
+
+    Parametrized over the shapes an operator actually reaches for -- a nudge over
+    the line, a doubling, the 420 from the incident, an absurdity, and the two
+    float spellings (`1e9`, `inf`) that a naive `float(raw)` accepts and a naive
+    ceiling check written with `int` would not.
+    """
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", requested)
+    assert ipc._resolve_dispatch_timeout_secs() <= _GLOBAL_TIMEOUT_HIGH_WATER_SECS
+    assert ipc._timeout_for("ping") <= _GLOBAL_TIMEOUT_HIGH_WATER_SECS
+    assert ipc._timeout_for("test.unregistered") <= _GLOBAL_TIMEOUT_HIGH_WATER_SECS
+
+
+def test_the_env_knob_still_narrows(monkeypatch):
+    """Narrowing is the permitted direction and must stay live and exact -- a
+    fast-fail run is a supported use, and a clamp written as `max` or as an
+    equality would break it."""
+    monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "0.25")
+    assert ipc._resolve_dispatch_timeout_secs() == pytest.approx(0.25)
+    assert ipc._timeout_for("ping") == pytest.approx(0.25)
+
+
+def test_the_builtin_default_is_not_itself_env_derived():
+    """The ceiling may not be computed from the thing it bounds.
+
+    `DISPATCH_TIMEOUT_SECS` was `float(os.environ.get("COORDINATOR_DISPATCH_
+    TIMEOUT_SECS", "30"))` until 2026-08-21. With that read in place, clamping the
+    env knob against this constant clamps it against itself: an engine started with
+    `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` takes 420 as its ceiling and the clamp
+    is a no-op. Every runtime assertion in this module would still pass -- the
+    monkeypatched env arrives after import, so no in-process test can see it.
+
+    Asserted against the source, therefore, rather than against behaviour: the
+    module-level binding must be a plain literal. A subprocess would also prove it
+    and would cost a process start on every run, which this repo's brightline does
+    not spend for a fact an AST read establishes for free.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ipc))
+    bindings = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "DISPATCH_TIMEOUT_SECS"
+    ]
+    assert len(bindings) == 1, (
+        f"expected exactly one module-level DISPATCH_TIMEOUT_SECS binding in ipc.py, "
+        f"found {len(bindings)} -- a second one would decide the ceiling and this "
+        f"test would be checking the wrong node."
+    )
+    assert isinstance(bindings[0].value, ast.Constant), (
+        "DISPATCH_TIMEOUT_SECS must be bound to a bare literal. It is now the "
+        "ceiling COORDINATOR_DISPATCH_TIMEOUT_SECS is clamped against, so deriving "
+        "it from that same env var (or from anything else an operator controls) "
+        "restores the unbounded knob this clamp removed, silently and with every "
+        "other test in this file still green."
     )

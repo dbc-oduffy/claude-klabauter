@@ -912,6 +912,15 @@ def _normalize_windows_argv0_head_path_with_spaces(cmd: str) -> str:
 #: `-n`, so a filename cannot collide with this allowlist.
 _NOEXEC_FLAG_TOKENS = frozenset({"-n", "--noexec"})
 
+#: A long option's ATTACHED-value form (`--rcfile=/tmp/x`, `--init-file=x`),
+#: matched as a whole token. Used by `_has_script_operand` below to treat any
+#: such token as operand-bearing regardless of which option precedes the
+#: `=` -- deliberately a shape match, not a named allowlist of "options that
+#: source/execute" (`--rcfile`, `--init-file`, ...): a named list fails open
+#: the moment bash grows a value-taking option nobody enumerated, which is
+#: exactly the bug this fixes (2026-08-22).
+_LONG_OPT_WITH_VALUE_RE = re.compile(r"^--[A-Za-z][A-Za-z0-9-]*=")
+
 
 def _has_noexec_flag_before_script(interpreter_args: List[str]) -> bool:
     """True if `-n`/`--noexec` appears among the shell's OWN option tokens,
@@ -935,6 +944,63 @@ def _has_noexec_flag_before_script(interpreter_args: List[str]) -> bool:
         if tok.startswith("-"):
             continue
         break
+    return False
+
+
+def _has_script_operand(interpreter_args: List[str]) -> bool:
+    """True if `interpreter_args` (the tokens AFTER a `bash`/`sh`/`zsh` name)
+    contains a non-option OPERAND -- i.e. the argv actually names a script for
+    the shell to run.
+
+    An argv whose every remaining token is one of the shell's OWN option
+    tokens names no script at all: `bash --version`, `bash --help`, `sh -l`
+    print or set something and exit, and denying them as
+    "interpreter-invoked script" describes an invocation that does not exist
+    (bug fix, 2026-08-22: an option-only argv reached the bare-`<file>` deny
+    branch purely on token COUNT).
+
+    Option scanning matches `_has_noexec_flag_before_script`, with two
+    deliberate edges:
+
+    - A literal `--` ends option parsing, so a following token is an operand
+      even though it starts with `-`: `bash -- --version` runs a script
+      NAMED `--version` and stays denied.
+    - A lone `-` is not an option; bash reads the script from stdin, whose
+      content this guard cannot examine, so it counts as an operand and
+      stays denied.
+
+    An option that TAKES a value (`bash --rcfile <file>`, `bash -O <name>`)
+    has its value counted as the operand. That is deliberately unchanged
+    from the pre-fix token-count behaviour -- this predicate only ever
+    withholds the deny from an argv with NO operand at all, so it can never
+    open a shape the count check already denied. `-c` never reaches here:
+    the `_BUNDLED_C_FLAG_RE` branch above claims it first, in every caller.
+
+    ATTACHED-FORM VALUE FIX (2026-08-22, code-review finding on this same
+    fix's landing): the space-separated case above (`--rcfile <file>`)
+    already returns True on the value token, but the attached `=` form
+    (`--rcfile=/tmp/evil.rc`) is a SINGLE token starting with `-`, so it fell
+    into the "pure option, skip" branch and was never seen as carrying a
+    script-bearing value at all -- an argv made entirely of such tokens
+    (`bash --rcfile=/tmp/evil.rc --norc`) read as option-only and was
+    ALLOWED, letting `--rcfile=`/`--init-file=` source an unexamined file.
+    Fixed by treating ANY `--name=value` long option as operand-bearing,
+    not by naming just `--rcfile`/`--init-file`: an allowlist of "known
+    script-sourcing options" fails open the moment bash grows one this
+    guard's author didn't enumerate, exactly the failure mode that produced
+    this bug. Any option that takes an attached value is presumed capable of
+    carrying one until proven otherwise -- consistent with the existing
+    space-separated behaviour, which already denies on ANY value token
+    without checking which option preceded it.
+    """
+    for idx, tok in enumerate(interpreter_args):
+        if tok == "--":
+            return idx + 1 < len(interpreter_args)
+        if _LONG_OPT_WITH_VALUE_RE.match(tok):
+            return True
+        if tok.startswith("-") and tok != "-":
+            continue
+        return True
     return False
 
 
@@ -1086,7 +1152,9 @@ def _evaluate_wrapper_indirection(cmd_text: str, depth: int = 0) -> Optional[str
                 if verdict is not None:
                     return f"{head_base} -c '<inline>' -> {verdict}"
                 continue
-            if head_base in _SHELL_FILE_INTERPRETERS and len(tokens) >= 2:
+            if head_base in _SHELL_FILE_INTERPRETERS and _has_script_operand(
+                tokens[1:]
+            ):
                 return (
                     f"{head_base} <file> (interpreter-invoked script -- "
                     "indirection wrapper, script content unexamined)"
@@ -1526,6 +1594,58 @@ def _real_git_subcommand(
     return None, False, []
 
 
+#: Matches a shell redirection OPERATOR at the start of a token: an optional
+#: leading fd digit, then `>`/`>>`/`&>` -- e.g. `2>&1` (operator "2>", target
+#: "&1" glued on), `>`, `2>`, `&>`, `>/dev/null` (operator ">", target
+#: "/dev/null" glued on). `re.match` anchors this at position 0 without
+#: requiring the whole token to be consumed, since a target is often glued
+#: onto the same shlex token as its operator.
+_REDIRECTION_OP_RE = re.compile(r"^\d*(>>?|&>)")
+
+
+def _strip_leading_redirection_tokens(tokens: "List[str]") -> "List[str]":
+    """Drop a leading run of shell-redirection tokens from `tokens`.
+
+    2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED): `shlex` has no concept of
+    shell redirection -- `git stash 2>&1` tokenizes to `["git", "stash",
+    "2>&1"]`, an ordinary-looking 3rd token, not two tokens split apart by a
+    stream-redirect operator the way a real shell would see it. Any caller
+    that reads `remaining[0]` as "the first real argument after the
+    subcommand" (the `stash` branch of `_evaluate_git_segment_anchored`, and
+    `block_subagent_stash_creation`'s mirror of it) was silently handed
+    `"2>&1"` as that argument -- not `None` (bare `git stash`, denied) and
+    not a real flag/subcommand, so the stash branch's `is_push_or_bare` test
+    failed and the command fell through to the safe-forward allowlist. A
+    redirection is never a real git argument; this treats one exactly like
+    the absence of an argument, matching what the shell itself would see.
+
+    Handles both a self-contained token (operator and target glued together,
+    e.g. `"2>&1"`, `">/dev/null"`) and a bare operator followed by its target
+    as a SEPARATE token (e.g. `[">", "/dev/null"]`, `["2>", "/dev/null"]`) --
+    the latter only occurs when the shell command had whitespace between the
+    operator and its target, which `shlex` still splits into two tokens.
+    Consumes a run of more than one redirection (`2>&1 >/tmp/log`), not just
+    one, since a caller may chain several before any real argument.
+    """
+    i = 0
+    n = len(tokens)
+    while i < n:
+        match = _REDIRECTION_OP_RE.match(tokens[i])
+        if not match:
+            break
+        if match.end() < len(tokens[i]):
+            # Target glued onto this same token (e.g. "2>&1", ">/dev/null") --
+            # nothing more to consume for this operator.
+            i += 1
+        else:
+            # Bare operator token (e.g. ">", "2>", "&>") -- its target, if
+            # present, is the NEXT token; consume both.
+            i += 1
+            if i < n:
+                i += 1
+    return tokens[i:]
+
+
 def _git_subcommand_and_remaining_for_segment(
     seg: str, strict: bool = True,
 ) -> "tuple[Optional[str], bool, List[str]]":
@@ -1822,7 +1942,15 @@ def _evaluate_git_segment_anchored(
         # (dispatch_checks.check_destructive_git_revert), which had inherited
         # the same misclassification from here; both are corrected together
         # so the subagent-path and EM-path guards do not diverge.
-        stash_head = remaining[0] if remaining else None
+        # 2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED): strip a leading
+        # redirection (`2>&1`, `>/dev/null`, ...) before reading the first
+        # real argument -- see `_strip_leading_redirection_tokens`'s own
+        # docstring. Without this, `git stash 2>&1` tokenized `remaining` to
+        # `["2>&1"]`; that token is neither `None`, `"push"`/`"save"`, nor
+        # `-`-prefixed, so `is_push_or_bare` went False and a bare stash-push
+        # sailed through to the safe-forward allowlist below, unscoped.
+        stash_remaining = _strip_leading_redirection_tokens(remaining)
+        stash_head = stash_remaining[0] if stash_remaining else None
         is_push_or_bare = (
             stash_head is None
             or stash_head in ("push", "save")
@@ -2186,7 +2314,9 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
                 if nested.deny_kind is not None and result.deny_kind is None:
                     result.deny_kind = f"{norm_head} -c '<inline>' -> {nested.deny_kind}"
                 continue
-            if norm_head in _SHELL_FILE_INTERPRETERS and len(working) >= 2:
+            if norm_head in _SHELL_FILE_INTERPRETERS and _has_script_operand(
+                working[1:]
+            ):
                 if result.deny_kind is None:
                     result.deny_kind = (
                         f"{norm_head} <file> (interpreter-invoked script -- "

@@ -307,6 +307,80 @@ def test_read_backpointer_subagent_type_legacy_short_row_ignored(
     assert resolved == CONFINED_TYPE
 
 
+def _archive_session(git_repo: Path, em_session_id: str, stamp: str = "2026-08-20") -> Path:
+    """Relocate a live session dir to .archive/<em_sid>-<date>/, as the cadence does."""
+    sessions_base = git_repo / ".git" / "coordinator-sessions"
+    dest = sessions_base / ".archive" / f"{em_session_id}-{stamp}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    (sessions_base / em_session_id).rename(dest)
+    return dest
+
+
+def test_read_backpointer_subagent_type_resolves_from_archived_session(
+    git_repo: Path,
+) -> None:
+    """The archival cadence moves <em_sid>/ to .archive/<em_sid>-<date>/. The
+    back-pointer still names <em_sid>, so a lookup that knows only the live path
+    goes blind on every archived session -- the shape that left 1000 of 1250
+    back-pointers on this box unresolvable."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _archive_session(git_repo, "em-session-1")
+
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == CONFINED_TYPE
+
+
+def test_read_backpointer_subagent_type_duplicate_across_live_and_archive_ambiguous(
+    git_repo: Path,
+) -> None:
+    """Pooling live and archived rows must not smuggle a resolution past the
+    single-match rule: two differing full rows for one agent_id stay fail-closed
+    however they are split across the two locations."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _archive_session(git_repo, "em-session-1")
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", REPORT_SIDECAR_TYPE)
+
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == ""
+
+
+def test_read_backpointer_subagent_type_archive_of_another_session_not_read(
+    git_repo: Path,
+) -> None:
+    """The archive fallback follows ONE session's relocation. An archived dir
+    belonging to a different em_sid must not answer for this agent_id."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _archive_session(git_repo, "em-session-1")
+    sessions_base = git_repo / ".git" / "coordinator-sessions"
+    other = sessions_base / ".archive" / "em-session-2-2026-08-20"
+    other.mkdir(parents=True, exist_ok=True)
+    (other / "dispatched-agents.txt").write_text(
+        f"{NAMED_AGENT_ID}\t2026-07-12T00:00:00Z\t{REPORT_SIDECAR_TYPE}\n",
+        encoding="utf-8",
+    )
+
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == CONFINED_TYPE
+
+
+def test_read_backpointer_subagent_type_prefix_collision_archive_not_read(
+    git_repo: Path,
+) -> None:
+    """`.archive/<em_sid>-*` must not match a LONGER session id that merely
+    starts with this one -- em-session-1 vs em-session-1a."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _archive_session(git_repo, "em-session-1")
+    sibling = git_repo / ".git" / "coordinator-sessions" / ".archive" / "em-session-1a-2026-08-20"
+    sibling.mkdir(parents=True, exist_ok=True)
+    (sibling / "dispatched-agents.txt").write_text(
+        f"{NAMED_AGENT_ID}\t2026-07-12T00:00:00Z\t{REPORT_SIDECAR_TYPE}\n",
+        encoding="utf-8",
+    )
+
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == CONFINED_TYPE
+
+
 # ---------------------------------------------------------------------------
 # resolve_effective_types
 # ---------------------------------------------------------------------------

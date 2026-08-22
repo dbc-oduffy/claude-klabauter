@@ -56,8 +56,8 @@ def main(argv: List[str], plugin_root: Optional[str] = None, site: str = "genera
     if not _trusted_root(plugin_root):
         print(
             f"ERROR: {site} '{plugin_root}' outside trusted prefix — refusing to source; "
-            "re-run coordinator:install (or set COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a "
-            "sanctioned --plugin-dir spike)",
+            "re-run python3 <claude-klabauter>/scripts/setup.py (or set "
+            "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 for a sanctioned --plugin-dir spike)",
             file=sys.stderr,
         )
         return 1

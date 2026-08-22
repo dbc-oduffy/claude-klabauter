@@ -38,8 +38,10 @@ from coordinator_core.install._shared import (
     wrap_hook_command_guarded,
 )
 from coordinator_core.install.gen_settings_hooks import (
+    HOOK_TIMEOUT_CEILING_SECS,
     GenSettingsHooksError,
     _assert_portable_command,
+    _clamp_hook_timeout,
     ensure_positive_marker,
     generate,
     kill_switch_marker_path,
@@ -1820,3 +1822,125 @@ def test_journal_omits_entry_when_mutation_disabled(coordinator_root: Path, _jou
     assert status == "seeded"
     assert out_path.is_file()
     assert _resolved(_journal_env) is None
+
+
+# ---------------------------------------------------------------------------
+# Per-hook `timeout` is bounded, not forwarded verbatim
+#
+# The field is the HARNESS's kill ceiling for a hook on the session/commit hot
+# path, and its value comes from a plugin-side hooks.json this repo does not
+# contain — so until 2026-08-21 an off-repo number set how long a wedged hook
+# could hold a session, with nothing in this suite able to see it. The oracle
+# fixture's `bootstrap-substrate.py` SessionStart entry carries a 120 that
+# proves the shape was reachable.
+# ---------------------------------------------------------------------------
+
+
+def test_oracle_fixture_timeouts_are_all_bounded_by_the_ceiling(coordinator_root: Path):
+    """End-to-end, through `generate()`: no emitted hook carries a timeout
+    above the ceiling, INCLUDING the fixture's 120s SessionStart entry."""
+    out_path = coordinator_root.parent / "settings-timeout-ceiling.json"
+    generate(
+        out_path=str(out_path),
+        hooks_json_override=str(_ORACLE_HOOKS_JSON),
+        coordinator_root_override=str(coordinator_root),
+    )
+    settings = json.loads(out_path.read_text())
+
+    emitted = [h.get("timeout") for h in _iter_all_hooks(settings) if "timeout" in h]
+    assert emitted, "fixture carries timeouts; an empty set would make this vacuous"
+    assert max(emitted) <= HOOK_TIMEOUT_CEILING_SECS
+
+    source = json.loads(_ORACLE_HOOKS_JSON.read_text())
+    over = [
+        h["timeout"]
+        for groups in source["hooks"].values()
+        for g in groups
+        for h in g.get("hooks", [])
+        if h.get("timeout", 0) > HOOK_TIMEOUT_CEILING_SECS
+    ]
+    assert over, "the input fixture must keep at least one over-ceiling value or this proves nothing"
+
+
+def test_over_ceiling_timeout_is_reported_naming_event_and_original(
+    coordinator_root: Path, capsys: pytest.CaptureFixture
+):
+    """The clamp is announced, not silent — an operator who wrote 120 in the
+    sibling repo learns their number did not survive, and where to change it."""
+    out_path = coordinator_root.parent / "settings-timeout-report.json"
+    generate(
+        out_path=str(out_path),
+        hooks_json_override=str(_ORACLE_HOOKS_JSON),
+        coordinator_root_override=str(coordinator_root),
+    )
+    err = capsys.readouterr().err
+
+    assert f"over the {HOOK_TIMEOUT_CEILING_SECS}s ceiling" in err
+    assert "event=SessionStart" in err
+    assert "timeout=120" in err
+    assert str(_ORACLE_HOOKS_JSON) in err
+    assert "Lower it" in err
+
+
+def test_under_ceiling_timeout_is_forwarded_untouched(coordinator_root: Path):
+    """The clamp bounds; it does not normalize. A hook already inside the
+    ceiling keeps its own number, so this is not a flat rewrite of the field."""
+    out_path = coordinator_root.parent / "settings-timeout-passthrough.json"
+    generate(
+        out_path=str(out_path),
+        hooks_json_override=str(_ORACLE_HOOKS_JSON),
+        coordinator_root_override=str(coordinator_root),
+    )
+    settings = json.loads(out_path.read_text())
+
+    session_guard = [
+        h
+        for h in _iter_all_hooks(settings)
+        if "session-guard.sh" in h.get("command", "")
+    ]
+    assert len(session_guard) == 1
+    assert session_guard[0]["timeout"] == 5
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "30", True, False, 0, -1, [], {}],
+    ids=["absent", "string", "true", "false", "zero", "negative", "list", "dict"],
+)
+def test_non_numeric_or_non_positive_timeout_is_left_alone(value):
+    """`_clamp_hook_timeout` bounds a number the harness will act on; it is
+    not a schema validator for the sibling repo's file, so anything that is
+    not a positive real number passes through exactly as it arrived.
+
+    `True`/`False` are in the corpus deliberately: `bool` is an `int`
+    subclass, so a naive isinstance check would read `"timeout": true` as a
+    1-second ceiling rather than a malformed field."""
+    hook = {"command": "x"} if value is None else {"command": "x", "timeout": value}
+    before = dict(hook)
+    clamped: list = []
+
+    _clamp_hook_timeout(hook, "SessionStart", clamped)
+
+    assert hook == before
+    assert clamped == []
+
+
+def test_clamp_fires_exactly_at_the_boundary():
+    """The ceiling itself is allowed; one over it is not."""
+    at = {"command": "x", "timeout": HOOK_TIMEOUT_CEILING_SECS}
+    _clamp_hook_timeout(at, "SessionStart", None)
+    assert at["timeout"] == HOOK_TIMEOUT_CEILING_SECS
+
+    over = {"command": "x", "timeout": HOOK_TIMEOUT_CEILING_SECS + 0.5}
+    rows: list = []
+    _clamp_hook_timeout(over, "PreToolUse", rows)
+    assert over["timeout"] == HOOK_TIMEOUT_CEILING_SECS
+    assert rows == [("PreToolUse", "x", HOOK_TIMEOUT_CEILING_SECS + 0.5)]
+
+
+def test_ceiling_stays_a_backstop_not_a_budget():
+    """A ratchet on the number itself. CLAUDE.md forbids any process past 2s
+    and puts the fix bar at 200ms; a kill ceiling must sit above the target
+    it guards, but a hook allowed to run for a minute is one the harness
+    never reclaims. Raising this past 10 is a doctrine change, not an edit."""
+    assert 2 < HOOK_TIMEOUT_CEILING_SECS <= 10

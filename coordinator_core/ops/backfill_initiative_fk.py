@@ -121,6 +121,7 @@ import subprocess
 import sys
 import tempfile
 from typing import IO, Iterable, List, Optional, Tuple
+from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -135,10 +136,22 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "backfill-initiative-fk"  # literal program-name prefix, matches the bash oracle's messages
 _LOCK_BASENAME = "backfill-initiative-fk.lock"
-# Bounded wait for a single coordinator-initiative attach subprocess call. Per the
-# porter addendum §2 (subprocess timeout rule): a loop over an externally-authored
-# TSV set must not let one hung child block the whole batch.
-_ATTACH_TIMEOUT_SECS = 60
+# Bounded wait for THE single `coordinator-initiative attach --pairs-file` subprocess
+# call this module makes. Derived from the engine's own end-to-end guard rather than
+# typed here, per DR-349: a site does not carry a timeout, it derives its bound from
+# the budget, and a bound wider than the budget the caller is held to is unreachable
+# anyway.
+#
+# NEGATIVE SPEC (DR-349 § "Dials that raise themselves", 2026-08-21): this bound is
+# FLAT and must stay flat. It was previously multiplied by `len(pairs)` at the call
+# site, which granted a 200-pair batch a 3.3-hour blocking wait on a box carrying
+# 50-70 concurrent sessions. The multiplier was cargo cult: `_attach_batch` writes
+# every pair to one temp TSV and makes ONE spawn for the whole batch (the
+# amplification-gate fix that retired this module's `_process_pairs::run` exemption),
+# so there is no N anywhere in the cost model for a per-item factor to scale against.
+# Do not reintroduce a per-item factor here; a batch that cannot finish inside this
+# bound is a defect in the attach CLI, not a request for more time.
+_ATTACH_TIMEOUT_SECS = DISPATCH_TIMEOUT_SECS
 
 
 def _lock_path() -> str:
@@ -291,9 +304,12 @@ def _attach_batch(
     line) is attributed to EVERY pair still unmatched, not silently dropped —
     preserves the "collect all failures, name every failed pair" contract at the
     cost of the single-pair path's per-pair timeout isolation: one hung pair in a
-    batch degrades the whole batch's timeout budget, where the old per-pair-spawn
-    loop only lost the one hung pair. Documented tradeoff of collapsing N spawns
-    into one, not an oversight.
+    batch fails the whole batch, where the old per-pair-spawn loop only lost the
+    one hung pair. Documented tradeoff of collapsing N spawns into one, not an
+    oversight.
+
+    The one spawn is bounded by the FLAT `_ATTACH_TIMEOUT_SECS` — see that
+    constant's negative spec for why nothing here scales with `len(pairs)`.
     """
     tmp_fd, pairs_file = tempfile.mkstemp(suffix=".tsv", prefix="backfill-initiative-fk-pairs-")
     try:
@@ -301,7 +317,6 @@ def _attach_batch(
             for _, artifact_path, initiative_id in pairs:
                 fh.write(f"{artifact_path}\t{initiative_id}\n")
 
-        batch_timeout = _ATTACH_TIMEOUT_SECS * max(len(pairs), 1)
         try:
             result = subprocess.run(
                 [
@@ -314,7 +329,7 @@ def _attach_batch(
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=batch_timeout,
+                timeout=_ATTACH_TIMEOUT_SECS,
                 **_CREATIONFLAGS,
             )
             stdout_text = result.stdout or ""

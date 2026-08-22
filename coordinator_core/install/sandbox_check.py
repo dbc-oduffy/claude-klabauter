@@ -823,6 +823,57 @@ def _call_resolve_coordinator_clone(mode: str, env: Dict[str, str]) -> Tuple[int
 # ---------------------------------------------------------------------------
 
 
+#: Sentinel the AC2 probe passes to `claude` so the check can prove the shim
+#: forwards the caller's own arguments after the `--doe-root` pair.
+_AC2_PROBE_ARG = "--ac2-argv-seam-probe"
+
+_AC2_STUB_ARG_PREFIX = "ARG:"
+_AC2_STUB_ENV_PREFIX = "ENV_REPO_DOE_CLAUDE:"
+
+
+def _write_claude_doe_argv_stub(sandbox: str) -> str:
+    """Write an executable ``claude-doe`` stub into its own sandbox bin dir and
+    return that dir, for the AC2 cold-shell probe to prepend to a cold PATH.
+
+    The stub reports the argv it was handed plus the ``REPO_DOE_CLAUDE`` it
+    inherited, and exits 0 without launching anything — AC2 asserts what the
+    shim PASSES to claude-doe, and must never start a real session to find out.
+
+    The shebang is a baked ``sys.executable``, not ``/usr/bin/env python3``:
+    the probe's whole point is a cold PATH, and a stub that resolved its own
+    interpreter through that PATH would be testing the sandbox's PATH rather
+    than the shim.
+    """
+    stub_bin = os.path.join(sandbox, "ac2-cold-shell-bin")
+    os.makedirs(stub_bin, exist_ok=True)
+    stub = os.path.join(stub_bin, "claude-doe")
+    Path(stub).write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        f"for _a in sys.argv[1:]:\n"
+        f"    print({_AC2_STUB_ARG_PREFIX!r} + _a)\n"
+        f"print({_AC2_STUB_ENV_PREFIX!r} + os.environ.get('REPO_DOE_CLAUDE', ''))\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    os.chmod(stub, 0o755)
+    return stub_bin
+
+
+def _parse_claude_doe_argv_stub(stdout: str) -> Tuple[List[str], str]:
+    """Split the AC2 stub's output into ``(argv, inherited_REPO_DOE_CLAUDE)``.
+
+    One argument per line, so a root containing spaces stays one argument."""
+    argv: List[str] = []
+    seen_env = ""
+    for line in stdout.splitlines():
+        if line.startswith(_AC2_STUB_ARG_PREFIX):
+            argv.append(line[len(_AC2_STUB_ARG_PREFIX) :])
+        elif line.startswith(_AC2_STUB_ENV_PREFIX):
+            seen_env = line[len(_AC2_STUB_ENV_PREFIX) :]
+    return argv, seen_env
+
+
 def _tier1b_pointer_and_shim(
     r: Reporter,
     sandbox: str,
@@ -1132,14 +1183,14 @@ def _tier1b_mirror_and_cold_tier(
         r.skip("resolver cold-tier tests (clone path not resolved)")
 
     # ---- 12. Cold-shell launch ----
-    r.section("--- Cold-shell launch: REPO_DOE_CLAUDE from pointer alone (AC2) ---")
+    r.section("--- Cold-shell launch: --doe-root argv seam from pointer alone (AC2) ---")
     sandbox_shim_path = os.path.join(sandbox, ".claude", "shell", "claude-doe-shim.sh")
     if os.name == "nt":
         # The probe sources a POSIX `.sh` shim under a hand-built cold PATH of
         # /usr/bin:/bin. On Windows that PATH resolves nothing, the `.sh` shim
-        # is not the launch surface (the `.cmd`/`.ps1` twins are), and the
-        # resulting empty REPO_DOE_CLAUDE was reported as an install defect on
-        # every Windows run. Not applicable is not a failure.
+        # is not the launch surface (the `.cmd`/`.ps1` twins are), so the
+        # claude() wrapper is never defined and the probe reported an install
+        # defect on every Windows run. Not applicable is not a failure.
         r.skip("AC2 cold-shell (POSIX login-shell seam; not applicable on Windows)")
     elif shim_section_ran and os.path.isfile(sandbox_shim_path):
         cold_path = "/usr/bin:/bin"
@@ -1147,19 +1198,41 @@ def _tier1b_mirror_and_cold_tier(
             if os.path.isdir(extra):
                 cold_path += f":{extra}"
 
-        cold_env_vars = {"PATH": cold_path, "CLAUDE_HOME": sandbox, "HOME": home}
+        stub_bin = _write_claude_doe_argv_stub(sandbox)
+        cold_env_vars = {"PATH": f"{stub_bin}{os.pathsep}{cold_path}", "CLAUDE_HOME": sandbox, "HOME": home}
         cp = _run(
-            ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; printf '%s' \"${{REPO_DOE_CLAUDE:-}}\""],
+            ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; claude {_AC2_PROBE_ARG}"],
             env=cold_env_vars,
         )
-        cold_launch_out = cp.stdout.strip()
-        if cold_launch_out:
-            if _paths_equal(cold_launch_out, doe_clone):
-                r.ok(f"AC2 cold-shell: REPO_DOE_CLAUDE resolved from pointer alone: {doe_clone}")
-            else:
-                r.bad(f"AC2 cold-shell: REPO_DOE_CLAUDE='{cold_launch_out}', expected '{doe_clone}'")
+        argv, stub_saw_env = _parse_claude_doe_argv_stub(cp.stdout)
+
+        if not argv:
+            r.bad(
+                f"AC2 cold-shell: claude() did not reach claude-doe under cold PATH "
+                f"(stub output: {cp.stdout.strip()!r})"
+            )
+        elif argv[0] != "--doe-root":
+            r.bad(
+                f"AC2 cold-shell: claude() invoked claude-doe with {argv!r}; DR-087 requires "
+                f"the explicit `--doe-root <pointer-value>` argv seam as the leading arguments"
+            )
+        elif len(argv) < 2 or not _paths_equal(argv[1], doe_clone):
+            r.bad(
+                f"AC2 cold-shell: --doe-root carried '{argv[1] if len(argv) > 1 else ''}', "
+                f"expected the pointer value '{doe_clone}'"
+            )
+        elif _AC2_PROBE_ARG not in argv[2:]:
+            r.bad(f"AC2 cold-shell: claude() dropped the caller's own arguments; got {argv!r}")
         else:
-            r.bad("AC2 cold-shell: REPO_DOE_CLAUDE empty after sourcing shim with cold PATH (pointer-read failed or shim does not export REPO_DOE_CLAUDE)")
+            r.ok(f"AC2 cold-shell: claude-doe --doe-root resolved from pointer alone: {doe_clone}")
+
+        if argv and stub_saw_env:
+            r.bad(
+                f"AC2 cold-shell: shim exported REPO_DOE_CLAUDE='{stub_saw_env}' — DR-087 demoted the "
+                f"pointer mirror out of rung-1 authority; the root travels as --doe-root only"
+            )
+        elif argv:
+            r.ok("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset (DR-087 mirror-promotion stays retired)")
     elif not shim_section_ran:
         r.bad("AC2 cold-shell: skipped — gen_claude_doe_shim.main() did not produce a sandbox shim")
     else:
@@ -1337,7 +1410,11 @@ must perform these steps manually before declaring the install surface complete 
      a. Skill resolution: invoke a coordinator skill (e.g. /repo-setup) and confirm the
         skill base-dir matches <doe_clone>/coordinator (not a cache copy or ~/.claude path).
      b. Hook firing at boot: a fresh boot should fire SessionStart hooks — check the
-        session-sentinel file (~/.claude/.session-sentinel) was updated on launch.
+        mtime of ${CLAUDE_CONFIG_DIR:-~/.claude}/.coordinator-content-root-last-seen
+        is at or after this session's launch. Written by run_self_probe
+        (coordinator_core/ops/session/guard_hook_generation_self_probe.py), dispatched
+        as a StartGuard from the SessionStart hook; a stale mtime means the hook did
+        not fire. The file also carries the probe's own verdict= line.
      c. CLAUDE_PLUGIN_ROOT is UNSET in hook env (self-resolution via BASH_SOURCE is active).
      d. No plugin byte-copy at ~/.claude/plugins/coordinator-claude/ (ls should show absent
         or pointer/config only).

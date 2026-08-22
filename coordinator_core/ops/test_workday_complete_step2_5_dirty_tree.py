@@ -31,6 +31,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import main as port_main
+from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
@@ -450,15 +451,22 @@ def test_peer_claim_perturbation_resolvable_then_broken_never_commits(
     assert "state/subagent-share/livepeer/peerfile.md" in status
 
     # -- broken leg: livepeer's touched.txt becomes unreadable --
-    peer_touched = Path(session_core.session_dir("livepeer", cwd=str(repo))) / "touched.txt"
-    orig_read_text = Path.read_text
+    # The read seam moved with the 2026-08-21 rebuild: ownership now comes
+    # from `claim_index`, whose reader reports unreadability as a
+    # `(lines, ok)` pair and never goes through `pathlib.Path.read_text`.
+    # Patched at the old seam this leg established no degradation at all and
+    # asserted the wrong half of its own contrast.
+    peer_touched = os.path.join(
+        session_core.session_dir("livepeer", cwd=str(repo)), "touched.txt"
+    )
+    real_reader = claim_index._read_lines_discard_torn_tail
 
-    def _boom(self, *a, **k):
-        if self == peer_touched:
-            raise OSError("simulated read failure")
-        return orig_read_text(self, *a, **k)
+    def _unreadable(path):
+        if os.path.normcase(str(path)) == os.path.normcase(peer_touched):
+            return [], False
+        return real_reader(path)
 
-    monkeypatch.setattr(Path, "read_text", _boom)
+    monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
 
     rc2, out2, err2 = _run_port(repo, [], capsys)
     assert rc2 == 2

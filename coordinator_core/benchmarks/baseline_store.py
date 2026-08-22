@@ -97,15 +97,50 @@ def tracked_baseline_path(machine: Optional[str] = None) -> Path:
     return BASELINES_DIR / f"tracked-{resolved_machine}.jsonl"
 
 
-DEFAULT_STORE_PATH = runs_path()
-"""This box's default run-history JSONL path -- `__main__.py`'s append
-target. Resolved once at import time via `compose_machine_id()`, which is
-stable for the lifetime of a process."""
+_DEFAULT_STORE_PATH_CACHE: Optional[Path] = None
+
+
+def __getattr__(name: str) -> Path:
+    """Resolve `DEFAULT_STORE_PATH` on first read rather than at import.
+
+    This box's default run-history JSONL path -- `__main__.py`'s append
+    target. Still resolved once and cached, and `compose_machine_id()` is
+    stable for the lifetime of a process, so the value is unchanged; only
+    the moment of resolution moves.
+
+    Negative-spec: this is NOT a lazy-import convenience. `compose_machine_id()`
+    calls `platform.system()`, whose first call costs ~55-88ms on Windows, and
+    this module is dragged into `coordinator_core.ops`'s eager registration by
+    `ops/gate_dimension_latency.py`. Computing a default-argument constant at
+    import time therefore charged that cost to every eager `import
+    coordinator_core.ops` -- ~283 ops paying a benchmark store's hostname
+    lookup. Do not restore a module-level `DEFAULT_STORE_PATH = runs_path()`.
+    PEP 562 keeps the read API (and `monkeypatch.setattr`, which the
+    gate_dimension_latency tests rely on) working unchanged.
+    """
+    if name == "DEFAULT_STORE_PATH":
+        global _DEFAULT_STORE_PATH_CACHE
+        if _DEFAULT_STORE_PATH_CACHE is None:
+            _DEFAULT_STORE_PATH_CACHE = runs_path()
+        return _DEFAULT_STORE_PATH_CACHE
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _resolve_path(path: Optional[Path]) -> Path:
-    """Return the caller-supplied path, or DEFAULT_STORE_PATH if None."""
-    return path if path is not None else DEFAULT_STORE_PATH
+    """Return the caller-supplied path, or DEFAULT_STORE_PATH if None.
+
+    Reads through `globals()` before the PEP 562 `__getattr__` fallback:
+    module-level `__getattr__` fires on module ATTRIBUTE access, never on a
+    global-name lookup inside this module, so a bare `DEFAULT_STORE_PATH` here
+    would raise NameError. The globals() probe is also what keeps
+    `monkeypatch.setattr(baseline_store, "DEFAULT_STORE_PATH", ...)` effective
+    for this function -- monkeypatch writes a real module global, which must
+    win over the cached value.
+    """
+    if path is not None:
+        return path
+    override = globals().get("DEFAULT_STORE_PATH")
+    return override if override is not None else __getattr__("DEFAULT_STORE_PATH")
 
 
 def append(record: ConformanceRecord, path: Optional[Path] = None) -> Path:

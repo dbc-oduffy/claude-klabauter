@@ -51,9 +51,17 @@ finding, not routed around: this file does not touch
 `no_console_creationflags`.
 
 NEGATIVE-SPEC HELD: no threshold, override key, or detection predicate in
-`coordinator_core.ops.detect_staged_rollback` is touched by this file. Both
-checks still run; both still fire on every case they fired on before this
-census (see the equivalence assertions below).
+`coordinator_core.ops.detect_staged_rollback` is touched by this file. The
+one surviving check (mass-deletion) still runs, still fires on every case it
+fired on before this census (see the equivalence assertions below).
+
+C16 (docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-
+floor.md), PM-ruled 2026-08-21, deleted the staged-rollback check (check 1)
+from the module this file exercises; only the mass-deletion tripwire (check
+2) survives. This file was updated in that chunk's wake to match: every
+test that exercised check-1-only behaviour (a rollback finding, the rollback
+exit code, the both-findings exit code, check 1's override) was removed
+outright, not rewritten or skipped.
 
 WHAT THIS FILE ACTUALLY PINS, GIVEN THAT FINDING:
   (a) AC9 -- an end-to-end regression lock proving the CLI trampoline
@@ -61,15 +69,15 @@ WHAT THIS FILE ACTUALLY PINS, GIVEN THAT FINDING:
       cwd OUTSIDE claude-klabauter, exactly the condition under which `.git/hooks/
       pre-commit`'s own relative-path resolution would otherwise silently
       short-circuit to "BLOCKED -- missing script" per § Corrections 5)
-      forwards byte-identical stderr text and the identical five-way exit
-      code the op's own in-process `main()` produces, across all four
-      exit-code shapes (clean, rollback-only, mass-deletion-only, both).
-      This is the harness AC9 asks for; because C4 makes no functional
-      change here, "before" and "after" are the same commit, and this test
-      is what proves that -- and what will catch a future edit here that
-      breaks the trampoline/op agreement.
+      forwards byte-identical stderr text and the identical three-way exit
+      code the op's own in-process `main()` produces, across both remaining
+      exit-code shapes (clean, mass-deletion). This is the harness AC9
+      asks for; because C4 makes no functional change here, "before" and
+      "after" are the same commit, and this test is what proves that -- and
+      what will catch a future edit here that breaks the trampoline/op
+      agreement.
   (b) A process-time and spawn-count budget pin at the measured baseline
-      (procs_per_call == 5, exact -- same rationale
+      (procs_per_call == 3, exact, post-C16 -- same rationale
       `test_wsc_tail_spawn_budget.py` gives for its own exact-equality pin:
       a spawn-count budget that does not drift quietly is the point).
 
@@ -89,15 +97,13 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+from coordinator_core.benchmarks.process_time import IS_DARWIN, IS_WINDOWS, batched_process_time_ms
 from coordinator_core.ops import detect_staged_rollback as _dsr
 from coordinator_core.ops.detect_staged_rollback import (
-    EXIT_BOTH_FINDINGS,
     EXIT_CLEAN,
     EXIT_MASS_DELETION_FINDING,
-    EXIT_ROLLBACK_FINDING,
+    EXIT_USAGE_ERROR,
     MASS_DELETION_RATIO_THRESHOLD,
-    OVERRIDE_ENV,
     main,
 )
 
@@ -111,11 +117,6 @@ pytestmark = [
 _TRAMPOLINE = str(
     Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "detect-staged-rollback.py"
 )
-
-
-def _require_windows() -> None:
-    if not IS_WINDOWS:
-        pytest.skip("process-time job-object accounting is a Windows-only primitive")
 
 
 # ---------------------------------------------------------------------------
@@ -213,24 +214,22 @@ def _env(**overrides) -> dict:
 
 
 def _assert_gate_actually_ran(result: subprocess.CompletedProcess) -> None:
-    """AC9's hard requirement: a real rc from the five-way contract, never
+    """AC9's hard requirement: a real rc from the three-way contract, never
     the missing-script short-circuit that made the plan's original +105ms/
     +1-proc reading worthless (§ Corrections 5)."""
     assert "missing script" not in result.stderr.lower(), (
-        "gate did not run -- got the missing-script short-circuit, not a real five-way rc: "
+        "gate did not run -- got the missing-script short-circuit, not a real three-way rc: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert result.returncode in (
         EXIT_CLEAN,
-        EXIT_ROLLBACK_FINDING,
-        2,
+        EXIT_USAGE_ERROR,
         EXIT_MASS_DELETION_FINDING,
-        EXIT_BOTH_FINDINGS,
-    ), f"rc {result.returncode} is not a five-way contract value: {result!r}"
+    ), f"rc {result.returncode} is not a three-way contract value: {result!r}"
 
 
 # ---------------------------------------------------------------------------
-# (a) AC9 -- trampoline/op equivalence across all four exit-code shapes
+# (a) AC9 -- trampoline/op equivalence across both remaining exit-code shapes
 
 
 def test_clean_index_verdict_matches_between_cli_and_in_process(tmp_path):
@@ -245,24 +244,6 @@ def test_clean_index_verdict_matches_between_cli_and_in_process(tmp_path):
 
     assert result.returncode == EXIT_CLEAN == in_process_rc
     assert result.stderr == ""
-
-
-def test_rollback_only_verdict_matches_between_cli_and_in_process(tmp_path):
-    repo = _init_repo(tmp_path / "rollback-only")
-    for name in ("a.txt", "b.txt", "c.txt"):
-        _commit_file(repo, name, "v1\n", f"{name} c1")
-        _commit_file(repo, name, "v2\n", f"{name} c2")
-        _stage_file(repo, name, "v1\n")
-
-    in_process_rc = main([str(repo)], env=_env())
-
-    result = _run_trampoline(repo, env=_env())
-    _assert_gate_actually_ran(result)
-
-    assert result.returncode == EXIT_ROLLBACK_FINDING == in_process_rc
-    assert "a.txt" in result.stderr
-    assert "b.txt" in result.stderr
-    assert "c.txt" in result.stderr
 
 
 def test_mass_deletion_only_verdict_matches_between_cli_and_in_process(tmp_path):
@@ -280,69 +261,42 @@ def test_mass_deletion_only_verdict_matches_between_cli_and_in_process(tmp_path)
     assert "9 of 10" in result.stderr
 
 
-def test_both_findings_verdict_matches_between_cli_and_in_process(tmp_path):
-    """Same combined fixture shape as coordinator_core/ops/
-    test_detect_staged_rollback.py's `test_both_checks_fire_...` --
-    mass-deletion fixture staged first, rollback fixture staged with a
-    path-scoped commit so it never sweeps up the mass-deletion leg's own
-    staged deletions (see that module's comment for why the ordering
-    matters)."""
-    repo = _init_repo(tmp_path / "both-findings")
-    names = [f"f{i}.txt" for i in range(100)]
-    _commit_many(repo, names)
-    _stage_delete(repo, names[:95])
-
-    for name in ("a.txt", "b.txt", "c.txt"):
-        _commit_file(repo, name, "v1\n", f"{name} c1")
-        _commit_file(repo, name, "v2\n", f"{name} c2")
-        _stage_file(repo, name, "v1\n")
-
-    in_process_rc = main([str(repo)], env=_env())
-
-    result = _run_trampoline(repo, env=_env())
-    _assert_gate_actually_ran(result)
-
-    assert result.returncode == EXIT_BOTH_FINDINGS == in_process_rc
-
-
-def test_override_env_still_forwards_correctly_through_the_trampoline(tmp_path):
-    """One override-path check through the CLI layer -- the in-process
-    override matrix already lives in coordinator_core/ops/
-    test_detect_staged_rollback.py; this only confirms the trampoline does
-    not swallow or reinterpret the env var on its way through."""
-    repo = _init_repo(tmp_path / "override-through-cli")
-    for name in ("a.txt", "b.txt", "c.txt"):
-        _commit_file(repo, name, "v1\n", f"{name} c1")
-        _commit_file(repo, name, "v2\n", f"{name} c2")
-        _stage_file(repo, name, "v1\n")
-
-    result = _run_trampoline(repo, env=_env(**{OVERRIDE_ENV: "1"}))
-    _assert_gate_actually_ran(result)
-    assert result.returncode == EXIT_CLEAN
-    assert "override is set" in result.stderr
-
-
 # ---------------------------------------------------------------------------
 # (b) Process-time / spawn-count budget pin
 
 
 #: Measured (this session, `batched_process_time_ms`, k=8, hermetic one-file
 #: staged fixture, absolute-path invocation, cwd = the fixture repo, outside
-#: claude-klabauter): 167.969 / 181.641 / 214.844 ms across three runs, procs_per_call
-#: exactly 5.0 every time. `PROCS_PER_CALL_CEILING` is an exact pin (see
-#: module docstring's rationale, mirrored from `test_wsc_tail_spawn_budget.py`)
-#: -- it is the fully-decomposed figure (1 interpreter + 2 git + 2 conhost),
+#: claude-klabauter), against the module as left by C16 (docs/plans/2026-08-21-the-cli-
+#: bootstrap-tax-dies-at-the-interpreter-floor.md): procs_per_call reads
+#: exactly 3.0 -- down from the pre-C16 pin of 5.0. Mechanism: C16 deleted
+#: check 1 (the staged-rollback check) outright, including its `_batch_
+#: path_history` unbounded `git log` walk and that spawn's own conhost --
+#: the two processes this pin no longer counts. What remains is the fully-
+#: decomposed figure for check 2 alone (1 interpreter + 1 `git diff --cached`
+#: + 1 conhost). `PROCS_PER_CALL_CEILING` is an exact pin (see module
+#: docstring's rationale, mirrored from `test_wsc_tail_spawn_budget.py`) --
 #: not a number with slack in it; a future spawn-count change here (adding OR
 #: removing a git call) must update this pin in the same commit, with a
-#: stated reason. `PROCESS_TIME_CEILING_MS` carries real headroom (this
-#: box's own three-sample range tops out at 214.844ms) because process time,
-#: unlike spawn count, is not expected to be bit-for-bit stable run to run.
-PROCS_PER_CALL_CEILING = 5.0
+#: stated reason. `PROCESS_TIME_CEILING_MS` carries real headroom because
+#: process time, unlike spawn count, is not expected to be bit-for-bit
+#: stable run to run.
+#: Windows pin: 1 interpreter + 1 `git diff --cached` + 1 conhost (the
+#: conhost `CREATE_NO_WINDOW` allocates per suppressed git spawn -- module
+#: docstring above). macOS has no conhost analogue (no console-subsystem
+#: window allocation exists on Darwin), so its pin is 2.0, DERIVED by
+#: dropping that one term -- not independently re-measured slack. The
+#: spike already measured this exact shape at 2.000 on Darwin. Parity of
+#: DEFINITION (1 interpreter + 1 git spawn, shared across both platforms),
+#: never parity of VALUE -- these are two separate constants on purpose;
+#: do not collapse them into one shared name.
+PROCS_PER_CALL_CEILING = 3.0 if IS_WINDOWS else 2.0
 PROCESS_TIME_CEILING_MS = 400.0
 
 
 def test_one_file_staged_gate_spawn_and_time_budget(tmp_path):
-    _require_windows()
+    if not (IS_WINDOWS or IS_DARWIN):
+        pytest.skip("batched_process_time_ms is Windows/Darwin-only (NotImplementedError elsewhere)")
 
     repo = _init_repo(tmp_path / "budget")
     _commit_file(repo, "a.txt", "one\n", "c1")

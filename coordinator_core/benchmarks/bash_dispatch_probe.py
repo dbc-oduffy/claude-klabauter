@@ -33,6 +33,23 @@ full command corpus, no ceiling here would be safe to commit to (see this
 chunk's own dispatch brief). Hosting a real spawn-count ceiling is C2/C3's
 job, in the existing `test_spawn_count_budget_ratchet.py` ratchet, once
 each chunk's own fix has landed.
+
+PLATFORM (C9, docs/plans/2026-08-22-the-brightlines-instrument-exists-on-
+the-fleet-floor.md, AC20/AC24): `measure_derived_floor` and every
+`batched_process_time_ms`/`_dispatch_cmd` call site here ride
+`process_time.py`'s own Windows/Darwin dispatch unconditionally -- neither
+raises nor skips on Darwin, and Windows behaviour is untouched. DR-344's
+500ms brightline itself carries no platform scoping (checked against the
+ruling text directly, `process_time.py` module docstring), so
+`DISPATCH_PROCESS_TIME_CEILING_MS` in the paired test file is the SAME
+500ms constant on both platforms -- what is per-platform is the MEASURED
+evidence that the claude-klabauter-owned dispatch entrypoint clears it, not the bar
+itself. Measured this session (2026-08-22, this box, Darwin,
+`batched_process_time_quantiles(k=20, n=15)` per corpus row): `bash_echo_
+hello` p50=60.1ms/p90=62.1ms, `bash_cat_pyproject_head` p50=64.5ms/
+p90=71.2ms, `powershell_get_childitem` p50=61.9ms/p90=65.9ms -- every row
+comfortably under the 500ms brightline, see the paired test file's own
+AC1 section for the pinned evidence.
 """
 
 from __future__ import annotations
@@ -46,7 +63,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from coordinator_core.benchmarks.process_time import IS_WINDOWS, batched_process_time_ms
+from coordinator_core.benchmarks.process_time import (
+    IS_DARWIN,
+    IS_WINDOWS,
+    batched_process_time_ms,
+)
 
 _ENV_PAYLOAD_KEY = "BASH_DISPATCH_PROBE_PAYLOAD"
 
@@ -177,13 +198,19 @@ def measure_derived_floor(k: int = 20) -> FloorMeasurement:
          reduce.
 
     Batched at `k` (default 20, matching this repo's own convention) inside
-    ONE job object per leg to beat the ~15.6ms scheduler-tick quantisation a
-    single sample cannot resolve (`process_time.py` module docstring, trap
-    2). Raises `NotImplementedError` off Windows -- callers must check
-    `IS_WINDOWS` first, exactly like `process_time.py` itself.
+    ONE job object per leg on Windows (or, on Darwin, `k` root-pid-scoped
+    invocations amortised the same way -- `process_time.py`'s own
+    Windows/Darwin dispatch) to beat the ~15.6ms scheduler-tick
+    quantisation a single Windows sample cannot resolve (`process_time.py`
+    module docstring, trap 2). Raises `NotImplementedError` off both
+    Windows and Darwin -- callers must check `IS_WINDOWS`/`IS_DARWIN` first,
+    exactly like `process_time.py` itself.
     """
-    if not IS_WINDOWS:
-        raise NotImplementedError("measure_derived_floor is a Windows job-object primitive")
+    if not (IS_WINDOWS or IS_DARWIN):
+        raise NotImplementedError(
+            "measure_derived_floor has no process-time primitive for this platform "
+            "-- see coordinator_core.benchmarks.process_time's own Windows/Darwin split"
+        )
 
     bare = batched_process_time_ms([sys.executable, "-c", "pass"], k=k, cwd=_REPO_ROOT)
 

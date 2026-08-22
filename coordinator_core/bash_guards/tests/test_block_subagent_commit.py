@@ -1297,6 +1297,59 @@ def test_git_commit_agent_git_commit_dash_a_denies(monkeypatch):
     _gca_denies(monkeypatch, 'git commit -a -m "msg"')
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-22 fallback fix: `op_budget_suspension.py`'s `ceremony.scoped_git_
+# commit` row names plain `git commit` as its SANCTIONED fallback while that
+# op is suspended ("A SANCTIONED FALLBACK IS NOT A BYPASS"). Before this fix,
+# `_resolve_git_commit_agent_pathspec` recognised only the `ceremony.scoped_
+# git_commit` invoke-module spelling and the `scoped-git-commit` trampoline
+# -- so a dispatched agent following the ruling's own prescribed fallback
+# fell through to `_LEG_NO_PATHSPEC` every time, deadlocked between a
+# suspended op and a guard that could not recognise its own sanctioned
+# escape. These tests pin: (a) the fallback shape now ALLOWS when scoped and
+# non-sweeping, exactly like the trampoline; (b) every existing unscoped/
+# sweeping-pathspec deny above (bare `git commit`, `git commit -a`) is
+# UNCHANGED -- the fallback is additive, never a widening of what counts as
+# scoped; (c) `-a`/`--all` before the `--` separator still denies even WITH
+# an explicit pathspec after it, since it is a modifier on `commit` itself,
+# not a pathspec element `_pathspec_element_is_sweeping` would ever see.
+# ---------------------------------------------------------------------------
+
+
+def test_git_commit_agent_plain_git_commit_scoped_pathspec_allows(monkeypatch):
+    _gca_allows(monkeypatch, 'git commit -m "msg" -- src/foo.py')
+
+
+def test_git_commit_agent_plain_git_commit_global_opts_scoped_pathspec_allows(
+    monkeypatch,
+):
+    _gca_allows(
+        monkeypatch, 'git -C /repo commit -m "msg" -- src/foo.py src/bar.py'
+    )
+
+
+def test_git_commit_agent_plain_git_commit_no_pathspec_still_denies(monkeypatch):
+    _gca_denies(monkeypatch, 'git commit -m "msg"')
+
+
+def test_git_commit_agent_plain_git_commit_dash_a_with_pathspec_still_denies(
+    monkeypatch,
+):
+    _gca_denies(monkeypatch, 'git commit -a -m "msg" -- src/foo.py')
+
+
+def test_git_commit_agent_plain_git_commit_dash_all_with_pathspec_still_denies(
+    monkeypatch,
+):
+    _gca_denies(monkeypatch, 'git commit --all -m "msg" -- src/foo.py')
+
+
+def test_git_commit_agent_plain_git_commit_sweeping_dot_pathspec_still_denies(
+    monkeypatch,
+):
+    _gca_denies(monkeypatch, 'git commit -m "msg" -- .')
+
+
 def test_git_commit_agent_git_add_dash_capital_a_denies(monkeypatch):
     """NOTE: ``git add -A`` is pre-existing OUT OF SCOPE for this guard's
     matchers regardless of subagent type or this chunk -- it stages but does

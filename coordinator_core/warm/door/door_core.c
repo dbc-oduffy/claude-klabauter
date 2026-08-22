@@ -125,6 +125,19 @@ void sha1_hex16(const unsigned char *data, size_t len, char out[17]) {
 }
 
 /* =========================================================================
+ * Sidecar trailing-whitespace trim -- see door_core.h for why it lives here.
+ * ========================================================================= */
+
+size_t trim_sidecar_trailing(char *buf, size_t len) {
+    while (len > 0 &&
+           (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
+            buf[len - 1] == ' ' || buf[len - 1] == '\t')) {
+        buf[--len] = '\0';
+    }
+    return len;
+}
+
+/* =========================================================================
  * Growable byte buffer
  * ========================================================================= */
 
@@ -443,7 +456,8 @@ int parse_response_envelope(
 int is_provably_undispatched(long code) {
     return code == JSONRPC_PARSE_ERROR || code == JSONRPC_INVALID_REQUEST ||
            code == JSONRPC_METHOD_NOT_FOUND || code == JSONRPC_ENGINE_SKEW ||
-           code == JSONRPC_UNTRUSTED_CALLER || code == JSONRPC_OP_SUSPENDED;
+           code == JSONRPC_UNTRUSTED_CALLER ||
+           code == JSONRPC_UNSTAMPED_ENGINE_ROOT || code == JSONRPC_OP_SUSPENDED;
 }
 
 int build_indeterminate_envelope(buf_t *out, const char *detail) {

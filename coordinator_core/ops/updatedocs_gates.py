@@ -91,6 +91,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -174,9 +175,11 @@ _DETAIL_TAIL_CHARS = 2000
 # Review: coordinator:code-reviewer — CLAUDE.md: "every op is held to an
 # end-to-end invocation budget," but _run passed no timeout= to
 # subprocess.run, so one hung external CLI could stall updatedocs.gates
-# indefinitely. Bounded per-CLI ceiling; a gate that legitimately needs
-# longer overrides via _run's timeout= param, not by raising this default.
-_DEFAULT_CLI_TIMEOUT_SECONDS = 120.0
+# indefinitely. The per-CLI ceiling is now the named external-tool carve-out
+# rather than this module's own literal; `_run`'s `timeout=` param narrows
+# only — a caller passing a larger value is clamped back to the ceiling.
+_CLI_SITE = "coordinator_core/ops/updatedocs_gates.py :: _run"
+_DEFAULT_CLI_TIMEOUT_SECONDS = bound_for(_CLI_SITE)
 
 
 def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
@@ -272,8 +275,13 @@ def _run(
         argv = [str(cli_path), *args]
     # Resolved at call time (not a bound default) so a test/override can
     # tighten _DEFAULT_CLI_TIMEOUT_SECONDS without needing every caller to
-    # thread an explicit timeout= through.
-    effective_timeout = _DEFAULT_CLI_TIMEOUT_SECONDS if timeout is None else timeout
+    # thread an explicit timeout= through. The min() is what makes the caller's
+    # `timeout=` narrow-only (DR-349 § 3): applied AFTER resolution, so a gate
+    # can ask for less than the ceiling and can never ask for more.
+    effective_timeout = min(
+        _DEFAULT_CLI_TIMEOUT_SECONDS,
+        _DEFAULT_CLI_TIMEOUT_SECONDS if timeout is None else timeout,
+    )
     try:
         return subprocess.run(
             argv,

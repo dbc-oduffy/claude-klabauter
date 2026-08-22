@@ -16,12 +16,20 @@ Representations covered:
   - dag.ARCHIVAL_EDGE_KINDS / dag.CONTINUATION_EDGE_KINDS (the SSOT itself).
   - ops.handoff_children._DEFAULT_EDGE_KINDS (set) / CONCLUSION_EDGE_KINDS (CSV).
   - coverage._CONTINUATION_EDGE_KINDS (frozenset).
-  - workstream_complete._LEG_B_EDGE_KINDS (CSV) — kept as a literal-shaped
-    local derivation (not a duplicate literal) per the module's own comment;
-    still checked here so a future edit that reintroduces literal drift is
-    caught.
 
 Negative-spec:
+  - workstream_complete._LEG_B_EDGE_KINDS (CSV) was a fourth representation
+    covered here until 2026-08-22. It is not missing — it was deleted with
+    its subject at e25f5b190 (chunk C9 / Ruling 4,
+    docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md), which
+    retargeted leg B off the `handoff.has_live_children` op dispatch onto a
+    read of the candidate's own write-time `continued_into` back-edge —
+    a shape that, per `_dispatch_has_live_children`'s own docstring, names
+    no edge-kinds parameter at all. There is no representation left to drift,
+    so the row is retired rather than repointed at a substitute constant.
+    That deletion left this module's module-level import dangling, making the
+    whole file uncollectable; `test_no_dangling_first_party_import.py` is the
+    guard for that class.
   - Does NOT test archival.reverse_membership or dag.referenced_by's runtime
     traversal behaviour — those are covered by test_dag_edge_kinds.py,
     test_handoff_children.py, and the 723aadac4b1d regression tests. This
@@ -32,7 +40,6 @@ from __future__ import annotations
 
 from coordinator_core import coverage, dag
 from coordinator_core.ops import handoff_children
-from coordinator_core.workstream_complete import _LEG_B_EDGE_KINDS
 
 
 def _csv_to_set(csv: str) -> set[str]:
@@ -55,9 +62,6 @@ class TestArchivalContinuationEdgeKindSSOT:
 
     def test_coverage_continuation_matches_dag(self) -> None:
         assert set(coverage._CONTINUATION_EDGE_KINDS) == set(dag.CONTINUATION_EDGE_KINDS)
-
-    def test_workstream_complete_leg_b_csv_matches_continuation(self) -> None:
-        assert _csv_to_set(_LEG_B_EDGE_KINDS) == set(dag.CONTINUATION_EDGE_KINDS)
 
     def test_referenced_by_default_matches_archival(self) -> None:
         """`dag.referenced_by`'s own inline default (the bottom-layer archival

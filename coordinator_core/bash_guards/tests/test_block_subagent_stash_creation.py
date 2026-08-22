@@ -176,6 +176,62 @@ class TestShellShapes:
         _reason(guard.check(_payload("git.exe -C /repo stash push", agent_id="a1")))
 
 
+class TestRedirectionDisplacement:
+    """2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED -- same shape as
+    `block_subagent_destructive_action.py`'s sibling fix, see
+    `_strip_leading_redirection_tokens`'s docstring): `shlex` has no concept
+    of shell redirection, so `git stash 2>&1` tokenizes `remaining` to
+    `["2>&1"]` -- a token this guard's `_classify_stash_subcommand` did not
+    recognize as `None`/`-`-prefixed/`"push"`, so it fell through to allow.
+    Confirmed live: a `coordinator:review-integrator` subagent's `git stash
+    2>&1 | head -5; echo done` swept 144 files on a shared tree
+    (state/bug-backlog/2026-08-21-subagent-unscoped-stash-push-swept-144-f-
+    ea557efb4908.yaml). Each case reproduces the EXACT displacement shape,
+    not a generic re-test of the existing stash coverage above.
+    """
+
+    def test_bare_with_stderr_redirect_denies(self):
+        _reason(guard.check(_payload("git stash 2>&1", agent_id="a1")))
+
+    def test_bare_with_stderr_redirect_and_pipe_denies(self):
+        # The EXACT shape from the incident transcript (repo path elided).
+        _reason(
+            guard.check(_payload("cd repo && git stash 2>&1 | head -5; echo done", agent_id="a1"))
+        )
+
+    def test_bare_with_stdout_redirect_denies(self):
+        _reason(guard.check(_payload("git stash >/dev/null", agent_id="a1")))
+
+    def test_bare_with_stderr_redirect_to_file_denies(self):
+        _reason(guard.check(_payload("git stash 2>/dev/null", agent_id="a1")))
+
+    def test_bare_with_separated_redirect_target_denies(self):
+        # Whitespace between the operator and its target still yields two
+        # `shlex` tokens (`[">", "/dev/null"]`) -- both must be consumed.
+        _reason(guard.check(_payload("git stash > /dev/null", agent_id="a1")))
+
+    def test_push_with_redirect_still_denies(self):
+        # A real token (`push`) already occupies the first-argument position
+        # before the redirect -- denied even pre-fix; kept as a boundary
+        # case so a future change can't silently narrow the strip.
+        _reason(guard.check(_payload("git stash push 2>&1", agent_id="a1")))
+
+    def test_dash_u_with_redirect_still_denies(self):
+        _reason(guard.check(_payload("git stash -u 2>&1", agent_id="a1")))
+
+    def test_powershell_bare_with_redirect_denies(self):
+        # `_evaluate_powershell_segments` mirrors the Bash leg's
+        # `remaining[0]` read exactly -- same displacement, same fix.
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "git stash 2>&1"},
+            "session_id": "sess1",
+            "cwd": "/repo",
+            "agent_id": "a1",
+        }
+        _reason(guard.check(payload))
+
+
 class TestHeredocBodies:
     def test_heredoc_prose_quoting_the_verb_allows(self):
         cmd = (

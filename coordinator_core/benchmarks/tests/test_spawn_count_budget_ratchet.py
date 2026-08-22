@@ -263,28 +263,6 @@ _SPAWN_COUNT_HIGH_WATER = {
         },
         "n_committed_rows": {"ceiling": 2, "reason": _BASELINE_REASON},
     },
-    "execute_plan_assemble.sibling_committed_chunk_ids_memo": {
-        "second_call_identical_inputs": {
-            "ceiling": 0,
-            "reason": (
-                "Floor of 0: a memoized second call with identical inputs "
-                "returns the cached result without spawning again."
-            ),
-        },
-        "first_call_one_sibling": {
-            "ceiling": 3,
-            "reason": (
-                "New shape first measured 2026-08-19 (opro-03 C6), entering "
-                "at its measured value. This op's only prior shape was the "
-                "memo hit at 0, and a shape that spawns nothing by "
-                "construction can never make a spawn site visible to a "
-                "counter -- which is why `close_out_and_stamp.py::_run_git` "
-                "sat permanently red on the uncounted-spawn gate. The 3 is "
-                "one merge-base range resolution plus two "
-                "`_deliverable_log_records` queries against the sibling."
-            ),
-        },
-    },
     # See module-level comment for the `ops.discover_working_repos` context:
     # `per_call` is a re-baseline (0 -> 1) against newly visible truth, the
     # `op_total_*` marks are the OP end-to-end (nothing stubbed) and are new

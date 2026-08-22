@@ -641,7 +641,7 @@ def test_map_covers_every_envelope_array_and_malformed_bucket():
 def test_full_parity(tmp_path):
     """Assert that the Python emitter produces the same output as the bash golden (C3).
 
-    Builds the Python emission via envelope.build() with all sections wired (artifact_emit
+    Builds the Python emission via envelope.build() with all sections wired (envelope
     triggers the wiring at import), writes it to a temp file, then calls assert_full_parity()
     to compare every section's records + malformed bucket (order-insensitive, volatile fields
     normalized) and the scalar envelope invariants (schema_version, narrative_views).
@@ -652,8 +652,8 @@ def test_full_parity(tmp_path):
     (c) the deliverable_status cross-join and shipped_sha/LMA enrichments produce the same
         values as the bash emitter's §8.16 + §1.5 + §1 step 3.5.
     """
-    # Trigger section wiring side-effect (artifact_emit._wire_sections call at module import).
-    import coordinator_core.ops.artifact_emit  # noqa: F401
+    # Trigger section wiring side-effect (envelope._wire_sections runs at module import).
+    import coordinator_core.ops.emit.envelope  # noqa: F401
 
     from coordinator_core.ops.emit import envelope as _envelope
 

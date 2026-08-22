@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session import claim_index
 from coordinator_core.session import js_bridge_cli
 from coordinator_core.session import scope
 
@@ -86,6 +87,81 @@ class TestClaimPath:
         rc = js_bridge_cli.main(["claim-path", "only-one-arg"])
         assert rc == 0
         assert "requires exactly 2 args" in capsys.readouterr().err
+
+    def test_backslashed_relative_entry_lands_in_the_readers_dialect(self, tmp_path):
+        # The writer-side half of the writer/reader dialect pin: a Windows-shaped
+        # relative pathspec must be recorded in the SAME forward-slash dialect
+        # claim_index._normalize_key compares against, or the claim keys under a
+        # form no ownership lookup will ever match.
+        touched = tmp_path / "touched.txt"
+
+        assert js_bridge_cli.main(["claim-path", str(touched), r"coordinator\a\b.py"]) == 0
+
+        lines = touched.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        verb, _ts, path = scope.parse_touch_event(lines[0])
+        assert (verb, path) == ("T", "coordinator/a/b.py")
+        assert claim_index._normalize_key(path) == path
+
+    def test_backslashed_and_slashed_forms_dedup_against_each_other(self, tmp_path):
+        # Two dialects for one file used to write two entries; one canonical
+        # dialect at the write makes the second a dedup no-op.
+        touched = tmp_path / "touched.txt"
+
+        js_bridge_cli.main(["claim-path", str(touched), r"coordinator\a\b.py"])
+        js_bridge_cli.main(["claim-path", str(touched), "coordinator/a/b.py"])
+
+        assert len(touched.read_text(encoding="utf-8").splitlines()) == 1
+
+    @pytest.mark.parametrize(
+        "absolute_entry",
+        [
+            r"C:\Users\x\.claude\projects\p\memory\MEMORY.md",  # abs-path-ok: fixture
+            "/home/x/.claude/memory/MEMORY.md",  # abs-path-ok: fixture
+            r"\\?\C:\Users\x\scratch\f.py",  # abs-path-ok: fixture
+            r"\\server\share\f.py",  # abs-path-ok: fixture
+        ],
+    )
+    def test_absolute_entry_is_refused_visibly_and_never_written(
+        self, tmp_path, capsys, absolute_entry
+    ):
+        # The 33-poison-entry defect, pinned at its source. Every shape here
+        # (drive-letter, POSIX, extended-length, UNC) reached touched.txt
+        # verbatim before the fix. The drop must be LOUD: a silently dropped
+        # claim is a path nobody is protecting.
+        touched = tmp_path / "touched.txt"
+
+        rc = js_bridge_cli.main(["claim-path", str(touched), absolute_entry])
+
+        assert rc == 0
+        assert not touched.exists()
+        err = capsys.readouterr().err
+        assert "is absolute" in err
+        assert repr(absolute_entry) in err  # the refused path is NAMED, not just counted
+        assert "self-claim" in err
+
+    def test_claim_path_spawns_no_subprocess(self, tmp_path, monkeypatch):
+        # Normalizing at the write must not buy itself a git spawn — the
+        # readers that compensated for the unnormalized form each paid one.
+        # Mirrors test_claim_index.py::test_commit_set_spawns_no_subprocess.
+        def _explode(*args, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("claim-path spawned a subprocess: %r" % (args,))
+
+        monkeypatch.setattr(subprocess, "run", _explode)
+        monkeypatch.setattr(subprocess, "Popen", _explode)
+        monkeypatch.setattr(subprocess, "check_output", _explode)
+
+        touched = tmp_path / "touched.txt"
+        assert js_bridge_cli.main(["claim-path", str(touched), r"pkg\mod.py"]) == 0
+        assert (
+            js_bridge_cli.main(
+                ["claim-path", str(touched), r"C:\Users\x\out.md"]  # abs-path-ok: fixture
+            )
+            == 0
+        )
+
+        lines = touched.read_text(encoding="utf-8").splitlines()
+        assert [scope.parse_touch_event(line)[2] for line in lines] == ["pkg/mod.py"]
 
 
 class TestSelfClaim:

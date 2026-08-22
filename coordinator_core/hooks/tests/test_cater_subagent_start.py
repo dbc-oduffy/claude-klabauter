@@ -54,7 +54,7 @@ ROLE_APPEND_CANARY = "INJECTION-ONLY-CANARY-ROLE: role framing text exists nowhe
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
+def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # `git init` only -- no test in this file ever commits, so a `user.email`/
     # `user.name` config would be dead subprocess weight even before
     # considering that the suite-root conftest (`coordinator_core/conftest.py
@@ -68,6 +68,15 @@ def git_repo(tmp_path: Path) -> Path:
     # missed" read.
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
+    # `resolve_plugin_root()` (provision_report.py) resolves the
+    # coordinator-claude plugin's CONTENT root independently of this
+    # fixture's own git root -- point its `CLAUDE_PLUGIN_ROOT` rung (the
+    # documented harness-injected override, and the intended seam for a
+    # test to supply its own plugin content) at THIS fixture's
+    # `coordinator/` dir so `_assemble_contract_blocks` resolves the
+    # synthetic snippets built below rather than whatever plugin happens
+    # to be installed on the machine running the suite.
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "coordinator"))
     registry = tmp_path / "coordinator" / "snippets" / "registry.toml"
     registry.write_text(
         "schema_version = 1\n\n"
@@ -362,7 +371,9 @@ pytestmark_doe = pytest.mark.skipif(
 
 
 @pytestmark_doe
-def test_real_code_reviewer_payload_carries_every_resolved_block(tmp_path: Path) -> None:
+def test_real_code_reviewer_payload_carries_every_resolved_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC1: real `coordinator:code-reviewer` payload against the real
     `subagent-sandbox-policy.yaml` + `coordinator/snippets/` -- every
     resolved `contract_blocks` entry must be present, matched on the
@@ -375,6 +386,14 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(tmp_path: Path)
     from coordinator_core.subagent_sandbox.provision_report import (
         _extract_contract_block_body,
     )
+
+    # The suite-root quarantine (`coordinator_core/conftest.py ::
+    # _quarantine_real_home`) deliberately seeds `.doe-root` with a
+    # throwaway stub, not the real sibling checkout, so
+    # `resolve_plugin_root()`'s rungs 2/3 cannot see the real corpus this
+    # test exists to exercise. Point its rung-1 `CLAUDE_PLUGIN_ROOT`
+    # override straight at DOE_ROOT's own content root instead.
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(DOE_ROOT) / "coordinator"))
 
     policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     policy_data = yaml.safe_load(policy_file.read_text(encoding="utf-8"))
@@ -416,7 +435,9 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(tmp_path: Path)
 
 
 @pytestmark_doe
-def test_real_staff_eng_payload_spills_blocks_to_companion_file(tmp_path: Path) -> None:
+def test_real_staff_eng_payload_spills_blocks_to_companion_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC9 amendment: `coordinator:staff-eng` (the widest `contract_blocks`
     row on disk, measured ~31,913 composed chars) must spill its blocks leg
     to a companion file rather than blow the `additionalContext` cap --
@@ -451,6 +472,11 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(tmp_path: Path) 
         probes.append(body.strip().splitlines()[0][:40])
 
     import shutil
+
+    # See the sibling AC1 test above for why this override is required:
+    # the suite-root quarantine stubs `.doe-root` so `resolve_plugin_root()`
+    # cannot otherwise see the real corpus.
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(DOE_ROOT) / "coordinator"))
 
     session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / "ac9-real-staff-eng"
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)

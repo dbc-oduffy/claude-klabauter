@@ -44,14 +44,17 @@ scope-disciplined to the ONE declared class above):
   from scratch, and deliberately out of scope for this module.
 
 Negative-spec:
-  - Does NOT resolve a non-literal op-name argument (a variable, an
-    f-string, a concatenation) at either end — every site this module
-    records comes from an ``ast.Constant`` string literal argument/dict
-    value; a call like ``get_op_handler(op_name)`` or
-    ``dispatch_message(msg)`` (msg built elsewhere) contributes NO site.
-    This is the same static-AST-only posture ``cartography.edges`` already
-    documents for its own import/call graph, not a defect unique to this
-    module — see that module's docstring negative-spec.
+  - Resolves an ``ast.Name`` argument ONE hop, module scope only: a name
+    bound at module scope directly to a string ``ast.Constant``
+    (``OP_X = "x.y"``, plain or annotated), or a ``for`` loop target
+    iterating a module-scope constant tuple/list/set of string literals
+    (one edge per member). Does NOT resolve a call-bound name, an
+    f-string, a concatenation, an imported name, a function parameter, or
+    a function-local assignment — none of those is a module-scope literal
+    binding, so each contributes NO site. This is the same
+    static-AST-only posture ``cartography.edges`` already documents for
+    its own import/call graph, not a defect unique to this module — see
+    that module's docstring negative-spec.
   - Does NOT special-case ``dispatch_message``'s ONLY real caller shape in
     this repo today (a ``msg`` dict built earlier and passed by name) —
     zero live ``dispatch_message({"method": …})`` inline-literal call sites
@@ -105,50 +108,140 @@ def _literal_str(node: ast.AST | None) -> str | None:
     return None
 
 
-def _register_op_names(tree: ast.Module) -> List[str]:
-    """Every op-name string literal passed as the first arg to a
-    ``register_op(...)`` call — decorator form (``@register_op("x")``) and
-    direct-call form (``register_op("x", handler)``) alike, since both are
-    represented as ``ast.Call`` nodes reachable from ``ast.walk``."""
-    names: List[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _call_target_name(node) == "register_op" and node.args:
-            name = _literal_str(node.args[0])
-            if name is not None:
-                names.append(name)
-    return names
+def _module_level_string_constants(tree: ast.Module) -> Dict[str, str]:
+    """Names bound at module scope directly to a string ``ast.Constant``
+    (``OP_X = "x.y"``, plain ``Assign`` or annotated ``AnnAssign`` alike).
+    ONE hop only — a name bound to another name is not resolved."""
+    consts: Dict[str, str] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            value = _literal_str(node.value)
+            if value is not None:
+                consts[node.targets[0].id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            value = _literal_str(node.value)
+            if value is not None:
+                consts[node.target.id] = value
+    return consts
 
 
-def _get_op_handler_names(tree: ast.Module) -> List[str]:
-    """Every op-name string literal passed as the first arg to a
-    ``get_op_handler(...)`` call."""
-    names: List[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _call_target_name(node) == "get_op_handler" and node.args:
-            name = _literal_str(node.args[0])
-            if name is not None:
-                names.append(name)
-    return names
+def _module_level_literal_collections(tree: ast.Module) -> Dict[str, List[str]]:
+    """Names bound at module scope directly to a List/Tuple/Set literal
+    whose every element is a string ``ast.Constant`` — the source a `for`
+    target can be resolved against. A collection with any non-string-literal
+    member is skipped entirely (no partial resolution)."""
+    collections: Dict[str, List[str]] = {}
+    for node in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0]
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target
+            value = node.value
+        if target is None or not isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            continue
+        members: List[str] = []
+        all_str = True
+        for elt in value.elts:
+            member = _literal_str(elt)
+            if member is None:
+                all_str = False
+                break
+            members.append(member)
+        if all_str and members:
+            collections[target.id] = members
+    return collections
 
 
-def _dispatch_message_literal_names(tree: ast.Module) -> List[str]:
-    """Every op-name string literal recovered from a
-    ``dispatch_message({"method": "…", ...})`` call whose sole/first
-    argument is an inline dict literal carrying a literal ``"method"`` key.
-    A ``dispatch_message(msg)`` call (msg built elsewhere) contributes
-    nothing — see module docstring negative-spec."""
-    names: List[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _call_target_name(node) == "dispatch_message" and node.args:
+def _resolve_expr_candidates(
+    node: ast.AST | None,
+    module_str_consts: Dict[str, str],
+    active_loop_vars: Dict[str, List[str]],
+) -> List[str]:
+    """Resolve a call-argument expression to zero, one, or many op-name
+    strings: a literal string yields itself; a `Name` resolves ONE hop
+    against an enclosing `for` target bound to a module-scope literal
+    collection first, else a module-scope string constant; anything else
+    (call-bound name, f-string, concatenation, imported name, function
+    parameter, function-local assignment) yields nothing."""
+    literal = _literal_str(node)
+    if literal is not None:
+        return [literal]
+    if isinstance(node, ast.Name):
+        if node.id in active_loop_vars:
+            return list(active_loop_vars[node.id])
+        if node.id in module_str_consts:
+            return [module_str_consts[node.id]]
+    return []
+
+
+class _CallSiteWalker(ast.NodeVisitor):
+    """Walks a module tracking `for` loops whose iterable is a module-scope
+    constant collection, so a call inside the loop body naming the loop
+    target resolves to one entry per member (ONE hop, module scope)."""
+
+    def __init__(self, module_str_consts: Dict[str, str], module_collections: Dict[str, List[str]]) -> None:
+        self._module_str_consts = module_str_consts
+        self._module_collections = module_collections
+        self._loop_scopes: List[Dict[str, List[str]]] = []
+        self.register_op_names: List[str] = []
+        self.get_op_handler_names: List[str] = []
+        self.dispatch_message_names: List[str] = []
+
+    def _active_loop_vars(self) -> Dict[str, List[str]]:
+        merged: Dict[str, List[str]] = {}
+        for scope in self._loop_scopes:
+            merged.update(scope)
+        return merged
+
+    def visit_For(self, node: ast.For) -> None:  # noqa: N802 (ast.NodeVisitor naming contract)
+        scope: Dict[str, List[str]] = {}
+        if isinstance(node.target, ast.Name) and isinstance(node.iter, ast.Name):
+            members = self._module_collections.get(node.iter.id)
+            if members is not None:
+                scope[node.target.id] = members
+        self._loop_scopes.append(scope)
+        self.generic_visit(node)
+        self._loop_scopes.pop()
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 (ast.NodeVisitor naming contract)
+        target = _call_target_name(node)
+        active = self._active_loop_vars()
+        if target == "register_op" and node.args:
+            self.register_op_names.extend(
+                _resolve_expr_candidates(node.args[0], self._module_str_consts, active)
+            )
+        elif target == "get_op_handler" and node.args:
+            self.get_op_handler_names.extend(
+                _resolve_expr_candidates(node.args[0], self._module_str_consts, active)
+            )
+        elif target == "dispatch_message" and node.args:
             first_arg = node.args[0]
-            if not isinstance(first_arg, ast.Dict):
-                continue
-            for key, value in zip(first_arg.keys, first_arg.values):
-                if _literal_str(key) == "method":
-                    name = _literal_str(value)
-                    if name is not None:
-                        names.append(name)
-    return names
+            if isinstance(first_arg, ast.Dict):
+                for key, value in zip(first_arg.keys, first_arg.values):
+                    if _literal_str(key) == "method":
+                        self.dispatch_message_names.extend(
+                            _resolve_expr_candidates(value, self._module_str_consts, active)
+                        )
+        self.generic_visit(node)
+
+
+def _collect_call_site_names(tree: ast.Module) -> "_CallSiteWalker":
+    """Run `_CallSiteWalker` over `tree` and return it, populated with
+    every resolved `register_op`/`get_op_handler`/`dispatch_message`
+    op-name site (literal-only plus the ONE-hop module-scope Name/`for`
+    resolutions above)."""
+    module_str_consts = _module_level_string_constants(tree)
+    module_collections = _module_level_literal_collections(tree)
+    walker = _CallSiteWalker(module_str_consts, module_collections)
+    walker.visit(tree)
+    return walker
 
 
 def op_edges_for_file(target_root: str | Path, file_path: str | Path) -> Dict[str, Any]:
@@ -182,11 +275,13 @@ def op_edges_for_file(target_root: str | Path, file_path: str | Path) -> Dict[st
     except SyntaxError as exc:
         return {"path": rel_path, **empty, "error": f"SyntaxError: {exc}"}
 
+    walker = _collect_call_site_names(tree)
+
     return {
         "path": rel_path,
-        "registrations": _register_op_names(tree),
-        "lookups": _get_op_handler_names(tree),
-        "dispatches": _dispatch_message_literal_names(tree),
+        "registrations": walker.register_op_names,
+        "lookups": walker.get_op_handler_names,
+        "dispatches": walker.dispatch_message_names,
     }
 
 

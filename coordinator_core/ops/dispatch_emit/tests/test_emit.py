@@ -1105,7 +1105,45 @@ def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
     # a returning-but-tokenless report is a refusal that still produced prose.
     # Neither proves a commit landed, so both must fail the same way.
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "if (!commitWave1Results || !String(commitWave1Results).includes('COMMIT-LANDED'))" in script
+    assert (
+        "if (!commitWave1Results || "
+        "!/^COMMIT-LANDED +[0-9a-f]{7,40} *$/m.test(String(commitWave1Results)))"
+    ) in script
+
+
+def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():
+    """Regression: the gate was `.includes('COMMIT-LANDED')`, and it FAILED OPEN.
+
+    Measured 2026-08-21 during a real plan execution. Subagents may not commit
+    at all (caller-identity enforced), so the commit agent refused -- and its
+    refusal quoted the instruction it had been given, "end your report with the
+    line 'COMMIT-LANDED <sha>'", back at the gate. The substring was present,
+    the gate passed, and the next wave ran over an uncommitted one.
+
+    The token is in the prompt every commit agent is holding while it writes,
+    so a substring test cannot distinguish emitting it from repeating it. This
+    pins the discriminator, not the spelling: an anchored whole-line match with
+    a real sha.
+    """
+    import re
+
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    emitted = re.search(r"!/(\^COMMIT-LANDED[^/]*)/m\.test", script)
+    assert emitted, "commit gate is no longer an anchored regex test"
+    gate = re.compile(emitted.group(1).replace("\\ ", " "), re.M)
+
+    # The verbatim shape of the refusal that defeated the old gate.
+    quoting_refusal = (
+        "The commit gate denied this -- I am a subagent and `git commit` is EM-only.\n"
+        "Attempted per the brief, which said to end the report with the line "
+        "'COMMIT-LANDED <sha>'. Guard denied; did not land.\n"
+    )
+    assert not gate.search(quoting_refusal)
+
+    # A genuine landing still passes, or the gate is merely broken the other way.
+    assert gate.search("committed the wave\nCOMMIT-LANDED a805587fd8d0\n")
+    # And a placeholder on its own line is still not a sha.
+    assert not gate.search("COMMIT-LANDED <sha>\n")
 
 
 def test_commit_prompt_requires_the_landed_token_only_on_success():

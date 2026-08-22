@@ -194,16 +194,12 @@ class TestNoTopLevelCoordinatorRootPathScalar:
 # ---------------------------------------------------------------------------
 
 class TestParamlessCallersImportCleanly:
-    """Param-less callers (artifact_emit, goal_append, recorder) import without TypeError."""
+    """Param-less callers (goal_append, recorder) import without TypeError.
 
-    def test_artifact_emit_imports(self) -> None:
-        """artifact_emit.py imports cleanly — resolve_context() is param-less there."""
-        import coordinator_core.ops.artifact_emit as ae  # noqa: F401
-        # If the import raised TypeError, this line would not be reached.
-        # Review: code-reviewer (Slice-4 F8) — 'or True' was vacuously always-true; assert real callable.
-        assert callable(getattr(ae, "_artifact_emit", None)), (
-            "artifact_emit module must expose a callable _artifact_emit handler"
-        )
+    `artifact_emit` was the third until 2026-08-22, when the emission artifact was
+    CUT — docs/problems/2026-08-22-artifact-emit-cannot-be-earned-back-in-its-current-
+    shape.md.
+    """
 
     def test_goal_append_imports(self) -> None:
         """goal_append.py imports cleanly — resolve_context() is param-less there."""

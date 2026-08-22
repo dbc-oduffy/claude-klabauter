@@ -28,7 +28,7 @@ from coordinator_core.op_census.timing import (
     cleared_ops,
     emit_dispositions,
     invocation_tax_dispositions,
-    process_time_by_op,
+    handler_elapsed_by_op,
 )
 
 
@@ -67,7 +67,7 @@ def test_emitted_disposition_excludes_no_data_op_from_cleared():
     passing invocation-tax axis) must never appear in
     `emit_dispositions(...)["cleared"]`.
     """
-    process_time = {
+    handler_elapsed = {
         "op.unmeasured": AxisResult(
             disposition=Disposition.NO_DATA, no_data_reason=NoDataReason.NEVER_OBSERVED
         ),
@@ -80,37 +80,37 @@ def test_emitted_disposition_excludes_no_data_op_from_cleared():
         "op.measured_good": AxisResult(disposition=Disposition.UNDER_BAR, max_ms=1.0, sample_count=1),
     }
 
-    emitted = emit_dispositions(process_time, invocation_tax)
+    emitted = emit_dispositions(handler_elapsed, invocation_tax)
 
     assert "op.unmeasured" not in emitted["cleared"]
     assert "op.measured_good" in emitted["cleared"]
-    assert emitted["ops"]["op.unmeasured"]["process_time"]["disposition"] == "no_data"
-    assert emitted["ops"]["op.unmeasured"]["process_time"]["no_data_reason"] == "never_observed"
+    assert emitted["ops"]["op.unmeasured"]["handler_elapsed"]["disposition"] == "no_data"
+    assert emitted["ops"]["op.unmeasured"]["handler_elapsed"]["no_data_reason"] == "never_observed"
 
 
 def test_emitted_disposition_excludes_no_data_on_either_axis():
-    process_time = {
+    handler_elapsed = {
         "op.a": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=1),
     }
     invocation_tax = {
         "op.a": AxisResult(disposition=Disposition.NO_DATA, no_data_reason=NoDataReason.NEVER_OBSERVED),
     }
-    emitted = emit_dispositions(process_time, invocation_tax)
+    emitted = emit_dispositions(handler_elapsed, invocation_tax)
     assert "op.a" not in emitted["cleared"]
 
 
 def test_end_to_end_no_data_op_never_reaches_cleared():
-    """Real pipeline: telemetry -> process_time_by_op -> invocation_tax ->
+    """Real pipeline: telemetry -> handler_elapsed_by_op -> invocation_tax ->
     emit_dispositions, for an op with zero telemetry rows at all.
     """
     ops = ["op.never_ran"]
-    process_time = process_time_by_op([], ops)
+    handler_elapsed = handler_elapsed_by_op([], ops)
     invocation_tax = invocation_tax_dispositions(ops, measured_tax_ms=None)
 
-    emitted = emit_dispositions(process_time, invocation_tax)
+    emitted = emit_dispositions(handler_elapsed, invocation_tax)
 
     assert emitted["cleared"] == []
-    assert emitted["ops"]["op.never_ran"]["process_time"]["disposition"] == "no_data"
+    assert emitted["ops"]["op.never_ran"]["handler_elapsed"]["disposition"] == "no_data"
     assert emitted["ops"]["op.never_ran"]["invocation_tax"]["disposition"] == "no_data"
 
 

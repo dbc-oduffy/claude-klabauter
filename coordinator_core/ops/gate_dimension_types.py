@@ -75,6 +75,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ops.gate_tool_resolve import resolve_tool
 from coordinator_core.ops.gate_validate_invocable import (
     DimensionResult,
@@ -83,7 +84,8 @@ from coordinator_core.ops.gate_validate_invocable import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-_MYPY_TIMEOUT_SECS = 120
+_MYPY_SITE = "coordinator_core/ops/gate_dimension_types.py :: _run_mypy"
+_MYPY_TIMEOUT_SECS = bound_for(_MYPY_SITE)
 _CREATIONFLAGS = no_console_creationflags()
 
 
@@ -134,7 +136,7 @@ def _run_mypy(
         return (
             -1,
             "",
-            f"mypy timed out after {_MYPY_TIMEOUT_SECS}s over {len(py_files)} file(s)",
+            f"mypy timed out after {_MYPY_TIMEOUT_SECS:.0f}s over {len(py_files)} file(s)",
         )
     except OSError as exc:
         print(f"skip: gate_dimension_types._run_mypy failed: {exc}", file=sys.stderr)

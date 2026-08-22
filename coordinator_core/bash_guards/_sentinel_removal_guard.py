@@ -32,7 +32,7 @@ REUSED PRIMITIVES (per module docstring convention already established by
 `_sentinel_creation_guard.py`): `_tokenize_full_command`,
 `_segments_from_tokens`, `_normalize_executable_basename`,
 `_normalize_interpreter_basename`, `_strip_env_prefix`,
-`_strip_heredoc_bodies`, `_has_noexec_flag_before_script`,
+`_strip_heredoc_bodies`, `_has_noexec_flag_before_script`, `_has_script_operand`,
 `_BUNDLED_C_FLAG_RE`, `_C_FLAG_INTERPRETERS`, `_SHELL_FILE_INTERPRETERS`,
 `_MAX_INDIRECTION_DEPTH`, and `_skip_wrapper_own_argv` -- all imported from
 `block_subagent_destructive_action.py` / `_command_tokenizer.py` exactly as
@@ -119,6 +119,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _MAX_INDIRECTION_DEPTH,
     _SHELL_FILE_INTERPRETERS,
     _has_noexec_flag_before_script,
+    _has_script_operand,
     _normalize_executable_basename,
     _normalize_interpreter_basename,
     _segments_from_tokens,
@@ -532,7 +533,9 @@ class SentinelRemovalDetector:
                     inner_verdict, inner_reason = verdict
                     return inner_verdict, f"{norm_head} -c '<inline>' -> {inner_reason}"
                 return None
-            if norm_head in _SHELL_FILE_INTERPRETERS and len(working) >= 2:
+            if norm_head in _SHELL_FILE_INTERPRETERS and _has_script_operand(
+                working[1:]
+            ):
                 if mentions_anywhere:
                     return (
                         VERDICT_ADVISORY,

@@ -1,6 +1,6 @@
 """
 coordinator_core.tests.test_dispatch — Dispatch-layer routing tests for the three
-reclassified emit ops (artifact.emit, backlog.record, goal.append).
+reclassified per-repo state writers (backlog.record, goal.append).
 
 Plan § C3 deliverable: dispatch tests assert emit ops receive a non-None repo_root
 derived from _origin_worktree, and fail-loud (INVALID_PARAMS -32602) when absent.
@@ -102,21 +102,6 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
 
         return captured[0] if captured else None
 
-    def test_artifact_emit_receives_non_none_repo_root(self, tmp_path: Path, exercise_suspended_op) -> None:
-        """artifact.emit handler receives non-None repo_root when _origin_worktree is present.
-
-        Regression guard: if artifact.emit were accidentally reclassified back to "central",
-        resolve_op_repo_key would return None and the handler would receive repo_root=None,
-        reintroducing the hardlocked-to-~/.claude bug (2026-07-07 per-repo emission cutover).
-        """
-        fake_common_dir = tmp_path / ".git"
-        received = self._dispatch_with_spy("artifact.emit", fake_common_dir)
-        assert received is not None, (
-            "artifact.emit handler must receive non-None repo_root when _origin_worktree present; "
-            "None means the op was silently reclassified to 'central' scope (regression)"
-        )
-        assert received == fake_common_dir
-
     def test_backlog_record_receives_non_none_repo_root(self, tmp_path: Path) -> None:
         """backlog.record handler receives non-None repo_root when _origin_worktree is present."""
         fake_common_dir = tmp_path / ".git"
@@ -135,15 +120,6 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
         )
         assert received == fake_common_dir
 
-    def test_emit_cadence_receives_non_none_repo_root(self, tmp_path: Path) -> None:
-        """emit.cadence handler receives non-None repo_root when _origin_worktree is present."""
-        fake_common_dir = tmp_path / ".git"
-        received = self._dispatch_with_spy("emit.cadence", fake_common_dir)
-        assert received is not None, (
-            "emit.cadence handler must receive non-None repo_root when _origin_worktree present"
-        )
-        assert received == fake_common_dir
-
 
 # ---------------------------------------------------------------------------
 # emit ops return INVALID_PARAMS (-32602) when _origin_worktree absent
@@ -152,13 +128,13 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
 class TestEmitOpsFailLoudWithoutOriginWorktree:
     """Dispatch layer returns INVALID_PARAMS (-32602) when _origin_worktree is absent.
 
-    The 3 reclassified emit ops are "common_dir"-scoped. resolve_op_repo_key raises
+    The reclassified per-repo state writers are "common_dir"-scoped. resolve_op_repo_key raises
     ValueError when request_repo is None (no _origin_worktree in message), which
     dispatch_message converts to INVALID_PARAMS. This is the dispatch-layer fail-loud
     gate (AC1 / AC5 line of defense before the handler's own None guard).
 
-    These tests do NOT replace the handler-level tests (test_c4a_handler_wiring.py /
-    test_recorder.py TestBacklogRecordHandler) — they test the dispatch layer independently.
+    These tests do NOT replace the handler-level tests (test_recorder.py
+    TestBacklogRecordHandler) — they test the dispatch layer independently.
     """
 
     @staticmethod
@@ -171,14 +147,6 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
             # _origin_worktree deliberately absent
         }
 
-    def test_artifact_emit_without_origin_worktree_returns_invalid_params(self, exercise_suspended_op) -> None:
-        """artifact.emit without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
-        d = _run(dispatch_message(self._msg_without_worktree("artifact.emit")))
-        assert "error" in d, "Expected error response when _origin_worktree is absent"
-        assert d["error"]["code"] == INVALID_PARAMS, (
-            f"Expected INVALID_PARAMS ({INVALID_PARAMS}); got {d['error']['code']}"
-        )
-
     def test_backlog_record_without_origin_worktree_returns_invalid_params(self) -> None:
         """backlog.record without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
         d = _run(dispatch_message(self._msg_without_worktree("backlog.record")))
@@ -188,11 +156,5 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
     def test_goal_append_without_origin_worktree_returns_invalid_params(self) -> None:
         """goal.append without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
         d = _run(dispatch_message(self._msg_without_worktree("goal.append")))
-        assert "error" in d
-        assert d["error"]["code"] == INVALID_PARAMS
-
-    def test_emit_cadence_without_origin_worktree_returns_invalid_params(self) -> None:
-        """emit.cadence without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
-        d = _run(dispatch_message(self._msg_without_worktree("emit.cadence")))
         assert "error" in d
         assert d["error"]["code"] == INVALID_PARAMS

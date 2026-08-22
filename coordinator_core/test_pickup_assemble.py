@@ -2606,8 +2606,8 @@ class TestClaimGrantTruthTable:
 
 # ---------------------------------------------------------------------------
 # holder_evidence (decidable claim evidence, 2026-07-27) — makes
-# compute_claim_grant/compute_competing_claim's holder_live boolean and
-# claim age falsifiable rather than a bare assertion.
+# compute_claim_grant's holder_live boolean and claim age falsifiable
+# rather than a bare assertion.
 # ---------------------------------------------------------------------------
 
 
@@ -3026,63 +3026,25 @@ class TestHolderEvidence:
         assert evidence["scope_overlap"] is None
 
 
-class TestCompetingClaimEvidenceCap:
-    def test_cheap_fields_on_all_candidates_activity_only_on_live_peer_or_handover(
-        self, tmp_path, monkeypatch
-    ):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "peer.md", 'claimed_by: "peer-sid"\n')
-        _seed_handoff_with_fields(repo, "stale.md", 'claimed_by: "gone-sid"\n')
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"peer-sid": (True, "stable-pid", None)},
-        )
-        monkeypatch.setenv("HOME", str(tmp_path / "fake-home-cap"))
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        by_path = {c["path"]: c for c in result["candidates"]}
-        peer = by_path["state/handoffs/peer.md"]
-        stale = by_path["state/handoffs/stale.md"]
-
-        # Cheap fields present on every candidate.
-        assert "liveness_basis" in peer and "liveness_basis" in stale
-        assert "last_activity_age_sec" in peer and "last_activity_age_sec" in stale
-
-        # Activity fields only on the live-peer/handover-eligible candidate.
-        assert "recent_paths" in peer
-        assert "recent_paths" not in stale
-
-    def test_cap_marks_recent_paths_source_as_capped(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        sids = [f"peer-sid-{i}" for i in range(7)]
-        for i, sid in enumerate(sids):
-            _seed_handoff_with_fields(repo, f"peer{i}.md", f'claimed_by: "{sid}"\n')
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {sid: (True, "stable-pid", None) for sid in sids},
-        )
-        monkeypatch.setenv("HOME", str(tmp_path / "fake-home-cap2"))
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        capped = [
-            c for c in result["candidates"] if c.get("recent_paths_source") == "capped"
-        ]
-        not_capped = [
-            c
-            for c in result["candidates"]
-            if c.get("recent_paths_source") not in (None, "capped")
-        ]
-        assert len(not_capped) == 5
-        assert len(capped) == 2
-        for c in capped:
-            assert c["recent_paths"] == []
-            assert c["scope_overlap"] is None
+# NEGATIVE-SPEC (2026-08-22): `TestCompetingClaimEvidenceCap` and
+# `TestCompetingClaim` lived here, plus the `build_competing_jp_is_blocking`
+# helper only `TestCompetingClaim` called. Their whole subject —
+# `pickup_assemble.compute_competing_claim` — was deleted at aadef0e23 ("C1,
+# C2, C5, C11: wave 1 of the ceremony-assembler rebuild", chunk C2 of
+# docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md), which
+# rewrote `compute_claim_grant` to the ratified R4 rule and dropped the
+# sibling-scan producer outright; `gates.competing_claim` is no longer in the
+# emitted gates object either. That commit's reverse-reference scan missed
+# these call sites, so they survived as AttributeError-at-runtime residue.
+#
+# Do NOT reinstate them against a resurrected producer. What they pinned that
+# still has a live subject is already covered elsewhere: the lineage filter by
+# `TestLivenessSignalLineageFilter`/`TestClaimGrantLineageFilter` below, the
+# holder-evidence cheap/activity split by `holder_evidence`'s own tests in
+# coordinator_core/session/tests/test_liveness.py, and the R4 grant rule by
+# coordinator_core/pickup_assemble/tests/test_claim_rule.py. The evidence-cap
+# and per-candidate-memo assertions had no surviving subject at all — the memo
+# was internal to the deleted function.
 
 
 # ---------------------------------------------------------------------------
@@ -3831,7 +3793,7 @@ def _seed_successor_handoff(
 class TestComputeSuccessorHandoffs:
     """Unit coverage for `compute_successor_handoffs` (plan
     2026-08-01-wsc-completeness-gate-and-pickup-successor.md, C5/AC7) — a
-    SEPARATE computation from `compute_competing_claim`, keyed on
+    SEPARATE computation from `compute_claim_grant`, keyed on
     `deployment_state`, never on claim-emptiness."""
 
     def test_path_form_predecessor_ready_to_fire_surfaces(self, tmp_path):
@@ -4590,12 +4552,12 @@ class TestBriefSpinoffKindVariants:
 
 
 # ---------------------------------------------------------------------------
-# gates.competing_claim (AC3, the Staff Engineer #3) + AC3e lineage-aware liveness — the
-# execution-session dogfood fix (Defect A). `_lineage_related_sessions` is
-# the one function `competing_claim`, `compute_liveness_signal`, and
-# `compute_claim_grant` all route a live-holder-relationship check through;
-# these tests exercise it via all three call sites so the filter cannot
-# drift apart between them.
+# AC3e lineage-aware liveness — the execution-session dogfood fix (Defect A).
+# `_lineage_related_sessions` is the one function `compute_liveness_signal`
+# and `compute_claim_grant` both route a live-holder-relationship check
+# through; these tests exercise it via both call sites so the filter cannot
+# drift apart between them. A third caller, `compute_competing_claim`, was
+# deleted at aadef0e23 — see the negative-spec block above.
 # ---------------------------------------------------------------------------
 
 def _seed_handoff_with_fields(repo: Path, name: str, extra_fm: str, predecessor: str = '"none"') -> Path:
@@ -4621,287 +4583,29 @@ def _seed_handoff_with_fields(repo: Path, name: str, extra_fm: str, predecessor:
     return path
 
 
-class TestCompetingClaim:
-    def test_no_siblings_is_none(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert result == {"verdict": "none", "candidates": []}
-
-    def test_stale_sibling_is_stale_only(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "stale.md", 'claimed_by: "gone-sid"\n')
-        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert result["verdict"] == "stale-only"
-        assert len(result["candidates"]) == 1
-        candidate = result["candidates"][0]
-        assert {
-            "path": candidate["path"],
-            "claimed_by": candidate["claimed_by"],
-            "holder_live": candidate["holder_live"],
-            "disposition": candidate["disposition"],
-        } == {
-            "path": "state/handoffs/stale.md",
-            "claimed_by": "gone-sid",
-            "holder_live": False,
-            "disposition": "stale-claim",
-        }
-        # Cheap evidence fields (holder_evidence.py) are additive on every
-        # candidate row, including a not-live holder with no real meta.json.
-        assert candidate["liveness_basis"] is None
-        assert candidate["last_activity_age_sec"] is None
-
-    def test_live_unrelated_sibling_is_live_peer(self, tmp_path, monkeypatch):
-        """AC3e negative case (b): a live holder of an UNRELATED sibling in
-        the same workstream still resolves `live-peer` — proves the
-        lineage filter narrows to actual relatives, it does not swallow
-        real contention. It no longer BLOCKS (PM ruling 2026-07-24,
-        pickup-skill-code-driven-branch-result spinoff):
-        `build_competing_claim_judgment_point` is retired to an always-`None`
-        no-op — a sibling handoff's liveness on a shared branch is never
-        this artifact's contention, only `gates.claim`/`claim_grant` (this
-        artifact's OWN claim state) may gate a pickup. `gates.competing_claim`
-        remains informational-only."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "stranger.md", 'claimed_by: "stranger-sid"\n')
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"stranger-sid": (True, "stable-pid", None)},
-        )
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert result["verdict"] == "live-peer"
-        assert result["candidates"][0]["disposition"] == "live-peer"
-        assert build_competing_jp_is_blocking(result) is False
-
-    def test_live_predecessor_author_resolves_handover_and_stays_coast_clear(self, tmp_path, monkeypatch):
-        """AC3e case (a): a live predecessor-author resolves `handover`, not
-        `live-peer`, and the artifact still reads coast-clear — the exact
-        false-hold-on-plan->execute-handover defect this row exists to
-        close."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(
-            repo, "pred.md", 'claimed_by: "predecessor-sid"\nauthoring_session: "predecessor-sid"\n',
-        )
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"predecessor-sid": (True, "stable-pid", None)},
-        )
-
-        self_fm = {"predecessor": "state/handoffs/pred.md"}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
-
-        assert result["verdict"] == "handover"
-        assert len(result["candidates"]) == 1
-        candidate = result["candidates"][0]
-        assert {
-            "path": candidate["path"],
-            "claimed_by": candidate["claimed_by"],
-            "holder_live": candidate["holder_live"],
-            "disposition": candidate["disposition"],
-        } == {
-            "path": "state/handoffs/pred.md",
-            "claimed_by": "predecessor-sid",
-            "holder_live": True,
-            "disposition": "handover",
-        }
-        # `handover` is an activity-eligible disposition (want_activity=True)
-        # — the extra evidence keys are present even with no real meta.json.
-        # This fixture writes NO session dir for "predecessor-sid" at all, so
-        # `holder_evidence()` returns its all-`None` default before ever
-        # reaching `_claim_scope_overlap` (the "no session dir" early-return,
-        # unchanged by C3) — `None` here is a genuine evidence gap, not the
-        # either-side-empty bug C3 fixes. Left exactly as it pinned before.
-        assert candidate["recent_paths"] == []
-        assert candidate["recent_paths_source"] == "unavailable"
-        assert candidate["scope_overlap"] is None
-        # (c) — the handover verdict never gates a directive: no judgment
-        # point, coast reads clear.
-        jp = pa.build_competing_claim_judgment_point(result, "gates.competing_claim", ["d2"])
-        assert jp is None
-        assert pa.compute_coast([])["verdict"] == "clear"
-
-    def test_live_author_of_self_resolves_handover(self, tmp_path, monkeypatch):
-        """A live session that authored THIS artifact directly (not via a
-        predecessor pointer) is also a handover, per
-        `_lineage_related_sessions`'s first source."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "sibling.md", 'claimed_by: "author-sid"\n')
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"author-sid": (True, "stable-pid", None)},
-        )
-
-        self_fm = {"authoring_session": "author-sid"}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
-
-        assert result["verdict"] == "handover"
-
-    def test_additional_predecessors_and_forked_from_also_resolve_handover(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "merge-parent.md", 'consumed_by: "merge-sid"\n')
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"merge-sid": (True, "stable-pid", None)},
-        )
-
-        self_fm = {"additional_predecessors": ["state/handoffs/merge-parent.md"]}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
-
-        assert result["verdict"] == "handover"
-
-    # Review: code-reviewer — Finding 3: the prior "live-unrelated" test above
-    # seeds NEITHER side with a `scope:`, so `_scopes_intersect([], [])` hits
-    # the conservative empty-side fallback and asserts `live-peer` — this
-    # test seeds two genuinely disjoint non-empty `scope:` lists to prove the
-    # `live-unrelated` disposition itself actually fires.
-    def test_disjoint_scopes_resolve_live_unrelated(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_with_fields(repo, "self.md", 'claimed_by: "self-holder-sid"\n', predecessor='"none"')
-        _seed_handoff_with_fields(
-            repo, "sibling.md", 'claimed_by: "stranger-sid"\nscope:\n  - "b/y.py"\n',
-        )
-        monkeypatch.setattr(
-            pa._liveness, "live_session_verdicts",
-            lambda cwd=None: {"stranger-sid": (True, "stable-pid", None)},
-        )
-
-        self_fm = {"scope": ["a/x.py"]}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
-
-        assert result["verdict"] == "live-unrelated"
-        assert result["candidates"][0]["disposition"] == "live-unrelated"
-
-    def test_self_is_excluded_from_its_own_sibling_scan(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_with_fields(repo, "self.md", 'claimed_by: "self-sid"\n')
-        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: True)
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert result == {"verdict": "none", "candidates": []}
-
-    # Call-scoped dedupe (spawn-count optimization, zero semantic change) —
-    # C8/AC13 migration: `holder_live` now comes from ONE
-    # `live_session_verdicts()` fetch per `compute_competing_claim` call
-    # (AC-live-verdicts), not a per-sid `session_live` probe, so the
-    # dedupe property is now "the verdicts map is fetched exactly once
-    # regardless of how many siblings/distinct sids appear" — a STRONGER
-    # form of the same guarantee this test used to pin against per-sid
-    # `session_live` calls.
-    def test_same_holder_sid_probes_session_live_once(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "a.md", 'claimed_by: "dup-sid"\n')
-        _seed_handoff_with_fields(repo, "b.md", 'claimed_by: "dup-sid"\n')
-        calls: list[None] = []
-
-        def fake_live_session_verdicts(cwd=None):
-            calls.append(None)
-            return {"dup-sid": (True, "stable-pid", None)}
-
-        monkeypatch.setattr(pa._liveness, "live_session_verdicts", fake_live_session_verdicts)
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert len(calls) == 1
-        assert result["verdict"] == "live-peer"
-        assert [c["claimed_by"] for c in result["candidates"]] == ["dup-sid", "dup-sid"]
-        assert all(c["holder_live"] is True for c in result["candidates"])
-        assert all(c["disposition"] == "live-peer" for c in result["candidates"])
-
-    def test_distinct_holder_sids_each_still_probed(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(repo, "a.md", 'claimed_by: "sid-one"\n')
-        _seed_handoff_with_fields(repo, "b.md", 'claimed_by: "sid-two"\n')
-        calls: list[None] = []
-
-        def fake_live_session_verdicts(cwd=None):
-            calls.append(None)
-            return {
-                "sid-one": (True, "stable-pid", None),
-                "sid-two": (False, "stable-pid", None),
-            }
-
-        monkeypatch.setattr(pa._liveness, "live_session_verdicts", fake_live_session_verdicts)
-
-        result = pa.compute_competing_claim(repo, {}, "state/handoffs/self.md")
-
-        assert len(calls) == 1
-        assert result["verdict"] == "live-peer"
-        dispositions = {c["claimed_by"]: c["disposition"] for c in result["candidates"]}
-        assert dispositions == {"sid-one": "live-peer", "sid-two": "stale-claim"}
-
-    def test_shared_sid_can_classify_differently_across_candidates(self, tmp_path, monkeypatch):
-        """Requirement 2 — the LIVENESS answer for a shared sid is memoized,
-        but per-candidate CLASSIFICATION is not: `dup-sid` is live and
-        non-lineage-related on both siblings, yet one declares a `scope:`
-        that overlaps this artifact's own (-> `live-peer`) and the other
-        declares a disjoint `scope:` for the SAME holder sid
-        (-> `live-unrelated`), proving the dedupe only collapsed the shared
-        `live_session_verdicts()` fetch, not the per-candidate disposition
-        derived from it (which also consults each candidate's own
-        `scope:`)."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "self.md")
-        _seed_handoff_with_fields(
-            repo, "overlapping.md", 'claimed_by: "dup-sid"\nscope:\n  - "a/x.py"\n',
-        )
-        _seed_handoff_with_fields(
-            repo, "disjoint.md", 'claimed_by: "dup-sid"\nscope:\n  - "b/y.py"\n',
-        )
-        calls: list[None] = []
-
-        def fake_live_session_verdicts(cwd=None):
-            calls.append(None)
-            return {"dup-sid": (True, "stable-pid", None)}
-
-        monkeypatch.setattr(pa._liveness, "live_session_verdicts", fake_live_session_verdicts)
-
-        self_fm = {"scope": ["a/x.py"]}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
-
-        assert len(calls) == 1
-        dispositions = {c["path"]: c["disposition"] for c in result["candidates"]}
-        assert dispositions == {
-            "state/handoffs/overlapping.md": "live-peer",
-            "state/handoffs/disjoint.md": "live-unrelated",
-        }
-        # live-peer is most-severe and present, so it wins the overall
-        # verdict even though a live-unrelated candidate also exists.
-        assert result["verdict"] == "live-peer"
-
-
-def build_competing_jp_is_blocking(competing_claim: dict) -> bool:
-    jp = pa.build_competing_claim_judgment_point(competing_claim, "gates.competing_claim", ["d2"])
-    return jp is not None and pa.compute_coast([jp])["verdict"] == "blocked"
+# NEGATIVE-SPEC (2026-08-22): `TestCompetingClaimEvidenceCap` and
+# `TestCompetingClaim` lived here, plus the `build_competing_jp_is_blocking`
+# helper only `TestCompetingClaim` called. Their whole subject —
+# `pickup_assemble.compute_competing_claim` — was deleted at aadef0e23 ("C1,
+# C2, C5, C11: wave 1 of the ceremony-assembler rebuild", chunk C2 of
+# docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md), which
+# rewrote `compute_claim_grant` to the ratified R4 rule and dropped the
+# sibling-scan producer outright; `gates.competing_claim` is no longer in the
+# emitted gates object either. That commit's reverse-reference scan missed
+# these call sites, so they survived as AttributeError-at-runtime residue.
+#
+# Do NOT reinstate them against a resurrected producer. What they pinned that
+# still has a live subject is already covered elsewhere: the lineage filter by
+# `TestLivenessSignalLineageFilter`/`TestClaimGrantLineageFilter` below, the
+# holder-evidence cheap/activity split by `holder_evidence`'s own tests in
+# coordinator_core/session/tests/test_liveness.py, and the R4 grant rule by
+# coordinator_core/pickup_assemble/tests/test_claim_rule.py. The evidence-cap
+# and per-candidate-memo assertions had no surviving subject at all — the memo
+# was internal to the deleted function.
 
 
 class TestLivenessSignalLineageFilter:
-    """AC3e — the same lineage filter `compute_competing_claim` applies is
+    """AC3e — the same lineage filter `compute_claim_grant` applies is
     threaded through `compute_liveness_signal`'s three signals (Defect A)."""
 
     def test_live_unrelated_claimant_on_self_still_fires(self, tmp_path, monkeypatch):

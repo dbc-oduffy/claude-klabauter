@@ -40,7 +40,7 @@ TARGET := door
 OBJS := door_posix.o door_core.o
 SELFTEST := door_core_selftest
 
-.PHONY: all clean selftest check
+.PHONY: all clean selftest check windows-check
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
@@ -66,5 +66,29 @@ door_posix.o: door_posix.c door_core.h
 door_core.o: door_core.c door_core.h
 	$(CC) $(CFLAGS) -c -o $@ door_core.c
 
+# RUN THIS BEFORE COMMITTING ANY CHANGE TO door_core.{c,h}. The shared core is
+# linked into the WINDOWS door too, and no Mac can run `door.exe` -- but the
+# headers door.c needs (windows.h, shellapi.h, sddl.h) come from mingw-w64, so
+# the compile and the LINK are both checkable here. The link is the half that
+# matters: it is what catches a door_core.h declaration that no longer matches
+# its definition, which is what an extraction into the shared core can break.
+#
+# Verified toolchain, not just a syntax pass: mingw-w64 is NOT MSVC, and
+# build.py ships with cl.exe. A green run here means "well-formed and links",
+# never "the Windows build succeeds".
+WIN_CC ?= x86_64-w64-mingw32-gcc
+
+windows-check:
+	@command -v $(WIN_CC) >/dev/null 2>&1 || { \
+	  echo "windows-check: $(WIN_CC) not found -- brew install mingw-w64"; exit 1; }
+	$(WIN_CC) $(CFLAGS) -DPYTHON_BIN_W='L"python3"' -DBUILD_ENGINE_ROOT_W='L""' \
+	  -c -o door_win_check.o door.c
+	$(WIN_CC) $(CFLAGS) -c -o door_core_win_check.o door_core.c
+	$(WIN_CC) -O2 -o door_win_check.exe door_win_check.o door_core_win_check.o \
+	  -ladvapi32 -lshell32
+	@echo "windows-check: door.c + door_core.c compile and link for Windows"
+	@rm -f door_win_check.o door_core_win_check.o door_win_check.exe
+
 clean:
-	rm -f $(TARGET) $(OBJS) $(SELFTEST)
+	rm -f $(TARGET) $(OBJS) $(SELFTEST) \
+	      door_win_check.o door_core_win_check.o door_win_check.exe

@@ -228,11 +228,11 @@ def test_best_effort_directive_failure_lands_in_degraded_not_failed(
     modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_cadence", "query-records", best_effort=True)]
+    directives = [_directive("d_best_effort", "query-records", best_effort=True)]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
-    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_best_effort"]
     assert report["landed"] == []
 
 
@@ -250,20 +250,20 @@ def test_best_effort_directive_failure_alone_still_reports_success(
         return 0
 
     modules = {
-        "emit-cadence": _fake_module(failing_main, "fake_cadence"),
+        "coordinator-ceremony-hook": _fake_module(failing_main, "fake_best_effort"),
         "list-week-changelog": _fake_module(ok_main, "fake_ok"),
     }
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     directives = [
         _directive("d_ok", "list-week-changelog"),
-        _directive("d_cadence", "emit-cadence", best_effort=True),
+        _directive("d_best_effort", "coordinator-ceremony-hook", best_effort=True),
     ]
     exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     assert exit_code == int(wwc_apply.WorkweekApplyExitCode.SUCCESS)
     assert report["landed"] == ["d_ok"]
-    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_best_effort"]
     assert report["failed"] == []
 
 
@@ -301,7 +301,7 @@ def test_degraded_entry_error_folds_in_captured_stderr(
     modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_cadence", "query-records", best_effort=True)]
+    directives = [_directive("d_best_effort", "query-records", best_effort=True)]
     _exit_code, report = wwc_apply._execute_directives(directives, [], {})
 
     entry = report["degraded"][0]
@@ -365,11 +365,11 @@ def test_execute_directives_ignores_hard_block_key_entirely(
     modules = {"query-records": _fake_module(failing_main, "fake_cli")}
     monkeypatch.setattr(wwc_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_cadence", "query-records", best_effort=True)
+    directive = _directive("d_best_effort", "query-records", best_effort=True)
     directive["hard_block"] = True  # deliberately divergent from best_effort
     _exit_code, report = wwc_apply._execute_directives([directive], [], {})
 
-    assert [entry["id"] for entry in report["degraded"]] == ["d_cadence"]
+    assert [entry["id"] for entry in report["degraded"]] == ["d_best_effort"]
     assert report["failed"] == []
 
 

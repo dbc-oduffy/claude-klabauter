@@ -130,7 +130,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -433,7 +432,11 @@ def resolve_python() -> str:
         f"FAIL [hard] python — Python 3.11+ required (got {sys.version.split()[0]}).",
         file=sys.stderr,
     )
-    print("  Remediation: install Python 3.11+ from https://www.python.org/downloads/", file=sys.stderr)
+    print(
+        "  Remediation: install Python 3.11+ from https://www.python.org/downloads/, "
+        "then re-run: python3 scripts/setup.py",
+        file=sys.stderr,
+    )
     print(
         "  On Windows: disable App Execution Alias stubs (Settings > Apps > App execution "
         "aliases) before installing.",
@@ -2348,15 +2351,13 @@ def register_claude_klabauter_root(
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed to launch: {exc}", file=sys.stderr)
             print(f"  Tried to register: {value}", file=sys.stderr)
-            print("  Remediation: run manually:", file=sys.stderr)
-            print(f"    machine-local set {key} {value}", file=sys.stderr)
+            print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         if proc.returncode != 0:
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed.", file=sys.stderr)
             print(f"  Tried to register: {value}", file=sys.stderr)
-            print("  Remediation: run manually:", file=sys.stderr)
-            print(f"    machine-local set {key} {value}", file=sys.stderr)
+            print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {value}")
     for advisory in pending_advisories:
@@ -2464,9 +2465,64 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         start_warm_engine(repo_root)
 
 
+def _verification_child_program() -> str:
+    """The source of the child process C2's verification leg runs under
+    C1's resolved published root's own `PYTHONPATH` (see `start_warm_engine`).
+
+    WHY A CHILD PROCESS AT ALL (eng-director F1, PROBE-CONFIRMED): the
+    installer's OWN interpreter has already imported `coordinator_core` from
+    the unstamped live checkout by the time this function runs (this module
+    itself is `<claude-klabauter checkout>/scripts/setup.py`), so
+    `warm.client.engine_token()` in THIS process always resolves
+    `"unversioned"` / `_live_tree_cold` regardless of which root the server
+    was spawned against — the verification poll would deterministically
+    time out no matter which root the server was spawned with. Running the
+    poll in a fresh child process whose `PYTHONPATH` is C1's resolved root
+    (via `_child_env`, the same construction `spawn_detached` already uses
+    for the server itself) makes THAT process's own `coordinator_core`
+    import resolve the published root, so its `engine_token()` computes the
+    matching token the server (spawned against the same root) also computed.
+
+    The printed line is machine-readable JSON on the LAST line of stdout —
+    `{"served": bool, "coordinator_core_file": str | None}` — so
+    `start_warm_engine` can discharge AC3 with a positive assertion (the
+    resolved `coordinator_core.__file__` this child itself imported, under
+    the SAME PYTHONPATH the server was spawned with) rather than an absent
+    error message (`state/lessons/2026-08-18-a-green-success-line-naming-
+    an-artifact`) — a served ping alone answers identically whether the
+    server booted from the published root or (were the mechanism broken)
+    fell through to some other tree entirely.
+    """
+    return (
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "deadline = time.monotonic() + 15.0\n"
+        "served = None\n"
+        "while time.monotonic() < deadline:\n"
+        "    try:\n"
+        "        from coordinator_core.warm.client import try_warm_dispatch\n"
+        "    except Exception as exc:\n"
+        "        print(json.dumps({'served': False, 'coordinator_core_file': None, "
+        "'error': repr(exc)}))\n"
+        "        sys.exit(0)\n"
+        "    served = try_warm_dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'ping', "
+        "'params': {}})\n"
+        "    if served is not None:\n"
+        "        break\n"
+        "    time.sleep(0.25)\n"
+        "if served is None:\n"
+        "    print(json.dumps({'served': False, 'coordinator_core_file': None}))\n"
+        "    sys.exit(0)\n"
+        "import coordinator_core\n"
+        "resolved_file = str(Path(coordinator_core.__file__).resolve())\n"
+        "print(json.dumps({'served': True, 'coordinator_core_file': resolved_file}))\n"
+    )
+
+
 def start_warm_engine(repo_root: Path) -> None:
-    """Bring a warm server up as part of the install and PROVE it serves,
-    rather than leaving `engine.warm.enabled = true` as an unbacked claim.
+    """Bring a warm server up as part of the install and PROVE it serves
+    FROM THE PUBLISHED ROOT, rather than leaving `engine.warm.enabled = true`
+    as an unbacked claim.
 
     WHY THIS EXISTS. Registering the key only makes a warm engine
     *permitted*; it does not make one *exist*. Every path that creates one
@@ -2478,8 +2534,21 @@ def start_warm_engine(repo_root: Path) -> None:
     that can never come up on this box (an unreachable engine root, a
     generation that rotates faster than a server boots) is indistinguishable
     at install time from one that works. This step collapses that gap: it
-    spawns, then dispatches a real `ping` through the ordinary client and
-    only claims success on a served response.
+    spawns against C1's resolved (published, stamped) root, then dispatches
+    a real `ping` through a child process ALSO rooted at that resolved root
+    (see `_verification_child_program` and eng-director F1) and only claims
+    success on a served response whose resolved `coordinator_core.__file__`
+    is confirmed under that root.
+
+    `repo_root` (the claude-klabauter checkout) is used ONLY to resolve
+    `coordinator_core.install.engine_root_for_install` for the very first
+    import below — `scripts/setup.py` is not itself pip-installed at
+    install time, so this module must be reached via `repo_root` on
+    `sys.path` (already arranged at module import time, see this file's
+    top-level `sys.path.insert`). The engine root the server is SPAWNED
+    against, and the root the verification child imports under, are both
+    C1's resolved answer — never `repo_root` itself (F1: `repo_root` is the
+    unstamped live checkout DR-315 §2 forbids hosting a warm server).
 
     Best-effort by construction — an install must never fail over an
     optional performance feature, so every failure here degrades to an
@@ -2494,16 +2563,32 @@ def start_warm_engine(repo_root: Path) -> None:
         (`coordinator_core.warm.idle`) still retires it after its deadline,
         which is the intended lifecycle, not a failure of this step.
       - Does NOT fabricate a warm result from a successful spawn — an
-        unserved ping is reported as an advisory, never as PASS.
+        unserved ping is reported as an advisory, never as PASS. Nor from a
+        served ping alone — a served ping whose resolved
+        `coordinator_core.__file__` is NOT under the published root is also
+        reported as an advisory, never as PASS (the positive-assertion
+        contract this step exists to prove).
     """
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     try:
-        from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
-        from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT, try_warm_dispatch
+        from coordinator_core.install.engine_root_for_install import (
+            resolve_engine_root_for_install,
+        )
+        from coordinator_core.ops.ceremony.detached_spawn import _child_env, spawn_detached
+        from coordinator_core.warm.client import SERVER_ENTRY_SCRIPT
     except Exception as exc:  # noqa: BLE001 — never fail an install on an import
         print(f"[ADVISORY] warm engine not started (engine import failed: {exc!r}).", file=sys.stderr)
         return
 
-    engine_root = str(repo_root)
+    resolved = resolve_engine_root_for_install()
+    if resolved.kind == "none" or resolved.root is None:
+        print("[ADVISORY] warm engine not started — no published engine root resolved.", file=sys.stderr)
+        print(f"  {resolved.remediation}", file=sys.stderr)
+        print("  Warmth stays enabled; a server will be started lazily once a published root exists.", file=sys.stderr)
+        return
+
+    engine_root = str(resolved.root)
     try:
         spawn_detached(engine_root, SERVER_ENTRY_SCRIPT)
     except Exception as exc:  # noqa: BLE001 — spawn_detached is best-effort itself
@@ -2511,23 +2596,48 @@ def start_warm_engine(repo_root: Path) -> None:
         print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
         return
 
-    # A server takes ~0.5-1 s to bind its pipe; poll rather than sleeping a
-    # fixed worst case, and stop at the first served response.
-    deadline = time.monotonic() + 15.0
-    served = None
-    while time.monotonic() < deadline:
-        served = try_warm_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
-        if served is not None:
-            break
-        time.sleep(0.25)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _verification_child_program()],
+            cwd=engine_root,
+            env=_child_env(engine_root),
+            capture_output=True,
+            text=True,
+            timeout=20.0,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[ADVISORY] warm engine verification child failed to run: {exc!r}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        return
 
-    if served is None:
+    last_line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    try:
+        outcome = json.loads(last_line)
+    except (json.JSONDecodeError, ValueError):
+        outcome = {}
+
+    if not outcome.get("served"):
         print("[ADVISORY] warm engine started but did not serve a ping within 15s.", file=sys.stderr)
         print("  Warmth stays enabled; a server will be started lazily by the first op that misses the pipe.", file=sys.stderr)
         print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
         return
 
-    print("PASS [warm engine] resident server started and served a ping")
+    resolved_file = outcome.get("coordinator_core_file")
+    try:
+        under_published_root = resolved_file is not None and Path(resolved_file).resolve().is_relative_to(
+            Path(engine_root).resolve()
+        )
+    except (OSError, ValueError):
+        under_published_root = False
+
+    if not under_published_root:
+        print("[ADVISORY] warm engine served a ping, but its resolved coordinator_core did not resolve", file=sys.stderr)
+        print(f"  under the published root ({engine_root}): got {resolved_file!r}.", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        return
+
+    print(f"PASS [warm engine] resident server served a ping; coordinator_core resolved to {resolved_file} (under {engine_root})")
 
 
 def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, engine_py: str, import_names: list[str]) -> None:
@@ -2554,7 +2664,7 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
         print("FAIL: coordinator_core is not importable from CLAUDE_KLABAUTER_ROOT.", file=sys.stderr)
         print(f"  CLAUDE_KLABAUTER_ROOT: {claude_klabauter_root_resolved}", file=sys.stderr)
         print(f"  Interpreter: {engine_py}", file=sys.stderr)
-        print("  Remediation:", file=sys.stderr)
+        print("  Remediation: python3 scripts/setup.py --claude-klabauter-root /path/to/claude-klabauter", file=sys.stderr)
         print("    1. Ensure claude-klabauter is fully cloned — coordinator_core/ must exist at:", file=sys.stderr)
         print(f"       {claude_klabauter_root_resolved}/coordinator_core/__init__.py", file=sys.stderr)
         print("    2. If CLAUDE_KLABAUTER_ROOT is wrong, re-run with the correct root:", file=sys.stderr)
@@ -2681,11 +2791,22 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     exists to set up (a resolvable CLAUDE_KLABAUTER_ROOT the rest of the tool chain
     can use) did not actually happen, so THIS is the check that must be
     able to fail. Returns True iff at least one hard-severity probe
-    reported a non-"pass" status; the caller decides what a hard failure
+    reported status "fail"; the caller decides what a hard failure
     means for its own exit code (§ `main()`'s `EXIT_HEALTH_PROBE_HARD_
     FAILURE`) — this function's own job is only to detect and surface it,
     never to swallow it into an indistinguishable WARN the way every
     severity used to be treated before this fix.
+
+    "fail", not "not pass". A hard probe that reports `inconclusive` did not
+    find a broken install -- it could not measure. `claude-klabauter.warm.residency` is
+    the standing case: its reachability primitive is Windows-only, so on every
+    POSIX box running a warm server that probe is inconclusive by construction,
+    with remediation "—". Gating the installer's exit code on it made a correct
+    macOS install return 94 permanently, for a reading nobody can make
+    conclusive and nobody can act on. The inconclusive names itself on stderr
+    instead. The probes keep `required=True` (their own `--step-zero` exit rule
+    and the envelope's worst-of ranking are unchanged); what narrows here is
+    which status this INSTALLER treats as "the install did not take".
     """
     print()
     print("--- Verification: post-install health probe ---")
@@ -2741,15 +2862,29 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     # raising — this pass must independently tolerate the same malformed
     # lines without depending on the other loop having run at all.
     hard_failure = False
+    hard_inconclusive: list[str] = []
     for line in probe_output.splitlines():
         if not line.strip():
             continue
         try:
             obj = json.loads(line)
-            if obj.get("severity") == "hard" and obj.get("status") != "pass":
+            if obj.get("severity") != "hard":
+                continue
+            status = obj.get("status")
+            if status == "fail":
                 hard_failure = True
+            elif status not in ("pass", "warn"):
+                hard_inconclusive.append(str(obj.get("name")))
         except (json.JSONDecodeError, TypeError):
             continue
+
+    if hard_inconclusive:
+        print(
+            "[ADVISORY] hard-severity probe could not measure: "
+            + ", ".join(hard_inconclusive)
+            + ". Inconclusive is not a failed install — see output above.",
+            file=sys.stderr,
+        )
 
     if proc.returncode != 0:
         print(file=sys.stderr)
@@ -2807,6 +2942,210 @@ def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) ->
         )
         print(f"  Re-run manually: {engine_py} {cli} {repo_root}", file=sys.stderr)
         # Non-fatal: setup must still complete even if this step failed.
+
+
+def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: lands the native warm-engine door
+    (`coordinator-invoke`) at `settings_home() / "bin"` — the same
+    destination spelling `install_bin_forwarders` already uses — and
+    verifies it THROUGH THE DOOR rather than trusting its exit code.
+
+    Spec backlink: state/dispatch-briefs/2026-08-22-warm-engine-and-door-
+    install-from-published-root/C6.md.
+
+    PLACEMENT (this chunk's brief): installed UNCONDITIONALLY, never gated
+    on `offer_warm_opt_in`'s warmth toggle. A door that falls through
+    correctly when no server is resident is itself a correct outcome —
+    coupling the install to the toggle would mean flipping warmth on later
+    leaves the box doorless with no signal at all. Skipped only under
+    `--register-only`, same footing as `install_bin_forwarders` (its own
+    caller in `main()` already gates on that flag).
+
+    ENGINE ROOT is `coordinator_core.install.engine_root_for_install`'s
+    resolved answer (C1) — never `claude_klabauter_root_resolved`/`repo_root`, which
+    DR-315 §2 forbids hosting a warm server or a door build against (the
+    live checkout is unstamped).
+
+    AC12 (peer-filed sun_path bug): before installing or verifying,
+    computes the resulting socket path's byte length the same way
+    `coordinator_core.warm.election.socket_path` does (reused, not
+    re-derived — `election.socket_path` and `breadcrumb._runtime_base`
+    remain the only answer for where things live) and reports a distinct
+    ADVISORY naming the `SUN_PATH_MAX_BYTES` budget and the actual byte
+    count when it will not fit, rather than installing a door that can
+    never connect and letting that present as an unexplained fall-through
+    (`coordinator_core.warm.client._record_permanent_preamble_failure`
+    already classifies `SocketPathTooLongError` this way for the dispatch
+    path; this is the same classification, install-time).
+
+    VERIFICATION (AC5, eng-director F5): `coordinator_core.install.
+    door_route_signal.read_door_route` invokes the installed door for a
+    real op and reads back its recorded `route` from telemetry — `warm_
+    server` is the only PASS-worthy outcome, `in_process` proves a genuine
+    fall-through, and `unresolved` is never trusted as "fall-through
+    occurred" on its own (the sink can be silently inert — kill switch,
+    unresolvable git common dir, unwritable disk). Before trusting an
+    `unresolved`/non-`warm_server` result, this step runs `run_cold_
+    control_invocation` — a known-cold invocation bypassing the door and
+    the warm server entirely — anchored explicitly to THIS parameter's
+    `repo_root` (the claude-klabauter checkout) rather than the executing process's
+    ambient `Path.cwd()` (eng-director F5, the C6 half): `Path.cwd()` in
+    the install context may not be the repo whose sink `door_route_signal`
+    reads, so `repo_root` is threaded through explicitly to both the
+    control invocation's dispatch envelope and the read that checks it,
+    guaranteeing the write and the read land in the same file. A control
+    invocation that ALSO comes back unresolved reports `discriminator_
+    unavailable` explicitly — a distinct outcome from both a genuine PASS
+    and a genuine fall-through, never folded into either.
+
+    Best-effort by construction, mirroring every other advisory step in
+    this chain: no failure here aborts the rest of `main()`.
+    """
+    print()
+    print("--- Install: warm-engine door (coordinator-invoke) ---")
+
+    try:
+        from coordinator_core.install.engine_root_for_install import (
+            resolve_engine_root_for_install,
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail an install on an import
+        print(f"[ADVISORY] door not installed (engine_root_for_install import failed: {exc!r}).", file=sys.stderr)
+        return
+
+    resolved = resolve_engine_root_for_install()
+    if resolved.kind == "none" or resolved.root is None:
+        print("[ADVISORY] door not installed — no published engine root resolved.", file=sys.stderr)
+        print(f"  {resolved.remediation}", file=sys.stderr)
+        return
+    engine_root = resolved.root
+
+    # AC12: sun_path budget check BEFORE installing or verifying — a
+    # too-long socket path presents identically to a fall-through from the
+    # sink alone (door_route_signal module docstring's AC12 note), so this
+    # runs first and reports its own distinct advisory rather than folding
+    # into "fell through" or "unresolved".
+    try:
+        from coordinator_core.warm.election import (
+            SUN_PATH_MAX_BYTES,
+            SocketPathTooLongError,
+            socket_path,
+        )
+        from coordinator_core.warm.skew import compute_client_token
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] door sun_path budget check not attempted (import failed: {exc!r}).", file=sys.stderr)
+    else:
+        try:
+            token = compute_client_token(engine_root)
+            socket_path(token, engine_clone=engine_root)
+        except SocketPathTooLongError as exc:
+            print(f"[ADVISORY] door socket path exceeds the {SUN_PATH_MAX_BYTES}-byte sun_path budget: {exc}", file=sys.stderr)
+            print("  Remediation: export XDG_RUNTIME_DIR=<a shorter path>, then re-run: python3 scripts/setup.py", file=sys.stderr)
+            return
+        except Exception as exc:  # noqa: BLE001 — best-effort budget probe
+            print(f"[ADVISORY] door sun_path budget check failed ({exc!r}) — continuing.", file=sys.stderr)
+
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install import door_install
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] door not installed (door_install import failed: {exc!r}).", file=sys.stderr)
+        return
+
+    bin_dst = settings_home() / "bin"
+
+    try:
+        if sys.platform == "win32":
+            dest = door_install.install_door(bin_dst, engine_root)
+        else:
+            from coordinator_core.install.door_install_posix_build import build_or_advise
+
+            build_result = build_or_advise(engine_root, output=bin_dst / door_install.DOOR_INSTALLED_NAME)
+            if not build_result.built:
+                print(f"[ADVISORY] {build_result.advisory}", file=sys.stderr)
+                return
+            dest = build_result.output
+    except door_install.DoorInstallError as exc:
+        print(f"[ADVISORY] door install failed: {exc}", file=sys.stderr)
+        return
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] door install failed unexpectedly: {exc!r}", file=sys.stderr)
+        return
+
+    # 2026-08-22 collision fix. `install_door()` no longer claims the bare
+    # name itself -- it is reached on Windows only. On POSIX the door is
+    # produced by `door_install_posix_build.build_or_advise` instead (no
+    # committed prebuilt exists for POSIX; see that module's docstring),
+    # landing at the identical `bin_dst / DOOR_INSTALLED_NAME` path
+    # `install_door()` would have used, through a code path that never
+    # calls `install_door()` at all. `dest` is established by EITHER
+    # branch above ONLY on a door that genuinely landed (a degraded build
+    # already returned above, leaving the forwarder family untouched as
+    # the fallback) -- so this single call site, covering both platforms,
+    # is the one place that actually knows the door landed. Kept out of
+    # `build_or_advise` deliberately: that module stays a pure build step
+    # with no settings-home-shape knowledge of its own (see its docstring).
+    # Best-effort: a failure here must never un-succeed a door install that
+    # already landed (mirrors every other step in this function).
+    try:
+        for removed in door_install.claim_bare_name(bin_dst):
+            print(f"[door-install] removed shadowing sibling {removed}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] shadowing-sibling cleanup failed unexpectedly ({exc!r}) -- continuing.", file=sys.stderr)
+
+    try:
+        from coordinator_core.install.door_route_signal import (
+            DISCRIMINATOR_UNAVAILABLE,
+            IN_PROCESS,
+            UNRESOLVED,
+            WARM_SERVER,
+            read_door_route,
+            run_cold_control_invocation,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] door route verification not attempted (import failed: {exc!r}).", file=sys.stderr)
+        return
+
+    op = "ping"
+    # `repo_root` here (the claude-klabauter checkout), NOT `engine_root` (the
+    # published mirror): the door's telemetry row is envelope-anchored to
+    # the CALLER's git common dir (`op_latency._write_entry` resolves
+    # `repo_key` from the dispatch envelope's origin worktree), never to
+    # the engine root the dispatched op happens to run from. Reading with
+    # `engine_root` reads the wrong sink and reports a live PASS as
+    # `discriminator_unavailable` — see `run_cold_control_invocation`
+    # below, which already anchors to `repo_root` for the same reason.
+    door_result = read_door_route(dest, op, repo_root=repo_root)
+
+    if door_result.route == WARM_SERVER:
+        print(f"PASS [door] {op} routed through the warm server (route={WARM_SERVER}).")
+        return
+
+    # Not a genuine PASS. Before reporting a fall-through, rule out a
+    # silently inert discriminator via a known-cold control invocation —
+    # anchored to `repo_root` (the claude-klabauter checkout) explicitly, never
+    # ambient `Path.cwd()` (eng-director F5, C6 half).
+    control = run_cold_control_invocation(op, repo_root=repo_root)
+    if control.route == UNRESOLVED:
+        print(
+            f"[ADVISORY] door route {DISCRIMINATOR_UNAVAILABLE} — telemetry sink is inert on this box "
+            "(COORDINATOR_OP_LATENCY_DISABLE, an unresolvable git common dir, or an unwritable sink).",
+            file=sys.stderr,
+        )
+        print("  Remediation: export COORDINATOR_OP_LATENCY_DISABLE=0, then re-run: python3 scripts/setup.py", file=sys.stderr)
+        return
+
+    if door_result.route == IN_PROCESS:
+        print(
+            f"[ADVISORY] door installed but fell through to the cold entrypoint (route={IN_PROCESS}) — "
+            "no warm server served this verification ping.",
+            file=sys.stderr,
+        )
+        return
+
+    print(
+        f"[ADVISORY] door route {UNRESOLVED} — no matching telemetry row found for the verification ping.",
+        file=sys.stderr,
+    )
 
 
 def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -3767,6 +4106,7 @@ def main(argv: list[str]) -> int:
 
     if not args.register_only:
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         provision_whoami_under_general_pin(repo_root, engine_py, claude_klabauter_root_resolved, args)
         migrate_whoami_pin_off_venv(repo_root, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
@@ -3783,7 +4123,10 @@ def main(argv: list[str]) -> int:
     else:
         print("=== claude-klabauter setup: complete ===")
     if not args.register_only:
-        print("  For the full agentic chain-walk: invoke /coordinator:setup from Claude Code.")
+        print(
+            "  For the full agentic chain-walk: start a Claude Code session and run the "
+            "coordinator setup skill (see docs/reference/interactive-launch-chain.md)."
+        )
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     return 0

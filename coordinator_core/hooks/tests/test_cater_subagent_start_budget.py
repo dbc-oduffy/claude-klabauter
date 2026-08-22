@@ -77,6 +77,52 @@ from coordinator_core.testing.doe_root import doe_root_and_present
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "cater_subagent_start.py"
 
+#: C3 lever 1 (plan `2026-08-21-catering-costs-what-the-work-costs.md` § C3):
+#: `hooks/track_touched_files.py:92` used to import
+#: `coordinator_core.ops.session_context` at MODULE scope. Because the
+#: `coordinator_core.hooks` package eagerly imports every hook module
+#: (including `track_touched_files`) on any `coordinator_core.hooks.*`
+#: import -- this file's own `compose_catering` import above triggers that
+#: sweep -- that one line dragged the entire ops registry (percolate
+#: engine, publish transport, close_out_and_stamp, urllib.request,
+#: http.client, yaml) onto every catering fire, a path that never actually
+#: calls the op it imported. This regression guard lives beside the C2
+#: catering budget file rather than in track_touched_files' own test module
+#: because the cost it prices is paid by THIS entrypoint's hot path, not by
+#: track_touched_files' own direct callers.
+_TRACK_TOUCHED_FILES_PATH = (
+    Path(__file__).resolve().parents[1] / "track_touched_files.py"
+)
+
+
+def test_track_touched_files_keeps_ops_session_context_off_module_scope() -> None:
+    """C3 lever 1 regression guard: `coordinator_core.ops.session_context`
+    must be imported only inside a function body of `track_touched_files.py`,
+    never at module (top) scope -- an AST walk over the module's own
+    top-level `Import`/`ImportFrom` statements (NOT a raw-text grep, which
+    would also match the deliberately-retained function-local import this
+    lever depends on). A regression here re-drags the ops registry (and
+    everything it imports) back onto the catering hot path this chunk moved
+    it off of.
+    """
+    import ast
+
+    source = _TRACK_TOUCHED_FILES_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(_TRACK_TOUCHED_FILES_PATH))
+
+    module_scope_hits = [
+        node.module
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "coordinator_core.ops.session_context"
+    ]
+    assert not module_scope_hits, (
+        "track_touched_files.py imports coordinator_core.ops.session_context "
+        "at MODULE scope again -- this re-drags the ops registry (percolate "
+        "engine, publish transport, urllib.request, http.client, yaml) onto "
+        "every catering fire (C3 lever 1 regression)."
+    )
+
 DOE_ROOT, DOE_ROOT_PRESENT = doe_root_and_present()
 
 #: Widest `contract_blocks` row on disk (module docstring's own AC9 finding,

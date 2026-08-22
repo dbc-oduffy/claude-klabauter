@@ -2497,6 +2497,89 @@ def test_git_stash_show_allows():
     assert guard.check(payload) is None
 
 
+# 2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED): `shlex` has no concept of
+# shell redirection, so `git stash 2>&1` tokenizes `remaining` to `["2>&1"]`
+# -- a token that is neither `None` nor `"push"`/`-`-prefixed, so the
+# `is_push_or_bare` test used to go False and an unscoped stash-push sailed
+# through to the safe-forward allowlist. Confirmed live: a
+# `coordinator:review-integrator` subagent's `git stash 2>&1 | head -5;
+# echo done` swept 144 files on a shared tree and this guard never denied it
+# (state/bug-backlog/2026-08-21-subagent-unscoped-stash-push-swept-144-f-
+# ea557efb4908.yaml). Each case below reproduces the EXACT displacement
+# shape -- a redirection occupying the position this guard reads as "the
+# first real argument after stash" -- not a generic stash re-test.
+def test_git_stash_bare_with_stderr_redirect_denies():
+    payload = _payload("git stash 2>&1", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_stderr_redirect_and_pipe_denies():
+    # The EXACT shape from the incident transcript (`cd <repo> && git stash
+    # 2>&1 | head -5; echo done`) -- repo path elided, irrelevant to
+    # classification.
+    payload = _payload(
+        "cd repo && git stash 2>&1 | head -5; echo done",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_stdout_redirect_denies():
+    payload = _payload("git stash >/dev/null", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_stderr_redirect_to_file_denies():
+    payload = _payload("git stash 2>/dev/null", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_separated_redirect_target_denies():
+    # Whitespace between the operator and its target still yields two
+    # `shlex` tokens (`[">", "/dev/null"]`) -- both must be consumed.
+    payload = _payload("git stash > /dev/null", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_push_with_redirect_still_denies():
+    # A real token (`push`) already occupies the first-argument position
+    # before the redirect -- this shape denied even pre-fix; kept as a
+    # boundary case so a future change can't silently narrow the strip to
+    # break it.
+    payload = _payload("git stash push 2>&1", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_dash_u_with_redirect_still_denies():
+    payload = _payload("git stash -u 2>&1", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_pathspec_with_redirect_still_allows():
+    # The `--`-delimited pathspec scoping must survive stripping a leading
+    # redirection -- confirms the fix doesn't over-strip into `remaining`
+    # and lose the `"--" not in remaining` scoping check.
+    payload = _payload(
+        "git stash push -- state/subagent-share/my-file.md 2>&1",
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
 def test_git_stash_pop_still_denies_as_pop_apply():
     payload = _payload("git stash pop", agent_type="coordinator:executor")
     result = guard.check(payload)

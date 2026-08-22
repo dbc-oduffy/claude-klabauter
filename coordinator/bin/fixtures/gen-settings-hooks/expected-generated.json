@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/plan-persistence-check.py\" ] && exec python3 \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/plan-persistence-check.py\" || exit 127",
-            "timeout": 15
+            "timeout": 10
           }
         ]
       }
@@ -54,7 +54,7 @@
           {
             "type": "command",
             "command": "[ -n \"$COORDINATOR_CONTENT_ROOT\" ] && [ -f \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/bootstrap-substrate.py\" ] && exec python3 \"$COORDINATOR_CONTENT_ROOT/hooks/scripts/bootstrap-substrate.py\" || exit 127",
-            "timeout": 120,
+            "timeout": 10,
             "async": true
           }
         ]

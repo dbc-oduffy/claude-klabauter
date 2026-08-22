@@ -225,7 +225,7 @@ _CLASSIFICATION_DEFECT_BACKLOG_ENTRY = (
 
 
 def _classification_defect_notice(target_repo: str, session_repo: str, report_to: str) -> Optional[str]:
-    """FOREIGN-class contrast-form guard, shared by `render_em_message` and
+    r"""FOREIGN-class contrast-form guard, shared by `render_em_message` and
     `render_subagent_message`.
 
     NEGATIVE SPEC: the FOREIGN-class contrast form `(not `{session_repo}`)`

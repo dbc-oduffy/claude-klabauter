@@ -229,8 +229,23 @@ class TestInvokeLatencyProbe:
     subprocess call is timeout-guarded so this probe can never hang the doctor.
     """
 
+    @pytest.fixture
+    def stamped_root(self, tmp_path: Path) -> Path:
+        """A root the probe will actually measure against.
+
+        Only a STAMPED engine root reaches the measurement arms (DR-331);
+        `_REPO_ROOT` is a source clone whose dispatch is refused at the stamp
+        gate, so pointing these cases there would time a refusal instead of a
+        round-trip. Patching the predicate is not an option: `_require_module()`
+        re-execs the probe file per call.
+        """
+        stamp = tmp_path / "coordinator_core" / "_engine_stamp"
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text("sha-published")
+        return tmp_path
+
     def test_latency_under_budget_is_pass(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """PASS when the (mocked) round-trip completes well under budget."""
         mod = _require_module()
@@ -242,7 +257,7 @@ class TestInvokeLatencyProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
 
-        result = mod._run_probe_invoke_latency(_REPO_ROOT)
+        result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result)
         assert result.probe == "claude-klabauter.invoke.latency"
@@ -255,7 +270,7 @@ class TestInvokeLatencyProbe:
         assert result.data["budget_ms"] == mod._INVOKE_LATENCY_BUDGET_MS
 
     def test_latency_over_budget_is_degraded(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """DEGRADED (not BROKEN) when the measured elapsed time exceeds the budget.
 
@@ -274,7 +289,7 @@ class TestInvokeLatencyProbe:
         _times = iter([0.0, (mod._INVOKE_LATENCY_BUDGET_MS / 1000.0) + 1.0])
         monkeypatch.setattr(mod.time, "perf_counter", lambda: next(_times))
 
-        result = mod._run_probe_invoke_latency(_REPO_ROOT)
+        result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "over-budget path must produce a parseable _ProbeResult, not a crash"
@@ -290,7 +305,7 @@ class TestInvokeLatencyProbe:
         assert "claude-klabauter-root pointer" in result.remediation
 
     def test_latency_timeout_is_degraded_not_broken(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """DEGRADED (not BROKEN, not a hang) when the bounded subprocess call times out.
 
@@ -304,7 +319,7 @@ class TestInvokeLatencyProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", _raise_timeout)
 
-        result = mod._run_probe_invoke_latency(_REPO_ROOT)
+        result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "TimeoutExpired must produce a parseable _ProbeResult, not a crash"
@@ -319,7 +334,7 @@ class TestInvokeLatencyProbe:
         assert result.data["timed_out"] is True
 
     def test_latency_spawn_failure_emits_skip_not_crash(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
     ) -> None:
         """SKIP (not a crash) when subprocess.run raises FileNotFoundError (interpreter absent)."""
         mod = _require_module()
@@ -329,7 +344,7 @@ class TestInvokeLatencyProbe:
 
         monkeypatch.setattr(mod.subprocess, "run", _raise_fnf)
 
-        result = mod._run_probe_invoke_latency(_REPO_ROOT)
+        result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "spawn FileNotFoundError must produce a parseable _ProbeResult, not a crash"
@@ -367,3 +382,69 @@ class TestInvokeLatencyProbe:
         assert result.probe == "claude-klabauter.invoke.latency"
         assert result.required is False
         assert result.status in {mod._PASS, mod._DEGRADED, mod._BROKEN, mod._INFO}
+
+
+class TestInvokeLatencyDispatchRoot:
+    """The latency probe measures the same tree the smoke probe dispatches
+    from -- a refusal at the stamp gate times the refusal, not the round-trip
+    this budget is about (DR-331, DR-326)."""
+
+    def test_unstamped_clone_measures_the_published_mirror(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        mod = _require_module()
+
+        clone = tmp_path / "source-clone"
+        clone.mkdir()
+        mirror = tmp_path / "mirror"
+        stamp = mirror / "coordinator_core" / "_engine_stamp"
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text("sha-published")
+
+        from coordinator_core import engine_root as engine_root_mod
+
+        monkeypatch.setattr(
+            engine_root_mod, "published_engine_mirror_path", lambda: str(mirror)
+        )
+
+        cwds: list[object] = []
+
+        class _FakeResult:
+            returncode = 0
+            stdout = '{"result": {"ok": true}}'
+            stderr = ""
+
+        def _capture(*a, **kw):
+            cwds.append(kw.get("cwd"))
+            return _FakeResult()
+
+        monkeypatch.setattr(mod.subprocess, "run", _capture)
+
+        result = mod._run_probe_invoke_latency(clone)
+
+        assert result.status == mod._PASS
+        assert cwds == [str(mirror)]
+        assert result.data["dispatch_root"] == str(mirror)
+
+    def test_no_stamped_root_anywhere_is_inconclusive_without_spawning(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        mod = _require_module()
+
+        from coordinator_core import engine_root as engine_root_mod
+
+        monkeypatch.setattr(
+            engine_root_mod, "published_engine_mirror_path", lambda: None
+        )
+
+        spawned: list[object] = []
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: spawned.append(a))
+
+        result = mod._run_probe_invoke_latency(tmp_path)
+
+        assert _is_parseable_probe_result(result)
+        assert result.status == mod._INFO
+        assert result.skipped is True
+        assert result.required is False
+        assert result.data["dispatch_root"] is None
+        assert spawned == []

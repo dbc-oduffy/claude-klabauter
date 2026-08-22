@@ -405,7 +405,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/classify-engine-root-residue.py",
         "coordinator/bin/coordinator-current-branch.py",
         "coordinator/bin/coordinator-doc-new.py",
-        "coordinator/bin/coordinator-prepare-commit-msg",
         "coordinator/bin/coordinator-prepare-commit-msg.py",
         "coordinator/bin/coordinator-safe-commit.py",
         "coordinator/bin/coordinator-write-review-trail.py",
@@ -611,7 +610,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
     {
         ("coordinator/bin/break_glass.py", "check_claude_sync(timeout)"),
         ("coordinator/bin/check-install-divergence.py", "_GIT_TIMEOUT_SECS"),
-        ("coordinator/bin/coordinator-prepare-commit-msg", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/coordinator-prepare-commit-msg.py", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
         ("coordinator/bin/percolate-round.py", "_GIT_PUSH_TIMEOUT_SECS"),
@@ -688,8 +686,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 205
-_PINNED_DIAL_CEILING = 70
+_PINNED_RUNNER_CEILING = 204
+_PINNED_DIAL_CEILING = 69
 
 
 def _runner_message(sites: list) -> str:

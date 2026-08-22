@@ -13,16 +13,12 @@
  * against exactly the logic that has already survived the 2026-08-19
  * double-commit incident, rather than a second derivation of it.
  *
- * DUPLICATION, NAMED. `door.c` still carries its own private copies of
- * every function declared here, because a peer was editing that file when
- * this core was extracted and an additive split was the only safe move.
- * That duplication is a known follow-up, not the intended end state:
- * door.c should be switched onto this core (delete its private copies,
- * `#include "door_core.h"`, link `door_core.c`) so the safety
- * classification exists once. Until that happens, ANY change to
- * `is_provably_undispatched`, `parse_response_envelope`, or `sha1_hex16`
- * must be made in BOTH files -- grep for the function name, not for this
- * file.
+ * NO DUPLICATION. `door.c` carries no private copies of the functions
+ * declared here: it `#include`s this header, and `build.py :: _compile`
+ * compiles and links `door_core.c` into the same binary. The safety
+ * classification, the envelope reader, and the SHA-1 exist exactly once;
+ * a change to `is_provably_undispatched`, `parse_response_envelope`, or
+ * `sha1_hex16` is made in this file's `.c`, full stop.
  *
  * WHAT THIS IS NOT. Nothing here opens a handle, a socket, a file, or a
  * process. Every function operates on memory the caller owns. That is the
@@ -50,6 +46,23 @@
  * `warm/election.py :: pipe_name` and `warm/breadcrumb.py :: svc_dir`).
  * Both Python sites truncate the hexdigest at 16 characters; so does this. */
 void sha1_hex16(const unsigned char *data, size_t len, char out[17]);
+
+/* =========================================================================
+ * Sidecar trailing-whitespace trim -- shared so the clone hash agrees.
+ * ========================================================================= */
+
+/* Trims trailing '\n', '\r', ' ', '\t' from `buf[0..len)` in place, NUL-
+ * terminating as it goes, and returns the new length. No leading trim; no
+ * other characters are touched, so interior whitespace survives untouched.
+ *
+ * This exists here, not per-door, because the trimmed bytes are a SHA-1
+ * input for the clone hash (`sha1(str(Path(engine_root).resolve())...)`,
+ * see `sha1_hex16` above) -- the socket name the door dials. If the two
+ * doors ever trimmed a sidecar value differently, they would derive
+ * different socket names from the same file, and the door would connect to
+ * nothing. That failure is silent (no error, just no listener) and
+ * permanent (every rebuild reproduces it), so the trim is written once. */
+size_t trim_sidecar_trailing(char *buf, size_t len);
 
 /* =========================================================================
  * Growable byte buffer -- the outbound JSON request and the inbound
@@ -113,6 +126,7 @@ int parse_response_envelope(
 #define JSONRPC_METHOD_NOT_FOUND (-32601)
 #define JSONRPC_ENGINE_SKEW (-32002)
 #define JSONRPC_UNTRUSTED_CALLER (-32003)
+#define JSONRPC_UNSTAMPED_ENGINE_ROOT (-32005)
 #define JSONRPC_OP_SUSPENDED (-32006)
 /* Mirrors `coordinator_core.warm.client.WARM_DISPATCH_INDETERMINATE` --
  * same code, same meaning ("delivered, no usable answer, do not re-run"). */
@@ -137,6 +151,24 @@ int parse_response_envelope(
  *     correctly-built door never produces this; it is handled anyway,
  *     because "our own caller can't trigger this" is not the same claim as
  *     "no caller can".
+ *   -32005 UNSTAMPED_ENGINE_ROOT_ERROR: `ipc.py::dispatch_message`'s stamp
+ *     gate is that function's FIRST statement -- earlier than the
+ *     `import time`, any telemetry, or the `await _dispatch_message_impl`
+ *     that would eventually raise -32601 or -32006. A failed stamp check
+ *     returns `_unstamped_dispatch_refusal(...)` immediately, so this is
+ *     strictly stronger proof of non-dispatch than either code already on
+ *     this list. `dispatch_message`'s own docstring states a refused
+ *     dispatch never ran and gets no telemetry row -- "those measure real
+ *     invocations, and a refusal is not one."
+ *
+ *     ADDED 2026-08-22. Before this entry, the door converted a real -32005
+ *     into its own -32004 envelope: an operator was told "the op may have
+ *     COMPLETED, reconcile against real state" about a request that
+ *     provably never reached a handler, while the remediation the server
+ *     actually sent ("dispatch via coordinator-invoke, or pass
+ *     --allow-unstamped-dispatch") never reached them. Falling through
+ *     re-runs it cold, where the same stamp gate answers correctly.
+ *
  *   -32006 OP_SUSPENDED_ERROR: `ipc.py::_dispatch_message_impl` returns on
  *     `op_budget_suspension.is_suspended(method)` immediately BEFORE the
  *     registry lookup that produces -32601 -- so it is strictly stronger

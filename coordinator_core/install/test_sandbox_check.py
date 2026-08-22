@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.install import sandbox_check
 from coordinator_core.install.sandbox_check import (
     Reporter,
     SandboxCheckTransportError,
@@ -271,17 +272,17 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     (clone / "coordinator" / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
     (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
     (clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
-        # Minimal stand-in for the real DoE template: exports REPO_DOE_CLAUDE
-        # from the .doe-root pointer at SOURCE time (not inside the function
-        # body -- checks 9/AC2 source this file directly and read the env var
-        # back without ever calling claude()) and defines a claude() function,
-        # using variable expansion only (no hardcoded $HOME/machine path).
-        'if [ -f "${CLAUDE_HOME:-$HOME}/.claude/.doe-root" ]; then\n'
-        '  export REPO_DOE_CLAUDE="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root")"\n'
-        "fi\n"
-        "\n"
+        # Minimal stand-in for the real DoE template, in its DR-087 shape:
+        # the pointer is read at CALL time and handed to claude-doe through
+        # the explicit `--doe-root` argv seam, and REPO_DOE_CLAUDE is never
+        # exported (DR-087 demoted the pointer mirror out of rung-1
+        # authority). Variable expansion only -- no hardcoded machine path.
         "claude() {\n"
-        '  command claude "$@"\n'
+        '  _r="$(cat "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/machine-local/.doe-root" 2>/dev/null)"\n'
+        '  if [ -z "$_r" ]; then\n'
+        '    _r="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root" 2>/dev/null)"\n'
+        "  fi\n"
+        '  command claude-doe --doe-root "$_r" "$@"\n'
         "}\n",
         encoding="utf-8",
     )
@@ -340,4 +341,54 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         for line in r.lines
     )
     assert not any("settings.json hooks array empty" in line for line in r.lines)
+    # AC2 is derived against the DR-087 argv seam: a conforming shim hands
+    # claude-doe `--doe-root <pointer>` and exports nothing. Both rows PASS
+    # here, so an AC2 re-derived against REPO_DOE_CLAUDE would go RED on a
+    # correct install — which is the failure this fixture exists to catch.
+    assert any(
+        "AC2 cold-shell: claude-doe --doe-root resolved from pointer alone" in line for line in r.lines
+    )
+    assert any("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset" in line for line in r.lines)
+    assert not any(line.startswith("FAIL") and "AC2" in line for line in r.lines)
     assert r.pass_count > 0  # and the fixture's own present pieces PASS
+
+
+def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_clone: Path, monkeypatch):
+    """The shape DR-087 retired: export the pointer as rung-1
+    ``REPO_DOE_CLAUDE`` and invoke claude-doe with no ``--doe-root``. AC2 must
+    call BOTH halves out — a missing argv seam and a promoted mirror."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl"
+    tmpl.write_text(
+        'export REPO_DOE_CLAUDE="$(cat "${CLAUDE_HOME:-$HOME}'
+        '/.coordinator-claude-settings/machine-local/.doe-root" 2>/dev/null)"\n'
+        "claude() {\n"
+        '  command claude-doe "$@"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
+
+    assert any(
+        line.startswith("FAIL") and "DR-087 requires the explicit `--doe-root" in line for line in r.lines
+    )
+    assert any(
+        line.startswith("FAIL") and "DR-087 demoted the pointer mirror" in line for line in r.lines
+    )
+
+
+def test_tier2_boot_check_names_the_sentinel_a_writer_actually_writes():
+    """The Tier 2 manual gate used to send the operator to
+    `~/.claude/.session-sentinel`, which nothing in this repo has ever
+    written — an operator in a live session whose hooks demonstrably fired
+    went looking for a file that will never appear (2026-08-22).
+
+    Pinned against the writer's own constant rather than a copied literal:
+    a rename there must break this, not silently strand the instruction
+    again."""
+    from coordinator_core.ops.session.guard_hook_generation_self_probe import _SENTINEL_NAME
+
+    banner = sandbox_check._TIER2_BANNER
+    assert _SENTINEL_NAME in banner
+    assert ".session-sentinel" not in banner

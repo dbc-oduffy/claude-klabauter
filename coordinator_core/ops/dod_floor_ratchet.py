@@ -88,9 +88,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.win_portability import no_console_creationflags
 
-_INTERROGATE_TIMEOUT_SECS = 120
+_INTERROGATE_SITE = "coordinator_core/ops/dod_floor_ratchet.py :: _measure_docstrings"
+_INTERROGATE_TIMEOUT_SECS = bound_for(_INTERROGATE_SITE)
 _CREATIONFLAGS = no_console_creationflags()
 
 # dimension -> floor filename, relative to repo_root. "docstrings" is C3's

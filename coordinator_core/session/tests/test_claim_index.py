@@ -811,3 +811,43 @@ def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
     )
 
     assert answer.by_path["a.py"].verdict == claim_index.OWNERSHIP_MINE
+
+
+def test_commit_set_names_peer_only_claims_separately_from_contested(tmp_path):
+    # `paths`/`contested` answer "what is mine"; `peers` answers the different
+    # question a dirty-tree sweep asks about a path it did NOT get from here --
+    # "does a peer own this, or has nobody claimed it?". Collapsing the two
+    # reads a peer's in-flight file as unattributed.
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py"), _touch_line("T", "shared.py")])
+    _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py"), _touch_line("T", "theirs.py")])
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.paths == ["mine.py"]
+    assert result.contested == {"shared.py": ["sid-peer"]}
+    assert result.peers == {"theirs.py": ["sid-peer"]}
+
+
+def test_commit_set_peers_excludes_a_path_nobody_holds(tmp_path):
+    _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.peers == {}
+
+
+def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
+    # Last-event-wins applies here exactly as it does to `paths`: a peer that
+    # committed and released no longer holds the path, so it is nobody's.
+    _session_touched(
+        tmp_path,
+        "sid-peer",
+        [
+            _touch_line("T", "theirs.py"),
+            _touch_line("R", "theirs.py", when="2026-08-08T11:00:00.000000Z"),
+        ],
+    )
+
+    result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
+
+    assert result.peers == {}

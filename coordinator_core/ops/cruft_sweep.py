@@ -256,21 +256,46 @@ def _resolve_toolchain_tool(row: dict) -> Optional[str]:
 # test can force a bail without a real 300s sleep.
 _WATCHDOG_CEILING_SECS_DEFAULT = 300
 
-# 60s cap per delete — matches bash `cs_timeout 60 -- rm -rf ...`.
+# 60s cap per `rm -rf` spawn — matches bash `cs_timeout 60 -- rm -rf ...`.
+#
+# NEGATIVE SPEC (DR-349 § "Dials that raise themselves", 2026-08-21): this is a
+# FLAT per-call ceiling and must stay flat. It was previously multiplied by
+# `len(chunk)` at the batch call site, which the review finding below had already
+# half-corrected — chunking bounded the worst case at 20 minutes per phase instead
+# of unbounded, which is a fixed ceiling far above the kill bar, not a fix. A bound
+# that grows with its input is not a bound; the deletion phase's real ceiling is now
+# the sweep's own `_Watchdog` deadline (see `_delete_paths_batch`), and this constant
+# is only the per-spawn runaway guard beneath it. Do not reintroduce a per-item
+# factor.
 _DELETE_TIMEOUT_SECS = 60
 
-# Batch-delete chunk size — bounds a single blocking `rm -rf` call's worst
-# case to _DELETE_TIMEOUT_SECS * this many targets (20 min at the defaults
-# above), regardless of how large the overall batch is. Review finding
-# (amp-s1 #1): an unchunked N-scaled timeout (60s * N in one blocking call)
-# put no ceiling on box-hazard liveness for a box running 50-70 concurrent
-# LLM sessions — a batch in the hundreds could block minutes-to-hours with
-# no watchdog visibility into the deletion phase. Chunking keeps every
-# subprocess call's worst case fixed and gives later chunks a chance to run
-# even if one chunk stalls, without changing per-item outcome attribution.
+# Batch-delete chunk size — splits a large batch into several bounded `rm -rf`
+# calls rather than one. Review finding (amp-s1 #1): a single unchunked call put
+# no ceiling on box-hazard liveness for a box running 50-70 concurrent LLM
+# sessions, and gave `_Watchdog` no visibility into the deletion phase at all.
+# Chunking keeps every subprocess call's worst case fixed, gives later chunks a
+# chance to run even if one chunk stalls, and — with the watchdog now threaded
+# through — gives the phase a re-checkable deadline between chunks, all without
+# changing per-item outcome attribution.
 _DELETE_BATCH_CHUNK_SIZE = 20
 
 EmitFn = Callable[[dict], None]
+
+
+def _resolve_watchdog_ceiling_secs() -> float:
+    """Live read of `CRUFT_SWEEP_WATCHDOG_CEILING_SECS`, clamped narrow-only.
+
+    THE seam: the env var is read here and nowhere else, so no consumer can
+    re-read it unclamped. See `_Watchdog`'s docstring for the ruling.
+    """
+    raw = os.environ.get("CRUFT_SWEEP_WATCHDOG_CEILING_SECS")
+    if not raw:
+        return float(_WATCHDOG_CEILING_SECS_DEFAULT)
+    try:
+        requested = float(raw)
+    except (TypeError, ValueError):
+        return float(_WATCHDOG_CEILING_SECS_DEFAULT)
+    return min(requested, float(_WATCHDOG_CEILING_SECS_DEFAULT))
 
 
 # ---------------------------------------------------------------------------
@@ -281,20 +306,43 @@ EmitFn = Callable[[dict], None]
 class _Watchdog:
     """Cooperative wall-clock ceiling bail. Mirrors cs_watchdog_check's
     ceiling-only operative behavior (stall-detection arm is dormant in every
-    oracle call site, per recipe confirmation)."""
+    oracle call site, per recipe confirmation).
+
+    The stamped `_start` is the phase's DEADLINE origin, not merely a
+    collection-loop guard: `remaining()` is what every subprocess beneath the
+    phase derives its own bound from (DR-349 § 4 — a budget is a deadline, not
+    a per-spawn timeout, so stacking spawns cannot buy time).
+
+    `CRUFT_SWEEP_WATCHDOG_CEILING_SECS` is NARROW-ONLY (DR-349 § 3, PM ruling
+    2026-08-21). It may lower the ceiling; it can never raise it. The `min()`
+    is applied AFTER env resolution — the shape `ipc.py ::
+    _resolve_dispatch_timeout_secs` already proves — so a stale `export` in a
+    sibling repo cannot reach in and grant this sweep more of the box. An
+    unparsable or widening value is inert, not an error: it resolves to the
+    default, silently and identically to it, because an operator who wanted
+    more time is not entitled to it. The `ceiling_secs` kwarg stays unclamped
+    as the in-process injection seam (a golden-net test forces a bail without
+    a real 300s sleep) — it is not reachable by an operator, who has the
+    environment and nothing else.
+    """
 
     def __init__(self, ceiling_secs: Optional[float] = None):
         if ceiling_secs is None:
-            env_val = os.environ.get("CRUFT_SWEEP_WATCHDOG_CEILING_SECS")
-            ceiling_secs = (
-                float(env_val) if env_val else _WATCHDOG_CEILING_SECS_DEFAULT
-            )
+            ceiling_secs = _resolve_watchdog_ceiling_secs()
         self._ceiling = ceiling_secs
         self._start = time.monotonic()
 
     def check(self) -> bool:
         """Return True to continue, False to bail (ceiling exceeded)."""
         return (time.monotonic() - self._start) < self._ceiling
+
+    def remaining(self) -> float:
+        """Seconds left before the ceiling, floored at 0.0.
+
+        The deadline remainder a subprocess beneath this phase bounds itself
+        by. Never negative, so a caller can hand it straight to `min()`.
+        """
+        return max(self._ceiling - (time.monotonic() - self._start), 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +543,9 @@ def _delete_path(target: Path) -> bool:
     return not target.exists()
 
 
-def _delete_paths_batch(targets: Sequence[Path]) -> dict:
+def _delete_paths_batch(
+    targets: Sequence[Path], *, watchdog: Optional["_Watchdog"] = None
+) -> dict:
     """Batched replacement for a per-item `_delete_path` loop: one `rm -rf`
     subprocess call removing every target, rather than one call per target.
 
@@ -511,16 +561,32 @@ def _delete_paths_batch(targets: Sequence[Path]) -> dict:
     never inferred from the batch call's exit status.
 
     Targets are processed in fixed-size chunks of `_DELETE_BATCH_CHUNK_SIZE`,
-    each issued as its own `rm -rf` subprocess call timed out at
-    `_DELETE_TIMEOUT_SECS * len(chunk)` -- preserving the per-target 60s
-    floor the single-item helper gives every delete (a flat 60s ceiling on N
-    targets would starve a large, legitimately-slow batch of the budget any
-    one of its members would individually have had) while bounding any one
-    blocking call's worst case to a fixed ceiling instead of scaling
-    unbounded with the whole batch's size (review finding amp-s1 #1: a
-    single N-scaled call had no ceiling visible to `_Watchdog`, which only
-    bounds the collection phase, not deletion). A chunk that times out or
-    errors does not stop later chunks from being attempted.
+    each issued as its own `rm -rf` subprocess call bounded by the FLAT
+    `_DELETE_TIMEOUT_SECS`, further clamped to whatever `watchdog` has left of
+    the sweep's ceiling. A chunk that times out or errors does not stop later
+    chunks from being attempted.
+
+    NEGATIVE SPEC (DR-349, 2026-08-21): the per-chunk bound was
+    `_DELETE_TIMEOUT_SECS * len(chunk)` -- a per-item multiplier defended as
+    "the per-target 60s floor the single-item helper gives every delete". That
+    defence is the "give it more time" reflex written into code: it granted a
+    full chunk 20 minutes of a box carrying 50-70 concurrent sessions, and it
+    was a fixed ceiling far above the kill bar rather than a bound. It is gone,
+    and nothing here may scale with the batch's size again.
+
+    What replaces it is the deadline the multiplier was standing in for.
+    Review finding amp-s1 #1 diagnosed the real gap exactly -- deletion had "no
+    ceiling visible to `_Watchdog`, which only bounds the collection phase, not
+    deletion" -- and chunking only half-applied the remedy. Threading the
+    phase's own watchdog through closes it: each chunk derives its bound from
+    the REMAINDER of the sweep's ceiling, so the whole deletion phase now lives
+    inside the same deadline the collection phase does, and stacking chunks
+    cannot buy time. Past the deadline, remaining chunks are not spawned at all
+    -- their targets are still reported, by the same post-hoc `exists()` check
+    every other target gets, so the return shape is unchanged.
+
+    `watchdog` is optional because one caller (`sweep_subagent_sandbox_files`)
+    has no watchdog by design; that path keeps the flat per-spawn bound alone.
 
     Returns {str(target): confirmed_gone_bool} for every entry in `targets`.
     """
@@ -535,10 +601,21 @@ def _delete_paths_batch(targets: Sequence[Path]) -> dict:
     results: dict = {}
     for start in range(0, len(targets), _DELETE_BATCH_CHUNK_SIZE):
         chunk = targets[start:start + _DELETE_BATCH_CHUNK_SIZE]
+        chunk_timeout = float(_DELETE_TIMEOUT_SECS)
+        if watchdog is not None:
+            chunk_timeout = min(chunk_timeout, watchdog.remaining())
+        if chunk_timeout <= 0.0:
+            print(
+                f"_delete_paths_batch: watchdog ceiling reached, skipping rm -rf for "
+                f"{len(chunk)} target(s)",
+                file=sys.stderr,
+            )
+            results.update({str(t): not t.exists() for t in chunk})
+            continue
         try:
             subprocess.run(
                 ["rm", "-rf"] + [str(t) for t in chunk],
-                timeout=_DELETE_TIMEOUT_SECS * len(chunk),
+                timeout=chunk_timeout,
                 capture_output=True,
                 **no_console_creationflags(),
             )
@@ -1150,7 +1227,9 @@ def sweep_harness(
                                    "auto-prune", f"transcript mtime {age_sec}s > threshold {threshold_sec}s",
                                    emit_fn=emit_fn)
 
-    uuid_delete_results = _delete_paths_batch([c[0] for c in uuid_candidates]) if apply else {}
+    uuid_delete_results = (
+        _delete_paths_batch([c[0] for c in uuid_candidates], watchdog=wd) if apply else {}
+    )
 
     # BEHAVIOUR CHANGE (2026-07-22): only count/log as pruned once
     # the delete is confirmed — a failed rm no longer inflates the
@@ -1208,7 +1287,9 @@ def sweep_harness(
 
             fh_candidates.append((fh_dir, dir_name, mtime, age_sec, _dir_size_bytes(fh_dir)))
 
-    fh_delete_results = _delete_paths_batch([c[0] for c in fh_candidates]) if apply else {}
+    fh_delete_results = (
+        _delete_paths_batch([c[0] for c in fh_candidates], watchdog=wd2) if apply else {}
+    )
 
     for fh_dir, dir_name, mtime, age_sec, size_bytes in fh_candidates:
         if apply:
@@ -1417,7 +1498,9 @@ def sweep_scratch(
             scratch_candidates.append((dir_path, dir_name, mtime, age_sec, size_bytes, effective_threshold))
             pruned_parents.append(dir_str)
 
-    scratch_delete_results = _delete_paths_batch([c[0] for c in scratch_candidates]) if apply else {}
+    scratch_delete_results = (
+        _delete_paths_batch([c[0] for c in scratch_candidates], watchdog=wd) if apply else {}
+    )
 
     for cand_path, cand_name, cand_mtime, cand_age_sec, cand_size_bytes, cand_threshold in scratch_candidates:
         cand_str = str(cand_path)
@@ -1518,8 +1601,10 @@ def sweep_subagent_sandbox_files(
 
     for file_path, file_name, mtime, age_sec, size_bytes in candidates:
         if apply:
-            # one batched rm -rf w/ N*60s cap (see _delete_paths_batch) --
-            # matches oracle's per-file cs_timeout rm -f floor, batched.
+            # one batched rm -rf, flat per-chunk cap (see _delete_paths_batch)
+            # -- matches oracle's per-file cs_timeout rm -f floor, batched.
+            # This phase declares no watchdog, so the flat per-spawn bound is
+            # its only ceiling.
             if not delete_results.get(str(file_path), False):
                 _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {file_path}", quiet=quiet)
                 if json_mode:
@@ -1645,7 +1730,9 @@ def sweep_orphans(
 
             candidates.append((child_path, child_name, size_bytes, mtime))
 
-    delete_results = _delete_paths_batch([c[0] for c in candidates]) if apply else {}
+    delete_results = (
+        _delete_paths_batch([c[0] for c in candidates], watchdog=wd) if apply else {}
+    )
 
     for child_path, child_name, size_bytes, mtime in candidates:
         if apply:
@@ -1797,7 +1884,9 @@ def sweep_empty_toplevel_dirs(
 
         candidates.append((child, name, max_mtime, age_sec))
 
-    delete_results = _delete_paths_batch([c[0] for c in candidates]) if apply else {}
+    delete_results = (
+        _delete_paths_batch([c[0] for c in candidates], watchdog=wd) if apply else {}
+    )
 
     for child, name, max_mtime, age_sec in candidates:
         if apply:

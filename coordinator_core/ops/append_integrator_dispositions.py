@@ -33,10 +33,13 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
     lives in the same directory but carries a different `agent_type`),
   - the target's frontmatter `agent_type:` is one of `_REVIEWER_AGENT_TYPES` —
     the code-reviewer family plus the six Opus reviewer personas, i.e. every
-    agent whose deliverable IS a finding set. This is deliberately WIDER than
-    the sibling guard's own single-literal `_REVIEWER_AGENT_TYPE`, which gates
-    a different question (which sidecars block an EM hand-edit); see that
-    constant's own comment below for why the two must not be reconciled,
+    agent whose deliverable IS a finding set — OR one of
+    `_REVIEWER_DOC_TYPE_TOKENS`, the doc-TYPE tokens `coordinator-doc-new`'s
+    self-persist fallback stamps into that same field on the (undispatched-
+    sidecar) fallback path. `_REVIEWER_AGENT_TYPES` is deliberately WIDER
+    than the sibling guard's own single-literal `_REVIEWER_AGENT_TYPE`, which
+    gates a different question (which sidecars block an EM hand-edit); see
+    that constant's own comment below for why the two must not be reconciled,
   - the target actually carries filled-in findings, checked under whichever
     of two named shapes it matches (`_detect_findings_shape`): the
     `review-findings` shape (`## Findings` section body — everything
@@ -179,6 +182,31 @@ _REVIEWER_AGENT_TYPES = frozenset(
         "coordinator:eng-director",
     }
 )
+
+#: A SECOND, deliberately separate vocabulary this gate accepts: doc-TYPE
+#: tokens (not agent-type names) that `coordinator-doc-new --type <token>`
+#: stamps into a sidecar's `agent_type:` frontmatter key on its SELF-PERSIST
+#: fallback path — reached only when a code-reviewer dispatch arrives with no
+#: sidecar pre-provisioned by the dispatching EM. See
+#: `coordinator-doc-new.py::_scaffold_review_findings`'s own docstring
+#: ("`agent_type` is stamped as the literal 'review-findings' — this
+#: scaffolder's doc TYPE, not a spawned agent's role — provision_report's own
+#: agent_type field records the SPAWNED agent's type instead, e.g.
+#: 'code-reviewer'; the two producers diverge on this one field's semantic,
+#: not its presence"). Confirmed live 2026-08-22: 56 committed
+#: `state/subagent-share/**/*.md` sidecars carry `agent_type: review-findings`
+#: today, all via this same fallback path.
+#:
+#: This is NOT the same defect as widening `_REVIEWER_AGENT_TYPES` to paper
+#: over drift — the two vocabularies answer different questions on purpose
+#: (agent IDENTITY vs. document TYPE) and are produced by two distinct,
+#: individually-documented code paths that were never meant to converge on
+#: one spelling. A sidecar this gate must accept can therefore carry EITHER,
+#: never neither. Only `review-findings` exists in this population today —
+#: `coordinator-doc-new.py` has no analogous self-scaffold literal for the
+#: `staff-eng-review` shape (persona reviewers always go through
+#: `provision_report`, which stamps their real subagent_type).
+_REVIEWER_DOC_TYPE_TOKENS = frozenset({"review-findings"})
 _DISPOSITIONS_HEADING = "## Integrator Dispositions"
 _FINDINGS_HEADING = "## Findings"
 _EXIT_INTERVIEW_HEADING = "## Exit interview"
@@ -515,11 +543,13 @@ def append_dispositions(
     text = sidecar_path.read_text(encoding="utf-8", errors="replace")
 
     agent_type = _extract_frontmatter_agent_type(text)
-    if agent_type not in _REVIEWER_AGENT_TYPES:
+    if agent_type not in _REVIEWER_AGENT_TYPES and agent_type not in _REVIEWER_DOC_TYPE_TOKENS:
+        accepted = sorted(_REVIEWER_AGENT_TYPES) + sorted(_REVIEWER_DOC_TYPE_TOKENS)
         raise DispositionsError(
             f"target's frontmatter agent_type is {agent_type!r}, which is not one "
-            f"of the reviewer agent types this tool writes to "
-            f"({', '.join(sorted(_REVIEWER_AGENT_TYPES))}) — it only ever writes to "
+            f"of the values this tool writes to — either a reviewer agent type or "
+            f"a self-scaffolded reviewer doc-type token "
+            f"({', '.join(accepted)}) — it only ever writes to "
             "a sidecar whose deliverable IS a finding set, never a run-report, an "
             "assessment, or your OWN sidecar."
         )

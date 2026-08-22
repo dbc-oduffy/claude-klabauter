@@ -1181,6 +1181,7 @@ class TestNewTypeGlobCoverage:
             "goal", "research-synthesis", "gap-report", "coverage-audit",
             "archived-memo", "sizing-object", "cutover",
             "priority-intent", "priority-ledger", "spike-result",
+            "spine",
         }
         assert set(_TYPE_TO_GLOB) == expected
 
@@ -1189,7 +1190,12 @@ class TestNewTypeGlobCoverage:
         assert _TYPE_TO_GLOB["debt"] == "state/debt-backlog/*.yaml"
         assert _TYPE_TO_GLOB["improvement"] == "state/improvement-queue/*.yaml"
         assert _TYPE_TO_GLOB["tracker"] == "docs/project-tracker.md"
-        assert _TYPE_TO_GLOB["roadmap"] == "state/roadmap/*/OVERVIEW.md"
+        # Widened with DoE's roadmap.schema.json 1.4.0 (their 1c5f0d849): the
+        # consumer glob must move with applies_to or a nested roadmap validates
+        # while staying invisible to `query-records --type roadmap`.
+        assert _TYPE_TO_GLOB["roadmap"] == "state/roadmap/**/OVERVIEW.md"
+        # Single-`*` per spine.schema.json's own applies_to — one spine per run-id.
+        assert _TYPE_TO_GLOB["spine"] == "state/roadmap/*/SPINE.md"
         assert _TYPE_TO_GLOB["health-status"] == "state/health/*.md"
         assert _TYPE_TO_GLOB["decision-guide"] == "docs/guides/*-decisions.md"
         assert _TYPE_TO_GLOB["completion"] == "archive/completed/*/*.md"

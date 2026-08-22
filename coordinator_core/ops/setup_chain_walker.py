@@ -209,6 +209,60 @@ def _configurable_location_for(dep_id: str, manifest_path: Path) -> dict[str, An
     return None
 
 
+def _sibling_search_root(repo_root: Path, manifest_path: Path) -> Path:
+    """The directory a manifest's ``sibling_dir_name`` default is resolved
+    against — the CHECKOUT ROOT's parent, i.e. where peer clones live.
+
+    ``repo_root`` cannot serve as that anchor, because its meaning differs per
+    layout while its name does not. ``coordinator/scripts/chain-walk.py::
+    _resolve_repo_root`` returns the ``coordinator/`` TREE root; in the flat
+    (publish-repo) layout that tree root IS the checkout root, and in the
+    nested (working-repo) layout it is one level below it. So
+    ``repo_root.parent`` names the peer-clone directory in one layout and the
+    checkout's own root in the other — the flat layout resolves
+    ``../coordinator-claude`` correctly while every dev clone resolves it to a
+    path inside its own tree. Adding a second ``.parent`` inverts which layout
+    is broken; the fix is an anchor whose meaning is layout-invariant.
+
+    Resolution, in order:
+
+    1. Nearest ancestor of ``repo_root`` (inclusive) holding a ``.git`` entry
+       — the checkout root, identical in meaning under both layouts. Resolved
+       via ``subagent_sandbox.engine.resolve_git_root_cheap``, the fleet's
+       spawn-free walk-up: `git rev-parse` is a process spawn on a preflight
+       path, and this call is squarely inside that helper's documented
+       miss-mode contract (a wrong answer here means the sibling default
+       misses and the dep is reported missing with its clone hint — never a
+       wrong verdict about a dep that resolved).
+    2. The checkout that OWNS the manifest, when the tree carries no ``.git``
+       (tarball payloads, publish mirrors copied without history). The
+       ``sibling_dir_name`` default is authored IN that manifest, so its owner
+       is the right thing to author it relative to.
+    3. ``repo_root`` — the pre-existing floor, so a caller whose tree matches
+       neither marker behaves exactly as before.
+
+    Deliberately identity-free. ``scripts/setup.py::resolve_repo_identity``
+    answers a DIFFERENT question (WHICH repo this is: claude-klabauter vs
+    claude-klabauter) from an enumerated marker set, and this walker resolves
+    deps for arbitrary repos rather than a known list — see
+    ``_configurable_location_for``. It is also not importable here:
+    ``scripts/`` is not a package and pyproject's packages.find includes only
+    ``coordinator_core*``.
+    """
+    from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
+
+    git_root = resolve_git_root_cheap(str(repo_root))
+    if git_root:
+        return Path(git_root).parent
+
+    manifest_depth = len(Path(_MANIFEST_REL).parts)
+    manifest_owner = manifest_path.parents[manifest_depth - 1] if len(manifest_path.parents) >= manifest_depth else None
+    if manifest_owner is not None:
+        return manifest_owner.parent
+
+    return repo_root.parent
+
+
 def _resolve_dep_root(
     dep_id: str,
     sibling_dir: str,
@@ -220,10 +274,12 @@ def _resolve_dep_root(
     for ``dep_id`` (``configurable_locations[].override.{flag,env}``) ahead of
     the plain sibling-dir default — the SAME rung order
     ``scripts/setup.py::_resolve_coordinator_claude_root`` uses: --<flag> CLI
-    arg -> $<ENV> -> sibling dir. Falls back to today's sibling-dir-only
-    behaviour when the manifest declares no ``configurable_locations`` entry
-    for this dep (e.g. an ordinary plugin-to-plugin dep with no override
-    surface of its own).
+    arg -> $<ENV> -> sibling dir. Falls back to the sibling-dir default when
+    the manifest declares no ``configurable_locations`` entry for this dep
+    (e.g. an ordinary plugin-to-plugin dep with no override surface of its
+    own); that default is resolved against ``_sibling_search_root``, never
+    against ``repo_root.parent`` — see that helper for why the latter names a
+    different place in each layout.
 
     ``argv`` is the CLI argv to scan for ``flag_name`` — threaded explicitly
     by every caller in this module (matching ``main``/``parse_args``'s own
@@ -255,7 +311,7 @@ def _resolve_dep_root(
                     return Path(tok[len(flag_name) + 1 :]), True
         if env_name and os.environ.get(env_name):
             return Path(os.environ[env_name]), True
-    return repo_root.parent / sibling_dir, False
+    return _sibling_search_root(repo_root, manifest_path) / sibling_dir, False
 
 
 def _upstream_url_dir_name(upstream_url: str) -> str:
@@ -562,7 +618,7 @@ def dep_probe(
         if via_override:
             return "missing"
         resolved = _sibling_fallback(
-            repo_root.parent,
+            _sibling_search_root(repo_root, manifest_path),
             sibling_dir,
             str(dep.get("upstream_url", "")),
             probe_kind=probe_kind,
@@ -648,7 +704,7 @@ def dep_probe_all(
         sibling_path, via_override = _resolve_dep_root(dep_id, sibling_dir, manifest_path, repo_root, argv=argv)
         if not via_override and not sibling_path.is_dir():
             resolved = _sibling_fallback(
-                repo_root.parent,
+                _sibling_search_root(repo_root, manifest_path),
                 sibling_dir,
                 str(upstream_url),
                 probe_kind=str(dep.get("functional_probe_kind", "")),

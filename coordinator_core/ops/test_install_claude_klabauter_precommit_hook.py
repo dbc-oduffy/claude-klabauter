@@ -246,12 +246,36 @@ def test_missing_gate_script_blocks_loudly_with_exit_1(tmp_path, monkeypatch):
     assert gate.marker in result.stderr
 
 
-def test_missing_python_interpreter_blocks_loudly_with_exit_1(tmp_path, monkeypatch):
+def test_stale_baked_interpreter_blocks_loudly_with_exit_1(tmp_path, monkeypatch):
+    """2026-08-21 (C17): the emitted hook no longer walks `$PATH` at commit
+    time — it execs an absolute interpreter path baked in at install time
+    (`_baked_interpreter_path`). Removing python from `$PATH` therefore no
+    longer breaks the hook (AC14 covers that this hook stays interpreter-
+    path-independent). The contract that must still hold: if the BAKED path
+    itself goes stale (interpreter moved/uninstalled since install), the
+    hook's self-heal (`[ -x "$_py" ] || _py=""`) clears it and the existing
+    missing-interpreter CANNOT-PROCEED branch fires — loud BLOCK, exit 1,
+    never a silent skip — with remediation naming a RUNNABLE SCRIPT (re-run
+    the installer), never a slash command (project doctrine: cold-path
+    remediation names a runnable script)."""
     repo = _install(tmp_path, monkeypatch)
-    result = _run_hook(_hook_path(repo), repo, path_env="/nonexistent-empty-path-dir")
+    hook = _hook_path(repo)
+    content = hook.read_text(encoding="utf-8")
+    stale = content.replace(
+        _mod._baked_interpreter_path(), "/nonexistent-baked-interpreter/python3"
+    )
+    assert stale != content, "fixture must actually stale the baked interpreter path"
+    hook.write_text(stale, encoding="utf-8")
+
+    result = _run_hook(hook, repo)
     assert result.returncode == 1
     assert "BLOCKED" in result.stderr
-    assert "no python interpreter found" in result.stderr
+    assert "interpreter" in result.stderr
+    assert "cannot proceed" in result.stderr
+    # Remediation names a runnable script (re-run the installer), never a
+    # slash command.
+    assert "install-claude-klabauter-precommit-hook" in result.stderr
+    assert "re-run" in result.stderr
 
 
 def test_missing_gate_script_override_bypasses_the_block(tmp_path, monkeypatch):
@@ -315,101 +339,27 @@ def test_transport_failure_exit_2_is_never_overridable(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Per-check exit-code override scoping — 2026-08-21 fix. Regression coverage
-# for the defect this whole change exists to close: a SINGLE
-# `gate.override_env` used to apply to ANY nonzero `$_gate_rc`, so
-# `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (rollback's own key)
-# silently suppressed a mass-deletion-only BLOCK it never inspected. See
-# `detect_staged_rollback`'s EXIT_* contract: 1 = rollback-only finding,
-# 3 = mass-deletion-only finding, 4 = both, unresolved by their own override.
+# Per-check exit-code override scoping. Check 1 (exact-blob rollback) was
+# KILLED 2026-08-21 (PM ruling) — see `detect_staged_rollback`'s module
+# docstring. The only surviving finding is the mass-deletion tripwire, which
+# now IS `EXIT_MASS_DELETION_FINDING` (1) in `detect_staged_rollback`'s own
+# contract, gated by exactly one key: `COORDINATOR_OVERRIDE_PRECOMMIT_MASS_
+# DELETION`. There is no longer a second key or a second exit-code arm to
+# scope against.
 # ---------------------------------------------------------------------------
 
-_STAGED_ROLLBACK_KEY = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
 _MASS_DELETION_KEY = "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
 
 
-def test_hook_body_contains_both_keys_each_in_its_own_exit_code_branch():
-    """The defect was invisible to structure-level assertions and only shows
-    in the generated body — assert on generated text, not on `_Gate` fields."""
-    content = _mod._hook_body(_GATE_REGISTRY)
-    rollback_arm = content.split("    1)", 1)[1].split("    3)", 1)[0]
-    mass_arm = content.split("    3)", 1)[1].split("    4)", 1)[0]
-    both_arm = content.split("    4)", 1)[1].split("    *)", 1)[0]
-
-    assert _STAGED_ROLLBACK_KEY in rollback_arm
-    assert _MASS_DELETION_KEY not in rollback_arm
-
-    assert _MASS_DELETION_KEY in mass_arm
-    assert _STAGED_ROLLBACK_KEY not in mass_arm
-
-    assert _STAGED_ROLLBACK_KEY in both_arm
-    assert _MASS_DELETION_KEY in both_arm
-
-
-def test_mass_deletion_only_finding_still_blocks_with_rollback_override_set(tmp_path, monkeypatch):
-    """The exact live defect: an operator with
-    COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK=1 exported (a real,
-    observed habit from prior legitimate revert work) must NOT have that key
-    silently suppress an unrelated mass-deletion-only BLOCK (exit 3) it never
-    inspected."""
-    gate = _GATE_REGISTRY[0]
-    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 3})
-    result = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
-    assert result.returncode == 1
-    assert "BLOCKED" in result.stderr
-    assert "SKIPPED" not in result.stderr
-
-
 def test_mass_deletion_only_finding_is_bypassed_by_its_own_key(tmp_path, monkeypatch):
-    """The companion to the test above: COORDINATOR_OVERRIDE_PRECOMMIT_MASS_
-    DELETION actually reaches and honours the mass-deletion-only branch
-    (exit 3) — the key the pre-fix wrapper never even tested."""
-    gate = _GATE_REGISTRY[0]
-    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 3})
-    result = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
-    assert result.returncode == 0
-    assert "SKIPPED" in result.stderr
-
-
-def test_rollback_only_finding_not_bypassed_by_mass_deletion_key(tmp_path, monkeypatch):
-    """Mirror of the mass-deletion test above, for the rollback-only branch
-    (exit 1): the mass-deletion key has no effect on it."""
+    """COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION reaches and honours the
+    (sole surviving) mass-deletion finding branch, exit 1 —
+    `detect_staged_rollback.EXIT_MASS_DELETION_FINDING`."""
     gate = _GATE_REGISTRY[0]
     repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 1})
     result = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
-    assert result.returncode == 1
-    assert "BLOCKED" in result.stderr
-    assert "SKIPPED" not in result.stderr
-
-
-def test_rollback_only_finding_is_bypassed_by_its_own_key(tmp_path, monkeypatch):
-    gate = _GATE_REGISTRY[0]
-    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 1})
-    result = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
     assert result.returncode == 0
     assert "SKIPPED" in result.stderr
-
-
-def test_both_findings_require_both_keys_together(tmp_path, monkeypatch):
-    """Exit 4 (both a rollback and a mass-deletion finding, per
-    `detect_staged_rollback`'s EXIT_BOTH_FINDINGS) needs BOTH override keys
-    set to skip — either one alone still blocks."""
-    gate = _GATE_REGISTRY[0]
-    repo = _install(tmp_path, monkeypatch, exit_map={gate.filename: 4})
-
-    only_rollback = _run_hook(_hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1"})
-    assert only_rollback.returncode == 1
-    assert "BLOCKED" in only_rollback.stderr
-
-    only_mass = _run_hook(_hook_path(repo), repo, extra_env={_MASS_DELETION_KEY: "1"})
-    assert only_mass.returncode == 1
-    assert "BLOCKED" in only_mass.stderr
-
-    both = _run_hook(
-        _hook_path(repo), repo, extra_env={_STAGED_ROLLBACK_KEY: "1", _MASS_DELETION_KEY: "1"}
-    )
-    assert both.returncode == 0
-    assert "SKIPPED" in both.stderr
 
 
 def test_arbitrary_unmapped_exit_code_blocks_unconditionally(tmp_path, monkeypatch):

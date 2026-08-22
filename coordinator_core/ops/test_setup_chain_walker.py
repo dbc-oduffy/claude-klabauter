@@ -858,3 +858,106 @@ def test_resolve_manifest_path_remediation_has_no_dead_publish_sh_command(tmp_pa
     assert "bash " not in captured.err
     assert "python3 coordinator/bin/publish.py coordinator-claude-toplevel-install" in captured.err
     assert "python3 coordinator/bin/publish.py coordinator-claude" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# _sibling_search_root — layout-invariant anchor for the sibling-dir default
+# ---------------------------------------------------------------------------
+
+def _dep_clone(peers: Path, name: str) -> Path:
+    clone = peers / name
+    (clone / ".claude-plugin").mkdir(parents=True)
+    (clone / ".claude-plugin" / "plugin.json").write_text("{}")
+    return clone
+
+
+_SIBLING_DEP = {
+    "id": "coordinator-claude",
+    "severity": "hard",
+    "sibling_dir_name": "coordinator-claude",
+    "upstream_url": "https://example.invalid/coordinator-claude.git",
+    "functional_probe": {
+        "kind": "file_exists_any",
+        "paths": [".claude-plugin/plugin.json", "coordinator/.claude-plugin/plugin.json"],
+    },
+}
+
+
+def _layout(peers: Path, *, nested: bool) -> tuple[Path, Path]:
+    """Build a checkout under ``peers`` and return (repo_root, manifest_path).
+
+    ``nested`` mirrors a working-repo clone (chain-walk.py hands the walker
+    the ``coordinator/`` tree root, one level below the checkout root);
+    ``nested=False`` mirrors the flat publish-repo layout, where the
+    ``coordinator/`` tree root and the checkout root are the same directory.
+    """
+    checkout = peers / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    manifest_dir = checkout / "docs" / "install"
+    manifest_dir.mkdir(parents=True)
+    manifest_path = manifest_dir / "agent-install-manifest.json"
+    manifest_path.write_text(json.dumps({"direct_deps": [_SIBLING_DEP]}))
+    repo_root = checkout / "coordinator" if nested else checkout
+    (repo_root / "scripts" / "lib").mkdir(parents=True, exist_ok=True)
+    return repo_root, manifest_path
+
+
+def test_sibling_default_resolves_beside_the_checkout_in_nested_layout(tmp_path):
+    """A dev clone hands the walker ``<checkout>/coordinator`` as repo_root.
+    The sibling default must land beside the CHECKOUT (``<peers>/
+    coordinator-claude``), never inside it (``<checkout>/coordinator-claude``,
+    which no clone ever creates and which failed the hard-dep gate on every
+    dev machine)."""
+    clone = _dep_clone(tmp_path, "coordinator-claude")
+    repo_root, manifest_path = _layout(tmp_path, nested=True)
+
+    resolved, via_override = scw._resolve_dep_root(
+        "coordinator-claude", "coordinator-claude", manifest_path, repo_root, argv=[]
+    )
+    assert (resolved, via_override) == (clone, False)
+    assert scw.dep_probe("coordinator-claude", manifest_path, repo_root, argv=[]) == "present"
+
+
+def test_sibling_default_resolves_beside_the_checkout_in_flat_layout(tmp_path):
+    """The flat (publish-repo) layout hands the walker the checkout root
+    itself. Same anchor, same answer — a fix that merely added one more
+    ``.parent`` would resolve this one level too high."""
+    clone = _dep_clone(tmp_path, "coordinator-claude")
+    repo_root, manifest_path = _layout(tmp_path, nested=False)
+
+    resolved, _ = scw._resolve_dep_root(
+        "coordinator-claude", "coordinator-claude", manifest_path, repo_root, argv=[]
+    )
+    assert resolved == clone
+    assert scw.dep_probe("coordinator-claude", manifest_path, repo_root, argv=[]) == "present"
+
+
+def test_sibling_search_root_falls_back_to_manifest_owner_without_git(tmp_path, monkeypatch):
+    """A payload with no ``.git`` (tarball, history-free mirror) resolves the
+    default against the checkout that OWNS the manifest — the same place the
+    ``.git`` walk would have found."""
+    monkeypatch.setattr(
+        "coordinator_core.subagent_sandbox.engine.resolve_git_root_cheap", lambda cwd: None
+    )
+    clone = _dep_clone(tmp_path, "coordinator-claude")
+    repo_root, manifest_path = _layout(tmp_path, nested=True)
+
+    assert scw._sibling_search_root(repo_root, manifest_path) == tmp_path
+    assert scw.dep_probe("coordinator-claude", manifest_path, repo_root, argv=[]) == "present"
+    assert clone.is_dir()
+
+
+def test_sibling_search_root_never_returns_a_path_inside_the_walked_tree(tmp_path):
+    """The defect's signature, pinned directly: whichever layout the walker
+    is handed, the anchor must sit OUTSIDE the tree being walked."""
+    for nested in (True, False):
+        peers = tmp_path / f"peers-{nested}"
+        peers.mkdir()
+        repo_root, manifest_path = _layout(peers, nested=nested)
+        anchor = scw._sibling_search_root(repo_root, manifest_path)
+        assert anchor == peers
+        # The anchor is an ancestor of the walked tree, never a directory
+        # inside it — so no sibling_dir_name can resolve into the checkout.
+        repo_root.relative_to(anchor)
+        with pytest.raises(ValueError):
+            anchor.relative_to(repo_root)

@@ -151,22 +151,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # substrate — read-only, same as the rest of this module."
     # Spec: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § C1 (PIN-1)
     "handoff.blocked_by_dependents": OpClass.COMPUTE_ONLY,
-    # artifact.emit — MUTATING: writes the canonical cockpit-emission.json artifact to
-    # coordinator substrate (DR § DD#2 "emission write = claude-klabauter engine"). Writes coordinator
-    # substrate ONLY, never rag's relational store (dual-write ban, DR-208 / tri-plane DD#1).
-    # Spec: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C1.
-    "artifact.emit": OpClass.MUTATING,
     # backlog.record — MUTATING: appends backlog-depth rows to the per-machine JSONL shard
     # <central_state_root>/backlog-snapshots.<machine>.jsonl (an on-disk state write). Writes
     # coordinator substrate ONLY, never rag's relational store (dual-write ban, DR-208 /
     # tri-plane DD#1). Registered in ops/__init__.py (emit.recorder) in the same chunk.
     # Spec: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C4.
     "backlog.record": OpClass.MUTATING,
-    # emit.cadence — MUTATING: composite sequencer over backlog.record then artifact.emit
-    # (both MUTATING). Writes coordinator substrate ONLY via the two unmodified sub-ops it
-    # calls; does not fold or reclassify them. Spec backlink: cross-repo/inbox/
-    # 2026-07-11-claude-central-em-backlog-record-cadence-relocation-reconcile.md § EM Response.
-    "emit.cadence": OpClass.MUTATING,
     # hooks.nudge_foreground_agent_dispatch — MUTATING (reclassified 2026-07-29; was
     # COMPUTE_ONLY under the affirmation below, which no longer holds for this op).
     #
@@ -4229,24 +4219,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "session.warm_start": OpClass.MUTATING,
     "session_baton.mint": OpClass.MUTATING,
     "session_baton.promote": OpClass.MUTATING,
-    # emission.publish — MUTATING, DR-208's fail-closed AMBIGUITY DEFAULT (NOT an
-    # extension of DR-208 §2's criterion, which is coordinator-substrate-scoped: state/
-    # files, queues, git objects/refs, on-disk records). This op's only effect is an
-    # outbound HTTP POST to a third-party sink (cockpit's fleet-emissions collection) --
-    # it writes nothing to coordinator substrate and nothing to rag's relational store.
-    # An outbound external side-effect does not obviously fall inside or outside that
-    # substrate criterion either way, so the classification rests on DR-208's own
-    # documented default for ambiguous cases (new ops classify MUTATING until a reviewer
-    # explicitly affirms COMPUTE_ONLY), invoking no new authority beyond that default.
-    #
-    # Enforces nothing on the in-process path TODAY: coordinator_core/authz/contract.py
-    # is vacated (DR-215/C8 retired Scope, is_authorized, and
-    # requires_single_writer_queue) and dispatch_message does not call classify().
-    # MUTATING here is correct retained metadata -- what the drift guard expects and what
-    # a future re-introduced transport shim (DR-215 § 6) would read -- not an active
-    # safety gate. Do not read this entry as evidence the op is currently authz-gated.
-    # Spec: docs/plans/2026-08-21-emission-publish-producer.md § C4 (AC14)
-    "emission.publish": OpClass.MUTATING,
     # op_census.breaches — COMPUTE_ONLY: the budget-breach view over the
     # op-latency sink (ops/op_budget_breaches.py::_op_budget_breaches).
     # DR-208 five-question affirmation:

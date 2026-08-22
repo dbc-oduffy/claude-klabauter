@@ -14,17 +14,42 @@ dropped into `coordinator/bin/` would be MIS-processed by that machinery
 rather than skipped, not correctly installed by it. The door needs its
 own step.
 
-WHY `coordinator-invoke.exe`, SPECIFICALLY, WINS THE BARE NAME. Verified
-live on this box (2026-08-21), not assumed:
+WHY `coordinator-invoke.exe`, SPECIFICALLY, WINS THE BARE NAME ON WINDOWS.
+Verified live on this box (2026-08-21), not assumed:
 
   - PATHEXT here is `.COM;.EXE;.BAT;.CMD;...` -- `.EXE` outranks `.CMD`.
     Confirmed BOTH cmd.exe and PowerShell resolve a bare name to a same-
     directory `.exe` over a `.cmd`/extensionless sibling (isolated test,
-    temp dir, PATH-prepended only for that one call).
+    temp dir, PATH-prepended only for that one call). This is also why the
+    `coordinator-invoke.cmd` sibling `install_bin_forwarders` writes is
+    harmless dead weight once the door is installed, not a fixed hazard:
+    it is never reached by a bare `coordinator-invoke` invocation on a box
+    that also carries the door's `.exe` in the same directory, PATHEXT
+    ranking settling the collision before this module has to. Its BODY
+    would still be wrong if it WERE reached post-door-install (it execs
+    the co-located extensionless sibling through python, and that sibling
+    is the door's native binary once installed, not the python trampoline
+    it was written to invoke) -- reachability, not correctness, is what
+    makes it safe to leave alone.
   - PowerShell's resolution ranks a `.ps1` sibling ABOVE `.exe` if one
-    exists (matches `coordinator-invoke.cmd`'s own header warning) --
-    settings-home `bin/` currently carries no `coordinator-invoke.ps1`,
-    so this is a live constraint to keep true, not a present problem.
+    exists (matches `coordinator-invoke.cmd`'s own header warning). This
+    WAS a hypothetical, kept-true-by-absence constraint when this
+    docstring was first written; it stopped being one the moment
+    `install_bin_forwarders` started deriving a `coordinator-invoke.ps1`
+    forwarder from `coordinator/bin/coordinator-invoke.py` (both land in
+    the SAME settings-home `bin/` this module installs into, one second
+    apart in a single `scripts/setup.py` run, live-measured
+    2026-08-22) -- a `.ps1` sibling is now a certainty on every install,
+    not an absence to keep true. `install_door()` below removes that one
+    shadowing sibling on every successful install so the constraint holds
+    by construction instead of by accident; see
+    `_remove_shadowing_forwarder_siblings`'s own docstring. `.cmd` needs no
+    matching removal for the PATHEXT reason above; POSIX has no PATHEXT
+    step and no `.ps1` bare-name resolution of its own, but a `.ps1` file
+    left in the same directory is inert weight there too, not a distinct
+    hazard, and removing it uniformly (not just under `sys.platform ==
+    "win32"`) is simpler than adding a platform branch to a one-line
+    unlink for a file this module already knows the exact name of.
   - `~/.coordinator-claude-settings/bin` sits EARLIER on PATH than
     `<interpreter>/Scripts`, where the pip/editable-install
     `coordinator-invoke.exe` console-script entrypoint already lives
@@ -32,6 +57,19 @@ live on this box (2026-08-21), not assumed:
     `coordinator_invoke_console_script` prerequisite entry) -- so
     settings-home `bin/` is the correct install target: directory order
     on PATH decides before same-directory PATHEXT ranking ever applies.
+
+WHY THE BARE EXTENSIONLESS `coordinator-invoke` ON POSIX. POSIX has no
+PATHEXT -- there is no extension-ranking step at all, so the bare name IS
+the file name, not a stem an extension gets appended to. The only ranking
+question left is directory order on PATH, same axis as the Windows case
+above: settings-home `bin/` must precede whatever other `coordinator-invoke`
+a `pip`/editable install might place on PATH, for the same reason it must
+precede `<interpreter>/Scripts` on Windows -- the settings-home entry is
+the one meant to win. `shutil.copy2` preserves the source file's mode bits
+(including the exec bit) across the copy, so a prebuilt `door` copied in
+this way stays executable with no extra `chmod`; a binary produced by a
+FRESH compile on this box, rather than copied, is not guaranteed to come
+out of the compiler with the exec bit set and must have it set explicitly.
 
 NOT THE INTERACTIVE LAUNCH CHAIN. `docs/reference/interactive-launch-
 chain.md`'s "direct child" invariant is scoped to `claude.exe` itself
@@ -96,16 +134,47 @@ from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
 
 __all__ = [
+    "BARE_FORWARDER_NAME",
     "DOOR_INSTALLED_NAME",
     "install_door",
+    "is_door_installed",
     "rebuild_and_verify_prebuilt",
 ]
 
-DOOR_INSTALLED_NAME = "coordinator-invoke.exe"
+#: Installed name is platform-resolved, not a single `.exe`-spelled
+#: literal: POSIX's `coordinator-invoke` carries no extension (there is no
+#: PATHEXT to rank one against), Windows keeps `coordinator-invoke.exe` for
+#: the reasons the module docstring's Windows paragraph gives.
+DOOR_INSTALLED_NAME = "coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"
+
+#: The platform-INVARIANT bare identity `coordinator-invoke` derives from --
+#: `DOOR_INSTALLED_NAME` above minus the Windows-only `.exe` suffix, and
+#: also the installed-forwarder NAME `_derive_agent_helper_target_map`
+#: (substrate.py) resolves for `coordinator/bin/coordinator-invoke.py` on
+#: EVERY platform (only the `.py` suffix is stripped there -- see that
+#: function's own docstring). Named once so `install_door()`'s shadow-sibling
+#: removal and `door_uninstall`'s fallback-forwarder re-emission agree on
+#: the same string without either re-deriving it from `DOOR_INSTALLED_NAME`.
+BARE_FORWARDER_NAME = "coordinator-invoke"
+
+#: Sibling suffixes `install_bin_forwarders` (substrate.py Step 3b) writes
+#: alongside the bare `coordinator-invoke` forwarder that can WIN bare-name
+#: resolution over the door once installed -- see the module docstring's
+#: Windows paragraph for why `.ps1` qualifies and `.cmd` does not.
+_SHADOWING_SIBLING_SUFFIXES = (".ps1",)
 
 _DOOR_DIR = Path(__file__).resolve().parents[1] / "warm" / "door"
-_PREBUILT_DOOR_EXE = _DOOR_DIR / "door.exe"
-_PREBUILT_PROVENANCE = _DOOR_DIR / "door.exe.provenance.json"
+
+#: Prebuilt lookup + provenance filenames follow each platform's OWN build
+#: module's output convention -- `build.py`'s default output is `door.exe`
+#: (provenance `door.exe.provenance.json`), `build_posix.py`'s default
+#: output is the extensionless `door` (provenance `door.provenance.json`).
+#: Both are committed at `_DOOR_DIR`; this module only picks the pair that
+#: matches the platform it is running on.
+_PREBUILT_DOOR_EXE = _DOOR_DIR / ("door.exe" if sys.platform == "win32" else "door")
+_PREBUILT_PROVENANCE = _DOOR_DIR / (
+    "door.exe.provenance.json" if sys.platform == "win32" else "door.provenance.json"
+)
 
 
 class DoorInstallError(RuntimeError):
@@ -132,6 +201,85 @@ def rebuild_and_verify_prebuilt(
     )
 
 
+def is_door_installed(bin_dst: Path) -> bool:
+    """Non-raising presence check: True iff both `DOOR_INSTALLED_NAME` and
+    its engine-root sidecar already exist at `bin_dst`. Same presence test
+    `install_door(check_only=True)` runs, but returns a bool instead of
+    raising `DoorInstallError` on absence -- a sibling, not a wrapper,
+    added for callers (C4's step) that need to branch on presence rather
+    than catch control flow out of `install_door`."""
+    bin_dst = Path(bin_dst)
+    dest_exe = bin_dst / DOOR_INSTALLED_NAME
+    dest_sidecar = bin_dst / door_build.SIDECAR_FILENAME
+    return dest_exe.exists() and dest_sidecar.exists()
+
+
+def claim_bare_name(bin_dst: Path) -> "list[Path]":
+    """Public entry point for the shadow-sibling removal -- the door's
+    counterpart to installing it.
+
+    NOT called from inside `install_door()` -- deliberately. `install_door`
+    is the WINDOWS install path only; on POSIX, `scripts/setup.py ::
+    install_warm_door` produces the door via
+    `door_install_posix_build.build_or_advise` and never calls
+    `install_door` at all, so a removal hung off that one function would be
+    dead code on every Mac and Linux box (measured: a full `scripts/setup.py
+    --i-am-agent` run landed the door and left `coordinator-invoke.ps1` in
+    place, 2026-08-22). Both platforms land the door at the identical
+    `bin_dst / DOOR_INSTALLED_NAME` path, so ONE caller -- `install_warm_door`,
+    once `dest` is established by either of its branches -- calls this
+    single function for both, rather than duplicating the removal call into
+    every producer of a door binary.
+
+    Idempotent and non-raising -- see `_remove_shadowing_forwarder_siblings`
+    (the implementation this wraps) for why. Must NOT be called on a
+    degraded/ADVISORY path where no door actually landed, or it would strip
+    the fallback forwarder the box is relying on instead of the door; every
+    caller gates on that already (a degraded `build_or_advise`/failed
+    `install_door` returns before this is ever reached).
+    """
+    return _remove_shadowing_forwarder_siblings(bin_dst)
+
+
+def _remove_shadowing_forwarder_siblings(bin_dst: Path) -> "list[Path]":
+    """Deletes the `install_bin_forwarders`-written siblings of
+    `BARE_FORWARDER_NAME` that would WIN bare-name resolution over the door
+    once it is installed at the same path -- today just
+    `coordinator-invoke.ps1` (PowerShell ranks a same-directory `.ps1`
+    above a same-directory `.exe`; see the module docstring's Windows
+    paragraph). `coordinator-invoke.cmd` is deliberately left alone: PATHEXT
+    ranks `.EXE` above `.CMD`, so it is unreachable by a bare-name lookup
+    once the door's `.exe`/extensionless binary sits beside it, dead weight
+    rather than a live shadow.
+
+    Private implementation -- `claim_bare_name` above is the public entry
+    point every real caller uses (`install_door()` itself no longer calls
+    this internally; see that function's own docstring for why keeping the
+    invocation OUT of `install_door` is load-bearing, not incidental).
+    Non-raising: a sibling that is already absent is simply skipped, and an
+    `OSError` on the unlink itself (permissions, a concurrent remover) is
+    swallowed and reported rather than raised -- a caller reaches this only
+    after a door is already correctly installed, and a failure to also
+    clear a shadow must not un-succeed that install.
+
+    Returns the list of paths actually removed (possibly empty).
+    """
+    bin_dst = Path(bin_dst)
+    removed: "list[Path]" = []
+    for suffix in _SHADOWING_SIBLING_SUFFIXES:
+        candidate = bin_dst / (BARE_FORWARDER_NAME + suffix)
+        try:
+            if candidate.exists():
+                candidate.unlink()
+                removed.append(candidate)
+        except OSError as exc:
+            print(
+                f"[door-install] could not remove shadowing sibling {candidate}: {exc}",
+                file=sys.stderr,
+            )
+    return removed
+
+
 def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) -> Path:
     """Installs the door at `bin_dst / DOOR_INSTALLED_NAME` plus its
     engine-root sidecar. Prefers the committed prebuilt binary (see
@@ -149,6 +297,14 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     verify the exe's CONTENT against the prebuilt (that is
     `rebuild_and_verify_prebuilt()`'s job, and is deliberately not paid
     on every check-only call) -- only presence.
+
+    On a REAL install (`check_only=False`), also removes the
+    `install_bin_forwarders`-written siblings that would shadow the door at
+    bare-name resolution -- see `_remove_shadowing_forwarder_siblings` and
+    the module docstring's Windows paragraph. `door_uninstall.uninstall_door`
+    is this removal's counterpart: it re-emits a fallback forwarder at
+    `BARE_FORWARDER_NAME` when it removes a door that claimed that name, so
+    uninstalling never leaves the box with no `coordinator-invoke` at all.
 
     Returns the path to the installed (or verified) executable.
     """
@@ -197,7 +353,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Install the native warm-engine door (coordinator-invoke.exe) "
+            f"Install the native warm-engine door ({DOOR_INSTALLED_NAME}) "
             "into a bin directory, plus its engine-root sidecar. NEVER "
             "resolves the real settings-home itself -- pass --bin-dst "
             "explicitly, and prefer a scratch directory unless you have "

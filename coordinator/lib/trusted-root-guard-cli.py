@@ -59,9 +59,9 @@ def _resolve_claude_klabauter_root() -> str:
     _bin_lib_dir = os.path.join(_coordinator_root, "bin", "lib")
     if _bin_lib_dir not in sys.path:
         sys.path.insert(0, _bin_lib_dir)
-    from cc_invoke import _resolve_claude_klabauter_root as _resolve, require_dispatch_engine_on_path  # noqa: E402
+    from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
-    return _resolve()
+    return require_dispatch_engine_on_path()
 
 
 def _parse_args(argv: list[str]) -> tuple[str, str, str]:
@@ -88,7 +88,7 @@ def main() -> None:
     mode, root, site = _parse_args(sys.argv[1:])
 
     try:
-        claude_klabauter_root = require_dispatch_engine_on_path()
+        claude_klabauter_root = _resolve_claude_klabauter_root()
     except RuntimeError as exc:
         print(
             f"trusted-root-guard-cli.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",

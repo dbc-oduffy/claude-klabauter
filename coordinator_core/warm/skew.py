@@ -123,15 +123,53 @@ class UnstampedEngineRootError(RuntimeError):
     caller reaching this on the DISPATCH axis wanted an engine and got the
     live working tree instead -- exactly the "oops, wrong var set" hole the
     PM vetoed. See § Hard constraint 1 (no new escape hatch).
+
+    `root` and `root_exists` are carried on the instance because the two
+    conditions that reach here are different operator problems with
+    different remediations, and a handler that sees only the class cannot
+    tell them apart: an unstamped tree that IS there is the ruling
+    (`root_exists` True), while a root that is NOT there is a broken
+    root-resolution channel, which no ruling covers. `warm.client` branches
+    on exactly this. `root_exists` defaults to `None` -- UNKNOWN, not
+    PRESENT -- so a caller constructing the error with a bare message, or a
+    future call site that passes `root=` without `root_exists=`, never has
+    presence fabricated on its behalf. `warm.client._live_tree_cold_message`
+    only takes the "does not exist" branch on an explicit `False`; `None`
+    (and `True`) fall through to the ruling-shaped message, so a caller
+    constructing the error with a bare message -- a test double, an older
+    call site -- still keeps that message rather than being told a path is
+    absent on no evidence.
     """
+
+    def __init__(
+        self, message: str, root: Optional[Path] = None, root_exists: Optional[bool] = None
+    ) -> None:
+        super().__init__(message)
+        self.root = Path(root) if root is not None else None
+        self.root_exists = root_exists
 
 
 def _no_stamp_message(root: Path) -> str:
     """Guard-messaging register (docs/wiki/guard-messaging.md § Register):
     one fact, one runnable alternative, no self-legitimacy, no apology,
     never a slash command -- this can fire on the cold path, before any
-    Claude Code session exists (`COLD_PATH_MODULES`)."""
-    root = Path(root).resolve()
+    Claude Code session exists (`COLD_PATH_MODULES`).
+
+    TWO CONDITIONS, TWO MESSAGES. A root that does not exist is not an
+    unpublished engine, and directing an operator to `scripts/setup.py`
+    under a directory that is not there names a path that cannot run. That
+    case is a root-resolution channel pointing somewhere this box has
+    nothing -- a pointer file carried in from another machine is the live
+    instance (2026-08-22 install dogfood) -- so it names the absent path and
+    routes to the reader that shows which channel produced it.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return (
+            "engine root does not exist: {root}\n"
+            "Remediation: python3 -m coordinator_core.root_channel_reconcile"
+        ).format(root=root)
+    root = root.resolve()
     setup_script = root / "scripts" / "setup.py"
     return (
         "engine root has no build stamp: {root} is not a published engine.\n"
@@ -260,7 +298,9 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
     except OSError:
         stamp_bytes = None
     if not stamp_bytes:
-        raise UnstampedEngineRootError(_no_stamp_message(root))
+        raise UnstampedEngineRootError(
+            _no_stamp_message(root), root=root, root_exists=root.is_dir()
+        )
     return hashlib.sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
 
 

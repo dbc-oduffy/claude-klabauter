@@ -279,8 +279,11 @@ _MEMO_TERMINAL_STATUS = frozenset({
 # from each type's schemas/*.yaml applies_to glob; Part 2 supplements the
 # non-schema'd types). bug/debt/improvement are ``.yaml`` whole-file frontmatter
 # (no ``---`` fences — see ``_load_record``'s extension branch below); roadmap
-# and completion have a wildcard DIRECTORY component (``*/``) and are collected
-# via ``_walk_glob_segments`` rather than the single-base-dir fast path.
+# (arbitrary-depth ``**/``, widened from a single-level ``*/`` at
+# roadmap.schema.json 1.3.0 -> 1.4.0 — DoE sha 1c5f0d8493588026c6f41ff863c4004cc9ffeac6)
+# and completion (single-level ``*/``) have a wildcard DIRECTORY component and
+# are collected via ``_walk_glob_segments`` rather than the single-base-dir
+# fast path.
 #
 # ``tracker`` KEPT LIVE despite the tracker-render retirement plan
 # (docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md):
@@ -304,7 +307,10 @@ _TYPE_TO_GLOB: dict[str, str] = {
     'debt':             'state/debt-backlog/*.yaml',
     'improvement':      'state/improvement-queue/*.yaml',
     'tracker':          'docs/project-tracker.md',
-    'roadmap':          'state/roadmap/*/OVERVIEW.md',
+    'roadmap':          'state/roadmap/**/OVERVIEW.md',
+    # Single-`*` mirrors spine.schema.json's own applies_to, deliberately: a spine
+    # is one per run-id at exactly that depth, unlike the nested OVERVIEW case.
+    'spine':            'state/roadmap/*/SPINE.md',
     'health-status':    'state/health/*.md',
     'decision-guide':   'docs/guides/*-decisions.md',
     'completion':       'archive/completed/*/*.md',
@@ -406,10 +412,12 @@ _YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement'
 # Query types whose glob has a wildcard DIRECTORY component (not just a wildcard
 # filename) — `_collect_files` routes these through the generic segment walker
 # instead of the single-base-dir fast path, which cannot express a `*` dir level.
-# `handoff-archived` (`archive/handoffs/**/*.md`) and `cutover`
-# (`state/roadmap/**/cutovers/*.md`) use the arbitrary-depth `**` form;
-# `roadmap`/`completion` use a single-level `*` dir component. Both shapes route
-# through the same `_walk_glob_segments` walker — see that function's docstring.
+# `handoff-archived` (`archive/handoffs/**/*.md`), `cutover`
+# (`state/roadmap/**/cutovers/*.md`), and `roadmap` (`state/roadmap/**/OVERVIEW.md`,
+# widened from a single-level `*/` dir component at roadmap.schema.json 1.4.0)
+# use the arbitrary-depth `**` form; `completion` uses a single-level `*` dir
+# component. Both shapes route through the same `_walk_glob_segments` walker —
+# see that function's docstring.
 _WILDCARD_DIR_TYPES: frozenset[str] = frozenset({
     'roadmap', 'completion', 'handoff-archived', 'cutover',
 })

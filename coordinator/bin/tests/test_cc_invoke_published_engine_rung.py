@@ -402,7 +402,9 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             published = str(Path(tmp) / "published-engine")
-            Path(published).mkdir()
+            core_dir = Path(published) / "coordinator_core"
+            core_dir.mkdir(parents=True)
+            (core_dir / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
             settings_home = self._settings_home(tmp, published=published, live="/live/working/tree")
 
             resolved, mock_run = self._resolve_with(settings_home)
@@ -441,6 +443,29 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
             resolved, mock_run = self._resolve_with(settings_home)
 
         self.assertEqual(resolved, "/live/working/tree")
+        mock_run.assert_not_called()
+
+    def test_unstamped_published_pointer_falls_through_to_live(self) -> None:
+        """C3: a present-but-unstamped published mirror must not win at Rung
+        1.5 -- the rung admits only a STAMPED root now (`isfile(<root>/
+        coordinator_core/_engine_stamp)` strictly subsumes the prior `isdir`
+        check), so a bare mkdir with no stamp falls through to the live
+        pointer, exactly like a stale/removed clone does."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            published = str(Path(tmp) / "published-engine-no-stamp")
+            Path(published).mkdir()
+            settings_home = self._settings_home(tmp, published=published, live="/live/working/tree")
+
+            resolved, mock_run = self._resolve_with(settings_home)
+
+        self.assertEqual(
+            resolved,
+            "/live/working/tree",
+            "an unstamped published mirror must not win at Rung 1.5 -- the "
+            "rung requires a stamp, not just a directory.",
+        )
         mock_run.assert_not_called()
 
     def test_env_override_still_beats_the_published_pointer(self) -> None:

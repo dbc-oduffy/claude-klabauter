@@ -146,7 +146,7 @@ def _fake_emit_writing_real_file(ctx, out=None):
 
 
 def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, exercise_suspended_op
 ) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

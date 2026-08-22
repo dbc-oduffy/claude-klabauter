@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/spine.schema.json",
+  "x-schema-name": "spine",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/roadmap/*/SPINE.md",
+  "description": "Sprint spine — `coordinator:roadmap-planning`'s terminal record, written exactly once at `state/roadmap/<run-id>/SPINE.md` with `kind: roadmap-spine`. It answers three questions and only three: which sprints exist and in what order, which stubs belong to which sprint, and which sprints gate which. Deliberately NOT `roadmap.schema.json`, whose `applies_to` targets the per-sprint `OVERVIEW.md` at a different path depth. NEGATIVE-SPEC: this record carries no baton fields, no cluster payload, and no per-stub content — those are answered by `handoff.schema.json` batons and the roadmap OVERVIEW records, and duplicating them here would create a second answer to a question `query-records` already answers. Spec backlink: docs/plans/2026-08-20-split-roadmap-planning-at-the-sprint-spine.md § The sprint spine; homing ratified in state/memo-outbox/sent/2026-08-21-roadmap-glob-widened-and-spine-homing-answered.md § (c).",
+  "type": "object",
+  "required": ["title", "created", "kind", "roadmap_id", "synthesis", "sprints", "cross_sprint_edges"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for this roadmap's sprint spine."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the spine was written (YYYY-MM-DD)."
+    },
+    "kind": {
+      "const": "roadmap-spine",
+      "description": "Artifact kind discriminator. Closed to a single value: a file at this path that is not a sprint spine is a defect, not a variant."
+    },
+    "roadmap_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The roadmap this spine is the parent record for. Load-bearing beyond identification: sprint-descriptor/stub id disjointness is scoped to a `roadmap_id` (see `$defs.sprint_id`), and a peer's edge traversal joins every edge sharing this value with no altitude filter of its own."
+    },
+    "synthesis": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path to the Phase 1 synthesis this spine was derived from. A pointer, never a copy — the synthesis keeps its own home."
+    },
+    "sprints": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Every sprint descriptor in this roadmap, written in full at spine time — including sprints whose stubs do not exist yet. This up-front completeness plus `ordinal` is what lets a mid-roadmap audit distinguish a sprint that is LEGITIMATELY not yet planned from one that is missing; without it every close before the final sprint reports false violations.",
+      "items": {
+        "type": "object",
+        "required": ["id", "ordinal", "jtbd", "exit_condition"],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/sprint_id",
+            "description": "Stable handle for this sprint descriptor. Stable across amendment — downstream `cross_sprint_edges`, `exit.invalidates`, and the sprint's working directory all resolve through it, so it is minted once and never rewritten."
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based position in the roadmap's sprint order. The ordering authority — `id` is a handle, not a sequence, and array position is not a contract. NEGATIVE-SPEC: an ordinal expresses scope nesting, not a calendar; two sprints with no edge between them are unconstrained and may run concurrently."
+          },
+          "jtbd": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The job this sprint is to be done — what it is for, in one statement."
+          },
+          "exit_condition": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The condition that, when met, means this sprint is finished. Authored at spine time as the target; `exit` below records what actually happened."
+          },
+          "stubs": {
+            "type": "array",
+            "uniqueItems": true,
+            "description": "The stub_ids belonging to this sprint — the membership an audit counts coverage against, so a sprint-scoped audit measures its own cluster subset rather than the whole roadmap. ABSENT means `sprint-planning` has not run for this sprint yet and its stubs are legitimately not on disk; an EMPTY ARRAY means it ran and authored none, which is a finding rather than a normal state. The two are deliberately not interchangeable.",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "not": {"pattern": "^sprint-"},
+              "description": "A stub_id. Barred from the reserved `sprint-` namespace — see `$defs.sprint_id` for why this is a validation rule rather than a naming convention."
+            }
+          },
+          "exit": {
+            "type": "object",
+            "description": "What this sprint's close actually produced. Written back by `sprint-planning`'s terminal step; read by the NEXT sprint's entry step as a named input, which may amend a downstream descriptor's fields as a result. Absent until the sprint closes.",
+            "required": ["outcome"],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "minLength": 1,
+                "description": "What the sprint actually delivered against its `exit_condition`, including the ways it diverged."
+              },
+              "invalidates": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {"$ref": "#/$defs/sprint_id"},
+                "description": "Sprint descriptor ids whose premise this outcome invalidated. Absent or empty means the spine still stands as written — this is the channel by which a sprint's real result reshapes the ones after it, instead of the spine silently going stale."
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "cross_sprint_edges": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Which sprints gate which, at SPRINT-DESCRIPTOR altitude only. Required, and `[]` is the correct value for a roadmap with no gates — an absent array would be indistinguishable from an unwritten one, and an audit that must resolve cross-sprint ordering from this record ALONE cannot afford that ambiguity. NEGATIVE-SPEC: a stub in a downstream sprint inherits its gate through sprint membership and never names a stub in another sprint; a stub-level stand-in is retired (it either under-describes the gate or becomes the cross-product of two sprints' stubs and truncates silently in a peer's traversal).",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/sprint_id",
+            "description": "The gating sprint descriptor — must complete first."
+          },
+          "to": {
+            "$ref": "#/$defs/sprint_id",
+            "description": "The gated sprint descriptor. NEGATIVE-SPEC, not expressible here: `to` must differ from `from`, and the edge set must be acyclic. JSON Schema cannot compare sibling values or close a graph, so both are the emitter's fail-loud assertions."
+          },
+          "edge_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional wire-level edge token. Deliberately an open string and deliberately optional: the spine's own semantics are fixed — every entry here means `from` gates `to` at sprint altitude — and the token that names this edge on the wire is a separate contract decision that does not belong to this schema. A reader of this record must not condition on it."
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "sprint_id": {
+      "type": "string",
+      "pattern": "^sprint-[a-z0-9][a-z0-9-]*$",
+      "description": "A sprint descriptor id. The `sprint-` prefix is RESERVED and structural, not cosmetic: sprint-descriptor ids and stub_ids must be disjoint within a `roadmap_id`, and a reserved prefix plus the matching bar on `sprints[].stubs[]` is what makes that disjointness a fail-loud validation rule instead of a convention someone has to remember. It matters because a peer's edge traversal joins every edge sharing a `roadmap_id` with no altitude filter — a collision lets a blocking chain hop sprint→stub→sprint and answer a query wrongly in another plane, where it reads as correct output rather than as a local defect."
+    }
+  },
+  "additionalProperties": true
+}

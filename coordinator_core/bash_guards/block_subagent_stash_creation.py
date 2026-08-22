@@ -123,6 +123,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _real_git_subcommand,
     _segments_from_tokens,
     _strip_heredoc_bodies,
+    _strip_leading_redirection_tokens,
     _strip_leading_subshell_and_env,
     _tokenize_full_command,
 )
@@ -247,7 +248,13 @@ def _evaluate(cmd: str) -> Optional[str]:
         if subcmd != "stash":
             continue
 
-        second = remaining[0] if remaining else None
+        # 2026-08-22 fix (UNSCOPED-STASH GAP, REOPENED -- same shape as
+        # block_subagent_destructive_action.py's stash branch, see
+        # `_strip_leading_redirection_tokens`'s docstring): `git stash 2>&1`
+        # tokenized `remaining` to `["2>&1"]`, which is neither `None` nor
+        # `"push"`/`-`-prefixed, so `_classify_stash_subcommand` allowed it.
+        stash_remaining = _strip_leading_redirection_tokens(remaining)
+        second = stash_remaining[0] if stash_remaining else None
         verdict = _classify_stash_subcommand(second)
         if verdict is not None:
             return verdict
@@ -286,7 +293,8 @@ def _evaluate_powershell_segments(
             return "git stash (unrecognized global option -- ambiguous resolution, denied per _real_git_subcommand's never-guess contract)"
         if subcmd != "stash":
             continue
-        second = remaining[0] if remaining else None
+        stash_remaining = _strip_leading_redirection_tokens(remaining)
+        second = stash_remaining[0] if stash_remaining else None
         verdict = _classify_stash_subcommand(second)
         if verdict is not None:
             return verdict

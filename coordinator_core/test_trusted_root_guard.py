@@ -343,7 +343,14 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
     """Regression for F6 (2026-07-28 Windows install dogfood): a rejection
     with no HOME/USERPROFILE in env must show the empty anchor explicitly,
     and must NOT present COORDINATOR_PLUGIN_ROOT_TRUSTED=1 as an
-    unconditional first-choice fix when an anchor resolved empty."""
+    unconditional first-choice fix when an anchor resolved empty.
+
+    The caveat is asserted against the diagnostic block that carries it,
+    not against the remediation sentence: the remediation moved to a
+    runnable installer command on the 2026-08-22 cold-path enrollment
+    (`coordinator/tests/test_cold_path_remediation_is_runnable.py`), and an
+    assertion pinned to its old wording would fail for a fix, not a
+    regression."""
     env = {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings-home")}
     with pytest.raises(UntrustedRootError):
         coordinator_trusted_root_guard(mode="fail-loud", root=str(tmp_path / "DoE-claude" / "coordinator"), env=env)
@@ -353,7 +360,8 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
     assert "doe_root resolved to:" in err
     assert "claude_klabauter_root resolved to:" in err
     assert "registry repos.doe_claude" in err
-    assert "ONLY after confirming every anchor" in err
+    assert "scripts/setup.py" in err
+    assert "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 would mask it" in err
 
 
 def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_path):

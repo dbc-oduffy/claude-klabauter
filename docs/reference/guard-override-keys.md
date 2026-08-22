@@ -359,12 +359,16 @@ pre-commit-gate-registry overrides named just below remain intentionally
 excluded from BOTH tables, for the reasons stated in this section.
 
 Also out of this scope by the same boundary: `coordinator_core.ops.detect_staged_rollback`'s
-`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (pre-existing) and
-`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` (2026-08-10) — both are
-pre-commit-gate-registry overrides (`coordinator_core.ops.install_claude_klabauter_precommit_hook
+`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` (2026-08-10) — a pre-commit-
+gate-registry override (`coordinator_core.ops.install_claude_klabauter_precommit_hook
 ._GATE_REGISTRY`), the same class as `publish.py`'s `COORDINATOR_OVERRIDE_DIRTY_TREE`
 above, self-documented in `detect_staged_rollback.py`'s own module docstring and
 `--help` output rather than routed through `operator_override_note`.
+`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (pre-existing) named the
+now-dead check-1 exact-blob rollback detector, KILLED 2026-08-21 (PM ruling,
+see `detect_staged_rollback.py`'s own module docstring) — it is no longer
+read anywhere in this repo's non-test Python and is listed as dead in the
+"Excluded from the table above" section below, not here.
 
 `schema_validate.py` is the third consumer, and joined for a reason rather
 than by drift: `_cf_spinoff_roadmap_requires_graph` is a cross-field rule
@@ -480,11 +484,16 @@ Excluded from the table above (found by the sweep, deliberately not rostered):
   escape hatch that existed only to override that refusal are all gone," PM
   ruling 2026-08-06). No `os.environ` read site for it exists anywhere in
   this repo's non-test Python — it is dead, not merely undocumented.
-- `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` and
-  `COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` — already covered by the
-  "Also out of this scope" paragraph above (pre-commit-gate-registry
-  overrides, self-documented via `--help`, not routed through
+- `COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` — already covered by the
+  "Also out of this scope" paragraph above (a pre-commit-gate-registry
+  override, self-documented via `--help`, not routed through
   `operator_override_note`).
+- `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` — named only in the
+  now-KILLED check-1 exact-blob rollback detector in
+  `coordinator_core/ops/detect_staged_rollback.py` (deleted 2026-08-21, PM
+  ruling — see that module's own docstring). No `os.environ` read site for
+  it exists anywhere in this repo's non-test Python — it is dead, not
+  merely undocumented, same class as `COORDINATOR_OVERRIDE_CARRY_GATE` above.
 - `COORDINATOR_OVERRIDE_DIRTY_TREE` — already covered by the same paragraph.
 
 Not in this table, by design:

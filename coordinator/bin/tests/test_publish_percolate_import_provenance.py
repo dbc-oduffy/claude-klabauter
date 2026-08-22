@@ -164,6 +164,26 @@ def test_multiple_dirty_paths_are_all_named(tmp_path: Path) -> None:
     assert "coordinator_core/frontmatter/schema_validate.py" in message
 
 
+def test_transform_set_paths_exist_in_this_checkout() -> None:
+    """Finding 5, s3-sweep-and-dirty review: `git status -- <path>` returns
+    `rc=0` with no output for a pathspec that doesn't exist on disk -- a path
+    in `_PERCOLATE_TRANSFORM_SET_PATHS` renamed upstream without updating
+    the constant would silently probe as clean rather than surfacing
+    "nothing to check here." This repo IS the engine root
+    `_assert_percolate_transform_set_clean` runs against in production, so
+    pin the constant against the real checkout directly rather than the
+    per-test fake `_init_engine_root` (which seeds a copy of the constant's
+    own path list and so cannot catch this drift)."""
+    repo_root = _BIN_DIR.parent.parent
+    missing = [
+        rel for rel in publish._PERCOLATE_TRANSFORM_SET_PATHS if not (repo_root / rel).exists()
+    ]
+    assert missing == [], (
+        f"_PERCOLATE_TRANSFORM_SET_PATHS entries absent from {repo_root}: {missing} -- "
+        "an absent path silently reads as clean instead of raising"
+    )
+
+
 def test_unresolvable_engine_root_fails_closed(tmp_path: Path) -> None:
     """A git probe that cannot run (no repo at `engine_root`) must never be
     read as clean -- same fail-closed posture as every other AC15 leg."""

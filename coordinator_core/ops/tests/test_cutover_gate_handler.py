@@ -544,3 +544,113 @@ def test_gate_never_writes_the_record_file(tmp_path: Path) -> None:
     assert after == before
     assert record_path.stat().st_mtime_ns == before_mtime
     assert "derivation_history_entry" in result
+
+
+# ---------------------------------------------------------------------------
+# DR-349 § 4 — the collection-error localization pass shares ONE deadline
+#
+# `_reverify_test_node_ids_batch` falls back to a per-ref pytest invocation
+# when a batch aborts during collection. That fallback is spawn-count-exempt
+# from the amplification gate (it fires only on failure and carries a filtered
+# subset of the batched primary's collection), but nothing bounded its TIME in
+# aggregate: N refs x `_pytest_batch_timeout(1)` with no shared ceiling is the
+# self-raising shape `_pytest_batch_timeout`'s own cap exists to prevent,
+# reintroduced one call frame out.
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """Stand-in for `cutover_gate`'s own `time` binding, so a deadline test
+    advances a dict-held clock instead of sleeping — and without touching the
+    real `time.monotonic` the surrounding thread pool depends on."""
+
+    def __init__(self, cell: dict) -> None:
+        self._cell = cell
+
+    def monotonic(self) -> float:
+        return self._cell["t"]
+
+
+def test_localization_pass_stops_at_its_shared_deadline(tmp_path: Path, monkeypatch) -> None:
+    """Past the shared deadline no further isolation run is spawned, and the
+    unlocalized refs fall through to REFUSE — fail-safe, never fail-open."""
+    from coordinator_core.ops import cutover_gate as cg
+
+    (tmp_path / "test_consumers.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    refs = [f"test_consumers.py::test_{i}" for i in range(5)]
+
+    spawned: list = []
+    clock = {"t": 0.0}
+
+    def _fake_batch(root, batch_refs, *, timeout_secs=None):
+        spawned.append(list(batch_refs))
+        # Every isolation run burns the whole deadline it was granted.
+        clock["t"] += timeout_secs if timeout_secs is not None else 0.0
+        return {}
+
+    monkeypatch.setattr(cg, "_run_pytest_batch", _fake_batch)
+    # Patch the MODULE's own `time` binding, never `time.monotonic` globally --
+    # the thread pool this path runs under uses the real clock.
+    monkeypatch.setattr(cg, "time", _FakeClock(clock))
+
+    results = cg._reverify_test_node_ids_batch(refs, {"here": tmp_path})
+
+    # The batched primary, then ONE isolation run that consumed the deadline.
+    assert len(spawned) == 2
+    assert spawned[0] == refs
+    assert len(spawned[1]) == 1
+    assert all(results[r][0] is False for r in refs)
+    assert all("cannot re-verify" in results[r][1] for r in refs)
+
+
+def test_localization_runs_derive_their_bound_from_the_remainder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Each isolation run is handed the deadline REMAINDER, so the pass's
+    total authorised occupancy never exceeds one batch bound for the same
+    refs — stacking spawns cannot buy time."""
+    from coordinator_core.ops import cutover_gate as cg
+
+    (tmp_path / "test_consumers.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    refs = [f"test_consumers.py::test_{i}" for i in range(3)]
+
+    handed: list = []
+    clock = {"t": 0.0}
+
+    def _fake_batch(root, batch_refs, *, timeout_secs=None):
+        if timeout_secs is not None:
+            handed.append(timeout_secs)
+            clock["t"] += 1.0
+        return {}
+
+    monkeypatch.setattr(cg, "_run_pytest_batch", _fake_batch)
+    # Patch the MODULE's own `time` binding, never `time.monotonic` globally --
+    # the thread pool this path runs under uses the real clock.
+    monkeypatch.setattr(cg, "time", _FakeClock(clock))
+
+    cg._reverify_test_node_ids_batch(refs, {"here": tmp_path})
+
+    budget = cg._pytest_batch_timeout(len(refs))
+    assert len(handed) == 3
+    assert handed == [budget, budget - 1.0, budget - 2.0]
+    assert max(handed) <= budget
+
+
+def test_run_pytest_batch_timeout_override_is_narrow_only(tmp_path: Path, monkeypatch) -> None:
+    """`timeout_secs` may only ever LOWER the batch bound (DR-349 § 3)."""
+    from coordinator_core.ops import cutover_gate as cg
+
+    seen: list = []
+
+    def _fake_run(argv, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        raise cg.subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(cg.subprocess, "run", _fake_run)
+
+    cg._run_pytest_batch(tmp_path, ["a.py::t"], timeout_secs=5.0)
+    cg._run_pytest_batch(tmp_path, ["a.py::t"], timeout_secs=999999.0)
+    cg._run_pytest_batch(tmp_path, ["a.py::t"])
+
+    flat = cg._pytest_batch_timeout(1)
+    assert seen == [5.0, flat, flat]
