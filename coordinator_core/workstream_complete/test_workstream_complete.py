@@ -160,9 +160,11 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
         # in-process to record the gate verdict under the same
         # `(session_id, sha_range)` identity the gate just checked -- it is
         # underscore-prefixed, never dispatched to a CLI, never part of the
-        # wire shape a directive-consuming caller sees. The required set is
-        # what this guard pins; an optional key landing later must not
-        # silently widen it.
+        # wire shape a directive-consuming caller sees. (C12: the
+        # `d-write-trail` builder that stamped this key was DROPPED, but the
+        # key stays optional here for any other future stamper.) The
+        # required set is what this guard pins; an optional key landing
+        # later must not silently widen it.
         assert set(directive.keys()) - {"best_effort", "advisory", "_gate_memo_key_parts"} == {
             "id",
             "cli",
@@ -301,99 +303,19 @@ def test_chain_terminal_without_consumed_handoff_falls_back_to_session_gate(monk
     assert "d-run-chain-plan-brightline-gate" not in ids
 
 
-def test_write_trail_directive_requires_all_five_review_fields(monkeypatch, tmp_path):
-    """staff-eng review 2026-08-14 (F2): a truthy-but-incomplete `review` used
-    to silently drop `d-write-trail` from the directive list while
-    `build_wsc_tail_directive` still composed `--adjudication-present` for
-    the SAME input -- the seam this raise now closes at assemble time,
-    before `directives[]` is even built. See `_raise_on_review_truthy_
-    unqualified`."""
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    partial_decisions = {"review": {"sha_range": "a..b", "reviewer": "someone"}}
-    with pytest.raises(ValueError, match="qualifies for no"):
-        wsc.brief(decisions=partial_decisions, repo_root=tmp_path)
-
-
 # ---------------------------------------------------------------------------
-# decisions["review"] as a list — a partitioned review's N per-slice records
-# (each with its own sha_range/reviewer/scope/verdict/diff_loc) that the
-# pre-existing single-object shape could not express. See
-# `build_write_trail_directives`'s own docstring.
+# `decisions["review"]` -> d-write-trail* — REMOVED (C12,
+# docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-the-requirement.md):
+# `wsc-coverage-gate-runner.py write-trail` was a subcommand PM ruling
+# 2026-08-23 removed. The builder (`build_write_trail_directives` and its
+# helpers) was dropped from `__init__.py`, not replaced, so the whole
+# `decisions["review"]` -> `d-write-trail*` test family that exercised it
+# (single-dict shape, list-of-slices shape, incomplete-entry dropping,
+# empty/None no-op, and the all-five-fields ValueError) no longer has a
+# builder to exercise and is removed alongside it. `decisions["review"]`
+# itself is unaffected -- no directive is owed for it, which is the ruling,
+# not a gap.
 # ---------------------------------------------------------------------------
-
-_REVIEW_SLICE_A = {
-    "sha_range": "a1..a2",
-    "reviewer": "code-reviewer",
-    "scope": "chain",
-    "verdict": "blocked",
-    "diff_loc": 40,
-}
-_REVIEW_SLICE_B = {
-    "sha_range": "b1..b2",
-    "reviewer": "staff-eng",
-    "scope": "chain",
-    "verdict": "ok",
-    "diff_loc": 60,
-}
-
-
-def test_write_trail_directive_accepts_a_list_of_per_slice_records(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    directives_by_id = {d["id"]: d for d in decision_object["directives"]}
-    assert "d-write-trail-0" in directives_by_id
-    assert "d-write-trail-1" in directives_by_id
-    assert "d-write-trail" not in directives_by_id
-    assert directives_by_id["d-write-trail-0"]["args"] == [
-        "write-trail",
-        "--sha-range", "a1..a2",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "blocked",
-        "--diff-loc", "40",
-    ]
-    assert directives_by_id["d-write-trail-1"]["args"] == [
-        "write-trail",
-        "--sha-range", "b1..b2",
-        "--reviewer", "staff-eng",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "60",
-    ]
-
-
-def test_write_trail_directive_single_object_shape_is_byte_identical_to_today(monkeypatch, tmp_path):
-    """Backward compatibility: a plain `dict` still produces exactly the
-    one pre-existing `d-write-trail` id, never `d-write-trail-0`."""
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decisions = {"review": dict(_REVIEW_SLICE_A)}
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-write-trail" in ids
-    assert "d-write-trail-0" not in ids
-
-
-def test_write_trail_directive_list_drops_incomplete_entries_without_dropping_siblings(monkeypatch, tmp_path):
-    incomplete = {"sha_range": "c1..c2", "reviewer": "code-reviewer"}  # missing scope/verdict/diff_loc
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decisions = {"review": [_REVIEW_SLICE_A, incomplete, _REVIEW_SLICE_B]}
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    # Index preserved from the ORIGINAL list position -- the incomplete
-    # entry at index 1 contributes no directive, but index 2 (slice B)
-    # keeps its own original index rather than shifting down to 1.
-    assert "d-write-trail-0" in ids
-    assert "d-write-trail-1" not in ids
-    assert "d-write-trail-2" in ids
-
-
-def test_write_trail_directive_empty_list_and_none_emit_nothing(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    for review_value in ([], None):
-        decision_object = wsc.brief(decisions={"review": review_value}, repo_root=tmp_path)
-        ids = {d["id"] for d in decision_object["directives"]}
-        assert not any(i == "d-write-trail" or i.startswith("d-write-trail-") for i in ids)
 
 
 def test_deletion_blocks_directive_absent_when_no_msg_file(monkeypatch, tmp_path):
@@ -865,70 +787,12 @@ _CHAIN_SLICE_ENTRY = {
 
 
 # ---------------------------------------------------------------------------
-# AC9 -- `_build_write_trail_args` forwards `reviewer_evidence` as
-# `--reviewer-evidence`, mirroring the existing `--scope-kind` handling. A
-# review WITHOUT evidence stays byte-identical to today.
+# AC9's `_build_write_trail_args`/`build_write_trail_directives` reviewer-
+# evidence tests REMOVED (C12): both builders were dropped from
+# `__init__.py` alongside the rest of the `d-write-trail` family (see the
+# removal note above `test_deletion_blocks_directive_absent_when_no_msg_
+# file`) -- `wsc-coverage-gate-runner.py write-trail` is gone by ruling.
 # ---------------------------------------------------------------------------
-
-
-def test_build_write_trail_args_forwards_reviewer_evidence_when_present():
-    review = {
-        "sha_range": "a..b",
-        "reviewer": "coordinator:code-reviewer",
-        "scope": "diff",
-        "verdict": "OK",
-        "diff_loc": 10,
-        "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
-    }
-    args = wsc._build_write_trail_args(review)
-    assert args == [
-        "write-trail",
-        "--sha-range", "a..b",
-        "--reviewer", "coordinator:code-reviewer",
-        "--scope", "diff",
-        "--verdict", "OK",
-        "--diff-loc", "10",
-        "--reviewer-evidence", "state/subagent-share/sid/reviewer.md",
-    ]
-
-
-def test_build_write_trail_args_is_byte_identical_without_reviewer_evidence():
-    review = {
-        "sha_range": "a..b",
-        "reviewer": "coordinator:code-reviewer",
-        "scope": "diff",
-        "verdict": "OK",
-        "diff_loc": 10,
-    }
-    args = wsc._build_write_trail_args(review)
-    assert args == [
-        "write-trail",
-        "--sha-range", "a..b",
-        "--reviewer", "coordinator:code-reviewer",
-        "--scope", "diff",
-        "--verdict", "OK",
-        "--diff-loc", "10",
-    ]
-    assert "--reviewer-evidence" not in args
-
-
-def test_build_write_trail_directives_names_reviewer_evidence_on_the_directive():
-    """End-to-end through `build_write_trail_directives`: a `decisions
-    ["review"]` dict carrying `reviewer_evidence` produces a `d-write-trail`
-    directive whose args name `--reviewer-evidence`."""
-    review = {
-        "sha_range": "a..b",
-        "reviewer": "coordinator:code-reviewer",
-        "scope": "diff",
-        "verdict": "OK",
-        "diff_loc": 10,
-        "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
-    }
-    directives = wsc.build_write_trail_directives(review)
-    assert len(directives) == 1
-    args = directives[0]["args"]
-    assert "--reviewer-evidence" in args
-    assert args[args.index("--reviewer-evidence") + 1] == "state/subagent-share/sid/reviewer.md"
 
 
 # ---------------------------------------------------------------------------
@@ -3510,44 +3374,17 @@ def test_memo_resolution_attribution_judgment_point_recommends_resolved_with_sig
 # reader sites silently and the ceremony still exited 0. The shared
 # `validate_review_shape` now raises loud, from both sites, on the same
 # malformed payload.
+#
+# `test_build_write_trail_directives_raises_on_the_same_unconsumed_review_
+# dict_shape` / `test_build_write_trail_directives_absent_review_key_stays_
+# silent` REMOVED (C12): both exercised `build_write_trail_directives`,
+# dropped from `__init__.py` alongside the rest of the `d-write-trail`
+# family (see removal note above `test_deletion_blocks_directive_absent_
+# when_no_msg_file`). `directives_commit_tail.build_close_tail_args_
+# directive`'s own `validate_review_shape` call was already removed in the
+# ceremony.wsc_tail kill (2026-08-23), so no reader site of
+# `decisions["review"]` remains in this module to exercise here.
 # ---------------------------------------------------------------------------
-
-_UNCONSUMED_REVIEW_PAYLOAD = {
-    "slices": [
-        {
-            "sha_range": "a1..a2",
-            "reviewer": "code-reviewer",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        },
-    ],
-    "reviewer": "someone",
-    "scope": "chain",
-    "verdict": "ok",
-    "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
-}
-
-
-def test_build_write_trail_directives_raises_on_the_same_unconsumed_review_dict_shape():
-    """One of two independent dropping sites named in the backlog entry —
-    `build_write_trail_directives` calls the shared `validate_review_shape`
-    validator, same as `directives_commit_tail.build_close_tail_args_
-    directive` formerly did (removed in the ceremony.wsc_tail kill,
-    2026-08-23) — so the two could not diverge."""
-    with pytest.raises(ValueError) as excinfo:
-        wsc.build_write_trail_directives(_UNCONSUMED_REVIEW_PAYLOAD)
-    assert "'slices'" in str(excinfo.value)
-
-
-def test_build_write_trail_directives_absent_review_key_stays_silent(monkeypatch, tmp_path):
-    """`decisions["review"]` genuinely absent (not present-but-malformed)
-    must not raise — `brief()`'s own call site passes `decisions.get(
-    "review")`, which is `None` when the key is missing entirely."""
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-write-trail" not in ids
 
 
 # ---------------------------------------------------------------------------

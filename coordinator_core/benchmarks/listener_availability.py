@@ -196,10 +196,18 @@ def report(sink: Path) -> Dict[str, Any]:
     probes = [r["probe_ms"] for r in rows if isinstance(r.get("probe_ms"), (int, float))]
     if probes:
         probes_sorted = sorted(probes)
+        mid = len(probes_sorted) // 2
+        # Review: coordinator:code-reviewer -- even-n median averaged the two
+        # middle values instead of taking the upper-median, which read one
+        # sample off on this already-noisy peer-load metric.
+        if len(probes_sorted) % 2 == 0:
+            median = (probes_sorted[mid - 1] + probes_sorted[mid]) / 2.0
+        else:
+            median = probes_sorted[mid]
         out["probe_ms"] = {
             "n": len(probes_sorted),
             "min": probes_sorted[0],
-            "p50": probes_sorted[len(probes_sorted) // 2],
+            "p50": round(median, 3),
             "max": probes_sorted[-1],
         }
     return out

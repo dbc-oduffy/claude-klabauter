@@ -592,6 +592,23 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         f"memo.send: {topic} delivered to {to}\n\n"
         f"Moves the outbox draft to sent/ and appends the sent-ledger row.\n"
     )
+    # THE OUTBOX PATH GOES IN THE PATHSPEC ONLY IF HEAD KNOWS IT.
+    # It is listed so the MOVE's deletion leg gets staged -- but a draft staged
+    # by `memo.draft` and sent straight away was never committed, so after the
+    # move that path is both gone from disk and unknown to git. Git then fails
+    # the WHOLE commit with "pathspec ... did not match any file(s) known to
+    # git", the receipt never lands, and the sent/ copy plus ledger row sit
+    # staged-but-uncommitted. That is the documented canonical workflow
+    # (draft -> send), so this fired on the first two real sends, 2026-08-25.
+    #
+    # `_head_entry_for` answers "is this in HEAD?" from the in-process tree
+    # spine, so the check costs ZERO extra git spawns and the op stays at its
+    # measured 3 (AC5 budget <= 4). An untracked draft has no deletion to
+    # stage, so dropping it from the pathspec loses nothing.
+    sender_pathspec = [sent_relpath, _SENT_LEDGER_RELPATH]
+    if git_native._head_entry_for(sender_worktree, outbox_relpath) is not None:
+        sender_pathspec.insert(1, outbox_relpath)
+
     try:
         # commit_scoped chooses its own safe mechanism and computes trailers
         # itself (interpret-trailers) — unlike commit_authored_new_file,
@@ -599,8 +616,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # applies. One `add` pathspec covers all three paths (Anti-scope §6:
         # `git commit -- <path>` alone cannot stage a brand-new file).
         sender_commit = git_native.commit_scoped(
-            [sent_relpath, outbox_relpath, _SENT_LEDGER_RELPATH],
-            sender_msg_file, sender_worktree,
+            sender_pathspec, sender_msg_file, sender_worktree,
         )
     finally:
         try:
@@ -616,6 +632,13 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         "sender_committed": bool(sender_commit.ok),
     }
     if not sender_commit.ok:
+        # The stderr is the whole diagnosis, and a WARNING alone loses it: the
+        # engine's log is not retained, so an operator sees only the CLI's
+        # generic line and cannot tell WHICH failure they hit. That cost two
+        # sends to diagnose the pathspec cause fixed on 2026-08-25 (569e39e1b),
+        # and it recurred on a DIFFERENT cause immediately after, with the
+        # reason again unavailable. Carry it on the result.
+        acted_item["sender_commit_stderr"] = (sender_commit.stderr or "").strip()
         _LOG.warning(
             "memo_send: delivery to %s landed and committed (%s), but the "
             "sender-side receipt commit failed: %s — sent/ copy and ledger "

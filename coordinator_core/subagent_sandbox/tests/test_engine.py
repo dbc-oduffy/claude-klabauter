@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.session import identity as session_identity
 from coordinator_core.subagent_sandbox import engine
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
@@ -45,6 +46,11 @@ REPORT_SIDECAR_TYPE = "coordinator:executor"
 
 BARE_HEX_AGENT_ID = "abc123def4567890"
 NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
+# What NAMED_AGENT_ID resolves to once a session_id of "em-session-1" is in
+# hand: `<name>@session-<session_id[:8]>`, the key form `.agents/` is named by.
+# Derived via the real builder (not a hand-typed literal) so a future grammar
+# change desyncs this assertion loudly instead of silently going stale.
+NAMED_CANONICAL_AGENT_ID = session_identity.build_canonical_agent_id("ReviewBot", "em-session-1"[:8])
 #: EM-side canonical teammate id — the shape a NAMED dispatch actually presents
 #: and the shape `.agents/<agent_id>/` is keyed by. Grammar taken from the three
 #: writers that mint it (track_dispatched_agents._TEAMMATE_AGENT_RE and the two
@@ -211,7 +217,15 @@ def test_canonical_agent_id_bare_hex() -> None:
 
 
 def test_canonical_agent_id_named_teammate_session_present() -> None:
-    assert engine._canonical_agent_id(NAMED_AGENT_ID, "em-session-1") == NAMED_AGENT_ID
+    """With a session_id present the named-teammate leg TRANSFORMS the
+    subagent-side raw form into the EM-side canonical key the `.agents/`
+    directories are actually named by, rather than returning it unchanged.
+    Returning it unchanged is the defect
+    docs/plans/2026-08-25-a-named-dispatch-keeps-its-report.md fixed."""
+    assert (
+        engine._canonical_agent_id(NAMED_AGENT_ID, "em-session-1")
+        == NAMED_CANONICAL_AGENT_ID
+    )
 
 
 def test_canonical_agent_id_named_teammate_session_absent_fallback() -> None:
@@ -487,12 +501,17 @@ def test_resolve_effective_types_bare_hex_agent_type_leg(git_repo: Path) -> None
 
 
 def test_resolve_effective_types_named_teammate_backpointer_leg(git_repo: Path) -> None:
-    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    """The back-pointer is keyed by the EM-side CANONICAL id, which is why a
+    payload carrying the subagent-side raw form has to be transformed before
+    the lookup rather than statted as-is."""
+    _write_backpointer(
+        git_repo, NAMED_CANONICAL_AGENT_ID, "em-session-1", CONFINED_TYPE
+    )
     payload = {"agent_id": NAMED_AGENT_ID, "session_id": "em-session-1"}
     agent_id, agent_type, subagent_type = engine.resolve_effective_types(
         payload, str(git_repo)
     )
-    assert agent_id == NAMED_AGENT_ID
+    assert agent_id == NAMED_CANONICAL_AGENT_ID
     assert agent_type == ""
     assert subagent_type == CONFINED_TYPE
 
@@ -509,7 +528,7 @@ def test_resolve_effective_types_no_agent_id_all_empty(git_repo: Path) -> None:
 def test_resolve_effective_types_no_git_root_no_backpointer_lookup() -> None:
     payload = {"agent_id": NAMED_AGENT_ID, "session_id": "em-session-1"}
     agent_id, agent_type, subagent_type = engine.resolve_effective_types(payload, None)
-    assert agent_id == NAMED_AGENT_ID
+    assert agent_id == NAMED_CANONICAL_AGENT_ID
     assert subagent_type == ""
 
 

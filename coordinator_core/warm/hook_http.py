@@ -50,6 +50,9 @@ from typing import Any, Dict, Mapping, Optional
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
 #: distinction drives `unreachable_response` and nothing else -- this module never decides
 #: whether a blocking event may ride this transport, which is a cross-repo shape question.
+#: Currently identical to `SERVED_EVENTS` below, coincidentally, not by construction -- the
+#: two encode different facts (what's dispatch-critical vs. what this listener can serve)
+#: and are expected to diverge as `SERVED_EVENTS` widens. Edit only the one you mean to.
 BLOCKING_EVENTS = frozenset({"PreToolUse"})
 
 #: The `hook_event_name` values this LISTENER can actually serve. A fact about our dispatch,
@@ -62,6 +65,7 @@ BLOCKING_EVENTS = frozenset({"PreToolUse"})
 #: truth is DoE's `hooks.json`, where PostToolUse alone names seven ops. A table here would be a
 #: second copy of somebody else's config, drifting silently. Widening this listener means
 #: consuming that mapping, not transcribing it.
+#: Currently identical to `BLOCKING_EVENTS` above, coincidentally -- see its docstring.
 SERVED_EVENTS = frozenset({"PreToolUse"})
 
 
@@ -90,15 +94,15 @@ def unserved_response(event_name: Optional[str]) -> Dict[str, Any]:
     must not be diagnosed as one another.
     """
     label = event_name or "an unnamed event"
-    return {
-        "hookSpecificOutput": {"hookEventName": event_name},
-        "systemMessage": "coordinator: no warm route for %s -- hook did not run" % label,
-        "additionalContext": (
-            "The coordinator warm listener has no dispatch for %s, so no coordinator hook ran "
-            "for it. It did not pass -- it did not run." % label
-        ),
-        "suppressOutput": False,
-    }
+    return _with_context(
+        {
+            "hookSpecificOutput": {"hookEventName": event_name},
+            "systemMessage": "coordinator: no warm route for %s -- hook did not run" % label,
+            "suppressOutput": False,
+        },
+        "The coordinator warm listener has no dispatch for %s, so no coordinator hook ran "
+        "for it. It did not pass -- it did not run." % label,
+    )
 
 #: The listener's hook endpoint, and the op a bare `/hook` POST routes to. Defined HERE
 #: rather than in `supervisor` because `op_for_path` is the routing decision and the
@@ -115,11 +119,41 @@ DEFAULT_OP_NAME = "warm_guard.evaluate"
 ROUTABLE_OP_PREFIXES = ("hooks.", "session.", "warm_guard.")
 
 #: Keys an op result may set that Claude Code splices into the session rather than reading as
-#: a verdict. `additionalContext` reaches the model, `systemMessage` reaches the operator.
-#: These are the WHOLE reason a non-deny-capable event is worth registering at all -- the
-#: SessionStart and UserPromptExpansion registrations exist to inject, not to approve -- so
-#: dropping them on the success path silently converts six live hooks into no-ops.
-PASSTHROUGH_RESULT_KEYS = ("additionalContext", "systemMessage", "suppressOutput")
+#: a verdict. `systemMessage` reaches the operator; `suppressOutput` is a display hint. Both
+#: are read at the TOP LEVEL of the response body.
+#:
+#: `additionalContext` is NOT in this tuple, and that asymmetry is measured, not stylistic --
+#: see `_with_context`.
+PASSTHROUGH_RESULT_KEYS = ("systemMessage", "suppressOutput")
+
+
+def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any]:
+    """Attach `additionalContext` where the harness actually reads it: NESTED inside
+    `hookSpecificOutput`, never at the top level of the response body.
+
+    MEASURED, not inferred. Claude-klabauter-0e probed harness 2.1.245 with each shape sent
+    ALONE on the same event over the same transport, differing in nothing else:
+
+        {"additionalContext": "<sentinel>"}                        -> model: ABSENT
+        {"hookSpecificOutput": {"additionalContext": "<sentinel>"}} -> model echoed it
+
+    A top-level copy is therefore not a harmless belt-and-braces duplicate; it is the whole
+    injection silently going nowhere behind a 200. This function existing at all is what
+    stops that shape being reintroduced by someone reading Claude Code's docs, which
+    describe `additionalContext` alongside genuinely top-level `systemMessage`.
+
+    It matters most on the paths that carry a WARNING rather than an injection.
+    `unreachable_response` and `unserved_response` exist to make an unrun guard visible to
+    the model instead of indistinguishable from one that ran and passed (module docstring,
+    obligation 3). Emitted top-level, that warning reached nobody -- the obligation read as
+    discharged in every test while being void over the wire.
+    """
+    if context is None:
+        return body
+    hso = dict(body.get("hookSpecificOutput") or {})
+    hso["additionalContext"] = context
+    body["hookSpecificOutput"] = hso
+    return body
 
 #: The env keys guard evaluation actually consults. Forwarding the caller's WHOLE environ
 #: would put arbitrary session secrets on the wire for every hook fire; forwarding nothing
@@ -239,7 +273,13 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
         merged.pop("permissionDecision", None)
         merged.pop("permissionDecisionReason", None)
         body["hookSpecificOutput"] = merged
-    return body
+    # An op that nests its own context has already put it where the harness reads it; one
+    # that returns the plain documented key has not, and that is the shape the module
+    # docstring tells op authors to use. Promote it rather than making every op know. An op
+    # that set BOTH keeps its nested value: it is the more specific declaration of the two.
+    if body["hookSpecificOutput"].get("additionalContext") is not None:
+        return body
+    return _with_context(body, result.get("additionalContext"))
 
 
 def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
@@ -256,15 +296,15 @@ def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
     plan's anti-scope stated as code: *a guard that cannot run must never read as a guard
     that passed.*
     """
-    return {
-        "hookSpecificOutput": {"hookEventName": event_name},
-        "systemMessage": "coordinator: guard did not run (%s)" % detail,
-        "additionalContext": (
-            "A coordinator guard for %s could not be evaluated (%s). "
-            "It did not pass -- it did not run." % (event_name, detail)
-        ),
-        "suppressOutput": False,
-    }
+    return _with_context(
+        {
+            "hookSpecificOutput": {"hookEventName": event_name},
+            "systemMessage": "coordinator: guard did not run (%s)" % detail,
+            "suppressOutput": False,
+        },
+        "A coordinator guard for %s could not be evaluated (%s). "
+        "It did not pass -- it did not run." % (event_name, detail),
+    )
 
 
 def is_blocking_event(event_name: Optional[str]) -> bool:

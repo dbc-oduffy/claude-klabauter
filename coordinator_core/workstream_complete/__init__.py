@@ -57,6 +57,9 @@ for the literal tuple; grouped here by which submodule names each CLI:
         2026-08-23.)
     coordinator-lesson-add, coordinator-queue-append, archive-stamp-cli,
         coordinator-harvest-deferrals -> `directives_lessons_plan.py` (C2a).
+        The first two are emitted only when `_lesson_capture_reachable()`
+        is True (C11, AC15) -- see CONSUMES_MANIFEST's own docstring and
+        Negative-spec below for why they stay manifest members regardless.
     coordinator-complete-entry.py, coordinator-fold-execution-record ->
         `directives_completion.py` (C2b). (`reconcile-completion-commits.py`
         was also named here; removed by PM ruling, 2026-08-23.)
@@ -71,12 +74,11 @@ for the literal tuple; grouped here by which submodule names each CLI:
     review-brightline-gate.py, freeze-review-diff.py, fan-out-integrator.py,
         scan_unresolved_ubt_records.py, classify-dispatch-shape.py ->
         `directives_review.py` (C2d). `wsc-coverage-gate-runner.py`'s
-        `coverage-gate`/`write-trail` subcommands are already manifested via
-        the pre-existing `d-coverage-gate`/`d-write-trail` directives below —
-        this module's OWN `build_chain_coverage_gate_directive`/
-        `build_write_review_trail_directive` builders are deliberately NOT
-        wired a second time here (see Negative-spec: no duplicate-CLI
-        directive pairs).
+        `coverage-gate` subcommand was already removed (K-001) and its
+        `write-trail` subcommand was DROPPED here (C12) rather than wired a
+        second time — this module's OWN `build_chain_coverage_gate_directive`/
+        `build_write_review_trail_directive` builders stay unwired (see
+        Negative-spec: no duplicate-CLI directive pairs).
     session-claim-cli, emit-cadence -> `directives_commit_tail.py` (C2e).
         (`wsc-close.py` already manifested; this module's own pre-existing
         `d-close-tail-args`/`d-tail` inline builders were superseded by
@@ -184,11 +186,19 @@ Negative-spec:
       C3's assembly-seam concern" case that module's own Negative-spec
       names. Keeping the pre-existing ids avoids a duplicate CLI dispatch
       pair.
+    - C11 (AC15): `coordinator-lesson-add`/`coordinator-queue-append`
+      DIRECTIVES are gated on `_is_dispatch_engine_stamped()`, not on
+      `decisions["lessons"]` presence — a caller supplying lessons no
+      longer guarantees either fires; reachability does. The fallback
+      route (`preflight.lesson_capture_route`) is the sanctioned
+      substitute on an unstamped clone. Both names STAY in
+      CONSUMES_MANIFEST (unlike a member dropped entirely) because
+      `apply.py::_CLI_DISPATCH` is built from that same tuple — see
+      CONSUMES_MANIFEST's own docstring for the confirmed regression
+      dropping them caused.
     - Several CONSUMES_MANIFEST members genuinely cannot fire under
       `test_workstream_complete_contract.py`'s (C1) synthetic `tmp_path`
-      sweep — `coordinator-lesson-add`/`coordinator-queue-append` need
-      caller-supplied `decisions["lessons"]` the sweep never sets;
-      `archive-stamp-cli`/`coordinator-harvest-deferrals` need a REAL
+      sweep — `archive-stamp-cli`/`coordinator-harvest-deferrals` need a REAL
       `docs/plans/<slug>.md` file on disk (the submodule's own
       `resolve_governing_plan` deliberately verifies existence rather than
       trusting a bare slug — the module's own "do NOT invent a plan to
@@ -210,6 +220,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -247,6 +258,7 @@ from coordinator_core.contract.decision_object.judgment import (
     partition_reportable,
 )
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+from coordinator_core.frontmatter.schema_validate import describe as _describe_vendored_schema  # C11 (AC15): lesson_capture_route fallback shape -- pure in-process read, never IPC/warm dispatch, so DR-315's stamp gate never applies to it
 from coordinator_core.ops.ceremony.wsc_disposition import (
     LEGACY_PREDECESSOR_CONSUMED,
     MEMO_PREDECESSOR,
@@ -254,6 +266,7 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
     SINGLE_SESSION,
     canonicalize,
 )
+from coordinator_core.ipc import _is_dispatch_engine_stamped  # noqa: SLF001 - C11: cold-fallback reachability check, coordinator-lesson-add needs schema.describe (DR-315 s2)
 from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
@@ -288,6 +301,42 @@ class TransportFailure(Exception):
 #: manifest" section for which submodule contributes each entry, and its
 #: Negative-spec for why several members are legitimately unreachable under
 #: `test_workstream_complete_contract.py`'s synthetic sweep today.
+#:
+#: C11 (AC15, docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-the-
+#: requirement.md, DR-358 § Negative-spec ruling): `coordinator-lesson-add`
+#: / `coordinator-queue-append` STAY here -- REVERTED after this row's own
+#: `apply.py::_CLI_DISPATCH = {name: _resolve_script_path(name) for name in
+#: CONSUMES_MANIFEST}` proved they are the SAME tuple apply's real dispatch
+#: table is built from, not a second, preflight-only copy. Dropping either
+#: name broke `apply()`'s ability to run either CLI even on a STAMPED
+#: clone where the producer genuinely is reachable
+#: (`test_apply.py::test_harvest_deferrals_failure_does_not_abort_sibling_
+#: directives` regressed to `report["landed"] == []` under the drop --
+#: confirmed via the pre-existing-failure swap protocol, not a hunch). A
+#: preflight-only exclusion would need a SECOND manifest apply.py doesn't
+#: read from, which is out of this chunk's `writes:` scope (`apply.py`).
+#: Both need `schema.describe` from a warm-server host; a clone carrying no
+#: `coordinator_core/_engine_stamp` is not one (DR-315 s2), and cold
+#: fallback is refused by ruling, not by defect. AC15's actual fix lives at
+#: the ASSEMBLY layer instead: `build_directives` now gates the whole
+#: lesson-capture pair on `_is_dispatch_engine_stamped()` (never emits
+#: either directive when unreachable -- the "unconditional mandate" AC15
+#: names) and `brief()` substitutes a documented, ceremony-owned hand-write
+#: fallback (`preflight.lesson_capture_route`) in its place. See
+#: `_lesson_capture_reachable`/`_lesson_capture_route_payload` and
+#: `build_directives`'s Step 1/1.2 block.
+#:
+#: KNOWN CONSEQUENCE, flagged rather than silently absorbed (mirrors this
+#: module's own precedent for `d-tail`/`_KNOWN_CLIS`, Negative-spec above):
+#: on an unstamped clone -- this one included -- neither CLI is ever
+#: emitted by any directive, so `test_workstream_complete_contract.py`'s
+#: `test_every_manifest_entry_is_named_by_at_least_one_directive` (dead-
+#: census direction 2) now reads both as dead census rows every time that
+#: file's sweep runs here, because `_DISPATCHED_WORKER_ONLY_MANIFEST_
+#: MEMBERS` is empty and that file is outside every chunk's `writes:`
+#: scope in this plan. Widening that frozenset (or teaching the sweep to
+#: monkeypatch `_is_dispatch_engine_stamped` reachable) is that file's own
+#: fix, not reproduced here.
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "wsc-coverage-gate-runner",
     "check-workstream-complete-deletion-blocks",
@@ -383,6 +432,28 @@ _FREE_VALUE_KEY_SOURCES: tuple[tuple[str, ...], ...] = (
 )
 
 
+#: Union source for `build_decisions_template`'s static-shape defaults
+#: (AC14, C10) — each `directives_*` submodule's own `FREE_VALUE_KEY_STATIC_
+#: DEFAULTS` dict (only `directives_lessons_plan` defines one today),
+#: mirroring `_FREE_VALUE_KEY_SOURCES`'s own per-submodule union so a key
+#: wanting a discoverable non-`None` template default is declared once, at
+#: its own submodule, never hand-copied here.
+_FREE_VALUE_KEY_STATIC_DEFAULT_SOURCES: tuple[dict[str, Any], ...] = (
+    directives_lessons_plan.FREE_VALUE_KEY_STATIC_DEFAULTS,
+)
+
+
+def _free_value_key_static_defaults() -> dict[str, Any]:
+    """Deduped union of every `directives_*` submodule's own static-shape
+    default dict, first-seen wins (matching `_all_free_value_keys`'s own
+    dedup posture)."""
+    merged: dict[str, Any] = {}
+    for defaults in _FREE_VALUE_KEY_STATIC_DEFAULT_SOURCES:
+        for key, value in defaults.items():
+            merged.setdefault(key, value)
+    return merged
+
+
 def _all_free_value_keys() -> tuple[str, ...]:
     """Deduped union of every `directives_*` submodule's `FREE_VALUE_KEYS`,
     order-preserving (first-seen wins) — several keys are legitimately read
@@ -453,9 +524,12 @@ def build_decisions_template(
             "options": [d["value"] for d in jp.get("dispositions", [])],
         }
     resolved_free_values = resolved_free_values or {}
+    static_defaults = _free_value_key_static_defaults()
     for key in _all_free_value_keys():
         if key in DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS and resolved_free_values.get(key) is not None:
             template[key] = resolved_free_values[key]
+        elif key in static_defaults:
+            template[key] = copy.deepcopy(static_defaults[key])
         else:
             template[key] = None
     return template
@@ -937,184 +1011,81 @@ def _directive(
     return directive
 
 
-def _build_legacy_coverage_and_trail_directives(
-    gate: SessionShapeGate,
-    decisions: dict[str, Any],
-    plan_claim_directives: list[dict[str, Any]],
-    repo_root: Optional[Path] = None,
-) -> list[dict[str, Any]]:
-    """The pre-existing (Convert #2) `d-write-trail` directive builder.
-
-    `d-coverage-gate` — REMOVED (K-001, state/kill-ledger.md), NOT live, and
-    built by nothing in this repo. This function emits `d-write-trail` only.
-    It formerly also emitted `d-coverage-gate` (`wsc-coverage-gate-runner
-    coverage-gate --from-handoff <consumed_handoff>`, gated on
-    `gate.disposition == PREDECESSOR_CONSUMED and gate.consumed_handoff`);
-    the DAG walk behind that verdict cost ~150-180s per close.
-    (Wording fixed 2026-08-19: this paragraph opened "the LIVE chain-end
-    coverage-verdict directive" and only said "was removed" four lines
-    later, which read as a live directive to anyone skimming the first
-    line — it sent a peer session hunting a construction site that has not
-    existed since K-001.) The gate-verdict memo machinery it used
-    (`directives_review.gate_memo_hit`/`record_gate_verdict_if_passed`) was
-    trimmed alongside it; only `d-run-review-brightline-gate`'s memo entry
-    survives (brightline itself is unaffected by this cut and still mints
-    chain-ancestry waivers via its own `--mint-chain-waivers` subprocess —
-    see `coordinator/bin/wsc-coverage-gate-runner.py::cmd_brightline_gate`).
-    `gate`/`decisions` are still accepted (`gate` was this function's own
-    coverage-directive gating input; `decisions` is a write-trail-directives
-    passthrough) so the signature stays stable for its one caller.
-
-    `repo_root`, `plan_claim_directives` — kept for signature stability;
-    `plan_claim_directives` was never read by the coverage-directive logic
-    (see the ordering note below) and `d-write-trail` does not consult a
-    verdict memo of its own.
-
-    `d-write-trail`'s `wsc-coverage-gate-runner` subcommand (`write-trail`)
-    has no positional slot for a `{<producer-id>.landed}`/
-    `{<producer-id>.entry_path}` dependency token (both subparsers define
-    ONLY `--flag`-form arguments — see
-    `coordinator/bin/wsc-coverage-gate-runner.py::_build_parser`), so it
-    never carried a real block-until-landed dependency on
-    `plan_claim_directives` either; that was true before this cut and is
-    unchanged by it."""
-    directives: list[dict[str, Any]] = []
-
-    directives.extend(
-        build_write_trail_directives(decisions.get("review"), session_id=gate.sid, repo_root=repo_root)
-    )
-
-    return directives
+#: `d-write-trail` builder DROPPED (C12, docs/plans/2026-08-25-the-close-
+#: ceremony-rebuilt-from-the-requirement.md): `_build_legacy_coverage_and_
+#: trail_directives` / `build_write_trail_directives` / `_build_write_trail_
+#: args` / `_apply_write_trail_gate_memo` formerly emitted `wsc-coverage-
+#: gate-runner.py write-trail` — a subcommand PM ruling 2026-08-23 REMOVED
+#: (`coordinator/bin/wsc-coverage-gate-runner.py:29` records the removal;
+#: the CLI now offers only `claim-plan`). argparse rejected every emitted
+#: directive with exit 2, `apply` exited 4 PARTIAL_MUTATION, and the tail
+#: was never attempted — measured twice independently (session `cb4ea2e4`,
+#: this repo; DoE-claude session `39644554`). No review trail is owed —
+#: that is the ruling, not a gap — so this builder is DROPPED, not
+#: replaced: `brief()` no longer calls it and no directive named
+#: `d-write-trail*` is ever emitted.
 
 
-_REVIEW_TRAIL_REQUIRED_FIELDS = ("sha_range", "reviewer", "scope", "verdict", "diff_loc")
+#: `schema_validate.describe`'s own name for the record `coordinator-lesson-
+#: add` writes (`applies_to: "state/lessons/*.yaml"` in its own return —
+#: verified at source, not guessed). Single source for both `_lesson_
+#: capture_reachable` callers below.
+_LESSON_ENTRY_SCHEMA_NAME = "lesson-entry"
 
 
-def _build_write_trail_args(review: dict[str, Any]) -> list[str]:
-    args = [
-        "write-trail",
-        "--sha-range", str(review["sha_range"]),
-        "--reviewer", str(review["reviewer"]),
-        "--scope", str(review["scope"]),
-        "--verdict", str(review["verdict"]),
-        "--diff-loc", str(review["diff_loc"]),
-    ]
-    if review.get("scope_kind"):
-        args += ["--scope-kind", str(review["scope_kind"])]
-    if review.get("reviewer_evidence"):
-        args += ["--reviewer-evidence", str(review["reviewer_evidence"])]
-    return args
+def _lesson_capture_reachable() -> bool:
+    """C11 (AC15, DR-358 § Negative-spec ruling): `coordinator-lesson-add`
+    (and its dependent `coordinator-queue-append`) dispatch through
+    `ipc.dispatch_message`, which enforces the engine-stamp gate (DR-315
+    s2) for EVERY op call regardless of read-only classification -- a
+    clone with no `coordinator_core/_engine_stamp` cannot reach either CLI,
+    by ruling, not by defect. Thin, testable wrapper over `ipc._is_
+    dispatch_engine_stamped()` (memoized, zero-spawn, never raises) so
+    `test_lesson_capture_reachable.py` can monkeypatch this single seam
+    rather than the ipc module's internal cache."""
+    return _is_dispatch_engine_stamped()
 
 
-def build_write_trail_directives(
-    review: Any, *, session_id: str = "", repo_root: Optional[Path] = None
-) -> list[dict[str, Any]]:
-    """`decisions["review"]` -> zero, one, or many `d-write-trail*`
-    directives, each a mechanical `wsc-coverage-gate-runner.py write-trail`
-    call over `coordinator_core.ops.review_trail_write`'s single-record
-    write path (`review_trail.write` writes exactly ONE record per
-    invocation — see that module's own docstring; storage already supports
-    N records, one per call, so N directives is the whole fix).
-
-    Two accepted shapes, BOTH read from the SAME `decisions["review"]` key
-    (docs backlink: a per-slice, brightline-mandated review can produce N
-    distinct `(sha_range, reviewer, scope, verdict, diff_loc)` tuples that
-    the pre-existing single-object shape could not express — see this
-    module's own review-trail-partition fix):
-
-    - a single `dict` (the pre-existing, still-fully-supported shape):
-      identical to today, byte-for-byte — one `d-write-trail` directive
-      when all five required fields are present and non-empty, none
-      otherwise. Every existing caller/test that supplies a dict keeps
-      working unchanged.
-    - a `list[dict]` (additive): one `d-write-trail-<index>` directive per
-      list entry whose own five required fields are all present and
-      non-empty — `<index>` is the entry's position in the ORIGINAL list
-      (not a count of qualifying entries), so an incomplete entry never
-      shifts a later entry's id. An entry missing a required field
-      contributes NO directive (mirrors the single-dict "name it, don't
-      guess" convention) — it is silently dropped from `directives[]`,
-      never dispatched with a partial/guessed value. This is a build-time
-      decision only: at APPLY time each directive dispatches
-      independently through `_execute_directives`'s per-directive halt
-      contract, so one slice's dispatch failure (e.g. a foreign-session
-      range refusal) never blocks or poisons any sibling slice's own
-      write.
-
-    `None`/`{}`/`[]`/any other falsy value: no directives (today's
-    behavior for an absent/empty `review` key, preserved for both shapes).
-
-    Calls `directives_commit_tail.validate_review_shape` first -- the SAME
-    shared validator `build_close_tail_args_directive` formerly called
-    (removed in the ceremony.wsc_tail kill, 2026-08-23), so the two
-    independent reader sites could not diverge (state/bug-backlog/2026-08-14-
-    wsc-apply-accepts-an-unconsumed-decision-debea052f8c5.yaml). RAISES
-    `ValueError` on a shape outside {falsy | dict of recognized keys | list
-    of such dicts} -- a caller-supplied `review` nested one key deeper than
-    either accepted shape now fails loud here instead of silently
-    contributing zero directives.
-
-    `session_id`/`repo_root` (C4, AC7, docs/plans/2026-08-15-the-ceremony-
-    tail-stops-lying-about-why-it-failed.md): when BOTH are supplied,
-    consults the gate verdict memo (READ-ONLY, via `directives_review.
-    gate_memo_hit`) keyed on `(session_id, sha_range)` -- the SAME identity
-    C3 gave the on-disk trail record itself -- and sets `already_satisfied
-    =True` on a hit, so a reconcile-and-re-run whose trail record already
-    exists no longer re-fires the write. Omitting either (every pre-C4
-    caller) reproduces today's byte-identical directives -- no memo lookup,
-    `already_satisfied` stays its `_directive` default of `False`. This
-    function NEVER WRITES the memo itself, same division as the sibling
-    `d-coverage-gate` memo above: the write happens exactly once, from
-    `apply.py::_execute_directives`'s `directives_review.
-    record_gate_verdict_if_passed`, after the directive actually dispatched
-    and exited 0 this pass.
-    """
-    directives_commit_tail.validate_review_shape(review)
-    if not review:
-        return []
-    if isinstance(review, dict):
-        if not all(review.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
-            return []
-        directive = _directive("d-write-trail", "wsc-coverage-gate-runner", _build_write_trail_args(review))
-        _apply_write_trail_gate_memo(directive, session_id, review["sha_range"], repo_root)
-        return [directive]
-    directives: list[dict[str, Any]] = []
-    for index, entry in enumerate(review):
-        if not isinstance(entry, dict):
-            continue
-        if not all(entry.get(k) not in (None, "") for k in _REVIEW_TRAIL_REQUIRED_FIELDS):
-            continue
-        directive = _directive(
-            f"d-write-trail-{index}", "wsc-coverage-gate-runner", _build_write_trail_args(entry)
-        )
-        _apply_write_trail_gate_memo(directive, session_id, entry["sha_range"], repo_root)
-        directives.append(directive)
-    return directives
-
-
-def _apply_write_trail_gate_memo(
-    directive: dict[str, Any], session_id: str, sha_range: Any, repo_root: Optional[Path]
-) -> None:
-    """C4 (AC7): shared opt-in for both `build_write_trail_directives`
-    shapes. Stamps `_gate_memo_key_parts` on `directive` unconditionally
-    when both inputs are present -- so `directives_review.
-    record_gate_verdict_if_passed` can record under the SAME `(session_id,
-    sha_range)` key this function just checked -- and additionally sets
-    `already_satisfied=True` on a hit. The key is `(session_id, sha_range)`
-    regardless of the directive's own id (`d-write-trail` vs the indexed
-    `d-write-trail-<n>` shape): the underlying trail-record identity C3
-    established does not vary with directive index, only the CLI dispatch
-    does. No-op (directive left exactly as `_directive` built it) when
-    either `session_id` or `repo_root` is falsy/`None` -- every pre-C4
-    caller of `build_write_trail_directives` supplies neither."""
-    if not session_id or repo_root is None:
-        return
-    key_parts = [session_id, str(sha_range)]
-    directive["_gate_memo_key_parts"] = key_parts
-    # Fixed gate-id tag (matches `directives_review._WRITE_TRAIL_DIRECTIVE_ID_PREFIX`);
-    # see this function's docstring for why it is not this directive's own id.
-    if directives_review.gate_memo_hit(repo_root, "d-write-trail", *key_parts):
-        directive["already_satisfied"] = True
+def _lesson_capture_route_payload() -> dict[str, Any]:
+    """`preflight.lesson_capture_route` -- the ceremony-owned, documented
+    fallback AC15 requires in place of the unconditional `coordinator-
+    lesson-add` mandate this module used to carry. When the producer is
+    reachable this is a thin "use the directive" pointer; when it is not,
+    `fallback.schema` is `schema_validate.describe("lesson-entry")`'s OWN
+    return value -- a pure in-process read of claude-klabauter's vendored schema
+    set, never a dispatched op, so DR-315's stamp gate never applies to
+    computing it (unlike calling the CLI itself). This is the fix for the
+    documented incident this chunk closes: two prior sessions hand-wrote
+    lesson YAML against a SIBLING file's field set, which is reverse-
+    engineering a schema, not a fallback -- this payload hands the EM the
+    real one instead."""
+    reachable = _lesson_capture_reachable()
+    if reachable:
+        return {
+            "reachable": True,
+            "producer": "coordinator-lesson-add",
+            "fallback": None,
+        }
+    return {
+        "reachable": False,
+        "producer": "coordinator-lesson-add",
+        "reason": (
+            "coordinator-lesson-add dispatches through ipc.dispatch_message, "
+            "gated by DR-315 s2's engine-stamp check; this clone carries no "
+            "coordinator_core/_engine_stamp, so the producer cannot start "
+            "here (by ruling, not by defect)."
+        ),
+        "fallback": {
+            "instructions": (
+                "Hand-author a YAML record matching the schema below at a new "
+                "path under fallback.schema['applies_to'] (state/lessons/*.yaml) "
+                "-- do NOT reverse-engineer the shape from a sibling record; "
+                "this schema is the authoritative source, read fresh via "
+                "schema_validate.describe('lesson-entry')."
+            ),
+            "schema": _describe_vendored_schema(_LESSON_ENTRY_SCHEMA_NAME),
+        },
+    }
 
 
 def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[dict[str, Any]]:
@@ -1213,10 +1184,9 @@ def build_directives(
     if governing_plan is not None and not effective_decisions.get("governing_plan_slug"):
         effective_decisions["governing_plan_slug"] = governing_plan.slug
 
-    # -- Convert #2 original: d-coverage-gate / d-write-trail, repointed --
-    directives.extend(
-        _build_legacy_coverage_and_trail_directives(gate, decisions, plan_claim_directives, repo_root=repo_root)
-    )
+    # -- Convert #2 original: d-coverage-gate REMOVED (K-001); d-write-trail
+    # DROPPED (C12) -- see that builder's own removal note above. No
+    # replacement directive is emitted here.
 
     # -- Step 2.4b (C2a): deferral-harvest sweep --
     harvest_targets = [governing_plan] if governing_plan else []
@@ -1229,7 +1199,17 @@ def build_directives(
     directives.extend(directives_lessons_plan.build_deferral_harvest_directives(harvest_targets))
 
     # -- Step 1/1.2 (C2a): lesson capture --
-    directives.extend(directives_lessons_plan.build_lesson_capture_directives(decisions))
+    # C11 (AC15): gated on producer reachability, not decision-shape --
+    # `coordinator-lesson-add`/`coordinator-queue-append` are absent from
+    # CONSUMES_MANIFEST (see that constant's own docstring) and this branch
+    # is the phantom-verb guard's proof that neither name ever reaches
+    # `directives[]` while unreachable. The documented fallback surfaces
+    # via `preflight.lesson_capture_route` (brief()) instead of a directive
+    # naming a CLI this clone cannot start.
+    if _lesson_capture_reachable():
+        directives.extend(
+            directives_lessons_plan.build_lesson_capture_directives(decisions, repo_root=repo_root)
+        )
 
     # -- Step 2.6/2.6.7/2.6.8/2.6b (C2b): completion-entry cluster --
     directives.extend(
@@ -2338,9 +2318,15 @@ def _build_preserved_judgment_points(
 
     # Step 1 / 1.2 — always relevant (every close evaluates it), scope
     # classification only once a lesson is actually in hand.
+    # C11 (AC15): a resolves id naming `d-add-lesson-<n>` is phantom while
+    # the producer is unreachable -- `build_directives` skips emitting the
+    # directive entirely in that case (see `_lesson_capture_reachable`),
+    # so this resolver must agree rather than naming an id nothing built.
     points.append(
         _judgments.build_lesson_worth_capturing_judgment_point(
             directives_lessons_plan.lesson_capture_resolves_ids(decisions)
+            if _lesson_capture_reachable()
+            else []
         )
     )
     if decisions.get("lessons"):
@@ -4060,6 +4046,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         preflight={
             "session_shape": session_shape_fact,
             "consumes_manifest": list(CONSUMES_MANIFEST),
+            "lesson_capture_route": _lesson_capture_route_payload(),
             "governing_plan_resolution": {
                 "source": governing_plan_source,
                 "slug": governing_plan.slug if governing_plan else None,

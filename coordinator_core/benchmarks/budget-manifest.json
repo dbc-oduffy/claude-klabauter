@@ -416,10 +416,30 @@
       "procs_per_call": 0.0,
       "reads_the_p90_correctly": "min and p50 sit under 0.7ms on all three arms; p90 jumps to ~14-15ms on the two that touch a socket. That is PEER LOAD, not transport cost -- the same 0.6 -> 14.4ms movement the 2026-08-23 rows recorded across runs with identical code, now reproduced within a single interleaved run. Quote min alongside any p50; never quote a p90 from this box as an arm cost.",
       "p_listener_up": {
-        "value": null,
-        "why": "NOT SAMPLABLE IN THIS REPO, and that is correct behaviour rather than a gap. current_engine_clone() resolves to X:/claude-klabauter, which is unstamped by design; ensure_listener's is_engine_root gate therefore refuses to start a listener here, so p(listener up) is structurally zero on this clone no matter what C2 and C3 wired.",
-        "surface_where_it_exists": "X:/claude-klabauter, the stamped publish clone that carries production hook traffic. Sampling it is a cross-repo action with its own owner, not something this plan takes unilaterally.",
-        "what_would_close_it": "A run of the discovery+health arms above from inside a stamped clone, over n>=25 spread across a real session's lifetime, reporting p(listener up) with its n."
+        "value": 1.0,
+        "n": 50,
+        "failure_rate_upper_95": 0.06,
+        "window_minutes": 49.0,
+        "outcomes": {
+          "up": 50,
+          "unhealthy": 0,
+          "dead_record": 0,
+          "no_record": 0
+        },
+        "longest_outage_minutes": 0.0,
+        "probe_ms": {
+          "min": 1.133,
+          "p50": 11.284,
+          "max": 38.674
+        },
+        "shape": "coordinator_core.benchmarks.listener_availability (8f49c9cc7) --sample --engine-root X:/claude-klabauter --interval 60. read_discovery + GET /health only: never ensure_listener (which would measure its own side effect), never the C door (which falls through to cold Python and so cannot report down), never POST /hook.",
+        "measured_on": "2026-08-25",
+        "ownership_correction": "The prior note called sampling the stamped clone 'a cross-repo action with its own owner'. That inverted the ownership: X:/claude-klabauter is claude-klabauter's own publish mirror. No cross-repo ask was needed and none was made.",
+        "what_this_does_not_support": "A steady-state claim across a working day, or time-of-day variation. DoE's own pipe-server sampling on this box found a 31.5-minute outage caused by a percolate deleting the build stamp (docs/research/2026-08-25-http-listener-availability.md) -- a routine, repeatable deploy event this window did not span. The risk on this transport is deploys, not churn, and this number does not measure deploys.",
+        "reading": "1.0 is the observed rate over 36 samples with zero recorded failures -- not an established availability. Rule-of-three (3/n, n=36) puts the one-sided 95% upper bound on the failure rate at ~8.3% (failure_rate_upper_95 above); a risk calculation should use that bound, not the point estimate.",
+        "what_was_probed": "GET /health reachability of the listener process/socket only, via supervisor.check_health. This establishes listener process/socket availability, not /hook-dispatch functional health -- a wedge isolated to POST /hook dispatch (an exception in hook_http.build_request/_serve_line, a ctx.dispatch deadlock, GIL contention on the POST path) is invisible to this probe and would still read up. Not probed via POST /hook by design: that would put synthetic guard traffic on a resident server serving dozens of sessions.",
+        "why_it_is_no_longer_the_blocker": "1.0 over this window. What actually blocked the twenty non-deny-capable registrations was claude-klabauter-side and is fixed in 399a72b4b: the transport framed every event with GUARD_OP_NAME, forwarded only the guard's fields, and dropped additionalContext/systemMessage on every success.",
+        "recount_note": "n corrected 36 -> 50 before commit. The sampler kept appending after the first read, so the recorded n no longer reproduced from the JSONL it cites -- a figure that disagrees with its own source is the defect, whichever number is larger. Recomputed from state/measurements/http-listener-availability.jsonl in full."
       }
     },
     "driver_reproduced": {
@@ -429,15 +449,45 @@
       "arms_reconciled_2026-08-25": "AC1 originally named a four-arm breakdown (client-cold-in-process, client-cold-warm-dispatch, door-warm, control floor); this dispatch brief supersedes it with three -- today's cold chain, HTTP warm hit, control -- reflecting the HTTP transport C2/C3 landed and the H4 wiring-gap fix, and reports process time, spawn count, AND wall side by side rather than wall-never per the original AC1 text.",
       "method": "arms interleaved round-robin (Arm/run_interleaved), n=25 wall samples/arm, warmup=3 discarded; process time/spawn count via batched_process_time_ms, k=20, for the one arm that spawns a child.",
       "wall_ms": {
-        "cold_chain_today": {"n": 25, "min": 38.071, "p50": 41.885, "p90": 43.138, "max": 43.361},
-        "http_warm_hit": {"n": 25, "min": 1.065, "p50": 1.257, "p90": 20.279, "max": 26.311},
-        "control_floor": {"n": 25, "min": 0.0, "p50": 0.001, "p90": 0.001, "max": 0.001}
+        "cold_chain_today": {
+          "n": 25,
+          "min": 38.071,
+          "p50": 41.885,
+          "p90": 43.138,
+          "max": 43.361
+        },
+        "http_warm_hit": {
+          "n": 25,
+          "min": 1.065,
+          "p50": 1.257,
+          "p90": 20.279,
+          "max": 26.311
+        },
+        "control_floor": {
+          "n": 25,
+          "min": 0.0,
+          "p50": 0.001,
+          "p90": 0.001,
+          "max": 0.001
+        }
       },
       "wall_note": "The http_warm_hit p90/max jump (1.257 -> 20.279ms) reproduces the same peer-load pattern the c4_supervised_listener block above already identified within a single interleaved run -- min/p50 are the arm's own cost, p90/max are contention on this box.",
       "process_time_ms": {
-        "cold_chain_today": {"k": 20, "process_time_ms": 32.812, "procs_per_call": 1.0},
-        "http_warm_hit": {"process_time_ms": 0.0, "procs_per_call": 0.0, "note": "no child process; cost is in-process client time plus resident server work"},
-        "control_floor": {"process_time_ms": 0.0, "procs_per_call": 0.0, "note": "no-op; measures the interleave harness's own loop overhead"}
+        "cold_chain_today": {
+          "k": 20,
+          "process_time_ms": 32.812,
+          "procs_per_call": 1.0
+        },
+        "http_warm_hit": {
+          "process_time_ms": 0.0,
+          "procs_per_call": 0.0,
+          "note": "no child process; cost is in-process client time plus resident server work"
+        },
+        "control_floor": {
+          "process_time_ms": 0.0,
+          "procs_per_call": 0.0,
+          "note": "no-op; measures the interleave harness's own loop overhead"
+        }
       },
       "shapes": {
         "cold_chain_today": "python3 -c \"import coordinator_core.ipc\" -- the child process every PreToolUse hook fire spawns on this box today, no warm transport",
@@ -450,6 +500,127 @@
         "note": "ensure_listener() against this repo's own unstamped dev engine root -- structurally 0/n by design (is_engine_root gate), same finding as c4_supervised_listener.p_listener_up above, now produced by committed code rather than by hand."
       },
       "run_to_run_variance_note": "A repeat at n=5/k=3 (throwaway, not recorded) gave cold_chain_today p50=40.634ms and http_warm_hit p50=16.711ms -- both within the spread already documented in this manifest's reverification block; direction (HTTP removes the one child process) held across both runs."
+    },
+    "ac1_n30": {
+      "measured_on": "2026-08-25",
+      "produced_by": "coordinator_core.benchmarks.hook_seam_bench.run_hook_fire_breakdown -- python -m coordinator_core.benchmarks.hook_seam_bench --n 30 --k-process 20",
+      "why_this_block_exists": "AC1 asks n>=30. The driver_reproduced block above is the n=25 run. AC1 was AMENDED (PM-directed) on two counts -- the four-arm list names two mechanisms the reshape deleted, and its never-wall-clock clause is the one this plan already retracted as break-class -- but n>=30 was NOT amended, because it was the one term that was not wrong. Re-run rather than argue the bar down.",
+      "method": "arms interleaved round-robin, n=30 wall samples/arm, warmup=3 discarded; process time and spawn count via batched_process_time_ms k=20.",
+      "wall_ms": {
+        "cold_chain_today": {
+          "n": 30,
+          "min": 38.671,
+          "p50": 40.701,
+          "p90": 43.447,
+          "max": 51.392
+        },
+        "http_warm_hit": {
+          "n": 30,
+          "min": 1.049,
+          "p50": 1.214,
+          "p90": 16.202,
+          "max": 25.381
+        },
+        "control_floor": {
+          "n": 30,
+          "min": 0.0,
+          "p50": 0.001,
+          "p90": 0.001,
+          "max": 0.001
+        }
+      },
+      "process_time_ms": {
+        "cold_chain_today": {
+          "process_time_ms": 31.25,
+          "procs_per_call": 1.0
+        },
+        "http_warm_hit": {
+          "process_time_ms": 0.0,
+          "procs_per_call": 0.0
+        },
+        "control_floor": {
+          "process_time_ms": 0.0,
+          "procs_per_call": 0.0
+        }
+      },
+      "shapes": {
+        "cold_chain_today": "python3 -c \"import coordinator_core.ipc\" -- the child process every PreToolUse hook fire spawns on this box today, no warm transport",
+        "http_warm_hit": "in-process POST http://127.0.0.1:<port>/hook to a resident ThreadingHTTPServer bound around supervisor._make_handler (real dispatch path, allow-stub op)",
+        "control_floor": "no-op call -- measures the interleave harness own loop overhead, not a real transport"
+      },
+      "headline": "One child process and 31.250ms of process time per hook fire today, against zero processes and 0.000ms over the warm http hit. The p90 spread on http_warm_hit (1.214 -> 16.202) is peer load inside a single interleaved run, not transport cost -- read min beside p50.",
+      "p_listener_up_note": "0.0 at n=10 FROM THIS CLONE is structural, not a measurement of production: the is_engine_root gate refuses this unstamped dev tree. Claude-klabauter-fe sampled the stamped publish clone read-only and reports 1.0 at n=36, zero outages over 35 minutes, probe min 1.15ms (sampling continued past the n=21 first read)."
+    }
+  },
+  "_ac8_subagent_start_relay_remeasure": {
+    "measured_on": "2026-08-25",
+    "code_sha": "8d5003196cb8f4755809b8dacd2c642347c37a3b",
+    "produced_by": "coordinator_core.benchmarks.catering_path_bench.run_and_record(n=30) -- the same instrument that produced the figure this plan opens with",
+    "unit": "getrusage process time, ms. Same unit as the 218.8ms this plan opens with; a wall figure would not be comparable to it.",
+    "against": "AC8: the 218.8ms real-relay process p90 in this plan Problem section, n=30 cold, code_sha 626c07f84",
+    "real_relay": {
+      "n": 30,
+      "import_cpu_ms": {
+        "p50": 0.0,
+        "p90": 15.625,
+        "max": 15.625
+      },
+      "compose_cpu_ms": {
+        "p50": 93.75,
+        "p90": 93.75,
+        "max": 109.375
+      },
+      "total_process_ms": {
+        "p50": 140.625,
+        "p90": 156.25,
+        "max": 187.5
+      },
+      "total_wall_ms": {
+        "p50": 199.873,
+        "p90": 207.326,
+        "max": 226.818
+      }
+    },
+    "control_relay": {
+      "n": 30,
+      "import_cpu_ms": {
+        "p50": 0.0,
+        "p90": 15.625,
+        "max": 15.625
+      },
+      "compose_cpu_ms": {
+        "p50": 46.875,
+        "p90": 46.875,
+        "max": 62.5
+      },
+      "total_process_ms": {
+        "p50": 93.75,
+        "p90": 93.75,
+        "max": 109.375
+      },
+      "total_wall_ms": {
+        "p50": 153.618,
+        "p90": 162.189,
+        "max": 170.102
+      }
+    },
+    "per_term_attribution": {
+      "headline": "real-relay process p90 218.8 -> 156.25 ms, a 62.55ms reduction.",
+      "term_1_relay_floor": "The control arm -- identical relay, two stubbed no-ops, zero op work -- moved from 140.6ms p90 to 93.75ms p90. This is the relay machinery itself, and it accounts for 46.85ms of the 62.55ms.",
+      "term_2_the_two_ops_own_cost": "Real minus control: 78.2ms p90 before (218.8-140.6), 62.5ms now (156.25-93.75). The two catering ops add 15.7ms less than they did.",
+      "why_this_is_not_a_residual": "Both terms are measured arms, not one arm and a subtraction. The control is a real run of the same relay with the op bodies stubbed, so the floor is observed rather than inferred -- which is what this plan Anti-scope demands (\"Do not attribute a cost by subtraction ... a residual is not an attribution\"). The subtraction that remains, real minus control, is the difference of TWO measured quantities rather than an unexplained remainder."
+    },
+    "spawn_count_note": "SETTLED 2026-08-25 (pickup), replacing the open question this key previously recorded. THE RELAY GENUINELY SPAWNS NOTHING; the enumeration is not blind. Direct measurement, invocation shape stated: batched_process_time_ms([sys.executable, '-c', <script>], k=3, cwd=_REPO_ROOT) reads procs_per_call 1.0 for the real relay arm, 1.0 for the control arm, 1.0 for a bare `pass` script (the root-inclusive floor, which fixes the convention), and 2.0 for a script that deliberately spawns one child -- same primitive, same k, same cwd. An instrument that reads 2.0 on a deliberate child in the identical call is observing the relay's zero, not missing its spawns. enumerate_spawn_set's independent Popen-patch view agrees at [], and the two disagree in what they could miss (the job object is spawn-mechanism-blind and catches os.system/posix_spawn; the Popen patch catches only in-process Popen constructions), so their agreement is corroboration rather than one instrument counted twice. A DEFECT FOUND SETTLING IT, now fixed: spawn_count = max(0, round(procs_per_call) - 1) is NOT injective at the low end -- procs_per_call 0.0 and 1.0 both derive to spawn_count 0. 0.0 is a reading the primitive really produces (see _hook_seam_http_transport's warm arms), so the collapse is reachable rather than theoretical, and the recorded 0.0 in this block structurally COULD NOT have answered its own question. catering_path_bench now records raw procs_per_call alongside spawn_count for exactly this reason. The p50/p90/max 0.0 figures in real_relay/control_relay above predate that and are read here against the direct measurement, not on their own.",
+    "instrument_fix_required_to_take_this_measurement": "catering_path_bench refused to run on Windows at all until 2026-08-25. Its `_verify_spawn_count_derivation` known-truth fixture was `python -> git --version`, DERIVED at 2.0 root-inclusive; measured here it reads 3.0 deterministically (5/5) against a 1.0 no-child baseline, because Git for Windows spawns a helper of its own. The derivation under test was never wrong -- its oracle binary was. Swapped to `python -> python -c pass`, whose child count is a property of CPython rather than of whichever git build is on PATH. The guard fired correctly on a fixture that could not hold.",
+    "spawn_count_raw_procs_per_call": {
+      "measured_on": "2026-08-25",
+      "k": 3,
+      "real_relay": 1.0,
+      "control_relay": 1.0,
+      "bare_interpreter_floor": 1.0,
+      "deliberate_one_child_positive_control": 2.0,
+      "reading": "root-inclusive. 1.0 = the interpreter itself and zero children.",
+      "why_a_positive_control": "A zero from an instrument nobody proved is looking is not a measurement. The 2.0 arm is what makes the three 1.0s evidence."
     }
   }
 }

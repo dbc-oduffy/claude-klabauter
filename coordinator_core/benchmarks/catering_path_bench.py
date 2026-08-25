@@ -329,6 +329,7 @@ class RelayMeasurement:
     total_process_ms: PhaseStats
     total_wall_ms: PhaseStats
     spawn_count: PhaseStats
+    procs_per_call: PhaseStats
 
     def to_dict(self, *, with_samples: bool = False) -> Dict[str, Any]:
         return {
@@ -338,6 +339,7 @@ class RelayMeasurement:
             "total_process_ms": self.total_process_ms.to_dict(with_samples=with_samples),
             "total_wall_ms": self.total_wall_ms.to_dict(with_samples=with_samples),
             "spawn_count": self.spawn_count.to_dict(with_samples=with_samples),
+            "procs_per_call": self.procs_per_call.to_dict(with_samples=with_samples),
         }
 
 
@@ -356,11 +358,22 @@ def _verify_single_invocation_succeeds(script: str) -> None:
     )
 
 
-def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int]:
+def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int, float]:
     """Two cold launches of the byte-identical *script*: one untimed to
     capture the self-reported `(import_cpu_ms, compose_cpu_ms)` JSON line,
     one timed via `batched_process_time_ms(k=1)` to capture
     `(total_process_ms, total_wall_ms, spawn_count)`.
+
+    Returns the RAW `procs_per_call` as a sixth term alongside the derived
+    `spawn_count`. The derivation `max(0, round(procs_per_call) - 1)` is NOT
+    injective at the low end -- `procs_per_call` of 0.0 (the primitive observed
+    no process at all, a reading `budget-manifest.json`'s
+    `_hook_seam_http_transport` warm arms genuinely produce) and 1.0 (the
+    interpreter itself, zero children) BOTH derive to `spawn_count` 0. A
+    recorded 0 therefore cannot on its own distinguish "this path spawns
+    nothing" from "the instrument saw nothing", which is the same
+    figure-without-its-invocation-shape defect this plan has withdrawn three
+    figures for. Record both; interpret the raw one.
 
     `spawn_count` is `procs_per_call - 1`: both the Windows job object's
     `TotalProcesses` and Darwin's `_darwin_one_invocation` seen-set count
@@ -399,6 +412,7 @@ def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int]:
         float(timed["process_time_ms"]),
         float(timed["wall_ms"]),
         max(0, int(round(timed["procs_per_call"])) - 1),
+        float(timed["procs_per_call"]),
     )
 
 
@@ -412,46 +426,45 @@ def _verify_spawn_count_derivation() -> None:
     rather than trusting the Windows framing on a platform it was never
     derived from.
 
-    The fixture is the SAME oracle `test_process_time_posix.py ::
-    test_python_to_git_oracle_count_is_exactly_two` asserts independently:
-    `python -> git --version`, DERIVED (not observed-then-blessed) at
-    `1 interpreter + 1 git = 2.0` root-inclusive. If this platform's
-    `procs_per_call` ever excluded the root, that fixture would measure
-    `1.0` here, `spawn_count` would come out `0` instead of the one real
-    git child, and every macOS figure this baseline reports would be off
-    by one, silently, in a bench nobody would think to distrust -- this
-    raises loud instead.
+    The fixture is `python -> python -c pass`, DERIVED (not
+    observed-then-blessed) at `1 root interpreter + 1 child = 2.0`
+    root-inclusive. If this platform's `procs_per_call` ever excluded the
+    root it would measure `1.0` here, `spawn_count` would come out `0`
+    instead of the one real child, and every figure this baseline reports
+    would be off by one, silently, in a bench nobody would think to
+    distrust -- this raises loud instead.
+
+    WHY NOT `python -> git --version`, which this fixture used until
+    2026-08-25 and which `test_process_time_posix.py ::
+    test_python_to_git_oracle_count_is_exactly_two` still asserts on POSIX:
+    it is not single-child on Windows. Measured here, deterministically,
+    5/5 runs: `python -> git --version` reads `procs_per_call=3.0` against
+    a `1.0` no-child baseline, so Git for Windows spawns a helper of its
+    own and the oracle's "exactly one git child" premise is false on this
+    platform. The derivation under test was never wrong; its known-truth
+    binary was, and the guard fired correctly on a fixture that could not
+    hold -- refusing to run the whole bench on Windows, where it is
+    needed. A second interpreter is the narrower oracle: its child count is
+    a property of CPython rather than of whichever git build is on PATH.
     """
-    git_path = shutil.which("git")
-    if not git_path:
-        raise RuntimeError(
-            "catering_path_bench: no git binary resolvable on PATH -- "
-            "cannot verify the spawn_count derivation's known-truth fixture"
-        )
     cmd = [
         sys.executable,
         "-c",
-        # `%r`, never `'%s'`: the path is interpolated into the child's SOURCE
-        # text, so a Windows git path ending `...\Git\mingw64\bin\git.EXE`
-        # interpolated raw has `\bin` parsed as a backspace escape -- the child
-        # then raises FileNotFoundError, spawns no git, and the fixture reads
-        # `procs_per_call=1.0` and aborts the whole bench as a platform defect.
-        "import subprocess; subprocess.run([%r, '--version'], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)" % (git_path,),
+        "import subprocess, sys; subprocess.run([sys.executable, '-c', 'pass'])",
     ]
     timed = batched_process_time_ms(cmd, k=1, cwd=_REPO_ROOT)
     if timed["rc"] != 0:
         raise RuntimeError(
             "catering_path_bench: spawn_count derivation fixture "
-            "(python -> git --version) exited %r" % (timed["rc"],)
+            "(python -> python -c pass) exited %r" % (timed["rc"],)
         )
     spawn_count = max(0, int(round(timed["procs_per_call"])) - 1)
     if spawn_count != 1:
         raise RuntimeError(
             "catering_path_bench: spawn_count derivation is WRONG on this "
-            "platform -- python -> git --version fixture measured "
+            "platform -- python -> python -c pass fixture measured "
             "procs_per_call=%r, so spawn_count = procs_per_call - 1 = %r, "
-            "expected exactly 1 (the one real git child). If this "
+            "expected exactly 1 (the one real child interpreter). If this "
             "platform's process count excludes the root, the '- 1' in "
             "_measure_one_sample silently under-reports every spawn_count "
             "figure by one." % (timed["procs_per_call"], spawn_count)
@@ -472,14 +485,16 @@ def measure_relay(script: str, n: int = 30) -> RelayMeasurement:
     process_samples: List[float] = []
     wall_samples: List[float] = []
     spawn_samples: List[float] = []
+    procs_samples: List[float] = []
 
     for _ in range(n):
-        import_ms, compose_ms, process_ms, wall_ms, spawns = _measure_one_sample(script)
+        import_ms, compose_ms, process_ms, wall_ms, spawns, procs = _measure_one_sample(script)
         import_samples.append(import_ms)
         compose_samples.append(compose_ms)
         process_samples.append(process_ms)
         wall_samples.append(wall_ms)
         spawn_samples.append(float(spawns))
+        procs_samples.append(procs)
 
     return RelayMeasurement(
         n=n,
@@ -488,6 +503,7 @@ def measure_relay(script: str, n: int = 30) -> RelayMeasurement:
         total_process_ms=PhaseStats.from_samples(process_samples),
         total_wall_ms=PhaseStats.from_samples(wall_samples),
         spawn_count=PhaseStats.from_samples(spawn_samples),
+        procs_per_call=PhaseStats.from_samples(procs_samples),
     )
 
 

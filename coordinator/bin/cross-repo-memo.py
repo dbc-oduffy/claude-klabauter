@@ -2852,12 +2852,27 @@ def _cmd_send(args: argparse.Namespace) -> int:
     if receiver_side_path:
         print(f"Receiver-side: {os.path.abspath(receiver_side_path)}")
     if not acted_item.get("sender_committed", True):
+        # Never "abort" -- the receiver's tree already has the memo durably
+        # committed by this point (ordering guarantee in memo_send.py's
+        # module docstring), so there is nothing left to roll back. But a
+        # partial receipt (sent/ copy + ledger row staged, uncommitted) is a
+        # real failure the caller must see, not a footnote under exit 0 --
+        # a script or CI step gating on $? would otherwise read this send as
+        # clean.
         print(
             "cross-repo-memo send: delivery landed and committed in the "
             "receiver's tree, but the sender-side receipt commit failed — "
             "the sent/ copy and ledger row are staged on disk, uncommitted.",
             file=sys.stderr,
         )
+        reason = acted_item.get("sender_commit_stderr")
+        if reason:
+            print(f"  reason: {reason}", file=sys.stderr)
+        print(
+            "  recover: commit the staged sent/ copy and ledger row by path.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

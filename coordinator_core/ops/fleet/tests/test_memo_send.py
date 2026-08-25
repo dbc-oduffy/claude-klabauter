@@ -26,6 +26,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import pytest
 
 from coordinator_core.frontmatter.primitives import split_frontmatter, read_fm_field_unquoted
@@ -105,6 +107,7 @@ def _write_draft(
     summary: str = "a one-line summary", kind: str = "fyi",
     sent_by: str = "d218a65c-2c5b-472e-879c-ae9ed1747030",
     body: str = "Body prose.\n",
+    track: bool = True,
 ) -> Path:
     outbox = sender_repo / "state" / "memo-outbox"
     outbox.mkdir(parents=True, exist_ok=True)
@@ -128,8 +131,9 @@ def _write_draft(
     # happens elsewhere in the real workflow) — commit_scoped's deletion
     # leg needs `state/memo-outbox/<topic>.md` to already be a KNOWN path
     # for `git add -- <deleted-path>` to recognize its removal.
-    _git(sender_repo, "add", "--", f"state/memo-outbox/{topic}.md")
-    _git(sender_repo, "commit", "-m", f"stage draft {topic}")
+    if track:
+        _git(sender_repo, "add", "--", f"state/memo-outbox/{topic}.md")
+        _git(sender_repo, "commit", "-m", f"stage draft {topic}")
     return draft_path
 
 
@@ -351,6 +355,104 @@ def _install_hook_canary(repo: Path) -> Path:
 
 
 class TestNoReceiverHooksFire:
+    def test_failed_sender_receipt_carries_its_reason(self, tmp_path, monkeypatch):
+        """A failed sender-side receipt must carry the git stderr on the result.
+
+        Regression, 2026-08-25. The pathspec cause fixed the same day
+        (569e39e1b) was diagnosed only after TWO real sends failed identically,
+        because the op logged the deciding stderr to a WARNING the engine does
+        not retain and the CLI printed a generic line. The very next real send
+        hit a DIFFERENT cause and the reason was again unavailable -- the
+        diagnostic gap outlived the bug it hid.
+
+        `sender_commit_stderr` is present ONLY on the failure path, so a
+        successful send stays exactly as it was.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "receipt-fails", track=False)
+
+        real_commit_scoped = git_native.commit_scoped
+
+        def _failing_commit_scoped(pathspec, msg_file, worktree, *a, **kw):
+            # Fail ONLY the sender-side receipt; the receiver-side delivery
+            # commit must still land, which is the ordering this op guarantees.
+            if worktree == sender_repo:
+                return SimpleNamespace(
+                    ok=False, stderr="fatal: simulated receipt failure", sha=None
+                )
+            return real_commit_scoped(pathspec, msg_file, worktree, *a, **kw)
+
+        monkeypatch.setattr(git_native, "commit_scoped", _failing_commit_scoped)
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "receipt-fails"}, repo_root=sender_repo
+        )
+        acted = result["acted"][0]
+
+        assert acted["sender_committed"] is False, acted
+        assert acted["sender_commit_stderr"] == "fatal: simulated receipt failure", (
+            "a failed receipt must carry the deciding stderr out of the op -- "
+            "without it the operator sees only the CLI's generic line and "
+            "cannot tell which failure they hit"
+        )
+
+    def test_sender_receipt_lands_when_the_draft_was_never_committed(
+        self, tmp_path, monkeypatch
+    ):
+        """An UNTRACKED outbox draft must still produce a sender-side receipt.
+
+        Regression, 2026-08-25. Every other test here stages the draft through
+        `_write_draft`, which COMMITS it -- so the outbox path was always known
+        to git and its deletion always stageable. The real canonical workflow
+        does not do that: `cross-repo-memo draft <topic>` leaves the draft
+        untracked, and `send` follows immediately.
+
+        In that case the op passed the outbox path to `commit_scoped` anyway,
+        to stage the move's deletion leg. After the move the path is gone from
+        disk AND unknown to git, so git failed the WHOLE commit with
+        "pathspec ... did not match any file(s) known to git": the delivery
+        landed in the receiver's tree, and the sender's sent/ copy and ledger
+        row were left staged-but-uncommitted. It fired on the first two real
+        sends ever made through the rebuilt channel.
+
+        The fixture's own comment asserted the opposite -- "a staged outbox
+        draft is tracked at rest" -- which is why twenty passing tests never
+        saw it. This test exists to keep that assumption from being re-encoded.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "untracked-topic", track=False)
+
+        # Precondition: the draft really is unknown to git.
+        tracked = _git(sender_repo, "ls-files", "--", "state/memo-outbox/untracked-topic.md")
+        assert tracked.stdout.decode("utf-8").strip() == ""
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "untracked-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["committed"] is True
+        assert acted["sender_committed"] is True, (
+            "the sender-side receipt must land even though the draft was never "
+            "committed -- this is the bug this test exists for"
+        )
+
+        # The receipt is COMMITTED, not merely staged: a clean tree is the proof.
+        sender_status = _git(sender_repo, "status", "--porcelain")
+        assert sender_status.stdout.decode("utf-8").strip() == ""
+
+        sent_path = sender_repo / "state" / "memo-outbox" / "sent" / "untracked-topic.md"
+        assert sent_path.exists()
+        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent/untracked-topic.md")
+        assert not (sender_repo / "state" / "memo-outbox" / "untracked-topic.md").exists()
+
     def test_receiver_side_hooks_never_fire(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)

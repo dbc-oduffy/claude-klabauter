@@ -219,7 +219,7 @@ import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from coordinator_core.bash_guards._advisory_value import (
     AdvisoryValue,
@@ -412,6 +412,45 @@ class GuardBand(Enum):
     CONFINEMENT_DENY = "confinement-deny"
     ADVISORY_REWRITE = "advisory-rewrite"
     PLATFORM_CONDITIONED_DENY = "platform-conditioned-deny"
+
+
+_OVERRIDE_KEY_PREFIXES = ("COORDINATOR_OVERRIDE_", "COORDINATOR_ALLOW_")
+
+_OverrideIdentity = FrozenSet[Tuple[str, str]]
+
+
+def _override_env_identity(payload: Optional[Dict[str, Any]]) -> _OverrideIdentity:
+    """Hashable identity of the override env ONE call would be evaluated
+    against -- the cache-key term that makes a memo of a guard verdict safe to
+    share between callers.
+
+    Resolves the same way ``dispatch_checks._override`` does (C14c): prefer a
+    per-call ``payload["env"]`` mapping, fall back to ambient ``os.environ``.
+    Only ``COORDINATOR_OVERRIDE_*``/``COORDINATOR_ALLOW_*`` keys are captured,
+    because those are the only names ``_override``/``operator_override_note``
+    consult; a full env snapshot would key on PATH churn and defeat the cache.
+
+    NEGATIVE SPEC. This is not a permission check and never decides anything --
+    it only distinguishes two calls that must not share a cached verdict. A
+    caller reading a truthiness out of the returned set is misusing it; ask
+    ``_override`` instead. And it is computed per call, never memoised at
+    module scope: the whole point is that ambient env differs between the
+    process that fills the cache and the process that reads it.
+    """
+    import os
+
+    env: Any = None
+    if isinstance(payload, dict):
+        candidate = payload.get("env")
+        if isinstance(candidate, dict):
+            env = candidate
+    if env is None:
+        env = os.environ
+    return frozenset(
+        (str(k), str(v))
+        for k, v in env.items()
+        if isinstance(k, str) and k.startswith(_OVERRIDE_KEY_PREFIXES)
+    )
 
 
 @dataclass(frozen=True)
@@ -1518,12 +1557,31 @@ def _build_guard_chain(
     # -- see the CONFINEMENT_DENY registration and the ADVISORY_REWRITE
     # registration further below, Review: staff-eng Finding 0 -- never
     # re-spawns the oracle.
+    #
+    # The cache key is `(cmd, session_id, override_identity)`. The third term
+    # is not redundant with the first two: the oracle reads a caller override
+    # (`COORDINATOR_OVERRIDE_GIT_REVERT`) through `_override(payload=...)`,
+    # which C14c re-keyed to prefer `payload["env"]` over ambient `os.environ`.
+    # Two calls agreeing on `cmd` and `session_id` but carrying different
+    # override env therefore have DIFFERENT correct verdicts.
+    #
+    # Within one `_build_guard_chain` call the third term is constant --
+    # `payload` is a single closed-over value -- so it buys nothing today and
+    # costs one env scan per call. It is here so that hoisting this cache onto
+    # anything that outlives one call (module scope, a warm-server-scoped memo)
+    # cannot serve one session's override verdict to another session's
+    # identical `cmd`. That hazard is invisible to every existing test: the
+    # narrow key passes them all and only fails in production, on a warm
+    # server, as a disarmed guard.
+    _override_identity = _override_env_identity(payload)
+
     _git_revert_cache: Dict[
-        Tuple[str, str], Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]
+        Tuple[str, str, _OverrideIdentity],
+        Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]],
     ] = {}
 
     def _git_revert_full() -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        key = (cmd, session_id)
+        key = (cmd, session_id, _override_identity)
         if key not in _git_revert_cache:
             _git_revert_cache[key] = _dc._check_destructive_git_revert_full(cmd, session_id, hook_payload=payload)
         return _git_revert_cache[key]

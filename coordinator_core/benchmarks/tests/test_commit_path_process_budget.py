@@ -172,6 +172,24 @@ shape than Windows on the SAME fixture -- while its AC2-analog (~23.1-23.4
 procs) is still well OVER the plan's 12-process target. This is a REPORTED
 FINDING (spawn count, not process time, is macOS's real gap), not a
 threshold this file adjusts and not grounds to touch the Windows plan.
+
+WHAT THIS FILE PINS, AND WHAT IT DOES NOT (2026-08-25, on DR-356, at
+pickup). `docs/decisions/DR-356-what-a-commit-path-budget-measures.md`
+rules the precise question this file's own numbers answer -- "given an op
+that commits, which processes count toward its budget?" -- as a table, not
+a feeling: the op's own spawns and git's own work for the commit itself are
+IN; `pre-commit`, `prepare-commit-msg`, `post-commit`, and anything they
+spawn are OUT, measured and reported alongside, never in place of, the
+budgeted figure. This file's own subject is the commit path with hooks IN
+(`_build_fixture_repo`'s three `_install_hook` calls) -- the raw full-commit total this
+file's AC1/AC2 pins are drawn against includes the hook chain DR-356 rules
+OUT of an op's own budget. That makes this file's subject DISTINCT from the
+shape DR-356 rules an op's own budget is assessed against; nothing here is
+re-columned for that reason, and every threshold and both `designed_red`
+markers stand exactly as pinned. `_measure_gate_alone` and
+`_measure_driver_residue`, this file's own named-exclusion mechanism (see
+above), are the pattern DR-356's two-figure reporting shape generalises --
+this file got there first, and this note is the record saying so.
 """
 
 from __future__ import annotations

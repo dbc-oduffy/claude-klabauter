@@ -163,7 +163,7 @@ def test_method_not_found_never_reads_as_an_allow(tmp_path: Path):
     hso = body["hookSpecificOutput"]
     assert "permissionDecision" not in hso
     assert body["suppressOutput"] is False
-    assert "did not run" in body["additionalContext"]
+    assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
     assert "-32601" in body["systemMessage"]
 
 
@@ -184,7 +184,7 @@ def test_non_object_result_never_reads_as_an_allow(tmp_path: Path):
     assert status == 200
     hso = body["hookSpecificOutput"]
     assert "permissionDecision" not in hso
-    assert "did not run" in body["additionalContext"]
+    assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
 
 
 def _echoing_dispatch(msg, *, session_id=None):
@@ -209,8 +209,8 @@ def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
         _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.session_heartbeat")
     finally:
         httpd.shutdown()
-    assert boot["additionalContext"] == "routed to session.boot_sweep"
-    assert track["additionalContext"] == "routed to hooks.session_heartbeat"
+    assert boot["hookSpecificOutput"]["additionalContext"] == "routed to session.boot_sweep"
+    assert track["hookSpecificOutput"]["additionalContext"] == "routed to hooks.session_heartbeat"
 
 
 def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
@@ -225,7 +225,7 @@ def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
     finally:
         httpd.shutdown()
     assert status == 200
-    assert body["additionalContext"] == "routed to hooks.receiver_state_sensor"
+    assert body["hookSpecificOutput"]["additionalContext"] == "routed to hooks.receiver_state_sensor"
     assert body["systemMessage"] == "op hooks.receiver_state_sensor ran"
     assert body["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
 
@@ -267,3 +267,32 @@ def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
     finally:
         httpd.shutdown()
     assert seen == [supervisor.GUARD_OP_NAME]
+
+
+def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_path: Path):
+    """Review: coordinator:code-reviewer Finding 1 (P1). Naming `warm_guard.evaluate`
+    explicitly via `/hook/warm_guard.evaluate` resolves to the SAME `op_name` as the
+    bare `/hook` path, so it must get the same event-eligibility gate -- a SessionStart
+    (no `tool_name`/`tool_input`) posted to the explicit alias must still come back as
+    the unserved shape, never reach the guard's dispatch."""
+    seen = []
+
+    def _recording_dispatch(msg, *, session_id=None):
+        seen.append(msg.get("method"))
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+    httpd, port = _bind_handler(tmp_path, dispatch=_recording_dispatch)
+    try:
+        status, body = _post(
+            port,
+            {"hook_event_name": "SessionStart", "source": "startup"},
+            path="/hook/%s" % supervisor.GUARD_OP_NAME,
+        )
+    finally:
+        httpd.shutdown()
+
+    assert status == 200
+    hso = body["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert "did not run" in hso["additionalContext"]
+    assert seen == []

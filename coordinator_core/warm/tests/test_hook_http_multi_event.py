@@ -41,7 +41,11 @@ def test_unroutable_paths_are_refused_rather_than_dispatched():
     """A registration is a string in a config file a plugin update can rewrite. Out-of-
     namespace, traversal, and nested paths must resolve to no op at all."""
     for path in ("/hook/ceremony.scoped_git_commit", "/hook/../etc", "/hook/hooks.a/b", "/hooks", "/hook/"[:5] + "x"):
-        assert hook_http.op_for_path(path) is None or path.rstrip("/") == "/hook"
+        # Review: coordinator:code-reviewer -- the prior `or path.rstrip("/") == "/hook"`
+        # disjunct was always False for this fixture list, making the assertion silently
+        # equivalent to `is None`; asserted directly so a future fixture that legitimately
+        # resolves to bare `/hook` fails loudly instead of being masked.
+        assert hook_http.op_for_path(path) is None
 
 
 def test_per_event_fields_reach_the_op():
@@ -79,7 +83,7 @@ def test_injected_content_survives_the_success_path():
         {"jsonrpc": "2.0", "id": 1, "result": {"additionalContext": "ctx for the model", "systemMessage": "for the operator"}}
     ).encode("utf-8")
     body = hook_http.interpret_result("UserPromptExpansion", frame)
-    assert body["additionalContext"] == "ctx for the model"
+    assert body["hookSpecificOutput"]["additionalContext"] == "ctx for the model"
     assert body["systemMessage"] == "for the operator"
     assert body["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
 
@@ -109,7 +113,7 @@ def test_an_error_envelope_is_still_not_a_verdict():
     injection-shaped success with empty content."""
     frame = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601}}).encode("utf-8")
     body = hook_http.interpret_result("SessionStart", frame)
-    assert "did not run" in body["additionalContext"]
+    assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
     assert "guard did not run" in body["systemMessage"]
 
 
@@ -122,7 +126,52 @@ def test_bare_hook_still_refuses_an_event_it_has_no_route_for():
     assert hook_http.route_for_event("SessionStart") is None
 
     body = hook_http.unserved_response("SessionStart")
-    assert "did not run" in body["additionalContext"]
+    assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
     assert "permissionDecision" not in json.dumps(body)
 
     assert hook_http.op_for_path("/hook/session.boot_sweep") == "session.boot_sweep"
+
+
+def _ctx(body):
+    """Where the harness actually reads injected context: nested, never top level."""
+    return body.get("hookSpecificOutput", {}).get("additionalContext")
+
+
+def test_additional_context_is_nested_where_the_harness_reads_it():
+    """MEASURED against harness 2.1.245 (claude-klabauter-0e): the top-level key is IGNORED
+    and the nested one is honoured, discriminated by sending each shape alone. A top-level
+    copy is not a harmless duplicate -- it is the injection silently going nowhere."""
+    frame = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"additionalContext": "sentinel"}}).encode("utf-8")
+    body = hook_http.interpret_result("UserPromptSubmit", frame)
+    assert _ctx(body) == "sentinel"
+    assert "additionalContext" not in body
+
+
+def test_an_op_that_already_nests_keeps_its_own_value():
+    frame = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"additionalContext": "top", "hookSpecificOutput": {"additionalContext": "nested"}}}
+    ).encode("utf-8")
+    assert _ctx(hook_http.interpret_result("UserPromptSubmit", frame)) == "nested"
+
+
+def test_the_did_not_run_warning_actually_reaches_the_model():
+    """Obligation 3 of the module docstring. Emitted top-level, this warning reached nobody
+    -- the obligation read as discharged in every test while being void over the wire."""
+    for body in (
+        hook_http.unreachable_response("PreToolUse", "listener down"),
+        hook_http.unserved_response("SessionStart"),
+    ):
+        assert "did not run" in _ctx(body)
+        assert "additionalContext" not in body
+        assert body["systemMessage"]
+
+
+def test_system_message_and_suppress_output_stay_top_level():
+    """Documented top-level and NOT disproven by the probe -- do not move them on the
+    strength of a result that only covered additionalContext."""
+    frame = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"systemMessage": "for the operator", "suppressOutput": True}}
+    ).encode("utf-8")
+    body = hook_http.interpret_result("Stop", frame)
+    assert body["systemMessage"] == "for the operator"
+    assert body["suppressOutput"] is True

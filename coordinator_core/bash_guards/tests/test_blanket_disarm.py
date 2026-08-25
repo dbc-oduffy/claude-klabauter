@@ -554,6 +554,36 @@ class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
         assert bd.disarm_status(EM_PAYLOAD).active is False
 
 
+class TestAC11NamedTeammateSessionIdAbsentIsNotEM:
+    """AC11 (docs/plans/2026-08-25-a-named-dispatch-keeps-its-report.md):
+    the plan's own named verification vehicle for this AC is "a test driving
+    `_blanket_disarm._is_em_caller` with a named, session_id-absent payload
+    and confirming it is NOT classified as the EM" -- this class exists
+    because that row was ticked in the plan with no such test on disk (the
+    only prior coverage,
+    `subagent_sandbox/tests/test_canonical_agent_id_adopts_named_form.py`,
+    pins `_canonical_agent_id`'s return value only, never the downstream
+    `_is_em_caller` classification this AC actually names as the guard).
+
+    Mechanism this pins: `resolve_effective_types` -> `_canonical_agent_id`
+    retains its F4 fallback (returns the raw named agent_id verbatim, never
+    `""`) when `resolve_subagent_identity` fails closed on an absent or
+    shorter-than-8-char `session_id`. `_is_em_caller` classifies EM iff
+    `agent_id`/`agent_type`/`subagent_type` are ALL empty, so a non-empty
+    F4-fallback `agent_id` must keep a named subagent OUT of EM-class. A
+    regression that made `_canonical_agent_id` return `""` for this shape
+    (or made `_is_em_caller` ignore `agent_id`) would silently let a named
+    subagent through this module's `machine-total`/`session` EM-only
+    audience narrowing -- this test is the guard against exactly that."""
+
+    NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
+
+    @pytest.mark.parametrize("session_id", [None, "short7"])
+    def test_named_agent_id_with_absent_or_short_session_id_is_not_em(self, session_id):
+        payload = {"agent_id": self.NAMED_AGENT_ID, "session_id": session_id}
+        assert bd._is_em_caller(payload, None) is False
+
+
 class TestDisarmResultDetailIsInformative:
     def test_disarm_status_never_raises_on_garbage_marker(self, tmp_path):
         _write_marker(tmp_path, "this is not key: value shaped garbage \x00\x01")

@@ -409,7 +409,7 @@ def test_draft_creates_outbox_file() -> None:
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
             "COORDINATOR_SETTINGS_HOME": claude_home,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
         }
 
         result = _run_dispatcher_in_repo(
@@ -500,7 +500,7 @@ def test_draft_collision_exits_2() -> None:
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
             "COORDINATOR_SETTINGS_HOME": claude_home,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
         }
 
         # First draft — should succeed
@@ -636,7 +636,7 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
             "COORDINATOR_SETTINGS_HOME": claude_home,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
         }
 
         result = _run_dispatcher_in_repo(
@@ -708,7 +708,7 @@ def test_list_enumerates_with_age() -> None:
         env = {
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
         }
 
         # Create two outbox drafts directly (bypass the draft subcommand)
@@ -806,7 +806,7 @@ def test_list_empty_prints_no_drafts() -> None:
         env = {
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
         }
 
         # Do NOT create any outbox files — empty outbox (dir may not even exist)

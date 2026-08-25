@@ -548,13 +548,17 @@ def _make_handler(ctx: "_ServerContext"):
 
                 event_name = event.get("hook_event_name")
 
-                # A bare `/hook` POST carries no route of its own, so the event has to
-                # supply one -- and for anything outside `SERVED_EVENTS` there is none.
-                # Answering it with the guard op would evaluate a SessionStart against a
-                # chain that reads `tool_name`/`tool_input`, producing a confident verdict
-                # on a question nobody asked. An explicit `/hook/<op>` needs no such
-                # inference: the registration already named the op.
-                if op_name == hook_http.DEFAULT_OP_NAME and not self.path.rstrip("/").startswith(HOOK_PATH + "/"):
+                # Reaching the guard op by ANY path -- bare `/hook` or the explicit
+                # `/hook/warm_guard.evaluate` alias -- still requires the posted event
+                # be one the guard chain can actually evaluate. Naming the op explicitly
+                # does not supply the `tool_name`/`tool_input` the chain reads; a
+                # SessionStart posted to either spelling would otherwise get a confident
+                # verdict on a question nobody asked. Both spellings resolve to the same
+                # `op_name`, so both get the same eligibility check.
+                # Review: coordinator:code-reviewer -- explicit /hook/<op> alias bypassed
+                # the bare-/hook safety check because it resolves to the same DEFAULT_OP_NAME
+                # but failed the path-based exclusion; gate on op_name alone instead.
+                if op_name == hook_http.DEFAULT_OP_NAME:
                     if hook_http.route_for_event(event_name) is None:
                         self._respond_json(hook_http.unserved_response(event_name))
                         return

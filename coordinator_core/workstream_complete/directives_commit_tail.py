@@ -29,17 +29,26 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C2e. Source census: state/plan-sidecars/2026-07-26-workstream-complete-
 computed-frontage.census-steps.md, Step 3.0/3/3.5/3.6/4 rows.
 
-Step 3/3.5 REMOVED (ceremony.wsc_tail kill, 2026-08-23): `d-close-tail-args`
-(`build_close_tail_args_directive`, fronting `coordinator/bin/wsc-close.py
-tail-args`), `d-run-wsc-tail` (`build_wsc_tail_directive`, fronting the now-
-deleted `coordinator/bin/wsc-tail.py` trampoline for the killed
-`ceremony.wsc_tail` op), and `d-release-plan-claim`
+Step 3/3.5, 2026-08-23 kill (`ceremony.wsc_tail`) and 2026-08-25 rebuild
+(DR-358, `docs/decisions/DR-358-the-close-ceremony-shape-after-the-kill.md`):
+`d-close-tail-args` (`build_close_tail_args_directive`, fronting
+`coordinator/bin/wsc-close.py tail-args`) and `d-run-wsc-tail`
+(`build_wsc_tail_directive`, fronting the now-deleted `coordinator/bin/
+wsc-tail.py` trampoline for the killed `ceremony.wsc_tail` op) were removed
+outright by the kill. DR-358 rules that the OPERATOR requirement they
+discharged — closing a session without hand-landing the commit — is
+rebuilt, not restored: `run_close_commit` below is the rebuilt shape, an
+in-process call directly against `commit_pipeline.run_commit_pipeline` at
+`push_mode=PUSH_MODE_NEVER` (hard constraints 5/6), with no new CLI or
+`directives[]` layer above it — `d-close-tail-args`'s former argument
+computation merges into this one call per DR-358's own ruling, rather than
+being rebuilt as a separate step. `d-release-plan-claim`
 (`build_release_plan_claim_directive`, fronting `session-claim-cli
-release-artifact`) are gone — the last depended on `d-run-wsc-tail` landing
-to know its own precondition and has no replacement signal now that
-producer is gone (delete-the-step, don't-redesign). `/workstream-complete`
-no longer commits the session's own staged paths or auto-releases a
-governing-plan claim; see `state/kill-ledger.md`.
+release-artifact`) remains gone as a standalone directive — DR-358 rules it
+discharged by an inline call to the existing native port
+`ops/ceremony/tail_ops.py :: cs_release_artifact`, wired into
+`run_close_commit`'s route by a later chunk (C5), not rebuilt as a directive
+either; see `state/kill-ledger.md` for the original removal record.
 
 Consumes (orchestrates, reimplements none):
     coordinator/bin/emit-cadence.py -> build_emit_cadence_directive's
@@ -104,6 +113,14 @@ Negative-spec:
       `describe_wsc_tail_outcome`'s `"timeout"` entry names RECONCILE
       (check actual repo state before deciding anything failed) as the
       required next move, never a blind retry — see its own docstring.
+    - `run_close_commit` does NOT compose `subject`/`prose` text itself
+      (`commit-message-authoring` stays `judgments.py`'s C2f call), does NOT
+      decide `stage_paths` (that is `accumulate_session_paths`'/
+      `resolve_known_concurrent_paths`'s job above), and does NOT release the
+      governing-plan claim (`cs_release_artifact` wiring is C5's route, not
+      this function's body) — it only turns already-decided values into one
+      `run_commit_pipeline` call, at a push mode this module never lets the
+      caller override.
     - DOES retry, narrowly: `_chunked_committed_paths`' per-chunk git spawn
       (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is the ONE exception
       to the no-retry posture above, and it is not a contradiction of it —
@@ -127,7 +144,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, NamedTuple, Optional, Set, Union
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Sequence, Set, Union
 
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
@@ -1059,6 +1076,93 @@ def validate_review_shape(review: Any) -> None:
             _raise_on_unrecognized_review_dict(entry)
         return
     raise ValueError(f"{_REVIEW_SHAPE_MESSAGE} Got {type(review).__name__}.")
+
+
+# ---------------------------------------------------------------------------
+# Step 3/3.5 rebuild — d-run-wsc-tail's commit, at the DR-358-ruled shape
+# ---------------------------------------------------------------------------
+
+
+def run_close_commit(
+    worktree_root: "Union[Path, str]",
+    *,
+    session_id: str,
+    subject: str,
+    prose: str = "",
+    deleted_paths: "Sequence[str]" = (),
+    kept_entries: "Sequence[str]" = (),
+    trailers: str = "",
+    stage_paths: "Sequence[str]" = (),
+    caller_paths: "Optional[Set[str]]" = None,
+    on_committed: "Optional[Any]" = None,
+    deliverable_id: Optional[str] = None,
+    attributed_session_id: Optional[str] = None,
+) -> Any:
+    """The rebuilt `d-run-wsc-tail` — restores the operator's ability to
+    close a session without hand-landing the commit, at the shape DR-358
+    rules and `state/audits/2026-08-25-close-ceremony-floor-probe.md`
+    measures (AC3's shape budget: `run_commit_pipeline(...,
+    push_mode=PUSH_MODE_NEVER)`, called directly IN-PROCESS, no new CLI or
+    `directives[]` layer above it — `d-close-tail-args`'s former argument
+    computation merges into this one call, per DR-358's own ruling).
+
+    `push_mode` is NEVER a parameter here — hard constraints 5/6 bind
+    absolutely: this always calls `run_commit_pipeline` (never
+    `git_native.commit_scoped` directly, which gets staging safety and
+    silently skips `commit_gates.carry_gate` and every other gate) at
+    `push_mode=PUSH_MODE_NEVER` (never the default `PUSH_MODE_SYNC`, a
+    synchronous network push, and never `"deferred"` — `_PUSH_MODES_
+    SUPPRESSING_POST_COMMIT_HOOK == frozenset({SYNC, NEVER})` leaves the
+    post-commit hook's push armed under `"deferred"`). A caller wanting a
+    push does so as its own separate, later step; this function never
+    pushes.
+
+    Every keyword argument here is a caller-supplied, already-decided value
+    passed straight through to `run_commit_pipeline` — `subject`/`prose`
+    (commit-message-authoring, `judgments.py`'s C2f), `stage_paths`
+    (`accumulate_session_paths`/`resolve_known_concurrent_paths` above),
+    `deleted_paths`/`kept_entries`/`trailers` (the Step-2.67 message blocks,
+    `commit_pipeline.compose_message`'s own contract). This function decides
+    none of them and composes no message text itself — see this module's own
+    Negative-spec. AC8 (the `Closes:` composed-by-hand message text
+    surviving verbatim) is a property of NOT mutating `prose` anywhere
+    between the caller and `run_commit_pipeline`'s own `compose_message`
+    call — this function's whole job is to not be the place that breaks
+    that.
+
+    Governing-plan claim release (`d-release-plan-claim`'s DR-358 ruling,
+    `ops/ceremony/tail_ops.py :: cs_release_artifact`) is NOT called here —
+    C5 wires that call at both the success and failure exits of this
+    route, in whatever caller wraps this function; this function's own
+    return is `run_commit_pipeline`'s `PipelineResult`, unmodified, so a
+    wrapping caller can inspect success/failure and call the release
+    itself.
+
+    Imports `run_commit_pipeline`/`PUSH_MODE_NEVER` lazily (mirrors
+    `_raise_on_review_enum_values`'s own lazy import above) — this module is
+    on the assemble hot path and `commit_pipeline` pulls in the op-registry
+    side effects of the full commit-gate stack with it.
+    """
+    from coordinator_core.ops.ceremony.commit_pipeline import (
+        PUSH_MODE_NEVER,
+        run_commit_pipeline,
+    )
+
+    return run_commit_pipeline(
+        worktree_root,
+        session_id=session_id,
+        subject=subject,
+        prose=prose,
+        deleted_paths=deleted_paths,
+        kept_entries=kept_entries,
+        trailers=trailers,
+        stage_paths=stage_paths,
+        caller_paths=caller_paths,
+        on_committed=on_committed,
+        push_mode=PUSH_MODE_NEVER,
+        deliverable_id=deliverable_id,
+        attributed_session_id=attributed_session_id,
+    )
 
 
 # ---------------------------------------------------------------------------

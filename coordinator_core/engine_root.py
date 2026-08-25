@@ -72,7 +72,6 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir
-from coordinator_core.win_portability import same_path
 
 #: Wall-clock bound on the Rung 2 `machine-local` subprocess. This resolver is
 #: reached from PreToolUse hook paths, so an unbounded wait blocks an interactive
@@ -529,6 +528,20 @@ def is_published_engine_mirror(root: str) -> bool:
     mirror = published_engine_mirror_path()
     if not mirror:
         return False
+    # FUNCTION-LOCAL, matching this module's lazy `no_console_creationflags`
+    # import in `coordinator_engine_root`'s Rung 2 rather than the module-level
+    # form this started as. C0's pin
+    # (tests/test_engine_root_module_name_is_not_repo_named.py) allows this
+    # ladder exactly ONE module-level cross-package import, `_settings_home`,
+    # because a candidate module loaded by file path under a synthetic
+    # sys.modules key resolves module-level cross-package imports through
+    # whichever coordinator_core package is already cached -- the mixed-root
+    # hole. `win_portability` is a stdlib-only leaf, so nothing about the
+    # dependency needs the module-level form; deferring it keeps the pin at one
+    # entry instead of widening the pin to accept a second. sys.modules makes the
+    # repeat cost a dict lookup.
+    from coordinator_core.win_portability import same_path
+
     return same_path(root, mirror)
 
 
