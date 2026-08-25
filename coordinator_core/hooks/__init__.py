@@ -3,73 +3,52 @@ coordinator_core.hooks — advisory and bookkeeping hook op handlers package.
 
 Purpose: Namespace for coordinator_core hook op implementations. Each sub-module
 self-registers its handler via register_op() at import time under the "hooks.<name>"
-method namespace. Importing this package triggers all 15 registrations, making the
-hooks.* ops available to the IPC server — UNLESS lazy mode is active (see below), in
-which case the eager import list is skipped and callers must trigger a targeted
-per-op import themselves (see coordinator_core.ipc's hooks-scoped registry-miss
-fallback, C2).
+method namespace. Importing this bare package NEVER populates the op-registry —
+registration is lazy unconditionally, with no flag or channel to arm it: a caller
+must trigger a targeted per-op import itself (see coordinator_core.ipc's
+hooks-scoped registry-miss fallback, C2), or call _eager_import_all() directly for
+the rare full-registration need.
 
-Every hook module that calls register_op() MUST be imported here. A module left out
-still registers its op whenever some unrelated importer happens to pull it in, which
-makes the op appear in the live _REGISTRY only under certain import orders — and the
-op-registry drift guards (authz OP_CLASSIFICATION coverage, ipc _OP_KEY_SCOPE
-coverage, OP_MODULE_MAP parity) then pass or fail depending on test ordering rather
-than on the actual registration state. context_pressure_precompact was exactly that
-shape until 2026-07-22.
+Every hook module that calls register_op() MUST be listed in _EAGER_HOOK_MODULES
+below. A module left out of that list still registers its op whenever some
+unrelated importer happens to pull it in directly, but _eager_import_all() (the
+only remaining full-load routine) will not force it, so any caller relying on that
+routine for completeness silently misses it. context_pressure_precompact was
+exactly this shape until 2026-07-22, when it was still an import-order hazard
+rather than a "not in the table" hazard — the failure mode this list closes off.
 
 Lazy hook registration (docs/plans/2026-08-06-windows-hot-path-less-work-per-
-interpreter.md § C1): a hook entrypoint needing exactly one module (e.g. track-touched-files.py
-importing only coordinator_core.hooks.track_touched_files) used to pay for all 15
-registrations and their full transitive import graph (measured ~31ms / 107 modules)
-just to reach the one it wanted, because importing this package always ran its
-__init__.py to completion first.
+interpreter.md § C1, made unconditional 2026-08-22 — the import-path-costs-nothing
+sprint, mirroring coordinator_core.ops's own C6 retirement): a hook entrypoint
+needing exactly one module (e.g. track-touched-files.py importing only
+coordinator_core.hooks.track_touched_files) used to pay for all 20 registrations
+and their full transitive import graph (measured ~0.609s min unarmed vs 0.079s
+armed on `example-cockpit-repo-93`'s box) just to reach the one it wanted, because
+importing this package always ran its __init__.py to completion first. A two-channel
+flag (`COORDINATOR_CORE_LAZY_OPS` env var / `sys._coordinator_core_lazy_ops`
+in-process attribute) — REUSED VERBATIM from coordinator_core.ops's own
+now-retired channel, never a hooks-specific one — used to gate this package's
+eager-import block; both channels, and the writers that armed the in-process one,
+are retired. Every consumer of a bare `import coordinator_core.hooks` (including
+DoE-claude's seven hook scripts that still call the sibling repo's own
+`_arm_lazy_ops()`, defined in that repo's `coordinator/hooks/scripts/_engine_root.py`
+(theirs, not ours — do not go looking for it here); that call becomes a harmless
+no-op the moment nothing here reads the channel it arms) now goes through the
+targeted-import or SAFE FALLBACK paths below instead of relying on package-init to
+populate the registry as a side effect.
 
-This package REUSES coordinator_core.ops's existing two-channel lazy-registration
-contract VERBATIM — the same operator-override env var and the same in-process sys
-attribute, read by this package's own predicate below — rather than minting a
-hooks-specific channel nobody would arm:
-
-  - `COORDINATOR_CORE_LAZY_OPS` is the OPERATOR override, authoritative in BOTH
-    directions ("1" forces lazy; any other value forces eager, whatever the
-    in-process channel says) — the identical variable coordinator_core.ops already
-    reads, not a new one.
-  - `sys._coordinator_core_lazy_ops` is the IN-PROCESS channel — the identical `sys`
-    attribute coordinator_core.ops already reads, NOT an env var and NOT a new `sys`
-    attribute name. It is not an env var because an env var leaks to every child
-    spawned without an explicit `env=`, and 59 test modules in this tree assert the
-    op registry at import time — an env-based in-process channel broke pytest
-    collection on a green tree (documented history, see
-    coordinator_core.ops._lazy_ops_requested's own docstring). Reusing the exact
-    attribute means every hook script that already arms coordinator_core.ops's lazy
-    channel (via _arm_lazy_ops(), e.g. preuse-write-dispatch.py,
-    preuse-bash-dispatch.py) gets lazy hooks for free, with no new channel for
-    anyone to arm.
-
-Default MUST remain eager (neither channel armed): importing this package eagerly
-registers all 17 hooks.* ops exactly as before this chunk, so the op-registry drift
-guards this docstring names above continue to see the FULL registered set at import
-time in every consumer that does not opt into lazy mode — this is the same
-default-preserving guarantee coordinator_core.ops makes for the analogous op-registry
-drift checks on its own side.
-
-Under LAZY mode, those three drift guards stay honest because nothing in this
-package changes what "the full registered set" IS — only when eager import runs.
-Any caller of the drift guards (or of coordinator_core.ops._eager_import_all(),
-which itself imports coordinator_core.hooks per its own _EAGER_OP_MODULES entry) is
-either (a) a plain `import coordinator_core.hooks` with neither lazy channel armed,
-which still runs _eager_import_all() below unconditionally, or (b) explicitly opts
-into lazy mode and is expected to force full registration first via
-_eager_import_all() (C2's registry-miss fallback does exactly this on a hooks.* miss)
-before relying on registry completeness. No guard observes a partially-registered
-state as if it were final.
-
-_eager_import_all() is also this package's full-load routine, mirroring
-coordinator_core.ops._eager_import_all() in name and role: it forces complete
-hooks.* registration on demand, regardless of the lazy flag or of whatever partial
-import state this package is already in — idempotent, since re-importing an
-already-imported submodule is a cheap no-op. Pinned for C2 (coordinator_core.ipc's
-registry-miss fallback, later wave): call
-`coordinator_core.hooks._eager_import_all()` — zero arguments, returns None.
+_eager_import_all() is exposed for two callers: (1) coordinator_core.ipc's
+registry-miss SAFE FALLBACK — if a hooks.* op is absent from OP_MODULE_MAP (or a
+mapped import didn't register it — map drift), the fallback calls this function
+directly to force full registration regardless of whatever partial state this
+package is already in; and (2) `ops/session/guard_roster_ops.py`'s
+`list_ported_advisory_ops()`, which needs an exhaustive roster and cannot rely on
+whatever has been imported so far in-process. Idempotent — re-importing an
+already-imported submodule is a cheap no-op, so this is what makes an
+incomplete/stale map (or a caller invoked before anything else has imported
+hooks) degrade to today's correctness rather than to a broken dispatch or a
+truncated roster. Pinned for C2 (coordinator_core.ipc's registry-miss fallback):
+call `coordinator_core.hooks._eager_import_all()` — zero arguments, returns None.
 
 Advisory hook ops ported from ~/.claude advisory/nudge command hooks (pcore-04, D4):
     nudge_foreground_agent_dispatch  — deny gate (foreground dispatches bounce back for
@@ -153,7 +132,6 @@ Spec backlinks:
 from __future__ import annotations
 
 import importlib
-import os as _os
 import sys as _sys
 import traceback as _traceback
 from typing import Dict
@@ -162,8 +140,12 @@ from typing import Dict
 # Eager-import table: dotted module path per hook module that used to be a bare
 # `from coordinator_core.hooks import X` statement. Kept as data (mirroring
 # coordinator_core.ops._EAGER_OP_MODULES) so _eager_import_all() is a single
-# loop rather than 15 duplicated import lines, and so it can be re-invoked
-# on demand (C2's registry-miss fallback) without re-running module-level code.
+# loop rather than 20 duplicated import lines, and so it can be re-invoked
+# on demand (C2's registry-miss fallback and guard_roster_ops.py's roster
+# call) without re-running module-level code. Retained deliberately, not
+# apparatus residue — mirroring C6's own note for _EAGER_OP_MODULES: it is
+# the table _eager_import_all() iterates, so retaining the function retains
+# the list.
 # ---------------------------------------------------------------------------
 _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.nudge_foreground_agent_dispatch",  # registers "hooks.nudge_foreground_agent_dispatch"
@@ -215,12 +197,14 @@ def _eager_import_all() -> None:
 
     Full-load routine, mirroring coordinator_core.ops._eager_import_all() in
     name, role, AND resilience shape. This is the exact set of imports that
-    used to run unconditionally at package-init time; it is now also
-    independently callable (by C2's registry-miss fallback in
-    coordinator_core.ipc) to force complete hooks.* registration on demand,
-    regardless of the COORDINATOR_CORE_LAZY_OPS flag or of which submodules
-    (if any) are already imported. Idempotent — re-importing an
-    already-imported submodule is a cheap no-op.
+    used to run unconditionally at package-init time before this package's
+    lazy-flag retirement (2026-08-22, mirroring coordinator_core.ops's own C6);
+    it is now the ONLY way to force complete hooks.* registration — a bare
+    `import coordinator_core.hooks` never does — called by C2's registry-miss
+    fallback in coordinator_core.ipc and by
+    `ops/session/guard_roster_ops.py::list_ported_advisory_ops()`, regardless
+    of which submodules (if any) are already imported. Idempotent —
+    re-importing an already-imported submodule is a cheap no-op.
 
     Resilient-and-loud (2026-08-06, mirroring coordinator_core.ops's
     2026-07-21 pattern): each module is imported independently. A single
@@ -256,45 +240,11 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
-def _lazy_ops_requested() -> bool:
-    """Whether eager hook registration is suppressed for this process.
-
-    Reads the EXACT two channels coordinator_core.ops._lazy_ops_requested()
-    reads — no new env var, no new sys attribute. See that function's
-    docstring for the full precedence rationale and the 2026-07-28 history of
-    why the in-process leg is a sys attribute rather than an environment
-    variable (env leaks to every child spawned without explicit env=, and 59
-    test modules in this tree assert the op registry at import time).
-
-      - `COORDINATOR_CORE_LAZY_OPS` — operator override, authoritative in BOTH
-        directions ("1" forces lazy; any other value forces eager).
-      - `sys._coordinator_core_lazy_ops` — in-process channel, armed by the
-        same writers coordinator_core.ops already documents
-        (coordinator_core.invoke.__main__, coordinator/bin/lib/cc_invoke.py).
-        Reusing this exact attribute means arming it once already gets both
-        packages' lazy channels for free.
-
-    Deliberately NOT `from coordinator_core.ops import _lazy_ops_requested`:
-    coordinator_core.ops's own module-init imports coordinator_core.hooks (it
-    is one of ops's _EAGER_OP_MODULES entries), so importing coordinator_core.ops
-    from inside coordinator_core.hooks's own module body risks a circular,
-    partially-initialized import — and would also defeat this channel's whole
-    point by pulling ~55 ops modules' worth of package machinery into what is
-    supposed to be a cheap, hooks-only import. This body is kept a verbatim
-    hand-mirror instead; a parity test
-    (test_lazy_hooks_channel.py::test_lazy_ops_requested_matches_ops_sibling_across_channel_matrix)
-    asserts the two functions agree across the channel matrix so the
-    "verbatim" claim stays true in practice, not just by inspection.
-    """
-    operator_override = _os.environ.get("COORDINATOR_CORE_LAZY_OPS")
-    if operator_override is not None:
-        return operator_override == "1"
-    return getattr(_sys, "_coordinator_core_lazy_ops", False) is True
-
-
-# Default behavior (neither channel armed) — UNCHANGED from before this chunk:
-# importing this package eagerly registers all 17 hooks.* ops, keeping the
-# op-registry drift guards (authz OP_CLASSIFICATION coverage, ipc
-# _OP_KEY_SCOPE coverage, OP_MODULE_MAP parity) honest against the full set.
-if not _lazy_ops_requested():
-    _eager_import_all()
+# Lazy is the only mode: importing this bare package never eagerly registers
+# any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
+# env var / sys._coordinator_core_lazy_ops in-process attribute, reused
+# verbatim from coordinator_core.ops's own now-retired channel) is retired —
+# there is no longer a flag to read or a channel to arm, so no conditional
+# call to _eager_import_all() happens here. Callers reach registration
+# through the targeted per-op import (ipc.py's registry-miss path) or, for
+# the rare full-registration need, by calling _eager_import_all() directly.

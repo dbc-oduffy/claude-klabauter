@@ -11,6 +11,9 @@ Spec backlink: state/dispatch-briefs/2026-08-21-the-census-that-cannot-miss-an-o
 
 from __future__ import annotations
 
+import json
+import subprocess
+
 import pytest
 
 from coordinator_core.op_census.timing import (
@@ -19,9 +22,12 @@ from coordinator_core.op_census.timing import (
     AxisResult,
     Disposition,
     NoDataReason,
+    UniformInvocationTaxError,
     cleared_ops,
+    emit_dispositions,
     invocation_tax_dispositions,
     handler_elapsed_by_op,
+    measure_invocation_tax_ms,
     routed_entries,
 )
 
@@ -173,3 +179,105 @@ def test_cleared_ops_raises_on_unrecognised_disposition():
     invocation_tax = {"op.a": AxisResult(disposition=Disposition.UNDER_BAR, max_ms=1.0, sample_count=1)}
     with pytest.raises(RuntimeError):
         cleared_ops(process_time, invocation_tax)
+
+
+# ---------------------------------------------------------------------------
+# measure_invocation_tax_ms shape -- the trampoline cold path, never a bare
+# interpreter (2026-08-23 fix, module docstring's CORRECTED block).
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcess:
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+def test_measure_invocation_tax_ms_never_passes_dash_S(monkeypatch):
+    """Nothing in production disables `site` -- `-S` inflated the old
+    probe's module count and is not a shape anything runs in."""
+    seen_argv = []
+
+    def _fake_run(argv, **kwargs):
+        seen_argv.append(argv)
+        payload = {"process_time_ms": 5.0, "module_count": 99, "canary_op_imported": False}
+        return _FakeCompletedProcess(json.dumps(payload))
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    measure_invocation_tax_ms(iterations=2)
+    assert seen_argv, "subprocess.run was never called"
+    for argv in seen_argv:
+        assert "-S" not in argv
+
+
+def test_measure_invocation_tax_ms_raises_when_child_did_not_arm(monkeypatch):
+    """A child that reports its canary op module WAS imported means op
+    registration was not lazy in that child. This must be proven per sample,
+    never assumed -- an eager sample silently reverts to the bare-interpreter
+    shape this rewrite exists to stop measuring."""
+
+    def _fake_run(argv, **kwargs):
+        payload = {"process_time_ms": 400.0, "module_count": 600, "canary_op_imported": True}
+        return _FakeCompletedProcess(json.dumps(payload))
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    with pytest.raises(RuntimeError):
+        measure_invocation_tax_ms(iterations=1)
+
+
+def test_measure_invocation_tax_ms_averages_armed_samples(monkeypatch):
+    calls = iter([10.0, 20.0, 0.0])
+
+    def _fake_run(argv, **kwargs):
+        payload = {"process_time_ms": next(calls), "module_count": 99, "canary_op_imported": False}
+        return _FakeCompletedProcess(json.dumps(payload))
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert measure_invocation_tax_ms(iterations=3) == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# THE regression: the exact failure the bug row named, now detected rather
+# than silently emitted -- every op OVER_BAR on tax must never again produce
+# a silent, permanently-empty `cleared` set (bug row
+# `state/bug-backlog/2026-08-23-op-census-can-never-clear-an-op-invocation-tax-measured-in-the-wrong-shape.yaml`).
+# ---------------------------------------------------------------------------
+
+
+def test_emit_dispositions_raises_when_tax_uniformly_over_bar_across_every_op():
+    """A perfect handler_elapsed axis plus a uniformly-OVER_BAR tax axis
+    used to return `cleared: set()` silently -- the exact defect shape.
+    `emit_dispositions` must now refuse to emit rather than reporting an
+    empty cleared set as though it were a real finding."""
+    handler_elapsed = {
+        "op.a": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=5),
+        "op.b": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=5),
+    }
+    invocation_tax = invocation_tax_dispositions(["op.a", "op.b"], measured_tax_ms=INVOCATION_TAX_BAR_MS + 1)
+
+    with pytest.raises(UniformInvocationTaxError):
+        emit_dispositions(handler_elapsed, invocation_tax)
+
+
+def test_emit_dispositions_does_not_raise_when_tax_uniformly_under_bar():
+    """Uniform `UNDER_BAR` is what a healthy measurement looks like by this
+    axis's own single-floor design (module docstring) -- not the failure
+    signature the guard exists for."""
+    handler_elapsed = {
+        "op.a": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=5),
+    }
+    invocation_tax = invocation_tax_dispositions(["op.a"], measured_tax_ms=1.0)
+    emitted = emit_dispositions(handler_elapsed, invocation_tax)
+    assert emitted["cleared"] == ["op.a"]
+
+
+def test_emit_dispositions_does_not_raise_on_mixed_dispositions():
+    handler_elapsed = {
+        "op.a": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=1),
+        "op.b": AxisResult(disposition=Disposition.UNDER_BAR, p50_ms=1.0, max_ms=1.0, sample_count=1),
+    }
+    invocation_tax = {
+        "op.a": AxisResult(disposition=Disposition.OVER_BAR, max_ms=999.0, sample_count=1),
+        "op.b": AxisResult(disposition=Disposition.UNDER_BAR, max_ms=1.0, sample_count=1),
+    }
+    emitted = emit_dispositions(handler_elapsed, invocation_tax)
+    assert emitted["cleared"] == ["op.b"]

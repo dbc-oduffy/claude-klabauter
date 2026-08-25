@@ -60,38 +60,41 @@ seam):
    assembler (C3) must fold this into `decisions["deleted_paths"]` BEFORE
    building `d-close-tail-args` (see § Wiring notes below).
 
-3. **d-reconcile-completion-commits`'s `--append <entry-path>` argument
-   cannot be pre-resolved at compute time.** `entry_path` is only known
-   once `d-complete-entry` actually runs — it depends on today's date and
-   an idempotency guard against an existing chain-slug entry that may
-   already live under a different date/session
+3. **`d-reconcile-completion-commits` — REMOVED (completion.
+   reconcile_commits kill, 2026-08-23):** its CLI, `coordinator/bin/
+   reconcile-completion-commits.py`, is deleted, and this module no
+   longer builds the directive. What follows is retained as history, since
+   `apply.py`'s generic `{<producer-id>.entry_path}`/`.landed`/`.argv`
+   arg-token substitution machinery (`_resolve_arg_tokens`,
+   `_execute_directives`'s directive-id `depends_on` routing) it motivated
+   remains live infrastructure, now unused pending a fresh consumer.
+   `entry_path` was only known once `d-complete-entry` actually ran — it
+   depends on today's date and an idempotency guard against an existing
+   chain-slug entry that may already live under a different date/session
    (`coordinator_core/ops/coordinator_complete_entry.py:676-708`,
    `_idempotency_guard`), and this module's own negative-spec (below)
-   forbids re-deriving that guard a second time here. This directive's
-   `args` therefore carries the literal placeholder token
+   forbade re-deriving that guard a second time here. This directive's
+   `args` therefore carried the literal placeholder token
    `RECONCILE_ENTRY_PATH_TOKEN` in place of the real path, with
-   `depends_on: "d-complete-entry"` — the apply half (C4) substitutes it
+   `depends_on: "d-complete-entry"` — the apply half (C4) substituted it
    from `d-complete-entry`'s captured stdout (first line, per that CLI's
    own `print(entry_path)` contract, `coordinator_complete_entry.py:726`)
    before invoking, the same shape workday_complete/workweek_complete's
    `apply.py` already use for directive-to-directive value threading
    (there: `stdin_from`, piping a producer's captured stdout into a
    consumer's stdin — not reusable verbatim here because `reconcile-
-   completion-commits.py` takes the path as a positional argument, not
-   stdin content, so a plain arg-token substitution is the closer fit).
+   completion-commits.py` took the path as a positional argument, not
+   stdin content, so a plain arg-token substitution was the closer fit).
    **Ratified (C4 completion, 2026-07-27):** `workstream_complete.apply.
    _resolve_arg_tokens` implements the substitution; `_execute_directives`
    also had to special-case this directive's `depends_on` value, since
    `ceremony_common.apply_halt._directive_gate_open` only understands
    `depends_on` as a judgment_point id and fail-closes (permanently
    blocks) on any other value — a `depends_on` naming a sibling DIRECTIVE
-   id (as this one does) is now recognized as a producer-ordering
+   id (as this one did) was recognized as a producer-ordering
    dependency and routed around that gate instead, letting `_resolve_arg_
    tokens`'s own producer-landed check govern readiness. See `apply.py`'s
-   module docstring, deviation 3, for the full mechanism. An unresolvable
-   token (producer never lands, or lands with empty stdout) fails this
-   directive loud into `apply()`'s `report["failed"]` — it is never
-   dispatched with the literal token string as a live argument.
+   module docstring, deviation 3, for the full mechanism.
 
 Consumes (orchestrates, reimplements none):
     coordinator/bin/coordinator-complete-entry.py
@@ -100,13 +103,6 @@ Consumes (orchestrates, reimplements none):
            skeleton scaffold+fill all live inside this CLI — this module
            never re-derives any of it, only composes the flags Step 2.6
            Action (a) names.
-    coordinator/bin/reconcile-completion-commits.py
-        -> d-reconcile-completion-commits's directives[].cli. Its own
-           `pending-release`-only status gate and Session-Id-trailer scope
-           live inside the CLI (mirrors the existing
-           `d-stamp-plan-implemented` precedent in `__init__.py`: "fires
-           unconditionally on the predicate already resolved; status-
-           matrix logic lives in the CLI itself").
     coordinator/bin/coordinator-fold-execution-record.py
         -> d-fold-execution-observations's directives[].cli (bareword, no
            `.py` suffix on disk — the apply half needs the same bareword-
@@ -128,9 +124,8 @@ Negative-spec:
       Step 2.6.7's commit-significance judgment filter — all three are
       `judgments.py`'s (C2f). This module only wires an ALREADY-DECIDED
       `nature`/`fold_desc` value into directive-argument shape.
-    - Does NOT invoke `coordinator-complete-entry.py`,
-      `reconcile-completion-commits.py`, or `coordinator-fold-execution-
-      record` in-process. Every mutating action this module names is an
+    - Does NOT invoke `coordinator-complete-entry.py` or
+      `coordinator-fold-execution-record` in-process. Every mutating action this module names is an
       existing CLI for the apply half to invoke, never invoked here — this
       module only reads disk (existence checks, sidecar globs, sidecar
       frontmatter) and returns directive/gate shape.
@@ -153,11 +148,9 @@ Negative-spec:
        paths` flag (`__init__.py:315-316,336`); this is additive to
        whatever `decisions["deleted_paths"]` the caller already supplies,
        never a replacement of it.
-    3. `d-reconcile-completion-commits`'s `args` carries
-       `RECONCILE_ENTRY_PATH_TOKEN` in place of a real path — the apply
-       half (`workstream_complete.apply._resolve_arg_tokens`) substitutes
-       it from `d-complete-entry`'s captured stdout before dispatch
-       (Design note 3, ratified).
+    3. Was `d-reconcile-completion-commits`'s `RECONCILE_ENTRY_PATH_TOKEN`
+       wiring — removed along with the directive (completion.
+       reconcile_commits kill, 2026-08-23); see Design note 3 above.
 """
 
 from __future__ import annotations
@@ -166,7 +159,6 @@ from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
-from coordinator_core.ops import coordinator_complete_entry as _coordinator_complete_entry
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 
 # ---------------------------------------------------------------------------
@@ -175,13 +167,7 @@ from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, 
 # ---------------------------------------------------------------------------
 
 _COMPLETE_ENTRY_CLI = "coordinator-complete-entry"
-_RECONCILE_COMPLETION_COMMITS_CLI = "reconcile-completion-commits"
 _FOLD_EXECUTION_RECORD_CLI = "coordinator-fold-execution-record"
-
-#: Placeholder the apply half must resolve from `d-complete-entry`'s
-#: captured stdout before invoking `d-reconcile-completion-commits` — see
-#: module docstring Design note 3. Not a real path; never dispatched as-is.
-RECONCILE_ENTRY_PATH_TOKEN = "{d-complete-entry.entry_path}"
 
 #: The `decisions` keys `build_directives` below reads — declared once so a
 #: caller (`__init__.py`'s `preflight.decisions_template` composition) can
@@ -224,38 +210,12 @@ def _directive(
 # ---------------------------------------------------------------------------
 
 
-class CompletionEntryScaffoldFact(NamedTuple):
-    entry_path: str
-    residue_fields: tuple[str, ...]
-
-
-def compute_completion_entry_scaffold_gate(
-    repo_root: Path,
-    sid: str,
-    governing_plan_slug: Optional[str],
-) -> Optional[CompletionEntryScaffoldFact]:
-    """The Step 2.6 authoring-window fact `__init__.py`'s `brief()` reads
-    to decide whether `d-run-wsc-tail` must halt (state/bug-backlog/
-    2026-07-28-workstream-complete-apply-re-scaffolds-t-e925d597e0af.yaml):
-    `None` when the completion-entry cluster doesn't apply at all
-    (`completion_archive_predicate` false) or the entry `d-complete-entry`
-    targets is already fully authored on title/nature/prose; otherwise the
-    entry's resolved path plus which of the three surfaces are still
-    placeholder. Resolves the SAME path `coordinator-complete-entry` itself
-    reads/writes to (`coordinator_core.ops.coordinator_complete_entry.
-    resolve_effective_entry_path` — including its chain-slug stand-down
-    scan onto a prior day/session's entry, not the date/sid derivation
-    alone) and reads its SAME placeholder-detection predicate
-    (`scaffold_residue_fields`) — neither is re-derived here."""
-    if not completion_archive_predicate(repo_root):
-        return None
-    entry_path, _marker = _coordinator_complete_entry.resolve_effective_entry_path(
-        str(repo_root), sid, governing_plan_slug or ""
-    )
-    residue = _coordinator_complete_entry.scaffold_residue_fields(entry_path)
-    if not residue:
-        return None
-    return CompletionEntryScaffoldFact(entry_path=entry_path, residue_fields=tuple(residue))
+# compute_completion_entry_scaffold_gate / CompletionEntryScaffoldFact —
+# REMOVED (ceremony.wsc_tail kill, 2026-08-23): the Step 2.6
+# authoring-window fact existed solely to feed `jp-completion-entry-
+# scaffold`, which gated `d-run-wsc-tail`. Neither the judgment point nor
+# the directive it gated still exist — see `directives_commit_tail.py`'s
+# module docstring and `__init__.py`'s `build_directives`.
 
 
 def completion_archive_predicate(repo_root: Path) -> bool:
@@ -305,26 +265,9 @@ def build_complete_entry_directive(
     return _directive("d-complete-entry", _COMPLETE_ENTRY_CLI, args)
 
 
-# ---------------------------------------------------------------------------
-# Step 2.6.8 — d-reconcile-completion-commits
-# ---------------------------------------------------------------------------
-
-
-def build_reconcile_completion_commits_directive() -> dict[str, Any]:
-    """Step 2.6.8's mechanical reconcile invocation: fold any session
-    commit landed after `d-complete-entry` wrote the entry into its
-    `commits:` list. `--append <entry-path>` cannot be pre-resolved here
-    (Design note 3) — carries `RECONCILE_ENTRY_PATH_TOKEN` and
-    `depends_on: "d-complete-entry"` for the apply half to resolve.
-    Detection (which commits are new) and the `pending-release`-only
-    status gate are the CLI's own job (`reconcile-completion-commits.py`
-    docstring, Steps 1-2 of its client-side validation)."""
-    return _directive(
-        "d-reconcile-completion-commits",
-        _RECONCILE_COMPLETION_COMMITS_CLI,
-        ["--append", RECONCILE_ENTRY_PATH_TOKEN],
-        depends_on="d-complete-entry",
-    )
+# Step 2.6.8 — d-reconcile-completion-commits — REMOVED (completion.
+# reconcile_commits kill, 2026-08-23): `coordinator/bin/reconcile-
+# completion-commits.py` is deleted.
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +392,9 @@ def build_directives(
                 nature=decisions.get(_KEY_NATURE),
             )
         )
-        directives.append(build_reconcile_completion_commits_directive())
+        # `d-reconcile-completion-commits` — REMOVED (completion.
+        # reconcile_commits kill, 2026-08-23): its CLI,
+        # `coordinator/bin/reconcile-completion-commits.py`, is deleted.
 
     plan_slug = decisions.get(_KEY_PLAN_SLUG) or decisions.get(_KEY_GOVERNING_PLAN_SLUG)
     sidecar_gate = compute_run_report_sidecar_gate(repo_root, sid, plan_slug)

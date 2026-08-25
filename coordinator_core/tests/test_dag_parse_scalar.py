@@ -20,7 +20,7 @@ Coverage:
 Spec backlink: root-caused a fleet-wide artifact.emit wedge — shipped_in: 229e792
 parsed to float('inf'), which then hit `subprocess.run([..., sha, ...])` with a
 non-str argv member (TypeError). See coordinator_core/ops/roadmap_dag.py and
-coordinator_core/ops/emit/envelope.py for the downstream carry/verify path.
+coordinator_core/ops/emit/resolvers.py for the downstream carry/verify path.
 """
 
 from __future__ import annotations

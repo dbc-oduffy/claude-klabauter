@@ -1,5 +1,14 @@
 # coordinator → example-cockpit-repo fleet.* invoke-envelope producer contract (FROZEN)
 
+> **STALE AS OF 2026-08-23 — the emission artifact this contract is built around no longer exists.**
+> `state/cockpit-emission.json`, `artifact.emit`, `emit.cadence` and `emission.publish` were deleted
+> (DR-351). Every clause below that names the emission as an authoritative surface, a schema_version
+> source, or an invocation target describes something that is gone. Nothing here has been rewritten:
+> this is a contract with a sibling repo and re-cutting it unilaterally is not claude-klabauter's call. Treat
+> the whole document as historical until both sides re-cut it against the `query-*` surface.
+> Producer-side detail: `docs/decisions/DR-351-the-emission-is-deleted-not-halted.md`.
+
+
 > **What this is.** The frozen producer-side contract of the `fleet.*` mutating invoke
 > envelope that the coordinator control-plane engine (**claude-klabauter**) exposes to
 > **example-cockpit-repo**. It defines the op namespace, per-op request/response wire shapes,

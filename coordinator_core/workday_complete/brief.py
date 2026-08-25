@@ -119,7 +119,7 @@ from coordinator_core.contract.decision_object.judgment import (
     partition_reportable,
 )
 from coordinator_core.git.repo_root import git_common_dir
-from coordinator_core.ops.emit.envelope import resolve_context
+from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_close_day import collect_open_day_goals
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import (
@@ -465,11 +465,6 @@ def _build_directives(
             "d_step2_5_dirty_tree_scan",
             cli="workday-complete-step2_5-dirty-tree",
             args=[],
-        ),
-        _directive(
-            "d_step2_6_completion_reconcile",
-            cli="workday-complete-reconcile",
-            args=["completion-reconcile"],
         ),
         _directive(
             "d_step2_65_reap_orphans",

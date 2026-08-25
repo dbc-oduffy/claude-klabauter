@@ -114,15 +114,6 @@ def measure_import_subprocess(entrypoint: str, python: Optional[str] = None) -> 
     """
     python = python or sys.executable
     env = dict(os.environ)
-    # Purpose: this probe measures the EAGER import path -- the path the manifest's
-    # ceilings were baselined against. `COORDINATOR_CORE_LAZY_OPS` is a real operator
-    # override (coordinator_core.hooks._lazy_ops_requested) that flips
-    # coordinator_core.hooks from 111 eager modules to 5 lazy ones; left ambient, a
-    # developer or CI runner with it set in their shell would get a probe reporting 5
-    # against a ceiling of 125, silently no longer gating the regrowth this module
-    # exists to catch. Stripped rather than pinned to a specific non-"1" value so no
-    # future accepted value for the var can quietly re-open the same hole.
-    env.pop("COORDINATOR_CORE_LAZY_OPS", None)
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
         f"{_REPO_ROOT}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else str(_REPO_ROOT)

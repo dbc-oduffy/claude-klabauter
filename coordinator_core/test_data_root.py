@@ -224,6 +224,8 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     assert core_result == bin_result
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path) -> None:
     """The publish pre-swap FUNCTION gate imports this file as a FLAT top-level
     `data_root` module with only the staging dir on `PYTHONPATH` — no

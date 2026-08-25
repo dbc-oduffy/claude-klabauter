@@ -6,17 +6,17 @@ Purpose: answer "which commits resolve <artifact-id>, and are they shipped?"
 by (1) finding every commit whose message carries a `Resolves: <artifact-id>`
 trailer (the format pinned by C4 — coordinator/docs/wiki/resolves-commit-trailer.md),
 and (2) delegating the "shipped?" question to
-coordinator_core.ops.emit.envelope.main (the check-shipped-on-main.sh port).
+coordinator_core.ops.emit.resolvers.main (the check-shipped-on-main.sh port).
 This module RE-DERIVES on every call; it never reads or writes a stored
 roll-up state (canonical-artifact-shapes.md: liveness/roll-up-state is
 derived, not stored).
 
 Contract (four tokens, one emitted per call, plus the resolving SHA list):
-  shipped               — envelope.main exit 0: all resolving commits are
+  shipped               — resolvers.main exit 0: all resolving commits are
                            ancestors of origin/main.
-  not-shipped            — envelope.main exit 1: >=1 resolving commit is not
+  not-shipped            — resolvers.main exit 1: >=1 resolving commit is not
                            on origin/main.
-  unknown-error          — envelope.main exit 2 (or any other unexpected
+  unknown-error          — resolvers.main exit 2 (or any other unexpected
                            code): not a git repo, or origin/main unreachable.
                            PROPAGATED as its own token — never collapsed into
                            not-shipped, since "could not determine" !=
@@ -233,12 +233,12 @@ def _resolving_shas(artifact_id: str) -> List[str]:
 
 
 def _shipped_rc(resolving_shas: List[str]) -> int:
-    """Call envelope.main(shas) with stdout suppressed; return its exit code only.
+    """Call resolvers.main(shas) with stdout suppressed; return its exit code only.
 
     Mirrors the bash oracle's `"$CHECK_SHIPPED" "${RESOLVING_SHAS[@]}" >/dev/null 2>&1`
     — only the exit code is consumed, never the ported script's own stdout/stderr.
     """
-    from coordinator_core.ops.emit.envelope import main as _shipped_main
+    from coordinator_core.ops.emit.resolvers import main as _shipped_main
 
     buf = io.StringIO()
     try:

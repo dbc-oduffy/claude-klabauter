@@ -6,11 +6,18 @@ actually shipped?" by combining three independent signals that today live in thr
 separate, unconnected parts of this repo:
 
   1. Git ancestry — is the resolved SHA an ancestor of ``origin/main``
-     (``coordinator_core.ops.emit.envelope.sha_on_origin_main`` et al.).
+     (``coordinator_core.ops.emit.resolvers.sha_on_origin_main`` et al.).
   2. Live frontmatter — does the named plan/handoff's OWN frontmatter say "shipped",
      re-derived directly from disk (NOT the emission pipeline's already-joined
      ``HandoffSummary``/``PlanSummary`` dicts — see Anti-scope in the spec backlink).
-  3. ``state/cockpit-emission.json`` — an advisory, potentially-stale cached snapshot,
+  3. ``state/cockpit-emission.json`` — DEAD LEG since 2026-08-23. The artifact was
+     deleted with the emission (DR-351); this leg reads a path that no longer exists,
+     returns None as it is designed to on any read failure, and therefore contributes
+     nothing to any verdict. It is kept rather than removed because the commit-closure
+     evidence it wanted is being rebuilt as a query surface, and re-pointing this leg
+     at that surface is cheaper than re-deriving it. Until then a ``disagreement``
+     verdict can only come from legs 1 and 2. Was: an advisory, potentially-stale
+     cached snapshot,
      cross-checked but never authoritative.
 
 The interesting part is not the git-subprocess reuse (already shipped, reused not
@@ -47,11 +54,11 @@ from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 # deleted at the 2026-08-21 timeout kill (docs/problems/2026-08-21-the-over-
 # budget-timeout-hitlist.md § G5, DR-349) on the ruling that a `git fetch` on a
 # render path is the wrong mechanism at any bound; see
-# `coordinator_core.ops.emit.envelope`'s module docstring. This module called it
+# `coordinator_core.ops.emit.resolvers`'s module docstring. This module called it
 # until 2026-08-22 and was uncollectable from the deletion onward. An absent
 # origin/main now yields an indeterminate git leg with narrated evidence — do
 # not restore a fetch here to make that leg decisive.
-from coordinator_core.ops.emit.envelope import (
+from coordinator_core.ops.emit.resolvers import (
     check_origin_main_reachable,
     resolve_ref,
     sha_on_origin_main,
@@ -83,7 +90,7 @@ def _resolve_state_root() -> Optional[Path]:
     """Resolve ``<claude-klabauter-repo-root>/state`` for the leg-3 emission-snapshot read.
 
     Delegates to the same canonical claude-klabauter-root resolver
-    ``coordinator_core.ops.emit.envelope._resolve_central_state_root`` wraps
+    ``coordinator_core.ops.emit.resolvers._resolve_central_state_root`` wraps
     (``coordinator_core.engine_root.coordinator_engine_root``) rather than hardcoding
     ``state/cockpit-emission.json`` relative to cwd. Returns None (never raises) on any
     resolution failure — leg 3 is advisory-only; an unresolvable root degrades to
@@ -300,7 +307,7 @@ def _compute_verdict(git_on_main: Optional[bool], frontmatter_status: Optional[s
 def main(argv: list[str]) -> int:
     """Optional CLI entry: ``verify-shipped <ref_or_sha> [--plan <path>]`` -> JSON verdict.
 
-    Mirrors `coordinator_core.ops.emit.envelope.main`'s CLI-trampoline pattern (parse
+    Mirrors `coordinator_core.ops.emit.resolvers.main`'s CLI-trampoline pattern (parse
     args, print, return an exit code) for the same launcher-shim generation path
     (`coordinator/bin/gen-launcher-shim.py`), should a picking-up caller need this
     directly invocable outside a Python import.

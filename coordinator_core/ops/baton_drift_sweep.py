@@ -246,7 +246,6 @@ recording the collision.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from pathlib import Path
@@ -489,6 +488,8 @@ def _retained_supersede_eligibility(
     a `continued` stamp names it, so tiers 1-2 (pure filesystem) are
     sufficient.
     """
+    import asyncio
+
     handoff_dir = os.path.dirname(path)
     target_abs = resolve_target(
         continued_into,

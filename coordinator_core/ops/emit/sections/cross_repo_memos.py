@@ -150,7 +150,7 @@ def _query_records(ctx: EmitContext, record_type: str) -> "tuple[list[dict], Opt
     no cross-repo memos" no longer look identical downstream (see collect() for how
     ``query_error`` surfaces into ``malformed_records.cross_repo_memos`` plus a loud
     ``warnings.warn``, the module's existing degraded-condition convention — see
-    ``coordinator_core/ops/emit/envelope.py``'s ``warnings.warn`` call sites).
+    ``coordinator_core/ops/emit/resolvers.py``'s ``warnings.warn`` call sites).
 
     Record source resolution mirrors the other in-process sections' ``subprocess_root``
     convention: ``ctx.subprocess_root`` (frozen-fixture test isolation) takes precedence
@@ -329,7 +329,7 @@ def _collect_bucket(
     malformed: list[dict] = []
 
     if query_error is not None:
-        # Loud observability signal (module convention — see envelope.py's warnings.warn
+        # Loud observability signal (module convention — see resolvers.py's warnings.warn
         # call sites): a query failure must never look like "zero cross-repo memos exist"
         # to a consumer scanning logs or a human tailing emit output.
         warnings.warn(

@@ -4,8 +4,7 @@ coordinator_core.ops.ceremony.tests.test_resolver_git_provenance
 Regression tests for ``resolver.detect_git_provenance_consumed`` (Detector B --
 git-provenance chain-terminal detection, ported from the bash
 /workstream-complete SKILL.md Step 0 oracle) and its wiring into
-``wsc_resolve.py``'s disposition detection and ``wsc_tail.py``'s step-1
-lightweight resolve.
+``wsc_resolve.py``'s disposition detection.
 
 Coverage:
   (a) detector_b_positive                 -- archived handoff with NO
@@ -39,12 +38,6 @@ Coverage:
                                               rejected with a diagnostic.
   (e) merge_base_unresolvable_warns_no_crash -- no ``origin/main`` -> a loud
                                               warning, empty hits, no crash.
-  (f) wsc_tail_step1_wiring                -- empty filesystem scan + a
-                                              Detector-B-positive fixture ->
-                                              ``ceremony.wsc_tail``'s step-1
-                                              sees the handoff (chain-terminal)
-                                              and folds Detector B's warnings
-                                              into the op's diagnostics.
 
 Spec backlink:
   cross-repo/inbox/2026-07-22-claude-central-em-wsc-tail-cutover-contract.md Ask 2
@@ -55,13 +48,11 @@ Spec backlink:
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony import wsc_tail as wsc_tail_mod
 from coordinator_core.ops.ceremony.resolver import detect_git_provenance_consumed
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -253,31 +244,3 @@ def test_merge_base_unresolvable_warns_loudly_no_crash(tmp_path):
     assert hits == []
     assert len(warnings) == 1
     assert "merge-base" in warnings[0]
-
-
-# ---------------------------------------------------------------------------
-# (f) wsc_tail step-1 wiring -- empty filesystem scan + B-positive fixture
-# ---------------------------------------------------------------------------
-
-
-def _run(coro):
-    return asyncio.run(coro)
-
-
-def test_wsc_tail_step1_sees_detector_b_hit(repo):
-    """No live consumed_by stamp anywhere (find_all_consumed_handoffs comes back
-    empty) -- ceremony.wsc_tail's step-1 must consult Detector B and resolve
-    chain-terminal from the ship-then-archive git provenance alone."""
-    sid = "sess-detb-tail-001"
-    _seed_archived_handoff(repo, "tail-shipped.md")
-    _commit_unpushed(repo, f"archive: ship handoff for tail\n\nSession-Id: {sid}")
-
-    result = _run(
-        wsc_tail_mod._handler(
-            {"sid": sid, "subject": "workstream-complete: detector-b wiring check"},
-            repo_root=(repo / ".git"),
-        )
-    )
-
-    assert result["exit_code"] in (0, 2), result
-    assert result["disposition"] == "predecessor-consumed"

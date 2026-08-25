@@ -308,18 +308,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # resolves solely from the caller-supplied target_root, path-guarded. Spec:
     # tasks/strategic-feed-emission/stub.md
     "strategic.emit":                        "none",
-    # testing.full_runner — fleet-generic, COMPUTE_ONLY op (mirrors the cartography/
-    # workflow/strategic.generate target-resolution model): explicit REQUIRED
-    # `target_root` wire param, any repo, NOT the caller's own dispatching tree. No
-    # repo-specific state is accessed via repo_root/_origin_worktree — the handler
-    # ignores the repo_root argument entirely and resolves solely from the
-    # caller-supplied target_root, path-guarded. Spec: docs/plans/2026-07-19-
-    # claude-klabauter-doe-full-test-runner.md § C5.
-    "testing.full_runner":                   "none",
     # fleet.* archival-writer ops — keyed on git_common_dir (shared across linked worktrees);
     # handlers derive worktree via main_worktree_root(common_dir), never repo_root directly.
     # DR-211 D4 async mandate + plan Key Decision 5.
-    "fleet.archive_completed_plans":         "common_dir",
     "fleet.archive_completed_handoffs":      "common_dir",
     "fleet.prune_closed_bugs":               "common_dir",
     "fleet.aggregate_capability_index":      "common_dir",
@@ -500,15 +491,19 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir) for project-scope path resolution (F1/AC13).
     # DR-213 sanctioned carve-out; spec: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C1/C2
     "queue.append":                          "common_dir",
+    # decision_record.mint_id / decision_record.release_id — same keying class as
+    # queue.append: both read/write under the CALLER's own main-worktree-rooted
+    # docs/decisions/ + state/decision-record-reservations/. Without this entry
+    # dispatch resolves repo_root=None and the op returns an unresolvable-root error.
+    # Spec: state/improvement-queue/2026-08-23-nothing-allocates-dr-numbers-so-a-
+    # plan-s-7aa417a58bce.yaml
+    "decision_record.mint_id":               "common_dir",
+    "decision_record.release_id":            "common_dir",
     # peer_notice.send / peer_notice.check — same-repo peer-contention notice
     # channel: keyed on git_common_dir (state/peer-notices/ is main-worktree-
     # rooted, same class as queue.append above).
     "peer_notice.send":                      "common_dir",
     "peer_notice.check":                     "common_dir",
-    # queue.close — same keying class as queue.append: it stamps and commits one
-    # entry under the caller's own state/improvement-queue/, then hands that
-    # already-committed path to fleet.archive_queue_entry (DR-270).
-    "queue.close":                           "common_dir",
     "queue.promote":                         "common_dir",
     # queue.cluster / queue.age_ping — keyed on git_common_dir: both cluster/scan the
     # CALLER's own main-worktree-rooted queue-family directories (state/debt-backlog/,
@@ -530,14 +525,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # failing to write into) the wrong repo.
     # Spec: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C5
     "handoff.scaffold_from_queue":           "common_dir",
-    # memo.send — cross-tree write op — keyed on git_common_dir: handler derives sender
-    # worktree via main_worktree_root(common_dir) (Key Decision 5 precedent; fleet.* pattern).
-    # Receiver inbox path is always registry-derived, never wire-derived (C2 containment spec).
-    # DR-214-send-class sanctioned carve-out; spec:
-    # docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md § C3
-    # HTTP/UDS gating vacated by DR-215 (command-type execution model): no gate chain in
-    # dispatch.py; MUTATING ops are serial-by-construction in the in-process model.
-    "memo.send":                             "common_dir",
     # memo.list — "none": repo_root is accepted per the standard handler signature
     # but unused. Receiver enumeration/resolution reads only the machine-local
     # registry (not sender-worktree-scoped substrate); unlike memo.send there is
@@ -583,18 +570,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handler fails loud when neither is available rather than guessing a cwd.
     # Spec: cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md
     "memo.blitz_buckets":                     "common_dir",
-    # ceremony.wsc_tail — the C9 single-pass rebuild orchestrator; keyed on git_common_dir.
-    # Supersedes the two-phase ceremony.wsc_resolve / ceremony.wsc_commit pipeline (both
-    # ops' registrations were removed 2026-07-29, kill-list op removal — wsc_resolve.py's
-    # engine survives as coordinator_core/ops/ceremony/branch_resolution.py, still imported
-    # live by ceremony.session_instructions; wsc_commit.py was deleted outright). Resolves
-    # + runs the full pre-commit tail + the locked commit critical section + the C5
-    # post-commit consumed-handoff stamp + AC17 follow-up commit, all in ONE in-process
-    # pass (no receipt round-trip between resolve and commit — AC6).
-    # Handler derives worktree via main_worktree_root(common_dir) per the fleet.* /
-    # handoff.* precedent.
-    # Spec: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C9
-    "ceremony.wsc_tail":                     "common_dir",
     # ceremony.post_commit_tail — keyed on git_common_dir, same as wsc_tail (the
     # only in-process caller): the C3a (2026-07-23 wsc-tail-slim-down) extraction
     # of wsc_tail's steps 5c (C5 post-commit consumed-handoff stamp+ship) and 5d
@@ -629,7 +604,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Keyed identically to append_day/backfill_gaps: handler derives worktree via
     # main_worktree_root(common_dir) and writes the same state/week-changelog/{date}.md noun.
     "changelog.upsert_reviewed":             "common_dir",
-    "completion.reconcile_commits":          "common_dir",
     "plan.append_session":                   "common_dir",
     "review_trail.write":                    "common_dir",
     # Backfill: records.query (strang-11 C1a COMPUTE_ONLY read op) was registered without an
@@ -817,7 +791,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Class-B/composite ops (session.*) read/write .git/coordinator-sessions/ and state/ paths,
     # both derived from the main worktree root. Spec: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C5
     "fleet.archive_shipped_handoffs":        "common_dir",
-    "fleet.archive_actioned_memos":          "common_dir",
     # fleet.backfill_dispositionless_memos — same "common_dir" keying as the other
     # fleet.* ops: the handler derives the worktree via main_worktree_root(common_dir)
     # to resolve cross-repo/archive/<filename> for each of the 34 backfill-table
@@ -855,13 +828,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session_baton.mint":                    "none",
     "session_baton.promote":                 "none",
     "session.reap":                          "common_dir",
+    # session.boot_sweep — rebuilt boot-time archival backstop (C5, docs/plans/
+    # 2026-08-22-the-boot-backstop-asks-git-nothing.md), module coordinator_core/
+    # ops/session/boot_backstop.py — op id preserved, module renamed from
+    # boot_sweep.py. Scope is unchanged: it reads/writes state/handoffs/ and
+    # archive/handoffs/ paths derived from the main worktree root and issues one
+    # scoped git add -A + git commit per run.
     "session.boot_sweep":                    "common_dir",
-    # session.sweep_consumed_handoffs — same scope as session.boot_sweep, and for the same
-    # reason: it wraps that op's own consumed-handoff leg (`_sweep_consumed_handoffs`), so it
-    # reads/writes state/handoffs/ and archive/ paths derived from the main worktree root and
-    # git-commits each archival. Repo-touching ops must be listed explicitly — the unlisted
-    # default is "none", which would be wrong here. Spec: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
-    "session.sweep_consumed_handoffs":       "common_dir",
     # session.reap_claims_for_repos — fleet-generic per-repo claim-reap primitive: takes an
     # explicit target_roots[] param and reaps each, so it derives NO per-request repo key from
     # the caller's own tree → scope "none" (claude-klabauter's target-resolution convention: fleet-generic
@@ -1244,10 +1217,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # but the reasoning is not.
     # Spec: archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C8, AC11
     "review_trail.readjudication_report":      "show_top",
-    # ceremony.scoped_git_commit — show_top: commits land in a specific worktree's
-    # index/HEAD; § Registration is four surfaces, not one names this row
-    # explicitly as repo-touching, so it must not default to "none".
-    "ceremony.scoped_git_commit":              "show_top",
     # findings.self_persist_fallback — "none": target_path is caller-supplied; the
     # op does not resolve relative paths against a repo root itself.
     "findings.self_persist_fallback":          "none",
@@ -1449,12 +1418,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # (same class as priority.set). See
     # coordinator_core/ops/priority_drain.py module docstring.
     "priority.drain":                           "none",
-    # probes.fork_census — "none": base_dir defaults to the OPERATOR's own live
-    # Claude Code transcript root (home_dir()/".claude"/"projects") and is
-    # otherwise an explicit caller-supplied override (tests); no path is ever
-    # derived from repo_root/_origin_worktree. Same "none" class as
-    # plugin_health.drift/engine.drift (operator-machine-scoped probes).
-    "probes.fork_census":                       "none",
     # plugin_health.forwarder_drift — "none": inspects the operator's OWN
     # settings-home/claude-klabauter install state (settings-home bin/, the retired
     # ~/.claude/bin compat mirror, coordinator/bin/ via the claude-klabauter-root
@@ -1520,7 +1483,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # figures were taken against. "none" would key a linked worktree's census to
     # the wrong corpus silently, which is the failure the refusal exists to stop.
     # Spec: docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md § C6
-    "op_census.report":                         "show_top",
     # "show_top" for the same reason as op_census.report immediately above:
     # _op_budget_breaches forwards repo_root to breach_report(), which resolves
     # the op-latency sink from it. "none" would key a linked worktree's breach

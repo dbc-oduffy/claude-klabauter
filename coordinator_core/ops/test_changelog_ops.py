@@ -605,7 +605,7 @@ def test_plans_touched_filters_sidecars_with_no_check_segment(tmp_path: Path) ->
     _commit_plan(repo, "README.md", "root\n")
     _commit_plan(repo, "docs/plans/2026-07-14-real.md", "---\nstatus: draft\n---\n\n# X\n")
     for sidecar in (
-        "docs/plans/2026-07-14-real.the Staff Engineer-review.md",
+        "docs/plans/2026-07-14-real.patrik-review.md",
         "docs/plans/2026-07-14-real.sonnet-review.md",
         "docs/plans/2026-07-14-real.eng-director-review.md",
         "docs/plans/2026-07-14-real.review.md",
@@ -819,7 +819,7 @@ class TestUpsertReviewed:
 
         _write_review_record(
             tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="the Staff Engineer", verdict="pass", diff_loc=12,
+            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
         )
 
         result = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
@@ -862,7 +862,7 @@ class TestUpsertReviewed:
         )
         _write_review_record(
             tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="the Staff Engineer", verdict="pass", diff_loc=12,
+            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
         )
 
         first = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
@@ -998,7 +998,7 @@ class TestUpsertReviewed:
 
         _write_review_record(
             tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="the Staff Engineer", verdict="pass", diff_loc=12,
+            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
         )
 
         result = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
@@ -1057,7 +1057,7 @@ class TestUpsertReviewed:
 
         _write_review_record(
             tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="the Staff Engineer", verdict="pass", diff_loc=12,
+            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
         )
 
         result = upsert_reviewed(worktree=tmp_path, date=date, machine="machine-a")

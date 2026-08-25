@@ -9,14 +9,14 @@ is exactly how a stuck record reported as converged (see the plan's Problem
 section and archive/specs/2026-07/2026-07-04-pcore-11-fleet-invoke-ops.md
 § AC12).
 
-Mirrors bin/tests/test_sweep_actioned_memos_blocked.py:53
-(test_dest_conflict_reason_is_not_already_archived), extended to every
-consuming import path so a future refactor cannot quietly re-collapse the two
-reasons in one family while leaving the others intact: the shared definition
-in _common.py, the re-export from archive_actioned_memos.py (the original
-owner, pinned by the bin/ test above), and the three families lifted onto the
-shared predicate by this plan's C1-C3 (archive_handoffs, archive_shipped_handoffs,
-prune_bugs).
+Extended to every consuming import path so a future refactor cannot quietly
+re-collapse the two reasons in one family while leaving the others intact: the
+shared definition in _common.py, and the three families lifted onto the shared
+predicate by this plan's C1-C3 (archive_handoffs, archive_shipped_handoffs,
+prune_bugs). fleet.archive_actioned_memos (the original owner, which used to
+re-export the constant) was deleted 2026-08-23 (PM kill ruling); its entry and
+the bin/tests/test_sweep_actioned_memos_blocked.py test that pinned it are gone
+with it.
 
 Negative-spec: pure imports and string comparison only — no git, no
 filesystem, no subprocess. This module must stay cheap; the wedge-shape
@@ -29,7 +29,6 @@ from __future__ import annotations
 import inspect
 
 from coordinator_core.ops.fleet import _common
-from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet import archive_handoffs
 from coordinator_core.ops.fleet import archive_shipped_handoffs
 from coordinator_core.ops.fleet import archive_sizings
@@ -37,10 +36,7 @@ from coordinator_core.ops.fleet import prune_bugs
 
 _ALREADY_ARCHIVED = "already-archived"
 
-# Every import path a consumer actually uses, per the plan's C1 note that
-# archive_actioned_memos.py re-exports the constant because
-# bin/tests/test_sweep_actioned_memos_blocked.py imports it from there, not
-# from _common.py.
+# Every import path a consumer actually uses.
 #
 # archive_sizings added by docs/plans/2026-08-13-terminal-sizings-boot-sweep-
 # family.md (AC7) — the terminal-sizings family also consumes the shared
@@ -49,7 +45,6 @@ _ALREADY_ARCHIVED = "already-archived"
 # "already-archived" source-gone string either.
 _IMPORT_SITES = {
     "_common": _common._REASON_DEST_CONFLICT,
-    "archive_actioned_memos (re-export)": archive_actioned_memos._REASON_DEST_CONFLICT,
     "archive_handoffs": archive_handoffs._REASON_DEST_CONFLICT,
     "archive_shipped_handoffs": archive_shipped_handoffs._REASON_DEST_CONFLICT,
     "prune_bugs": prune_bugs._REASON_DEST_CONFLICT,

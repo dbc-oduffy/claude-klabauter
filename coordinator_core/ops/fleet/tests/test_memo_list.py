@@ -31,7 +31,7 @@ from coordinator_core.ops.fleet.memo_list import (
     _memo_list,
     _validate_list_params,
 )
-from coordinator_core.ops.fleet.memo_send import (
+from coordinator_core.ops.fleet._memo_compose import (
     _ENGINE_ACTOR_ID,
     _TOPIC_SLUG_RE,
     _memo_filename,

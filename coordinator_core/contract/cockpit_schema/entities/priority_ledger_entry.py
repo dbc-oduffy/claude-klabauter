@@ -40,11 +40,11 @@ re-vendor it implies, tracked the same way `092cfa95`'s spinoff baton
 tracked `FinancialMetricSummary`'s) is the correct shape, not the excluded
 one.
 
-Envelope/collector surface — verified, not asserted: neither `envelope.py`
+Envelope/collector surface — verified, not asserted: neither `resolvers.py`
 (no `priority_ledger_entries` skeleton key, no SECMAP row) nor a dedicated
 `ops/emit/sections/priority_ledger_entries.py` collector is added here.
 `092cfa95` itself is the precedent for this half too — it registered
-`FinancialMetricSummary` in `ENTITY_SCHEMAS` with NO `envelope.py` touch and
+`FinancialMetricSummary` in `ENTITY_SCHEMAS` with NO `resolvers.py` touch and
 no collector file (grep confirms no `financial_metric` hit anywhere under
 `ops/emit/`); `financial-metric-summary` and this entity both publish a
 schema for external reference/validation without claude-klabauter owning a populated

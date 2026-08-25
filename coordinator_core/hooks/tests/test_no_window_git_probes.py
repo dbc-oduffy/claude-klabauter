@@ -37,7 +37,7 @@ def test_example_retrieval_repo_detect_git_passes_suppression_kwargs_on_windows(
     assert kwargs.get("creationflags") == 0x08000000
     assert kwargs.get("capture_output") is True
     assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 10
+    assert kwargs.get("timeout") == 2.0
 
 
 def test_example_retrieval_repo_detect_git_unchanged_on_posix():
@@ -53,7 +53,7 @@ def test_example_retrieval_repo_detect_git_unchanged_on_posix():
     assert "creationflags" not in kwargs
     assert kwargs.get("capture_output") is True
     assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 10
+    assert kwargs.get("timeout") == 2.0
 
 
 def test_context_pressure_precompact_run_git_passes_suppression_kwargs_on_windows():
@@ -70,7 +70,7 @@ def test_context_pressure_precompact_run_git_passes_suppression_kwargs_on_window
     assert kwargs.get("cwd") == "fake-repo-root"
     assert kwargs.get("capture_output") is True
     assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 10
+    assert kwargs.get("timeout") == 2.0
 
 
 def test_context_pressure_precompact_run_git_unchanged_on_posix():
@@ -87,4 +87,4 @@ def test_context_pressure_precompact_run_git_unchanged_on_posix():
     assert kwargs.get("cwd") == "fake-repo-root"
     assert kwargs.get("capture_output") is True
     assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 10
+    assert kwargs.get("timeout") == 2.0

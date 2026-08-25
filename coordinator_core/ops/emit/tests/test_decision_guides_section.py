@@ -56,7 +56,7 @@ def test_collect_reads_decision_guide_records_in_process(tmp_path: Path) -> None
     assert rec["title"] == "FIFA decisions"
     assert rec["created"] == "2026-07-01"
     assert rec["status"] == "active"
-    assert rec["owner"] == "the VP-Product Reviewer"
+    assert rec["owner"] == "yk"
     assert rec["decision_count"] == 10
     assert rec["path"].endswith("fifa-decisions.md")
 

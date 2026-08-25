@@ -26,15 +26,11 @@ Subcommands (argv[1] selects):
       killed; all three went with it. See
       docs/wiki/cost-budgets-and-the-kill-disposition.md.
 
-  write-trail --sha-range <A..B> --reviewer <name> --scope <chain|session>
-              --verdict <ok|warn|blocked|waived|pending> --diff-loc <N>
-              [--scope-kind <diff|plan|integration>] [--workstream <slug>]
-      Step 2.9 "Marker write". A thin argv-forwarding passthrough to the
-      sibling coordinator-write-review-trail.py (already the single
-      authorized review_trail.write trampoline — see that file's own
-      docstring) so the whole Step 2.9 ceremony sequence (claim → gate →
-      trail) is reachable from one CLI surface. No branching logic of its
-      own beyond argument assembly + exit-code/output passthrough.
+  write-trail — REMOVED (PM ruling 2026-08-23, kill review_trail.write). Its
+      whole job was an argv-forwarding passthrough to
+      coordinator-write-review-trail.py, which was deleted along with the
+      review_trail.write op it trampolined. See the removal comment above
+      `_build_parser` (where the subcommand used to be registered).
 
   brightline-gate — REMOVED (state/kill-ledger.md K-007, 2026-08-19, PM
       ruling). The chain-terminal two-oracle gate: this subcommand, its
@@ -56,9 +52,6 @@ Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-p
 Exit codes:
   claim-plan    — 0 (claimed/re-entrant/stale-takeover), 1 (contention or
                   infra error — both fail the same way; see docstring above)
-  write-trail   — propagates coordinator-write-review-trail.py's own exit
-                  code verbatim (0 success, 1 missing required arg, 2 native
-                  op transport/refusal failure)
 """
 from __future__ import annotations
 
@@ -83,13 +76,13 @@ from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_arg
 
 #: The .cmd launcher's own basename — used by `recover_windows_argv` to locate
 #: where this invocation's own arguments begin within the raw `%CMDCMDLINE%`
-#: capture. `write-trail --sha-range` takes a git rev/range typed directly at
-#: the CLI (e.g. the `sha^..sha` predecessor-range shape) at every
-#: `/workstream-complete` close, which cmd.exe's `%*` batch-parameter
-#: population silently strips a literal `^` from — see `coordinator/bin/lib/
-#: raw_cmdline_recovery.py`'s module docstring. Refuses on an unvouchable
-#: capture (coordinator-write-review-trail.py's own C2 posture, since this
-#: CLI wraps the same `review_trail.write` op).
+#: capture — see `coordinator/bin/lib/raw_cmdline_recovery.py`'s module
+#: docstring. The `write-trail --sha-range` subcommand this originally guarded
+#: (a git rev/range typed directly at the CLI, e.g. the `sha^..sha`
+#: predecessor-range shape cmd.exe's `%*` batch-parameter population silently
+#: strips a literal `^` from) was removed 2026-08-23 (PM ruling, kill
+#: review_trail.write); kept for `claim-plan`'s own argv, refusing on an
+#: unvouchable capture same as before.
 _LAUNCHER_CMD_NAME = "wsc-coverage-gate-runner.cmd"
 
 
@@ -143,48 +136,13 @@ def cmd_claim_plan(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# write-trail
+# write-trail — REMOVED (PM ruling 2026-08-23, kill review_trail.write). This
+# subcommand's entire job was an argv-forwarding passthrough to the sibling
+# coordinator-write-review-trail.py, which was itself deleted along with the
+# review_trail.write op it trampolined. Kill-means-kill, no successor built
+# yet. See docs/wiki/cost-budgets-and-the-kill-disposition.md for the sibling
+# removal precedents (coverage-gate/brightline-gate) this follows.
 # ---------------------------------------------------------------------------
-
-def _run_write_review_trail(argv: list[str]) -> tuple[int, str, str]:
-    """Invoke the sibling coordinator-write-review-trail.py and return
-    (returncode, stdout, stderr). Isolated for test monkeypatching."""
-    cmd = [
-        sys.executable,
-        os.path.join(_SCRIPT_DIR, "coordinator-write-review-trail.py"),
-        *argv,
-    ]
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-        **no_console_creationflags(),  # popup-safe-env-suppressed
-    )
-    return proc.returncode, proc.stdout, proc.stderr
-
-
-def cmd_write_trail(args: argparse.Namespace) -> int:
-    argv = [
-        "--sha-range", args.sha_range,
-        "--reviewer", args.reviewer,
-        "--scope", args.scope,
-        "--verdict", args.verdict,
-        "--diff-loc", str(args.diff_loc),
-    ]
-    if args.scope_kind:
-        argv += ["--scope-kind", args.scope_kind]
-    if args.workstream:
-        argv += ["--workstream", args.workstream]
-    if args.reviewer_evidence:
-        argv += ["--reviewer-evidence", args.reviewer_evidence]
-
-    returncode, stdout, stderr = _run_write_review_trail(argv)
-    if stdout:
-        print(stdout, end="" if stdout.endswith("\n") else "\n")
-    if stderr:
-        print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-    return returncode
 
 
 # ---------------------------------------------------------------------------
@@ -198,22 +156,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p_claim = sub.add_parser("claim-plan")
     p_claim.add_argument("slug")
     p_claim.set_defaults(func=cmd_claim_plan)
-
-    p_trail = sub.add_parser("write-trail")
-    p_trail.add_argument("--sha-range", required=True, dest="sha_range")
-    p_trail.add_argument("--reviewer", required=True)
-    p_trail.add_argument("--scope", required=True)
-    p_trail.add_argument("--verdict", required=True)
-    p_trail.add_argument("--diff-loc", required=True, dest="diff_loc")
-    p_trail.add_argument("--scope-kind", default=None, dest="scope_kind")
-    p_trail.add_argument("--workstream", default=None, dest="workstream")
-    p_trail.add_argument(
-        "--reviewer-evidence", default=None, dest="reviewer_evidence",
-        help="Evidence correlating --reviewer with an artifact showing a review "
-        "occurred (optional; forwarded verbatim when supplied). See "
-        "coordinator_core/ops/review_trail_write.py's reviewer_evidence design.",
-    )
-    p_trail.set_defaults(func=cmd_write_trail)
 
     return parser
 

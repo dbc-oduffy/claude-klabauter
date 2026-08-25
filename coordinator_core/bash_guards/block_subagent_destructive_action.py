@@ -1594,13 +1594,23 @@ def _real_git_subcommand(
     return None, False, []
 
 
-#: Matches a shell redirection OPERATOR at the start of a token: an optional
-#: leading fd digit, then `>`/`>>`/`&>` -- e.g. `2>&1` (operator "2>", target
-#: "&1" glued on), `>`, `2>`, `&>`, `>/dev/null` (operator ">", target
-#: "/dev/null" glued on). `re.match` anchors this at position 0 without
-#: requiring the whole token to be consumed, since a target is often glued
-#: onto the same shlex token as its operator.
-_REDIRECTION_OP_RE = re.compile(r"^\d*(>>?|&>)")
+#: Matches a shell OR PowerShell redirection OPERATOR at the start of a
+#: token: an optional leading fd digit, then one of --
+#:   `>`, `>>`, `&>`, `&>>`   -- output-direction (bash): covers `2>&1`
+#:                               (operator "2>", target "&1" glued on), `>|`,
+#:                               `>&2`, `2>&-` too -- the group only anchors
+#:                               a PREFIX, so anything starting with digit*
+#:                               then `>` or `&>` matches regardless of what
+#:                               follows.
+#:   `<`, `<<`, `<<<`, `<>`   -- input-direction (bash): plain redirect,
+#:                               heredoc marker, herestring, read-write open.
+#:   `*>`, `*>>`              -- PowerShell all-streams redirect; `*` is not
+#:                               a valid bash redirection lead so this is
+#:                               additive, never a bash false-positive.
+#: `re.match` anchors this at position 0 without requiring the whole token to
+#: be consumed, since a target is often glued onto the same shlex token as
+#: its operator (`>/dev/null`, `</dev/null`).
+_REDIRECTION_OP_RE = re.compile(r"^(?:\d*(?:>>?|&>>?|<{1,3}|<>)|\*>>?)")
 
 
 def _strip_leading_redirection_tokens(tokens: "List[str]") -> "List[str]":
@@ -1619,13 +1629,24 @@ def _strip_leading_redirection_tokens(tokens: "List[str]") -> "List[str]":
     redirection is never a real git argument; this treats one exactly like
     the absence of an argument, matching what the shell itself would see.
 
+    2026-08-23 fix (same gap, two more character classes): the original
+    regex only matched bash's OUTPUT-direction operators. `<`-family input
+    redirection (`git stash </dev/null`) and PowerShell's `*>`/`*>>`
+    all-streams redirect are exactly as invisible to `shlex`/the PowerShell
+    tokenizer as `>` was, and displace `remaining[0]` the identical way.
+    Widened rather than special-cased so every `remaining[0]` reader (this
+    module's stash branch, both `block_subagent_stash_creation` legs, and
+    `block_stash_destruction`'s two sites) gets the fix from one shared
+    helper -- see `docs/reference` note on not hand-copying this check.
+
     Handles both a self-contained token (operator and target glued together,
-    e.g. `"2>&1"`, `">/dev/null"`) and a bare operator followed by its target
-    as a SEPARATE token (e.g. `[">", "/dev/null"]`, `["2>", "/dev/null"]`) --
-    the latter only occurs when the shell command had whitespace between the
-    operator and its target, which `shlex` still splits into two tokens.
-    Consumes a run of more than one redirection (`2>&1 >/tmp/log`), not just
-    one, since a caller may chain several before any real argument.
+    e.g. `"2>&1"`, `">/dev/null"`, `"</dev/null"`) and a bare operator
+    followed by its target as a SEPARATE token (e.g. `[">", "/dev/null"]`,
+    `["2>", "/dev/null"]`, `["<<<", "x"]`) -- the latter only occurs when the
+    shell command had whitespace between the operator and its target, which
+    the tokenizer still splits into two tokens. Consumes a run of more than
+    one redirection (`2>&1 >/tmp/log`), not just one, since a caller may
+    chain several before any real argument.
     """
     i = 0
     n = len(tokens)

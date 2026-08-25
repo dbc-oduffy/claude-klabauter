@@ -50,13 +50,16 @@ for the literal tuple; grouped here by which submodule names each CLI:
         gates.session_shape. NOT a CONSUMES_MANIFEST member (loaded
         in-process, never dispatched as a directive).
     wsc-coverage-gate-runner.py, check-workstream-complete-deletion-blocks.py,
-        wsc-close.py, wsc-tail.py -> this module's own pre-existing Step
+        wsc-close.py -> this module's own pre-existing Step
         2.4/2.9/2.67/3 directive spine (unchanged from Convert #2, save the
-        two renames noted in the Negative-spec below).
+        renames noted in the Negative-spec below). (`wsc-tail.py` was also
+        part of this spine; removed in the ceremony.wsc_tail kill,
+        2026-08-23.)
     coordinator-lesson-add, coordinator-queue-append, archive-stamp-cli,
         coordinator-harvest-deferrals -> `directives_lessons_plan.py` (C2a).
-    coordinator-complete-entry.py, reconcile-completion-commits.py,
-        coordinator-fold-execution-record -> `directives_completion.py` (C2b).
+    coordinator-complete-entry.py, coordinator-fold-execution-record ->
+        `directives_completion.py` (C2b). (`reconcile-completion-commits.py`
+        was also named here; removed by PM ruling, 2026-08-23.)
     (archive-stamp-cli, wsc-close.py, both already listed above) ->
         `directives_memo_lifecycle.py` (C2c) contributes no CLI beyond those
         two already-manifested names.
@@ -75,10 +78,12 @@ for the literal tuple; grouped here by which submodule names each CLI:
         wired a second time here (see Negative-spec: no duplicate-CLI
         directive pairs).
     session-claim-cli, emit-cadence -> `directives_commit_tail.py` (C2e).
-        (`wsc-close.py`/`wsc-tail.py` already manifested; this module's
-        `build_close_tail_args_directive`/`build_wsc_tail_directive`
-        SUPERSEDE this module's own pre-existing `d-close-tail-args`/`d-tail`
-        inline builders — see Negative-spec.)
+        (`wsc-close.py` already manifested; this module's own pre-existing
+        `d-close-tail-args`/`d-tail` inline builders were superseded by
+        `directives_commit_tail.py`'s `build_close_tail_args_directive`/
+        `build_wsc_tail_directive` — see Negative-spec. Both builders, and
+        `wsc-tail.py`, were removed in the ceremony.wsc_tail kill,
+        2026-08-23.)
     coordinator_core.contract.decision_object.envelope.build_envelope / emit
         -> the 8-key envelope + fail-loud validation chokepoint.
     coordinator_core.contract.decision_object.judgment.build_judgment_point /
@@ -287,13 +292,11 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "wsc-coverage-gate-runner",
     "check-workstream-complete-deletion-blocks",
     "wsc-close",
-    "wsc-tail",
     "coordinator-lesson-add",
     "coordinator-queue-append",
     "archive-stamp-cli",
     "coordinator-harvest-deferrals",
     "coordinator-complete-entry",
-    "reconcile-completion-commits",
     "coordinator-fold-execution-record",
     "regenerate-orientation-cache",
     "check-machine-local-regeneratability",
@@ -302,7 +305,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "fan-out-integrator",
     "scan_unresolved_ubt_records",
     "classify-dispatch-shape",
-    "session-claim-cli",
 )
 
 
@@ -817,10 +819,10 @@ def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> O
     inert-a-p-fe5b38e42795.yaml): when the caller has already answered
     `jp-session-shape`, `gates.session_shape.disposition` should read that
     resolved value on a re-`brief`, not silently replay the detector chain's
-    original verdict — today all four dispositions carry `resolves: []`, so
-    the decision is honoured by `wsc-tail` but invisible here, leaving
-    "accepted" and "discarded" indistinguishable to the operator deciding
-    whether to retry.
+    original verdict — today all four dispositions carry `resolves: []`,
+    leaving "accepted" and "discarded" indistinguishable to the operator
+    deciding whether to retry. (Formerly honoured by `wsc-tail`, removed in
+    the ceremony.wsc_tail kill, 2026-08-23.)
 
     Reads `decisions["jp-session-shape"]["disposition"]` only — the same key
     `build_decisions_template` pre-keys for this judgment point — and
@@ -835,8 +837,10 @@ def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> O
     the directive these dispositions used to resolve, was removed under
     K-001 (state/kill-ledger.md, LANDED `55e64be13`). This function only
     changes what `brief` REPORTS back through `gates.session_shape`, never
-    what `directives[]` dispatches — the mutation path stays exactly where
-    `wsc-tail` already reads the decision from, unchanged by this chunk.
+    what `directives[]` dispatches — the mutation path was left exactly
+    where `wsc-tail` used to read the decision from, unchanged by this
+    chunk. (`wsc-tail` itself was removed in the ceremony.wsc_tail kill,
+    2026-08-23.)
     """
     entry = decisions.get(_JP_SESSION_SHAPE_ID)
     if not isinstance(entry, dict):
@@ -1041,8 +1045,9 @@ def build_write_trail_directives(
     behavior for an absent/empty `review` key, preserved for both shapes).
 
     Calls `directives_commit_tail.validate_review_shape` first -- the SAME
-    shared validator `build_close_tail_args_directive` calls, so the two
-    independent reader sites cannot diverge (state/bug-backlog/2026-08-14-
+    shared validator `build_close_tail_args_directive` formerly called
+    (removed in the ceremony.wsc_tail kill, 2026-08-23), so the two
+    independent reader sites could not diverge (state/bug-backlog/2026-08-14-
     wsc-apply-accepts-an-unconsumed-decision-debea052f8c5.yaml). RAISES
     `ValueError` on a shape outside {falsy | dict of recognized keys | list
     of such dicts} -- a caller-supplied `review` nested one key deeper than
@@ -1118,12 +1123,12 @@ def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[d
     `<prepared-commit-msg-file>` is REQUIRED — its own usage line has no
     optional form — so an absent `msg_file` must contribute NO directive,
     never one with an empty `args` list that would fail with a usage
-    error (exit 2) on every dispatch. Mirrors `directives_commit_tail.
-    build_release_plan_claim_directive`'s "absent input, no directive"
-    convention rather than inventing a placeholder path. The deletion-
-    blocks step is optional — a plan-less/msg_file-less session simply
-    skips it, exactly like a governing-plan-less session skips the
-    release-plan-claim directive (2026-07-27 finding: this directive was
+    error (exit 2) on every dispatch. Follows the same "absent input, no
+    directive" convention `directives_commit_tail.build_release_plan_claim_
+    directive` formerly used (that builder was removed in the
+    ceremony.wsc_tail kill, 2026-08-23) rather than inventing a placeholder
+    path. The deletion-blocks step is optional — a plan-less/msg_file-less
+    session simply skips it (2026-07-27 finding: this directive was
     previously emitted unconditionally with `args: []` whenever
     `decisions["msg_file"]` was absent, failing with a usage error on
     every real `apply` run that didn't happen to supply it)."""
@@ -1134,28 +1139,6 @@ def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[d
         "check-workstream-complete-deletion-blocks",
         [msg_file],
     )
-
-
-def _resolve_commit_message_authoring_fields(decisions: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    """Single resolution of `d-run-wsc-tail`'s commit subject/prose text
-    (state/bug-backlog/2026-07-28-workstream-complete-apply-re-scaffolds-t-
-    e925d597e0af.yaml: this directive used to carry only `--sid` because
-    nothing read the EM's actual answer to the `commit-message-authoring`
-    judgment point). A flat `decisions["subject"]`/`["prose"]` key (the
-    pre-existing, still-honored contract) takes precedence when the caller
-    supplies it directly; otherwise falls back to the same text carried
-    alongside `commit-message-authoring`'s own resolved disposition
-    (`decisions["commit-message-authoring"]["subject"/"prose"]`) — the
-    shape an EM naturally produces when resolving that judgment point.
-    Used by BOTH `build_directives` (to backfill `effective_decisions`
-    before building `d-run-wsc-tail`) and `brief()` (to decide whether the
-    synthetic `jp-commit-subject-missing` halt below must fire) — the one
-    place this precedence is decided."""
-    jp_decision = decisions.get("commit-message-authoring")
-    jp_fields = jp_decision if isinstance(jp_decision, dict) else {}
-    subject = decisions.get("subject") or jp_fields.get("subject")
-    prose = decisions.get("prose") or jp_fields.get("prose")
-    return subject, prose
 
 
 def build_directives(
@@ -1195,12 +1178,15 @@ def build_directives(
 
     `partition_mandatory` (D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-
     wsc-review-trail-skips-silently.md): `brief()`'s own resolved
-    `decide_review_scale(...).partition_mandatory`, threaded straight to
-    `directives_commit_tail.build_wsc_tail_directive` below — a DEDICATED
-    parameter, deliberately never a `decisions[...]` key (that would make
-    it look caller-suppliable and decisions-template-discoverable; it is
-    neither, it is this module's own resolved verdict). Defaults `False`,
-    reproducing every existing caller's argv byte-identically.
+    `decide_review_scale(...).partition_mandatory`. Formerly threaded
+    straight to `directives_commit_tail.build_wsc_tail_directive` below — a
+    DEDICATED parameter, deliberately never a `decisions[...]` key (that
+    would make it look caller-suppliable and decisions-template-
+    discoverable; it is neither, it is this module's own resolved verdict).
+    That builder was removed in the ceremony.wsc_tail kill, 2026-08-23; this
+    parameter is now accepted but unused pending a replacement consumer.
+    Defaults `False`, reproducing every existing caller's argv
+    byte-identically.
     """
     directives: list[dict[str, Any]] = []
 
@@ -1210,9 +1196,10 @@ def build_directives(
 
     # Every OTHER consumer below that reads `decisions.get("governing_plan_
     # slug")` directly (directives_completion.build_directives's completion-
-    # entry metadata + run-report-sidecar plan_slug gate,
-    # directives_commit_tail.build_wsc_tail_directive's commit-tail arg,
-    # directives_commit_tail.build_release_plan_claim_directive) would go
+    # entry metadata + run-report-sidecar plan_slug gate; formerly also
+    # directives_commit_tail.build_wsc_tail_directive's commit-tail arg and
+    # directives_commit_tail.build_release_plan_claim_directive, both
+    # removed in the ceremony.wsc_tail kill, 2026-08-23) would go
     # blind exactly like `d-release-plan-claim` did whenever the slug
     # resolved via the handoff-frontmatter or fixed-fallback legs rather
     # than a caller-supplied `decisions` key (2026-07-27 finding: the claim
@@ -1225,16 +1212,6 @@ def build_directives(
     effective_decisions = dict(decisions)
     if governing_plan is not None and not effective_decisions.get("governing_plan_slug"):
         effective_decisions["governing_plan_slug"] = governing_plan.slug
-
-    # `d-run-wsc-tail`'s subject/prose text, same "backfill effective_
-    # decisions, never each consumer re-deriving it" pattern as the
-    # governing-plan-slug backfill just above — see
-    # `_resolve_commit_message_authoring_fields`'s own docstring.
-    resolved_subject, resolved_prose = _resolve_commit_message_authoring_fields(decisions)
-    if resolved_subject and not effective_decisions.get("subject"):
-        effective_decisions["subject"] = resolved_subject
-    if resolved_prose and not effective_decisions.get("prose"):
-        effective_decisions["prose"] = resolved_prose
 
     # -- Convert #2 original: d-coverage-gate / d-write-trail, repointed --
     directives.extend(
@@ -1346,12 +1323,14 @@ def build_directives(
         )
 
     # -- Step 3/3.5/3.6 (C2e): commit-tail keystone through cadence --
-    directives.append(directives_commit_tail.build_close_tail_args_directive(decisions))
-    directives.append(
-        directives_commit_tail.build_wsc_tail_directive(
-            gate.sid, effective_decisions, partition_mandatory=partition_mandatory
-        )
-    )
+    # `d-close-tail-args` / `d-run-wsc-tail` / `d-release-plan-claim` were
+    # REMOVED here (ceremony.wsc_tail kill, 2026-08-23) — the trampoline and
+    # engine op they fronted are deleted, and `d-release-plan-claim` had no
+    # precondition signal left once its producer (`d-run-wsc-tail`) was
+    # gone. `/workstream-complete` no longer commits the session's own
+    # staged paths or auto-releases a governing-plan claim; see
+    # `state/kill-ledger.md`.
+    #
     # `d-archive-session-claim` is DELIBERATELY NOT emitted here (2026-07-28).
     # This ceremony fires once per closed workstream, and a session can
     # close several workstreams before it ends — but `scope.archive()` moves
@@ -1364,19 +1343,6 @@ def build_directives(
     # caller; the directive builder that used to construct this call
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
     # been removed as unreferenced — only the CLI it wrapped survives.
-    # Reads `effective_decisions` (backfilled above with the resolved
-    # `governing_plan.slug` above) rather than raw `decisions` directly, so
-    # claim and release agree regardless of which precedence leg
-    # (decisions/handoff/fixed fallback) actually resolved the plan.
-    # Reading the raw decisions key here left `d-release-plan-claim` absent
-    # whenever the slug came from the handoff-frontmatter leg — a lock
-    # taken and never released (2026-07-27, found in review of the
-    # handoff-frontmatter-resolution fix).
-    release_plan_claim = directives_commit_tail.build_release_plan_claim_directive(
-        effective_decisions.get("governing_plan_slug")
-    )
-    if release_plan_claim is not None:
-        directives.append(release_plan_claim)
 
     return directives
 
@@ -1401,8 +1367,9 @@ def build_review_scale_judgment_point(
 
     ADVISORY, not an enforced lock, by deliberate PM ruling (2026-07-27,
     the same ruling `build_coverage_judgment_point` carries): the commit
-    tail (`d-run-wsc-tail`) carries no dependency edge on this judgment
-    point. See DR-068 ("Commit-Time Coverage Gate — ... Advisory-Not-
+    tail (`d-run-wsc-tail`, removed in the ceremony.wsc_tail kill,
+    2026-08-23) carried no dependency edge on this judgment
+    point while it existed. See DR-068 ("Commit-Time Coverage Gate — ... Advisory-Not-
     Blocking") and DoE-claude coordinator/docs/wiki/workstream-complete-
     review.md, section "The gate is an oracle, not a lock" — do not
     re-derive this as a bug or wire a dependency edge here without a fresh
@@ -1443,7 +1410,8 @@ def build_review_scale_judgment_point(
     — that is exactly the mechanism the memo above traces from "verdict
     computed but not carried" to "EM takes the tier-appropriate
     recommendation and closes a chain terminal on one reviewer." This is
-    STILL advisory, not a new block: `d-run-wsc-tail` carries no dependency
+    STILL advisory, not a new block: `d-run-wsc-tail` (removed in the
+    ceremony.wsc_tail kill, 2026-08-23) never carried a dependency
     edge on `jp-review-scale` either way, per DR-068 (2026-07-27,
     "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and DoE-claude
     coordinator/docs/wiki/workstream-complete-review.md, section "The gate
@@ -1526,7 +1494,8 @@ def build_review_scale_judgment_point(
             # (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
             # being-questions.md) This branch is reached only once the scale
             # RESOLVES, its one disposition `acknowledge-scale` carries
-            # `resolves=[]`, and DR-068 keeps `d-run-wsc-tail` free of any
+            # `resolves=[]`, and DR-068 kept `d-run-wsc-tail` (removed in the
+            # ceremony.wsc_tail kill, 2026-08-23) free of any
             # dependency edge on this point — so it gates nothing on the
             # directive axis while carrying a recommendation, which is exactly
             # the shape `_emit`'s backstop refuses when unclassified. Without
@@ -1559,100 +1528,10 @@ def build_review_scale_judgment_point(
     )
 
 
-# ---------------------------------------------------------------------------
-# jp-completion-entry-scaffold / jp-commit-subject-missing — mechanical,
-# disk/decisions-computed halts in front of `d-run-wsc-tail` (state/bug-
-# backlog/2026-07-28-workstream-complete-apply-re-scaffolds-t-
-# e925d597e0af.yaml). Both mirror `build_session_shape_judgment_point`'s
-# "only emitted while the underlying fact holds" shape: once the EM clears
-# the fact (authors the entry; supplies a subject), the NEXT `brief()`
-# recomputation simply stops emitting the point, and `_append_directive_
-# dependency` below only ever ran for a call where the point WAS emitted —
-# there is no stale dependency edge left dangling on a since-cleared pass.
-# Both are structurally UNRESOLVABLE via a caller-supplied `decisions`
-# entry (their one disposition's `resolves` list is deliberately empty) —
-# the only way to clear either gate is to fix the underlying fact and
-# re-run `apply`, never to fabricate a disposition.
-# ---------------------------------------------------------------------------
-
-
-def build_completion_entry_scaffold_judgment_point(
-    entry_path: str, residue_fields: tuple[str, ...], entry_exists: bool = True
-) -> dict[str, Any]:
-    """Blocks `d-run-wsc-tail` until the `d-complete-entry` scaffold at
-    `entry_path` has been hand-authored. SKILL.md's own "Resolving these
-    two judgment points is not the last step" paragraph names this exact
-    authoring window as mandatory before the commit-tail keystone may
-    fire — a single `apply` pass previously fired `d-complete-entry` and
-    `d-run-wsc-tail` back to back with no window between them for the EM
-    to write anything.
-
-    `entry_exists` distinguishes "not yet scaffolded at all" (no file at
-    `entry_path` yet — `directives_completion.compute_completion_entry_
-    scaffold_gate`'s own `_coordinator_complete_entry._read_existing_
-    scaffold_state` computes this `exists` bit, but `scaffold_residue_
-    fields` — the caller of that reader — only returns the missing-field
-    LIST and discards it) from "still carries placeholder" (a real file
-    exists on disk but one or more of title/nature/prose is still the
-    scaffold's own placeholder value). Reporting the absent case as
-    "still carries placeholder" claimed evidence this module never had —
-    there was nothing on disk to carry anything, placeholder or otherwise.
-    Computed here via a plain `Path(entry_path).is_file()` (this module's
-    own read-only posture already tolerates a disk read at this layer —
-    see `_read_consumed_handoff_text` — and duplicating a filesystem stat
-    is cheaper and lower-risk than importing `directives_completion`'s
-    private reader across a package boundary this chunk does not own)."""
-    fields = ", ".join(residue_fields)
-    if entry_exists:
-        question = (
-            f"The completion entry at {entry_path!r} still carries placeholder "
-            f"{fields} — has it been hand-authored yet?"
-        )
-        evidence = f"{entry_path}'s own frontmatter/body — still-placeholder: {fields}"
-    else:
-        question = (
-            f"The completion entry at {entry_path!r} has not yet been scaffolded at all "
-            f"(no file on disk) — its {fields} still need authoring once it exists — "
-            "has it been hand-authored yet?"
-        )
-        evidence = f"{entry_path} does not exist on disk yet — not yet scaffolded: {fields}"
-    return build_untrusted_gate_judgment_point(
-        id="jp-completion-entry-scaffold",
-        question=question,
-        dispositions=[build_disposition("not-yet-authored", resolves=[])],
-        evidence=evidence,
-        reason=(
-            f"Author the resolved {fields} directly into {entry_path}, then re-run apply — "
-            "there is no disposition that can clear this gate short of actually editing the "
-            "file (SKILL.md § Resolve judgment points: 'not the last step')."
-        ),
-    )
-
-
-def build_commit_subject_missing_judgment_point() -> dict[str, Any]:
-    """Blocks `d-run-wsc-tail` when neither a flat `decisions['subject']`
-    nor `decisions['commit-message-authoring']['subject']` resolved to a
-    real value. `wsc-tail.py --subject` is HARD-required by the op
-    (argparse `required=True`) — dispatching without it is a guaranteed
-    exit-2 argparse failure, never a legitimate soft-fail tail item."""
-    return build_untrusted_gate_judgment_point(
-        id="jp-commit-subject-missing",
-        question=(
-            "d-run-wsc-tail needs a commit subject — supply it as "
-            "decisions['subject'] or decisions['commit-message-authoring']['subject']."
-        ),
-        dispositions=[build_disposition("subject-not-yet-supplied", resolves=[])],
-        evidence="decisions['subject'] / decisions['commit-message-authoring']['subject'], both absent",
-        reason=(
-            "wsc-tail.py's --subject is argparse required=True; dispatching without it is a "
-            "guaranteed exit-2 usage failure, never a legitimate tail-item soft-fail. There is "
-            "no disposition that can clear this gate (like jp-completion-entry-scaffold, its "
-            "one disposition's resolves list is deliberately empty) — set decisions['subject'] "
-            "(or decisions['commit-message-authoring']['subject']) to the commit subject text "
-            "directly, then re-run apply; the next brief() recomputation simply stops emitting "
-            "this judgment point once a real value resolves."
-        ),
-    )
+# jp-completion-entry-scaffold / jp-commit-subject-missing — REMOVED
+# (ceremony.wsc_tail kill, 2026-08-23): both existed solely to gate
+# `d-run-wsc-tail`, which no longer exists — see
+# `directives_commit_tail.py`'s module docstring.
 
 
 def build_open_spine_rows_block_stamp_judgment_point(gate: "directives_spine_worklist.OpenSpineRowGate") -> dict[str, Any]:
@@ -1663,12 +1542,13 @@ def build_open_spine_rows_block_stamp_judgment_point(gate: "directives_spine_wor
     is a terminal state
     (`coordinator_core/frontmatter/schemas/plan.schema.json`) and stamping
     it over unresolved or unverifiable spine work misrepresents the plan as
-    done. Mirrors `build_commit_subject_missing_judgment_point`'s shape: a
+    done. Same shape as `build_commit_subject_missing_judgment_point`
+    formerly used (removed in the ceremony.wsc_tail kill, 2026-08-23): a
     single disposition with an empty `resolves` — there is no EM pick that
     clears this gate short of actually resolving/waiving the named row(s)
     or fixing the spine so it can be read (SKILL.md § Resolve judgment
     points: "not the last step"), same as that builder's own docstring
-    reasons for `jp-commit-subject-missing`. Only ever called once this
+    reasoned for `jp-commit-subject-missing`. Only ever called once this
     module has already confirmed `gate.verdict == "indeterminate"` or
     (`gate.verdict == "applicable"` and `gate.unwaived_ids()` is non-empty)
     — see the call site's own comment for the incident this closes; raises
@@ -2375,25 +2255,24 @@ def compute_consumed_handoff_completeness_gate(
 
 
 def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffCompletenessGate) -> dict[str, Any]:
-    """AC3/AC4 — blocks all six attribution/tail directives when
-    `gate.blocks` is True. Copies the `_append_directive_dependency`/
-    `build_untrusted_gate_judgment_point` wiring from
-    `build_commit_subject_missing_judgment_point`, but deliberately NOT its
-    `resolves` shape: that builder's single disposition is unclearable by
-    design (its own remedy is "edit a file and re-run"). This gate needs
-    the opposite — an EM able to affirmatively override a known in-flight
-    state (DR-502, docs/wiki/ceremony-wsc-hardening.md:372: a J-node stays
-    formally unresolved until an affirmative EM pick) — so `override-known-
-    in-flight` names all six of d-run-wsc-tail, d-claim-plan-execution-lock,
-    d-stamp-plan-implemented, d-harvest-deferrals-1, d-complete-entry, and
-    d-reconcile-completion-commits in `resolves` (the last of these carries
-    a `depends_on="d-complete-entry"` edge plus a literal
-    `{d-complete-entry.entry_path}` arg token — `_execute_directives`
-    routes an unresolvable token to report["failed"], not
-    report["blocked"], so leaving it ungated would strand it and flip a
-    correct HALTED_AT_JUDGMENT into a spurious DIRECTIVE_FAILED/
-    PARTIAL_MUTATION), and `stop-and-handoff` is the inert arm matching
-    SKILL.md's own mutual-exclusion rule."""
+    """AC3/AC4 — blocks the remaining four attribution/tail directives when
+    `gate.blocks` is True (`d-run-wsc-tail` and `d-reconcile-completion-
+    commits` were two more members, removed with the rest of Step 3's
+    commit-tail wiring and the killed `completion.reconcile_commits` CLI
+    respectively — see `directives_commit_tail.py`'s and
+    `directives_completion.py`'s module docstrings). Uses
+    `_append_directive_dependency`/`build_untrusted_gate_judgment_point`
+    the same way every other structural gate in this module does, but
+    deliberately does NOT use a single-unclearable-disposition shape (the
+    remedy for THIS gate is not "edit a file and re-run"). This gate needs
+    the opposite — an EM able to
+    affirmatively override a known in-flight state (DR-502,
+    docs/wiki/ceremony-wsc-hardening.md:372: a J-node stays formally
+    unresolved until an affirmative EM pick) — so `override-known-
+    in-flight` names d-claim-plan-execution-lock, d-stamp-plan-implemented,
+    d-harvest-deferrals-1, and d-complete-entry in `resolves`, and
+    `stop-and-handoff` is the inert arm matching SKILL.md's own
+    mutual-exclusion rule."""
     blocking = [e for e in gate.elements if e["blocks"]]
     lines = []
     for e in blocking:
@@ -2418,12 +2297,10 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
             build_disposition(
                 "override-known-in-flight",
                 resolves=[
-                    "d-run-wsc-tail",
                     "d-claim-plan-execution-lock",
                     "d-stamp-plan-implemented",
                     "d-harvest-deferrals-1",
                     "d-complete-entry",
-                    "d-reconcile-completion-commits",
                 ],
             ),
             build_disposition("stop-and-handoff", resolves=[]),
@@ -2547,9 +2424,9 @@ def _build_preserved_judgment_points(
         points.append(_judgments.build_concurrent_peer_attribution_judgment_point())
         points.append(_judgments.build_unattributable_file_disposition_judgment_point())
 
-    # Step 3/4 — commit-message authoring + session-work-summary are
-    # relevant at every close.
-    points.append(_judgments.build_commit_message_authoring_judgment_point())
+    # Step 3/4 — commit-message-authoring REMOVED (ceremony.wsc_tail kill,
+    # 2026-08-23): nothing reads decisions["subject"]/["prose"] any more.
+    # session-work-summary is still relevant at every close.
     points.append(_judgments.build_session_work_summary_judgment_point())
 
     # Flag-severity classification, only when the caller has flags to
@@ -3179,8 +3056,9 @@ def _measure_session_review_scale_inputs(
     now reads it (C2) rather than `gross_loc`.
 
     Both halves are session-scoped, because Step 6's review-scale question
-    is asked BEFORE `d-run-wsc-tail` commits and a measurement over landed
-    commits alone would undercount the normal uncommitted close:
+    is asked BEFORE the commit tail lands (formerly `d-run-wsc-tail`,
+    removed in the ceremony.wsc_tail kill, 2026-08-23) and a measurement
+    over landed commits alone would undercount the normal uncommitted close:
 
     - COMMITTED work is summed over `_session_owned_shas` via `git show
       --numstat`, per-commit. A `base..HEAD` range is wrong here for the
@@ -3943,63 +3821,14 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         root, gate.consumed_handoff_paths
     )
 
-    # Authoring-window halts in front of d-run-wsc-tail (state/bug-backlog/
-    # 2026-07-28-workstream-complete-apply-re-scaffolds-t-e925d597e0af.yaml)
-    # — see the two builders' own docstrings. Both only ever append when
-    # `directives` actually carries a `d-run-wsc-tail` entry (always true
-    # today, but this mirrors `build_coverage_judgment_point`'s own
-    # defensive `any(...)` check rather than assuming the id's presence).
-    # AC5's `stage_paths` template pre-fill source (`gates.stage_paths_
-    # candidates`) — only ever populated inside the branch below, when this
-    # run actually computed a candidate set; stays `None` otherwise (caller
-    # already supplied `decisions["stage_paths"]`, or `d-run-wsc-tail` is
-    # absent this pass).
+    # Authoring-window halts in front of d-run-wsc-tail — REMOVED (ceremony.
+    # wsc_tail kill, 2026-08-23): `d-run-wsc-tail` no longer exists, so
+    # `jp-completion-entry-scaffold`/`jp-commit-subject-missing`/
+    # `jp-stage-paths-missing` have nothing left to gate. AC5's
+    # `stage_paths` template pre-fill source (`gates.stage_paths_
+    # candidates`) is left wired below, always `None` now — see
+    # `directives_commit_tail.py`'s module docstring for the removed step.
     stage_paths_candidates: Optional[list[str]] = None
-
-    if any(d["id"] == "d-run-wsc-tail" for d in directives):
-        effective_governing_plan_slug = (
-            governing_plan.slug if governing_plan is not None else decisions.get("governing_plan_slug")
-        )
-        scaffold_fact = directives_completion.compute_completion_entry_scaffold_gate(
-            root, gate.sid, effective_governing_plan_slug
-        )
-        if scaffold_fact is not None:
-            judgment_points.append(
-                build_completion_entry_scaffold_judgment_point(
-                    scaffold_fact.entry_path,
-                    scaffold_fact.residue_fields,
-                    entry_exists=Path(scaffold_fact.entry_path).is_file(),
-                )
-            )
-            _append_directive_dependency(directives, "d-run-wsc-tail", "jp-completion-entry-scaffold")
-
-        resolved_subject, _resolved_prose = _resolve_commit_message_authoring_fields(decisions)
-        if not resolved_subject:
-            judgment_points.append(build_commit_subject_missing_judgment_point())
-            _append_directive_dependency(directives, "d-run-wsc-tail", "jp-commit-subject-missing")
-
-        if decisions.get("stage_paths") is None:
-            # `session_start_time`, the known-concurrent set and the
-            # session-authored classification were all resolved once above,
-            # for the review-scale measurement — reused here rather than
-            # recomputed, since the classification costs one `git log` spawn
-            # per dirty path.
-            if known_concurrent_paths is None or classified_session_files is None:
-                known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
-                    root, gate.sid
-                )
-                classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
-                    root, session_start_time, known_concurrent_paths=known_concurrent_paths
-                )
-            session_authored_paths = [
-                row["path"] for row in classified_session_files if row["session_authored"]
-            ]
-            candidate_paths = directives_commit_tail.accumulate_session_paths(session_authored_paths)
-            stage_paths_candidates = candidate_paths
-            judgment_points.append(
-                _judgments.build_stage_paths_missing_judgment_point(candidate_paths, known_concurrent_paths)
-            )
-            _append_directive_dependency(directives, "d-run-wsc-tail", "jp-stage-paths-missing")
 
     # AC3/AC4 — either leg fires -> emit ONE judgment point, then depend
     # every attribution/tail directive on it. Keyed on `consumed_handoff_
@@ -4018,12 +3847,10 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             build_consumed_handoff_completeness_judgment_point(consumed_handoff_completeness_gate)
         )
         for _gated_directive_id in (
-            "d-run-wsc-tail",
             "d-claim-plan-execution-lock",
             "d-stamp-plan-implemented",
             "d-harvest-deferrals-1",
             "d-complete-entry",
-            "d-reconcile-completion-commits",
         ):
             if any(d["id"] == _gated_directive_id for d in directives):
                 _append_directive_dependency(directives, _gated_directive_id, "jp-consumed-handoff-completeness")
@@ -4188,8 +4015,10 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # every entry: each slice is a real code sha_range, never a plan/
     # integration record. The caller fills reviewer/scope/verdict per
     # entry and passes the list straight through as `decisions["review"]`
-    # (`directives_commit_tail.build_close_tail_args_directive`'s existing
-    # list branch already consumes this exact shape as `--review-slice`).
+    # (`directives_commit_tail.build_write_trail_directives` consumes this
+    # exact shape; `build_close_tail_args_directive` formerly also did, via
+    # its `--review-slice` list branch, removed in the ceremony.wsc_tail
+    # kill, 2026-08-23).
     review_scale_payload = review_scale_decision._asdict()
     if measured_commit_count is not None:
         for _slice in review_scale_commit_slices:

@@ -286,44 +286,20 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
 
 
 def sweep_backlog_grind_assemble(monkeypatch: Any) -> PhantomSweepResult:
-    import os
-    import sys
-
     # `backlog_grind_assemble` transitively imports `orient_assemble` (for
     # `ReaderResult`), whose own `readers_branch_reconcile.py` dynamically
     # loads `coordinator/bin/workday-start-day-branch-resolve.py`, which
-    # imports `cc_invoke.py` -- and THAT module arms lazy op registration
-    # process-globally at import time. This sweep only needs to not leave the
-    # process dirty for a sibling test/session that runs after it, so it
-    # snapshots and restores the flag around the one import path that can
-    # trigger the write.
-    #
-    # BOTH channels are restored. The env var was the channel until
-    # 2026-07-28, when the in-process signal moved to
-    # `sys._coordinator_core_lazy_ops` to stop children inheriting it (see
-    # coordinator/bin/lib/cc_invoke.py); the env var remains a legitimate
-    # operator override, so a value found there is still put back rather than
-    # dropped. The import-time global write is no longer the unfixed defect
-    # this comment used to report.
-    had_var = "COORDINATOR_CORE_LAZY_OPS" in os.environ
-    prior_value = os.environ.get("COORDINATOR_CORE_LAZY_OPS")
-    had_attr = hasattr(sys, "_coordinator_core_lazy_ops")
-    prior_attr = getattr(sys, "_coordinator_core_lazy_ops", None)
-    try:
-        from coordinator_core import backlog_grind_assemble as bga
-        from coordinator_core.backlog_grind_assemble import CADENCES, brief as bga_brief
-    finally:
-        if had_var:
-            os.environ["COORDINATOR_CORE_LAZY_OPS"] = prior_value  # type: ignore[assignment]
-        else:
-            os.environ.pop("COORDINATOR_CORE_LAZY_OPS", None)
-        if had_attr:
-            setattr(sys, "_coordinator_core_lazy_ops", prior_attr)
-        else:
-            try:
-                delattr(sys, "_coordinator_core_lazy_ops")
-            except AttributeError:
-                pass
+    # imports `cc_invoke.py`. Until the `import-path-costs-nothing` sprint
+    # (C8), that import armed lazy op registration process-globally as a
+    # side effect, and this function used to snapshot/restore both the
+    # `COORDINATOR_CORE_LAZY_OPS` env var and the `sys._coordinator_core_lazy_
+    # ops` in-process attribute around it so a sibling test/session running
+    # after this sweep never inherited a dirty process. `cc_invoke.py` no
+    # longer arms anything at import time (lazy registration is
+    # unconditional now — see coordinator_core/ops/__init__.py), so there is
+    # nothing left for this import path to leak and nothing to restore.
+    from coordinator_core import backlog_grind_assemble as bga
+    from coordinator_core.backlog_grind_assemble import CADENCES, brief as bga_brief
 
     # `brief()` calls `resolve_operator_config()` (AC5) -- stubbed exactly
     # like `test_backlog_grind_assemble.py`'s own autouse fixture, so this

@@ -5,7 +5,7 @@ Purpose: Records agent IDs dispatched by the EM into two session-runtime files:
     .git/coordinator-sessions/<session_id>/dispatched-agents.txt   (tab-delimited log)
     .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
 
-Ported from the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Ported from the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, DoE ``3a561713``). Faithful port of all write logic and
 conditionals — same 3-pass agent-id extraction (now pre-resolved to flat scalar
 input by the manifest), same 4-source model cascade (now pre-resolved), same
@@ -67,7 +67,7 @@ Negative-spec:
     - Always returns without blocking the harness — advisory bookkeeping only.
 
 Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C4
-Source: retired ~/.claude/plugins/coordinator/hooks/scripts/
+Source: retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, DoE ``3a561713``).
 """
 
@@ -495,6 +495,16 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
+    # Class-2 instrument: asyncio.CancelledError raised while this handler is
+    # queued/suspended was previously bare-propagated with no breadcrumb — the
+    # named reason a 14-day undercount went unseen (this leg is the only one
+    # of the two silent-drop classes that is NOT a return path). _checkpoint
+    # is updated immediately before each await point below so a cancellation
+    # log can say which side of _setup_dirs_sync (the back-pointer write) it
+    # landed on, matching the on-disk signature (both artifacts absent).
+    _entry_monotonic = time.monotonic()
+    _checkpoint = "entered_handler"
+
     session_id = field(params, "session_id")
     # R-1: dispatched_agent_id is the flattened tool_response.agentId; snake fallback
     # dispatched_agent_id_snake consumes tool_response.agent_id (snake_case) from named-teammate
@@ -504,15 +514,35 @@ async def _handler(params: dict, repo_root=None) -> dict:
     subagent_type = field(params, "subagent_type")
 
     # --- Guard: required inputs (mirrors source exits at lines 88-90, 124) ---
+    # Each early return here previously left NO trace on disk: the drop is
+    # indistinguishable from a dispatch that never fired this hook at all
+    # (14-day undercount, id-namespace mismatch and PowerShell coverage gap
+    # both eliminated on evidence). Breadcrumb naming which guard tripped —
+    # same fail-open stderr sink as _process_dispatched_locked's LockTimeout
+    # leg (line ~456) — makes the drop self-explaining without changing the
+    # guard's disposition.
     if not session_id:
+        print(
+            f"track_dispatched_agents: guard=empty_session_id — dropped agent_id={agent_id!r}",
+            file=sys.stderr,
+        )
         return no_advisory()
     if not agent_id:
+        print(
+            f"track_dispatched_agents: guard=empty_agent_id — dropped session_id={session_id!r}",
+            file=sys.stderr,
+        )
         return no_advisory()
 
     # --- Agent-id format guard (mirrors source step (b), lines 125-128) ---
     # Accept bare lowercase hex (≥12 chars) OR teammate canonical <name>@session-<short>.
     # Reject anything else fail-closed.
     if not _valid_agent_id(agent_id):
+        print(
+            f"track_dispatched_agents: guard=invalid_agent_id — dropped agent_id={agent_id!r} "
+            f"session_id={session_id!r}",
+            file=sys.stderr,
+        )
         return no_advisory()
 
     # --- Rewrite a stale harness-embedded short against the LIVE session_id ---
@@ -530,7 +560,19 @@ async def _handler(params: dict, repo_root=None) -> dict:
         normalize_teammate_agent_id,
     )
 
-    agent_id = normalize_teammate_agent_id(agent_id, session_id)
+    try:
+        agent_id = normalize_teammate_agent_id(agent_id, session_id)
+    except Exception as exc:
+        # Pure function per its own docstring, but an uncaught raise here would
+        # violate this op's "always returns without blocking the harness"
+        # contract — fail open with the same breadcrumb shape as every other
+        # leg in this window rather than let it propagate silently.
+        print(
+            f"track_dispatched_agents: guard=normalize_teammate_agent_id_raised — dropped "
+            f"agent_id={agent_id!r} session_id={session_id!r}: {exc}",
+            file=sys.stderr,
+        )
+        return no_advisory()
 
     # --- Model fallback (mirrors source step (c), line 138: MODEL="unknown") ---
     # The manifest resolved the 4-source cascade to a flat scalar; "" means none resolved.
@@ -542,15 +584,27 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # --- Resolve write paths from repo_root ---
     # Guard against absent/None value: write to .git/ only when a valid repo root is available.
     if not repo_root:
+        print(
+            f"track_dispatched_agents: guard=empty_repo_root — dropped agent_id={agent_id!r} "
+            f"session_id={session_id!r}",
+            file=sys.stderr,
+        )
         return no_advisory()
     # C1d: route through git_common_dir so linked worktrees resolve to the main .git
     # directory (a real dir) rather than the worktree's .git FILE.
     try:
         _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
-    except RuntimeError:
+    except RuntimeError as exc:
         # Review: code-reviewer — fallback had ".git" doubled: repo_root IS git_common_dir,
         # so Path(repo_root) / ".git" / "coordinator-sessions" → <repo>/.git/.git/… (never exists).
         # Fix: drop the redundant ".git" join in this fallback branch.
+        # Not a drop (the fallback path below still runs) — breadcrumb only so a
+        # git_common_dir failure is visible without changing this leg's disposition.
+        print(
+            f"track_dispatched_agents: guard=git_common_dir_raised — falling back to repo_root "
+            f"agent_id={agent_id!r} session_id={session_id!r}: {exc}",
+            file=sys.stderr,
+        )
         _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
     sessions_base = str(_sessions_base)
     session_dir = str(_sessions_base / session_id)
@@ -558,26 +612,43 @@ async def _handler(params: dict, repo_root=None) -> dict:
     dispatched = os.path.join(session_dir, "dispatched-agents.txt")
     em_backpointer = os.path.join(agent_dir, "em-session-id.txt")
 
-    # --- Init session-dir + agent-dir + atomic back-pointer ---
-    # Source tries cs_init via coordinator-session.sh lib; falls back to mkdir -p.
-    # In-engine: always repo-keyed, so the lib-resolution dance is unnecessary.
-    # Review: code-reviewer — F5 (nit): collapsed 3 sequential to_thread() round-trips
-    # for independent pre-write operations into one _setup_dirs_sync dispatch.
-    await asyncio.to_thread(_setup_dirs_sync, session_dir, agent_dir, em_backpointer, session_id)
+    try:
+        # --- Init session-dir + agent-dir + atomic back-pointer ---
+        # Source tries cs_init via coordinator-session.sh lib; falls back to mkdir -p.
+        # In-engine: always repo-keyed, so the lib-resolution dance is unnecessary.
+        # Review: code-reviewer — F5 (nit): collapsed 3 sequential to_thread() round-trips
+        # for independent pre-write operations into one _setup_dirs_sync dispatch.
+        _checkpoint = "before_setup_dirs"
+        await asyncio.to_thread(_setup_dirs_sync, session_dir, agent_dir, em_backpointer, session_id)
+        _checkpoint = "after_setup_dirs"
 
-    # --- Dedup / collision-guard + append — asyncio.Lock (D6) + locked_rmw cross-process layer ---
-    # asyncio.Lock serializes concurrent asyncio.to_thread() invocations within this process.
-    # locked_rmw (flock-backed) adds cross-process serialisation via _process_dispatched_locked.
-    # Falls back to _process_dispatched_sync when locked_rmw is unavailable (non-POSIX, non-git).
-    lock = _get_file_lock(dispatched)
-    async with lock:
-        await asyncio.to_thread(
-            _process_dispatched_locked,
-            dispatched,
-            agent_id,
-            model,
-            subagent_type,
-            Path(str(repo_root)),
+        # --- Dedup / collision-guard + append — asyncio.Lock (D6) + locked_rmw cross-process layer ---
+        # asyncio.Lock serializes concurrent asyncio.to_thread() invocations within this process.
+        # locked_rmw (flock-backed) adds cross-process serialisation via _process_dispatched_locked.
+        # Falls back to _process_dispatched_sync when locked_rmw is unavailable (non-POSIX, non-git).
+        _checkpoint = "before_lock_acquire"
+        lock = _get_file_lock(dispatched)
+        async with lock:
+            _checkpoint = "before_process_dispatched"
+            await asyncio.to_thread(
+                _process_dispatched_locked,
+                dispatched,
+                agent_id,
+                model,
+                subagent_type,
+                Path(str(repo_root)),
+            )
+            _checkpoint = "after_process_dispatched"
+    except asyncio.CancelledError:
+        # Never swallow — logging then re-raising preserves asyncio's cancellation
+        # contract. _checkpoint pins which side of the back-pointer write (the
+        # earlier of the two disk artifacts) the cancellation landed on.
+        elapsed = time.monotonic() - _entry_monotonic
+        print(
+            f"track_dispatched_agents: cancelled — checkpoint={_checkpoint} "
+            f"elapsed={elapsed:.3f}s agent_id={agent_id!r} session_id={session_id!r}",
+            file=sys.stderr,
         )
+        raise
 
     return no_advisory()

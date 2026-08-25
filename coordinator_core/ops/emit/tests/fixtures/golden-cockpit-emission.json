@@ -713,6 +713,7 @@
       "repo": "fixture-owner/fixture-repo",
       "coordinator_root_path": ".",
       "path": "docs/plans/2026-07-01-fixture-plan-alpha.md",
+      "review_verified": false,
       "title": "Fixture Plan Alpha — deterministic parity test anchor",
       "created": "2026-07-01",
       "author": "fixture-em",
@@ -751,6 +752,7 @@
       "repo": "fixture-owner/fixture-repo",
       "coordinator_root_path": ".",
       "path": "docs/plans/2026-07-02-fixture-plan-beta.md",
+      "review_verified": false,
       "title": "Fixture Plan Beta — deterministic parity test anchor",
       "created": "2026-07-02",
       "author": "fixture-em",
@@ -789,6 +791,7 @@
       "repo": "fixture-owner/fixture-repo",
       "coordinator_root_path": ".",
       "path": "docs/plans/2026-07-03-fixture-plan-gamma.md",
+      "review_verified": false,
       "title": "Fixture Plan Gamma — deterministic parity test anchor",
       "created": "2026-07-03",
       "author": "fixture-em",
@@ -1266,7 +1269,6 @@
       }
     }
   ],
-  "file_attributions": [],
   "initiatives": [
     {
       "repo": "fixture-owner/fixture-repo",
@@ -1406,7 +1408,6 @@
     "health": [],
     "decision_guides": [],
     "session_hierarchies": [],
-    "file_attributions": [],
     "initiatives": [],
     "exec_summaries": [],
     "roadmap_dag_nodes": [],

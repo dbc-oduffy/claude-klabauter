@@ -1,4 +1,4 @@
-"""Tests for envelope.main — the check-shipped-on-main.sh CLI port.
+"""Tests for resolvers.main — the check-shipped-on-main.sh CLI port.
 
 Port of: check-shipped-on-main.sh (DoE b5a4192c, 2026-07-20). Exercises the
 exit-code/stdout contract (0/1/2, --verbose ON_MAIN/NOT_ON_MAIN lines) against
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.emit.envelope import main
+from coordinator_core.ops.emit.resolvers import main
 
 # Declared, not excused: this file spawns a real git process because the property under
 # test is check-shipped-on-main's own git-ancestry contract, which no mock stands in

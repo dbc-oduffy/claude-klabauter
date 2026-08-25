@@ -7,14 +7,21 @@ cross-section (whole-envelope) parity scope, already carries bespoke, named
 folding revert-row coverage in there would create write-overlap with any other chunk
 or sibling plan touching whole-envelope parity (review finding G12).
 
-Reuses ``test_emit_parity.py``'s fixture-commit helper *shape*
-(``_closure_test_ctx`` / ``_init_closure_test_repo`` / ``_commit_with_message``,
-including the ``update-ref refs/remotes/origin/main`` trick — without it
-``collect()``'s ``git log origin/main HEAD`` does not resolve in a fixture repo at
-all) rather than re-deriving a throwaway git repo from scratch.
+**Ledger-backed since C2 (commit-closure-pipe-carries-rows plan).** ``collect()`` no
+longer scans commit messages or git history for the closure/revert facts — C1 stamps
+``closes``/``reverts_sha`` at commit time and this porter reads them back off the
+commit ledger (see ``coordinator_core/ops/emit/sections/commit_closures.py``'s own
+docstring). Fixture helpers below mirror
+``test_commit_closures_from_ledger.py``'s pattern — real throwaway git commits (so
+the one reachability ``git rev-list origin/main`` spawn resolves against real commit
+objects) with the closure/revert facts written directly into the ledger via
+``coordinator_core.commit_ledger.store.append_entry``, rather than authoring real
+``Closes:``-trailer/``git revert`` messages for ``collect()`` to parse — it never
+parses commit messages any more.
 
 Spec backlink: docs/plans/2026-08-18-sat-07-tier-a-wiring.md § Chunk C3, DR-318 §D4,
-§D8, AC9, AC16, AC17.
+§D8, AC9, AC16, AC17; C2 ledger migration per
+docs/plans/2026-08-22-the-commit-closure-pipe-carries-rows.md.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from unittest.mock import patch
 
 import pytest
 
+from coordinator_core.commit_ledger import store as ledger_store
 from coordinator_core.contract.cockpit_schema.entities.commit_closure import CommitClosure
 from coordinator_core.ops.emit.sections import commit_closures
 
@@ -32,9 +40,10 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 # --------------------------------------------------------------------------- fixture helpers
-# Shape reused from test_emit_parity.py's _init_closure_test_repo / _commit_with_message /
-# _closure_test_ctx (G12) — not imported cross-test-file (breaks pytest collection
-# isolation, per that module's own F2 review note), re-derived locally instead.
+# Shape reused from test_commit_closures_from_ledger.py's ledger-backed fixture pattern
+# (_init_repo / _commit / _mark_origin_main / _append / _closure_test_ctx) — not imported
+# cross-test-file (breaks pytest collection isolation, per F2 review note on the prior
+# git-scan-era version of this file), re-derived locally instead.
 
 
 def _run_git_or_raise(repo_root: Path, *args: str) -> str:
@@ -63,10 +72,25 @@ def _commit_with_message(repo_root: Path, message: str, content: str) -> str:
     return _run_git_or_raise(repo_root, "rev-parse", "HEAD")
 
 
+def _mark_origin_main(repo_root: Path, sha: str) -> None:
+    _run_git_or_raise(repo_root, "update-ref", "refs/remotes/origin/main", sha)
+
+
 def _revert_commit(repo_root: Path, sha: str) -> str:
-    """Run a real ``git revert``, producing git's own auto-generated body linkage line."""
+    """Run a real ``git revert``, producing git's own auto-generated body linkage line.
+
+    Kept for ``test_revert_of_untracked_commit_yields_no_revert_row`` (out of this
+    dispatch's scope, still passing unmodified) -- it only needs a real revert commit
+    object to exist, never a ledger entry, since its expectation (no rows at all) holds
+    on an empty ledger regardless of mechanism.
+    """
     _run_git_or_raise(repo_root, "revert", "--no-edit", sha)
     return _run_git_or_raise(repo_root, "rev-parse", "HEAD")
+
+
+def _append(repo_root: Path, handoff_id: str, sha: str, **kwargs) -> None:
+    ok = ledger_store.append_entry(handoff_id, sha, "code", cwd=str(repo_root), **kwargs)
+    assert ok, f"fixture append_entry failed for sha={sha}"
 
 
 def _closure_test_ctx(repo_root: Path):
@@ -87,15 +111,17 @@ def _closure_test_ctx(repo_root: Path):
 
 # --------------------------------------------------------------------------- AC9: revert row
 def test_git_revert_yields_marked_revert_row(tmp_path: Path) -> None:
-    """A real ``git revert`` of a Closes:-trailer commit yields TWO rows: the original close
-    row (``reverts_sha`` null) and a revert row carrying the SAME item_id, the revert
-    commit's OWN sha, and ``reverts_sha`` set to the reverted commit's sha (AC9, D4/D8)."""
+    """A revert commit whose ledger entry carries ``reverts_sha`` (stamped at write time,
+    C1, off git's own auto-generated 'This reverts commit <sha>' body line) yields TWO rows:
+    the original close row (``reverts_sha`` null) and a revert row carrying the SAME item_id,
+    the revert commit's OWN sha, and ``reverts_sha`` set to the reverted commit's sha
+    (AC9, D4/D8)."""
     _init_closure_test_repo(tmp_path)
-    closure_sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-42\n", "content-1\n"
-    )
-    revert_sha = _revert_commit(tmp_path, closure_sha)
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", revert_sha)
+    closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-1\n")
+    revert_sha = _commit_with_message(tmp_path, "revert: undo it", "content-1-reverted\n")
+    _mark_origin_main(tmp_path, revert_sha)
+    _append(tmp_path, "hnd-a", closure_sha, closes=["RECS-42"])
+    _append(tmp_path, "hnd-b", revert_sha, reverts_sha=closure_sha)
 
     ctx = _closure_test_ctx(tmp_path)
     records, malformed = commit_closures.collect(ctx)
@@ -123,19 +149,22 @@ def test_git_revert_yields_marked_revert_row(tmp_path: Path) -> None:
 
 # --------------------------------------------------------------------------- AC16: hand-authored revert
 def test_hand_authored_revert_message_yields_no_revert_row(tmp_path: Path) -> None:
-    """A commit whose subject looks like a revert but carries NO auto-generated
-    'This reverts commit <sha>' body line produces no revert row — fails safe, never an
-    error (D4's measured ~50% coverage limit, AC16)."""
+    """A hand-authored revert message has no auto-generated 'This reverts commit <sha>' body
+    line, so C1's ``extract_closure_facts_from_text`` never stamps ``reverts_sha`` for it at
+    write time — its ledger entry carries no ``reverts_sha`` at all. Such a commit therefore
+    produces no revert row — fails safe, never an error (D4's measured coverage limit,
+    AC16)."""
     _init_closure_test_repo(tmp_path)
-    closure_sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-7\n", "content-2\n"
-    )
+    closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-2\n")
     hand_revert_sha = _commit_with_message(
         tmp_path,
-        f"Revert \"fix: close an item\"\n\nManually reversed, no auto linkage line here.\n",
+        "Revert \"fix: close an item\"\n\nManually reversed, no auto linkage line here.\n",
         "content-2-reverted-by-hand\n",
     )
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", hand_revert_sha)
+    _mark_origin_main(tmp_path, hand_revert_sha)
+    _append(tmp_path, "hnd-a", closure_sha, closes=["RECS-7"])
+    # No reverts_sha on hand_revert_sha's entry -- nothing was stamped at write time.
+    _append(tmp_path, "hnd-a", hand_revert_sha)
 
     ctx = _closure_test_ctx(tmp_path)
     records, malformed = commit_closures.collect(ctx)
@@ -166,103 +195,46 @@ def test_revert_of_untracked_commit_yields_no_revert_row(tmp_path: Path) -> None
     assert records == [], f"reverted sha matches no closure row; expected no rows: {records!r}"
 
 
-# --------------------------------------------------------------------------- AC5/G13: pair-walk stride
-def test_pair_walk_stride_matches_widened_three_field_format(tmp_path: Path) -> None:
-    """A malformed-SHA record followed by a well-formed record, in the WIDENED three-field
-    (sha, trailers, body) format, must not desynchronize the pair-walk (G13) — the
-    malformed-row quarantine's stride correction (``i += 3``) is exercised alongside the
-    happy-path stride."""
-    _init_closure_test_repo(tmp_path)
-    ctx = _closure_test_ctx(tmp_path)
-
-    fake_stdout = (
-        "\x00" + "not-a-valid-sha" + "\x00" + "RECS-99\n" + "\x00"
-        + "\x00" + ("b" * 40) + "\x00" + "RECS-1\n" + "\x00This reverts commit " + ("c" * 40)
-    )
-    fake_result = subprocess.CompletedProcess(
-        args=["git", "log"], returncode=0, stdout=fake_stdout, stderr=""
-    )
-
-    with patch(
-        "coordinator_core.ops.emit.sections.commit_closures.subprocess.run",
-        return_value=fake_result,
-    ):
-        records, malformed = commit_closures.collect(ctx)
-
-    assert malformed == [
-        {
-            "sha": "not-a-valid-sha",
-            "reason": "git-log record failed 40-char lowercase-hex SHA validation",
-        }
-    ], f"malformed bucket did not quarantine correctly under the widened stride: {malformed!r}"
-    assert len(records) == 1, f"the well-formed record must still be emitted intact: {records!r}"
-    assert records[0]["sha"] == "b" * 40
-    assert records[0]["item_id"] == "RECS-1"
-    assert records[0]["reverts_sha"] is None, (
-        "this record's trailer block ('RECS-1\\n') must not be mistaken for its body — the "
-        "actual body ('This reverts commit ' + 'c'*40) never resolves to a revert because no "
-        "commit in this fixture has sha 'c'*40, so the (sha, trailer_block, body) triple must "
-        "not desynchronize under a malformed-row stride correction"
-    )
+# NOTE test_pair_walk_stride_matches_widened_three_field_format (formerly here, AC5/G13) was
+# DELETED (2026-08-23, C2 test-retirement pass): it pinned the git-log NUL-delimited pair-walk
+# stride and the ``i += 3`` correction over a fake ``subprocess.run`` stdout -- both artifacts
+# of the retired git-log scan mechanism (no ``_LOG_FORMAT``, no pair-walk, no fake-stdout
+# parsing exist in collect() any more). The malformed-sha-quarantine property it also touched
+# survives and stays covered: test_malformed_sha_shape_is_quarantined_not_emitted in
+# test_commit_closures_from_ledger.py.
 
 
 # --------------------------------------------------------------------------- AC5: single subprocess call
 def test_revert_arm_adds_no_second_subprocess_call(tmp_path: Path) -> None:
-    """The revert arm is a pure post-processing pass over the already-captured commits list —
-    collect() still performs EXACTLY ONE subprocess call even when a revert row is produced
-    (amplification-gate invariant, test_no_unbatched_per_item_git_spawn.py)."""
+    """The revert arm is a pure post-processing pass over the already-read ledger entries --
+    collect() still performs EXACTLY ONE subprocess call (the reachability ``git rev-list``)
+    even when a revert row is produced (amplification-gate invariant,
+    test_no_unbatched_per_item_git_spawn.py)."""
     _init_closure_test_repo(tmp_path)
-    closure_sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-3\n", "content-4\n"
-    )
-    revert_sha = _revert_commit(tmp_path, closure_sha)
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", revert_sha)
+    closure_sha = _commit_with_message(tmp_path, "fix: close an item", "content-4\n")
+    revert_sha = _commit_with_message(tmp_path, "revert: undo it", "content-4-reverted\n")
+    _mark_origin_main(tmp_path, revert_sha)
+    _append(tmp_path, "hnd-a", closure_sha, closes=["RECS-3"])
+    _append(tmp_path, "hnd-b", revert_sha, reverts_sha=closure_sha)
 
     ctx = _closure_test_ctx(tmp_path)
 
     with patch(
-        "coordinator_core.ops.emit.sections.commit_closures.subprocess.run",
-        wraps=subprocess.run,
+        "coordinator_core.ops.emit.sections.commit_closures.run_git",
+        wraps=commit_closures.run_git,
     ) as spy:
         records, _malformed = commit_closures.collect(ctx)
 
     assert spy.call_count == 1, (
         f"collect() must spawn exactly one subprocess even with a revert row present; "
-        f"got {spy.call_count} calls: {spy.call_args_list!r}"
+        f"got {spy.call_args_list!r}"
     )
     assert len(records) == 2
 
 
-# --------------------------------------------------------------------------- G5: marker pre-filter
-def test_marker_pre_filter_keeps_the_record_set_and_drops_the_rest(tmp_path: Path) -> None:
-    """The ``--grep`` disjunction is a pre-filter, not a narrowing: every commit that
-    could contribute a row still does, and commits carrying neither marker never reach
-    Python at all.
-
-    The unfiltered form read 15.9 MB of ``%B`` bodies for 23,446 commits on this repo to
-    produce 3 contributing ones (hitlist § G5). Filtering server-side is safe BY
-    CONSTRUCTION — collect() skips any commit with no trailer values and any body
-    ``_REVERT_LINE_RE`` does not match — so this pins the construction rather than a
-    measurement: a close row, a revert row, and a noise commit that must be filtered out.
-    """
-    _init_closure_test_repo(tmp_path)
-    closure_sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-9\n", "content-5\n"
-    )
-    revert_sha = _revert_commit(tmp_path, closure_sha)
-    _commit_with_message(tmp_path, "chore: neither marker here\n", "content-6\n")
-    noise_sha = _run_git_or_raise(tmp_path, "rev-parse", "HEAD").strip()
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", noise_sha)
-
-    ctx = _closure_test_ctx(tmp_path)
-    commits, malformed = commit_closures._extract_closure_commits(ctx)
-
-    assert malformed == []
-    walked = {sha for sha, _tv, _body in commits}
-    assert walked == {closure_sha, revert_sha}, (
-        "the pre-filter must admit exactly the two marker-carrying commits"
-    )
-    assert noise_sha not in walked, "a commit with neither marker must not reach Python"
-
-    records, _ = commit_closures.collect(ctx)
-    assert {r["sha"] for r in records} == {closure_sha, revert_sha}
+# NOTE test_marker_pre_filter_keeps_the_record_set_and_drops_the_rest (formerly here, G5) was
+# DELETED (2026-08-23, C2 test-retirement pass): it called ``commit_closures._extract_closure_
+# commits``, which no longer exists -- the ``--grep`` server-side pre-filter it pinned was part
+# of the retired git-log scan and has no ledger-backed analogue (a ledger read has no "noise
+# commit" to filter: only entries carrying ``closes``/``reverts_sha`` are ever written). No
+# durable property survives this one to re-express.

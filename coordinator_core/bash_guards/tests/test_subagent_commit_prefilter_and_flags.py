@@ -307,7 +307,6 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     "fleet.archive_actioned_memos",
     "fleet.archive_completed_handoffs",
     "fleet.archive_paper_trail",
-    "fleet.archive_completed_plans",
     "fleet.archive_queue_entry",
     "fleet.prune_closed_bugs",
     "handoff.archive_transition",

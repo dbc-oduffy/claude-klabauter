@@ -231,6 +231,77 @@ class TestRedirectionDisplacement:
         }
         _reason(guard.check(payload))
 
+    def test_bare_with_input_redirect_denies(self):
+        # 2026-08-23 fix (Finding 1): `<`-family input redirection is a
+        # distinct character class from the `>`-family the original regex
+        # matched. `git stash </dev/null` tokenized `remaining` to
+        # `["</dev/null"]`, undetected, and fell through to allow.
+        _reason(guard.check(_payload("git stash </dev/null", agent_id="a1")))
+
+    def test_bare_with_heredoc_marker_denies(self):
+        _reason(guard.check(_payload("git stash <<EOF", agent_id="a1")))
+
+    def test_bare_with_herestring_denies(self):
+        _reason(guard.check(_payload("git stash <<< x", agent_id="a1")))
+
+    def test_bare_with_separated_input_redirect_target_denies(self):
+        _reason(guard.check(_payload("git stash < /dev/null", agent_id="a1")))
+
+    def test_input_redirect_does_not_change_a_scoped_push_verdict(self):
+        # Boundary case for the `<`-family strip: stripping a leading
+        # redirection run must not alter how a scoped push classifies.
+        #
+        # Corrected 2026-08-23, replacing an assertion that this allows.
+        # It does not, and it never did: THIS guard refuses stash CREATION
+        # by a subagent whether or not a pathspec scopes it, so there is no
+        # allow to preserve here. The `-- <path>` exemption belongs to the
+        # sibling destructive-action guard, and the original assertion had
+        # borrowed it across. The real property is invariance -- redirection
+        # is not a classification input -- so pin the verdict AGAINST the
+        # un-redirected form rather than against a hardcoded expectation.
+        scoped = "git stash push -- state/subagent-share/my-file.md"
+        plain = guard.check(_payload(scoped, agent_id="a1"))
+        redirected = guard.check(_payload(f"{scoped} </dev/null", agent_id="a1"))
+
+        assert plain is not None
+        assert redirected is not None
+        assert (
+            redirected["hookSpecificOutput"]["permissionDecision"]
+            == plain["hookSpecificOutput"]["permissionDecision"]
+        )
+        # The reason echoes the offending command back, so the two strings
+        # differ by exactly that echo and nothing else. Normalise it out
+        # rather than comparing verbatim -- what is being pinned is that the
+        # redirection changed no part of the guidance, not that the guard
+        # forgot which command it saw.
+        assert redirected["hookSpecificOutput"]["permissionDecisionReason"].replace(
+            f"{scoped} </dev/null", ""
+        ) == plain["hookSpecificOutput"]["permissionDecisionReason"].replace(scoped, "")
+
+    def test_powershell_bare_with_all_streams_redirect_denies(self):
+        # 2026-08-23 fix (Finding 2): PowerShell's all-streams redirect
+        # (`*>`, `*>>`) starts with `*`, which the Bash-output-operator-
+        # shaped regex never matched -- displaced `remaining[0]` on the
+        # PowerShell leg the identical way `2>&1` used to.
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "git stash *>$null"},
+            "session_id": "sess1",
+            "cwd": "/repo",
+            "agent_id": "a1",
+        }
+        _reason(guard.check(payload))
+
+    def test_powershell_bare_with_all_streams_append_redirect_denies(self):
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "git stash *>> out.log"},
+            "session_id": "sess1",
+            "cwd": "/repo",
+            "agent_id": "a1",
+        }
+        _reason(guard.check(payload))
+
 
 class TestHeredocBodies:
     def test_heredoc_prose_quoting_the_verb_allows(self):

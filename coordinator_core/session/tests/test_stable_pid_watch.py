@@ -126,3 +126,35 @@ def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path):
 
     assert result["status"] == STATUS_EMPTY
     assert result["checked"] == 0
+
+
+def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
+    # AC8/C4 (2026-08-22): a session dir that ran but left NO meta.json at
+    # all — the population a sibling chunk (C1, edit-hook session-bootstrap
+    # removal) grows — must still be COUNTED, not fall out of the
+    # denominator and read falsely CLEAN. touched.txt is this repo's own
+    # signal that a session genuinely ran here.
+    root = tmp_path / "coordinator-sessions"
+    sdir = root / "s1"
+    sdir.mkdir(parents=True)
+    (sdir / "touched.txt").write_text("some/file.py\n", encoding="utf-8")
+
+    result = scan_stable_pid_misses(sessions_dir=root)
+
+    assert result["status"] == STATUS_MISS
+    assert result["checked"] == 1
+    assert result["misses"] == [{"session": "s1", "reason": "no_meta_json"}]
+
+
+def test_dir_with_neither_meta_json_nor_touched_txt_is_not_counted(tmp_path):
+    # The pre-existing behaviour the AC8 branch must preserve: genuine hub
+    # debris (no meta.json, no touched.txt) stays out of the denominator.
+    root = tmp_path / "coordinator-sessions"
+    sdir = root / "s1"
+    sdir.mkdir(parents=True)
+    (sdir / "some_other_file.txt").write_text("debris", encoding="utf-8")
+
+    result = scan_stable_pid_misses(sessions_dir=root)
+
+    assert result["status"] == STATUS_EMPTY
+    assert result["checked"] == 0

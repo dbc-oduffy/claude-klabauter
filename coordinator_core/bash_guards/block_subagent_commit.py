@@ -3201,7 +3201,8 @@ _COMMITTING_OP_NAMES = frozenset(
         "session.boot_sweep",
         "distill.apply_disposal",
         "memo.send",
-        "ceremony.wsc_tail",
+        # "ceremony.wsc_tail" REMOVED (ceremony.wsc_tail kill, 2026-08-23) --
+        # the op is deleted and no longer registered.
         # Review: coordinator:code-reviewer (B-commit-matchers Finding 1, P0,
         # confirmed live by fleet.archive_shipped_handoffs landing commit
         # d9282543f this session) -- six more registered, directly-invocable
@@ -3222,7 +3223,6 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_actioned_memos",     # fleet/archive_actioned_memos.py -- archive_and_commit(...)
         "fleet.archive_completed_handoffs",  # fleet/archive_handoffs.py -- archive_and_commit(...)
         "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
-        "fleet.archive_completed_plans",    # fleet/archive_plans.py -- archive_and_commit(...)
         "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)
         "fleet.prune_closed_bugs",          # fleet/prune_bugs.py -- archive_and_commit(...)
         "handoff.archive_transition",       # handoff_archive_transition.py -- archive_and_commit(...)

@@ -67,12 +67,89 @@ FOUR RULES
     Rule 4 -- a spawning test file must be TIERED off the per-commit path.
         Declaring the spawn is not enough on its own: a file that spawns a
         real process must also carry `pytest.mark.cadence`, so it runs at
-        cadence gates. Rule 2 without Rule 4 is what let this guard record
-        the residue for six weeks while never moving any of it -- 555 files
-        fully known, counted, and still running on the tier everyone runs.
-        A `conftest.py` is exempt from Rule 4 and must instead hold NO spawn
+        cadence gates. Rule 4 accepts the SAME two declaration forms Rule 2
+        does (reconciled 2026-08-23, see `state/bug-backlog/2026-08-23-
+        spawn-ratchet-rule-2-and-rule-4-disagree-on-what-declaring-a-spawn-
+        means.yaml`): module-level `pytestmark = [pytest.mark.cadence, ...]`
+        tiers every test in the file, OR `@pytest.mark.cadence` stacked
+        directly on each spawning test function tiers only those functions,
+        leaving the file's non-spawning tests on the fast path -- the exact
+        whole-file retiering Rule 2's per-function form exists to avoid. The
+        per-function form is available under TWO conditions, both of which
+        exist because a decorator that cannot take effect must never count:
+        (i) the file has no module-level spawn lineno -- a spawn at module
+        scope cannot be tiered by any function decorator, so such a file
+        needs the module-level form regardless (and Rule 1 fails it either
+        way); and (ii) every spawning function is itself a collectible
+        `test_*`. A `pytest.mark` on a `_helper` or on a `@pytest.fixture`
+        is INERT -- pytest applies marks only to what it collects -- so one
+        non-test spawner sends the whole file to the module-level form. The
+        live case is `session/tests/test_ensure_meta.py`, whose spawners are
+        `_init_repo` and the `repo` fixture, with no test function reaching
+        them statically: pytest INJECTS a fixture rather than calling it,
+        and this collector resolves calls only. Condition (ii) was MISSING
+        when the per-function leg first landed 2026-08-23, which accepted
+        inert markers and reported such a file tiered while nothing was --
+        a false pass, strictly worse than the red it replaced. Pinned by
+        `test_rule4_per_function_form_is_refused_when_a_spawner_is_not_collectible`.
+        Rule
+        2 without Rule 4 is what let this guard record the residue for six
+        weeks while never moving any of it -- 555 files fully known,
+        counted, and still running on the tier everyone runs. A
+        `conftest.py` is exempt from Rule 4 and must instead hold NO spawn
         site at all: a marker only tiers the test that declares it, so a
         spawn in a conftest is untierable by construction.
+
+        A THIRD declared form (reconciled 2026-08-23, same day as the
+        two above): a `@pytest.mark.spawns_process`/`@pytest.mark.cadence`
+        decorator on the ENCLOSING CLASS of a spawning test method also
+        counts, for every method inside it, exactly like the module-level
+        `pytestmark` form counts for every test in the file -- pytest
+        itself applies a class-level mark to every test item it collects
+        under that class, so this is the SAME mechanism as module-level
+        `pytestmark`, just scoped to one class instead of the whole file,
+        and it is why this form counts while a mark on a `_helper`/
+        `@pytest.fixture` does not: pytest actually APPLIES it to what it
+        collects (condition (ii) above, unchanged). A method inherits marks
+        from EVERY class enclosing it, outermost in, for nested classes. A
+        class mark never reaches a sibling module-level function outside
+        the class, or a non-test method inside it -- both stay their own,
+        unrescued, declaration. The collector previously read only
+        per-function `func_decorators`, blind to this: the live case is
+        `roadmap_planning_assemble/tests/test_roadmap_planning_assemble.py`
+        and `sprint_planning_assemble/tests/test_sprint_planning_assemble.py`,
+        both `class TestRealCliStructuralAndPerf(unittest.TestCase)`
+        correctly decorated with `@pytest.mark.spawns_process`/
+        `@pytest.mark.cadence` at the class level -- Rule 2/4 flagged both
+        as undeclared/untiered anyway, a FALSE RED sending people to add
+        redundant per-method markers to satisfy a guard that could not see
+        the effective ones already in place.
+
+        This does NOT rescue `session/tests/test_ensure_meta.py` (condition
+        (ii)'s named live case, above) even though IT ALSO carries a
+        class-level `@pytest.mark.spawns_process`/`@pytest.mark.cadence` --
+        a materially different shape from the roadmap/sprint case: its
+        spawners (`_init_repo`, the `repo` fixture) sit at MODULE level,
+        outside the class, and its four `test_*` methods reach them only by
+        pytest INJECTING the `repo` fixture as a parameter, never by a call
+        this collector's `generic_calls` walk can see. The class mark does
+        cover the four methods pytest actually collects and tiers, which
+        makes this file plausibly correct at RUNTIME -- but Rule 4 cannot
+        derive "every test that reaches this fixture-mediated spawn is
+        tiered" without resolving fixture injection generically (matching a
+        test's parameter names against fixture defs across scopes and
+        conftests, including indirect fixture-through-fixture chains), a
+        materially wider capability than reading one more decorator list.
+        Deliberately NOT attempted here: it is the same shape of risk as the
+        per-function mock seam built and reverted, unmerged, earlier this
+        same day for `test_review_scale.py`'s stored-lambda case -- correct
+        in isolation, but tuned to one file's route rather than a general
+        rule, and this collector's "skip, don't guess" discipline treats an
+        unresolved fixture route the same as any other unresolved route:
+        conservatively red. `test_ensure_meta.py` stays on the module-level
+        form requirement; its own one-line fix is to promote its existing
+        class-level marker to `pytestmark = [pytest.mark.spawns_process,
+        pytest.mark.cadence]`, a change to that test file, not this guard.
 
 THE ARGV0 TRI-STATE, STATED PLAINLY (so no reader misreads it)
     `_classify_spawn` answers REAL / NOT_A_SPAWN / UNKNOWN. UNKNOWN has TWO
@@ -99,15 +176,36 @@ THE ARGV0 TRI-STATE, STATED PLAINLY (so no reader misreads it)
         shape `test_no_grandfather_clause_is_reintroduced` exists to catch.
         `test_kind_axis.py` stays red.
 
-MOCK-SEAM SUPPRESSION
-    A file that `patch.object`/`monkeypatch.setattr`s a module's own
-    `subprocess`/`os` attribute suppresses an indirect-spawn route into
-    THAT SAME module, narrowly (same file, same target module) -- otherwise
-    a test that mocks the only spawn in a helper it calls would still read
-    as spawning. Computed per-file in this module's own scanner (never in
-    `WrapperResolver`, whose `_wrapper_cache` is shared across the whole
-    collection run and would make the suppression collection-order-
-    dependent).
+MOCK-SEAM SUPPRESSION -- TWO SEAMS, DIFFERENT WIDTH, DO NOT COMPRESS
+    PER-MODULE SEAM (original). A file that `patch.object`/`monkeypatch.
+    setattr`s a TARGET MODULE's own `subprocess`/`os` attribute --
+    `patch.object(helper.subprocess, "run", ...)` -- suppresses an
+    indirect-spawn route into THAT SAME target module, narrowly (same file,
+    same target module) -- otherwise a test that mocks the only spawn in a
+    helper it calls would still read as spawning. Computed per-file in this
+    module's own scanner (never in `WrapperResolver`, whose `_wrapper_cache`
+    is shared across the whole collection run and would make the
+    suppression collection-order-dependent).
+
+    GLOBAL-STDLIB SEAM (added 2026-08-23, `state/bug-backlog/2026-08-23-
+    spawn-ratchet-rule-2-and-rule-4-disagree-on-what-declaring-a-spawn-
+    means.yaml` Defect B). A file that patches the STDLIB `subprocess`/`os`
+    MODULE OBJECT ITSELF -- `monkeypatch.setattr(subprocess, "run", fake)`,
+    where `subprocess` is this file's own `import subprocess` -- is a
+    GLOBAL rebinding: the same module object is shared process-wide, so
+    every route this file reaches, at ANY hop depth, that would otherwise
+    call the patched `(module, attr)` sees the fake too, not just a route
+    through one target module. This seam is therefore keyed by stdlib
+    module NAME, not by an on-disk target-module path, and its reach walk
+    is transitive (`_reach_all_patched_by_stdlib`), unlike the per-module
+    seam's one-hop check. Narrow in the other two dimensions: only the two
+    tracked stdlib modules (`subprocess`, `os`) are ever eligible, and only
+    the SPECIFIC attribute literal-named in the patch call (`"run"`, not
+    every spawn primitive) is neutralised -- a file that patches
+    `subprocess.run` but reaches `subprocess.Popen` elsewhere still counts.
+    Conservative wherever the transitive walk cannot statically resolve a
+    hop (aliased import, unresolved cross-file target): such a route is
+    treated as reaching an UNPATCHED spawn, never silently suppressed.
 
 WHAT THIS COLLECTOR RESOLVES AND DOES NOT RESOLVE, AFTER C6 (three named
 items -- do not compress into one "UNKNOWN is resolved now" sentence):
@@ -138,6 +236,57 @@ items -- do not compress into one "UNKNOWN is resolved now" sentence):
       `test_no_grandfather_clause_is_reintroduced` exists to catch).
       `test_kind_axis.py` stays red: a measured detector false positive
       pending a resolver decision, not a regression.
+    - A SPAWN INSIDE A STORED-BUT-UNINVOKED LAMBDA is likewise NOT handled,
+      and is the same disposition as the line above rather than a new one.
+      Reachability here is FUNCTION-granular, never path-granular: a `Call`
+      node anywhere in a function's body counts, including one inside a
+      `lambda` that the function only stores and returns. That is the
+      correct conservative answer for a guard — a different caller really
+      can invoke the stored lambda and really does spawn — but it means a
+      test exercising the same function without ever calling the lambda
+      reads as spawning when it does not.
+      Live case, measured 2026-08-23: `workstream_complete/test_review_scale.py`'s
+      three `test_floor_kwargs_*` tests reach
+      `workstream_complete/__init__.py :: _resolve_review_brightline_floor_kwargs`,
+      whose returned dict carries `"is_ancestor": lambda a, b:
+      _git_is_ancestor(root, a, b)`. `_git_is_ancestor` spawns `git
+      merge-base --is-ancestor`; none of the three tests ever calls
+      `result["is_ancestor"]`. The file imports no `subprocess`, holds no
+      spawn literal, and runs 8 tests in 0.55s — runtime is the
+      measurement, the same evidence that settled `op_census/tests/test_timing.py`.
+      It STAYS RED and must NOT be marked: tiering 8 fast tests onto cadence
+      to silence a spawn that never happens is precisely the trade Rule 2's
+      per-function form exists to refuse, and the same mistake that was made
+      and reverted against `test_timing.py`.
+      Deliberately NOT fixed, and the reason is the one directly above:
+      distinguishing a stored lambda from an invoked one is real
+      control-flow modelling, and a rule tuned until exactly this file
+      passes is the per-file exemption shape
+      `test_no_grandfather_clause_is_reintroduced` exists to catch. A
+      per-function mock seam (suppressing a route through a
+      `monkeypatch.setattr(<mod>, "<func>", fake)`-patched function) was
+      built for this file on 2026-08-23 and REVERTED UNMERGED: it was
+      correct and self-tested, and it cleared zero files repo-wide, because
+      this file's real route is the lambda and not the two patched
+      functions it also carries. Do not rebuild it without a measurement
+      naming a file it actually clears.
+    - AN EARLY RETURN AHEAD OF THE SPAWN is the third face of the same
+      function-granular conservatism, listed separately only because the
+      route differs -- the spawn is in the callee's ordinary body, not in a
+      lambda, and the test simply never reaches it.
+      Live case, measured 2026-08-23: `git/tests/test_git_state.py ::
+      test_head_blobs_empty_paths_returns_empty_dict_no_spawn` calls
+      `git_state.head_blobs(".", [])`, which returns `{}` on the empty-paths
+      guard before any `git` call -- the early return IS the assertion.
+      Measured in isolation against a control, per the whole-file-is-not-
+      per-test rule below: this test creates 1 process (pytest itself) and 0
+      git spawns, where its cadence-tiered sibling
+      `test_head_tree_sha_matches_git_rev_parse_loose` creates 14.
+      It STAYS RED and must NOT be marked, same disposition and same reason
+      as `test_review_scale.py` above. It is the only Rule 2/4 entry left on
+      this file: the nine tests that genuinely spawn moved to
+      `git/tests/test_git_state_against_real_git.py` on 2026-08-23, which
+      carries the module-level form honestly.
 
     Full union after C1-C14: 34 of 35 original arrears, plus 77 of 77
     C7-C12 measured-hidden files, plus C13's 4 containment-check files,
@@ -454,6 +603,13 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
         self.func_spawns: dict[str, list[ast.Call]] = {}
         self.func_decorators: dict[str, list[ast.expr]] = {}
         self._func_stack: list[str] = []
+        # Enclosing CLASS decorators, innermost last -- see module docstring
+        # Rule 4 "A THIRD declared form". pytest applies a class-level mark
+        # to every test item it collects under that class; this stack lets
+        # `_visit_def` fold those marks into `func_decorators` for a method
+        # directly under one or more classes, the same way Rule 2/4 already
+        # read a per-function decorator.
+        self._class_decorator_stack: list[list[ast.expr]] = []
         # Indirect-spawn support: every call target (spawn or not), bucketed
         # the same way as func_spawns/module_level_spawns, so an enclosing
         # function/module scope can be checked for "does it call a locally-
@@ -489,6 +645,17 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
     def _visit_def(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         self.func_decorators.setdefault(node.name, [])
         self.func_decorators[node.name].extend(node.decorator_list)
+        # CLASS-LEVEL MARKS (Rule 2/4's third declared form -- see module
+        # docstring). Only folded in when this def sits DIRECTLY under its
+        # enclosing class(es), i.e. no intervening function scope: a helper
+        # nested inside a method's own body is never itself a test item
+        # pytest collects under the class, so it must not inherit the
+        # class's marks regardless of how deeply the class is nested.
+        # Enclosing classes contribute outermost first, but order does not
+        # matter -- `has_marker_decorator` only checks membership.
+        if not self._func_stack:
+            for class_decorators in self._class_decorator_stack:
+                self.func_decorators[node.name].extend(class_decorators)
         self._func_stack.append(node.name)
         self._alias_stack.append(_child_scope_aliases(self._alias_stack[-1], node.body))
         self.generic_visit(node)
@@ -500,6 +667,11 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
         self._visit_def(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        self._class_decorator_stack.append(node.decorator_list)
+        self.generic_visit(node)
+        self._class_decorator_stack.pop()
 
 
 # `_decorator_names` / `_has_spawns_process_marker` / `_has_module_level_pytestmark`
@@ -625,14 +797,23 @@ def _collect_patched_module_aliases(tree: ast.Module) -> set[str]:
 
 
 def _func_reaches_spawn_indirectly_excluding_patched(
-    info, func_name: str, patched_module_paths: set[Path]
+    info,
+    func_name: str,
+    patched_module_paths: set[Path],
+    patched_stdlib_attrs: dict[str, set[str]] | None = None,
 ) -> bool:
     """Same one-hop walk as `WrapperResolver.func_reaches_spawn_indirectly`,
     except a route whose resolved target is a module-attribute access
     (`("attr", obj_name, attr)`) into a module THIS FILE itself patches is
     skipped entirely -- narrowly, same file + same target module, so an
     unpatched spawn in a file that merely patches something unrelated is
-    not suppressed (the inverse false negative)."""
+    not suppressed (the inverse false negative). If `patched_stdlib_attrs`
+    is non-empty (this file also globally patches the stdlib `subprocess`/
+    `os` module object -- see module docstring "GLOBAL-STDLIB SEAM"), a
+    target that DOES reach a spawn is given a second chance: if everything
+    it transitively reaches resolves to an already-patched `(module, attr)`
+    pair, it is suppressed too, at any hop depth."""
+    patched_stdlib_attrs = patched_stdlib_attrs or {}
     for target in info.scanner.generic_calls.get(func_name, []):
         if target[0] == "attr":
             obj_name = target[1]
@@ -643,8 +824,174 @@ def _func_reaches_spawn_indirectly_excluding_patched(
                 and binding.module_path in patched_module_paths
             ):
                 continue
-        if _target_reaches_spawn(info, target, frozenset()):
-            return True
+        if not _target_reaches_spawn(info, target, frozenset()):
+            continue
+        if patched_stdlib_attrs and _target_reaches_only_patched_stdlib(
+            info, target, patched_stdlib_attrs, frozenset()
+        ):
+            continue
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# GLOBAL-STDLIB SEAM -- see module docstring "MOCK-SEAM SUPPRESSION". A
+# file that patches the stdlib `subprocess`/`os` module object itself (not
+# a target module's imported reference to it) neutralises that specific
+# attribute for every route this file reaches, at any hop depth.
+# ---------------------------------------------------------------------------
+
+_STDLIB_PATCHABLE_MODULES = frozenset({"subprocess", "os"})
+
+
+def _collect_module_import_aliases(tree: ast.Module) -> dict[str, str]:
+    """Map a local bare name to the stdlib module it imports, for `import
+    subprocess` / `import subprocess as sp` / `import os as o` -- restricted
+    to `_STDLIB_PATCHABLE_MODULES`, the only modules the global-stdlib mock
+    seam ever neutralises. Module-level imports only: a global monkeypatch
+    of the stdlib module object is meaningful regardless of where the
+    import happens, but resolving a function-local import adds
+    scope-tracking this narrow widening does not need -- module-level
+    `import subprocess` covers the case this seam exists for, and a file
+    that only imports it inside a function is simply not recognised (skip,
+    don't guess, same discipline as the rest of this file)."""
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            if alias.asname is not None and "." in alias.name:
+                continue
+            if alias.name in _STDLIB_PATCHABLE_MODULES:
+                local = alias.asname or alias.name
+                aliases[local] = alias.name
+    return aliases
+
+
+def _collect_patched_stdlib_attrs(tree: ast.Module) -> dict[str, set[str]]:
+    """Whole-file scan (a test body, a fixture, anywhere) for
+    `patch.object(subprocess, "run", ...)` / `monkeypatch.setattr(subprocess,
+    "run", ...)` -- and the `os` equivalent -- shaped calls whose FIRST
+    argument is a bare name resolving (via this file's own `import
+    subprocess` / `import os`, aliased or not) to the actual stdlib module
+    object, not a target module's `.subprocess` attribute (that narrower,
+    same-file-scoped seam is `_collect_patched_module_aliases`, unchanged).
+
+    Returns `{"subprocess": {"run"}, ...}` -- only the SPECIFIC attribute
+    literal-named in the second positional arg is neutralised; a file that
+    patches `subprocess.run` but reaches `subprocess.Popen` elsewhere must
+    still count (narrow-per-attribute, mirrors `_collect_patched_module_
+    aliases`'s narrow-per-module discipline)."""
+    module_aliases = _collect_module_import_aliases(tree)
+    if not module_aliases:
+        return {}
+    patched: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target_expr = _patch_target_module_expr(node)
+        if target_expr is None or not isinstance(target_expr, ast.Name):
+            continue
+        module_name = module_aliases.get(target_expr.id)
+        if module_name is None:
+            continue
+        if len(node.args) < 2:
+            continue
+        attr_node = node.args[1]
+        if not (isinstance(attr_node, ast.Constant) and isinstance(attr_node.value, str)):
+            continue
+        patched.setdefault(module_name, set()).add(attr_node.value)
+    return patched
+
+
+def _reach_all_patched_by_stdlib(
+    info, func_name: str, patched_stdlib_attrs: dict[str, set[str]], visiting: frozenset
+) -> bool:
+    """True if EVERY real spawn reachable from `func_name` (any hop depth)
+    resolves -- via a plain `<module>.<attr>(...)` Call shape, the common
+    unaliased-import case this narrow widening covers -- to a `(module,
+    attr)` pair patched globally by `patched_stdlib_attrs`. Mirrors
+    `WrapperResolver`'s cycle-safe recursive reach walk but answers a
+    DIFFERENT question ("does everything reached resolve to an
+    already-neutralised stdlib call" rather than "does this reach a spawn
+    at all"), so it cannot reuse `_wrapper_cache`/`target_reaches_spawn`
+    and is deliberately NOT cached -- this seam is a rare per-file check,
+    not a hot path worth a shared cache the way transitive wrapper
+    detection is.
+
+    Conservative on anything unresolved: a spawn Call whose target isn't a
+    plain `<name>.<attr>(...)` shape, or a further indirect call this walk
+    cannot resolve to an on-disk module/function, makes the whole function
+    NOT fully patched (`False`) -- skip, don't guess, in the safe
+    direction, same discipline as the rest of this file."""
+    key = (info.path, func_name)
+    if key in visiting:
+        return True
+    next_visiting = visiting | {key}
+
+    for call in info.scanner.func_spawns.get(func_name, []):
+        target = _call_target(call)
+        if target is None or target[1] not in patched_stdlib_attrs.get(target[0], set()):
+            return False
+
+    for gtarget in info.scanner.generic_calls.get(func_name, []):
+        sub_info = None
+        sub_func = None
+        if gtarget[0] == "name":
+            name = gtarget[1]
+            if name in info.top_level_funcs:
+                sub_info, sub_func = info, name
+            else:
+                binding = info.imports.get(name)
+                if binding is not None and binding.kind == "func":
+                    sub_info = _get_module_info(binding.module_path)
+                    sub_func = binding.orig_name
+        elif gtarget[0] == "attr":
+            obj_name, attr = gtarget[1], gtarget[2]
+            binding = info.imports.get(obj_name)
+            if binding is not None and binding.kind == "module":
+                sub_mod_info = _get_module_info(binding.module_path)
+                if sub_mod_info is not None and attr in sub_mod_info.top_level_funcs:
+                    sub_info, sub_func = sub_mod_info, attr
+        if sub_info is None or sub_func is None:
+            # Unresolved target -- bail conservative only if it actually
+            # reaches a spawn at all; an unresolved non-spawning helper
+            # call is simply irrelevant to this question.
+            if _target_reaches_spawn(info, gtarget, frozenset()):
+                return False
+            continue
+        if not _reach_all_patched_by_stdlib(sub_info, sub_func, patched_stdlib_attrs, next_visiting):
+            return False
+    return True
+
+
+def _target_reaches_only_patched_stdlib(
+    info, target: tuple, patched_stdlib_attrs: dict[str, set[str]], visiting: frozenset
+) -> bool:
+    """`_reach_all_patched_by_stdlib`, entered from a raw `generic_calls`
+    target tuple rather than a known `(module_path, func_name)` pair --
+    mirrors `WrapperResolver._target_reaches_spawn_ex`'s target-to-
+    (module, func) resolution."""
+    if target[0] == "name":
+        name = target[1]
+        if name in info.top_level_funcs:
+            return _reach_all_patched_by_stdlib(info, name, patched_stdlib_attrs, visiting)
+        binding = info.imports.get(name)
+        if binding is not None and binding.kind == "func":
+            sub_info = _get_module_info(binding.module_path)
+            if sub_info is not None:
+                return _reach_all_patched_by_stdlib(
+                    sub_info, binding.orig_name, patched_stdlib_attrs, visiting
+                )
+    elif target[0] == "attr":
+        obj_name, attr = target[1], target[2]
+        binding = info.imports.get(obj_name)
+        if binding is not None and binding.kind == "module":
+            sub_info = _get_module_info(binding.module_path)
+            if sub_info is not None and attr in sub_info.top_level_funcs:
+                return _reach_all_patched_by_stdlib(
+                    sub_info, attr, patched_stdlib_attrs, visiting
+                )
     return False
 
 
@@ -796,7 +1143,14 @@ def _main_guard_body_linenos(tree: ast.Module) -> set[int]:
 
 
 class FileSpawnReport:
-    __slots__ = ("relpath", "module_level_linenos", "unmarked_spawning_funcs", "has_any_spawn")
+    __slots__ = (
+        "relpath",
+        "module_level_linenos",
+        "unmarked_spawning_funcs",
+        "has_any_spawn",
+        "spawning_funcs",
+        "tree",
+    )
 
     def __init__(
         self,
@@ -804,17 +1158,35 @@ class FileSpawnReport:
         module_level_linenos: list[int],
         unmarked_spawning_funcs: list[str],
         has_any_spawn: bool,
+        spawning_funcs: list[str],
+        tree: ast.Module | None = None,
     ) -> None:
         self.relpath = relpath
         self.module_level_linenos = module_level_linenos
         self.unmarked_spawning_funcs = unmarked_spawning_funcs
         self.has_any_spawn = has_any_spawn
+        # Every function name that resolved as spawning (direct or
+        # indirect), independent of whether it carries a marker -- Rule 4
+        # reads this to check per-function `pytest.mark.cadence` coverage
+        # (see bug-backlog 2026-08-23, Defect A). A SUPERSET of
+        # `unmarked_spawning_funcs`: a function can be here, correctly
+        # marked `spawns_process`, and still appear here for Rule 4's own,
+        # separate `cadence` check.
+        self.spawning_funcs = spawning_funcs
+        # The parsed tree `_analyze_file` already built (`tree_for_marker`),
+        # kept so `_rule4_missing_cadence` can reuse it instead of a second
+        # `read_text`+`ast.parse` of the same bytes (slice-A review, item 3:
+        # bounded to the handful of files Rule 4 actually flags, but a free
+        # cache hit since the parse already happened). `None` only for the
+        # early `info is None` return in `_analyze_file`, which Rule 4 never
+        # reaches -- that path returns `not spawns` before touching `tree`.
+        self.tree = tree
 
 
 def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
     info = _get_module_info(path)
     if info is None:
-        return FileSpawnReport(relpath, [], [], False)
+        return FileSpawnReport(relpath, [], [], False, [])
     tree_for_marker = ast.parse(
         path.read_text(encoding="utf-8", errors="replace"), filename=relpath
     )
@@ -856,19 +1228,25 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
         for alias in patched_aliases
         if alias in info.imports and info.imports[alias].kind == "module"
     }
+    # GLOBAL-STDLIB SEAM (Defect B): this file's own `monkeypatch.setattr(
+    # subprocess, "run", ...)`-shaped calls, keyed by stdlib module name --
+    # see module docstring "MOCK-SEAM SUPPRESSION".
+    patched_stdlib_attrs = _collect_patched_stdlib_attrs(tree_for_marker)
 
     file_wide_marker = _has_module_level_pytestmark(tree_for_marker)
     unmarked_funcs: list[str] = []
+    spawning_funcs: list[str] = []
     spawning_func_names = set(scanner.func_spawns) | set(scanner.generic_calls)
     any_func_spawn = False
     for fname in spawning_func_names:
         direct = bool(scanner.func_spawns.get(fname))
         indirect = _func_reaches_spawn_indirectly_excluding_patched(
-            info, fname, patched_module_paths
+            info, fname, patched_module_paths, patched_stdlib_attrs
         )
         if not (direct or indirect):
             continue
         any_func_spawn = True
+        spawning_funcs.append(fname)
         if file_wide_marker:
             continue
         decorators = scanner.func_decorators.get(fname, [])
@@ -877,7 +1255,14 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
         unmarked_funcs.append(fname)
 
     has_any_spawn = bool(module_level_linenos) or any_func_spawn
-    return FileSpawnReport(relpath, module_level_linenos, sorted(unmarked_funcs), has_any_spawn)
+    return FileSpawnReport(
+        relpath,
+        module_level_linenos,
+        sorted(unmarked_funcs),
+        has_any_spawn,
+        sorted(spawning_funcs),
+        tree_for_marker,
+    )
 
 
 def _rel(path: Path) -> str:
@@ -953,8 +1338,10 @@ _ALTERNATIVE_MSG_RULE2 = (
     "declaring the real-process spawn explicitly, or (b) rewrite the test "
     "against a mocked/faked git rather than a real spawned process. There is "
     "no allowlist to add the file to -- the grandfather list was discharged "
-    "on 2026-08-14. A declared spawn must also carry `pytest.mark.cadence` "
-    "(Rule 4)."
+    "on 2026-08-14. A declared spawn must also be tiered onto "
+    "`pytest.mark.cadence` (Rule 4) -- Rule 4 accepts the identical two "
+    "forms this rule does, so whichever form clears Rule 2 also clears "
+    "Rule 4."
 )
 
 
@@ -998,34 +1385,92 @@ def test_rule2_new_spawning_files_ratchet() -> None:
         )
 
 
-def test_rule4_every_spawning_file_is_cadence_tiered() -> None:
-    """Rule 4 -- a file that spawns a real process must ALSO carry
-    `pytest.mark.cadence`, so it runs at cadence gates and not on whatever
-    tier happens to sweep it up. See module docstring 'Rule 4'."""
-    untiered: list[str] = []
-    for path in _iter_test_files():
-        relpath = _rel(path)
-        if path.name == "conftest.py":
-            continue
+def _rule4_missing_cadence(path: Path, relpath: str, report: FileSpawnReport) -> str | None:
+    """Rule 4's per-file verdict: `None` if the file is either non-spawning
+    or properly tiered; otherwise a human-readable reason string naming
+    WHICH of the two accepted forms (see module docstring 'Rule 4') is
+    missing. Factored out of `test_rule4_every_spawning_file_is_cadence_
+    tiered` so both the aggregate gate and this file's own self-tests can
+    exercise the identical per-file logic against synthetic fixtures."""
+    if path.name == "conftest.py":
+        return None
+    spawns = bool(report.module_level_linenos) or report.has_any_spawn
+    if not spawns:
+        return None
+    # Reuse `_analyze_file`'s own parse (`report.tree`) rather than a second
+    # `read_text`+`ast.parse` of identical bytes (slice-A review, item 3).
+    # `report.tree` is only `None` for the `info is None` early return in
+    # `_analyze_file`, which sets `has_any_spawn=False` and is already
+    # excluded by the `not spawns` check above -- so a fallback parse here
+    # is a defensive belt, never a path this function actually takes.
+    tree = report.tree
+    if tree is None:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
         except SyntaxError:
-            continue
+            return None
+    if _has_module_level_pytestmark(tree, "pytest.mark.cadence"):
+        return None
+    if report.module_level_linenos:
+        return "module-level spawn site -- cannot be tiered by a function decorator, needs module-level pytestmark"
+    if report.spawning_funcs:
+        # A marker only tiers a function pytest COLLECTS. `@pytest.mark.cadence`
+        # on a `_helper` or on a `@pytest.fixture` is silently ignored by pytest
+        # (newer pytest errors on the fixture case outright), so accepting it
+        # here would pass a file that is not tiered at all -- strictly worse than
+        # the red gate, because the red is at least honest. The per-function form
+        # is therefore available ONLY when every spawning function is itself a
+        # collectible `test_*`; one non-test spawner sends the whole file to the
+        # module-level form. `session/tests/test_ensure_meta.py` is the live case:
+        # its spawners are `_init_repo` and the `repo` FIXTURE, and no test
+        # function reaches them statically, because pytest INJECTS a fixture
+        # rather than calling it and this collector resolves calls only.
+        uncollectible = [f for f in report.spawning_funcs if not f.startswith("test_")]
+        if uncollectible:
+            return (
+                "spawns via non-test function(s) "
+                f"{', '.join(uncollectible)} -- a marker there is inert, needs module-level pytestmark"
+            )
+        info = _get_module_info(path)
+        scanner = info.scanner if info is not None else None
+        missing = [
+            fname
+            for fname in report.spawning_funcs
+            if scanner is None
+            or not _has_spawns_process_marker(
+                scanner.func_decorators.get(fname, []), "pytest.mark.cadence"
+            )
+        ]
+        if not missing:
+            return None
+        return f"missing @pytest.mark.cadence on: {', '.join(missing)}"
+    return "spawns but no module-level or per-function cadence marker found"
+
+
+def test_rule4_every_spawning_file_is_cadence_tiered() -> None:
+    """Rule 4 -- a file that spawns a real process must ALSO be tiered onto
+    `pytest.mark.cadence`, so it runs at cadence gates and not on whatever
+    tier happens to sweep it up. Accepts the same two forms Rule 2 does --
+    module-level `pytestmark`, or `@pytest.mark.cadence` on each spawning
+    function -- see module docstring 'Rule 4' and `_rule4_missing_cadence`."""
+    untiered: list[str] = []
+    for path in _iter_test_files():
+        relpath = _rel(path)
         report = _analyze_file(path, relpath)
-        spawns = bool(report.module_level_linenos) or report.has_any_spawn
-        if not spawns:
-            continue
-        if _has_module_level_pytestmark(tree, "pytest.mark.cadence"):
-            continue
-        untiered.append(relpath)
+        reason = _rule4_missing_cadence(path, relpath, report)
+        if reason is not None:
+            untiered.append(f"{relpath} ({reason})")
     assert not untiered, (
         f"SPAWN-RATCHET Rule 4: {len(untiered)} file(s) spawn a real process but are "
         "not tiered onto the cadence suite:\n"
         + "\n".join(f"  {u}" for u in sorted(untiered))
         + "\n\nFix: add `pytest.mark.cadence` to the module-level `pytestmark` list "
-        "(alongside `pytest.mark.spawns_process`), or rewrite the test against a "
-        "faked process so it stops spawning. A conftest.py cannot be tiered by a "
-        "marker at all -- move any spawning helper out of it into a sibling module."
+        "(alongside `pytest.mark.spawns_process`, tiers the whole file), or add "
+        "`@pytest.mark.cadence` directly to each spawning test function (tiers only "
+        "those functions -- only available when the file has no module-level spawn "
+        "site), or rewrite the test against a faked process so it stops spawning. A "
+        "conftest.py cannot be tiered by a marker at all -- move any spawning helper "
+        "out of it into a sibling module."
     )
 
 
@@ -1645,3 +2090,445 @@ def test_function_scope_unknown_spawn_is_contained_regardless_of_query_order(
         "an UNKNOWN spawn through _helper) -- got "
         f"module-first={module_first_promote}, func-first={func_first_promote}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Defect A regression (bug-backlog 2026-08-23): Rule 4 must accept the SAME
+# two declaration forms Rule 2 does -- per-function `@pytest.mark.cadence`
+# on every spawning function, or module-level `pytestmark`.
+# ---------------------------------------------------------------------------
+
+
+def _swap_wrapper_resolver(tmp_path: Path):
+    """Context-manager-shaped helper: swap the module-global `_WRAPPER_
+    RESOLVER` for a fresh one rooted at `tmp_path`, for the duration of the
+    caller's `with` block, restoring the prior resolver afterward -- same
+    targeted save/restore discipline as `test_module_scope_unknown_
+    promotion_reports_the_negative_direction`, factored out since the
+    Defect A/B self-tests below all need it."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        prior = globals()["_WRAPPER_RESOLVER"]
+        globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)
+        try:
+            yield
+        finally:
+            globals()["_WRAPPER_RESOLVER"] = prior
+
+    return _cm()
+
+
+def test_rule4_accepts_per_function_cadence_only(tmp_path: Path) -> None:
+    """Positive case: every spawning function carries `@pytest.mark.cadence`
+    directly (stacked alongside `@pytest.mark.spawns_process`, satisfying
+    Rule 2 too), no module-level `pytestmark` at all. Must pass Rule 4 --
+    this is the exact remediation Rule 2's own docstring/message documents,
+    which is precisely what could not clear Rule 4 before this fix."""
+    module = tmp_path / "test_per_function_cadence.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "def test_spawns():\n"
+        "    subprocess.run(['git', 'status'])\n"
+        "def test_fast():\n"
+        "    assert 1 == 1\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_per_function_cadence.py")
+        reason = _rule4_missing_cadence(module, "test_per_function_cadence.py", report)
+    assert report.spawning_funcs == ["test_spawns"], report.spawning_funcs
+    assert reason is None, f"expected Rule 4 to pass, got: {reason}"
+
+
+def test_rule4_fails_when_only_some_spawning_functions_carry_cadence(tmp_path: Path) -> None:
+    """Negative case: two functions spawn, only one carries
+    `@pytest.mark.cadence`. Rule 4 must fail and name the specific function
+    still missing it."""
+    module = tmp_path / "test_partial_per_function_cadence.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "def test_spawns_tiered():\n"
+        "    subprocess.run(['git', 'status'])\n"
+        "@pytest.mark.spawns_process\n"
+        "def test_spawns_untiered():\n"
+        "    subprocess.run(['git', 'log'])\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_partial_per_function_cadence.py")
+        reason = _rule4_missing_cadence(module, "test_partial_per_function_cadence.py", report)
+    assert reason is not None, "expected Rule 4 to fail: one spawning function is untiered"
+    assert "test_spawns_untiered" in reason, reason
+    assert "test_spawns_tiered" not in reason, reason
+
+
+def test_rule4_still_accepts_module_level_form(tmp_path: Path) -> None:
+    """The pre-existing module-level `pytestmark` form must keep passing --
+    this fix widens Rule 4, it does not narrow it."""
+    module = tmp_path / "test_module_level_cadence.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]\n"
+        "def test_spawns():\n"
+        "    subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_module_level_cadence.py")
+        reason = _rule4_missing_cadence(module, "test_module_level_cadence.py", report)
+    assert reason is None, f"expected Rule 4 to pass via module-level form, got: {reason}"
+
+
+def test_rule4_module_level_spawn_site_still_requires_module_level_form(
+    tmp_path: Path,
+) -> None:
+    """A module-level (import-time) spawn site cannot be tiered by any
+    function decorator -- such a file must still use the module-level
+    `pytestmark` form; a per-function decorator on some unrelated test
+    function must NOT satisfy Rule 4 for it. (Rule 1 also fails this file
+    unconditionally, independent of Rule 4 -- this test pins Rule 4's own
+    verdict only.)"""
+    module = tmp_path / "test_module_level_spawn_site.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "subprocess.run(['git', 'status'])\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "def test_something_else():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_module_level_spawn_site.py")
+        reason = _rule4_missing_cadence(module, "test_module_level_spawn_site.py", report)
+    assert report.module_level_linenos, "sanity: fixture must carry a module-level spawn"
+    assert reason is not None, (
+        "a module-level spawn site must still require the module-level pytestmark "
+        "form -- a per-function decorator on an unrelated function must not satisfy it"
+    )
+
+
+def test_rule4_per_function_form_is_refused_when_a_spawner_is_not_collectible(
+    tmp_path: Path,
+) -> None:
+    """A `pytest.mark` on a helper or a `@pytest.fixture` is INERT -- pytest
+    only applies marks to functions it collects. So the per-function form
+    must be refused outright for a file whose spawn lives in a non-test
+    function, rather than accepting a decorator that tiers nothing.
+
+    NEGATIVE SPEC, and the reason this test exists: the per-function leg
+    landed 2026-08-23 checking only "does every name in `spawning_funcs`
+    carry `@pytest.mark.cadence`", with no test on whether the marker could
+    take effect there. That accepted inert markers and reported the file
+    TIERED while nothing was -- a false pass, strictly worse than the red it
+    replaced, because red is at least honest. The live case is
+    `coordinator_core/session/tests/test_ensure_meta.py`, whose spawners are
+    `_init_repo` and the `repo` fixture with NO test function reaching them
+    statically (pytest injects a fixture rather than calling it, and this
+    collector resolves calls only)."""
+    module = tmp_path / "test_helper_spawner.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.cadence\n"
+        "def _init_repo(p):\n"
+        "    subprocess.run(['git', 'init', str(p)])\n"
+        "def test_uses_helper(tmp_path):\n"
+        "    _init_repo(tmp_path)\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_helper_spawner.py")
+        reason = _rule4_missing_cadence(module, "test_helper_spawner.py", report)
+    assert "_init_repo" in report.spawning_funcs, (
+        "sanity: the helper must register as a spawning function"
+    )
+    assert reason is not None, (
+        "an inert @pytest.mark.cadence on a non-test helper must NOT satisfy Rule 4 -- "
+        "pytest never applies it, so the file is not tiered"
+    )
+    assert "inert" in reason, (
+        f"the refusal must say WHY the decorator does not count, got: {reason!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLASS-LEVEL MARKS regression (found by the slice-C reviewer against this
+# file's own surface, 2026-08-23): Rule 2/4 must recognise a mark on the
+# ENCLOSING CLASS of a spawning test method -- pytest applies a class-level
+# mark to every test item it collects under that class, the same mechanism
+# module-level `pytestmark` already relies on. See module docstring's Rule 4
+# "A THIRD declared form".
+# ---------------------------------------------------------------------------
+
+
+def test_class_level_marker_declares_and_tiers_every_method(tmp_path: Path) -> None:
+    """The live case this closes: a class decorated with both
+    `@pytest.mark.spawns_process` and `@pytest.mark.cadence`, no
+    per-function or module-level marker at all, must satisfy Rule 2 AND
+    Rule 4 for every spawning method inside it -- mirrors
+    `roadmap_planning_assemble`/`sprint_planning_assemble`'s
+    `TestRealCliStructuralAndPerf`, which this collector previously flagged
+    as undeclared/untiered despite being correctly marked."""
+    module = tmp_path / "test_class_level_marker.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "import unittest\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "class TestThing(unittest.TestCase):\n"
+        "    def test_spawns(self):\n"
+        "        subprocess.run(['git', 'status'])\n"
+        "    def test_also_spawns(self):\n"
+        "        subprocess.run(['git', 'log'])\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_class_level_marker.py")
+        reason = _rule4_missing_cadence(module, "test_class_level_marker.py", report)
+    assert sorted(report.spawning_funcs) == ["test_also_spawns", "test_spawns"]
+    assert report.unmarked_spawning_funcs == [], (
+        "Rule 2 must accept a class-level spawns_process marker, got unmarked: "
+        f"{report.unmarked_spawning_funcs}"
+    )
+    assert reason is None, f"Rule 4 must accept a class-level cadence marker, got: {reason}"
+
+
+def test_nested_class_marks_combine_outermost_in(tmp_path: Path) -> None:
+    """A method's marks come from EVERY enclosing class, outermost in -- an
+    inner class carrying only `cadence` and an outer class carrying only
+    `spawns_process` must together satisfy both Rule 2 and Rule 4."""
+    module = tmp_path / "test_nested_class_marker.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.spawns_process\n"
+        "class Outer:\n"
+        "    @pytest.mark.cadence\n"
+        "    class Inner:\n"
+        "        def test_spawns(self):\n"
+        "            subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_nested_class_marker.py")
+        reason = _rule4_missing_cadence(module, "test_nested_class_marker.py", report)
+    assert report.unmarked_spawning_funcs == [], report.unmarked_spawning_funcs
+    assert reason is None, reason
+
+
+def test_class_level_marker_does_not_rescue_a_sibling_module_level_function(
+    tmp_path: Path,
+) -> None:
+    """A class-level mark covers only test items pytest collects UNDER that
+    class -- it must not leak into an unrelated module-level function that
+    spawns outside the class, which still needs its own declaration."""
+    module = tmp_path / "test_class_marker_scope.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "class TestThing:\n"
+        "    def test_spawns(self):\n"
+        "        subprocess.run(['git', 'status'])\n"
+        "def test_unrelated_spawns():\n"
+        "    subprocess.run(['git', 'log'])\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_class_marker_scope.py")
+    assert report.unmarked_spawning_funcs == ["test_unrelated_spawns"], (
+        report.unmarked_spawning_funcs
+    )
+
+
+def test_class_level_marker_does_not_rescue_a_fixture_mediated_spawn() -> None:
+    """The real, in-repo counterpart to
+    `test_class_level_marker_does_not_rescue_a_non_test_method`:
+    `session/tests/test_ensure_meta.py` carries the identical class-level
+    `spawns_process`/`cadence` decorator this fix now recognises, but its
+    spawners (`_init_repo`, the `repo` fixture) sit at MODULE level and are
+    reached by its `test_*` methods only through pytest fixture INJECTION,
+    which this collector's `generic_calls` walk cannot see. Deliberately
+    NOT resolved (see module docstring's 'A THIRD declared form' section,
+    closing paragraph) -- this file must stay red under the module-level
+    form requirement, still naming both non-test spawners, so a future
+    widening of fixture resolution does not silently regress this pin."""
+    relpath = "coordinator_core/session/tests/test_ensure_meta.py"
+    full_path = REPO_ROOT / relpath
+    assert full_path.is_file(), f"expected file missing: {relpath}"
+    report = _analyze_file(full_path, relpath)
+    reason = _rule4_missing_cadence(full_path, relpath, report)
+    assert reason is not None, (
+        "test_ensure_meta.py's class-level marker must NOT be read as "
+        "covering its module-level, fixture-mediated spawners -- if this "
+        "is None, fixture-injection reachability started being resolved "
+        "and this pin (and the docstring section it backs) needs revisiting"
+    )
+    assert "_init_repo" in reason and "repo" in reason, reason
+
+
+def test_class_level_marker_does_not_rescue_a_non_test_method(tmp_path: Path) -> None:
+    """The class-marked counterpart to
+    `test_rule4_per_function_form_is_refused_when_a_spawner_is_not_collectible`:
+    a class-level `pytest.mark.cadence` still cannot tier a spawn hiding in
+    a non-test helper METHOD -- pytest applies the class mark to test items
+    it collects, and a `_helper` method is never collected regardless of
+    which class it lives in."""
+    module = tmp_path / "test_class_marker_inert_helper.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.cadence\n"
+        "class TestThing:\n"
+        "    def _init_repo(self, p):\n"
+        "        subprocess.run(['git', 'init', str(p)])\n"
+        "    def test_uses_helper(self, tmp_path):\n"
+        "        self._init_repo(tmp_path)\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_class_marker_inert_helper.py")
+        reason = _rule4_missing_cadence(module, "test_class_marker_inert_helper.py", report)
+    assert "_init_repo" in report.spawning_funcs, report.spawning_funcs
+    assert reason is not None
+    assert "inert" in reason, reason
+
+
+# ---------------------------------------------------------------------------
+# Defect B regression (bug-backlog 2026-08-23): a file that globally
+# monkeypatches the STDLIB `subprocess`/`os` module object must not read as
+# reaching a spawn through a wrapper function whose only spawn is the
+# patched attribute.
+# ---------------------------------------------------------------------------
+
+
+def test_global_stdlib_patch_suppresses_a_wrapped_spawn(tmp_path: Path) -> None:
+    """The concrete shape from `op_census/tests/test_timing.py`: a helper
+    module's top-level function directly calls `subprocess.run`; the test
+    file imports the SAME stdlib `subprocess` module and monkeypatches
+    `subprocess.run` globally before calling the helper. Must report zero
+    spawn -- the whole point of Defect B."""
+    helper = tmp_path / "helper_mod.py"
+    helper.write_text(
+        "import subprocess\n"
+        "def measure():\n"
+        "    subprocess.run(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_uses_helper.py"
+    test_file.write_text(
+        "import subprocess\n"
+        "from helper_mod import measure\n"
+        "def test_measure(monkeypatch):\n"
+        "    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: None)\n"
+        "    measure()\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(test_file, "test_uses_helper.py")
+    assert report.spawning_funcs == [], (
+        f"a globally-patched subprocess.run reached only through the patched "
+        f"attribute must not read as spawning, got: {report.spawning_funcs}"
+    )
+    assert not report.unmarked_spawning_funcs
+    assert not report.has_any_spawn
+
+
+def test_global_stdlib_patch_does_not_suppress_a_different_attribute(tmp_path: Path) -> None:
+    """Negative case the bug backlog names explicitly: patching
+    `subprocess.run` must NOT suppress a route that reaches
+    `subprocess.Popen` instead -- narrow per-attribute, not per-module."""
+    helper = tmp_path / "helper_mod_popen.py"
+    helper.write_text(
+        "import subprocess\n"
+        "def measure():\n"
+        "    subprocess.Popen(['git', 'status'])\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_uses_helper_popen.py"
+    test_file.write_text(
+        "import subprocess\n"
+        "from helper_mod_popen import measure\n"
+        "def test_measure(monkeypatch):\n"
+        "    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: None)\n"
+        "    measure()\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(test_file, "test_uses_helper_popen.py")
+    assert report.spawning_funcs == ["test_measure"], (
+        f"patching subprocess.run must not suppress a route reaching "
+        f"subprocess.Popen, got: {report.spawning_funcs}"
+    )
+    assert report.unmarked_spawning_funcs == ["test_measure"]
+
+
+def test_global_stdlib_patch_suppresses_a_cyclic_route(tmp_path: Path) -> None:
+    """`_reach_all_patched_by_stdlib`'s `if key in visiting: return True`
+    cycle guard (reviewed OK by slice-A's reviewer, but with no test
+    exercising the branch -- all three Defect B tests use straight-line
+    reach, none recursive/mutual). Two mutually-recursive helper functions,
+    `a` calling `b` calling `a`, with `a`'s only spawn site fully covered by
+    the global-stdlib patch: the cycle must not make either direction read
+    as an unpatched spawn. Modelled on
+    `test_wrapper_resolver_agrees_on_a_cycle_regardless_of_query_order`'s
+    mutual-recursion shape, applied to the promote/patched-stdlib walk
+    instead of plain wrapper resolution."""
+    helper = tmp_path / "cyclic_helper_mod.py"
+    helper.write_text(
+        "import subprocess\n"
+        "def a():\n"
+        "    subprocess.run(['git', 'status'])\n"
+        "    b()\n"
+        "def b():\n"
+        "    a()\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_uses_cyclic_helper.py"
+    test_file.write_text(
+        "import subprocess\n"
+        "from cyclic_helper_mod import b\n"
+        "def test_measure(monkeypatch):\n"
+        "    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: None)\n"
+        "    b()\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(test_file, "test_uses_cyclic_helper.py")
+    assert report.spawning_funcs == [], (
+        "a globally-patched spawn reached through a mutually-recursive "
+        f"helper pair must not read as spawning, got: {report.spawning_funcs}"
+    )
+    assert not report.unmarked_spawning_funcs
+    assert not report.has_any_spawn
+
+
+def test_collect_patched_stdlib_attrs_recognizes_direct_stdlib_patch() -> None:
+    """Unit-level check on the collector itself: `monkeypatch.setattr(
+    subprocess, "run", ...)` where `subprocess` is this file's own `import
+    subprocess` must resolve to `{"subprocess": {"run"}}` -- the shape
+    `_collect_patched_module_aliases` (the narrower, pre-existing seam)
+    does not recognize at all, since its target is a bare `Name`, not an
+    `<alias>.subprocess` `Attribute`."""
+    tree = ast.parse(
+        "import subprocess\n"
+        "def test_thing(monkeypatch):\n"
+        "    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: None)\n"
+    )
+    assert _collect_patched_stdlib_attrs(tree) == {"subprocess": {"run"}}
+    # Sanity: the pre-existing narrow seam must NOT also claim this shape --
+    # the two collectors stay disjoint in what they recognize.
+    assert _collect_patched_module_aliases(tree) == set()

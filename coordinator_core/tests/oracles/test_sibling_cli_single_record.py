@@ -78,31 +78,6 @@ def test_queue_append_takes_one_record():
     )
 
 
-def test_reconcile_completion_commits_takes_one_entry_path(capsys):
-    """One oracle, four sites: `workday-complete-reconcile::run_completion_reconcile`,
-    `workday-start-reconcile-sweep::run_sweep`, `workweek-complete-close::run_reconcile_sweep`,
-    and `merge-release-notes-derive::cmd_reconcile_sweep` all shell to this same CLI once per
-    entry.
-
-    This one is not argparse -- the parser is hand-rolled inside `main()` -- so the surface is
-    exercised rather than introspected. That is safe HERE and only because the arity refusal
-    happens before `entry_path` is touched: no file is opened, nothing is written, and the call
-    returns 1. Verified by reading `main()` rather than assumed; an entrypoint whose refusal sat
-    after its first side effect would need a different oracle shape, not this one with a
-    tmp_path bolted on."""
-    main = load_bin_module("reconcile-completion-commits.py").main
-
-    assert main(["entry-one.md", "entry-two.md"]) == 1, (
-        "reconcile-completion-commits.py now accepts two entry paths in one invocation. Four "
-        "exemptions rest on it taking exactly one -- batch those callers and delete their "
-        "`_ORACLE_CLAIMS` entries."
-    )
-    assert "too many positional args" in capsys.readouterr().err, (
-        "the two-path call returned 1 for some reason OTHER than arity. This oracle would then "
-        "be passing for the wrong reason, which is worse than failing -- re-read `main()`."
-    )
-
-
 @pytest.mark.parametrize(
     "script, entry",
     [

@@ -57,28 +57,28 @@ def test_domain_signal_resolves_default_pair_and_full_roster():
         routing_md_text=_FIXTURE_ROUTING_MD,
     )
     slugs = [p["slug"] for p in decision["personas"]]
-    assert slugs == ["the Staff Engineer", "sid"]
+    assert slugs == ["patrik", "sid"]
     by_slug = {p["slug"]: p for p in decision["personas"]}
-    assert by_slug["the Staff Engineer"]["agent_file"] == "coordinator/agents/staff-eng.md"
-    assert by_slug["the Staff Engineer"]["subagent_type"] == "coordinator:staff-eng"
+    assert by_slug["patrik"]["agent_file"] == "coordinator/agents/staff-eng.md"
+    assert by_slug["patrik"]["subagent_type"] == "coordinator:staff-eng"
     assert by_slug["sid"]["subagent_type"] == "game-dev:staff-game-dev"
 
 
 def test_explicit_slug_override_bypasses_domain_signal_lookup():
     decision = ssa.resolve_roster(
         session_mode="review",
-        slugs=["the Front-End Reviewer", "the UX Reviewer"],
+        slugs=["pali", "fru"],
         routing_md_text=_FIXTURE_ROUTING_MD,
     )
     slugs = [p["slug"] for p in decision["personas"]]
-    assert slugs == ["the Front-End Reviewer", "the UX Reviewer"]
+    assert slugs == ["pali", "fru"]
 
 
 def test_synthesizer_cannot_appear_as_a_debater_via_override():
     with pytest.raises(ssa.StaffSessionAssembleError, match="synthesizer"):
         ssa.resolve_roster(
             session_mode="plan",
-            slugs=["the Staff Engineer", "the Director of Engineering"],
+            slugs=["patrik", "zoli"],
             routing_md_text=_FIXTURE_ROUTING_MD,
         )
 
@@ -128,7 +128,7 @@ def test_reads_doctrine_side_data_not_a_hardcoded_copy():
         routing_md_text=mutated,
     )
     by_slug = {p["slug"]: p for p in decision["personas"]}
-    assert by_slug["the Staff Engineer"]["agent_file"] == "coordinator/agents/renamed-staff-eng.md"
+    assert by_slug["patrik"]["agent_file"] == "coordinator/agents/renamed-staff-eng.md"
 
 
 def test_missing_section_heading_is_fail_loud():
@@ -142,7 +142,7 @@ def test_missing_section_heading_is_fail_loud():
 
 
 def test_cli_main_prints_json_roster(capsys):
-    exit_code = ssa.main(["--slug", "the Staff Engineer", "--session-mode", "plan"])
+    exit_code = ssa.main(["--slug", "patrik", "--session-mode", "plan"])
     # No routing_md_text seam on the CLI path — this will hit the real
     # doctrine-side read, which fails today (routing.md has no
     # Staff-Session Roster section yet, C9 not landed) — assert the

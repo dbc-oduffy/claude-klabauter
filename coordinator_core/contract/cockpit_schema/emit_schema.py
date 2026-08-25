@@ -302,7 +302,34 @@ GENERATES = [
 # from DoE's tagged release, which does not carry this change until
 # claude-central-em regens + re-tags (the not-yet-sent C3 memo).
 # Spec backlink: docs/plans/2026-08-21-x-baton-class-travels-to-the-tools-that-vendor-it.md § C1/C2.
-CONTRACT_VERSION = "3.14.0"
+# MAJOR bump 3.15.0 -> 4.0.0: removes the `file-attribution` entity and the
+# `file_attributions` key from snapshot-envelope's `backlogs` object and its
+# `malformed_records` buckets. MAJOR, not MINOR, because the key sits in a
+# `required` array AND the schema is `additionalProperties: false`, so removal
+# breaks in BOTH directions — a new envelope without the key fails the old
+# schema, an old envelope carrying it fails the new one. Example-cockpit-repo's
+# `checkSchemaVersion()` hard-throws on a MAJOR mismatch in either direction,
+# which is the intended signal here rather than a silent narrowing.
+#
+# Both consumers assented in advance and were verified from their own records,
+# not inferred: example-cockpit-repo ratified a DROP 2026-08-22 superseding their
+# DR-021 KEEP (their panel was deleted 2026-07-29 — write-only for seven
+# weeks); DoE-claude verified zero readers in their tree and returned an
+# explicit GO with conditions. Nothing leaves the fleet.
+#
+# DoE's binding conditions: emit as MAJOR; land as ONE commit followed by the
+# two-step `--advance-ref` flow so consumers re-vendor once; do NOT bundle the
+# conformance fixture into this bump — that is regenerated separately at
+# 3.15.0 by a generator that does not yet exist, so the generator is proven on
+# an ordinary patch before a major depends on it.
+#
+# DoE's version-pin gate firing on the shape hash is that gate working, not a
+# red. Same D39 source-first sequence as every bump above: claude-klabauter regenerates,
+# DoE commits the bundle and advances the release tag, claude-klabauter re-vendors.
+# Spec backlinks: docs/decisions/DR-353-cockpit-contract-4-0-0-is-an-em-call-not-a-pm-gate.md,
+#   docs/decisions/DR-351-the-emission-is-deleted-not-halted.md,
+#   cross-repo/inbox/2026-08-23-example-cockpit-repo-em-file-attributions-is-dropped-your-deliberation-rests-on-a-superseded-record.md
+CONTRACT_VERSION = "4.0.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from
@@ -944,6 +971,47 @@ def _schema_out_dir(out_dir: str | os.PathLike[str] | None = None) -> Path:
     return (Path(__file__).parent / ".." / ".." / ".." / "schema").resolve()
 
 
+def assert_no_orphaned_schema(
+    schema_dir: Path,
+    emitted: dict[str, dict[str, Any]],
+) -> None:
+    """
+    Refuse to finish an emit that leaves a schema file for an entity the contract
+    no longer has.
+
+    Failure class guarded: `emit_schemas` creates `schema_dir` with
+    `exist_ok=True` and then writes one file per entity in the CURRENT registry.
+    It has no unlink and no prune pass, so retiring an entity does not remove its
+    `*.schema.json` — the file is simply never written again and survives
+    untouched, byte-identical to its last-emitted state. `schema_dir` is the
+    directory the `cockpit-contract-release` tag publishes, so a consumer
+    re-vendoring pulls a well-formed, valid-looking schema for an entity that no
+    longer exists. Nothing in the file marks it stale. Found by DoE-claude during
+    the 4.0.0 `file_attribution` drop; the blast radius is the whole consumer set,
+    in the one window a major guarantees they are all pulling.
+
+    Negative-spec — this REFUSES, it does not prune. Deleting the orphan would be
+    the shorter fix and is deliberately not what happens here: `out_dir` is
+    routinely a directory this generator does not own (DoE's
+    `coordinator/cockpit-contract/schema/`, reached across repos), and a generator
+    that silently deletes files it did not write is a worse defect than the one it
+    closes. Removing a retired entity's schema is a deliberate `git rm` by whoever
+    owns that tree; this check's whole job is to make that step impossible to
+    forget rather than merely documented.
+    """
+    expected = {f"{name}.schema.json" for name in emitted}
+    expected.add("cockpit-contract.schema.json")
+    orphaned = sorted(p.name for p in schema_dir.glob("*.schema.json") if p.name not in expected)
+    if orphaned:
+        raise RuntimeError(
+            f"emit_schema: {schema_dir} carries {len(orphaned)} schema file(s) for "
+            f"entities no longer in the registry: {', '.join(orphaned)}. A retired "
+            "entity's schema is still published by the release tag and is "
+            "indistinguishable from a live one. Remove it with `git rm` in the same "
+            "commit as this regen; this generator will not delete a file it does not own."
+        )
+
+
 def emit_schemas(
     entity_schemas: dict[str, Any],
     out_dir: str | os.PathLike[str] | None = None,
@@ -1015,6 +1083,8 @@ def emit_schemas(
         encoding="utf-8",
         newline="\n",
     )
+
+    assert_no_orphaned_schema(schema_dir, emitted)
 
     print(f"emit_schema: emitted {len(emitted)} entity schemas + 1 bundle -> {schema_dir}")
     return emitted

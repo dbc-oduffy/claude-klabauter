@@ -105,6 +105,18 @@ from coordinator_core.shipped_in_tokens import (
 )
 from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
 from coordinator_core import dag
+from coordinator_core.git.git_objects import (
+    _GitReadModelError,
+    _MAX_DELTA_DEPTH,
+    _PackIndex,
+    _apply_git_delta,
+    _iter_pack_files,
+    _parse_pack_index,
+    _read_loose_object,
+    _read_object,
+    _read_pack_object_at,
+    _read_pack_object_by_sha,
+)
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
     build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
@@ -297,12 +309,10 @@ _RUN_GIT_SPAWN_VERBS = ("status", "diff", "add", "commit")
 # ---------------------------------------------------------------------------
 
 
-class _GitReadModelError(Exception):
-    """Internal signal only — a `_run_git` call shape the read-model does
-    not (yet) understand, or an unresolved revision. Caught at the
-    `_run_git` dispatch boundary and degraded to the same non-zero
-    `CompletedProcess` the old subprocess body returned on transport
-    failure. Never propagates past `_run_git`."""
+# `_GitReadModelError` is imported from `coordinator_core.git.git_objects`
+# (see top-of-file imports) -- one exception type for both the extracted
+# object-store reader and every other read-model dispatch site in this
+# module that raises/catches it.
 
 
 class _GitDirs(NamedTuple):
@@ -315,16 +325,7 @@ class _GitDirs(NamedTuple):
 
 
 _GIT_DIRS_CACHE: dict[str, Optional[tuple[Path, _GitDirs]]] = {}
-_OBJECT_CACHE: dict[str, dict[str, Optional[tuple[str, bytes]]]] = {}
-_PACK_INDEX_CACHE: dict[str, Optional["_PackIndex"]] = {}
-_PACK_BYTES_CACHE: dict[str, bytes] = {}
 _PACKED_REFS_CACHE: dict[str, dict[str, str]] = {}
-_PACK_FILES_CACHE: dict[str, list[tuple[Path, Path]]] = {}
-# Keyed on (str(pack_path), pack byte-offset) — memoizes decoded pack objects
-# (not just the final sha-resolved object `_OBJECT_CACHE` covers) so a delta
-# base shared by multiple OFS_DELTA chains is decompressed/reconstructed once
-# per `brief()` process rather than once per chain hop that references it.
-_PACK_OBJECT_AT_CACHE: dict[tuple[str, int], tuple[int, bytes]] = {}
 # Keyed on the commit sha itself — see `_commit_meta`, the single
 # read-and-parse entry point for commit objects in this module.
 _COMMIT_META_CACHE: dict[str, dict[str, Optional[dict[str, Any]]]] = {}
@@ -398,119 +399,6 @@ def _discover_git_dirs(start: Path) -> Optional[tuple[Path, _GitDirs]]:
     return result
 
 
-def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    path = common_dir / "objects" / sha[:2] / sha[2:]
-    if not path.is_file():
-        return None
-    try:
-        raw = zlib.decompress(path.read_bytes())
-    except (OSError, zlib.error):
-        return None
-    header, _, payload = raw.partition(b"\x00")
-    otype, _, _ = header.partition(b" ")
-    return otype.decode("ascii", errors="replace"), payload
-
-
-class _PackIndex(NamedTuple):
-    pack_path: Path
-    fanout: tuple  # 256 cumulative counts (v2 idx fanout table)
-    shas: bytes  # N * 20 bytes, sorted ascending
-    offsets: tuple  # N pack byte-offsets, parallel to `shas`
-
-
-def _iter_pack_files(common_dir: Path) -> list[tuple[Path, Path]]:
-    """Lists `(idx_path, pack_path)` pairs under `objects/pack/`. Cached per
-    `common_dir` — like `_GIT_DIRS_CACHE`/`_PACK_INDEX_CACHE`/`_OBJECT_CACHE`,
-    this assumes the pack directory doesn't change mid-`brief()` (this module
-    runs one short-lived spawn-per-call process per `brief()` invocation;
-    see module docstring). Without this cache, `_read_pack_object_by_sha`
-    re-globs+re-stats the pack dir on every single object lookup — 5441
-    scandir + 27345 stat calls measured in the 2026-07-26 profiling for a
-    directory that cannot change within one call."""
-    key = str(common_dir)
-    cached = _PACK_FILES_CACHE.get(key)
-    if cached is not None:
-        return cached
-    pack_dir = common_dir / "objects" / "pack"
-    result: list[tuple[Path, Path]] = []
-    if pack_dir.is_dir():
-        for idx_path in sorted(pack_dir.glob("*.idx")):
-            pack_path = idx_path.with_suffix(".pack")
-            if pack_path.is_file():
-                result.append((idx_path, pack_path))
-    _PACK_FILES_CACHE[key] = result
-    return result
-
-
-def _parse_pack_index(idx_path: Path) -> Optional[_PackIndex]:
-    """Parses a v2 pack `.idx`: 8-byte header, 256-entry fanout table,
-    sorted sha table, CRC32 table (skipped, not needed for object lookup),
-    a 32-bit offset table, and — only when a pack exceeds 2GB — a 64-bit
-    "large offsets" overflow table addressed via the MSB of a 32-bit
-    entry. v1 idx (pre-2005) is not supported; no repo on this stack
-    produces one. Review: code-reviewer — Finding 9: a failed magic-byte
-    check (below) degrades to `None` for either a benign v1 idx OR a
-    genuinely corrupt v2 idx — those two cases are indistinguishable here
-    and both silently drop the pack from every downstream lookup, rather
-    than surfacing corruption. Accepted per the stated v1-out-of-scope
-    carve-out above; not urgent unless this becomes a real-world concern."""
-    key = str(idx_path)
-    if key in _PACK_INDEX_CACHE:
-        return _PACK_INDEX_CACHE[key]
-    result: Optional[_PackIndex] = None
-    try:
-        data = idx_path.read_bytes()
-    except OSError:
-        data = b""
-    if len(data) >= 8 and data[:4] == b"\xfftOc" and struct.unpack(">I", data[4:8])[0] == 2:
-        pos = 8
-        fanout = struct.unpack(">256I", data[pos : pos + 1024])
-        pos += 1024
-        count = fanout[255]
-        shas = data[pos : pos + count * 20]
-        pos += count * 20
-        pos += count * 4  # CRC32 table — unused, object lookup doesn't need it
-        offsets32 = struct.unpack(f">{count}I", data[pos : pos + count * 4])
-        pos += count * 4
-        large_count = sum(1 for o in offsets32 if o & 0x80000000)
-        large_offsets = (
-            struct.unpack(f">{large_count}Q", data[pos : pos + large_count * 8]) if large_count else ()
-        )
-        offsets = []
-        for raw_offset in offsets32:
-            if raw_offset & 0x80000000:
-                offsets.append(large_offsets[raw_offset & 0x7FFFFFFF])
-            else:
-                offsets.append(raw_offset)
-        result = _PackIndex(idx_path.with_suffix(".pack"), fanout, shas, tuple(offsets))
-    _PACK_INDEX_CACHE[key] = result
-    return result
-
-
-def _pack_index_find(pidx: _PackIndex, sha_hex: str) -> Optional[int]:
-    """Binary search the fanout-bounded sorted sha table; returns the pack
-    byte offset of the object, or None if `sha_hex` isn't in this pack."""
-    try:
-        target = bytes.fromhex(sha_hex)
-    except ValueError:
-        return None
-    if len(target) != 20:
-        return None
-    first_byte = target[0]
-    lo = pidx.fanout[first_byte - 1] if first_byte > 0 else 0
-    hi = pidx.fanout[first_byte]
-    while lo < hi:
-        mid = (lo + hi) // 2
-        mid_sha = pidx.shas[mid * 20 : mid * 20 + 20]
-        if mid_sha == target:
-            return pidx.offsets[mid]
-        if mid_sha < target:
-            lo = mid + 1
-        else:
-            hi = mid
-    return None
-
-
 def _pack_index_prefix_matches(pidx: _PackIndex, prefix_hex: str) -> list[str]:
     """Linear scan for abbreviated-sha resolution (`cat-file -e` on a short
     sha). An abbreviated sha may be shorter than 2 hex chars, in which case
@@ -528,255 +416,6 @@ def _pack_index_prefix_matches(pidx: _PackIndex, prefix_hex: str) -> list[str]:
         if sha_hex.startswith(prefix):
             matches.append(sha_hex)
     return matches
-
-
-def _read_pack_bytes(pack_path: Path) -> bytes:
-    key = str(pack_path)
-    cached = _PACK_BYTES_CACHE.get(key)
-    if cached is None:
-        cached = pack_path.read_bytes()
-        _PACK_BYTES_CACHE[key] = cached
-    return cached
-
-
-_PACK_TYPE_NAMES = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
-# Review: code-reviewer — Finding 7: hoisted out of `_read_pack_object_at`'s
-# REF_DELTA branch, which previously rebuilt this inverse map on every hop.
-_PACK_TYPE_NUMS = {v: k for k, v in _PACK_TYPE_NAMES.items()}
-
-
-def _apply_git_delta(base: bytes, delta: bytes) -> bytes:
-    """Applies a git pack delta (copy/insert instruction stream, RFC-less
-    but stable since the pack v2 format's introduction) to `base`,
-    producing the target object's content."""
-    pos = 0
-    _base_size, pos = _delta_read_size(delta, pos)
-    _result_size, pos = _delta_read_size(delta, pos)
-    out = bytearray()
-    n = len(delta)
-    while pos < n:
-        opcode = delta[pos]
-        pos += 1
-        if opcode & 0x80:
-            copy_offset = 0
-            copy_size = 0
-            if opcode & 0x01:
-                copy_offset |= delta[pos]
-                pos += 1
-            if opcode & 0x02:
-                copy_offset |= delta[pos] << 8
-                pos += 1
-            if opcode & 0x04:
-                copy_offset |= delta[pos] << 16
-                pos += 1
-            if opcode & 0x08:
-                copy_offset |= delta[pos] << 24
-                pos += 1
-            if opcode & 0x10:
-                copy_size |= delta[pos]
-                pos += 1
-            if opcode & 0x20:
-                copy_size |= delta[pos] << 8
-                pos += 1
-            if opcode & 0x40:
-                copy_size |= delta[pos] << 16
-                pos += 1
-            if copy_size == 0:
-                copy_size = 0x10000
-            out += base[copy_offset : copy_offset + copy_size]
-        elif opcode != 0:
-            out += delta[pos : pos + opcode]
-            pos += opcode
-        else:
-            raise _GitReadModelError("invalid pack delta opcode 0")
-    return bytes(out)
-
-
-def _delta_read_size(data: bytes, pos: int) -> tuple[int, int]:
-    """Git's delta-header varint: 7 bits per byte, little-endian, MSB
-    continuation flag. Used for both the base-size and result-size header
-    fields (values themselves are unused by `_apply_git_delta` — the
-    produced byte count is trusted implicitly, matching git's own
-    zero-validation fast path)."""
-    result = 0
-    shift = 0
-    while True:
-        byte = data[pos]
-        pos += 1
-        result |= (byte & 0x7F) << shift
-        shift += 7
-        if not (byte & 0x80):
-            break
-    return result, pos
-
-
-# Review: code-reviewer — Finding 2: well above git's own `pack.depth`
-# default ceiling of 50, so a well-formed pack never approaches this; only
-# a corrupt/adversarial/cyclic delta chain does.
-_MAX_DELTA_DEPTH = 200
-
-
-def _zlib_decompress_bounded(pack_bytes: bytes, pos: int, size_hint: int) -> bytes:
-    """Decompresses a single zlib stream embedded inside a (possibly tens-of-
-    MB) pack file, feeding growing bounded INPUT windows — starting at
-    `size_hint` (the object's own uncompressed size, parsed from the pack
-    object header; zlib streams rarely expand, so this is normally big
-    enough for the whole stream in one shot) and doubling — instead of
-    handing the entire remainder of the pack file to `zlib.decompressobj`
-    in one call.
-
-    Regression this exists to prevent (2026-07-26 profiling,
-    `docs/plans/...pickup-assemble-perf` — see plan for the measured 9053 ms
-    vs <=60 ms budget): `decompressobj().decompress(mv[pos:])` looks
-    zero-copy because the INPUT is a memoryview slice, but once the DEFLATE
-    stream's real end is found mid-buffer, CPython copies everything past
-    that point into `decompressobj.unused_data` — a full copy of the pack
-    tail, per object read. `max_length` alone does NOT fix this: it bounds
-    the OUTPUT per call, not how much of the input buffer gets scanned/
-    copied into `unused_data`/`unconsumed_tail` once the stream ends (empir-
-    ically verified: a 500-byte payload followed by a 5 MB tail still
-    produced a 5 MB `unused_data` copy under `max_length=500`). Feeding
-    small, growing INPUT windows keeps `unused_data` bounded to at most one
-    window's worth, at the cost of a `zlib.error`-free retry loop for the
-    (rare) case where `size_hint` underestimates the true compressed size.
-    """
-    mv = memoryview(pack_bytes)
-    n = len(pack_bytes)
-    d = zlib.decompressobj()
-    out = bytearray()
-    cur = pos
-    window = max(64, size_hint + 64) if size_hint else 4096
-    while True:
-        end = min(cur + window, n)
-        if end <= cur:
-            raise _GitReadModelError(f"truncated zlib stream in pack object at offset {pos}")
-        out += d.decompress(mv[cur:end])
-        cur = end
-        if d.eof:
-            return bytes(out)
-        window *= 2
-
-
-def _read_pack_object_at(
-    common_dir: Path, pack_path: Path, pack_bytes: bytes, offset: int, _depth: int = 0
-) -> tuple[int, bytes]:
-    # Review: code-reviewer — Finding 2: depth guard against a cyclic/over-
-    # deep OFS_DELTA chain (the direct self-recursion below); `_run_git`'s
-    # catch set also now traps `RecursionError` as a backstop for REF_DELTA
-    # cycles, which route through `_read_object` and aren't depth-threaded.
-    if _depth > _MAX_DELTA_DEPTH:
-        raise _GitReadModelError(f"delta chain exceeds max depth {_MAX_DELTA_DEPTH} (cyclic/corrupt pack?)")
-    cache_key = (str(pack_path), offset)
-    cached = _PACK_OBJECT_AT_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    pos = offset
-    first = pack_bytes[pos]
-    pos += 1
-    type_num = (first >> 4) & 0x7
-    # Object header size varint (7 bits/byte, little-endian, MSB continuation
-    # flag) — for a non-delta object this is the uncompressed content size;
-    # for OFS_DELTA/REF_DELTA it's the uncompressed size of the delta STREAM
-    # itself (base-size + copy/insert opcodes), which is exactly the byte
-    # count `_zlib_decompress_bounded` needs to size its first window.
-    usize = first & 0x0F
-    shift = 4
-    byte = first
-    while byte & 0x80:
-        byte = pack_bytes[pos]
-        pos += 1
-        usize |= (byte & 0x7F) << shift
-        shift += 7
-
-    if type_num == 6:  # OFS_DELTA
-        byte = pack_bytes[pos]
-        pos += 1
-        base_rel_offset = byte & 0x7F
-        while byte & 0x80:
-            byte = pack_bytes[pos]
-            pos += 1
-            base_rel_offset += 1
-            base_rel_offset = (base_rel_offset << 7) | (byte & 0x7F)
-        base_offset = offset - base_rel_offset
-        if base_offset < 0:
-            # Review: code-reviewer — Finding 4: a negative `base_offset`
-            # (corrupt/truncated pack) would otherwise resolve via Python's
-            # negative indexing into the tail of the file, silently decoding
-            # an unrelated byte region as if it were a valid object header.
-            raise _GitReadModelError(f"OFS_DELTA base offset underflow: {base_offset}")
-        delta = _zlib_decompress_bounded(pack_bytes, pos, usize)
-        base_type, base_content = _read_pack_object_at(common_dir, pack_path, pack_bytes, base_offset, _depth + 1)
-        result = (base_type, _apply_git_delta(base_content, delta))
-        _PACK_OBJECT_AT_CACHE[cache_key] = result
-        return result
-
-    if type_num == 7:  # REF_DELTA
-        base_sha = pack_bytes[pos : pos + 20].hex()
-        pos += 20
-        delta = _zlib_decompress_bounded(pack_bytes, pos, usize)
-        base = _read_object(common_dir, base_sha)
-        if base is None:
-            raise _GitReadModelError(f"REF_DELTA base object missing: {base_sha}")
-        base_type_name, base_content = base
-        base_type_num = _PACK_TYPE_NUMS.get(base_type_name)
-        if base_type_num is None:
-            raise _GitReadModelError(f"REF_DELTA base object has unsupported type: {base_type_name}")
-        result = (base_type_num, _apply_git_delta(base_content, delta))
-        _PACK_OBJECT_AT_CACHE[cache_key] = result
-        return result
-
-    content = _zlib_decompress_bounded(pack_bytes, pos, usize)
-    result = (type_num, content)
-    _PACK_OBJECT_AT_CACHE[cache_key] = result
-    return result
-
-
-def _read_pack_object_by_sha(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    for idx_path, pack_path in _iter_pack_files(common_dir):
-        pidx = _parse_pack_index(idx_path)
-        if pidx is None:
-            continue
-        offset = _pack_index_find(pidx, sha)
-        if offset is None:
-            continue
-        pack_bytes = _read_pack_bytes(pack_path)
-        type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
-        type_name = _PACK_TYPE_NAMES.get(type_num)
-        if type_name is None:
-            return None
-        return type_name, content
-    return None
-
-
-def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    """Reads a git object by full 40-hex sha — packs first (v2 idx binary
-    search across every pack in `objects/pack/`), loose second. Cached per
-    (repo, sha): the `brief` call graph reads the same commit/tree objects
-    from several different signal-computation functions."""
-    sha = sha.lower()
-    cache = _OBJECT_CACHE.setdefault(str(common_dir), {})
-    if sha in cache:
-        return cache[sha]
-    # Packs first, loose second: a sha is content-addressed, so a pack copy
-    # and a loose copy of the same sha are byte-identical and this ordering
-    # is a performance choice only, given intact object stores — it is not
-    # a correctness concern there. On this repo's commit-dense branches
-    # almost every object the walk touches is already packed, so
-    # loose-first pays for a failed stat(2) + ENOENT on nearly every
-    # lookup; pack-first resolves those same lookups via an in-memory idx
-    # binary search instead. Do not "fix" this back to loose-first.
-    # A found-but-corrupt pack entry (truncated zlib stream, a bad delta
-    # chain) raises rather than returning None, so it would otherwise skip
-    # the loose fallback below entirely; catch narrowly and fall back so a
-    # damaged pack copy doesn't shadow an intact loose copy of the same sha.
-    try:
-        result = _read_pack_object_by_sha(common_dir, sha)
-    except (_GitReadModelError, zlib.error, struct.error):
-        result = None
-    if result is None:
-        result = _read_loose_object(common_dir, sha)
-    cache[sha] = result
-    return result
 
 
 def _find_object_by_prefix(common_dir: Path, prefix_hex: str) -> Optional[str]:

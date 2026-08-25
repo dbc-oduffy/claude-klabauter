@@ -25,10 +25,11 @@ second concurrent-write surface introduced).
 
 Idempotent — outcome-predicate no-op pattern (docs/wiki/idempotent-op-design-catalogue.md
 row 1): a memo that already carries any of decision/decision_note/realized_by/
-actioned_note (_DISPOSITION_FIELDS, imported from archive_actioned_memos.py so
-the vocabulary exists exactly once) fails the "needs a disposition" predicate by
-construction and is skipped, never overwritten. A second run over the same 34
-is therefore a no-op by construction, not by an explicit already-ran tracker.
+actioned_note (_DISPOSITION_FIELDS, defined locally below — formerly imported
+from the now-deleted fleet.archive_actioned_memos, PM kill ruling 2026-08-23)
+fails the "needs a disposition" predicate by construction and is skipped, never
+overwritten. A second run over the same 34 is therefore a no-op by
+construction, not by an explicit already-ran tracker.
 
 Self-registration: importing this module calls
 register_op("fleet.backfill_dispositionless_memos", _handler) as a side-effect.
@@ -82,13 +83,17 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.fleet.archive_actioned_memos import _DISPOSITION_FIELDS
 
 import asyncio
 import yaml
 
 _LOG = logging.getLogger(__name__)
 _LOG.addHandler(logging.NullHandler())
+
+#: Disposition-field vocabulary — formerly defined in fleet.archive_actioned_memos
+#: and imported from there (PM kill ruling 2026-08-23 deleted that module); this is
+#: now its sole owner.
+_DISPOSITION_FIELDS = ("decision", "decision_note", "realized_by", "actioned_note", "superseded_by")
 
 
 # ---------------------------------------------------------------------------

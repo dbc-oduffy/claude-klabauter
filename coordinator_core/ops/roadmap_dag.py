@@ -72,6 +72,11 @@ _LOG = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# Leaf import -- NEVER `coordinator_core.roadmap.audit`, which pulls
+# `ops.ceremony.records_query` and would cycle back through this package's
+# own eager registration loop.
+from coordinator_core.roadmap.spine import cross_sprint_gates, find_spine
+
 def _collect_stub_paths(worktree_root: Path) -> tuple[List[Path], List[str]]:
     """Scan live and archived stub handoff paths.
 
@@ -247,9 +252,15 @@ def _compute_critical_path(
 
     Args:
         nodes: List of node dicts (each with 'stub_id').
-        edges: List of edge dicts (each with 'from', 'to', type='blocks').
-               C3 guarantees dangling edges have already been removed — both
-               endpoints of every edge are present in the node set.
+        edges: List of edge dicts (each with 'from', 'to', 'type').
+               C3 guarantees dangling STUB edges have already been removed —
+               both endpoints of every type='blocks' edge are present in the
+               node set. type='blocks-sprint' rows are descriptor-altitude
+               gates whose endpoints resolve to NO node by design (D47), and
+               are filtered out below rather than traversed: feeding a sprint
+               id into a stub-keyed adjacency map is the sprint→stub→sprint
+               hop that spine.schema.json's reserved `sprint-` prefix exists
+               to make impossible.
 
     Returns:
         List of stub_ids forming the longest chain, earliest dependency first
@@ -268,6 +279,9 @@ def _compute_critical_path(
     in_degree: Dict[str, int] = {sid: 0 for sid in stub_ids}
 
     for edge in edges:
+        # Discriminate on type BEFORE resolving an endpoint (D47).
+        if edge.get("type") != "blocks":
+            continue
         frm = edge["from"]
         to_ = edge["to"]
         # C3 drops dangling edges, but guard defensively
@@ -527,6 +541,30 @@ def assemble_roadmap_dag(roadmap_id: str, worktree_root: Path) -> Dict[str, Any]
                     "to": target_stub_id,
                     "type": "blocks",
                     "roadmap_id": roadmap_id,  # explicit identity (F6)
+                }
+            )
+
+    # -----------------------------------------------------------------------
+    # Pass 3: descriptor-altitude sprint gates (AC6, D47)
+    # A cross-sprint gate emits as its OWN edge row naming sprint descriptors
+    # in from/to -- never flattened to stub-to-stub, which would either
+    # under-describe the gate or become the cross-product of two sprints'
+    # stubs and truncate silently in rag's 1000-row default.
+    #
+    # These ride the SAME `type` property as stub edges (D47: the value widen,
+    # not a separate entity), and their endpoints resolve to NO RoadmapDagNode
+    # by design -- a consumer must discriminate on `type` before resolving an
+    # endpoint. `_compute_critical_path` does exactly that, below.
+    # -----------------------------------------------------------------------
+    spine = find_spine(worktree_root, roadmap_id)
+    if spine is not None:
+        for sprint_from, sprint_to in cross_sprint_gates(spine):
+            edges.append(
+                {
+                    "from": sprint_from,
+                    "to": sprint_to,
+                    "type": "blocks-sprint",
+                    "roadmap_id": roadmap_id,
                 }
             )
 

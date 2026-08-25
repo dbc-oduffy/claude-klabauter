@@ -170,7 +170,7 @@ def test_mapping_shape_named_dispatch_resolves_via_backpointer(
 ) -> None:
     _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
     payload = _payload(
-        "the Staff Engineer",  # teammate NAME, not a policy key
+        "patrik",  # teammate NAME, not a policy key
         "session-map-named-1",
         str(git_repo),
         contract_blocks={ELIGIBLE_TYPE: [SNIPPET_A]},
@@ -256,7 +256,7 @@ def test_counter_fires_only_for_named_dispatch(
 
     _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
     named_payload = _payload(
-        "the Staff Engineer",
+        "patrik",
         "session-counter-named",
         str(git_repo),
         contract_blocks={ELIGIBLE_TYPE: [SNIPPET_A]},
@@ -273,7 +273,7 @@ def test_counter_fires_only_for_named_dispatch(
 def test_counter_output_is_stderr_only(git_repo: Path, capsys: pytest.CaptureFixture) -> None:
     _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
     payload = _payload(
-        "the Staff Engineer",
+        "patrik",
         "session-stderr-only-1",
         str(git_repo),
         contract_blocks={ELIGIBLE_TYPE: [SNIPPET_A]},

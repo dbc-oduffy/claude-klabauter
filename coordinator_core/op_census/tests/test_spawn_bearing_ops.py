@@ -335,6 +335,84 @@ def test_ops_with_spawn_evidence_function_granular_nested_site_attributes_to_top
     assert result["op.nested"][0].enclosing == "outer._inner"
 
 
+def test_ops_with_spawn_evidence_function_granular_follows_to_thread_hop(tmp_path, monkeypatch):
+    """C8/AC15: `handler` reaches `helper` only through `asyncio.to_thread(helper)`, never a
+    direct call -- before C8, `_reachable_functions` had no edge for a thread hop at all, so
+    `helper`'s spawn site was invisible to the function-granular walk even though `handler`
+    genuinely spawns through it at runtime. Same transitive-attribution shape as the direct-call
+    sibling test above, but reached only via the thread-hop edge."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    mod = root / "thread_hop.py"
+    mod.write_text(
+        "import asyncio\n"
+        "import subprocess\n"
+        "def helper():\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "async def handler():\n"
+        "    return await asyncio.to_thread(helper)\n",
+        encoding="utf-8",
+    )
+    entrypoints = {
+        "op.thread_hop": OpEntrypoint("op.thread_hop", "coordinator_core/thread_hop.py", "handler")
+    }
+    module_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints)
+    assert "op.thread_hop" in module_granular  # module lens already saw it; not the regression
+
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(function_granular) == {"op.thread_hop"}
+    assert function_granular["op.thread_hop"][0].enclosing == "helper"
+
+
+def test_ops_with_spawn_evidence_function_granular_follows_run_in_executor_hop(tmp_path, monkeypatch):
+    """Sibling of the `to_thread` case for `loop.run_in_executor(None, fn, ...)` -- the callee
+    sits at the SECOND positional argument, not the first (the executor, often a bare `None`,
+    occupies the first slot), so this pins that the resolver reads the right argument index."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    mod = root / "executor_hop.py"
+    mod.write_text(
+        "import subprocess\n"
+        "def helper():\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "def handler(loop):\n"
+        "    return loop.run_in_executor(None, helper)\n",
+        encoding="utf-8",
+    )
+    entrypoints = {
+        "op.executor_hop": OpEntrypoint(
+            "op.executor_hop", "coordinator_core/executor_hop.py", "handler"
+        )
+    }
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(function_granular) == {"op.executor_hop"}
+    assert function_granular["op.executor_hop"][0].enclosing == "helper"
+
+
+def test_ops_with_spawn_evidence_function_granular_unresolvable_thread_hop_is_counted(
+    tmp_path, monkeypatch
+):
+    """AC15's own residual-gap requirement: a thread-hop call whose callee argument is not
+    statically resolvable (here, a `getattr`-shaped dynamic dispatch) yields no edge -- the
+    site stays invisible to `function_granular` exactly as before C8 -- but the gap is COUNTED
+    in `_UNRESOLVED_THREAD_HOP_CALLEES` via `_gate._unresolved_thread_hop_report()`, not silently
+    dropped as an assumption."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    mod = root / "dynamic_hop.py"
+    mod.write_text(
+        "import asyncio\n"
+        "def handler(obj):\n"
+        "    return asyncio.to_thread(getattr(obj, 'method'))\n",
+        encoding="utf-8",
+    )
+    entrypoints = {
+        "op.dynamic_hop": OpEntrypoint("op.dynamic_hop", "coordinator_core/dynamic_hop.py", "handler")
+    }
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert function_granular == {}
+
+    report = _gate._unresolved_thread_hop_report()
+    assert ("coordinator_core/dynamic_hop.py", "handler", 3) in report
+
+
 @pytest.mark.cadence
 def test_function_granular_width_probe_timing():
     """AC10's width probe: this chunk holds the function-granular result and

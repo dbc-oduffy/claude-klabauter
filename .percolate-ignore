@@ -1,0 +1,79 @@
+# .percolate-ignore for the claude-klabauter-publish-repo-toplevel flat-mirror target
+# (publish-targets.portable row `claude-klabauter-publish-repo-toplevel`).
+#
+# MECHANISM — a listed path is protected in BOTH directions (publish_sync.py
+# `sync_flat_mirror`, both phases call the SAME `ignore.matches(rel_path)`):
+#   Phase 1 (src->dst copy): not synced from this directory.
+#   Phase 2 (dst delete-not-in-source): NOT deleted at the destination.
+# Phase 2 is the dangerous half. It deletes every top-level destination file that this
+# source directory does not contain, so a destination-native file that is not listed here
+# is destroyed on the first publish. That is not hypothetical: the coordinator-claude
+# sibling's own RESOLVED-2026-07-27 comment block records exactly this consequence being
+# accepted for that mirror's CLAUDE.md when its protection line was removed.
+#
+# INVERSE, and equally load-bearing: a file we DO ship from this directory must NOT be
+# listed. Listing it would make Phase 1 skip the copy, and the file would simply never
+# reach the mirror. LICENSE, NOTICE.md, README.md, CONTRIBUTING.md, SECURITY.md,
+# PRIVACY.md, CODE_OF_CONDUCT.md, COMMERCIAL.md, CHANGELOG.md, AGENTS.md, pyproject.toml,
+# conftest.py, and (as of the unscanned-published-noise fix) .gitignore are all shipped
+# from here and are deliberately absent below.
+#
+# SCOPE — Phase 2 skips any destination entry that is not a file (`if not
+# dst_file.is_file(): continue`), and the walk is `dst_dir.iterdir()`, non-recursive. The
+# sweep therefore cannot reach a destination-native DIRECTORY or anything inside one:
+# `.github/` and its contents are structurally out of reach and need no line here.
+# Only top-level destination FILES need protecting.
+
+# The .percolate-ignore file itself shouldn't appear in the publish repo root — it is a
+# source-side control file, not OSS-facing content.
+#
+# Flat-mirror Phase 1 has NO dotfile skip -- unlike `sync_mirror`'s
+# `_sync_mirror_top_level_files` helper, it checks only `ignore.matches(rel_path)`, never
+# `rel_path.startswith(".")`. Without this line, this file would publish itself.
+# `coordinator/dist/publish-repo-toplevel/.percolate-ignore` lists itself for the identical
+# reason; this file follows that precedent.
+.percolate-ignore
+
+# ---------------------------------------------------------------------------
+# Destination-native (publish-repo-owned) top-level files: authored in the mirror, never
+# back-percolated here, and destroyed by the Phase-2 sweep unless named below.
+# ---------------------------------------------------------------------------
+
+# `.gitignore` used to be listed here (destination-native, hand-authored, never shipped
+# from source) but no destination-native one was ever actually authored -- the published
+# repo shipped with NO .gitignore at all, so anything that ran Python inside a fresh clone
+# (a pytest run, a stray `python -m`) accumulated untracked `__pycache__/*.pyc` noise that
+# then tripped `dispatch_end_of_run_unscanned_published_check` (499 false-positive findings
+# on one real run, all `__pycache__/*.pyc`). Fixed by shipping a real `.gitignore` FROM
+# this directory instead (see the sibling `.gitignore` file here) -- removed from the
+# protection list below so Phase 1 actually copies it.
+
+# The publish repo's Python venv pin -- per-publish-repo, not authored here.
+.python-version
+
+# Publish-side install-provenance sentinel, written at the END of a target sync (= source
+# meta-repo HEAD) rather than authored in this directory. Protected so it is not churned
+# -- deleted, then recreated -- on every publish.
+version.txt
+
+# ---------------------------------------------------------------------------
+# `state/` — PM ruling 2026-08-12: claude-klabauter's own working substrate (see
+# claude-klabauter's CLAUDE.md, "`state/` is substrate") must never enter the
+# claude-klabauter mirror. This directory has never staged a `state/` entry
+# and is not expected to, but this line is a Phase-1 copy-time backstop for
+# THIS row specifically: if `state/` were ever staged here (accidentally or
+# by a future authoring mistake), branch-2 any-depth directory matching
+# (ignore.py `is_ignored`) stops Phase 1 from copying it into the mirror.
+#
+# NOT a complete fix for this row's actual incident on its own — read the
+# SCOPE note above first. This row's own Phase 2 (destination orphan sweep)
+# is file-only and non-recursive (`dst_dir.iterdir()`, `if not
+# dst_file.is_file(): continue`), so it structurally cannot reach a
+# directory at the destination either way; a `state/` directory already
+# present in the mirror by some OTHER path (e.g. a runtime writer, not this
+# row) is outside this file's reach by construction, same as `.github/`
+# above. That incident's actual root cause is the runtime writer
+# (`coordinator_core/state_root.py`), fixed separately, not this publish
+# row. This line closes this row's own copy-time contribution path, which
+# is the only lever a `.percolate-ignore` file gives it.
+state/

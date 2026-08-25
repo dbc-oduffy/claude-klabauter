@@ -3116,6 +3116,42 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     session_id = payload.get("session_id") or ""
     agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
     agent_type = payload.get("agent_type") or ""
+    # Divergence 19 (2026-08-23, root cause for the P1 filed as "intermittent"
+    # at state/bug-backlog/2026-08-21-bash-guard-applies-code-reviewer-allowlist-
+    # to-other-agents-intermittently.yaml): `git_root` was derived SOLELY from
+    # the agent's `payload["cwd"]`, which is wherever that agent happened to be
+    # working at the moment of the call -- routinely its own scratchpad, which is
+    # outside the repo. `resolve_git_root()` then returns None, the back-pointer
+    # leg below never runs, and `subagent_type` stays "". For a NAMED dispatch
+    # `agent_type` is the caller-chosen teammate NAME rather than a type, so
+    # `_resolve_effective_type` has no known identity to prefer, degrades to that
+    # name, and `_is_confined_type`'s leg 3 confines it for absence from the
+    # roster -- handing an arbitrary agent `coordinator:code-reviewer`'s
+    # allowlist.
+    #
+    # That is what made this look intermittent for three sessions: the verdict
+    # tracks the cwd of each individual Bash call, so the SAME agent running the
+    # SAME command is allowed from the repo and denied from its scratchpad. Not a
+    # race -- measured, the back-pointer was on disk 79s before the denial.
+    #
+    # The back-pointer store does not move when an agent changes directory: it
+    # lives in the repo the EM session runs in, which is the HOOK process's own
+    # cwd. So fall back to that (`resolve_git_root(None)`, the documented
+    # resolve-against-process-cwd contract) when the payload cwd cannot resolve.
+    #
+    # This does NOT relax confinement, which is why it is preferred over the two
+    # alternatives (fail open on unresolvable git_root, or stop selecting the
+    # code-reviewer ruleset). `_read_backpointer_subagent_type` is already
+    # cross-checked against THIS payload's `session_id` via
+    # `expected_em_session_id`, so widening WHERE the store is looked for cannot
+    # manufacture a false identity -- a wrong root simply finds no matching row
+    # and returns "", landing on exactly today's fail-closed behaviour. It can
+    # only recover a TRUE identity that a transient cwd was hiding. Divergence
+    # 18's deliberate fail-closed-on-unresolved posture is untouched: it still
+    # governs every case where the chain genuinely does not resolve.
+    if not git_root:
+        git_root = resolve_git_root(None)
+
     subagent_type = ""
     if agent_id and git_root:
         # Review: coordinator:code-reviewer (2026-08-14, Divergence 18

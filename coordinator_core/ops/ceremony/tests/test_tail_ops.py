@@ -30,18 +30,16 @@ Coverage:
 
   fire_archive_sweeps_detached (C2, 2026-07-23 wsc-tail-slim-down -- replaces the retired
   archive_completed_plans/archive_completed_handoffs/sweep_actioned_memos blocking wrappers):
-    (l) fire_archive_sweeps_detached_spawns_four_expected_clis -- exactly the four per-class
+    (l) fire_archive_sweeps_detached_spawns_expected_clis -- exactly the expected per-class
         CLIs are spawned, each with worktree_root as its repo_root arg; sweep-boot.py is
         never among them
     (m) fire_archive_sweeps_detached_records_spawn_failure -- a spawn_detached() False return
-        for one script lands in failed[], the rest still fire
+        lands in failed[], not raised
 
-  coverage.gate / review_trail.write wrappers:
-    (n) coverage_gate_covered_verdict_is_acted
-    (o) coverage_gate_indeterminate_is_failed
-    (p) review_trail_incomplete_metadata_skips_cleanly
-    (q) review_trail_b_adjudication_incomplete_is_critical
-    (r) review_trail_complete_metadata_forwards_to_handler
+  coverage.gate and review_trail.write wrapper tests were removed along
+  with their in-process wiring (coverage.gate: K-001, state/kill-ledger.md;
+  review_trail.write: PM ruling 2026-08-23, kill review_trail.write -- the
+  op module itself was deleted).
 
   refresh_roadmap_callout (STEP_2_75, 2026-07-22 C9 wiring-gap fix -- docs/plans/
   2026-07-16-wsc-pure-python-tail-rebuild.md § C9; its former render_handoff_tracker
@@ -336,11 +334,15 @@ def test_two_phase_handler_exception_is_caught(tmp_path):
     assert "fleet.fake_op: RuntimeError" in result["failed"][0]
 
 
-def test_fire_archive_sweeps_detached_spawns_four_expected_clis(tmp_path):
-    """C2: the retired blocking archive_completed_plans/archive_completed_handoffs/
-    sweep_actioned_memos calls are replaced by exactly four detached CLI fires -- never
-    the composite sweep-boot.py (plan § C2 anti-scope: it also runs the unintegrated-
-    findings reap, a tracked git rm, out of scope for a call fired on every WSC pass)."""
+def test_fire_archive_sweeps_detached_spawns_expected_clis(tmp_path):
+    """C2: the retired blocking archive_completed_handoffs/sweep_actioned_memos
+    calls are replaced by detached CLI fires -- never the composite sweep-boot.py
+    (plan § C2 anti-scope: it also runs the unintegrated-findings reap, a tracked
+    git rm, out of scope for a call fired on every WSC pass). sweep-terminal-plans.py
+    was removed when fleet.archive_completed_plans was killed and rebuilt from
+    scratch (PM ruling 2026-08-23). sweep-actioned-memos.py was removed the same day
+    when fleet.archive_actioned_memos was killed outright (PM ruling, no replacement
+    op) -- only the shipped-handoffs sweep fires now."""
     worktree_root = tmp_path
     spawned: list[tuple] = []
 
@@ -351,13 +353,10 @@ def test_fire_archive_sweeps_detached_spawns_four_expected_clis(tmp_path):
     with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
         result = tail_ops.fire_archive_sweeps_detached(worktree_root)
 
-    assert mock_spawn.call_count == 4
+    assert mock_spawn.call_count == 1
     fired_scripts = {Path(script_path).name for _repo_root, script_path, _args in spawned}
     assert fired_scripts == {
-        "sweep-terminal-plans.py",
         "sweep-shipped-handoffs.py",
-        "sweep-consumed-handoffs.py",
-        "sweep-actioned-memos.py",
     }
     assert "sweep-boot.py" not in fired_scripts
 
@@ -367,24 +366,28 @@ def test_fire_archive_sweeps_detached_spawns_four_expected_clis(tmp_path):
         assert Path(script_path).parent == Path(worktree_root, "coordinator", "bin")
 
     assert result["failed"] == []
-    assert len(result["acted"]) == 4
+    assert len(result["acted"]) == 1
 
 
 def test_fire_archive_sweeps_detached_records_spawn_failure(tmp_path):
-    """A spawn_detached() False return for one script lands in failed[]; the other
-    three scripts still fire (a single bad spawn must not short-circuit the rest)."""
+    """A spawn_detached() False return lands in failed[], not raised. Only one
+    script remains in _ARCHIVE_SWEEP_SCRIPTS since fleet.archive_completed_plans
+    (2026-08-23 rebuild) and fleet.archive_actioned_memos (2026-08-23 kill) both
+    lost their detached fires here -- this can no longer exercise "one bad spawn
+    doesn't short-circuit the rest" with a second script; that shape returns
+    when a rebuilt op re-earns a call site."""
     worktree_root = tmp_path
 
     def _fake_spawn(repo_root, script_path, args):
-        return "sweep-actioned-memos.py" not in script_path
+        return False
 
     with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
         result = tail_ops.fire_archive_sweeps_detached(worktree_root)
 
-    assert mock_spawn.call_count == 4
-    assert len(result["acted"]) == 3
+    assert mock_spawn.call_count == 1
+    assert len(result["acted"]) == 0
     assert len(result["failed"]) == 1
-    assert "sweep-actioned-memos.py" in result["failed"][0]
+    assert "sweep-shipped-handoffs.py" in result["failed"][0]
 
 
 def test_unregistered_op_key_is_clean_failure(tmp_path):
@@ -393,301 +396,6 @@ def test_unregistered_op_key_is_clean_failure(tmp_path):
     assert result["acted"] == []
     assert result["skipped"] == []
     assert result["failed"] == ["fleet.does_not_exist: fleet.does_not_exist not registered"]
-
-
-# ---------------------------------------------------------------------------
-# review_trail.write wrapper
-# ---------------------------------------------------------------------------
-
-
-def test_review_trail_incomplete_metadata_skips_cleanly(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(tail_ops.write_review_trail(common_dir, review_trail=None))
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert result["skipped"] == [f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"]
-
-
-def test_review_trail_b_adjudication_incomplete_is_critical(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(
-        tail_ops.write_review_trail(
-            common_dir,
-            review_trail={"sha_range": "abc..def"},  # missing 4 required fields
-            b_adjudication_present=True,
-        )
-    )
-    assert result["acted"] == []
-    assert result["skipped"] == []
-    assert result["failed"] == []
-    assert len(result["failed_critical"]) == 1
-    assert "b_adjudication present but review_trail missing" in result["failed_critical"][0]
-
-
-def test_review_trail_partition_mandatory_incomplete_is_critical(tmp_path):
-    """D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-silently.md:
-    `partition_mandatory` is `b_adjudication_present`'s sibling gate — a resolved
-    `decide_review_scale` row 4/6 with no complete review_trail metadata must also be
-    `failed_critical`, not the ordinary `no-review-metadata` skip."""
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(
-        tail_ops.write_review_trail(
-            common_dir,
-            review_trail=None,
-            partition_mandatory=True,
-        )
-    )
-    assert result["acted"] == []
-    assert result["skipped"] == []
-    assert result["failed"] == []
-    assert len(result["failed_critical"]) == 1
-    assert "partition_mandatory resolved but review_trail missing" in result["failed_critical"][0]
-
-
-def test_review_trail_partition_mandatory_false_and_no_adjudication_is_ordinary_skip(tmp_path):
-    """Neither gate set → the pre-existing ordinary no-review-this-session skip,
-    unchanged — D is additive, never a stricter default for the common close."""
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(
-        tail_ops.write_review_trail(common_dir, review_trail=None, partition_mandatory=False)
-    )
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert result["skipped"] == [f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"]
-
-
-def test_review_trail_many_partition_mandatory_no_qualifying_entries_is_critical(tmp_path):
-    """`write_review_trail_many`'s sibling of the single-record test above — an
-    empty/all-incomplete list with `partition_mandatory=True` must also be critical."""
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(
-        tail_ops.write_review_trail_many(
-            common_dir,
-            review_trail_list=[{"sha_range": "abc..def"}],  # missing required fields
-            partition_mandatory=True,
-        )
-    )
-    assert result["acted"] == []
-    assert result["skipped"] == []
-    assert result["failed"] == []
-    assert len(result["failed_critical"]) == 1
-    assert "partition_mandatory resolved but review_trail (list) had no" in result["failed_critical"][0]
-
-
-def test_review_trail_complete_metadata_forwards_to_handler(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    forwarded = {}
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        forwarded.update(params)
-        return {"out_path": "state/review-trail/2026-07-16-abc.json"}
-
-    review_trail = {
-        "sha_range": "abc..def",
-        "reviewer": "code-reviewer",
-        "scope": "chain",
-        "verdict": "ok",
-        "diff_loc": 42,
-    }
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.write_review_trail(common_dir, review_trail=review_trail))
-
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert result["acted"] == [
-        f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/2026-07-16-abc.json"
-    ]
-    assert forwarded == review_trail
-
-
-# ---------------------------------------------------------------------------
-# write_review_trail_many -- N-slice sibling for the commit-tail path
-# (finishes the partitioned-review fix's second, previously-stopgapped half;
-# see directives_commit_tail.py's _review_fields_present docstring)
-# ---------------------------------------------------------------------------
-
-
-def test_write_review_trail_many_empty_list_skips_cleanly(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    result = _run(tail_ops.write_review_trail_many(common_dir, []))
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert result["skipped"] == [f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"]
-
-
-def test_write_review_trail_many_writes_one_record_per_qualifying_slice(tmp_path):
-    common_dir = _make_common_dir(tmp_path)
-    calls = []
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        calls.append(dict(params))
-        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
-
-    slices = [
-        {
-            "sha_range": "a1..a2",
-            "reviewer": "code-reviewer",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        },
-        {"sha_range": "incomplete-slice-missing-fields"},  # dropped, no write attempted
-        {
-            "sha_range": "b1..b2",
-            "reviewer": "staff-eng",
-            "scope": "session",
-            "verdict": "warn",
-            "diff_loc": 20,
-        },
-    ]
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
-
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert result["acted"] == [
-        f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/a1..a2.json",
-        f"{tail_ops.OP_REVIEW_TRAIL}:state/review-trail/b1..b2.json",
-    ]
-    assert len(calls) == 2
-    assert calls[0]["sha_range"] == "a1..a2"
-    assert calls[1]["sha_range"] == "b1..b2"
-
-
-def test_write_review_trail_many_17_slices_run_concurrently_not_n_times_serial(tmp_path):
-    """KPI regression (2026-08-15, docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-
-    budget.md): measured on a real `/workstream-complete` pass, 17
-    `--review-slice` records drove `write_review_trail_many`'s BLOCKING path
-    to >30s (the global dispatch guard tripped twice) -- 17.8s of that was
-    reproduced here in isolation, sequentially, on a tiny synthetic repo
-    with no real contention, confirming the dominant cost was per-slice
-    SUBPROCESS-SPAWN latency (measured against the then-live
-    `review_trail_write._guard_foreign_session_range`, since removed by
-    K-010, plus `_own_session_touched_paths_and_untrailered_flag`, each
-    genuinely re-derived per slice since every slice names a DIFFERENT
-    sha_range), not git's own walk cost over the tiny fixture data.
-
-    Fix: `write_review_trail_many` now fires all qualifying slices'
-    `write_review_trail` calls CONCURRENTLY (`asyncio.gather`) rather than
-    sequentially -- each slice's own op call never raises (see that
-    function's own docstring), so `asyncio.gather`'s default
-    `return_exceptions=False` cannot let one slice suppress a sibling; the
-    per-slice failure-isolation property `write_review_trail_many`'s own
-    docstring requires is unaffected, only wall clock changes.
-
-    This test pins the CONCURRENCY property STRUCTURALLY, by observing peak
-    in-flight overlap rather than wall clock. An earlier version asserted a
-    timing budget (``elapsed < 5 * _PER_SLICE_DELAY``) and was flaky exactly
-    as predicted: it passed in isolation and failed in the full-file run on
-    this box's stated load norm of 50-70 concurrent LLMs, because a wall-clock
-    bound measures the scheduler as much as the code. A pin that fails under
-    load teaches the next person to re-run until green, which is worse than no
-    pin at all -- so the assertion is now on max concurrent in-flight calls,
-    which is exactly the property under test and is unaffected by how slowly
-    the box happens to be running.
-
-    Sequential awaiting yields max_in_flight == 1; `asyncio.gather` yields
-    max_in_flight == n_slices. There is no load condition under which those
-    two are confusable.
-    """
-    common_dir = _make_common_dir(tmp_path)
-    _PER_SLICE_DELAY = 0.05
-    n_slices = 17
-
-    slices = [
-        {
-            "sha_range": f"sha{i}~1..sha{i}",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        }
-        for i in range(n_slices)
-    ]
-
-    in_flight = 0
-    max_in_flight = 0
-
-    async def _handler(params: dict, repo_root=None) -> dict:
-        nonlocal in_flight, max_in_flight
-        in_flight += 1
-        max_in_flight = max(max_in_flight, in_flight)
-        try:
-            await asyncio.sleep(_PER_SLICE_DELAY)
-        finally:
-            in_flight -= 1
-        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
-
-    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
-        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
-
-    assert result["failed"] == []
-    assert "failed_critical" not in result
-    assert len(result["acted"]) == n_slices
-
-    assert max_in_flight == n_slices, (
-        f"peak in-flight was {max_in_flight}, expected {n_slices} -- "
-        "the slices are not overlapping, which is a regression back to "
-        "sequential per-slice awaiting"
-    )
-
-
-def test_write_review_trail_many_batches_attribution_context_once_not_n_times(tmp_path):
-    """C1/C2 pin (docs/plans/2026-08-15-the-review-trail-write-stops-paying-
-    n-wa.md): `write_review_trail_many` must call `review_trail_write.
-    build_batch_attribution_context` exactly ONCE per batch, not once per
-    slice -- the whole point of C1 is that the identical-or-batchable
-    per-slice lookups (is-inside-work-tree, deliverable-id, P2 attribution
-    window/grep) are computed once and reused, not re-derived per slice. A
-    future edit that reintroduces per-slice re-derivation (e.g. moving the
-    call inside the loop/gather) fails THIS test deterministically, rather
-    than only showing up as a slow stopwatch under machine load.
-
-    Also pins that every slice's own `write_review_trail` call receives the
-    SAME batch_context object -- the whole point is reuse, not a
-    per-slice-fresh-but-still-single-call context.
-    """
-    common_dir = _make_common_dir(tmp_path)
-    n_slices = 17
-    slices = [
-        {
-            "sha_range": f"sha{i}~1..sha{i}",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        }
-        for i in range(n_slices)
-    ]
-
-    sentinel_context = {"is_work_tree_rc": 0, "marker": "batch-context-sentinel"}
-    build_calls: list = []
-    received_contexts: list = []
-
-    def fake_build(caller_worktree, sha_ranges):
-        build_calls.append((caller_worktree, tuple(sha_ranges)))
-        return sentinel_context
-
-    async def fake_write(common_dir, entry, *, b_adjudication_present=False, _batch_context=None):
-        received_contexts.append(_batch_context)
-        return {"acted": [entry["sha_range"]], "skipped": [], "failed": [], "failed_critical": []}
-
-    with patch.object(
-        tail_ops._review_trail_write_mod, "build_batch_attribution_context", fake_build,
-    ), patch.object(tail_ops, "write_review_trail", fake_write):
-        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
-
-    assert len(build_calls) == 1, (
-        f"build_batch_attribution_context called {len(build_calls)} times for "
-        f"{n_slices} slices -- expected exactly 1 (batched once), not once per slice"
-    )
-    assert build_calls[0][1] == tuple(entry["sha_range"] for entry in slices)
-    assert len(received_contexts) == n_slices
-    assert all(ctx is sentinel_context for ctx in received_contexts)
-    assert result["failed"] == []
-    assert "failed_critical" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -933,101 +641,3 @@ def test_refresh_roadmap_callout_all_skipped_does_not_stamp(tmp_path):
     assert statuses[hl.ROADMAP_CALLOUT] == hl.STATUS_NEVER_STAMPED
 
 
-# ---------------------------------------------------------------------------
-# review_trail_metadata_complete -- the supply predicate `ceremony.wsc_tail`
-# uses to decide the `b_adjudication_present` breach BEFORE it commits.
-# ---------------------------------------------------------------------------
-
-
-def test_metadata_complete_dict_all_fields():
-    assert tail_ops.review_trail_metadata_complete(
-        {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "session",
-         "verdict": "ok", "diff_loc": "3"}
-    ) is True
-
-
-def test_metadata_complete_dict_missing_one_field():
-    assert tail_ops.review_trail_metadata_complete(
-        {"reviewer": "code-reviewer", "scope": "session", "verdict": "ok", "diff_loc": "3"}
-    ) is False
-
-
-def test_metadata_complete_dict_blank_field_counts_as_missing():
-    assert tail_ops.review_trail_metadata_complete(
-        {"sha_range": "", "reviewer": "code-reviewer", "scope": "session",
-         "verdict": "ok", "diff_loc": "3"}
-    ) is False
-
-
-def test_metadata_complete_none_and_empty_shapes():
-    assert tail_ops.review_trail_metadata_complete(None) is False
-    assert tail_ops.review_trail_metadata_complete({}) is False
-    assert tail_ops.review_trail_metadata_complete([]) is False
-
-
-def test_metadata_complete_list_needs_only_one_qualifying_entry():
-    """Mirrors `write_review_trail_many`'s own once-across-the-list gate: a
-    caller supplying at least one complete slice has discharged the
-    adjudication requirement, whatever the other entries look like."""
-    assert tail_ops.review_trail_metadata_complete(
-        [
-            {"reviewer": "code-reviewer"},
-            {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "session",
-             "verdict": "ok", "diff_loc": "3"},
-        ]
-    ) is True
-
-
-def test_metadata_complete_list_of_incomplete_entries_is_false():
-    assert tail_ops.review_trail_metadata_complete(
-        [{"reviewer": "code-reviewer"}, "not-a-dict", {}]
-    ) is False
-
-
-def test_metadata_complete_agrees_with_write_review_trail_gate(tmp_path):
-    """The predicate and the writer must never disagree on the same input --
-    the whole point of extracting it is that the pre-commit gate and the
-    post-gate write decide identically."""
-    common_dir = _make_common_dir(tmp_path)
-    incomplete = {"reviewer": "code-reviewer", "scope": "session", "verdict": "ok"}
-
-    assert tail_ops.review_trail_metadata_complete(incomplete) is False
-    result = _run(
-        tail_ops.write_review_trail(common_dir, incomplete, b_adjudication_present=True)
-    )
-    assert result["failed_critical"]
-    assert result["metadata_supplied"] is False
-
-
-def test_write_review_trail_many_isolates_a_raising_slice_from_its_siblings():
-    """A slice that RAISES must not suppress its siblings' writes.
-
-    Pins the isolation guarantee structurally rather than by contract. The
-    sequential loop this function replaced was justified in its own docstring
-    by exactly this property; `asyncio.gather`'s default
-    (`return_exceptions=False`) would have propagated the first exception and
-    cancelled the in-flight siblings, silently converting a documented
-    guarantee into a claim that happens to hold only while
-    `write_review_trail` keeps its never-raises contract. This test fails
-    against that default.
-    """
-    calls: list = []
-
-    async def fake_write(common_dir, entry, *, b_adjudication_present=False, _batch_context=None):
-        calls.append(entry["sha_range"])
-        if entry["sha_range"] == "bbb^..bbb":
-            raise RuntimeError("simulated slice failure")
-        return {"acted": [entry["sha_range"]], "skipped": [], "failed": [], "failed_critical": []}
-
-    entries = [
-        {"sha_range": f"{n}^..{n}", "reviewer": "code-reviewer", "scope": "session",
-         "verdict": "ok", "diff_loc": "1"}
-        for n in ("aaa", "bbb", "ccc")
-    ]
-
-    with patch.object(tail_ops, "write_review_trail", fake_write):
-        result = asyncio.run(tail_ops.write_review_trail_many(Path("."), entries))
-
-    assert "aaa^..aaa" in result["acted"], "a sibling before the raising slice lost its write"
-    assert "ccc^..ccc" in result["acted"], "a sibling after the raising slice lost its write"
-    assert any("bbb^..bbb" in m and "RuntimeError" in m for m in result["failed_critical"]),         "the raising slice must surface as failed_critical, not vanish"

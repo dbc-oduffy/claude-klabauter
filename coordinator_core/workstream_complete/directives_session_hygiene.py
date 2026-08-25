@@ -205,6 +205,14 @@ stays internally consistent and reviewable in one read:
      covers the "never entered the envelope" case, not what happens once
      it does.
 
+Snapshot addendum (ceremony.wsc_tail / completion.reconcile_commits kills,
+2026-08-23): `d-release-plan-claim`, `d-close-tail-args`, `d-run-wsc-tail`,
+`d-emit-cadence` (directives_commit_tail.py) and `d-reconcile-completion-
+commits` (directives_completion.py) — cited above under M2, M3, and M4 as
+of this classification's original authoring — no longer exist; their
+builders were removed. The classification above is left as the historical
+record it was written as, not corrected line-by-line.
+
 This module's own two directives, BEFORE this chunk, were both M3
 (dict-literal `"already_satisfied": False`, `:156`/`:178` below — cited
 by the plan's own residual-defect section). After this chunk:

@@ -278,8 +278,6 @@ _BASELINE: set[tuple[str, str]] = {
      'Replaces the inline `cat "$OBSERVER_SIDECAR" >> "$DAILY_SUMMARY"; rm'),
     ('coordinator/bin/test_cross_repo_memo_draft.py',
      '"""compose <topic> --open with empty $EDITOR exits 0; stdout includes path + warning.'),
-    ('coordinator/bin/tests/file-attribution/test_derive_file_attribution.py',
-     't7: Bash echo > $OUTPUT (ambiguous)       → unknown, file_path=None → skipped'),
     ('coordinator/bin/tests/test_agent_helper_shim_doe_corpus_coverage.py',
      '${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/<cli>'),
     ('coordinator/bin/tests/test_agent_helper_shim_doe_corpus_coverage.py',

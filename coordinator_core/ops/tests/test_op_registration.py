@@ -14,9 +14,18 @@ already covers that: cartography/tests/test_*.py, ops/tests/test_memo_triage.py,
 ops/tests/test_workflow_validate.py).
 
 Coverage:
-  (a) importing coordinator_core.ops populates coordinator_core.ipc._REGISTRY
-      with all 7 op keys (proves ops/__init__.py imports every op module).
-  (b) authz.classification.classify() returns COMPUTE_ONLY for all 7 op keys.
+  (a) every op key RESOLVES through coordinator_core.ipc's real dispatch path
+      (`_lazy_import_and_lookup`: OP_MODULE_MAP targeted import, then the
+      `_eager_import_all` safe fallback) — i.e. coordinator-invoke can reach
+      it. This used to read `op_key in ipc._REGISTRY` on the premise that
+      importing coordinator_core.ops registers every op; that premise was
+      retired 2026-08-22 when the ops package went lazy (its docstring: the
+      bare package NEVER populates the registry), leaving the raw membership
+      read a test of pytest collection order rather than of wire registration.
+      See test_op_is_registered's own docstring.
+  (b) authz.classification.classify() returns COMPUTE_ONLY for every op key
+      except the deliberately-MUTATING cartography.symbols (DR-228 § D6),
+      which carries its own positive pin instead.
   (c) ipc.OP_KEY_SCOPE carries an entry for all 7 op keys — the exact wire-
       registration gate lesson 2026-07-06-compute-only-op-registration-needs-
       an-op guards (an op absent from _OP_KEY_SCOPE silently degrades to
@@ -125,12 +134,34 @@ def _run(coro):
 
 @pytest.mark.parametrize("op_key", _ALL_OPS)
 def test_op_is_registered(op_key):
-    assert op_key in ipc._REGISTRY, (
-        f"{op_key!r} is not in coordinator_core.ipc._REGISTRY — "
-        f"coordinator_core/ops/__init__.py is missing the import that "
-        f"triggers this op module's register_op(...) side-effect."
+    """Resolve each op the way dispatch resolves it, never by raw _REGISTRY
+    membership.
+
+    RETIRED CONTRACT (2026-08-23). This assertion used to read
+    `op_key in ipc._REGISTRY` directly, on the premise stated in this module's
+    own header — "importing coordinator_core.ops populates
+    coordinator_core.ipc._REGISTRY". That premise was retired on 2026-08-22
+    when the ops package went lazy: its module docstring now states the bare
+    package NEVER populates the registry. Against a lazy package the raw
+    membership read does not test wire registration at all, it tests whether
+    some OTHER module pytest happened to collect first imported this op --
+    so it FAILED OPEN for the ops that had such a neighbour and went red for
+    the ops that did not, which is a collection-order coin flip either way.
+
+    `_lazy_import_and_lookup` is the actual resolution path `coordinator-invoke`
+    takes on a registry miss (OP_MODULE_MAP targeted import, then the
+    _eager_import_all SAFE FALLBACK). Asserting against it tests the property
+    this file exists to guard -- the op is REACHABLE at dispatch -- under the
+    contract that actually holds, and it still fails loud for an op whose
+    module is missing, unmapped, or broken at import."""
+    handler = ipc._REGISTRY.get(op_key) or ipc._lazy_import_and_lookup(op_key)
+    assert handler is not None, (
+        f"{op_key!r} does not resolve through coordinator_core.ipc's real "
+        f"dispatch path (_lazy_import_and_lookup: OP_MODULE_MAP targeted "
+        f"import, then the _eager_import_all safe fallback). The op ships "
+        f"present-but-dead — coordinator-invoke cannot resolve it."
     )
-    assert callable(ipc._REGISTRY[op_key])
+    assert callable(handler)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +169,30 @@ def test_op_is_registered(op_key):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("op_key", _ALL_OPS)
+# cartography.symbols is DELIBERATELY MUTATING, not an omission: DR-228 § D6's
+# scratch-tier write (params["emit"] writes
+# <target_root>/state/scratch/cartography-symbols/<run_id>/symbols.json),
+# classified 2026-08-20 with the full DR-208 five-question affirmation recorded
+# inline in authz/classification.py. This row asserted COMPUTE_ONLY for every
+# _ALL_OPS entry and so went red the moment that decision landed — the test was
+# the stale side, never the classification. Excluded here and pinned by its own
+# positive twin below, so a silent flip back to COMPUTE_ONLY degrades loudly
+# rather than passing unnoticed.
+_MUTATING_OPS = ("cartography.symbols",)
+_COMPUTE_ONLY_OPS = tuple(op for op in _ALL_OPS if op not in _MUTATING_OPS)
+
+
+@pytest.mark.parametrize("op_key", _MUTATING_OPS)
+def test_deliberately_mutating_op_stays_mutating(op_key):
+    assert classify(op_key) is OpClass.MUTATING, (
+        f"{op_key!r} is classified MUTATING by deliberate decision (DR-228 "
+        f"§ D6 scratch-tier emit, DR-208 five-question affirmation recorded "
+        f"in authz/classification.py). A flip to COMPUTE_ONLY would silently "
+        f"drop that write out of the mutating-op guardrails."
+    )
+
+
+@pytest.mark.parametrize("op_key", _COMPUTE_ONLY_OPS)
 def test_op_is_classified_compute_only(op_key):
     assert classify(op_key) is OpClass.COMPUTE_ONLY, (
         f"{op_key!r} must be COMPUTE_ONLY in authz/classification.py's "
@@ -448,12 +502,27 @@ def test_workflow_validate_dispatch_message_smoke(tmp_path):
 #     has already imported both modules (and all of coordinator_core.ops)
 #     into this process's sys.modules by the time any test body runs, so an
 #     in-process import-order test would prove nothing.
+#     LAZY-PACKAGE ARMING (2026-08-23): coordinator_core.ops was converted to
+#     lazy registration on 2026-08-22 -- its own module docstring states the
+#     bare package NEVER populates the op-registry. These probes were written
+#     against the prior contract, where package init ran the registration walk
+#     itself, and went red the moment that contract was retired: they were
+#     asserting eager registration in a package that is deliberately not
+#     eager. They are NOT force-importing to dodge the import-cliff budget --
+#     _eager_import_all() is the escape hatch ops/__init__.py exposes for
+#     exactly this "rare full-registration need", and it is what ipc.py's own
+#     registry-miss SAFE FALLBACK reaches. It still swallows a per-module
+#     ImportError (prints + continues), so a reintroduced cycle still drops
+#     the op key and this probe still bites -- the regression these probes
+#     exist to catch is preserved, only its arming is now explicit.
 # ---------------------------------------------------------------------------
 
 _IMPORT_ORDER_PROBE = """
 import sys
 {first_import}
 {second_import}
+import coordinator_core.ops
+coordinator_core.ops._eager_import_all()
 from coordinator_core.ipc import _REGISTRY
 assert "deliverable.cascade_retract" in _REGISTRY, (
     "deliverable.cascade_retract missing from _REGISTRY after "
@@ -525,11 +594,25 @@ def test_cascade_retract_registers_cascade_retract_imported_first():
 #     body runs, so an in-process import-order test would prove nothing.
 #     (Verified live: reverting the fix and re-running this exact probe script
 #     reproduces the ImportError and drops both op keys from _REGISTRY.)
+#     LAZY-PACKAGE ARMING (2026-08-23): coordinator_core.ops was converted to
+#     lazy registration on 2026-08-22 -- its own module docstring states the
+#     bare package NEVER populates the op-registry. These probes were written
+#     against the prior contract, where package init ran the registration walk
+#     itself, and went red the moment that contract was retired: they were
+#     asserting eager registration in a package that is deliberately not
+#     eager. They are NOT force-importing to dodge the import-cliff budget --
+#     _eager_import_all() is the escape hatch ops/__init__.py exposes for
+#     exactly this "rare full-registration need", and it is what ipc.py's own
+#     registry-miss SAFE FALLBACK reaches. It still swallows a per-module
+#     ImportError (prints + continues), so a reintroduced cycle still drops
+#     the op key and this probe still bites -- the regression these probes
+#     exist to catch is preserved, only its arming is now explicit.
 # ---------------------------------------------------------------------------
 
 _PICKUP_ASSEMBLE_ORDER_PROBE = """
 import coordinator_core.pickup_assemble
 import coordinator_core.ops
+coordinator_core.ops._eager_import_all()
 from coordinator_core.ipc import _REGISTRY
 assert "deliverable.cascade_terminal" in _REGISTRY, (
     "deliverable.cascade_terminal missing from _REGISTRY after "

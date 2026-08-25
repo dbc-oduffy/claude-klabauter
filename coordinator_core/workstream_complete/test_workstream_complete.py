@@ -585,11 +585,6 @@ def test_review_scale_judgment_point_is_advisory_no_dependency_edge_on_commit_ta
         ids = {jp["id"] for jp in decision_object["judgment_points"]}
         if expect_resolved:
             assert "jp-review-scale" not in ids
-        wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-        depends_on = wsc_tail["depends_on"]
-        depends_on_list = [depends_on] if isinstance(depends_on, str) else list(depends_on)
-        assert "d-close-tail-args" in depends_on_list
-        assert "jp-review-scale" not in depends_on_list
 
 
 def test_review_scale_judgment_point_does_not_fire_on_a_fully_resolved_row_1_or_2_close(monkeypatch, tmp_path):
@@ -972,193 +967,9 @@ def test_emit_cadence_directive_is_gone_with_the_emission(monkeypatch, tmp_path)
     assert "d-emit-cadence" not in directives_by_id
 
 
-# ---------------------------------------------------------------------------
-# jp-completion-entry-scaffold / jp-commit-subject-missing (state/bug-
-# backlog/2026-07-28-workstream-complete-apply-re-scaffolds-t-
-# e925d597e0af.yaml) -- the two authoring-window halts in front of
-# d-run-wsc-tail.
-# ---------------------------------------------------------------------------
-
-
 def _depends_on_list(directive: dict) -> list:
     dep = directive["depends_on"]
     return [dep] if isinstance(dep, str) else list(dep or [])
-
-
-def test_completion_entry_scaffold_gate_blocks_wsc_tail_when_entry_missing(monkeypatch, tmp_path):
-    (tmp_path / "archive").mkdir()
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-completion-entry-scaffold" in jp_ids
-    scaffold_jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-completion-entry-scaffold")
-    # Structurally unresolvable -- its one disposition resolves nothing.
-    assert scaffold_jp["dispositions"] == [{"value": "not-yet-authored", "resolves": []}]
-
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-completion-entry-scaffold" in _depends_on_list(wsc_tail)
-
-
-def test_completion_entry_scaffold_gate_absent_once_entry_fully_authored(monkeypatch, tmp_path):
-    (tmp_path / "archive").mkdir()
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-
-    from coordinator_core.workstream_complete import directives_completion
-
-    entry_path = Path(
-        directives_completion._coordinator_complete_entry.resolve_entry_path(str(tmp_path), "testsid123", "")
-    )
-    entry_path.parent.mkdir(parents=True, exist_ok=True)
-    entry_path.write_text(
-        "---\n"
-        'title: "Did the thing"\n'
-        "created: 2026-07-01\n"
-        "nature: bugfix\n"
-        "nature_inferred: false\n"
-        "commits: []\n"
-        "status: pending-release\n"
-        "chain_terminal: false\n"
-        'authored_by: "testsid123"\n'
-        "loe:\n"
-        "  agent_dispatches: null\n"
-        "  opus_dispatches: null\n"
-        "  em_tokens: null\n"
-        "  tshirt: null\n"
-        "---\n\nDid the thing, verified.\n",
-        encoding="utf-8",
-    )
-
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-completion-entry-scaffold" not in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-completion-entry-scaffold" not in _depends_on_list(wsc_tail)
-
-
-def test_completion_entry_scaffold_gate_absent_when_chain_entry_stood_down_from_a_prior_day(monkeypatch, tmp_path):
-    """chain-terminal close, multi-day chain: the real completion entry
-    already exists (a prior day, a different session's sid) and is fully
-    authored. `coordinator-complete-entry` itself stands down onto that
-    entry rather than deriving today's date/sid path — the gate must
-    consult the SAME stand-down-aware resolution, not
-    `resolve_entry_path`'s date/sid derivation alone (state/bug-backlog/
-    2026-07-28-workstream-complete-apply-re-scaffolds-t-e925d597e0af.yaml).
-    Regression guard: both pre-existing scaffold-gate tests above only
-    exercise `single-session`, where no stand-down is possible — neither
-    would have caught this."""
-    (tmp_path / "archive").mkdir()
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-
-    chain_slug = "some-plan"
-    prior_entry = tmp_path / "archive" / "completed" / "2026-06" / "2026-06-01-some-plan-abc123.md"
-    prior_entry.parent.mkdir(parents=True, exist_ok=True)
-    prior_entry.write_text(
-        "---\n"
-        'title: "Did the thing"\n'
-        "created: 2026-06-01\n"
-        "nature: bugfix\n"
-        "nature_inferred: false\n"
-        "commits: []\n"
-        'chain: "some-plan"\n'
-        "status: pending-release\n"
-        "chain_terminal: true\n"
-        'authored_by: "abc123"\n'
-        "loe:\n"
-        "  agent_dispatches: null\n"
-        "  opus_dispatches: null\n"
-        "  em_tokens: null\n"
-        "  tshirt: null\n"
-        "---\n\nDid the thing, verified.\n",
-        encoding="utf-8",
-    )
-
-    decision_object = wsc.brief(
-        decisions={"subject": "a commit subject", "governing_plan_slug": chain_slug}, repo_root=tmp_path
-    )
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-completion-entry-scaffold" not in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-completion-entry-scaffold" not in _depends_on_list(wsc_tail)
-
-
-def test_commit_subject_missing_blocks_wsc_tail_and_names_named_halt(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
-
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-commit-subject-missing" in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-commit-subject-missing" in _depends_on_list(wsc_tail)
-    assert "--subject" not in wsc_tail["args"]
-
-    jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-commit-subject-missing")
-    assert "decisions['subject']" in jp["reason"]
-    assert "no disposition" in jp["reason"]
-
-
-def test_commit_subject_resolved_from_commit_message_authoring_decision_wires_wsc_tail_args(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decisions = {
-        "commit-message-authoring": {
-            "disposition": "drafted",
-            "subject": "fix: the thing",
-            "prose": "Detailed body.",
-        }
-    }
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-commit-subject-missing" not in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-commit-subject-missing" not in _depends_on_list(wsc_tail)
-    assert "--subject" in wsc_tail["args"]
-    assert "fix: the thing" in wsc_tail["args"]
-    assert "--prose" in wsc_tail["args"]
-    assert "Detailed body." in wsc_tail["args"]
-
-
-# ---------------------------------------------------------------------------
-# jp-stage-paths-missing (state/bug-backlog/2026-07-29-workstream-complete-
-# silently-under-commi-33e5cdf24112.yaml) -- the third authoring-window
-# halt in front of d-run-wsc-tail. Unlike jp-commit-subject-missing (which
-# guards a HARD-required wsc-tail.py flag), --stage-paths is optional at
-# the CLI layer, so its omission previously failed *silent*, not loud: the
-# tail committed only whatever its own dirty-tree gates independently
-# swept. This gate closes that asymmetry.
-# ---------------------------------------------------------------------------
-
-
-def test_stage_paths_missing_blocks_wsc_tail_and_names_named_halt(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-stage-paths-missing" in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-stage-paths-missing" in _depends_on_list(wsc_tail)
-    assert "--stage-paths" not in wsc_tail["args"]
-
-    stage_paths_jp = next(jp for jp in decision_object["judgment_points"] if jp["id"] == "jp-stage-paths-missing")
-    # Structurally unresolvable -- its one disposition resolves nothing, so a
-    # fabricated disposition can never clear this gate (mirrors
-    # jp-commit-subject-missing's own contract).
-    assert stage_paths_jp["dispositions"] == [{"value": "stage-paths-not-yet-supplied", "resolves": []}]
-    assert stage_paths_jp["recommendation"] is None
-
-
-def test_stage_paths_supplied_clears_the_gate_and_wires_wsc_tail_args(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decisions = {"subject": "a commit subject", "stage_paths": ["state/some-file.md", "state/other-file.md"]}
-    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-
-    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
-    assert "jp-stage-paths-missing" not in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-stage-paths-missing" not in _depends_on_list(wsc_tail)
-    assert "--stage-paths" in wsc_tail["args"]
-    assert "state/some-file.md" in wsc_tail["args"]
-    assert "state/other-file.md" in wsc_tail["args"]
 
 
 # ---------------------------------------------------------------------------
@@ -1248,15 +1059,13 @@ def test_consumed_handoff_completeness_clears_the_gate_when_all_boxes_ticked_and
 
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-consumed-handoff-completeness" not in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-consumed-handoff-completeness" not in _depends_on_list(wsc_tail)
     gate_evidence = decision_object["gates"]["consumed_handoff_completeness"]
     assert gate_evidence["blocks"] is False
     assert gate_evidence["elements"][0]["leg_a"]["verdict"] == "clean"
     assert gate_evidence["elements"][0]["leg_b"]["verdict"] == "no-children"
 
 
-def test_consumed_handoff_completeness_leg_a_open_blocks_wsc_tail(monkeypatch, tmp_path):
+def test_consumed_handoff_completeness_leg_a_open_blocks(monkeypatch, tmp_path):
     _write_ac_handoff(tmp_path, "state/handoffs/x.md", "## Acceptance criteria\n\n- [x] one\n- [ ] two\n")
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
     _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
@@ -1265,24 +1074,22 @@ def test_consumed_handoff_completeness_leg_a_open_blocks_wsc_tail(monkeypatch, t
 
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-consumed-handoff-completeness" in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-consumed-handoff-completeness" in _depends_on_list(wsc_tail)
     jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
     # 2026-08-05-session-shape-attribution-structural-gate C3: the override
-    # arm now resolves all six attribution/tail directives, not just
-    # d-run-wsc-tail — see build_consumed_handoff_completeness_judgment_
-    # point's own docstring for why d-reconcile-completion-commits is
-    # load-bearing among the five newly-named ids.
+    # arm resolves the four attribution/tail directives named below — see
+    # build_consumed_handoff_completeness_judgment_point's own docstring.
+    # (Originally six: `d-run-wsc-tail` and `d-reconcile-completion-commits`
+    # dropped from `resolves` in the ceremony.wsc_tail /
+    # completion.reconcile_commits kills, 2026-08-23, along with the
+    # directives themselves.)
     assert jp["dispositions"] == [
         {
             "value": "override-known-in-flight",
             "resolves": [
-                "d-run-wsc-tail",
                 "d-claim-plan-execution-lock",
                 "d-stamp-plan-implemented",
                 "d-harvest-deferrals-1",
                 "d-complete-entry",
-                "d-reconcile-completion-commits",
             ],
         },
         {"value": "stop-and-handoff", "resolves": []},
@@ -2062,7 +1869,7 @@ def test_no_judgment_point_resolves_a_phantom_directive_id(monkeypatch, tmp_path
 #: above (`test_uncertain_session_shape_surfaces_untrusted_gate_judgment_
 #: point_with_no_recommendation`, `test_chain_terminal_coverage_judgment_
 #: point_carries_a_recommendation`, the `jp-review-scale` tests, and
-#: `test_consumed_handoff_completeness_leg_a_open_blocks_wsc_tail`).
+#: `test_consumed_handoff_completeness_leg_a_open_blocks`).
 def _all_preserved_judgment_point_ids() -> set[str]:
     """Derives the full set of judgment_point ids `_build_preserved_
     judgment_points` can ever emit directly from `judgments.py`'s own
@@ -2882,56 +2689,11 @@ def test_archived_consumed_handoff_still_resolves_governing_plan(monkeypatch, tm
     }
 
 
-# ---------------------------------------------------------------------------
-# Claim/release symmetry (2026-07-27 follow-up finding): the handoff-
-# frontmatter fix above resolved `governing_plan` correctly for `d-claim-
-# plan-execution-lock` but `d-release-plan-claim` was still built from the
-# raw `decisions.get("governing_plan_slug")` — a lock taken via the
-# handoff-frontmatter (or fixed-fallback) leg was therefore never released.
-# This section pins the durable invariant rather than just the one call
-# site: whenever the claim fires, the release must fire too, regardless of
-# which precedence leg resolved the plan.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "decisions_factory",
-    [
-        pytest.param(lambda slug: {}, id="handoff_frontmatter"),
-        pytest.param(lambda slug: {"governing_plan_slug": slug}, id="decisions_slug"),
-        pytest.param(lambda slug: {"governing_plan_path": f"docs/plans/{slug}.md"}, id="decisions_path"),
-    ],
-)
-def test_claim_and_release_plan_directives_are_symmetric_under_every_resolution_source(
-    monkeypatch, tmp_path, decisions_factory
-):
-    slug = "claim-release-symmetry-plan"
-    _write_plan(tmp_path, slug)
-    _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{slug}.md")
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-
-    decision_object = wsc.brief(decisions=decisions_factory(slug), repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-claim-plan-execution-lock" in ids, "expected the claim to fire for this fixture"
-    assert "d-release-plan-claim" in ids, (
-        "d-claim-plan-execution-lock fired but d-release-plan-claim did not -- "
-        "a plan-execution lock would be taken and never released"
-    )
-    release_directive = next(d for d in decision_object["directives"] if d["id"] == "d-release-plan-claim")
-    assert release_directive["args"][-2] == slug
-    assert release_directive["args"][-1] == "{d-run-wsc-tail.landed}", (
-        "d-release-plan-claim must carry the ordering-only producer-readiness "
-        "token trailing the slug -- see apply.py's _resolve_arg_tokens '.landed' "
-        "field"
-    )
-
-
-def test_no_release_plan_directive_when_no_governing_plan_resolved(monkeypatch, tmp_path):
+def test_no_claim_plan_directive_when_no_governing_plan_resolved(monkeypatch, tmp_path):
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     ids = {d["id"] for d in decision_object["directives"]}
     assert "d-claim-plan-execution-lock" not in ids
-    assert "d-release-plan-claim" not in ids
 
 
 # ---------------------------------------------------------------------------
@@ -3742,304 +3504,6 @@ def test_memo_resolution_attribution_judgment_point_recommends_resolved_with_sig
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 doe-claude-em cross-repo memo, item 2 -- an unrecognized flat
-# `review_*` key on `decisions` now gets a loud stderr diagnostic instead of
-# a silent drop; a legitimately absent `review` dict stays quiet.
-# ---------------------------------------------------------------------------
-
-
-def test_build_close_tail_args_directive_warns_on_unrecognized_flat_review_keys(capsys):
-    decisions = {
-        "review_sha_range": "a..b",
-        "review_reviewer": "someone",
-        "review_scope": "chain",
-        "review_verdict": "ok",
-        "review_diff_loc": 10,
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    captured = capsys.readouterr()
-    assert captured.out == "", "the diagnostic must never touch stdout -- it is a parsed argv/token channel"
-    assert "review_sha_range" in captured.err
-    assert "review_reviewer" in captured.err
-    assert "--review-sha-range" not in directive["args"], (
-        "flat review_* keys are still not composed into --review-* flags -- the diagnostic "
-        "supplements the silent drop, it does not add a second accepted spelling"
-    )
-
-
-def test_build_close_tail_args_directive_no_diagnostic_when_review_absent(capsys):
-    directive = _dc_tail.build_close_tail_args_directive({})
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out == ""
-    assert directive["args"] == ["tail-args"]
-
-
-def test_build_close_tail_args_directive_no_diagnostic_when_review_present_correctly(capsys):
-    decisions = {
-        "review": {
-            "sha_range": "a..b",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 10,
-        }
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out == ""
-    assert "--review-sha-range" in directive["args"]
-
-
-# ---------------------------------------------------------------------------
-# 2026-08-03 doe-claude-em-wsc-tail-review-metadata-dropped -- the transport
-# hole: `build_wsc_tail_directive` documented that `depends_on=
-# "d-close-tail-args"` spliced the producer's stdout into this directive's
-# argv, but no token ever expressed that splice. `apply._resolve_arg_tokens`'s
-# `.argv` field is the fix; these two pin the builder side (the regression
-# anchor) and the end-to-end shape (the original hole, closed).
-# ---------------------------------------------------------------------------
-
-
-def test_build_wsc_tail_directive_args_end_with_the_close_tail_args_argv_token():
-    directive = _dc_tail.build_wsc_tail_directive("abcdef", {"governing_plan_slug": "some-plan"})
-    assert directive["args"][-1] == "{d-close-tail-args.argv}", (
-        "d-run-wsc-tail must carry the explicit '.argv' token that transports "
-        "d-close-tail-args's spliced --deleted-paths/--kept-entries/--review-* "
-        "flags -- depends_on alone only orders the two directives, it does not "
-        "thread the value (apply._resolve_arg_tokens's '.argv' field)"
-    )
-    assert directive["depends_on"] == "d-close-tail-args"
-
-
-def test_review_flags_reach_the_wsc_tail_argv_token_transport():
-    """The ORIGINAL end-to-end hole, closed: given a full nested `review`
-    dict, `build_close_tail_args_directive` emits the five `--review-*`
-    flags AND `build_wsc_tail_directive` carries the `.argv` token that
-    transports them -- both builder halves of the wire, asserted together
-    (an apply-level dispatch test lives in test_apply.py, which exercises
-    the actual token expansion through `_execute_directives`)."""
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 42,
-        },
-        "deleted_paths": ["state/old-file.md"],
-        "kept_entries": ["archive/completed/2026-07/kept.md"],
-    }
-    close_tail_args = _dc_tail.build_close_tail_args_directive(decisions)
-    wsc_tail = _dc_tail.build_wsc_tail_directive("abcdef", decisions)
-
-    assert close_tail_args["id"] == "d-close-tail-args"
-    assert "--deleted-paths" in close_tail_args["args"]
-    assert "--kept-entries" in close_tail_args["args"]
-    assert "--review-sha-range" in close_tail_args["args"]
-    assert "--review-reviewer" in close_tail_args["args"]
-    assert "--review-scope" in close_tail_args["args"]
-    assert "--review-verdict" in close_tail_args["args"]
-    assert "--review-diff-loc" in close_tail_args["args"]
-    assert wsc_tail["depends_on"] == close_tail_args["id"]
-    assert wsc_tail["args"][-1] == "{d-close-tail-args.argv}"
-
-
-# ---------------------------------------------------------------------------
-# state/bug-backlog/2026-08-14-no-caller-composes-b-adjudication-present-
-# 9f4c21a0e5d3.yaml -- build_wsc_tail_directive composes --adjudication-
-# present whenever decisions["review"] is non-empty, the PM-ruled predicate
-# that finally gives the b_adjudication_present fail-loud gate (7c19e190ae86)
-# a real producer.
-# ---------------------------------------------------------------------------
-
-
-def test_build_wsc_tail_directive_composes_adjudication_present_for_nonempty_review():
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 42,
-        },
-    }
-    directive = _dc_tail.build_wsc_tail_directive("abcdef", decisions)
-    assert "--adjudication-present" in directive["args"]
-    assert directive["args"][-1] == "{d-close-tail-args.argv}"
-
-
-def test_build_wsc_tail_directive_composes_adjudication_present_for_list_shaped_review():
-    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
-    directive = _dc_tail.build_wsc_tail_directive("abcdef", decisions)
-    assert "--adjudication-present" in directive["args"]
-    assert directive["args"][-1] == "{d-close-tail-args.argv}"
-
-
-# ---------------------------------------------------------------------------
-# staff-eng review 2026-08-14 (coordinatorstaff-eng-659e50f5) F1/F2 --
-# a truthy-but-incomplete decisions["review"] used to compose
-# --adjudication-present in build_wsc_tail_directive while
-# build_close_tail_args_directive composed NO --review-*/--review-slice
-# token at all -- the seam surfaced only post-commit, as an exit_code 2 the
-# operator is told not to re-run for. `_review_any_qualifies` now backs
-# BOTH builders' predicate, and a truthy-but-unqualified `review` raises
-# ValueError at assemble time from EITHER builder instead of the pair
-# silently disagreeing.
-# ---------------------------------------------------------------------------
-
-
-def test_truthy_incomplete_dict_review_raises_from_both_builders_instead_of_pairing_mismatch():
-    decisions = {"review": {"sha_range": "abc..def", "reviewer": "staff-eng"}}  # missing 3 fields
-    with pytest.raises(ValueError, match="qualifies for no"):
-        _dc_tail.build_wsc_tail_directive("abcdef", decisions)
-    with pytest.raises(ValueError, match="qualifies for no"):
-        _dc_tail.build_close_tail_args_directive(decisions)
-
-
-def test_truthy_all_entries_incomplete_list_review_raises_from_both_builders():
-    decisions = {"review": [{"sha_range": "a..b"}, {"reviewer": "x"}]}
-    with pytest.raises(ValueError, match="qualifies for no"):
-        _dc_tail.build_wsc_tail_directive("abcdef", decisions)
-    with pytest.raises(ValueError, match="qualifies for no"):
-        _dc_tail.build_close_tail_args_directive(decisions)
-
-
-def test_build_wsc_tail_directive_omits_adjudication_present_for_falsy_or_absent_review():
-    baseline = _dc_tail.build_wsc_tail_directive("abcdef", {"governing_plan_slug": "some-plan"})
-    assert "--adjudication-present" not in baseline["args"]
-    for falsy_review in (None, {}, [], False, ""):
-        directive = _dc_tail.build_wsc_tail_directive(
-            "abcdef", {"governing_plan_slug": "some-plan", "review": falsy_review}
-        )
-        assert directive["args"] == baseline["args"], (
-            "a falsy/absent decisions['review'] must produce argv byte-identical "
-            "to the no-review-key baseline"
-        )
-
-
-# ---------------------------------------------------------------------------
-# List-shaped decisions["review"] reaching the commit-tail path (finishes the
-# partitioned-review fix's second half -- directives_review.py's
-# build_write_trail_directives covered the standalone directive path in
-# a3d90f24dc16; this is the wsc-close tail-args -> wsc-tail.py leg).
-# ---------------------------------------------------------------------------
-
-
-def test_build_close_tail_args_directive_single_dict_review_byte_identical():
-    """Backward compatibility is absolute: a single-`dict` review must keep
-    producing the exact same scalar `--review-*` flags it always has, never
-    the new `--review-slice` form."""
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 42,
-        },
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    assert directive["args"] == [
-        "tail-args",
-        "--review-sha-range", "abc123..def456",
-        "--review-reviewer", "staff-eng",
-        "--review-scope", "chain",
-        "--review-verdict", "ok",
-        "--review-diff-loc", "42",
-    ]
-    assert "--review-slice" not in directive["args"]
-
-
-def test_build_close_tail_args_directive_list_review_emits_one_slice_per_qualifying_entry():
-    import json as _json
-
-    decisions = {
-        "review": [
-            {
-                "sha_range": "a1..a2",
-                "reviewer": "code-reviewer",
-                "scope": "chain",
-                "verdict": "ok",
-                "diff_loc": 10,
-            },
-            {"sha_range": "incomplete-entry-dropped"},  # missing required fields -- no token
-            {
-                "sha_range": "b1..b2",
-                "reviewer": "staff-eng",
-                "scope": "session",
-                "verdict": "warn",
-                "diff_loc": 20,
-                "scope_kind": "diff",
-            },
-        ],
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    args = directive["args"]
-    assert "--review-sha-range" not in args
-    slice_indices = [i for i, tok in enumerate(args) if tok == "--review-slice"]
-    assert len(slice_indices) == 2
-    payloads = [_json.loads(args[i + 1]) for i in slice_indices]
-    assert payloads[0]["sha_range"] == "a1..a2"
-    assert payloads[1]["sha_range"] == "b1..b2"
-    assert payloads[1]["scope_kind"] == "diff"
-    assert "scope_kind" not in payloads[0]
-
-
-def test_build_close_tail_args_directive_forwards_reviewer_evidence_scalar():
-    """Regression (DoE-claude memo 2026-08-13 § 2): `reviewer_evidence` was
-    accepted in `decisions["review"]`, never emitted here, and the op-side gate
-    (`review_trail_write._verify_reviewer_evidence`) then warned that the field
-    was missing — the correlation it checks was severed one layer above it."""
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "code-reviewer",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 42,
-            "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
-        },
-    }
-    args = _dc_tail.build_close_tail_args_directive(decisions)["args"]
-    assert args[-2:] == [
-        "--review-reviewer-evidence",
-        "state/subagent-share/sid/reviewer.md",
-    ]
-
-
-def test_build_close_tail_args_directive_forwards_reviewer_evidence_per_slice():
-    import json as _json
-
-    decisions = {
-        "review": [
-            {
-                "sha_range": "a1..a2",
-                "reviewer": "code-reviewer",
-                "scope": "chain",
-                "verdict": "ok",
-                "diff_loc": 10,
-                "reviewer_evidence": "state/subagent-share/sid/a.md",
-            },
-            {
-                "sha_range": "b1..b2",
-                "reviewer": "staff-eng",
-                "scope": "session",
-                "verdict": "warn",
-                "diff_loc": 20,
-            },
-        ],
-    }
-    args = _dc_tail.build_close_tail_args_directive(decisions)["args"]
-    payloads = [
-        _json.loads(args[i + 1]) for i, tok in enumerate(args) if tok == "--review-slice"
-    ]
-    assert payloads[0]["reviewer_evidence"] == "state/subagent-share/sid/a.md"
-    assert "reviewer_evidence" not in payloads[1]
-
-
-# ---------------------------------------------------------------------------
 # 2026-08-14 state/bug-backlog/2026-08-14-wsc-apply-accepts-an-unconsumed-
 # decision-debea052f8c5.yaml -- decisions["review"] nested one key deeper
 # than either accepted shape (e.g. {"slices": [...], ...}) passed both
@@ -4065,205 +3529,15 @@ _UNCONSUMED_REVIEW_PAYLOAD = {
 }
 
 
-def test_build_close_tail_args_directive_raises_on_unconsumed_review_dict_shape():
-    """The exact failing payload from cross-repo/inbox/2026-08-14-project-
-    cockpit-em-review-decisions-dict-drops-silently-and-mints-a-not-reviewed-
-    waiver.md — a 'slices' wrapper key that is not part of either accepted
-    shape must now raise, naming both legal shapes, instead of silently
-    contributing zero --review-* tokens."""
-    decisions = {"review": _UNCONSUMED_REVIEW_PAYLOAD}
-    with pytest.raises(ValueError) as excinfo:
-        _dc_tail.build_close_tail_args_directive(decisions)
-    message = str(excinfo.value)
-    assert "subset of" in message, "must name the dict-of-recognized-keys legal shape"
-    assert "list of such dicts" in message, "must name the list legal shape"
-    assert "'slices'" in message
-
-
 def test_build_write_trail_directives_raises_on_the_same_unconsumed_review_dict_shape():
-    """The second independent dropping site named in the backlog entry —
-    `build_write_trail_directives` must call the SAME validator, so it
-    cannot diverge from `build_close_tail_args_directive`'s verdict on the
-    identical payload."""
+    """One of two independent dropping sites named in the backlog entry —
+    `build_write_trail_directives` calls the shared `validate_review_shape`
+    validator, same as `directives_commit_tail.build_close_tail_args_
+    directive` formerly did (removed in the ceremony.wsc_tail kill,
+    2026-08-23) — so the two could not diverge."""
     with pytest.raises(ValueError) as excinfo:
         wsc.build_write_trail_directives(_UNCONSUMED_REVIEW_PAYLOAD)
     assert "'slices'" in str(excinfo.value)
-
-
-def test_validate_review_shape_accepts_legal_single_dict_and_still_emits_five_flags():
-    """A legal single dict (byte-identical shape to
-    `test_build_close_tail_args_directive_single_dict_review_byte_identical`)
-    must still pass validation and still emit the exact five scalar
-    `--review-*` flags it does today — the new validator changes what is
-    REJECTED, never what a legal payload produces."""
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "staff-eng",
-            "scope": "chain",
-            "verdict": "ok",
-            "diff_loc": 42,
-        },
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    assert directive["args"] == [
-        "tail-args",
-        "--review-sha-range", "abc123..def456",
-        "--review-reviewer", "staff-eng",
-        "--review-scope", "chain",
-        "--review-verdict", "ok",
-        "--review-diff-loc", "42",
-    ]
-
-
-def test_validate_review_shape_accepts_legal_list_and_still_emits_one_slice_per_entry():
-    """A legal `list[dict]` review must still pass validation and still
-    emit one `--review-slice` token per valid entry (mirrors
-    `test_build_close_tail_args_directive_list_review_emits_one_slice_per_
-    qualifying_entry`, re-asserted post-fix)."""
-    decisions = {
-        "review": [
-            {
-                "sha_range": "a1..a2",
-                "reviewer": "code-reviewer",
-                "scope": "chain",
-                "verdict": "ok",
-                "diff_loc": 10,
-            },
-            {
-                "sha_range": "b1..b2",
-                "reviewer": "staff-eng",
-                "scope": "session",
-                "verdict": "warn",
-                "diff_loc": 20,
-            },
-        ],
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    assert directive["args"].count("--review-slice") == 2
-
-
-@pytest.mark.parametrize("falsy_review", [None, {}, [], "", 0, False])
-def test_validate_review_shape_stays_silent_on_falsy_review(falsy_review, capsys):
-    directive = _dc_tail.build_close_tail_args_directive({"review": falsy_review})
-    assert directive["args"] == ["tail-args"]
-    assert capsys.readouterr().err == ""
-
-    assert wsc.build_write_trail_directives(falsy_review) == []
-
-
-# ---------------------------------------------------------------------------
-# cross-repo/inbox/2026-08-18-doe-claude-em-review-trail-write-enums-
-# undiscoverable-until-apply.md -- the four review enums were reachable ONLY
-# by being rejected by them, and the rejection landed at `d-write-trail`,
-# which runs FIRST in apply order: a wrong value turned the whole pass into
-# `EXIT: 4 PARTIAL_MUTATION`. `_raise_on_review_enum_values` moves that
-# verdict to assemble time, where nothing has moved yet.
-# ---------------------------------------------------------------------------
-
-
-def test_illegal_review_enums_are_rejected_at_assemble_time():
-    """The exact triple from the memo -- a namespaced reviewer, a `scope`
-    filled with a file list, and `scope_kind: files` -- must be rejected by
-    the composer, before any directive reaches `directives[]`."""
-    decisions = {
-        "review": {
-            "sha_range": "a..b",
-            "reviewer": "coordinator:code-reviewer",
-            "scope": "coordinator/hooks/x.py coordinator/tests/y.py",
-            "verdict": "ok",
-            "scope_kind": "files",
-            "diff_loc": 10,
-        },
-    }
-    with pytest.raises(ValueError) as excinfo:
-        _dc_tail.build_close_tail_args_directive(decisions)
-    message = str(excinfo.value)
-    # All three offending fields in ONE raise, not first-wins -- the caller
-    # fixes a closed-vocabulary mistake in one round trip, not three.
-    assert "reviewer 'coordinator:code-reviewer' is invalid" in message
-    assert "scope_kind 'files' is invalid" in message
-    assert "scope 'coordinator/hooks/x.py coordinator/tests/y.py' is invalid" in message
-    # The bare-name hint survives the move to the earlier seam.
-    assert "did you mean 'code-reviewer'?" in message
-
-
-def test_assemble_time_enum_message_is_byte_identical_to_the_writer_s():
-    """Both seams render from `review_enum_errors`, so the text a caller sees
-    cannot depend on WHICH gate caught them -- a second, hand-copied allow-list
-    in the composer would drift from the writer's silently."""
-    from coordinator_core.ops.review_trail_write import review_enum_errors
-
-    writer_errors = review_enum_errors(
-        reviewer="staff-eng", scope="partitioned", verdict="ok", scope_kind="diff"
-    )
-    with pytest.raises(ValueError) as excinfo:
-        _dc_tail.build_close_tail_args_directive(
-            {
-                "review": {
-                    "sha_range": "a..b",
-                    "reviewer": "staff-eng",
-                    "scope": "partitioned",
-                    "verdict": "ok",
-                    "diff_loc": 10,
-                },
-            }
-        )
-    assert len(writer_errors) == 1
-    assert writer_errors[0] in str(excinfo.value)
-    # `partitioned` is decide_review_scale's vocabulary -- the axis-collision
-    # hint is the one the memo's sender would have needed first.
-    assert "partition-strategy" in writer_errors[0]
-
-
-def test_illegal_enum_in_a_review_slice_names_its_index():
-    """A list-shaped review names WHICH slice is wrong -- an unindexed message
-    across N slices leaves the caller diffing every entry by hand."""
-    decisions = {
-        "review": [
-            dict(_REVIEW_SLICE_A),
-            {**dict(_REVIEW_SLICE_B), "scope": "not-a-scope"},
-        ],
-    }
-    with pytest.raises(ValueError) as excinfo:
-        _dc_tail.build_close_tail_args_directive(decisions)
-    assert "slice[1]" in str(excinfo.value)
-    assert "slice[0]" not in str(excinfo.value)
-
-
-def test_legal_review_enums_compose_exactly_as_before():
-    """The gate changes what is REJECTED, never what a legal payload emits."""
-    decisions = {
-        "review": {
-            "sha_range": "abc123..def456",
-            "reviewer": "code-reviewer",
-            "scope": "session",
-            "verdict": "ok",
-            "scope_kind": "diff",
-            "diff_loc": 42,
-        },
-    }
-    directive = _dc_tail.build_close_tail_args_directive(decisions)
-    assert directive["args"] == [
-        "tail-args",
-        "--review-sha-range", "abc123..def456",
-        "--review-reviewer", "code-reviewer",
-        "--review-scope", "session",
-        "--review-verdict", "ok",
-        "--review-diff-loc", "42",
-        "--review-scope-kind", "diff",
-    ]
-
-
-def test_incomplete_review_entry_is_not_this_gate_s_class():
-    """An entry missing required fields composes no token at all, so its enum
-    values never reach the writer -- `_raise_on_review_truthy_unqualified`
-    owns that class, and this gate must not pre-empt its message."""
-    with pytest.raises(ValueError) as excinfo:
-        _dc_tail.build_close_tail_args_directive(
-            {"review": {"sha_range": "a..b", "reviewer": "someone"}}
-        )
-    assert "missing required field(s)" in str(excinfo.value)
 
 
 def test_build_write_trail_directives_absent_review_key_stays_silent(monkeypatch, tmp_path):
@@ -5306,84 +4580,13 @@ def test_build_decisions_template_declared_mapping_names_the_real_envelope_paths
     }
 
 
-def test_stage_paths_missing_evidence_names_the_real_known_concurrent_paths_producer(monkeypatch, tmp_path):
-    """Corrected false-observation #1: the evidence/reason no longer claims
-    'there is no producer anywhere in this codebase' for known_concurrent_
-    paths, and no longer hardcodes known_concurrent_paths=frozenset() when a
-    real (non-empty) exclusion set was actually applied."""
-    jp = judgments.build_stage_paths_missing_judgment_point(
-        ["state/some-file.md"], known_concurrent_paths=frozenset({"state/subagent-share/peer-sid/"})
-    )
-    assert "there is no producer anywhere in this codebase" not in jp["reason"]
-    assert "directives_commit_tail.resolve_known_concurrent_paths" in jp["reason"]
-    assert "known_concurrent_paths=frozenset()" not in jp["evidence"]
-    assert "state/subagent-share/peer-sid/" in jp["evidence"]
-
-
-def test_stage_paths_missing_evidence_reports_real_empty_set_when_genuinely_empty():
-    jp = judgments.build_stage_paths_missing_judgment_point(["state/some-file.md"], known_concurrent_paths=frozenset())
-    assert "known_concurrent_paths=frozenset()" in jp["evidence"]
-
-
-def test_completion_entry_scaffold_absent_file_reports_not_yet_scaffolded_not_placeholder():
-    """Corrected false-observation #2: an entry that does not exist on disk
-    is reported as 'not yet scaffolded', never 'still carries placeholder'
-    -- there was nothing on disk to carry a placeholder."""
-    jp = wsc.build_completion_entry_scaffold_judgment_point(
-        "archive/completed/2026-08/2026-08-08-x-abc123.md", ("title", "nature", "prose"), entry_exists=False
-    )
-    assert "still carries placeholder" not in jp["question"]
-    assert "not yet been scaffolded" in jp["question"]
-    assert "does not exist on disk yet" in jp["evidence"]
-
-
-def test_completion_entry_scaffold_existing_file_still_reports_placeholder():
-    jp = wsc.build_completion_entry_scaffold_judgment_point(
-        "archive/completed/2026-08/2026-08-08-x-abc123.md", ("prose",), entry_exists=True
-    )
-    assert "still carries placeholder" in jp["question"]
-    assert "does not exist on disk yet" not in jp["evidence"]
-
-
-def test_completion_entry_scaffold_gate_end_to_end_reports_absent_correctly(monkeypatch, tmp_path):
-    """End-to-end through brief(): the scaffold gate's own producer resolves
-    a not-yet-existing entry path, and the judgment point built from it must
-    say so, not claim a placeholder."""
-    (tmp_path / "archive").mkdir()
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-    jp = next(
-        j for j in decision_object["judgment_points"] if j["id"] == "jp-completion-entry-scaffold"
-    )
-    assert "not yet been scaffolded" in jp["question"]
-    assert "still carries placeholder" not in jp["question"]
-
-
-def test_wsc_tail_directive_governing_plan_slug_already_threads_through_effective_decisions(monkeypatch, tmp_path):
-    """Corrected false-observation #3: `build_wsc_tail_directive`'s
-    `--governing-plan-slug` arg is NOT built from raw, unbackfilled
-    `decisions` -- `build_directives`'s own `effective_decisions` backfill
-    (governing_plan.slug, when `decisions` didn't already supply it) is
-    threaded into `build_wsc_tail_directive`'s call site before this
-    directive is built, so a plan resolved via the handoff-frontmatter/
-    fixed-fallback legs still reaches `--governing-plan-slug`, not just the
-    decisions_slug leg."""
-    slug = "wsc-tail-slug-thread-plan"
-    _write_plan(tmp_path, slug)
-    _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{slug}.md")
-    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
-
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "--governing-plan-slug" in wsc_tail["args"]
-    assert slug in wsc_tail["args"]
-
-
-def test_ac8_regression_five_protected_judgment_points_still_emit(monkeypatch, tmp_path):
-    """AC8 regression guard: the five AC3-protected judgment-point ids are
-    still emitted as judgment_points after this chunk's decisions_template
-    population change -- a template-population change, never new/removed
-    behavior for these five."""
+def test_ac8_regression_four_protected_judgment_points_still_emit(monkeypatch, tmp_path):
+    """AC8 regression guard: four of the original five AC3-protected
+    judgment-point ids are still emitted as judgment_points after this
+    chunk's decisions_template population change -- a template-population
+    change, never new/removed behavior for these four. (The fifth,
+    `commit-message-authoring`, was removed in the ceremony.wsc_tail kill,
+    2026-08-23 -- it existed solely to gate `d-run-wsc-tail`.)"""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decisions = {
         "review": {
@@ -5398,7 +4601,6 @@ def test_ac8_regression_five_protected_judgment_points_still_emit(monkeypatch, t
     decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     for protected_id in (
-        "commit-message-authoring",
         "session-work-summary",
         "review-partition-strategy",
         "finding-tradeoff-escalation-check",
@@ -6189,7 +5391,7 @@ def test_completion_verdict_present_on_brief_envelope_with_verdict_enum_and_inde
 def test_completion_verdict_ac6_no_new_judgment_point_and_ids_unchanged(monkeypatch, tmp_path):
     """AC6: this plan gates nothing -- no `depends_on` edge, no judgment
     point, no halt/block. Regression guard: the judgment-point id set on a
-    fixture brief (the same fixture `test_ac8_regression_five_protected_
+    fixture brief (the same fixture `test_ac8_regression_four_protected_
     judgment_points_still_emit` above uses) is exactly what it was before
     this chunk, with no `completion-verdict`-shaped id added."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
@@ -6205,14 +5407,14 @@ def test_completion_verdict_ac6_no_new_judgment_point_and_ids_unchanged(monkeypa
     }
     decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    # `commit-message-authoring`, `jp-commit-subject-missing`, and
+    # `jp-stage-paths-missing` dropped from this set in the ceremony.wsc_tail
+    # kill (2026-08-23) -- all three existed solely to gate `d-run-wsc-tail`.
     assert jp_ids == {
-        "commit-message-authoring",
         "commit-significance-filter",
         "finding-tradeoff-escalation-check",
         "governing-spec-identification",
-        "jp-commit-subject-missing",
         "jp-review-scale",
-        "jp-stage-paths-missing",
         "lesson-worth-capturing",
         "quota-retry-vs-escalate",
         "review-dispatch-vehicle-choice",

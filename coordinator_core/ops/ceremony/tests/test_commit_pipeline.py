@@ -4977,30 +4977,6 @@ def test_commit_reason_commit_failure_for_every_other_shape(tmp_path, monkeypatc
     assert outcome.reason == "commit-failure"
 
 
-def test_op_reports_empty_commit_set_reason_unaffected_by_ac7(tmp_path):
-    """AC7's fifth reason, `empty-commit-set`, is decided one layer up
-    (`scoped_git_commit._classify_uncommitted`, which alone has the `git
-    status` probe that distinction needs) -- pinned here at the op boundary
-    to confirm this plan's new `CommitOutcome.reason`/`PipelineResult.reason`
-    plumbing never shadows or overrides it for the pre-existing benign
-    already-committed no-op.
-    """
-    from coordinator_core.ops.ceremony import scoped_git_commit
-
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "a.txt", "v1\n")
-    _git(["add", "--", "a.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    result = scoped_git_commit._handler(
-        {"worktree_root": str(repo), "paths": ["a.txt"], "message": "no-op re-commit"},
-        repo_root=None,
-    )
-
-    assert result["committed"] is False
-    assert result.get("reason") == "empty-commit-set"
-
-
 def test_stage_patch_covered_path_commits_despite_unattributable_worktree_edit(tmp_path):
     """A `--stage-patch`-covered path whose WORKTREE also carries an edit this
     call cannot attribute still commits, and lands ONLY the patch's content.

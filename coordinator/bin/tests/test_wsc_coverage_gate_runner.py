@@ -22,14 +22,13 @@ Coverage:
       notes the override is a no-op (nothing left to override).
     - VERDICT=INDETERMINATE halts (exit 2) with no override present.
     - VERDICT=INDETERMINATE + COORDINATOR_OVERRIDE_COVERAGE_GATE=1 exits 0.
-  write-trail:
-    - forwards args and propagates the underlying exit code + stdout/stderr.
+  write-trail's coverage was removed here (PM ruling 2026-08-23, kill
+  review_trail.write) along with the subcommand itself.
 """
 from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
-import json
 import os
 import shlex
 import subprocess
@@ -157,117 +156,9 @@ def _make_commit(repo_dir, filename, message):
     return _git("rev-parse", "HEAD", cwd=repo_dir)
 
 
-# ---------------------------------------------------------------------------
-# write-trail
-# ---------------------------------------------------------------------------
-
-def test_write_trail_forwards_and_propagates(monkeypatch, capsys):
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, '{"status": "ok"}\n', ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    rc = _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-    ])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert '"status": "ok"' in out
-    assert captured_argv["argv"] == [
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-    ]
-
-
-def test_write_trail_optional_scope_kind(monkeypatch):
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, "", ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "waived",
-        "--scope", "session",
-        "--verdict", "waived",
-        "--diff-loc", "0",
-        "--scope-kind", "plan",
-    ])
-    assert "--scope-kind" in captured_argv["argv"]
-    assert "plan" in captured_argv["argv"]
-
-
-def test_write_trail_forwards_reviewer_evidence_when_given(monkeypatch):
-    """`--reviewer-evidence` is forwarded verbatim when supplied."""
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, "", ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-        "--reviewer-evidence", "state/subagent-share/sid/report.md",
-    ])
-    assert "--reviewer-evidence" in captured_argv["argv"]
-    assert "state/subagent-share/sid/report.md" in captured_argv["argv"]
-
-
-def test_write_trail_omits_reviewer_evidence_when_not_given(monkeypatch):
-    """`--reviewer-evidence` is omitted entirely from the forwarded argv
-    when not supplied — never forwarded as an empty string."""
-    captured_argv = {}
-
-    def _fake(argv):
-        captured_argv["argv"] = argv
-        return 0, "", ""
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "ok",
-        "--diff-loc", "42",
-    ])
-    assert "--reviewer-evidence" not in captured_argv["argv"]
-
-
-def test_write_trail_propagates_failure(monkeypatch, capsys):
-    def _fake(argv):
-        return 2, "", "review_trail.write: op-level refusal\n"
-
-    monkeypatch.setattr(_mod, "_run_write_review_trail", _fake)
-    rc = _mod.main([
-        "write-trail",
-        "--sha-range", "abc..def",
-        "--reviewer", "code-reviewer",
-        "--scope", "chain",
-        "--verdict", "blocked",
-        "--diff-loc", "10",
-    ])
-    assert rc == 2
-    assert "op-level refusal" in capsys.readouterr().err
+# write-trail's tests were removed here (PM ruling 2026-08-23, kill
+# review_trail.write) along with the subcommand itself (see
+# wsc-coverage-gate-runner.py's own removal comment).
 
 
 # ---------------------------------------------------------------------------
@@ -601,75 +492,8 @@ def _commit_with_unparseable_trailing_session_trailer(repo_dir, filename, messag
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# AC6 (docs/plans/2026-08-18-chain-review-records-and-credits-predecessors.md
-# § C6): end-to-end credit, not just admission, and the two readers agree.
-#
-# Takes the exact command line the AC9 narration above prints (fills in its
-# `<sha>`/`<dispatch-id>`/`<sidecar-path>` placeholders with a real fixture's
-# values) and runs it — via `coordinator-write-review-trail.py`'s own `main`,
-# never a hand-rolled call into `write_review_trail_entry` — against a real
-# git repo whose sole uncovered commit is predecessor-authored. Only the
-# transport hop (`cc_invoke.route_mutation`'s daemon/socket round trip) is
-# replaced, with the SAME native op function
-# (`review_trail_write.write_review_trail_entry`) this repo's own CLI
-# ultimately calls — `_guard_foreign_session_range` and every other guard on
-# the write path run for real, unmocked, exactly the "two surfaces
-# disagreeing" defect class this chunk exists to catch (eng-director F7).
-# ---------------------------------------------------------------------------
-
-_AC6_OWN_SESSION = "ac6-own-session-e2e01"
-_AC6_FOREIGN_SESSION = "ac6-foreign-session-e2e02"
-_AC6_DISPATCH_ID = "code-reviewer@session-ac6own"
-
-
-def _load_write_review_trail_cli():
-    loader = importlib.machinery.SourceFileLoader(
-        "wsc_coverage_gate_runner_ac6_write_trail_cli",
-        str(_BIN_DIR / "coordinator-write-review-trail.py"),
-    )
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    loader.exec_module(mod)
-    return mod
-
-
-def _ac6_ledger_row(repo, session_id, dispatch_id):
-    ledger_dir = repo / ".git" / "coordinator-sessions" / session_id
-    ledger_dir.mkdir(parents=True, exist_ok=True)
-    (ledger_dir / "dispatched-agents.txt").write_text(
-        f"{dispatch_id}\topus\tcode-reviewer\t1786451686\n", encoding="utf-8",
-    )
-
-
-def _ac6_write_pending_frozen_record(repo, session_id, sha_range):
-    trail_dir = repo / "state" / "review-trail"
-    trail_dir.mkdir(parents=True, exist_ok=True)
-    record = {
-        "sha_range": sha_range,
-        "reviewer": "code-reviewer",
-        "scope": "session",
-        "scope_kind": "diff",
-        "verdict": "pending",
-        "diff_loc": 1,
-        "session_id": session_id,
-        "workstream": None,
-    }
-    (trail_dir / f"2026-08-18-000000-{session_id[:8]}-pending.json").write_text(
-        json.dumps(record), encoding="utf-8",
-    )
-
-
-def _ac6_write_sidecar(repo, session_id, filename, reviewed_range_sha):
-    rel = f"state/subagent-share/{session_id}/{filename}"
-    path = repo / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "---\nreviewer: code-reviewer\n"
-        f'reviewed_range:\n  - "{reviewed_range_sha}^..{reviewed_range_sha}"\n'
-        "---\n",
-        encoding="utf-8",
-    )
-    return rel
-
-
+# AC6's end-to-end write-trail coverage (docs/plans/2026-08-18-chain-review-
+# records-and-credits-predecessors.md § C6) was removed here (PM ruling
+# 2026-08-23, kill review_trail.write): it loaded and ran
+# coordinator-write-review-trail.py's own main(), which was deleted along
+# with the review_trail.write op it trampolined.

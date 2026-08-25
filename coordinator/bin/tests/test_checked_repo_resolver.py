@@ -455,8 +455,6 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "reaper-resting-batons.py",
         "sweep-actioned-memos.py",
         "sweep-boot.py",
-        "sweep-consumed-handoffs.py",
-        "sweep-terminal-plans.py",
         "workday-start-inbox-blitz-assemble.py",
         "wsc-session-disposition.py",
         # Added 2026-08-15 (docs/plans/2026-08-15-turn-coordinator-bin-

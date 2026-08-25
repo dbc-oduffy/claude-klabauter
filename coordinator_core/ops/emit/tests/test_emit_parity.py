@@ -84,7 +84,7 @@ from coordinator_core.ops.emit.normalizers import (  # noqa: E402
     _normalize,
     _relativize_abs_fixture_path,
 )
-from coordinator_core.ops.emit.envelope import resolve_coordinator_root  # noqa: E402
+from coordinator_core.ops.emit.resolvers import resolve_coordinator_root  # noqa: E402
 
 
 def normalize_record(record: dict) -> dict:
@@ -494,7 +494,7 @@ def assert_full_parity(emission: dict) -> None:
 _NO_GOLDEN_ORACLE_SECTIONS = frozenset({"commit_closures"})
 
 # Non-porter helper modules colocated under sections/ for import ergonomics — no `collect()`,
-# never wired into envelope.py, and not a "section" under any of the predicates above (unlike
+# never wired into resolvers.py, and not a "section" under any of the predicates above (unlike
 # _NO_GOLDEN_ORACLE_SECTIONS, this isn't a section lacking an oracle — it's not a section at
 # all). Kept without the `_shared.py`-style leading-underscore convention because it is a named,
 # public extraction point another op (handoff.columns, C3) imports directly — see
@@ -537,7 +537,7 @@ _DISCOVERED = [
 # section_envelope_map.json (minus _NO_GOLDEN_ORACLE_SECTIONS) must have a live discovered
 # porter, and the discovered count itself is pinned so a narrowing shows up even if the
 # map was (wrongly) edited to match.
-_EXPECTED_DISCOVERED_COUNT = 20
+_EXPECTED_DISCOVERED_COUNT = 19
 
 assert len(_DISCOVERED) == _EXPECTED_DISCOVERED_COUNT, (
     f"discovered section porter count changed ({len(_DISCOVERED)} != "
@@ -638,33 +638,19 @@ def test_map_covers_every_envelope_array_and_malformed_bucket():
 
 
 # --------------------------------------------------------------------------- C3: full parity
-def test_full_parity(tmp_path):
-    """Assert that the Python emitter produces the same output as the bash golden (C3).
-
-    Builds the Python emission via envelope.build() with all sections wired (envelope
-    triggers the wiring at import), writes it to a temp file, then calls assert_full_parity()
-    to compare every section's records + malformed bucket (order-insensitive, volatile fields
-    normalized) and the scalar envelope invariants (schema_version, narrative_views).
-
-    This test is the gate for C3 — it passes only when:
-    (a) all 21 sections are registered and their collect() runs without error, AND
-    (b) the Python emission matches the golden for every section, AND
-    (c) the deliverable_status cross-join and shipped_sha/LMA enrichments produce the same
-        values as the bash emitter's §8.16 + §1.5 + §1 step 3.5.
-    """
-    # Trigger section wiring side-effect (envelope._wire_sections runs at module import).
-    import coordinator_core.ops.emit.envelope  # noqa: F401
-
-    from coordinator_core.ops.emit import envelope as _envelope
-
-    ctx = build_emit_context()
-
-    # Use a temp out path so the sentinel gate does not fire during testing.
-    out = tmp_path / "test-emission.json"
-    _envelope.emit(ctx, out=out)
-    emission = json.loads(out.read_text())
-
-    assert_full_parity(emission)
+# NOTE test_full_parity (formerly here, C3) was DELETED (2026-08-23, C6 test-retirement pass):
+# it called envelope.build()/envelope.emit() to assemble the full 21-section envelope in one
+# pass and diffed it against the golden fixture. Both entry points were deleted by the
+# artifact.emit cut (see docs/plans/2026-08-23-the-emit-residue-gets-a-consumer-or-a-gravestone.md)
+# and the cut is a deliberate PM-ruled retirement (DR-351), not an oversight — there is no
+# replacement assembly path to test against. assert_full_parity() (the assertion helper) is
+# left in place unused pending a future decision on whether to delete it too; it is out of this
+# pass's scope (helper, not a test). Per-section record/malformed-bucket parity survives
+# unchanged via test_section_parity, which calls each section's collect() directly rather than
+# through the deleted envelope assembly. The two scalar invariants test_full_parity also checked
+# (schema_version == CONTRACT_VERSION, narrative_views drift) have no other test covering them
+# post-cut — narrative_views is itself an envelope-assembly-only concept with no producer to
+# re-target the check at.
 
 
 # --------------------------------------------------------------------------- commit_closures
@@ -716,88 +702,19 @@ def _closure_test_ctx(repo_root: Path):
     )
 
 
-def test_commit_closures_fixture_commit_yields_record_with_reachability(tmp_path: Path) -> None:
-    """A commit carrying a Closes: trailer yields a commit_closures record, with reachability
-    stamped True once the enricher runs (AC3/AC4). collect() itself leaves
-    reachable_on_default_branch null by construction (commit_closures.py docstring) — the
-    stamp only appears after envelope._stamp_closure_reachability runs.
-    """
-    from coordinator_core.ops.emit.envelope import _stamp_closure_reachability
-    from coordinator_core.ops.emit.sections import commit_closures
-
-    _init_closure_test_repo(tmp_path)
-    sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-42\n", "fixture-content-1\n"
-    )
-    # No real remote in this throwaway repo — a bare local ref stands in for "origin/main"
-    # so collect()'s `git log origin/main HEAD ...` and the reachability check both resolve.
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", sha)
-
-    ctx = _closure_test_ctx(tmp_path)
-    records, malformed = commit_closures.collect(ctx)
-
-    assert malformed == []
-    assert len(records) == 1, f"expected exactly one Closes: record, got {records!r}"
-    record = records[0]
-    assert record["item_id"] == "RECS-42"
-    assert record["sha"] == sha
-    assert record["repo"] == "test/repo"
-    assert record["reachable_on_default_branch"] is None, (
-        "collect() must never resolve reachability itself (AC4) — left null by construction"
-    )
-
-    _stamp_closure_reachability(records, tmp_path)
-    assert records[0]["reachable_on_default_branch"] is True, (
-        "the commit is origin/main itself; reachability must stamp True"
-    )
-
-
-# Review: code-reviewer (Finding 2) — AC4's tri-state (true/false/null, "never silently
-# coerced to false") is the load-bearing correctness property of _stamp_closure_reachability;
-# the fixture-commit test above only exercised the True branch. These two siblings cover the
-# False (not-yet-merged commit) and None (no origin/main ref at all — degrade-to-null) paths.
-def test_commit_closures_reachability_false_when_not_on_origin_main(tmp_path: Path) -> None:
-    """A Closes: commit that exists, but origin/main points at an EARLIER commit, must stamp
-    reachable_on_default_branch False (AC4) — the single most common real-world case."""
-    from coordinator_core.ops.emit.envelope import _stamp_closure_reachability
-
-    _init_closure_test_repo(tmp_path)
-    base_sha = _commit_with_message(tmp_path, "chore: base", "base\n")
-    # origin/main stays pinned at base_sha — the closure commit below is never an ancestor.
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", base_sha)
-    closure_sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-42\n", "unmerged-content\n"
-    )
-
-    records = [{"sha": closure_sha, "reachable_on_default_branch": None}]
-    _stamp_closure_reachability(records, tmp_path)
-
-    assert records[0]["reachable_on_default_branch"] is False, (
-        "closure_sha is not an ancestor of origin/main (which is pinned at an earlier "
-        "commit); reachability must stamp False, not None or True"
-    )
-
-
-def test_commit_closures_reachability_none_when_no_origin_main_ref(tmp_path: Path) -> None:
-    """No refs/remotes/origin/main ref at all must degrade to None (AC4) — never coerced
-    to False. Exercises _check_origin_main_reachable's failure branch deterministically,
-    since there's no real origin remote in the throwaway repo for _fetch_origin_main to
-    reach."""
-    from coordinator_core.ops.emit.envelope import _stamp_closure_reachability
-
-    _init_closure_test_repo(tmp_path)
-    sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-42\n", "no-origin-content\n"
-    )
-    # Deliberately do NOT create refs/remotes/origin/main.
-
-    records = [{"sha": sha, "reachable_on_default_branch": None}]
-    _stamp_closure_reachability(records, tmp_path)
-
-    assert records[0]["reachable_on_default_branch"] is None, (
-        "no origin/main ref exists; reachability must degrade to None (indeterminate), "
-        "never be coerced to False"
-    )
+# NOTE test_commit_closures_fixture_commit_yields_record_with_reachability,
+# test_commit_closures_reachability_false_when_not_on_origin_main, and
+# test_commit_closures_reachability_none_when_no_origin_main_ref (formerly here) were DELETED
+# (2026-08-23, C6 test-retirement pass): all three imported and called
+# envelope._stamp_closure_reachability, deleted by the artifact.emit cut. Their premise is also
+# architecturally stale independent of the deletion — commit_closures.py's collect() no longer
+# leaves reachable_on_default_branch null-by-construction for a separate enricher to stamp; it
+# resolves the tri-state itself in one git rev-list spawn (see that module's docstring § Why
+# reachability costs a spawn). The True/False/None tri-state property these three asserted
+# survives fully, against the CURRENT collect()-resolves-it-itself architecture, in
+# test_commit_closures_from_ledger.py: test_close_row_from_ledger_entry (True),
+# test_reachability_false_when_sha_not_on_origin_main (False), and
+# test_reachability_null_when_origin_main_unresolvable (None).
 
 
 def test_commit_closures_no_trailer_yields_no_records(tmp_path: Path) -> None:
@@ -818,37 +735,14 @@ def test_commit_closures_no_trailer_yields_no_records(tmp_path: Path) -> None:
     assert malformed == []
 
 
-def test_commit_closures_collect_is_exactly_one_git_log_subprocess(tmp_path: Path) -> None:
-    """collect() performs EXACTLY ONE subprocess call — the bounded git log (AC5).
-
-    Scoped to collect() itself, not total git-call count across a full emit run:
-    reachability's amortized per-SHA `git merge-base --is-ancestor` spawns (AC4) are legitimate
-    and live in a separate function (_stamp_closure_reachability), never invoked here.
-    """
-    from coordinator_core.ops.emit.sections import commit_closures
-
-    _init_closure_test_repo(tmp_path)
-    sha = _commit_with_message(
-        tmp_path, "fix: close an item\n\nCloses: RECS-7\n", "fixture-content-2\n"
-    )
-    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", sha)
-
-    ctx = _closure_test_ctx(tmp_path)
-
-    with patch(
-        "coordinator_core.ops.emit.sections.commit_closures.subprocess.run",
-        wraps=subprocess.run,
-    ) as spy:
-        records, _malformed = commit_closures.collect(ctx)
-
-    assert spy.call_count == 1, (
-        f"collect() must spawn exactly one subprocess (the bounded git log, AC5); "
-        f"got {spy.call_count} calls: {spy.call_args_list!r}"
-    )
-    (cmd,), _kwargs = spy.call_args
-    assert cmd[:3] == ["git", "-C", str(tmp_path)]
-    assert "log" in cmd, f"the one collect() subprocess must be a git log call, got {cmd!r}"
-    assert len(records) == 1
+# NOTE test_commit_closures_collect_is_exactly_one_git_log_subprocess (formerly here, AC5) was
+# DELETED (2026-08-23, C2 test-retirement pass): it asserted the one subprocess collect()
+# spawns is specifically a ``git log`` call (``"log" in cmd``) -- an artifact of the retired
+# git-log scan mechanism (collect() reads the commit ledger now; its one remaining subprocess
+# is a ``git rev-list origin/main`` reachability check, not a log). The durable property --
+# collect() spawns exactly one subprocess -- survives and stays covered:
+# test_collect_issues_exactly_one_reachability_spawn_and_no_history_scan and
+# test_revert_arm_adds_no_second_subprocess_call, both against the ledger-backed collect().
 
 
 # Review: code-reviewer (Finding 3) — AC3 names "malformed rows route to
@@ -857,42 +751,38 @@ def test_commit_closures_collect_is_exactly_one_git_log_subprocess(tmp_path: Pat
 # cannot itself produce a truncated/non-hex SHA (module docstring), so this needs a
 # monkeypatched subprocess.run result rather than a real repo fixture.
 def test_commit_closures_malformed_sha_routes_to_malformed_bucket(tmp_path: Path) -> None:
-    """A git-log record whose SHA fails 40-char lowercase-hex validation must land in the
-    malformed bucket with the documented reason, not be silently dropped or emitted as a
-    record with a corrupt identity key (AC3)."""
+    """A commit-ledger entry whose ``sha`` fails 40-char lowercase-hex validation must land
+    in the malformed bucket with the documented reason, not be silently dropped or emitted as
+    a record with a corrupt identity key (AC3).
+
+    Rewritten off the ledger (C2 migration): collect() no longer parses ``git log`` output --
+    it reads the commit ledger, so the malformed-shape input is now a corrupt ledger entry
+    rather than a fake git-log stdout line. Ledger fixture pattern mirrors
+    ``test_commit_closures_from_ledger.py``'s ``_append`` helper.
+    """
+    from coordinator_core.commit_ledger import store as ledger_store
     from coordinator_core.ops.emit.sections import commit_closures
 
     _init_closure_test_repo(tmp_path)
+    good_sha = _commit_with_message(tmp_path, "fix: close an item", "fixture-content-3\n")
+    _run_git_or_raise(tmp_path, "update-ref", "refs/remotes/origin/main", good_sha)
     ctx = _closure_test_ctx(tmp_path)
 
-    # Fake NUL-delimited stdout matching commit_closures._LOG_FORMAT
-    # ("%x00%H%x00%(trailers:key=Closes,valueonly)"): one malformed (non-40-hex) SHA record
-    # and one well-formed record, so the quarantine branch and the happy path both fire in
-    # the same subprocess result.
-    # Three fields per record, body last, matching _LOG_FORMAT's
-    # (sha, trailer_block, body) layout — the quarantine path's stride moves in
-    # lockstep with the walk's, so a malformed record must not desynchronize the
-    # records that follow it.
-    fake_stdout = (
-        "\x00" + "not-a-valid-sha" + "\x00" + "RECS-99\n" + "\x00" + "a subject\n"
-        + "\x00" + ("b" * 40) + "\x00" + "RECS-1\n" + "\x00" + "another subject\n"
+    assert ledger_store.append_entry(
+        "hnd-a", good_sha, "code", cwd=str(tmp_path), closes=["RECS-1"]
     )
-    fake_result = subprocess.CompletedProcess(
-        args=["git", "log"], returncode=0, stdout=fake_stdout, stderr=""
+    assert ledger_store.append_entry(
+        "hnd-a", "not-a-real-sha", "code", cwd=str(tmp_path), closes=["RECS-99"]
     )
 
-    with patch(
-        "coordinator_core.ops.emit.sections.commit_closures.subprocess.run",
-        return_value=fake_result,
-    ):
-        records, malformed = commit_closures.collect(ctx)
+    records, malformed = commit_closures.collect(ctx)
 
     assert malformed == [
         {
-            "sha": "not-a-valid-sha",
-            "reason": "git-log record failed 40-char lowercase-hex SHA validation",
+            "sha": "not-a-real-sha",
+            "reason": "commit-ledger entry failed 40-char lowercase-hex SHA validation",
         }
     ], f"malformed bucket did not quarantine the invalid SHA as documented: {malformed!r}"
     assert len(records) == 1, f"the well-formed record must still be emitted: {records!r}"
-    assert records[0]["sha"] == "b" * 40
+    assert records[0]["sha"] == good_sha
     assert records[0]["item_id"] == "RECS-1"

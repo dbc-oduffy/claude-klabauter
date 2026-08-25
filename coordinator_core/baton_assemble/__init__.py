@@ -121,6 +121,21 @@ evidence-of-succ.md` § 6, PROPOSED) for exactly ONE decision -- which path d1
 writes -- and grants no succession conclusion: d6's own gate re-derives
 `claimed_or_shipped` independently and is unchanged.
 
+BARE-SLUG REPLAY (2026-08-25 break-class fix, bug backlog
+`2026-08-25-spinoff-brief-then-apply-mints-two-batons-and-adopts-the-stub-as-
+origin.yaml`). The IDEMPOTENT REPLAY machinery above reaches convergence through
+PREDECESSOR-side evidence, which kind=spinoff never writes (`predecessor: none`
+by design) -- so re-running an identical `apply spinoff <slug>` minted a SECOND
+pickup_ready baton beside the first, and, because `resolve_lineage` read
+whatever occupied the mint path BEFORE asking whether the caller had supplied a
+bare slug at all, stamped that abandoned first attempt onto the survivor as its
+own `origin_handoff`. Both halves close on one ordering rule: a bare-slug
+`artifact_path` is the OUTPUT, never a lineage input, whoever occupies it.
+`_adopt_prior_attempt_mint_path` then re-uses this run's own prior attempt as
+`output_path` (d1's existing existence predicate makes it `already_satisfied`
+from there), and `_assert_no_directive_writes_over_input` skips satisfied
+directives, which by definition write nothing.
+
 kind=spinoff's artifact-authoring directive DEFAULTS to DISPATCHING the existing
 live claude-klabauter op `handoff.author_fork` (coordinator_core/ops/handoff_author_fork.py,
 registered op name "handoff.author_fork") rather than reimplementing spinoff
@@ -1427,6 +1442,93 @@ def _adopt_prior_attempt_scaffold_path(
     return _repo_rel_handoff_path(candidates[0])
 
 
+def _adopt_prior_attempt_mint_path(
+    mint_path: str, root: Path, kind: str
+) -> Optional[str]:
+    """Non-None when the bare-slug MINT TARGET `mint_path` is already occupied
+    by THIS run's own prior attempt -- the path is then re-used as
+    `lineage["output_path"]` (making d1 `already_satisfied`, since d1's own
+    predicate is "does `--out` exist on disk") instead of
+    `_compute_fresh_output_path` disambiguating away from it and minting a
+    SECOND baton beside the first.
+
+    The kind=spinoff sibling of `_adopt_prior_attempt_scaffold_path`, which
+    cannot serve here: that function identifies a prior attempt by the
+    candidate's own `predecessor:` pointer, and every spinoff is
+    `predecessor: none` by design (schema_validate.py Rule A3a-3). The
+    evidence available on this path is stronger and needs no scan -- the bare
+    slug determines the mint path exactly, so there is a single candidate to
+    accept or reject, never a set to rank.
+
+    Fixes the reproduced live break (bug backlog
+    `2026-08-25-spinoff-brief-then-apply-mints-two-batons-and-adopts-the-stub-
+    as-origin.yaml`): `apply spinoff <slug>` was idempotent only for
+    kind=handoff, which reaches convergence through the predecessor-side
+    `continued_into` record (`_resume_recorded_successor_path`) a spinoff never
+    writes. Re-running the identical spinoff command -- the ordinary response to
+    a first run whose output the operator could not read -- minted a second
+    pickup_ready baton for one topic.
+
+    Adopted only when EVERY condition holds; there is no partial-credit branch,
+    and a decline falls back to the pre-existing fresh-mint behaviour (a second
+    file, but never a corrupted one):
+      - `mint_path` names an existing file directly under live
+        `state/handoffs/` -- never `archive/`, which d1 must not write into.
+      - Its `kind:` equals the `kind` this run is assembling. A `handoff` and a
+        `spinoff` briefed from the same slug are different artifacts that
+        happen to collide on a name; adopting across kinds would author one
+        over the other.
+      - Its `authoring_session` is PRESENT and equals `_resolve_current_session_id()`
+        -- THIS process's own session, resolved from this run's environment,
+        never a caller-supplied value. The same machine-stamped authorship fact
+        `_adopt_prior_attempt_scaffold_path` gates on, and for the same reason:
+        a peer session's same-slug baton is not this run's residue.
+      - It has not been continued (`deployment_state: continued`, or a set
+        `continued_into`) -- a completed link in a longer chain is not a prior
+        attempt's output.
+
+    Negative-spec:
+      - Does NOT read the adopted file for LINEAGE. `resolve_lineage` holds `fm`
+        empty on this path: the file is this run's own output, so nothing in it
+        is an origin, a predecessor, or a progenitor. That separation is the
+        whole point -- adopting the path while reading the frontmatter would
+        re-create the `origin_handoff`-names-the-stub half of the defect.
+      - Does NOT write, stamp, delete, or repair anything.
+      - Does NOT fire for a qualified caller-supplied `artifact_path`; only the
+        bare-slug mint convention reaches here (`resolve_lineage`'s
+        `was_bare_slug` gate), because only there is `artifact_path` the OUTPUT
+        rather than an input.
+    """
+    if not mint_path:
+        return None
+    candidate = Path(mint_path)
+    if not candidate.is_absolute():
+        candidate = root / mint_path
+    if not candidate.is_file():
+        return None
+    try:
+        if candidate.resolve().parent != (root / "state" / "handoffs").resolve():
+            return None
+    except OSError:
+        return None
+    try:
+        fm = _read_frontmatter(candidate)
+    except (OSError, UnicodeDecodeError):
+        return None
+    if (_fm_field(fm, "kind") or "").strip() != kind:
+        return None
+    if _fm_field(fm, "deployment_state") == "continued":
+        return None
+    if (_fm_field(fm, "continued_into") or "").strip() not in ("", "none", "null", "~"):
+        return None
+    current_session = _resolve_current_session_id()
+    if not current_session:
+        return None
+    if (_fm_field(fm, "authoring_session") or "").strip() != current_session:
+        return None
+    return _repo_rel_handoff_path(candidate.name)
+
+
 def _assert_no_directive_writes_over_input(
     directives: list[dict[str, Any]], input_path: str, root: Path
 ) -> None:
@@ -1470,6 +1572,18 @@ def _assert_no_directive_writes_over_input(
         return  # nothing existing to destroy -- a fresh-mint target, not a live input
     collision_flag = f"--out={input_path}"
     for directive in directives:
+        if directive.get("already_satisfied"):
+            # A satisfied directive is SKIPPED, never dispatched
+            # (`contract.apply_base.execute_directives` -- "skips
+            # `already_satisfied` directives without dispatching their
+            # handler"), so it cannot overwrite anything and this guard has
+            # nothing to protect against. Load-bearing since the bare-slug
+            # replay adopt (`_adopt_prior_attempt_mint_path`): there
+            # `output_path` is deliberately the existing mint-path file and d1
+            # is satisfied BECAUSE it exists -- without this narrowing the
+            # backstop would refuse the whole brief for the one shape whose
+            # entire purpose is to not write.
+            continue
         for arg in directive.get("args") or []:
             if arg == collision_flag:
                 raise ValueError(
@@ -2051,16 +2165,38 @@ def resolve_lineage(
     # directly-openable path to hand `resolve_deliverable_and_initiative` as
     # its `predecessor` argument.
     _artifact_frontmatter_abs_path: Optional[Path] = None
+    # Non-None only on a bare-slug REPLAY -- see `_adopt_prior_attempt_mint_path`.
+    _adopted_mint_path: Optional[str] = None
     if artifact_path:
         _artifact_fm_path = Path(artifact_path)
         if not _artifact_fm_path.is_absolute():
             _artifact_fm_path = root / artifact_path
-        if _artifact_fm_path.is_file():
+        if was_bare_slug:
+            # MINT TARGET, never a lineage input -- whether or not a file is
+            # already sitting there. `was_bare_slug` is tested BEFORE the
+            # `is_file()` read (2026-08-25 break-class fix, bug backlog
+            # `2026-08-25-spinoff-brief-then-apply-mints-two-batons-and-adopts-
+            # the-stub-as-origin.yaml`): the previous ordering read whatever
+            # occupied the mint path as `fm` and, for kind=spinoff, stamped its
+            # `handoff_id` onto the new baton as `origin_handoff_id` (see the
+            # `kind == "spinoff"` branch's `origin_own_handoff_id` gate). The
+            # file occupying a mint path is by construction NOT an origin: it is
+            # this run's OWN prior attempt, or an unrelated same-slug artifact.
+            # Reproduced live: two `apply spinoff <slug>` calls 8s apart (the
+            # first's stdout swallowed by a `Select-Object -First 120` pipe, so
+            # the operator could not see it had succeeded) left two pickup_ready
+            # batons for one topic, the survivor naming the abandoned first as
+            # its own `origin_handoff` -- provenance pointing at a file a
+            # tidy-up deletes.
+            #
+            # `fm` stays empty, so kind=spinoff falls through to
+            # `handoff.author_fork`'s own claim-ledger self-resolution (the
+            # session's ACTUAL held baton) exactly as it does on a first run.
+            fm = ""
+            _adopted_mint_path = _adopt_prior_attempt_mint_path(artifact_path, root, kind)
+        elif _artifact_fm_path.is_file():
             fm = _read_frontmatter(_artifact_fm_path)
             _artifact_frontmatter_abs_path = _artifact_fm_path
-        elif was_bare_slug:
-            # Fresh mint target -- nothing exists here yet, by design.
-            fm = ""
         else:
             # Qualified path, missing at its named live location -- archive-
             # aware fail-loud resolution (2026-07-28 break-class fix). See
@@ -2244,7 +2380,26 @@ def resolve_lineage(
         # the carve-out's reach needs to be able to tell them apart. Present-as-
         # None on every run, for the same reason as `resumed_successor`.
         "adopted_scaffold": None,
+        # Non-None only when the BARE-SLUG mint path was already occupied by
+        # this run's own prior attempt: that path, adopted as `output_path` so
+        # the re-run converges onto the existing baton (d1 goes
+        # `already_satisfied`) instead of minting a second one beside it. Its
+        # own field rather than folded into `adopted_scaffold` for the same
+        # reason that one is not folded into `resumed_successor`: a DIFFERENT
+        # evidence class (the mint path is deterministic from the slug; nothing
+        # about a predecessor edge is consulted or concluded). Present-as-None
+        # on every run. See `_adopt_prior_attempt_mint_path`.
+        "adopted_mint_path": None,
     }
+
+    if _adopted_mint_path:
+        # Applied BEFORE the kind branches, so kind=handoff's own
+        # predecessor-side resumption (`_resume_recorded_successor_path`, and
+        # then `_adopt_prior_attempt_scaffold_path`) still overrides it where it
+        # has evidence -- that ordering keeps the stronger, predecessor-side
+        # evidence class first, unchanged by this fix.
+        lineage["output_path"] = _adopted_mint_path
+        lineage["adopted_mint_path"] = _adopted_mint_path
 
     if kind == "handoff":
         # Discriminator: does `artifact_path` carry its OWN `handoff_id` --

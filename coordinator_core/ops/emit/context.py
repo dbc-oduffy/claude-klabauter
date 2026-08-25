@@ -16,7 +16,7 @@ raises — that is the corruption/aliasing case.  ``coordinator_root`` is irrele
 attribution — it resolves via ``resolve_coordinator_root()`` to the LIVE post-W4.2-cutover
 coordinator script/lib clone (``<claude-klabauter-root>/coordinator`` on a current install; the
 DoE-claude clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
-``envelope.resolve_coordinator_root``'s docstring).
+``resolvers.resolve_coordinator_root``'s docstring).
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19)
@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.git.git_state import head_sha as _git_state_head_sha
 from coordinator_core.win_portability import no_console_creationflags
 
 # TEST/DOC-ORACLE CONSTANT ONLY (post-2026-07-07 per-repo-emission-cutover).
@@ -86,12 +88,42 @@ def _run_git(repo_root: Path, *args: str) -> Optional[str]:
         # OSError: executable not found or OS rejects the call.
         # ValueError: raised by subprocess.run if capture_output=True is combined with explicit
         # stdout/stderr overrides; that combination isn't used here, but caught defensively
-        # to match the pattern used for similar subprocess calls throughout envelope.py.
+        # to match the pattern used for similar subprocess calls throughout resolvers.py.
         # Review: code-reviewer (F7) — rationale documented; no live ValueError path for these kwargs.
         return None
     if out.returncode != 0:
         return None
     return out.stdout.strip() or None
+
+
+def _resolve_git_branch(repo_root: Path) -> str:
+    """Mirror ``git rev-parse --abbrev-ref HEAD`` without spawning ``git``.
+
+    Reads ``resolve_git_dir(repo_root)/HEAD`` directly -- the same file
+    ``git_state.head_sha`` reads, but stopping at the FIRST line rather than
+    following the one ref hop to a sha. ``HEAD`` on an attached branch is
+    ``ref: refs/heads/<name>\\n``; the ``refs/heads/`` prefix is stripped to
+    return ``<name>``, matching ``--abbrev-ref``'s output. A detached HEAD
+    (no ``ref:`` prefix -- the file holds a bare sha) returns the literal
+    string ``"HEAD"``, matching git's own ``--abbrev-ref`` behaviour there.
+    Any read failure (missing ``.git``, unreadable ``HEAD``) returns
+    ``"unknown"``, the same sentinel the spawn-based caller used on failure.
+    """
+    gitdir = resolve_git_dir(repo_root)
+    try:
+        content = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    if not content:
+        return "unknown"
+    if content.startswith("ref:"):
+        ref = content[len("ref:"):].strip()
+        prefix = "refs/heads/"
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+        return ref
+    # Bare sha with no `ref:` prefix -- detached HEAD.
+    return "HEAD"
 
 
 def _remote_url_to_slug(url: str) -> Optional[str]:
@@ -285,7 +317,7 @@ class EmitContext:
         (``repo === ''`` requiring a non-null ``{kind, value}`` entity_anchor) never
         applies via this constructor. That case is reserved for the two market-intel
         arrays (``competitor_summaries`` / ``intelligence_signals``), which stay
-        empty-by-design (see envelope.py). Do not compute a non-null entity_anchor in
+        empty-by-design (see resolvers.py). Do not compute a non-null entity_anchor in
         this method.
 
         Review: code-reviewer — Finding 4 (2026-07-14 entity_anchor slice review) — this
@@ -364,9 +396,23 @@ class EmitContext:
         would attribute the wrong tree.  ``git_branch``/``git_sha`` reflect the main
         worktree HEAD (intended).
         # Review: code-reviewer (Slice-1 F1) — old text said "raises on no remote"; Q-B hybrid returns local/<basename> instead.
+
+        Spawn count (2026-08-22, ``the-import-path-costs-nothing`` C11):
+        ``git_branch``/``git_sha`` are resolved SPAWN-FREE — ``_resolve_git_branch`` and
+        ``coordinator_core.git.git_state.head_sha`` both read ``.git`` files directly via
+        ``resolve_git_dir``. ``repo_name`` is NOT spawn-free: ``resolve_repo_name`` still
+        shells out to ``git remote get-url origin`` (``git.remote_url.get_remote_url``'s own
+        docstring rejects a ``.git/config`` parse as a correctness regression — subsection
+        quoting, multivalued keys, and ``insteadOf``/``includeIf`` rewrites all diverge from
+        a literal read). So this call is zero-git-spawn ONLY for a caller that never reads
+        ``ctx.repo_name`` — every current caller of ``resolve_context``/``EmitContext.resolve``
+        (``recorder.py``, ``goal_append.py``, ``goal_close_day.py``, ``strategic_emit.py``,
+        ``workday_complete/brief.py``) reads ``ctx.repo_name`` via ``ctx.provenance()`` or
+        directly, so none of them is zero-spawn today; a narrow repo_name-free variant would
+        have no live caller and was not added for that reason.
         """
-        git_branch = _run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "unknown"
-        git_sha = _run_git(repo_root, "rev-parse", "HEAD") or "unknown"
+        git_branch = _resolve_git_branch(repo_root)
+        git_sha = _git_state_head_sha(repo_root) or "unknown"
         git_sha_short = git_sha[:8]
         observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         hostname = _resolve_hostname()

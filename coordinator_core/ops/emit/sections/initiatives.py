@@ -22,7 +22,7 @@ ratified ``goals: [goal-id, ...]`` id-array parsed from the initiative YAML (DR-
 initiative.schema.json). This section CANNOT resolve those ids into full Goal records
 itself (the collect() spine contract gives a section no access to another section's
 output) — resolution against ``envelope["goals_current"]`` and the final ``goals``
-nesting happen in a post-collect enricher (envelope.py ``_stamp_initiative_goals``),
+nesting happen in a post-collect enricher (resolvers.py ``_stamp_initiative_goals``),
 which also POPS ``_goal_ids`` before the wire write (the InitiativeSummary schema is
 ``.strict()`` / ``additionalProperties: false`` — a leaked staging key would reject).
 This section MUST NOT read ``goals-log.*.jsonl`` itself; that derivation lives exactly
@@ -199,7 +199,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 # Review: code-reviewer (Finding 4) — hardcoded to "." on the current
                 # single-coordinator-root invariant (unlike goals.py, which reads this
                 # field from disk per-record). The `_stamp_initiative_goals` join in
-                # envelope.py scopes on (repo, coordinator_root_path) match; a future
+                # resolvers.py scopes on (repo, coordinator_root_path) match; a future
                 # multi-coordinator-root setup would need this value sourced from disk
                 # here too, or the join silently fails to resolve initiatives declared
                 # against a non-"." root.

@@ -1205,12 +1205,45 @@ def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, O
     return results
 
 
-def _override(name: str) -> bool:
+def _override(name: str, payload: Optional[Dict[str, Any]] = None) -> bool:
     """Inline-per-call env read -- NEVER hoist to module scope (F2, recipe
     Sec(e) "module-level namespace collisions"). Every call site in this file
-    calls `_override("COORDINATOR_ALLOW_X")` fresh, matching bash `${VAR:-0}`
-    at each individual guard's own call site."""
-    return os.environ.get(name, "0") == "1"
+    calls `_override("COORDINATOR_ALLOW_X", payload=...)` fresh, matching
+    bash `${VAR:-0}` at each individual guard's own call site.
+
+    RE-KEYED 2026-08-23 (C14c, prerequisite for the warm-dispatch server
+    routing C14b adds): this used to read `os.environ` unconditionally,
+    which holds ONLY because today's guard invocation is a fresh child
+    process whose environ is the actual caller's shell environ. Once guard
+    evaluation routes through a warm, long-lived server process (C14b),
+    `os.environ` is that SERVER's environ, frozen at server start and
+    shared by every session on the box -- a legitimate per-session
+    `COORDINATOR_OVERRIDE_*`/`COORDINATOR_ALLOW_*` set by one operator's
+    shell would go silently dead (not present in the server's environ),
+    and whatever the server itself happened to start under would apply,
+    invisibly, to every other session's guard evaluation. See this
+    module's own `dispatch.check_no_verify`-adjacent history and the
+    dispatching stub for the fuller incident writeup.
+
+    The fix, mirroring `block_subagent_destructive_action`'s existing
+    per-call caller-context resolution: prefer an `env` mapping carried on
+    the per-call PAYLOAD (`payload["env"]`, populated by the caller from
+    ITS OWN resolved context -- session_id/cwd/agent_id are already on that
+    same wire) over ambient process env. `payload` absent, not a dict, or
+    carrying no `env` mapping falls back to `os.environ` unchanged -- this
+    keeps every existing direct-call/test-call site (which never passes
+    `payload`) byte-identical to the pre-C14c behavior; only a caller that
+    populates `payload["env"]` (the warm-server wiring C14b will add) gets
+    the caller-keyed read.
+    """
+    env = None
+    if isinstance(payload, dict):
+        candidate = payload.get("env")
+        if isinstance(candidate, dict):
+            env = candidate
+    if env is None:
+        env = os.environ
+    return env.get(name, "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -1565,7 +1598,7 @@ def check_no_verify(
     tokenize. `resolved is None` (every caller predating this parameter)
     takes the original self-contained path below, unchanged.
     """
-    if _override("COORDINATOR_OVERRIDE_NO_VERIFY"):
+    if _override("COORDINATOR_OVERRIDE_NO_VERIFY", payload=hook_payload):
         return None
     if not cmd:
         return None
@@ -1987,7 +2020,7 @@ def check_destructive_git_orphan(
         return None
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
-    if _override("COORDINATOR_ALLOW_ORPHAN"):
+    if _override("COORDINATOR_ALLOW_ORPHAN", payload=payload):
         return None
 
     # BX-13 (2026-08-17, confirmed live bypass -- guard-bypass-triage
@@ -2471,7 +2504,11 @@ def _is_same_dir(a: str, b: str) -> bool:
         return False
 
 
-def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_destructive_rm(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """F0-b (2026-08-05, spawn-count defect): the per-TARGET loop below
     resolves `git -C <parent-dir> rev-parse --show-toplevel` (scratch-
     allowlist probe) and, for a file target, `git -C <parent-dir> rev-parse
@@ -2494,7 +2531,7 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
     if not re.search(r"\brm\b", cmd):
         return None
 
-    rm_override = _override("COORDINATOR_ALLOW_RM")
+    rm_override = _override("COORDINATOR_ALLOW_RM", payload=payload)
 
     # Per-call memo, keyed on the exact (cwd, args) pair actually run -- see
     # `_new_git_memo` docstring for why this is sound and why it is
@@ -2885,8 +2922,13 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument
     # is executed, not inert text -- unwrap and re-scan it too.
-    for payload in _shell_c_unwrap_payloads(cmd):
-        result = check_destructive_rm(payload, session_id)
+    #: The loop variable is the unwrapped COMMAND STRING, not the guard payload
+    #: dict -- named apart from `payload` because binding it to that name shadowed
+    #: this function's own `payload` parameter, so the recursion below silently
+    #: re-scanned with caller context dropped and `_override` fell back to ambient
+    #: process env. Forward the parameter explicitly (C14c).
+    for unwrapped_cmd in _shell_c_unwrap_payloads(cmd):
+        result = check_destructive_rm(unwrapped_cmd, session_id, payload=payload)
         if result is not None:
             return result
     return None
@@ -3208,7 +3250,7 @@ def check_destructive_git_clean(
 
     if not re.search(r"\bgit\b", cmd) or not re.search(r"\bclean\b", cmd):
         return None
-    if _override("COORDINATOR_OVERRIDE_GIT_CLEAN"):
+    if _override("COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload):
         return None
 
     # W5/C5 (2026-08-19, spawn-count defect): identical to the F0-b shape
@@ -3611,7 +3653,7 @@ def _check_destructive_git_revert_full(
         return None, None
     if not re.search(r"\bcheckout\b|\brestore\b|\breset\b|\bstash\b", cmd):
         return None, None
-    if _override("COORDINATOR_OVERRIDE_GIT_REVERT"):
+    if _override("COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload):
         return None, None
 
     # Per-call replacement for the former module-level `_GR_OVERRIDE_HINT`
@@ -4368,7 +4410,9 @@ def check_blanket_git_add(
     if not _is_hazard_repo(git_root):
         return None
 
-    if _override("COORDINATOR_OVERRIDE_BLANKET_ADD") or _override("_COORDINATOR_SAFE_COMMIT_INTERNAL_BLANKET"):
+    if _override("COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload) or _override(
+        "_COORDINATOR_SAFE_COMMIT_INTERNAL_BLANKET", payload=hook_payload
+    ):
         try:
             override_log = _override_log_path(git_root, session_id)
             if override_log is None:
@@ -4654,7 +4698,11 @@ def _find_is_find_segment(seg: str) -> bool:
     return bool(re.match(r"^(/\S*/)?find(\s|$)", s))
 
 
-def check_runaway_find(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_runaway_find(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
@@ -4663,7 +4711,7 @@ def check_runaway_find(cmd: str, session_id: str = "") -> Optional[Dict[str, Any
     if not re.search(r"\bfind\b", cmd):
         return None
 
-    find_override = _override("COORDINATOR_ALLOW_FIND_ROOT")
+    find_override = _override("COORDINATOR_ALLOW_FIND_ROOT", payload=payload)
 
     for seg in _split_segments(cmd):
         if not seg.strip():
@@ -4711,8 +4759,11 @@ def check_runaway_find(cmd: str, session_id: str = "") -> Optional[Dict[str, Any
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument
     # is executed, not inert text -- unwrap and re-scan it too.
-    for payload in _shell_c_unwrap_payloads(cmd):
-        result = check_runaway_find(payload, session_id)
+    #: Same shadowing hazard as `check_destructive_rm`'s unwrap loop -- see the
+    #: note there. The loop variable is a command string; the guard payload is
+    #: this function's own parameter and is forwarded explicitly (C14c).
+    for unwrapped_cmd in _shell_c_unwrap_payloads(cmd):
+        result = check_runaway_find(unwrapped_cmd, session_id, payload=payload)
         if result is not None:
             return result
     return None
@@ -4765,7 +4816,7 @@ def check_probe_spray(
     """
     if not cmd:
         return None
-    if _override("COORDINATOR_PROBE_NUDGE_OFF"):
+    if _override("COORDINATOR_PROBE_NUDGE_OFF", payload=payload):
         return None
 
     now = int(time.time())
@@ -5232,7 +5283,7 @@ def check_validate_commit(
     # the bash's dormant strict-mode branch is now live here; see the module
     # docstring "KNOWN PORTING GAPS", CLOSED entry for this promotion). Reuses
     # compute_scope() -- no separate declared-scope carrier is introduced. ---
-    scope_strict = _override("COORDINATOR_SCOPE_STRICT")
+    scope_strict = _override("COORDINATOR_SCOPE_STRICT", payload=payload)
     if session_id:
         git_root = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()
         if git_root:
@@ -5670,7 +5721,7 @@ def check_validate_commit(
             "addition." % soft_names
         )
 
-    if hard_violation and not _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET"):
+    if hard_violation and not _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload):
         _budget_note = operator_override_note(
             "COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload, git_root=_repo_root_for_governance
         )
@@ -5683,7 +5734,7 @@ def check_validate_commit(
         ) + ("\n\n" + _budget_note if _budget_note else "")
         return _deny(reason)
 
-    if hard_violation and _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET"):
+    if hard_violation and _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload):
         warnings.append("CLAUDEMD-BUDGET (override):%s" % hard_violation)
 
     # --- Check 8: Plan/handoff frontmatter mutation needs commit-subject
@@ -5823,7 +5874,7 @@ def check_validate_commit(
     # advisory, mirroring the CLAUDEMD-BUDGET override branch above.
     registration_quad_violation = commit_tripwires.check_registration_quad_completeness(_cwd)
     if registration_quad_violation:
-        if _override("COORDINATOR_OVERRIDE_REGISTRATION_QUAD"):
+        if _override("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", payload=payload):
             warnings.append("REGISTRATION-QUAD-TRIPWIRE (override):\n%s" % registration_quad_violation)
         else:
             _quad_note = operator_override_note(
@@ -6180,7 +6231,7 @@ def check_find_exec_rewrite(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_FIND_EXEC"):
+    if _override("COORDINATOR_ALLOW_FIND_EXEC", payload=payload):
         return None
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:
@@ -6537,7 +6588,7 @@ def check_grep_via_bash_rewrite(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_GREP_VIA_BASH"):
+    if _override("COORDINATOR_ALLOW_GREP_VIA_BASH", payload=payload):
         return None
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:
@@ -6596,7 +6647,7 @@ def check_sed_range_read_advise(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_SED_RANGE"):
+    if _override("COORDINATOR_ALLOW_SED_RANGE", payload=payload):
         return None
     tokens = _bt_tokenize_full_command(cmd)
     if tokens is None:
@@ -6650,7 +6701,7 @@ def check_cat_heredoc_write_advise(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_CAT_HEREDOC"):
+    if _override("COORDINATOR_ALLOW_CAT_HEREDOC", payload=payload):
         return None
     if "<<" not in cmd or not re.search(r"\bcat\b", cmd):
         return None
@@ -6851,7 +6902,7 @@ def check_heredoc_repo_write_advise(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_HEREDOC_REPO_WRITE"):
+    if _override("COORDINATOR_ALLOW_HEREDOC_REPO_WRITE", payload=payload):
         return None
     if not git_root:
         return None
@@ -7926,7 +7977,7 @@ def check_git_commit_safe_commit_advise(
         # under live peers) differs from the bare-commit shape that key
         # governs, so one must not silently unlock the other.
         if _bt_commit_has_amend_flag(seg_tokens) and not _override(
-            "COORDINATOR_ALLOW_GIT_COMMIT_AMEND"
+            "COORDINATOR_ALLOW_GIT_COMMIT_AMEND", payload=payload
         ):
             provenance = _bt_head_commit_amend_provenance(
                 _bt_git_dash_c_value(seg_tokens), session_id
@@ -7962,7 +8013,7 @@ def check_git_commit_safe_commit_advise(
                     )
                     + ("\n\n%s" % _amend_note if _amend_note else "")
                 )
-        if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE"):
+        if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload):
             return None
         if _bt_commit_has_explicit_pathspec(seg_tokens):
             return None
@@ -8256,7 +8307,7 @@ def check_multiprobe_banner_rewrite(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_MULTIPROBE_BANNER"):
+    if _override("COORDINATOR_ALLOW_MULTIPROBE_BANNER", payload=payload):
         return None
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:

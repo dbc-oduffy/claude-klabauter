@@ -220,7 +220,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -325,6 +324,8 @@ async def _cartography_churn(params: dict, repo_root: Optional[Path] = None) -> 
         {"emergent": [...], "excluded_by_prefilter": [...], "deleted_at_head": [...]}
         or {"error": <str>} if target_root is missing/invalid.
     """
+    import asyncio
+
     target_root_raw = params.get("target_root")
     if not target_root_raw:
         return {"error": "cartography.churn requires a non-empty target_root param"}

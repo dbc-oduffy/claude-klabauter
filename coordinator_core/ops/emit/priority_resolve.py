@@ -163,7 +163,7 @@ def load_priority_ledger(state_root: Optional[str] = None) -> Dict[str, dict]:
     resolution configured must still be able to emit. Yields ``{}`` and emits
     a ``UserWarning`` (rather than staying silent) so a genuinely
     misconfigured machine remains observable — mirrors the fallback-warning
-    idiom in ``ops/emit/envelope.py``'s ``resolve_coordinator_root``. Only
+    idiom in ``ops/emit/resolvers.py``'s ``resolve_coordinator_root``. Only
     ``StateRootError`` (and its ``CrossCuttingStateRoot`` subclass) is caught
     here — a narrow catch, deliberately not ``Exception``, so a genuine ledger
     read fault (corruption, a malformed entry, a permissions error) still

@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import re
 
-import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (queue.append side effects)
+import coordinator_core.ops  # noqa: F401 — kept so an import failure surfaces here; registers nothing (lazy-only since 2026-08-22)
 
-from coordinator_core.ipc import _REGISTRY
+from coordinator_core.ipc import _REGISTRY  # noqa: F401 — retained for per-test reads
+from coordinator_core.ops._registry_map import resolves
 
-assert "queue.append" in _REGISTRY, (
-    "import guard failed: 'queue.append' not in _REGISTRY — "
-    "coordinator_core.ops.queue_append @register_op did not fire"
+assert resolves("queue.append"), (
+    "dispatchability guard failed: 'queue.append' not in _REGISTRY — "
+    "coordinator_core.ops.queue_append is neither in OP_MODULE_MAP nor already registered"
 )
 
 from coordinator_core.ops.queue_append import append_queue_entry  # noqa: E402

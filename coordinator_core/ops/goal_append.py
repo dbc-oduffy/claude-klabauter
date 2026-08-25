@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.emit.envelope import resolve_context
+from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 # ---------------------------------------------------------------------------

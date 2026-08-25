@@ -314,7 +314,7 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
     # (`os.environ.get("HOME") or os.environ.get("USERPROFILE") or
     # resolved_home`, an explicit USERPROFILE rung one line up);
     # `test_envelope_resolve_context.py:91` asserts against
-    # `envelope.py`'s own `resolve_context()`, whose real chain (line 1573,
+    # `resolvers.py`'s own `resolve_context()`, whose real chain (line 1573,
     # baselined in RUNG_ORDER_BASELINE) already defaults to `Path.home()`.
     (
         "coordinator_core/install/uninstall_legs.py",

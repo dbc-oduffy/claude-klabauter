@@ -665,7 +665,7 @@ async def _shipped_in_batch_resolvable(worktree: Path, shas: Sequence[str]) -> D
 
 
 async def _classify_heir_children(
-    handoff_path: Path, dag_index: List[str]
+    handoff_path: Path, dag_index: List[str], index: Optional[dict] = None
 ) -> tuple[str, str]:
     """Partition a consumed candidate's referencing children by edge kind.
 
@@ -720,13 +720,23 @@ async def _classify_heir_children(
     """
     import asyncio
 
-    try:
-        heir_children = await asyncio.to_thread(
-            reverse_membership,
-            str(handoff_path),
-            dag_index,
-            edge_kinds=_HEIR_EDGE_KINDS,
+    # The thread offload exists for the UNINDEXED shape, where
+    # reverse_membership re-walks the whole dag_index and reads every node's
+    # frontmatter — genuinely blocking work that has no business on the event
+    # loop. Handed a prebuilt index it is a dict lookup plus a handful of
+    # child-frontmatter reads, and `to_thread` then buys nothing while
+    # charging a threadpool dispatch and an event-loop round trip PER CALL.
+    # A caller classifying at the boot backstop's 25-candidate cap pays that
+    # up to 50 times for work measured in microseconds.
+    async def _members(**kwargs) -> frozenset:
+        if index is not None:
+            return reverse_membership(str(handoff_path), dag_index, index=index, **kwargs)
+        return await asyncio.to_thread(
+            reverse_membership, str(handoff_path), dag_index, index=index, **kwargs
         )
+
+    try:
+        heir_children = await _members(edge_kinds=_HEIR_EDGE_KINDS)
     except (ValueError, TypeError) as exc:
         # Review: code-reviewer F6 — reverse_membership's own docstring documents
         # both ValueError and TypeError (dag_index not iterable); mirrors the
@@ -737,9 +747,7 @@ async def _classify_heir_children(
         return "heir", child_name
 
     try:
-        all_children = await asyncio.to_thread(
-            reverse_membership, str(handoff_path), dag_index
-        )
+        all_children = await _members()
     except (ValueError, TypeError) as exc:
         return "error", f"reverse_membership error: {exc}"
     if all_children:

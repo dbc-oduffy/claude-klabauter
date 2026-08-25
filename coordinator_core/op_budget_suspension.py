@@ -20,43 +20,86 @@ work up to the bound, and the op comes back next invocation to pay again. A dial
 lowered to 2s converts a 30s breach into fifteen 2s breaches. Off is the only
 disposition that returns the time.
 
-REINSTATEMENT — the whole point of the table, and the only path back:
-    An op earns its way back by PROVING it runs under 2s WITHOUT the warm engine
-    — cold interpreter, cold caches, under load — and the PM admits it to the
-    candidate build on klabauter. Warm-engine numbers do not discharge this: the
-    warm engine is what makes an over-budget op survivable, and reinstating on
-    warm numbers reinstates the defect with its evidence attached. Each op has a
-    spinoff carrying its own reinstatement case; `spinoff` names it.
+THERE IS NO REINSTATEMENT LANE, AND A ROW HERE IS DEAD, NOT PAUSED.
+    PM ruling, 2026-08-23, verbatim: *"kill means kill forever... rebuild from
+    scratch should be the norm."*
 
-    ON BOTH PLATFORMS, and this is one bar, not two. A case built on macOS
-    numbers alone does not discharge it, and neither does one built on Windows
-    numbers alone. Process creation — the dominant cost of every op in this table
-    — is far more expensive on Windows than on macOS, measured at roughly 50x for
-    the same work: `review_trail.write` reads p50 74.1ms / max 1484.5ms over
-    n=938 on one box's macOS sink and p50 3986.3ms / max 16558.8ms over n=108 in
-    the Windows measurement this table's own row carries. Both figures are
-    correct. A single-platform case therefore either under-reports the real cost
-    by that factor or condemns an op that is fine where it actually runs, and a
-    reader cannot tell which from the number alone.
+    ONE PM CARVE-OUT EXISTS, AND IT IS NOT A LANE. `review_trail.write` was
+    reinstated by PM ruling on 2026-08-23 -- verbatim: *"ok fine we can
+    reinstate this thing"* -- leaving this table with its implementation
+    intact. That is NOT an op earning its way back, which remains impossible.
+    It is the correction of a row that should never have been written.
+
+    Its suspension figures (p50 3986.3ms, max 16558.8ms, "96% breach rate over
+    108 invocations") are WALL CLOCK off the op-latency sink, and `CLAUDE.md`
+    § The brightline refuses wall clock as a cost measurement. Measured on
+    process time by `benchmarks/process_time.batched_process_time_ms`
+    (claude-klabauter-24, 2026-08-23, commits 060230992 / 5ffce81fc / bcba631b2):
+    212.5ms cold end-to-end concrete, 296.9ms symbolic, 46.9ms warm marginal --
+    under the 500ms brightline on every sample taken. It never met the kill bar
+    on the axis that governs, and 46% of its cold cost is its own module import
+    against 16% git, so it is not even the shape the bar targets.
+
+    Read this before writing a row off that sink: a suspension justified by
+    wall clock is not evidence, and the answer to one is to measure process
+    time, not to defend the row. The cost of this one standing was a real audit
+    surface -- no review was recordable fleet-wide while it held
+    (`state/bug-backlog/2026-08-23-review-trail-write-is-suspended-in-its-own-right-so-no-review-is-recordable-fleet-wide.yaml`).
+
+    This block previously described how a suspended op earns its way back by
+    proving the SAME implementation runs under 2s. That reading is retired, and
+    the reason is measured, not stylistic: it minted eighteen
+    `state/handoffs/2026-08-21-earn-*-back-under-2s-cold.md` batons whose
+    success condition was, by construction, a refactor of the code that had
+    already failed the bar. Yield, verbatim from one of them on 2026-08-23:
+    "7.9s wall / 1513ms process / 31 procs after four spawn cuts". Four rounds
+    of L-tier effort, still 3x over the only bar that governs.
+
+    What may follow a dead row is a REQUIREMENT, never the code. Exactly one
+    question is asked of it -- does anything still need this job done?
+
+        No  -> a gravestone. The row stays, the code is deleted, the matter is
+               closed forever. `artifact.emit` (CUT in full per PM, 2026-08-23)
+               is the worked example.
+        Yes -> a NEW plan, sized against the requirement in the PM's words,
+               spiked under DR-344 SS1-3, written from first principles. The
+               deleted implementation is not a starting point, not a reference,
+               and not a thing to be made incrementally cheaper. `git` retains
+               it; doctrine does not.
+
+    A row leaves this table when a NEW implementation clears 500ms, never when
+    the old one is tuned.
+
+    `SUSPENSION_BAR_MS` (2000ms) IS AN ADMISSION THRESHOLD, NOT A TARGET.
+    It answers "which ops were box-occupying enough to switch off on the spot",
+    and nothing else. It is 4x the brightline, so an op scored against it reads
+    as nearly-there while sitting 3x over the number that governs -- which is
+    exactly how a 20ms saving came to be reported as progress. Nothing is
+    designed, sized, accepted, or reported against 2000ms. DR-344 SS6: one bar,
+    and it is 500ms.
+
+    The measurement discipline below still binds every NEW implementation, and
+    is retained for that reason -- it was written at the seam where the
+    temptation to cite a friendly number is highest.
+
+    ON BOTH PLATFORMS, AND IT IS ONE BAR, NOT TWO. A case built on macOS numbers
+    alone does not discharge it, and neither does one built on Windows numbers
+    alone. Process creation -- the dominant cost of every op in this table -- is
+    far more expensive on Windows than on macOS, measured at roughly 50x for the
+    same work: `review_trail.write` reads p50 74.1ms / max 1484.5ms over n=938
+    on one box's macOS sink and p50 3986.3ms / max 16558.8ms over n=108 in the
+    Windows measurement this table's own row carries. Both figures are correct.
+    A single-platform case therefore either under-reports the real cost by that
+    factor or condemns an op that is fine where it actually runs, and a reader
+    cannot tell which from the number alone.
 
     What this is NOT: a per-platform threshold, a platform column in the roster,
     or a suspension that lifts on one OS and holds on another. PM ruling,
     2026-08-22: the bans stay until the ops are rebuilt to be performant on both
-    platforms, and an OS-aware ban mechanism was rejected outright — it is one
+    platforms, and an OS-aware ban mechanism was rejected outright -- it is one
     step from "this is fine on macOS, so un-ban it here", which converts a
     fleet-wide correctness bar into a local opt-out and leaves the op slow on
     Windows with nobody feeling it. The single uniform number is the feature.
-    This paragraph tightens the EVIDENCE a reinstatement case must carry; it
-    changes nothing about who the ban applies to, which is everyone.
-
-    That bar was UNSATISFIABLE for every op until 2026-08-22: macOS had no
-    instrument for spawn count or process time, so no case could ever carry
-    both halves, on any op, regardless of how it ran on Windows. This did NOT
-    make Windows-only evidence sufficient — it never was and still is not; the
-    bar was, and remains, one bar. What changed is that its macOS half now has
-    a sanctioned instrument: `coordinator_core/benchmarks/process_time.py ::
-    batched_process_time_ms`. A both-platforms case is now possible to build;
-    none has been.
 
     SPAWN COUNT IS THE LOAD-INVARIANT FIGURE, AND IT IS REQUIRED.
     A wall-clock number taken under load is mostly a measurement of this session's
@@ -167,15 +210,18 @@ Spec backlink: docs/decisions/DR-349-one-budget-governs-every-constructed-op.md
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+import math
+from typing import Dict, List, Optional
 
 __all__ = [
     "SUSPENSION_BAR_MS",
+    "OCCUPANCY_BAR_SECS",
     "SUSPENDED_OPS",
     "OpSuspendedError",
     "is_suspended",
     "suspension_record",
     "refusal_message",
+    "admitted_on",
 ]
 
 
@@ -218,86 +264,76 @@ SUSPENSION_BAR_MS = 2000.0
 # by carve-out: their max latencies (66-110ms) simply fit. A rule that needed an
 # exception for its own test fixtures would be the wrong rule.
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
-    "ceremony.scoped_git_commit": {
-        "measured": {"max_ms": 150021.1, "p50_ms": 30694.6, "n": 338},
-        "note": "Rode the 150s ceiling. Hourly p50 degraded 3-8s -> 85.4s over 2026-08-21. "
-                "n=338 is the BREACH population from `op_census.breaches` and is not this "
-                "op's invocation count: the same window read directly off op-latency gives "
-                "n=2668 and 30,266 box-seconds (8.4h), 1006 runs over 9.5s. Use the larger "
-                "figure for damage; a reinstatement still beats the max, not the count.",
-        "fallback": "Commit with plain `git commit`; the prepare-commit-msg hook "
-                    "attaches Deliverable-Id.",
-        "spinoff": "state/handoffs/2026-08-21-earn-ceremony-scoped-git-commit-back-und.md",
-    },
-    "ceremony.wsc_tail": {
-        "measured": {"max_ms": 220191.7, "p50_ms": 30015.6, "n": 12},
-        "note": "Worst single occupancy measured anywhere in the tree: 220s.",
-        "spinoff": None,
-    },
-    "session.sweep_consumed_handoffs": {
-        "measured": {"max_ms": 104963.8, "p50_ms": 30193.9, "n": 2},
-        "note": "The 30s ceiling is the operating point, not the tail.",
-        "spinoff": None,
-    },
-    "probes.fork_census": {
-        "measured": {"max_ms": 42367.5, "p50_ms": 42367.5, "n": 1},
-        "note": "Single invocation, 42s. Every invocation observed was a breach.",
-        "spinoff": None,
-    },
     "session.boot_sweep": {
         "measured": {"max_ms": 30016.6, "p50_ms": 30010.8, "n": 8},
         "note": "8/8 ended in caller_timeout at 30s.",
-        "spinoff": None,
-    },
-    "queue.close": {
-        "measured": {"max_ms": 30016.9, "p50_ms": 30016.9, "n": 1},
-        "note": "Ran to the ceiling on its only observed invocation.",
-        "spinoff": None,
-    },
-    "memo.send": {
-        "measured": {"max_ms": 30015.7, "p50_ms": 7133.5, "n": 20},
-        "note": "94% breach rate.",
-        "spinoff": None,
-    },
-    "fleet.archive_completed_plans": {
-        "measured": {"max_ms": 27940.0, "p50_ms": 807.3, "n": 3},
         "spinoff": None,
     },
     "fleet.archive_completed_handoffs": {
         "measured": {"max_ms": 26111.9, "p50_ms": 26111.9, "n": 1},
         "spinoff": None,
     },
-    "review_trail.write": {
-        "measured": {"max_ms": 16558.8, "p50_ms": 3986.3, "n": 108},
-        "note": "96% breach rate over 108 invocations.",
-        "spinoff": None,
-    },
-    "fleet.archive_actioned_memos": {
-        "measured": {"max_ms": 13054.5, "p50_ms": 10547.4, "n": 4},
-        "spinoff": None,
-    },
-    "op_census.report": {
-        "measured": {"max_ms": 11734.5, "p50_ms": 1662.1, "n": 3},
-        "note": "Subject to the bar it reports on.",
-        "spinoff": None,
-    },
-    "completion.reconcile_commits": {
-        "measured": {"max_ms": 7865.0, "p50_ms": 3374.3, "n": 26},
-        "note": "26/26 breached.",
-        "spinoff": None,
-    },
-    "hooks.track_touched_files": {
-        "measured": {"max_ms": 6939.7, "p50_ms": 11.1, "n": 3439},
-        "note": "Fires on every edit. 3439 invocations, trend worsening.",
-        "spinoff": None,
-    },
-    "testing.full_runner": {
-        "measured": {"max_ms": 4919.1, "p50_ms": 1963.3, "n": 2},
-        "note": "DR-349 names the test runner a carve-out; the carve-out is for the "
-                "RUN's duration, not for this op's own dispatch overhead.",
-        "spinoff": None,
-    },
 }
+
+
+# The second admission axis (staff-eng F6 / DR-349 addendum): an op that never
+# breaches SUSPENSION_BAR_MS on MAX can still hold the box for more cumulative
+# box-seconds than the whole roster combined, and the max-only criterion is blind
+# to it (C1's occupancy scan; state/audits/2026-08-23-the-op-table-against-both-
+# admission-criteria.md). `admitted_on` below is the SIGNATURE this plan lifts
+# ahead of the PM gate (C4's ratchet-completeness guard needs it to import NOW);
+# the ratified value is a C2-recommended, PM-ratified absolute box-seconds figure
+# and lands at C6 together with the admitted rows, in the same commit as the
+# roster change (the plan's one-commit constraint).
+#
+# `math.inf` is the placeholder, not a guess at the ratified number: it makes the
+# occupancy leg of `admitted_on` inert (nothing has infinite occupancy) rather
+# than silently admitting or excluding rows on a number nobody has ratified yet.
+# This is a ratchet exactly like `SUSPENSION_BAR_MS`: once C6 sets a finite value,
+# it may only be LOWERED, never raised back toward `math.inf`.
+OCCUPANCY_BAR_SECS: float = math.inf
+
+
+def admitted_on(max_observed_ms: float, occupancy_secs: float) -> List[str]:
+    """Which axis or axes admit an op onto the roster; `[]` means neither.
+
+    One predicate, stated once (this plan's own doctrine backlink,
+    `docs/wiki/computed-fact-in-prose-is-break-class.md`): emit a named field,
+    not prose asserting the same fact. An op is admitted if its windowed max
+    exceeds `SUSPENSION_BAR_MS`, or its box-seconds exceed `OCCUPANCY_BAR_SECS`,
+    or both — the return value names WHICH, as `["max"]`, `["occupancy"]`, or
+    `["max", "occupancy"]`, so a caller never re-derives the reason from the two
+    constants by hand.
+
+    IMPORTED, not cited, by three consumers (AC10) — C1's scan
+    (`op_census.occupancy_scan`, which populates the candidate list's
+    `admitted_on` field), and, in `tests/test_op_suspension_ratchet.py`, both
+    `test_roster_matches_most_recent_audit_content` (C4's ratchet-completeness
+    guard, checking the audit against the roster) and
+    `test_every_entry_carries_its_measured_evidence` (C4): a change to the rule
+    changes all three together. `OCCUPANCY_BAR_SECS` is a placeholder
+    (`math.inf`) until C6 ratifies it, so every caller of this predicate today
+    reads as max-only in practice — that is the correct behaviour of an unset
+    ratchet, not a bug to work around here.
+
+    *max_observed_ms* and *occupancy_secs* are the windowed figures from C1's
+    `op_census.occupancy_scan.OpOccupancy` (`max_observed_ms`, `occupancy_secs`)
+    — this module does not import that dataclass, to keep the predicate usable
+    from either direction without a circular import. `max_observed_ms` there is
+    typed `Optional[float]` (`None` when an op has zero complete rows in the
+    window); this predicate takes a plain `float` on purpose, so a caller MUST
+    coerce `None` before calling (`acc.max_observed_ms or 0.0`, as the live C1
+    call site does) — `None > SUSPENSION_BAR_MS` raises `TypeError` otherwise.
+    The plain-float shape is deliberate, not an oversight: accepting `Optional`
+    here would pin an import direction between this module and `op_census` that
+    the circular-import avoidance above exists to prevent.
+    """
+    reasons: List[str] = []
+    if max_observed_ms > SUSPENSION_BAR_MS:
+        reasons.append("max")
+    if occupancy_secs > OCCUPANCY_BAR_SECS:
+        reasons.append("occupancy")
+    return reasons
 
 
 def is_suspended(method: object) -> bool:
@@ -349,6 +385,6 @@ def refusal_message(method: str) -> str:
         f"{method} is off: measured max {max_ms:.0f}ms against a "
         f"{SUSPENSION_BAR_MS:.0f}ms bar. "
         + (f"{fallback} " if fallback else "")
-        + f"Prove it under {SUSPENSION_BAR_MS / 1000:.0f}s without the warm "
-        "engine to bring it back."
+        + "Killed, not suspended -- the old implementation does not come "
+        "back. If the job is still needed, plan a new one under 500ms."
     )

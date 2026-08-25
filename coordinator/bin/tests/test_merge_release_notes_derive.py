@@ -1,9 +1,9 @@
 """test_merge_release_notes_derive — pytest tests for
 merge-release-notes-derive.py (ported /merging-to-main Step 5.5 logic:
-pending-release reconcile sweep + tag-history release attribution walk).
+tag-history release attribution walk).
 
 Spec backlink: DoE-claude coordinator/skills/merging-to-main/SKILL.md
-  Step 5.5 items 2-3 (pre-port original, ported verbatim into this CLI).
+  Step 5.5 item 3 (pre-port original, ported verbatim into this CLI).
 
 Coverage:
   TestFlipTags:
@@ -21,12 +21,9 @@ Coverage:
       as a real subprocess over a scratch git repo with two entries, one
       resolving to an old tag and one falling through to the new cut tag.
 
-  TestReconcileSweep:
-    test_warns_on_nonzero_delta -- an entry with authored_by set and a
-      sibling reconcile-completion-commits.py stub reporting delta=2 emits
-      the "unaccounted session commit(s)" warning line.
-    test_silent_on_null_authored_by -- an entry with authored_by: null is
-      skipped (no sibling CLI invocation, no output).
+`TestReconcileSweep` (the `reconcile-sweep` subcommand's coverage) was
+removed 2026-08-23 along with `completion.reconcile_commits`, the op it
+dispatched — do not resurrect it before the op's replacement lands.
 """
 from __future__ import annotations
 
@@ -219,69 +216,6 @@ class TestFlipTags:
         assert result.returncode == 0, result.stderr
         assert f"{entry_old}: released_in=v1.0.0" in result.stdout
         assert f"{entry_new}: released_in=v2.0.0" in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# TestReconcileSweep — module-level with _run_sibling_cli monkeypatched
-# ---------------------------------------------------------------------------
-
-
-class _FakeCompleted:
-    def __init__(self, stdout: str):
-        self.stdout = stdout
-
-
-class TestReconcileSweep:
-    def test_warns_on_nonzero_delta(self, tmp_path: Path, monkeypatch, capsys):
-        entry = tmp_path / "entry.md"
-        entry.write_text(
-            "---\nstatus: pending-release\nauthored_by: session-abc\n---\nbody\n",
-            encoding="utf-8",
-        )
-
-        def _fake_run_sibling_cli(name, args):
-            if name == "query-completions.py":
-                return _FakeCompleted(str(entry) + "\n")
-            if name == "reconcile-completion-commits.py":
-                return _FakeCompleted("delta=2\n")
-            raise AssertionError(f"unexpected sibling CLI: {name}")
-
-        monkeypatch.setattr(_mod, "_run_sibling_cli", _fake_run_sibling_cli)
-
-        rc = _mod.cmd_reconcile_sweep(argparse_namespace())
-        captured = capsys.readouterr()
-        assert rc == 0
-        assert "entry.md" in captured.out
-        assert "2 session commit(s) unaccounted" in captured.out
-
-    def test_silent_on_null_authored_by(self, tmp_path: Path, monkeypatch, capsys):
-        entry = tmp_path / "entry.md"
-        entry.write_text(
-            "---\nstatus: pending-release\nauthored_by: null\n---\nbody\n",
-            encoding="utf-8",
-        )
-
-        calls = []
-
-        def _fake_run_sibling_cli(name, args):
-            calls.append(name)
-            if name == "query-completions.py":
-                return _FakeCompleted(str(entry) + "\n")
-            raise AssertionError("reconcile-completion-commits.py must not be invoked")
-
-        monkeypatch.setattr(_mod, "_run_sibling_cli", _fake_run_sibling_cli)
-
-        rc = _mod.cmd_reconcile_sweep(argparse_namespace())
-        captured = capsys.readouterr()
-        assert rc == 0
-        assert captured.out == ""
-        assert calls == ["query-completions.py"]
-
-
-def argparse_namespace():
-    import argparse
-
-    return argparse.Namespace()
 
 
 class TestContainsAllAbbreviatedShas:

@@ -17,7 +17,6 @@
   "health":             {"records": ["health"],                                                  "malformed": ["health"]},
   "decision_guides":    {"records": ["decision_guides"],                                          "malformed": ["decision_guides"]},
   "session_hierarchy":  {"records": ["session_hierarchies"],                                      "malformed": ["session_hierarchies"]},
-  "file_attribution":   {"records": ["file_attributions"],                                        "malformed": ["file_attributions"]},
   "initiatives":        {"records": ["initiatives"],                                              "malformed": ["initiatives"]},
   "exec_summary":       {"records": ["exec_summaries"],                                           "malformed": ["exec_summaries"]},
   "roadmap_dag":        {"records": ["roadmap_dag_nodes", "roadmap_dag_edges"],                   "malformed": ["roadmap_dag_nodes", "roadmap_dag_edges"]},

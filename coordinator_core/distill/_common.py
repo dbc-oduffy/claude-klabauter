@@ -350,10 +350,10 @@ SIDECAR_SUFFIXES = (
     ".node-map.md",
     ".phase0.md",
     ".v3-divergence-check.md",
-    ".the Staff Engineer-review.md",
+    ".patrik-review.md",
     ".sonnet-review.md",
     ".eng-director-review.md",
-    ".the Director of Engineering-review.md",
+    ".zoli-review.md",
 )
 """Process-scaffolding sidecar suffixes, full-suffix-anchored (matched via
 str.endswith against the full filename, e.g. "<stem>.review.md" — never a bare

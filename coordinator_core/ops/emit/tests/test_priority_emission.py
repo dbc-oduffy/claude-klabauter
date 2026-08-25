@@ -84,22 +84,33 @@ def _collect(
 
 
 def test_contract_version_carries_the_priority_ledger_bump() -> None:
-    """The priority-ledger fields ship on a MINOR bump above 3.3.0, never a major.
+    """The priority-ledger fields ship at or above 3.4.0 — they were never a major's payload.
 
-    Pinned as a floor rather than an equality: example-cockpit-repo's checkSchemaVersion
-    hard-throws on a major mismatch in either direction but tolerates
-    emission-minor-ahead on the same major, so what actually matters to the consumer
-    is that the major stays 3 and the minor moved past 3.3.0. An equality assertion
-    on the exact minor was pinned to 3.4.0 and broke the moment a later review
-    finding narrowed pm_priority's type — a shape change that legitimately earned
-    its own bump. That churn is the test being wrong about what it was protecting,
-    not the bump being wrong.
+    Pinned as a floor rather than an equality: an equality assertion on the exact
+    minor was pinned to 3.4.0 and broke the moment a later review finding narrowed
+    pm_priority's type — a shape change that legitimately earned its own bump. That
+    churn is the test being wrong about what it was protecting, not the bump being
+    wrong.
+
+    The floor used to carry a second clause, `major == 3`, justified as "a major bump
+    breaks cockpit's ingest either direction". That clause was a PROXY, and DR-353
+    retired the premise under it: cockpit-contract 4.0.0 drops `file_attribution`
+    deliberately, and cockpit's `checkSchemaVersion()` hard-throwing on the major IS
+    the intended signal to re-vendor, with cockpit's own ratified assent on record
+    (they ratified the DROP 2026-08-22, superseding DR-021). Keeping `major == 3`
+    would have frozen the contract at major 3 forever to protect a fact about the
+    priority-ledger fields that a whole-version floor already states exactly.
+
+    What this test protects is unchanged and is the only thing it ever protected: the
+    priority-ledger fields are not retro-classified below 3.4.0. It says nothing about
+    whether a later major is permitted — that is DR-353's question, not this test's.
     """
     from coordinator_core.contract.cockpit_schema.emit_schema import CONTRACT_VERSION
 
-    major, minor, _patch = (int(part) for part in CONTRACT_VERSION.split("."))
-    assert major == 3, f"major bump breaks cockpit's ingest either direction: {CONTRACT_VERSION}"
-    assert minor >= 4, f"priority-ledger fields require minor >= 4, got {CONTRACT_VERSION}"
+    version = tuple(int(part) for part in CONTRACT_VERSION.split("."))
+    assert version >= (3, 4, 0), (
+        f"priority-ledger fields require contract >= 3.4.0, got {CONTRACT_VERSION}"
+    )
 
 
 # ---------------------------------------------------------------------------

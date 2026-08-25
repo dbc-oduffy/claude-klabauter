@@ -1207,7 +1207,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     "posix_mode_bits": {
         REPO_CLAUDE_KLABAUTER: {
-            "coordinator/bin/tests/file-attribution/test_derive_file_attribution.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/hooks/test_em_report_altitude.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,

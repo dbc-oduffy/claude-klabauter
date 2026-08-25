@@ -3,12 +3,11 @@ coordinator_core.ops.scratchpad_sweep — op "scratchpad.sweep": reclaim dead
 harness scratchpad directories under the OS temp root.
 
 Purpose: every dispatched-agent session gets a scratchpad directory under
-``<tempdir>/claude/<project-slug>/<session-uuid>/scratchpad`` (see
-``coordinator_core/probes/fork_census.py``'s module docstring, whose "deleted
-with the scratchpad" aside is NOT a property this codebase implements —
-nothing on this machine has ever reclaimed it). Measured 2026-08-10: 58,624
-files / ~11.7 GB across 23 project trees, the oldest session dir resident
-since 2026-07-20.
+``<tempdir>/claude/<project-slug>/<session-uuid>/scratchpad``. Harness prose
+has long claimed such directories are "deleted with the scratchpad" when a
+session ends — that is NOT a property this codebase implements; nothing on
+this machine has ever reclaimed it. Measured 2026-08-10: 58,624 files / ~11.7
+GB across 23 project trees, the oldest session dir resident since 2026-07-20.
 
 Two-gate deletion contract:
     1. Liveness — the owning session must be DEAD, per

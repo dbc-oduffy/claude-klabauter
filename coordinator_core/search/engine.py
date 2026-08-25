@@ -66,7 +66,27 @@ from coordinator_core.search.regex_translate import translate as _translate_patt
 #: call -- unbounded work here does not merely slow one command, it wedges the session.
 #: These are correctness-relevant, not defensive garnish: exceeding one is what flips an
 #: answer into a refusal when a downstream stage cannot tolerate truncation.
-MAX_WALL_SECONDS = 2.5
+#:
+#: MAX_PROCESS_SECONDS is measured against `time.process_time()` (this process's own
+#: user+system CPU time), never wall clock. `time.perf_counter()` -- what this constant
+#: was checked against before -- is wall clock, the instrument CLAUDE.md forbids for
+#: exactly this reason ("process time and spawn count, never wall clock -- wall clock
+#: measures peer load"): under the box's normal 50-70 concurrent sessions, a wall-clock
+#: cap fires EARLIER the busier the box is, truncating answers that would have completed
+#: and charging this search for load it did not cause. Observed live on this box: an
+#: ordinary two-term grep returned "2500ms ... truncated at the time-cap" under load that
+#: never touched the CPU this search itself consumed.
+#:
+#: `benchmarks.process_time.batched_process_time_ms` is NOT reused here -- that module
+#: measures a SPAWNED subprocess tree's rusage from the parent (job object / kevent
+#: reap), a different question from this call's own in-process CPU consumption.
+#: `time.process_time()` answers this call's question directly, with no subprocess to
+#: attach to.
+#:
+#: 500ms is DR-344's brightline (`docs/decisions/DR-344-the-brightline-process-budget-
+#: for-claude-klabauter.md` -- "process its entire job in 500ms end-to-end, including under an
+#: [everyday] load"), not a preserved fraction of the old 2.5s wall-clock number.
+MAX_PROCESS_SECONDS = 0.5
 MAX_FILES_SCANNED = 20000
 MAX_MATCH_LINES = 2000
 MAX_RENDER_BYTES = 48_000
@@ -159,8 +179,121 @@ class Stage:
 
 
 @dataclass
-class AnswerPlan:
+class SourceOutcome:
+    """One source's own execution outcome -- the generalized successor to a bare
+    `SearchResult` (C3). Every field a source-type-specific fact must feed is named
+    here explicitly, so `answer._render` never has to branch on source identity to
+    decide what to print.
+
+    `lines`: line-list representation, always present -- used whenever a downstream
+      stage is applied (`cat f | wc -l` is genuinely line-shaped) or a source has no
+      raw-text representation of its own (grep).
+    `raw_text`: exact bytes-as-text with terminators preserved (final-newline
+      presence, CRLF, ...), or None for a source with no such representation. Used
+      ONLY for a stage-free source whose deliverable is verbatim bytes (a bare
+      `cat f`) -- round-tripping that through `lines` and rejoining with `"\n"`
+      cannot reproduce a missing final newline or a CRLF terminator.
+    `truncated`: whether a hot-path cap cut this source's own output short, BEFORE
+      any downstream stage or render-cap clip. Interacts with
+      `Stage.needs_complete_input` identically for every source kind -- a truncated
+      result feeding an aggregating/tail-reading stage is a confidently wrong
+      answer regardless of source (`answer.answer` owns that shared check).
+    `cap_hit`: which cap tripped `truncated`, or None -- grep-specific vocabulary a
+      read source never populates (nothing to say if it never truncates).
+    `note`: fully rendered, source-specific provenance text -- grep vocabulary
+      (`files_scanned`, `elapsed_ms`) stays inside the source that produced it, per
+      `_render`'s own contract (C3): it appends whichever note the source built,
+      never constructs one itself.
+    `empty_body_text`: what `_render` prints in place of an EMPTY body -- grep's is
+      "(no matches)" (this IS search vocabulary and does not apply to a read: `cat
+      empty.txt` prints nothing, not "(no matches)"); a read source's is "".
+    """
+
+    lines: List[str]
+    raw_text: Optional[str]
+    truncated: bool
+    cap_hit: Optional[str]
+    note: str
+    empty_body_text: str
+
+
+class Source:
+    """Source protocol (C3): the shared shape every answerable command class
+    implements so the stage pipeline, the cap policy, and the footer-first
+    ordering contract stay genuinely shared while grep vocabulary and read
+    vocabulary each stay inside their own implementation.
+
+    Duck-typed rather than an ABC -- a concrete implementation (`GrepSource` here,
+    `answer.ReadSource` in the answer-assembly module, which cannot import this
+    module's own downstream `sources_read` without a cycle) need only provide these
+    three methods with these signatures:
+
+      `execute(cwd, stop_after) -> SourceOutcome` -- run the source, or raise
+        `Unanswerable`/`OSError` to decline.
+      `clip(body) -> (str, bool)` -- apply this source's OWN render-cap policy to
+        the fully-assembled body (post-stages). A search may clip-with-caveat
+        (returns `(clipped_body, True)`); a read must decline outright on the same
+        condition (raises `Unanswerable`) -- see `answer.ReadSource.clip`'s
+        docstring for why that divergence is deliberate, not an oversight.
+      `finalize_note(note_base, cap_hit, truncated, clipped) -> str` -- fold the
+        execution outcome's truncation/clip facts into the note text, in this
+        source's OWN vocabulary.
+    """
+
+    def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:  # pragma: no cover
+        raise NotImplementedError
+
+    def clip(self, body: str) -> Tuple[str, bool]:  # pragma: no cover
+        raise NotImplementedError
+
+    def finalize_note(self, note_base: str, cap_hit: Optional[str], truncated: bool,
+                       clipped: bool) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+
+@dataclass
+class GrepSource(Source):
+    """`Source` implementation wrapping a parsed grep-family invocation. Folds
+    `files_scanned`/`cap_hit` into ITS OWN note text -- grep vocabulary stays here,
+    never leaking into `answer._render` (C3)."""
+
     spec: SearchSpec
+
+    def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:
+        result = run(self.spec, cwd=cwd, stop_after=stop_after)
+        note = (
+            "[searched in-process: %d file(s), %.0fms, no subprocess spawned]"
+            % (result.files_scanned, result.elapsed_ms)
+        )
+        return SourceOutcome(
+            lines=result.lines,
+            raw_text=None,
+            truncated=result.truncated,
+            cap_hit=result.cap_hit,
+            note=note,
+            empty_body_text="(no matches)",
+        )
+
+    def clip(self, body: str) -> Tuple[str, bool]:
+        """A clipped SEARCH result is still an honest answer with a caveat -- a
+        search never declines outright on the render cap alone (C3)."""
+        if len(body) <= MAX_RENDER_BYTES:
+            return body, False
+        return body[:MAX_RENDER_BYTES].rsplit("\n", 1)[0], True
+
+    def finalize_note(self, note_base: str, cap_hit: Optional[str], truncated: bool,
+                       clipped: bool) -> str:
+        if truncated or clipped:
+            note_base += (
+                "\n[truncated at the %s -- narrow it with --include='*.py' or a "
+                "tighter path to see the rest]" % (cap_hit or "render cap")
+            )
+        return note_base
+
+
+@dataclass
+class AnswerPlan:
+    source: Source
     stages: List[Stage]
 
     @property
@@ -601,6 +734,39 @@ def _expand_targets(targets: Sequence[str], cwd: str) -> List[str]:
     return resolved
 
 
+#: Metacharacters that make a read-source operand something other than a plain,
+#: literal filename. Brace is included here (unlike `_GLOB_METACHARS` above) because
+#: a read source declines on a glob/brace operand outright rather than expanding it
+#: -- see `resolve_plain_path_operand`.
+_GLOB_OR_BRACE_METACHARS = ("*", "?", "[", "{")
+
+
+def resolve_plain_path_operand(operand: str, cwd: str) -> str:
+    """Resolve one path operand the way a file-read source (cat/head/tail/sed -n)
+    must: relative operands join against `cwd`, absolute operands pass through
+    unchanged -- matching `_expand_targets`'s own absolute-operand handling, since
+    there is no cwd-confinement to reuse (`_expand_targets` has none either; grep
+    the module for `commonpath`/`realpath`). Declines on any glob/brace
+    metacharacter or a path that is not an existing, readable regular file.
+
+    Deliberately NOT the same policy as `_expand_targets`: that function EXPANDS
+    an unquoted glob operand, because the shell would have expanded it before grep
+    ever ran and a glob is exactly what real grep receives on that argv position.
+    A read source's real command (`cat a*.txt`) never resolves that way either --
+    the shell expands it into a list `cat` then reads in expanded order, which
+    this seam has no shell to perform -- so it declines on the metacharacter
+    instead of guessing an expansion, per the read-source contract (C1).
+    """
+    if any(ch in operand for ch in _GLOB_OR_BRACE_METACHARS):
+        raise Unanswerable("glob/brace operand %r not supported" % operand)
+    base = operand if os.path.isabs(operand) else os.path.join(cwd, operand)
+    if not os.path.isfile(base):
+        raise Unanswerable("operand %r is not a readable regular file" % operand)
+    if not os.access(base, os.R_OK):
+        raise Unanswerable("operand %r is not readable" % operand)
+    return base
+
+
 def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> SearchResult:
     """Execute a SearchSpec in-process, honoring the module's hot-path caps."""
     rx = compile_spec(spec)
@@ -648,7 +814,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
     # (F4). Crossing a file boundary always breaks adjacency, which falls out for free
     # here because `shown` changes.
     last_group: Optional[Tuple[str, int]] = None
-    started = time.perf_counter()
+    started = time.process_time()
 
     def budget_exhausted() -> bool:
         nonlocal truncated, cap_hit
@@ -658,9 +824,15 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
         if files_scanned > MAX_FILES_SCANNED:
             truncated, cap_hit = True, "file-cap"
             return True
-        if time.perf_counter() - started > MAX_WALL_SECONDS:
-            truncated, cap_hit = True, "time-cap"
-            return True
+        if time.process_time() - started > MAX_PROCESS_SECONDS:
+            # DECLINE, not truncate: match-cap/file-cap bound a legitimate result
+            # SIZE the agent can narrow with --include or a tighter path -- the time
+            # budget bounds this call's own COST, and a search that is already this
+            # expensive in-process is exactly the shape real grep (a separate process,
+            # off this hook's own budget) should run instead. Truncating here would
+            # serve a confidently partial answer while still having spent the full
+            # budget, on a path that gates every Bash call in the session.
+            raise Unanswerable("search exceeded the %.1fs process-time budget" % MAX_PROCESS_SECONDS)
         return False
 
     def scan(path: str, shown: str) -> bool:
@@ -709,12 +881,13 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                         break
                 if idx - checked_at >= _WALL_CHECK_STRIDE:
                     checked_at = idx
-                    if time.perf_counter() - started > MAX_WALL_SECONDS:
-                        # A partial count would be a confidently wrong number -- omit
-                        # this file's line entirely rather than print one, same as the
-                        # match-cap path below does for render mode.
-                        truncated, cap_hit = True, "time-cap"
-                        return False
+                    if time.process_time() - started > MAX_PROCESS_SECONDS:
+                        # DECLINE (see budget_exhausted's own comment): a partial
+                        # count would be a confidently wrong number, and this search
+                        # is already too expensive in-process to keep going.
+                        raise Unanswerable(
+                            "search exceeded the %.1fs process-time budget" % MAX_PROCESS_SECONDS
+                        )
             out.append("%s:%d" % (shown, count) if show_name else str(count))
             return True
 
@@ -733,9 +906,11 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                     break
             if idx - checked_at >= _WALL_CHECK_STRIDE:
                 checked_at = idx
-                if time.perf_counter() - started > MAX_WALL_SECONDS:
-                    truncated, cap_hit = True, "time-cap"
-                    break
+                if time.process_time() - started > MAX_PROCESS_SECONDS:
+                    # DECLINE (see budget_exhausted's own comment).
+                    raise Unanswerable(
+                        "search exceeded the %.1fs process-time budget" % MAX_PROCESS_SECONDS
+                    )
         if not hits:
             return True
 
@@ -765,8 +940,6 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
             # file -- stop entirely rather than silently moving on to the next file
             # having only rendered a prefix of this one's matches.
             return False
-        if cap_hit == "time-cap" and truncated:
-            return False
         return True
 
     for target in targets:
@@ -793,7 +966,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                 break
 
     return SearchResult(out, files_scanned, truncated, cap_hit,
-                        (time.perf_counter() - started) * 1000)
+                        (time.process_time() - started) * 1000)
 
 
 def _merge_windows(hits: List[Tuple[int, str]], before: int, after: int,

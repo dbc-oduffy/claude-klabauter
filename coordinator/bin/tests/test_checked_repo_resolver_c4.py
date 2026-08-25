@@ -10,11 +10,15 @@ chunk names its own test module; see the plan's "Dispatch shape" note).
 
 Scope: the five near-verbatim copies this chunk repointed --
   - emit-cockpit-snapshot.py (WRITER)
-  - reconcile-completion-commits.py (WRITER)
   - coordinator-tasks-mirror.py (WRITER)
   - coordinator-write-review-trail.py (WRITER)
   - verify-orientation-cache-sync.py (READER -- reclassified post-C8: no
     write path exists in this trampoline or the op it dispatches into)
+
+`reconcile-completion-commits.py` (WRITER)'s coverage was removed 2026-08-23
+along with `completion.reconcile_commits`, the op it dispatched, and the
+trampoline itself -- do not resurrect this class before the op's replacement
+lands with its own resolver repoint.
 
 AC10's load-bearing assertion for this group: a wrong-repo (MISMATCH) case
 proves NO artifact is written -- asserted on the ABSENCE of the write
@@ -213,47 +217,6 @@ class TestEmitCockpitSnapshot(_RepoIdentityHarness):
 
         root = mod._resolve_repo_root()
         self.assertEqual(root, str(repo_root.resolve()))
-
-
-class TestReconcileCompletionCommits(_RepoIdentityHarness):
-    def _make_entry(self, tmp_path: Path) -> Path:
-        entry = tmp_path / "entry.md"
-        entry.write_text(
-            "---\nstatus: pending-release\ncommits: []\n---\nbody\n",
-            encoding="utf-8",
-        )
-        return entry
-
-    def test_mismatch_refuses_before_op_dispatch(self):
-        tmp_path = self._mkdtemp()
-        self._setup_mismatch(tmp_path, "sess-recon-mm", 7002)
-        entry = self._make_entry(tmp_path)
-        mod = _load_module("reconcile-completion-commits.py")
-
-        called = {"n": 0}
-        self._setattr(mod.cc_invoke, "route_mutation", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
-
-        rc = mod.main(["--session-id", "sess-recon-mm", str(entry)])
-        self.assertEqual(rc, 2)
-        self.assertEqual(called["n"], 0, "the op must never be dispatched on MISMATCH")
-
-    def test_unresolved_still_dispatches(self):
-        tmp_path = self._mkdtemp()
-        self._setup_unresolved(tmp_path)
-        entry = self._make_entry(tmp_path)
-        mod = _load_module("reconcile-completion-commits.py")
-
-        called = {"n": 0}
-
-        def _fake_route_mutation(*a, **k):
-            called["n"] += 1
-            return {"merge_base_unresolved": True}
-
-        self._setattr(mod.cc_invoke, "route_mutation", _fake_route_mutation)
-
-        rc = mod.main(["--session-id", "sess-recon-unres", str(entry)])
-        self.assertEqual(rc, 0)
-        self.assertEqual(called["n"], 1, "the op must still be dispatched on UNRESOLVED")
 
 
 class TestCoordinatorTasksMirror(_RepoIdentityHarness):

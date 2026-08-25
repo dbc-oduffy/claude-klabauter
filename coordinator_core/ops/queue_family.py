@@ -24,15 +24,9 @@ Negative-spec:
     three families and their field tables below are the closed set.
 
 Import cost for spawn-per-call callers: this module lives under
-``coordinator_core.ops``, whose ``__init__`` eagerly imports every op module to
-populate the registry by default — ~70ms a fresh CLI process pays without ever
-dispatching an op. A caller that only wants this read seam sets
-``sys._coordinator_core_lazy_ops = True`` before its first
-``coordinator_core.ops`` import (see that package's ``_lazy_ops_requested``);
-``load_family_records`` needs no registry and is unaffected. Measured 94ms ->
-26ms on macOS/CPython 3.13. Not ``os.environ["COORDINATOR_CORE_LAZY_OPS"]`` —
-that variable is the operator override, and writing it in-process hands the
-flag to every child the caller later spawns, which is the 2026-07-28 leak.
+``coordinator_core.ops``, whose ``__init__`` registers ops lazily by default —
+package import no longer walks every op module body to populate the registry.
+``load_family_records`` needs no registry and pays only its own import cost.
 """
 
 from __future__ import annotations

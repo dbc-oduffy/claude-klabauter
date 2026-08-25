@@ -39,7 +39,7 @@ from coordinator_core.ipc import register_op
 # where a future update to _slug.machine_slug would not propagate to recorder's private copy.
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.ops.emit.context import EmitContext
-from coordinator_core.ops.emit.envelope import resolve_context
+from coordinator_core.ops.emit.resolvers import resolve_context
 
 # Backlog subdirs counted per repo, mapped to the row field they populate.
 # state/<subdir>/*.yaml (non-archived) -> row[field].

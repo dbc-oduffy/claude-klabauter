@@ -45,7 +45,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.fleet import _common
 from coordinator_core.ops.fleet._common import (
     EMPTY_TREE_SHA,
     Move,
@@ -180,8 +179,16 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
     dst = root / "cross-repo" / "archive" / src.name
     move = Move(src=src, dst=dst, candidate_id="cross-repo/inbox/" + src.name)
 
-    original = _common.asyncio.create_subprocess_exec
-    _common.asyncio.create_subprocess_exec = _exec_losing_the_index
+    # Patch `asyncio` ITSELF, not `_common.asyncio`. `_common` imports asyncio
+    # inside each function that spawns (module-scope `import asyncio` dragged
+    # asyncio.base_events into every warm-engine boot, ~8ms — see the comment
+    # at that import), so `_common.asyncio` is not a module attribute and
+    # reaching for it raised AttributeError, leaving this guard dead rather
+    # than failing on its own subject. A function-local import resolves
+    # through `sys.modules`, so swapping the attribute here is what the code
+    # under test actually sees.
+    original = asyncio.create_subprocess_exec
+    asyncio.create_subprocess_exec = _exec_losing_the_index
     try:
         acted, failed = _run(
             archive_and_commit(
@@ -191,7 +198,7 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
             )
         )
     finally:
-        _common.asyncio.create_subprocess_exec = original
+        asyncio.create_subprocess_exec = original
 
     assert acted == [], "nothing may be reported as archived when the commit was refused"
     assert len(failed) == 1

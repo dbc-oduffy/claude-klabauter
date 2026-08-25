@@ -68,34 +68,39 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        reconciliation — this is a disk-truth-over-stale-plan-text call, not
        a silent scope cut.
     3. `directives_completion.build_reconcile_completion_commits_directive`
-       emits `d-reconcile-completion-commits` with a LITERAL, unresolved
-       inter-directive token in its args (`RECONCILE_ENTRY_PATH_TOKEN`,
-       `"{d-complete-entry.entry_path}"`) in place of the real completion-
-       entry path, which `d-complete-entry` (its `depends_on` producer)
-       only knows at RUN time (that CLI's own idempotency guard, LoE
-       computation, and today's-date filename derivation all happen
-       in-process — see `directives_completion.py`'s module docstring,
-       Design note 3). `workday_complete.apply`/`workweek_complete.apply`
-       already solve the general "thread a producer's runtime output into
-       a later directive" problem via `stdin_from` (pipe a producer's
-       captured stdout into a consumer's stdin) — but
-       `reconcile-completion-commits.py` takes its entry-path as a
-       POSITIONAL ARGUMENT, not stdin content (confirmed by reading that
-       CLI: it never touches `sys.stdin`), so `stdin_from` cannot express
-       this directive's actual need. This module extends the family's own
-       idiom rather than inventing a new templating language: `_invoke_cli_
-       main` captures stdout exactly as the stdin_from family already does
-       (mirrors `workday_complete.apply._invoke_cli_main`'s `stdout_buf`
-       capture), and `_resolve_arg_tokens` (below) substitutes a
-       `{<producer-id>.entry_path}` token in a directive's `args` with the
-       FIRST LINE of that producer's captured stdout — matching
+       — REMOVED (completion.reconcile_commits kill, 2026-08-23): its CLI,
+       `coordinator/bin/reconcile-completion-commits.py`, is deleted, and
+       `directives_completion.py` no longer builds `d-reconcile-completion-
+       commits`. What follows is retained as history, since the general
+       `{<producer-id>.entry_path}`/`.landed`/`.argv` arg-token mechanism it
+       motivated remains live infrastructure (`_resolve_arg_tokens` below),
+       now unused pending a fresh consumer. This directive used to emit a
+       LITERAL, unresolved inter-directive token in its args
+       (`RECONCILE_ENTRY_PATH_TOKEN`, `"{d-complete-entry.entry_path}"`) in
+       place of the real completion-entry path, which `d-complete-entry`
+       (its `depends_on` producer) only knew at RUN time (that CLI's own
+       idempotency guard, LoE computation, and today's-date filename
+       derivation all happen in-process — see `directives_completion.py`'s
+       module docstring, Design note 3). `workday_complete.apply`/
+       `workweek_complete.apply` already solve the general "thread a
+       producer's runtime output into a later directive" problem via
+       `stdin_from` (pipe a producer's captured stdout into a consumer's
+       stdin) — but `reconcile-completion-commits.py` took its entry-path
+       as a POSITIONAL ARGUMENT, not stdin content, so `stdin_from` could
+       not express that directive's need. This module extended the
+       family's own idiom rather than inventing a new templating language:
+       `_invoke_cli_main` captures stdout exactly as the stdin_from family
+       already does (mirrors `workday_complete.apply._invoke_cli_main`'s
+       `stdout_buf` capture), and `_resolve_arg_tokens` (below) substitutes
+       a `{<producer-id>.entry_path}` token in a directive's `args` with
+       the FIRST LINE of that producer's captured stdout — matching
        `coordinator-complete-entry.py`'s own single-line `print(entry_path)`
        contract (`coordinator_core/ops/coordinator_complete_entry.py:726`).
        An unresolvable token (producer never landed this pass, landed with
        no stdout, or any `{...}` token this function doesn't recognize
-       survives substitution) fails the directive loud into `report["failed"]`
-       — see `_resolve_arg_tokens` — it is NEVER dispatched with the literal
-       token string as a live argument.
+       survives substitution) still fails the directive loud into
+       `report["failed"]` — see `_resolve_arg_tokens` — it is NEVER
+       dispatched with the literal token string as a live argument.
 
        Defect C fix (same plan, chunk C1): an `already_satisfied` directive
        is registered in `stdout_by_id` with `""` (empty string) the moment
@@ -110,19 +115,21 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        honest "landed but captured no stdout to resolve its {entry_path}
        token from" rather than the dishonest "did not land" message.
     4. `directives_commit_tail.build_release_plan_claim_directive`/
-       `build_emit_cadence_directive` set `depends_on="d-run-wsc-tail"` —
+       `build_emit_cadence_directive` — both REMOVED (ceremony.wsc_tail
+       kill, 2026-08-23) — used to set `depends_on="d-run-wsc-tail"` —
        a sibling-directive id, which `_directive_gate_open` deliberately
        does not gate on (see that function's docstring: gating a
        directive-id dependency there would route a failed producer into
        `HALTED_AT_JUDGMENT`, a state no disposition can ever clear).
-       Neither directive's CLI needs a VALUE from `d-run-wsc-tail`'s
-       output, so the `.entry_path` token shape doesn't fit — but each
-       still needs to refuse to dispatch when the commit-tail producer
+       Neither directive's CLI needed a VALUE from `d-run-wsc-tail`'s
+       output, so the `.entry_path` token shape didn't fit — but each
+       still needed to refuse to dispatch when the commit-tail producer
        never landed this pass (blocked at a judgment point, or failed).
-       `_resolve_arg_tokens`'s `.landed` field (below) covers exactly this
-       case: an ordering-only token that substitutes to the empty string
-       once its producer is confirmed landed, otherwise fails the
-       directive loud the same way `.entry_path` does.
+       `_resolve_arg_tokens`'s `.landed` field (below) covered exactly this
+       case, and remains live infrastructure for a future producer/consumer
+       pair with the same need: an ordering-only token that substitutes to
+       the empty string once its producer is confirmed landed, otherwise
+       fails the directive loud the same way `.entry_path` does.
 
 No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
 provenance-write-time-closure-gate.md, chunk C13): before dispatching any
@@ -297,20 +304,21 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 WorkstreamApplyExitCode = build_ceremony_halt_exit_codes("WorkstreamApplyExitCode")
 
-#: The four "legacy" Convert #2 CLI names the C4 plan body names by hand —
+#: The "legacy" Convert #2 CLI names the C4 plan body names by hand —
 #: still individually correct, still `CONSUMES_MANIFEST` members, but no
-#: longer the whole manifest (see module docstring, deviation 2). Kept as a
-#: named constant (not inlined) purely so a future reader can grep for
-#: exactly the four the plan text called out, without this module treating
-#: them as an exhaustive dispatch boundary.
+#: longer the whole manifest (see module docstring, deviation 2). Originally
+#: four; `wsc-tail` was REMOVED (ceremony.wsc_tail kill, 2026-08-23 — the
+#: trampoline it named is deleted). Kept as a named constant (not inlined)
+#: purely so a future reader can grep for exactly the ones the plan text
+#: called out, without this module treating them as an exhaustive dispatch
+#: boundary.
 _LEGACY_CONVERT2_CLI_NAMES: tuple[str, ...] = (
     "wsc-coverage-gate-runner",
     "check-workstream-complete-deletion-blocks",
     "wsc-close",
-    "wsc-tail",
 )
 assert set(_LEGACY_CONVERT2_CLI_NAMES) <= set(CONSUMES_MANIFEST), (
-    "workstream_complete.apply: the four legacy Convert #2 CLI names must "
+    "workstream_complete.apply: the legacy Convert #2 CLI names must "
     "remain a subset of CONSUMES_MANIFEST (C1's single oracle for the "
     "tuple) — if this fails, either a name was renamed on the manifest "
     "side or this module's own pinned constant drifted from it"
@@ -511,8 +519,9 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
 #:     readiness for a directive-id dependency is this module's own
 #:     concern, and a directive with nothing to thread still needs a way
 #:     to express it.
-#:   - `.argv` — a WHOLE-ARG, list-expanding token (`directives_commit_
-#:     tail.build_wsc_tail_directive`'s `"{d-close-tail-args.argv}"`):
+#:   - `.argv` — a WHOLE-ARG, list-expanding token (formerly `directives_
+#:     commit_tail.build_wsc_tail_directive`'s `"{d-close-tail-args.argv}"`,
+#:     removed in the ceremony.wsc_tail kill, 2026-08-23):
 #:     every non-blank line of the producer's captured stdout becomes its
 #:     own element of the consumer's resolved argv, in order. Only legal
 #:     when it is the ENTIRE arg string — splicing a multi-token list into
@@ -538,7 +547,8 @@ _ARGV_TOKEN_RE = re.compile(r"^\{([A-Za-z0-9_-]+)\.argv\}$")
 #: the identifier grammar `_ARG_TOKEN_RE` actually implements
 #: (`{name}` or `{name.field}`) rather than "any brace-delimited span":
 #: a serialized JSON payload (e.g. `directives_commit_tail.
-#: build_close_tail_args_directive`'s `--review-slice <json>`) is
+#: build_close_tail_args_directive`'s `--review-slice <json>`, that
+#: builder removed in the ceremony.wsc_tail kill, 2026-08-23) is
 #: brace-delimited but contains quotes, colons, and spaces, so it can
 #: never match this pattern — that is the point, it was never a token
 #: candidate to begin with. The one deliberate residual: a braced span

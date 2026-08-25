@@ -1388,7 +1388,7 @@ class TestBuildJsonRecord:
     def test_workstream_slug_double_quoted(self):
         """workstream slug → double-quoted string in JSON output."""
         record = _build_json_record(
-            sha_range="a..b", reviewer="the Staff Engineer", scope="session",
+            sha_range="a..b", reviewer="patrik", scope="session",
             scope_kind="plan", verdict="ok", diff_loc=5,
             session_id="sess0001", workstream="my-workstream",
         )

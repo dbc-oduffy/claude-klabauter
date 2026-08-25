@@ -37,6 +37,12 @@ OP_MODULE_MAP: Dict[str, str] = {
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",
+    # decision_record.mint_id / decision_record.release_id — one module registers
+    # both ops, same shared-value shape as the hooks.* / spec_backlink.* blocks.
+    # Spec: state/improvement-queue/2026-08-23-nothing-allocates-dr-numbers-so-a-
+    # plan-s-7aa417a58bce.yaml
+    "decision_record.mint_id":                "coordinator_core.ops.decision_record_mint",
+    "decision_record.release_id":             "coordinator_core.ops.decision_record_mint",
     "handoff.has_live_children":              "coordinator_core.ops.handoff_children",
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
     # peer_notice.send / peer_notice.check — same-repo peer-contention notice channel
@@ -51,7 +57,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
-    "op_census.report":                       "coordinator_core.ops.op_census_report",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
@@ -91,11 +96,11 @@ OP_MODULE_MAP: Dict[str, str] = {
     "goal.close_day_apply":                   "coordinator_core.ops.goal_close_day",
     "goals.reassess_krs":                     "coordinator_core.goals.reassess_krs",
     "orientation.regenerate_cache":            "coordinator_core.orientation.regenerate_cache",
-    "fleet.archive_completed_plans":          "coordinator_core.ops.fleet.archive_plans",
+    "session.boot_sweep":                     "coordinator_core.ops.session.boot_backstop",
+    "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.work_state":                       "coordinator_core.ops.fleet.work_state",
     "fleet.record_history":                   "coordinator_core.ops.fleet.record_history",
-    "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",
     "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
@@ -132,10 +137,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
     "queue.age_ping":                         "coordinator_core.ops.queue_age_ping",
     "queue.append":                           "coordinator_core.ops.queue_append",
-    "queue.close":                            "coordinator_core.ops.queue_close",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",
-    "memo.send":                              "coordinator_core.ops.fleet.memo_send",
     "memo.list":                              "coordinator_core.ops.fleet.memo_list",
     "memo.draft":                             "coordinator_core.ops.fleet.memo_draft",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
@@ -156,7 +159,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
-    "ceremony.wsc_tail":                      "coordinator_core.ops.ceremony.wsc_tail",
     "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
     "ceremony.session_instructions":          "coordinator_core.ops.ceremony.session_instructions",
     "records.query":                          "coordinator_core.ops.records_query",
@@ -168,19 +170,15 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.inject_anchor":                "coordinator_core.ops.changelog_ops",
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",
-    "completion.reconcile_commits":           "coordinator_core.ops.completion_ops",
     "plan.append_session":                    "coordinator_core.ops.completion_ops",
     "review_trail.write":                     "coordinator_core.ops.review_trail_write",
     "review_trail.readjudication_report":     "coordinator_core.ops.review_trail_readjudication_report",
     "fleet.archive_shipped_handoffs":         "coordinator_core.ops.fleet.archive_shipped_handoffs",
-    "fleet.archive_actioned_memos":           "coordinator_core.ops.fleet.archive_actioned_memos",
     "fleet.backfill_dispositionless_memos":   "coordinator_core.ops.fleet.backfill_memo_disposition",
     "fleet.reap_unintegrated_findings":       "coordinator_core.ops.fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings":         "coordinator_core.ops.fleet.reap_integrated_findings",
     "session.reap":                           "coordinator_core.ops.session.reap",
     "session.reap_claims_for_repos":          "coordinator_core.ops.session.reap",
-    "session.boot_sweep":                     "coordinator_core.ops.session.boot_sweep",
-    "session.sweep_consumed_handoffs":        "coordinator_core.ops.session.sweep_consumed_handoffs",
     "session.guard_settings_integrity":       "coordinator_core.ops.session.guard_settings_integrity",
     "session.guard_hooks_kill_switch_detail": "coordinator_core.ops.session.guard_settings_integrity",
     "session.record_pickup":                  "coordinator_core.ops.session.record_pickup",
@@ -202,7 +200,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plugin_health.scan":                     "coordinator_core.plugin_health.scan",
     "plugin_health.sentinel":                 "coordinator_core.plugin_health.sentinel",
     "plugin_health.forwarder_drift":          "coordinator_core.plugin_health.forwarder_drift",
-    "probes.fork_census":                     "coordinator_core.probes.fork_census",
     "cartography.tree":                       "coordinator_core.ops.cartography_tree",
     "cartography.file_index":                 "coordinator_core.ops.cartography_file_index",
     "cartography.churn":                      "coordinator_core.ops.cartography_churn",
@@ -224,7 +221,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "strategic.emit":                         "coordinator_core.ops.strategic_emit",
     "handoff.reconcile_open":                 "coordinator_core.ops.handoff_reconcile",
     "handoff.close_origin_stub":              "coordinator_core.ops.handoff_close_origin_stub",
-    "testing.full_runner":                    "coordinator_core.ops.testing_full_runner",
     "session_hierarchy.derive":               "coordinator_core.ops.session_hierarchy_derive",
     "session_ledger.aggregate_chain_loe":     "coordinator_core.session_ledger.aggregate_chain_loe",
     "deferral.detect_orphan_memo":             "coordinator_core.ops.deferral_detect_orphan_memo",
@@ -278,7 +274,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ci.run_semgrep_scan":                    "coordinator_core.ops.run_semgrep_scan",
     "ci.run_shellcheck_sweep":                "coordinator_core.ops.run_shellcheck_sweep",
     "review_trail.scan_unresolved_ubt":       "coordinator_core.ops.scan_unresolved_ubt_records",
-    "ceremony.scoped_git_commit":             "coordinator_core.ops.ceremony.scoped_git_commit",
     "findings.self_persist_fallback":         "coordinator_core.ops.self_persist_findings",
     "review.snapshot_diff_and_head":          "coordinator_core.ops.ceremony.snapshot_diff_and_head",
     "review.freeze_diff":                     "coordinator_core.ops.review_freeze_diff",
@@ -352,3 +347,30 @@ OP_MODULE_MAP: Dict[str, str] = {
     "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
     "eol.repair":                              "coordinator_core.ops.eol.repair",
 }
+
+
+def resolves(op_key: str) -> bool:
+    """True when `op_key` is DISPATCHABLE right now: it either has a lazy-import
+    entry in OP_MODULE_MAP (dispatch_message can import its owning module on a
+    registry miss) or it is already live in coordinator_core.ipc._REGISTRY
+    (already registered, e.g. under eager-import mode or after a prior
+    dispatch). This is a weaker claim than `"x" in _REGISTRY`: that proves "x is
+    registered right now"; `resolves("x")` proves "x is dispatchable" -- true
+    even with an empty _REGISTRY, since a mapped miss still resolves via lazy
+    import. It is NOT a substitute for a registry read where the assertion's
+    subject is registry state itself (an empty-registry proof, or a
+    binding-identity check of which callable is bound) -- see
+    docs/plans/2026-08-22-the-import-path-costs-nothing.md § C3 for the two
+    excluded assertion classes.
+
+    `ipc` is imported locally, not at module scope, to preserve this module's
+    dotted-path-strings-only load-time contract (see module docstring) --
+    resolves() is a test/inspection helper, not part of the hot dispatch path.
+
+    Spec backlink: docs/plans/2026-08-22-the-import-path-costs-nothing.md § C3
+    """
+    if op_key in OP_MODULE_MAP:
+        return True
+    from coordinator_core import ipc
+
+    return op_key in ipc._REGISTRY

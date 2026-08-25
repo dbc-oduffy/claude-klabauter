@@ -57,6 +57,16 @@ import yaml
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
 _NAMED_TEAMMATE_RE = re.compile(r"^a.+-[a-f0-9]{16}$")
 
+#: EM-side canonical teammate id — the grammar the back-pointer DIRECTORY is
+#: actually keyed by. Taken from the three writers that mint that key, not from
+#: observed samples: ``hooks.track_dispatched_agents._TEAMMATE_AGENT_RE``,
+#: ``hooks.track_touched_files._TEAMMATE_CANONICAL_RE``, and
+#: ``write_guards._subagent_identity._TEAMMATE_CANONICAL_RE`` — all three
+#: identical, and the last one is what ``normalize_teammate_agent_id`` rewrites
+#: through immediately before ``.agents/<agent_id>/`` is created. Deliberately
+#: NOT wider than those: this reader accepts exactly what the writers produce.
+_TEAMMATE_CANONICAL_RE = re.compile(r"^[A-Za-z0-9_.-]+@session-[a-z0-9-]+$")
+
 #: em-session-id.txt back-pointer content format guard (reference hook line 186).
 _SESSION_ID_FORMAT_RE = re.compile(r"^[a-zA-Z0-9_-]{3,}$")
 
@@ -421,21 +431,56 @@ def resolve_git_root(cwd: Optional[str] = None) -> Optional[str]:
 def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
     """Port of ``resolve_subagent_identity`` + the F4 session_id-absent fallback.
 
-    Accepts both bare-hex unnamed-agent ids (``^[a-f0-9]{12,}$``) and named
-    teammate ids (``^a.+-[a-f0-9]{16}$``). For the named form, the back-pointer
-    dir is normally keyed by a session_id-resolved value; when ``session_id``
-    is absent from the payload, the reference hook falls back to keying on the
-    RAW ``agent_id`` itself (lines 118-126) — a distinct leg from the
-    session_id-present resolution, ported verbatim here (the Staff Engineer F4). Returns
-    ``""`` if the raw id matches neither accepted form.
+    Accepts three forms, all returned unchanged — this function is a format
+    predicate, not a transform:
+
+    (a) bare-hex unnamed-agent ids (``^[a-f0-9]{12,}$``);
+    (b) subagent-side raw named-teammate ids (``^a.+-[a-f0-9]{16}$``);
+    (c) EM-side canonical teammate ids (``<name>@session-<short>``).
+
+    (c) is the form a NAMED dispatch actually presents on this path, and the
+    form ``.agents/<agent_id>/`` is keyed by — see ``_TEAMMATE_CANONICAL_RE``
+    for the writers it is taken from. Without it every named dispatch returned
+    ``""`` here, so ``resolve_effective_types`` skipped the back-pointer leg on
+    its ``if agent_id and git_root:`` guard and the teammate's true
+    ``subagent_type`` never resolved. That leg fails CLOSED downstream
+    (``bash_guards.block_reviewer_bash_outside_allowlist`` Divergence 15
+    confines a roster-absent type), so the symptom was over-confinement and
+    lost catering, never a bypass.
+
+    Adding (c) does NOT loosen the confinement-bypass posture documented on
+    ``_read_backpointer_subagent_type``: the guard against a fabricated
+    back-pointer is that function's ``expected_em_session_id`` parameter, which
+    ``resolve_effective_types`` still deliberately leaves unset. Tightening it
+    remains a separate decision.
+
+    For the named forms the back-pointer dir is normally keyed by a
+    session_id-resolved value; when ``session_id`` is absent from the payload,
+    the reference hook falls back to keying on the RAW ``agent_id`` itself
+    (lines 118-126) — a distinct leg from the session_id-present resolution,
+    ported verbatim here (the Staff Engineer F4). Returns ``""`` if the raw id matches no
+    accepted form.
+
+    All three legs use ``fullmatch``, never ``match``. Python's ``$`` (outside
+    ``re.MULTILINE``) also matches immediately before a single trailing
+    newline, so ``match`` accepted ``"<id>
+"`` for the two older predicates —
+    an id that then keys a ``.agents/<id>
+/`` directory no writer creates.
+    Same gap, same fix, same reasoning as
+    ``coordinator_core.session.identity._format_ok`` (review: code-reviewer
+    nit); closed here for the same reason, and flagged by the review of the
+    commit that added the canonical leg.
     """
-    if _NAMED_TEAMMATE_RE.match(raw_agent_id):
+    if _TEAMMATE_CANONICAL_RE.fullmatch(raw_agent_id):
+        return raw_agent_id
+    if _NAMED_TEAMMATE_RE.fullmatch(raw_agent_id):
         if session_id:
             return raw_agent_id
         # session_id-absent named-teammate fallback (the Staff Engineer F4): key on the
         # raw agent_id itself rather than a session_id-resolved value.
         return raw_agent_id
-    if _BARE_HEX_RE.match(raw_agent_id):
+    if _BARE_HEX_RE.fullmatch(raw_agent_id):
         return raw_agent_id
     return ""
 

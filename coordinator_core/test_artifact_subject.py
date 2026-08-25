@@ -26,7 +26,7 @@ def test_claude_klabauter_install_script_is_engine():
 
 def test_coordinator_commands_install_is_doctrine():
     assert (
-        classify("plugins/coordinator/commands/install.md")
+        classify("plugins/coordinator-claude/coordinator/commands/install.md")
         == Subject.DOCTRINE
     )
 
@@ -86,11 +86,11 @@ def test_fleet_spine_emitter_binding_raises_with_remediation():
 @pytest.mark.parametrize(
     "path",
     [
-        "plugins/coordinator/skills/handoff/SKILL.md",
+        "plugins/coordinator-claude/coordinator/skills/handoff/SKILL.md",
         "docs/plans/2026-07-04-update-state-placement-law-wiki.md",
-        "plugins/coordinator/hooks/block-blanket-git-add.sh",
+        "plugins/coordinator-claude/coordinator/hooks/block-blanket-git-add.sh",
         "CLAUDE.md",
-        "plugins/coordinator/agents/code-reviewer.md",
+        "plugins/coordinator-claude/coordinator/agents/code-reviewer.md",
     ],
 )
 def test_clear_doctrine_cases(path):
@@ -118,7 +118,7 @@ def test_clear_engine_cases(path):
 # ---------------------------------------------------------------------------
 def test_coordinator_plugin_mcp_server_wiki_is_doctrine_not_engine():
     path = (
-        "plugins/coordinator/docs/wiki/mcp-server-configuration.md"
+        "plugins/coordinator-claude/coordinator/docs/wiki/mcp-server-configuration.md"
     )
     assert classify(path) == Subject.DOCTRINE
 
@@ -132,7 +132,7 @@ def test_docs_wiki_mcp_server_is_doctrine_not_engine():
 # ---------------------------------------------------------------------------
 def test_skills_repo_setup_is_doctrine():
     assert (
-        classify("plugins/coordinator/skills/repo-setup/SKILL.md")
+        classify("plugins/coordinator-claude/coordinator/skills/repo-setup/SKILL.md")
         == Subject.DOCTRINE
     )
 

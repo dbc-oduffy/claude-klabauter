@@ -528,6 +528,46 @@ class TestCheckRegistrationQuadCompleteness:
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
+    # C5 (2026-08-22-the-import-path-costs-nothing) -- premise correction: this
+    # chunk originally expected retiring the discovery apparatus to remove
+    # _EAGER_OP_MODULES, making commit_tripwires.py:658's import fail and the
+    # fast path fall through to check_registration_quad() every time. C6 keeps
+    # _eager_import_all() as the registry-miss fallback, and _EAGER_OP_MODULES
+    # is the table that function iterates, so the table -- and this import --
+    # survive untouched. This test pins that against the LIVE module (no
+    # monkeypatch on _EAGER_OP_MODULES) using a real registered op, proving
+    # the fifth surface stays populated and the fast path still fires.
+    def test_fifth_surface_import_resolves_live_and_fast_path_fires(self, tmp_path, monkeypatch):
+        import coordinator_core.ops as ops_module
+        import coordinator_core.authz.classification as classification_module
+        import coordinator_core.op_scopes as op_scopes_module
+        import coordinator_core.ops._registry_map as registry_map_module
+        import coordinator_core.authz.registration_quad as registration_quad_module
+
+        assert hasattr(ops_module, "_EAGER_OP_MODULES")
+        eager_module_paths = frozenset(mp for mp, _note in ops_module._EAGER_OP_MODULES)
+        assert eager_module_paths, "the fifth surface must not be empty post-C6"
+
+        # Pick a real op key complete on all five surfaces off the live tables.
+        live_op_key = next(
+            k
+            for k, mp in registry_map_module.OP_MODULE_MAP.items()
+            if k in classification_module.OP_CLASSIFICATION
+            and k in op_scopes_module._OP_KEY_SCOPE
+            and mp in eager_module_paths
+        )
+
+        root = _init_repo(tmp_path)
+        _stage_op_file(root, "coordinator_core/ops/fake_live_fifth_surface_op.py", live_op_key)
+        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
+
+        def _boom():
+            raise AssertionError("fast path should short-circuit before the full walk")
+
+        monkeypatch.setattr(registration_quad_module, "check_registration_quad", _boom)
+
+        assert commit_tripwires.check_registration_quad_completeness(root) is None
+
     # Review: code-reviewer (Finding 1) -- proves the gate now denies an op
     # complete on OP_CLASSIFICATION/_OP_KEY_SCOPE/OP_MODULE_MAP but missing
     # only from _EAGER_OP_MODULES -- the exact live gap (roadmap.link_stubs,

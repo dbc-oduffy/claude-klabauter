@@ -677,6 +677,137 @@ def read_trailer_value(
     return None
 
 
+_CLOSES_LINE_RE = re.compile(r"^Closes:\s*(.+?)\s*$")
+_REVERT_LINE_RE = re.compile(
+    r"^This reverts commit ([0-9a-fA-F]{7,40})\.?\s*$"
+)
+
+
+def _split_paragraphs(text: str) -> List[List[str]]:
+    """Split `text` into paragraphs -- runs of non-blank lines separated by
+    one-or-more blank lines. A leading/trailing run of blank lines produces
+    no empty paragraph."""
+    paragraphs: List[List[str]] = []
+    current: List[str] = []
+    for line in text.splitlines():
+        if line.strip() == "":
+            if current:
+                paragraphs.append(current)
+                current = []
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append(current)
+    return paragraphs
+
+
+def _paragraph_is_trailer_shaped(paragraph: List[str]) -> bool:
+    """True iff every line of `paragraph` is either a `Token: value` line or
+    a continuation line (leading whitespace) -- the same per-line predicate
+    `_extract_trailer_block` applies to git's own last-paragraph trailer
+    block, reused here to widen the bound (see `_trailing_region_lines`)."""
+    return all(
+        _TRAILER_LINE_RE.match(line) or _TRAILER_CONT_RE.match(line)
+        for line in paragraph
+    )
+
+
+def _trailing_region_lines(text: str) -> List[str]:
+    """Return the lines of `text`'s TRAILING REGION: the last paragraph
+    (always included, whatever its shape -- this is what admits a `git
+    revert`-style "This reverts commit <sha>." paragraph, which is not
+    itself trailer-shaped), plus every paragraph immediately preceding it,
+    walking backward, that is entirely trailer-shaped (per
+    `_paragraph_is_trailer_shaped`) -- stopping at the first paragraph
+    (scanning backward) that is not.
+
+    This is the bound named in this module's own commit_trailers.py C1
+    supersession of DECISION-2 (docs/plans/2026-07-17-commit-closure-
+    emission-fact.md): reading raw, line-anchored text is what defeats
+    git's last-paragraph trailer-demotion rule (a `Closes:` line separated
+    from a trailing `Commit-Token:` block by a blank line, e.g. built from
+    successive `-m` args, still counts), while this bound is what keeps a
+    quoted/embedded prior commit message elsewhere in the body -- separated
+    from the trailing region by an ordinary (non-trailer-shaped) paragraph
+    -- from being scanned at all. A quoted trailer-shaped paragraph sitting
+    DIRECTLY adjacent to the real trailing region is a named, accepted
+    hazard (not a defect this bound is meant to close -- see this module's
+    C1 dispatch brief).
+
+    Returns `[]` for an empty (or all-blank) `text`.
+    """
+    paragraphs = _split_paragraphs(text)
+    if not paragraphs:
+        return []
+
+    region: List[str] = list(paragraphs[-1])
+    for paragraph in reversed(paragraphs[:-1]):
+        if _paragraph_is_trailer_shaped(paragraph):
+            region = paragraph + region
+        else:
+            break
+    return region
+
+
+def extract_closure_facts_from_text(text: str) -> "tuple[List[str], Optional[str]]":
+    """Extract closure facts from an already-in-hand commit message `text`
+    (C1, commit-closure-pipe-carries-rows): the message's `Closes:` values,
+    normalized to item_ids via `ops.emit.closure_trailer.parse_closure_
+    trailers` (the existing normalizer -- never hand-rolled item-id
+    parsing here), and any `This reverts commit <sha>` line's sha.
+
+    Deliberately reads the RAW message text, line-anchored -- never git's
+    parsed trailer block (`_extract_trailer_block`/`git interpret-trailers`)
+    -- bounded to `_trailing_region_lines`'s trailing region so a quoted or
+    embedded message elsewhere in the body cannot contribute a false
+    `Closes:`/revert line (see that function's own docstring for the full
+    reasoning and named hazard).
+
+    A `Closes:` line's value is passed through `parse_closure_trailers`
+    UNNORMALIZED-first (as the raw trailer value), same shape that
+    function already expects from C3's git-native extraction -- multiple
+    `Closes:` lines each contribute their own value, in message order; a
+    value `parse_closure_trailers`'s pattern table rejects (not ID-shaped)
+    is silently dropped by that normalizer, same as it already is for the
+    git-native extraction path.
+
+    Returns `([], None)` for text carrying neither -- never raises.
+    """
+    region_lines = _trailing_region_lines(text)
+
+    raw_closes_values: List[str] = []
+    reverts_sha: Optional[str] = None
+    for line in region_lines:
+        closes_match = _CLOSES_LINE_RE.match(line)
+        if closes_match:
+            raw_closes_values.append(closes_match.group(1))
+            continue
+        if reverts_sha is None:
+            revert_match = _REVERT_LINE_RE.match(line)
+            if revert_match:
+                reverts_sha = revert_match.group(1)
+
+    from coordinator_core.ops.emit.closure_trailer import parse_closure_trailers
+
+    closes = parse_closure_trailers(raw_closes_values)
+    return closes, reverts_sha
+
+
+def extract_closure_facts(
+    commit_msg_file: Union[str, Path]
+) -> "tuple[List[str], Optional[str]]":
+    """File-reading counterpart to `extract_closure_facts_from_text`, for a
+    caller holding `commit_msg_file` rather than the message text itself --
+    same degrade-gracefully contract as `_has_trailer_line`/`read_trailer_
+    value` above: any read failure returns `([], None)`, never raises."""
+    try:
+        with open(commit_msg_file, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return [], None
+    return extract_closure_facts_from_text(text)
+
+
 def compute_missing_trailer_args(
     commit_msg_file: Union[str, Path],
     cwd: Union[str, Path],

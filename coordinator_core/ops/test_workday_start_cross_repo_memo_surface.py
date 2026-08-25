@@ -14,7 +14,6 @@ import io
 import os
 import subprocess
 from contextlib import redirect_stdout
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -456,14 +455,12 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch)
         "created: 2026-05-22\nstatus: actioned",
     )
 
-    from coordinator_core.ops.fleet import archive_actioned_memos as archive_mod
-
-    mock = MagicMock(
-        side_effect=AssertionError(
-            "archival must never run from this read-only surface op (C14)"
-        )
-    )
-    monkeypatch.setattr(archive_mod, "archive_actioned_memos_internal", mock)
+    # Prior to 2026-08-23, this also monkeypatched
+    # `coordinator_core.ops.fleet.archive_actioned_memos.archive_actioned_memos_internal`
+    # to an AssertionError-raising mock — belt-and-braces against the C14 regression.
+    # That module was killed outright 2026-08-23 (PM ruling, no replacement op), so the
+    # patch target no longer exists; the git-log assertion below is now the sole guard
+    # that `main()` performs no archival mutation.
     monkeypatch.delenv("CROSS_REPO_INBOX_DIR", raising=False)
     monkeypatch.chdir(repo)
 
@@ -472,7 +469,6 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch)
         rc = main([])
 
     assert rc == 0
-    mock.assert_not_called()
 
     log = subprocess.run(
         ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True

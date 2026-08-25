@@ -44,7 +44,7 @@ practice: `item_project` is 0..n across the fleet and this process has no
 guaranteed checkout of the item's repo.
 
 `reachable_on_default_branch` is a tri-state, mirroring
-`coordinator_core.ops.emit.envelope`'s `_stamp_shipped_sha` tri-state
+`coordinator_core.ops.emit.resolvers`'s `_stamp_shipped_sha` tri-state
 discipline rather than inventing a new one: `True` means checked and
 reachable, `False` means checked and NOT reachable, `None` means not
 checked (indeterminate). `None` degrades to `"suggest"`, NEVER to a false

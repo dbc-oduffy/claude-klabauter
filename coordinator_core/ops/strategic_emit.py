@@ -4,7 +4,7 @@ coordinator_core.ops.strategic_emit — JSON-RPC "strategic.emit" operation.
 Purpose: the claude-klabauter engine op that emits the curated strategic self-description canonical
 (`<target_root>/state/strategic/self-description.yaml`) into a standalone
 `strategic-emission.json` feed — the SIBLING of `cockpit-emission.json`
-(coordinator_core/ops/emit/envelope.py:569), NOT a section inside it (PM-ratified
+(coordinator_core/ops/emit/resolvers.py:569), NOT a section inside it (PM-ratified
 2026-07-12 route decision: the closed cockpit-contract envelope schema forecloses adding a
 strategic array without a DoE contract change + re-vendor; this op emits a separate feed that
 reuses rag's ProvenanceEnvelope record shape instead). This is the emit sibling of

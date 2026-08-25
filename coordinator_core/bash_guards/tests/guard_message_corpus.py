@@ -1825,6 +1825,26 @@ def _wg_consumed_handoff_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     }
 
 
+def _wg_duplicate_decision_record_id_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Two `docs/decisions/*.md` files claiming the same `id:` -- absolute
+    paths anchored at `scratch_dir` (unlike `_wg_consumed_handoff_fire`
+    above, this guard does its own disk I/O of sibling files rather than
+    matching on a path string, so it must not depend on the test process's
+    real cwd)."""
+    decisions = scratch_dir / "docs" / "decisions"
+    decisions.mkdir(parents=True, exist_ok=True)
+    (decisions / "DR-1-first.md").write_text("---\nid: DR-1\n---\n", encoding="utf-8")
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(decisions / "DR-1-duplicate.md"),
+            "content": "---\nid: DR-1\n---\n",
+        },
+    }
+
+
 def _wg_memory_store_cap_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     home = scratch_dir / "home"
     mem = home / ".claude" / "projects" / "-Some-project" / "memory"
@@ -2412,6 +2432,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_completion_monolith_write", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),
     WriteGuardRow("block_consumed_handoff_edit", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_duplicate_decision_record_id",
+        "fire",
+        True,
+        _wg_duplicate_decision_record_id_fire,
+    ),
+    WriteGuardRow("block_duplicate_decision_record_id", "control", False, _wg_benign),
     WriteGuardRow(
         "bump_out_of_repo_tool_write",
         "control",

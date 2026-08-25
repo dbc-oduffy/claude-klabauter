@@ -550,7 +550,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     and a repo that appears later in the process still resolves.
 
     Deferred import of the seam is deliberate, but not for import cost: measured
-    under both eager and COORDINATOR_CORE_LAZY_OPS=1 import modes, `subprocess`
+    under lazy op registration (the only mode), `subprocess`
     and this seam module are already in `sys.modules` after a bare import of
     this module (`from coordinator_core.ipc import register_op` pulls in
     `lifecycle` -> `git` -> `git.repo_root`, which imports `subprocess` at

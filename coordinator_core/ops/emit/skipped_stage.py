@@ -129,7 +129,7 @@ _PRIOR_CACHE: dict[str, Optional[dict]] = {}
 
 def _prior_emission_path(ctx: Any) -> Path:
     """Return the canonical emission path for *ctx* — the reuse source, never ``out``."""
-    from coordinator_core.ops.emit.envelope import DEFAULT_OUTPUT_NAME
+    from coordinator_core.ops.emit.resolvers import DEFAULT_OUTPUT_NAME
 
     return Path(ctx.central_state_root) / DEFAULT_OUTPUT_NAME
 

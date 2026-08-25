@@ -33,6 +33,13 @@ own Layer-1 decision exactly, not a re-derivation:
   - ``stable_pid`` present with at least one witness -> Layer 1 engages ->
     not F0-exposed -> not a miss (regardless of whether the process is
     actually alive — aliveness is not this watch's question).
+  - No ``meta.json`` at all, but a ``touched.txt`` in the same dir (C4,
+    2026-08-22) -> a genuine session left no record whatsoever, so Layer 1
+    provably never engaged -> MISS (reason ``no_meta_json``) — closes the
+    gap where a session moved entirely out of "meta.json present,
+    unstamped" into "no meta.json at all" would otherwise fall out of this
+    watch's denominator and read CLEAN while the exposed population grows.
+    A dir with NEITHER file is still not counted (unrelated hub debris).
 
 Cost constraint (cadence-path, non-negotiable per CLAUDE.md § Load norm): NO
 process spawns, NO corpus walk beyond the session dirs themselves. One
@@ -86,7 +93,7 @@ def scan_stable_pid_misses(
         {
           "status": STATUS_MISS | STATUS_CLEAN | STATUS_EMPTY,
           "checked": int,
-          "misses": [{"session": <dirname>, "reason": "empty" | "no_witness" | "unreadable"}],
+          "misses": [{"session": <dirname>, "reason": "empty" | "no_witness" | "unreadable" | "no_meta_json"}],
           "summary": <one-line human string>,
         }
 
@@ -120,8 +127,20 @@ def scan_stable_pid_misses(
     for sdir in entries:
         meta_path = sdir / "meta.json"
         if not meta_path.is_file():
-            # No meta.json at all is not a session record (e.g. a stray
-            # non-session subdirectory under the hub) — not counted.
+            # No meta.json at all is normally not a session record (e.g. a
+            # stray non-session subdirectory under the hub) — not counted.
+            # EXCEPT a dir carrying `touched.txt` (2026-08-22, C4,
+            # docs/plans/2026-08-22-track-touched-files-pays-only-for-the-
+            # append.md): that file is this repo's own signal that a
+            # session genuinely ran here, so a meta.json-less dir bearing
+            # one is NOT "not a session record" — it is exactly the
+            # population this watch exists to keep visible. Conservatively
+            # counted as a miss (this module's own contract, see the
+            # "unreadable" branch below) rather than silently dropped from
+            # the denominator, which is the AC8 gap this branch closes.
+            if (sdir / "touched.txt").is_file():
+                checked += 1
+                misses.append({"session": sdir.name, "reason": "no_meta_json"})
             continue
         checked += 1
         try:

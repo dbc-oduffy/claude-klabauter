@@ -3866,25 +3866,6 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "test_python_api_single_record::test_archive_stamp_verbs_take_exactly_one_handoff",
         "fast",
     ),
-    # --- `reconcile-completion-commits.py` takes exactly one entry path (fast tier) ---
-    # One oracle, four callers. The prose register carried this claim four separate times, once
-    # per site, each written independently and each unverifiable.
-    ("coordinator/bin/workday-complete-reconcile.py", "run_completion_reconcile", "_run_reconcile_append"): (
-        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
-        "fast",
-    ),
-    ("coordinator/bin/workday-start-reconcile-sweep.py", "run_sweep", "_run_reconcile_helper"): (
-        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
-        "fast",
-    ),
-    ("coordinator/bin/workweek-complete-close.py", "run_reconcile_sweep", "_run_reconcile_helper"): (
-        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
-        "fast",
-    ),
-    ("coordinator/bin/merge-release-notes-derive.py", "cmd_reconcile_sweep", "_run_sibling_cli"): (
-        "test_sibling_cli_single_record::test_reconcile_completion_commits_takes_one_entry_path",
-        "fast",
-    ),
     # --- act-time TOCTOU rechecks: the property, not a description of it (fast tier) ---
     #: Both files already batch the CLASSIFICATION pass; what remains is the recheck fired
     #: immediately before `unlink()`. Any hoist lands before the first unlink and widens exactly

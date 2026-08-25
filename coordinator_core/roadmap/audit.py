@@ -140,6 +140,9 @@ from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.roadmap.spine import (  # noqa: F401 -- re-exported
+    read_spine,
+)
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.win_portability import same_path
 
@@ -526,25 +529,6 @@ def _detect_cycles(
 # ---------------------------------------------------------------------------
 
 
-def read_spine(spine_path: Path) -> Optional[Dict[str, Any]]:
-    """Read and parse `state/roadmap/<run-id>/SPINE.md`'s frontmatter.
-
-    Uses `coordinator_core.frontmatter.schema_validate.parse_frontmatter`
-    (full YAML, not the hand-rolled mapping-only parser in `coordinator_core.
-    dag`) — spine.schema.json's `sprints[]`/`cross_sprint_edges[]` are
-    nested list-of-dict shapes the mapping-only parser is not built to
-    reach. Returns None if the file is absent, unreadable, or does not
-    parse as a `kind: roadmap-spine` record — never raises.
-    """
-    try:
-        text = spine_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    parsed = parse_frontmatter(text)
-    fm = parsed.get("frontmatter")
-    if not isinstance(fm, dict) or fm.get("kind") != "roadmap-spine":
-        return None
-    return fm
 
 
 def _find_sprint_descriptor(spine: Dict[str, Any], sprint_id: str) -> Optional[Dict[str, Any]]:

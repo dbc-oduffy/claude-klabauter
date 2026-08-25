@@ -1,112 +1,40 @@
 """
-coordinator_core.ops.completion_ops — in-place mutators for completion-entry commits
-reconciliation and plan session appending.
+coordinator_core.ops.completion_ops — in-place mutators for completion-entry
+release state and plan session appending.
 
-Purpose: Port of two completion/plan ceremony writers:
-  completion.reconcile_commits ← reconcile-completion-commits.sh (DoE 432e3285, 2026-07-22)
-                                  (--append mode write logic)
-  plan.append_session          ← append-plan-session.sh (DoE 2737ca3d, 2026-07-19)
+Purpose: hosts ``plan.append_session`` (a byte-parity port of
+``append-plan-session.sh``, DoE 2737ca3d, 2026-07-19), ``completion.flip_to_released``,
+and ``day_coverage_sweep`` — plus the ``commits:`` YAML-list parsing shared by the
+latter two. ``completion.reconcile_commits`` (the module's original third op) was
+killed and rebuilt from scratch per PM ruling, 2026-08-23; do not resurrect its
+handler, ``resolve_chain_commits``, or the chain-widening helpers it alone used.
 
-Each mutates a caller-supplied entry in-place:
-  - ``completion.reconcile_commits``: folds missing session SHAs into a completion entry's
-    ``commits:`` YAML list (idempotent: already-present SHAs are skipped). The entry lives
-    under ``archive/completed/**/*.md`` (empirical production noun — 61 confirmed
-    ``status: pending-release`` entries, 0 under ``docs/plans/``) or ``docs/plans/``
-    (DR-216's originally-stated noun, kept as a conservative superset); the guard permits both.
-  - ``plan.append_session``: appends a session-tracking entry to the plan's
-    ``agent_sessions:`` YAML list (idempotent: same session_id → no-op). Confined to
-    ``docs/plans/<plan>.md`` (correct and confirmed noun for this op).
-  (Review: code-reviewer — Finding 8, module docstring flatly asserted docs/plans/ for both
-  ops without qualifying reconcile_commits' real production shape.)
+``plan.append_session`` appends a session-tracking entry to the plan's
+``agent_sessions:`` YAML list (idempotent: same session_id → no-op). Confined to
+``docs/plans/<plan>.md``.
 
 Content-additive in-place ONLY (DR-216 D2(iii)): NEVER rewrites, reorders, or deletes
 existing plan content. Read-modify-write to a temp file + atomic ``os.replace`` (DR-216 D3).
 
-Byte-parity targets (``--append`` mode write logic only):
-  completion.reconcile_commits:
-    ``reconcile-completion-commits.sh`` (DoE 432e3285, 2026-07-22, awk write pass)
-  plan.append_session:
-    ``append-plan-session.sh`` (DoE 2737ca3d, 2026-07-19, mapfile/printf write pass)
+Byte-parity target: ``append-plan-session.sh`` (DoE 2737ca3d, 2026-07-19,
+mapfile/printf write pass).
 
 MUTATING ops (DR-208 §2): write coordinator substrate directly — ``archive/completed/**/*.md``
-or ``docs/plans/*.md`` completion sections (see per-op noun table above). NEVER writes
-``state/handoffs/``, ``archive/handoffs/``, ``state/`` queue subdirs, rag's relational
-store, or any path outside the caller-supplied plan file (DR-216 D2(iv)/D4 noun
-confinement). No git commit from handlers (DR-216 D2(v)). Blocking FS I/O wrapped via
-``asyncio.to_thread`` (DR-216 D3).
+(``completion.flip_to_released``) or ``docs/plans/*.md`` completion sections
+(``plan.append_session``). NEVER writes ``state/handoffs/``, ``archive/handoffs/``,
+``state/`` queue subdirs, rag's relational store, or any path outside the
+caller-supplied plan/entry file (DR-216 D2(iv)/D4 noun confinement). No git commit
+from handlers (DR-216 D2(v)). Blocking FS I/O wrapped via ``asyncio.to_thread``
+(DR-216 D3).
 
 Caller ``repo_root`` threading: handler third arg receives ``git_common_dir(caller_worktree)``
 via ``_OP_KEY_SCOPE: common_dir`` (ipc.py). Plan path is always a caller-supplied absolute
 path parameter — the op does NOT derive it from ``repo_root`` (``plan_path`` is DR-216's noun,
-not ``state/``). Both handlers enforce the empty-path guard (DR-216 D2(iv) minimum) AND a
+not ``state/``). The handler enforces the empty-path guard (DR-216 D2(iv) minimum) AND a
 containment guard (op-family path-containment sweep, 2026-07-08): the resolved ``plan_path``
-must be under one of the op's allowed roots (``completion.reconcile_commits`` allows
-``main_worktree_root(repo_root) / "archive" / "completed"`` and
-``main_worktree_root(repo_root) / "docs" / "plans"``; ``plan.append_session`` allows only
-``main_worktree_root(repo_root) / "docs" / "plans"``), mirroring ``handoff.has_live_children``'s
-dual-root ``state/handoffs/`` + ``archive/handoffs/`` allow-list. ``repo_root is None`` is
+must be under ``main_worktree_root(repo_root) / "docs" / "plans"``. ``repo_root is None`` is
 rejected up front (same shape as ``handoff.transition``/``handoff.stamp``) since containment
 requires a derivable worktree root.
-
-Negative-spec (completion.reconcile_commits):
-  - Pre-computed-SHA-list call path (``commits`` given, ``session_id`` omitted): does NOT
-    run ``git log``, ``git merge-base``, or any other git command — the caller (facade or
-    test) pre-computes the SHA list and passes it as ``commits``. Idempotency uses string
-    equality (no short/full SHA normalization) on this path. Preserved verbatim for
-    backward compat — every existing caller (bash facade in Zone-A mode, existing tests)
-    is unaffected by the extension below.
-  - ``status: pending-release`` guard is a caller obligation (facade checks before invoking).
-
-REOPENED (session_id call path — DR-216 boundary reopened by PM 2026-07-19; supersedes the
-  git-resolution carve-out above for this path only):
-  When ``session_id`` is given, the op now owns git-resolution internally, composing
-  ``coordinator_core.reconcile.commit_reality``'s git subprocess pattern (``_git``) rather
-  than reinventing it. Byte-parity oracle for this path is the git-log/merge-base/chain-walk/
-  canonicalization portion of ``reconcile-completion-commits.sh`` (Zone A, pre-append-mode-fork):
-    - merge-base resolution against ``origin/main`` (unresolvable -> non-blocking no-op,
-      mirrors the oracle's ``merge-base unresolved — reconcile skipped`` exit-0 path).
-    - chain-slug expansion: ``chain_slug`` explicit param, else derived from the entry's own
-      ``chain:`` frontmatter field (oracle Step 3.5) — walks ``archive/completed/**/*.md``
-      for sibling ``authored_by:`` values sharing the same chain, and ``state/handoffs/`` +
-      ``archive/handoffs/`` for ``claimed_by:`` (fallback ``consumed_by:``) values on handoffs
-      sharing ``workstream: <slug>`` (authored_by UNION claimed_by, always seeded with the passed
-      ``session_id`` — oracle Axis 1 chain-widening).
-    - multi-session ``git log --grep=^Session-Id: <sid>$`` collection across every id in the
-      widened chain set (oracle Step 4).
-    - SHA canonicalization via ``git rev-parse --verify <sha>^{commit}`` for the entry's
-      already-stored short SHAs, so delta computation matches on full-SHA equality — no
-      short/ambiguous-SHA leakage (oracle Step 5-ish).
-    - id-provenance-mismatch probe (oracle Step 6): when the widened chain set produces zero
-      matching commits in range but the range DOES contain OTHER ``Session-Id:`` trailered
-      commits, a ``provenance_warning`` string is returned (never raised, never blocks) —
-      preserved exactly, oracle's ambiguity-discriminating diagnostic.
-  ``worktree_root`` (repo root; derived by the handler via ``main_worktree_root(repo_root)``,
-  where ``repo_root`` is the dispatch engine's common_dir-keyed resolution of the caller's
-  ``_origin_worktree`` envelope field — never read directly out of ``params``, so a JSON-RPC
-  caller cannot smuggle an arbitrary path in via the method's own parameter list; there is no
-  UDS socket in the current in-process command-type model, retired by DR-215) is required for
-  this path. (Review: code-reviewer — Finding 4: "socket-authoritative... never
-  caller-suppliable" was stale post-DR-215 and overclaimed the trust boundary — the caller
-  DOES influence which repo via ``_origin_worktree``, within common_dir containment.)
-  ``session_id`` MUST pass the oracle's allowlist regex
-  (``^[a-zA-Z0-9][a-zA-Z0-9_-]*$``, and not the literal ``"null"``) — ValueError otherwise,
-  mirroring the oracle's exit-1 caller guard.
-  Still does NOT: acquire a lock (in-process, serial-by-construction, DR-215), run
-  ``git commit``/any mutating git verb, or read the ``status:`` guard (still a caller
-  obligation).
-  ACCEPTED RISK (Review: code-reviewer — F6): ``_strip_chain_date_prefix``'s date-prefix
-  normalization (see that function's docstring) can conflate two genuinely unrelated chains
-  that happen to share a base slug on different days (e.g. ``2026-07-20-cleanup`` and
-  ``2026-07-26-cleanup``). This is a deliberate acceptance, not an oversight: the fix this
-  normalization targets is a ``chain:`` (always date-prefixed) vs ``workstream:`` (never
-  date-prefixed) mismatch, where the two sides frequently carry NO common date to require
-  matching against — requiring same-date-on-both-sides would silently narrow the widening
-  back below the literal-match floor and reintroduce the exact bug this normalization fixes.
-  Disambiguating further would require inferring similarity beyond the declared
-  ``chain_aliases:`` set, which this module's widening invariant (never match on inferred
-  shape, only on literal/normalized/declared-alias equality) forbids. If same-slug
-  cross-day collision becomes a real (not merely plausible) problem, the fix is a workflow
-  one — give genuinely-unrelated same-slug work distinguishable slugs — not a code one.
 
 Negative-spec (plan.append_session):
   - Does NOT acquire a file lock (in-process command-type, serial-by-construction, DR-215).
@@ -114,7 +42,7 @@ Negative-spec (plan.append_session):
   - ``created_at`` is accepted as a parameter or generated at call time; NOT the oracle's
     ``_cs_now_iso`` side-channel.
 
-Registered as ``completion.reconcile_commits`` and ``plan.append_session`` in
+Registered as ``plan.append_session`` and ``completion.flip_to_released`` in
 ``ops/__init__.py`` (C3). Classified ``OpClass.MUTATING`` in ``authz/classification.py`` (C3).
 
 Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C2
@@ -123,7 +51,7 @@ DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carve
 
 from __future__ import annotations
 
-# Generator-provenance declaration: completion.reconcile_commits /
+# Generator-provenance declaration: completion.flip_to_released /
 # plan.append_session mutate a caller-supplied entry in place under
 # archive/completed/**/*.md or docs/plans/*.md -- a data-dependent set of
 # already-tracked files matching a predicate (which completion entry /
@@ -150,17 +78,11 @@ from coordinator_core.reconcile.commit_reality import _git as _reality_git
 
 logger = logging.getLogger(__name__)
 
-#: Session-id / chain-slug allowlist — byte-parity oracle:
-#: reconcile-completion-commits.sh's ``_ID_ALLOWLIST_RE`` (prevents ERE-injection
-#: into ``git log --grep``). The literal string "null" passes this regex but is
-#: explicitly rejected by callers (oracle Step 3 comment) — see ``_validate_id``.
-_ID_ALLOWLIST_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
-
 
 # ---------------------------------------------------------------------------
-# completion.reconcile_commits — fold missing SHAs into commits: list
-# ---------------------------------------------------------------------------
-# Byte-parity oracle: reconcile-completion-commits.sh --append mode awk write pass.
+# commits: YAML-list parsing — shared by completion.flip_to_released and
+# day_coverage_sweep below (byte-parity oracle: reconcile-completion-commits.sh's
+# stored-SHA extraction awk).
 # ---------------------------------------------------------------------------
 
 
@@ -252,144 +174,6 @@ def _parse_existing_commits(content: str) -> set[str]:
     return shas
 
 
-def _apply_commits_fold(content: str, new_shas: list[str]) -> str:
-    """Fold ``new_shas`` into the ``commits:`` YAML list (byte-parity port of the oracle awk).
-
-    Matches the awk write pass of ``reconcile-completion-commits.sh --append``:
-      - ``commits: [...]`` (inline flow-style, empty or populated): replaced with a
-        ``commits:`` key + block SHA list items — existing elements first, in their
-        original order, then the new SHAs.
-      - ``commits:`` (multi-line): existing items buffered and reprinted; new SHAs appended
-        immediately after the last existing item (when the commits block exits or frontmatter
-        closes with the second ``---``).
-      - SHA line format: ``  - "<sha>"`` (2-space indent, double-quoted) matching oracle's
-        ``printf '  - "%s"\\n' "${sha}"``.
-      - Lines outside the commits block are passed through unchanged.
-
-    Negative-spec:
-      - Does NOT reorder, rewrite, or delete existing content (DR-216 D2(iii)).
-      - Empty ``new_shas`` → returns ``content`` unchanged (no write).
-      - Flow-style ``commits: [...]`` → block-form rewrite is the ONE permitted byte-level
-        substitution. DR-216 D2(iii) prohibits *reordering, rewriting, or deleting existing
-        content*; a flow→block normalization emits the same elements, in the same order,
-        with no element added or dropped — it changes YAML syntax, not content, so it is
-        outside what D2(iii) protects. The empty case (``commits: []``) was always carved
-        out on this reasoning as semantically additive; the populated case is carved out on
-        the stronger ground that the alternative is emitting *invalid YAML*. Treating a
-        populated flow list as a block key (the pre-2026-07-22 ``^commits:`` match) appended
-        block items beneath a flow line, producing frontmatter ``yaml.safe_load`` rejects —
-        which ``query-completions`` then dropped silently. Preserving byte-form is not worth
-        corrupting the entry. Source: cross-repo memo 2026-07-22 (example-market-data-repo-em).
-      - Any ``commits:`` shape matching neither flow nor block form raises ``ValueError``
-        rather than being passed through. Loud failure on an unknown shape is strictly
-        better than the silent-corruption blast radius above.
-    """
-    if not new_shas:
-        return content
-
-    # Format new SHA lines exactly as the oracle: printf '  - "%s"\n' "${sha}"
-    # Oracle awk stores them as $0 (no trailing newline); print new_lines[i] adds \n.
-    # Python equivalent: store without newline, join via '\n' + trailing '\n'.
-    new_sha_lines = [f'  - "{sha}"' for sha in new_shas]
-
-    lines = content.splitlines(keepends=False)
-    result_lines: list[str] = []
-    fm_n = 0
-    in_commits = False
-    commits_buf: list[str] = []  # buffer existing commits: list items (without trailing \n)
-
-    for line in lines:
-        if line == "---":
-            fm_n += 1
-            if fm_n == 2 and in_commits:
-                # Flush buffered existing entries, then new SHAs, then the closing fence.
-                # Mirrors awk: printf "%s", commits_buf (already has \n each); print new_lines[i].
-                result_lines.extend(commits_buf)
-                result_lines.extend(new_sha_lines)
-                commits_buf = []
-                in_commits = False
-            result_lines.append(line)
-            continue
-
-        if fm_n == 1:
-            # Inline flow-style list, empty OR populated: commits: [] / commits: ["a","b"]
-            # (with optional trailing comment). Normalized to block form, existing items
-            # re-emitted first in their original order, then the new SHAs.
-            flow = _COMMITS_FLOW_RE.match(line)
-            if flow:
-                result_lines.append("commits:")
-                result_lines.extend(f'  - "{item}"' for item in _split_flow_items(flow.group(1)))
-                result_lines.extend(new_sha_lines)
-                in_commits = False
-                continue
-
-            # commits: key (multi-line form) — value empty, items follow as - lines.
-            if _COMMITS_BLOCK_RE.match(line):
-                in_commits = True
-                result_lines.append(line)
-                continue
-
-            # Neither flow nor block: a shape this fold does not understand. Fail loud
-            # rather than pass it through and append block items beneath it — silent
-            # corruption is the failure mode this guard exists to prevent.
-            if _COMMITS_ANY_RE.match(line):
-                raise ValueError(
-                    f"unrecognized commits: shape in frontmatter — refusing to fold: {line!r}"
-                )
-
-            if in_commits:
-                # List item: ^[[:space:]]+-[[:space:]]
-                if re.match(r"^\s+-\s", line):
-                    # Buffer existing entry exactly as-is (oracle: commits_buf = commits_buf $0 "\n").
-                    commits_buf.append(line)
-                    continue
-                else:
-                    # Exiting commits block (next frontmatter key or unexpected line).
-                    # Oracle: printf "%s", commits_buf (flush buffer); for i print new_lines[i].
-                    result_lines.extend(commits_buf)
-                    result_lines.extend(new_sha_lines)
-                    commits_buf = []
-                    in_commits = False
-                    result_lines.append(line)
-                    continue
-
-        result_lines.append(line)
-
-    # Malformed frontmatter guard: if we're still in_commits at EOF.
-    if in_commits:
-        result_lines.extend(commits_buf)
-        result_lines.extend(new_sha_lines)
-
-    # Reconstruct: '\n'.join (no trailing newline from join) + '\n' (mirrors printf '%s\n' which
-    # adds newline after each element, including the final one).
-    return "\n".join(result_lines) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# Git-resolution machinery (REOPENED session_id call path) — composes
-# commit_reality.py's _git subprocess pattern; byte-parity oracle:
-# reconcile-completion-commits.sh Zone A (pre-append-mode-fork).
-# ---------------------------------------------------------------------------
-
-
-def _validate_id(value: str, label: str) -> None:
-    """Allowlist-validate a session-id / chain-slug value (oracle Step 3 guard).
-
-    Raises ValueError (mirrors the oracle's exit-1 caller guard) when ``value``
-    is empty, the literal string ``"null"`` (passes the regex but is explicitly
-    rejected — oracle Step 3 comment), or fails ``_ID_ALLOWLIST_RE``.
-    """
-    if not value or value == "null":
-        raise ValueError(
-            f"completion.reconcile_commits: {label} is empty or the literal 'null'"
-        )
-    if not _ID_ALLOWLIST_RE.match(value):
-        raise ValueError(
-            f"completion.reconcile_commits: {label} must match "
-            f"{_ID_ALLOWLIST_RE.pattern!r}: {value!r}"
-        )
-
-
 def _read_frontmatter_field(content: str, key: str) -> Optional[str]:
     """Read a single top-level frontmatter field's value (first block only).
 
@@ -418,25 +202,6 @@ def _read_frontmatter_field(content: str, key: str) -> Optional[str]:
     return None
 
 
-def _derive_chain_slug(entry_content: str) -> str:
-    """Derive the ``chain:`` slug from a completion entry's frontmatter (oracle Step 3.5).
-
-    Normalizes "null"/empty/allowlist-failing values to "" (no-chain), matching the
-    oracle's WARN-and-skip behavior on an invalid slug rather than raising.
-    """
-    slug = _read_frontmatter_field(entry_content, "chain") or ""
-    if slug == "null":
-        slug = ""
-    if slug and not _ID_ALLOWLIST_RE.match(slug):
-        logger.warning(
-            "completion.reconcile_commits: chain slug %r fails allowlist — "
-            "chain resolution skipped",
-            slug,
-        )
-        slug = ""
-    return slug
-
-
 def _iter_files(root: Path) -> List[Path]:
     """Recursively enumerate ``*.md`` files under ``root`` (oracle's ``grep -rl`` scope).
 
@@ -445,219 +210,6 @@ def _iter_files(root: Path) -> List[Path]:
     if not root.is_dir():
         return []
     return sorted(p for p in root.rglob("*.md") if p.is_file())
-
-
-#: ``chain:`` slugs are always date-prefixed (``YYYY-MM-DD-<slug>``); sibling
-#: ``workstream:`` values on handoffs never carry that prefix — a literal-equality
-#: comparison between the two therefore matched nothing (empirically: 0 siblings
-#: widened on every 2026-07-26 repair-session entry). Fixed-width and unambiguous,
-#: so stripping is strictly invertible.
-_CHAIN_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
-
-
-def _strip_chain_date_prefix(slug: str) -> str:
-    """Strip a leading ``YYYY-MM-DD-`` date prefix from a chain slug (Axis 1 fix).
-
-    No-op when no prefix is present, so applying it to both comparison sides only
-    ever widens matches, never narrows — same shape as this module's earlier
-    chain-widening normalization (frontmatter-field vs literal-line match, see the
-    Finding-2 comment above in ``_collect_chain_session_ids``).
-
-    ACCEPTED RISK (Review: code-reviewer — F6, see module negative-spec for full
-    rationale): stripping means two unrelated same-base-slug chains on different days
-    (``2026-07-20-cleanup`` vs ``2026-07-26-cleanup``) widen together. Deliberate —
-    disambiguating further would require inferring beyond the declared
-    ``chain_aliases:`` set, which this module's widening invariant forbids.
-    """
-    return _CHAIN_DATE_PREFIX_RE.sub("", slug, count=1)
-
-
-def _read_frontmatter_list_field(content: str, key: str) -> List[str]:
-    """Read a top-level frontmatter list field (first block only).
-
-    Supports both inline flow syntax (``key: [a, b]``) and YAML block-list syntax
-    (``key:`` followed by indented ``- item`` lines). Returns ``[]`` when the key is
-    absent, empty, or the block is malformed — matching this module's None-safe
-    convention for other frontmatter readers (``_read_frontmatter_field``).
-    """
-    lines = content.splitlines()
-    fm_n = 0
-    prefix_re = re.compile(rf"^{re.escape(key)}:\s*(.*)$")
-    item_re = re.compile(r"^\s*-\s*(.+?)\s*$")
-
-    def _clean(raw: str) -> str:
-        raw = re.sub(r"\s*#.*$", "", raw)
-        return raw.strip().strip('"').strip("'")
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if line == "---":
-            fm_n += 1
-            if fm_n == 2:
-                return []
-            i += 1
-            continue
-        if fm_n != 1:
-            i += 1
-            continue
-        m = prefix_re.match(line)
-        if m:
-            rest = _clean(m.group(1))
-            if rest.startswith("[") and rest.endswith("]"):
-                inner = rest[1:-1]
-                return [_clean(item) for item in inner.split(",") if _clean(item)]
-            if rest:
-                # scalar value under a list key — tolerate as a single-item list.
-                return [rest]
-            # block-list form: gather the indented "- item" lines that follow.
-            items: List[str] = []
-            j = i + 1
-            while j < len(lines):
-                sub = lines[j]
-                if sub == "---":
-                    break
-                sub_m = item_re.match(sub)
-                if sub_m is None:
-                    break
-                val = _clean(sub_m.group(1))
-                if val:
-                    items.append(val)
-                j += 1
-            return items
-        i += 1
-    return []
-
-
-def _chain_membership_matches(
-    entry_slug: Optional[str],
-    entry_aliases: Sequence[str],
-    target_slug: str,
-) -> bool:
-    """Does a completion entry / handoff belong to ``target_slug``'s chain?
-
-    Two DISTINCT match shapes, deliberately kept apart (Fix Half 1 / Fix Half 2):
-
-    1. Date-prefix normalization — ``entry_slug`` and ``target_slug`` are the same
-       logical chain modulo a ``YYYY-MM-DD-`` prefix. Strict, invertible transform.
-
-    2. Declared alias membership — an umbrella slug vs sub-slug is NEVER inferred
-       from slug shape (no prefix/substring matching, no fuzzy-match warning: a
-       warning only audits a false positive after the fact, and this module's
-       output attributes commits to completion records under a byte-parity
-       contract). ``entry_aliases`` is the entry's own ``chain_aliases:``
-       frontmatter list — matched only against that explicitly declared set.
-    """
-    # Review: code-reviewer — F5: `target_slug in normalized_aliases` (the
-    # unnormalized disjunct) was dead code — normalized_aliases only ever
-    # contains stripped values, so target_slug can only match it when
-    # target_slug already carries no date prefix, in which case
-    # target_norm == target_slug and the disjunct below already covers it.
-    target_norm = _strip_chain_date_prefix(target_slug)
-    if entry_slug is not None and _strip_chain_date_prefix(entry_slug) == target_norm:
-        return True
-    normalized_aliases = {_strip_chain_date_prefix(alias) for alias in entry_aliases}
-    return target_norm in normalized_aliases
-
-
-def _collect_chain_session_ids(
-    worktree_root: Path,
-    chain_slug: str,
-    seed_session_id: str,
-) -> Tuple[List[str], List[str]]:
-    """Widen a lone session-id into the full chain session-id set (oracle Step 3.5, Axis 1).
-
-    (a) authored_by: from every archive/completed/**/*.md entry whose frontmatter carries
-        ``chain: <slug>`` or ``chain: "<slug>"`` (oracle's dual grep pattern — the whole
-        file, not just the frontmatter block, matching the oracle's plain ``grep -rl``).
-    (b) claimed_by (new; consumed_by fallback for pre-migration handoffs): from handoffs
-        under state/handoffs/ (state-root-seam-resolved, per-repo for a sibling repo /
-        claude-klabauter-central when worktree_root IS the meta-repo) and archive/handoffs/ whose
-        frontmatter carries ``workstream: <slug>``.
-
-    Chain membership (both (a) and (b)) is decided by ``_chain_membership_matches``, not raw
-    equality: ``chain:`` slugs are ``YYYY-MM-DD-`` prefixed but ``workstream:`` values never
-    are, so a literal comparison found zero siblings in production; and an umbrella-slug vs
-    sub-slug relationship widens ONLY via an entry's own explicitly declared
-    ``chain_aliases:`` list — never inferred from slug shape (no prefix/substring matching).
-
-    Returns (dedup_validated_sids, warnings) — dedup preserves the oracle's allowlist-skip
-    WARN semantics (skips + warns rather than raising) for any malformed collected id.
-    """
-    warnings: List[str] = []
-    chain_sids: List[str] = [seed_session_id]
-
-    if chain_slug:
-        # (a) archive/completed/**/*.md sharing the same chain: slug. File-selection
-        # scans every file recursively (oracle's whole-tree scope, byte-parity on WHICH
-        # files are considered), but the value comparison uses _read_frontmatter_field
-        # (already used two lines below for authored_by) rather than a literal-line
-        # match — a raw "chain: <slug>" / 'chain: "<slug>"' string-equality check missed
-        # cosmetic drift (trailing inline comment, alternate quoting, whitespace) that
-        # _read_frontmatter_field already normalizes, silently under-counting chain
-        # siblings. (Review: code-reviewer — Finding 2, P1: literal whole-file string
-        # match dropped semantically-valid siblings; frontmatter-field comparison is a
-        # strict superset of the literal match, never narrower.)
-        completed_root = worktree_root / "archive" / "completed"
-        for entry_path in _iter_files(completed_root):
-            try:
-                text = entry_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                # DIAGNOSTIC FIX (2026-07-22): an unreadable completion entry was
-                # previously dropped silently, under-widening the chain and
-                # excluding commits under a missed sibling session id from
-                # delta_shorts without any trail. Now surfaced like every other
-                # skip reason in this module.
-                warnings.append(f"chain scan: unreadable completion entry {entry_path}: {exc}")
-                continue
-            entry_chain = _read_frontmatter_field(text, "chain")
-            entry_aliases = _read_frontmatter_list_field(text, "chain_aliases")
-            if not _chain_membership_matches(entry_chain, entry_aliases, chain_slug):
-                continue
-            ab = _read_frontmatter_field(text, "authored_by")
-            if ab and ab != "null":
-                chain_sids.append(ab)
-
-        # (b) handoffs (state/handoffs/ + archive/handoffs/) sharing workstream: slug.
-        # Same frontmatter-comparison rationale as (a) above.
-        handoff_dirs, handoff_dirs_warning = _resolve_handoff_dirs(worktree_root)
-        if handoff_dirs_warning:
-            warnings.append(handoff_dirs_warning)
-        for hdir in handoff_dirs:
-            for hf_path in _iter_files(hdir):
-                try:
-                    text = hf_path.read_text(encoding="utf-8")
-                except OSError as exc:
-                    # DIAGNOSTIC FIX (2026-07-22): same rationale as the
-                    # archive/completed/ scan above — surface, don't drop.
-                    warnings.append(f"chain scan: unreadable handoff {hf_path}: {exc}")
-                    continue
-                entry_workstream = _read_frontmatter_field(text, "workstream")
-                entry_aliases = _read_frontmatter_list_field(text, "chain_aliases")
-                if not _chain_membership_matches(entry_workstream, entry_aliases, chain_slug):
-                    continue
-                cb = _read_frontmatter_field(text, "claimed_by") or _read_frontmatter_field(
-                    text, "consumed_by"
-                )
-                if cb and cb != "null":
-                    chain_sids.append(cb)
-
-    dedup: List[str] = []
-    seen: Set[str] = set()
-    for csid in chain_sids:
-        if not csid or csid == "null":
-            continue
-        if not _ID_ALLOWLIST_RE.match(csid):
-            warnings.append(
-                f"chain session-id {csid!r} fails allowlist — skipped"
-            )
-            continue
-        if csid in seen:
-            continue
-        seen.add(csid)
-        dedup.append(csid)
-
-    return dedup, warnings
 
 
 def _resolve_handoff_dirs(worktree_root: Path) -> Tuple[List[Path], Optional[str]]:
@@ -703,68 +255,6 @@ def _resolve_handoff_dirs(worktree_root: Path) -> Tuple[List[Path], Optional[str
     return [state_root / "handoffs", worktree_root / "archive" / "handoffs"], warning
 
 
-def _collect_session_log(
-    worktree_root: Path, merge_base: str, session_ids: Sequence[str]
-) -> List[Tuple[str, str]]:
-    """Collect (short_sha, full_sha) pairs across all chain session-ids (oracle Step 4).
-
-    BATCHED (2026-08 spawn-amplification fix, chunk C9): one ``git log`` walk of
-    ``merge_base..HEAD`` replaces one ``git log --grep=^Session-Id: <sid>$`` spawn
-    per session id — this loop resolves MANY session ids against ONE range, the
-    batchable "one ref, in-memory membership" shape (§ Anti-scope 1/2/4 governing
-    discrimination), NOT independent ranges: there is exactly one range
-    (``merge_base..HEAD``) shared by every iteration, so no
-    ``reachable(positives) \\ reachable(negatives)`` collapse risk applies. The
-    single walk emits each commit's short sha, full sha, and full body (``%B``,
-    which carries the ``Session-Id:`` trailer line the oracle's ``--grep`` matched
-    against); Python then re-applies the oracle's exact per-line anchored match
-    (``^Session-Id: <sid>$``) against that body, grouped by session id.
-
-    No inter-session dedup — the oracle's comment holds: a commit carries exactly one
-    ``Session-Id:`` trailer, so cross-session duplicates don't occur in practice.
-    Ordering: newest-first WITHIN each session-id's own contribution only — the
-    per-session-id result blocks are concatenated in session-iteration order, not
-    globally chronologically merged, so a widened multi-session chain's overall
-    list is NOT a single newest-first ordering across the whole delta. (Review:
-    code-reviewer — Finding 3: caller docstring's unqualified "newest-first"
-    overclaimed for the multi-session case.) The batched walk preserves this: the
-    single ``git log`` output is itself newest-first, and per-session grouping is
-    a stable filter of that order, so within-session order is unchanged; the
-    final concatenation still iterates ``session_ids`` in caller order, not the
-    walk's chronological order.
-    """
-    if not session_ids:
-        return []
-
-    result = _reality_git(
-        worktree_root,
-        ["log", "--pretty=%h%x1f%H%x1f%B%x1e", f"{merge_base}..HEAD"],
-    )
-    if result.returncode != 0:
-        return []
-
-    session_id_re = re.compile(r"^Session-Id: (.+)$", re.MULTILINE)
-    by_session: dict[str, List[Tuple[str, str]]] = {}
-    for record in result.stdout.split("\x1e"):
-        record = record.lstrip("\n")
-        if not record.strip():
-            continue
-        parts = record.split("\x1f", 2)
-        if len(parts) != 3:
-            continue
-        short_sha, full_sha, body = parts
-        short_sha = short_sha.strip()
-        full_sha = full_sha.strip()
-        for m in session_id_re.finditer(body):
-            csid = m.group(1)
-            by_session.setdefault(csid, []).append((short_sha, full_sha))
-
-    pairs: List[Tuple[str, str]] = []
-    for csid in session_ids:
-        pairs.extend(by_session.get(csid, []))
-    return pairs
-
-
 def _canonicalize_stored_shas(
     worktree_root: Path, stored_shas: Sequence[str]
 ) -> Tuple[Set[str], List[str]]:
@@ -777,7 +267,7 @@ def _canonicalize_stored_shas(
     every other), the batchable shape (§ Anti-scope 1/2/4 governing
     discrimination) — not a range walk, so no
     ``reachable(positives) \\ reachable(negatives)`` collapse risk applies.
-    Mirrors ``coordinator_core.ops.emit.envelope.classify_shas_on_origin_main``'s
+    Mirrors ``coordinator_core.ops.emit.resolvers.classify_shas_on_origin_main``'s
     batch-check idiom: ``--batch-check`` emits exactly one output line per input
     line, in input order, even for objects that don't resolve (printed as
     ``<input> missing``) — line-for-line zip against the input list recovers
@@ -840,340 +330,6 @@ def _canonicalize_stored_shas(
             warnings.append(f"rev-parse failed for {sha} — treating as unmatched")
 
     return full_set, warnings
-
-
-def resolve_chain_commits(
-    worktree_root: Path,
-    plan_path: str,
-    session_id: str,
-    chain_slug: Optional[str] = None,
-) -> dict:
-    """Resolve the delta short-SHA list for a completion entry (oracle Zone A).
-
-    Composes commit_reality.py's ``_git`` subprocess pattern to perform the oracle's
-    merge-base resolution, chain-slug expansion, multi-session commit collection, and
-    SHA canonicalization internally — the caller no longer pre-computes this.
-
-    Returns:
-        {
-          "delta_shorts": [str, ...],   # newest-first WITHIN each chain session-id's
-                                         # own contribution (oracle parity); session-id
-                                         # groups are concatenated in iteration order,
-                                         # NOT globally chronologically interleaved —
-                                         # see _collect_session_log. (Review:
-                                         # code-reviewer — Finding 3.)
-          "delta_count": int,
-          "merge_base": str | None,
-          "chain_session_ids": [str, ...],
-          "merge_base_unresolved": bool, # True iff merge-base against origin/main failed (non-blocking)
-          "skip_reason": str | None,
-          "provenance_warning": str | None,
-          "warnings": [str, ...],        # allowlist-skip / rev-parse-failure diagnostics
-        }
-
-    Raises:
-        ValueError: ``session_id`` fails the oracle's allowlist/"null" guard
-            (mirrors the oracle's exit-1 caller guard — fail loud on a
-            correctness-critical id, never silently substitute).
-    """
-    _validate_id(session_id, "session_id")
-
-    entry_content = Path(plan_path).read_text(encoding="utf-8")
-
-    resolved_chain_slug = chain_slug if chain_slug is not None else _derive_chain_slug(entry_content)
-    if resolved_chain_slug and not _ID_ALLOWLIST_RE.match(resolved_chain_slug):
-        logger.warning(
-            "completion.reconcile_commits: chain slug %r fails allowlist — "
-            "chain resolution skipped",
-            resolved_chain_slug,
-        )
-        resolved_chain_slug = ""
-
-    merge_base_result = _reality_git(worktree_root, ["merge-base", "origin/main", "HEAD"])
-    merge_base = merge_base_result.stdout.strip() if merge_base_result.returncode == 0 else ""
-    if not merge_base:
-        return {
-            "delta_shorts": [],
-            "delta_count": 0,
-            "merge_base": None,
-            "chain_session_ids": [],
-            "merge_base_unresolved": True,
-            "skip_reason": "merge-base unresolved — reconcile skipped",
-            "provenance_warning": None,
-            "warnings": [],
-        }
-
-    chain_sids, chain_warnings = _collect_chain_session_ids(
-        worktree_root, resolved_chain_slug, session_id
-    )
-
-    session_log = _collect_session_log(worktree_root, merge_base, chain_sids)
-
-    stored_shas = sorted(_parse_existing_commits(entry_content))
-    stored_full_set, rev_parse_warnings = _canonicalize_stored_shas(worktree_root, stored_shas)
-
-    delta_shorts: List[str] = []
-    for short_sha, full_sha in session_log:
-        if full_sha not in stored_full_set:
-            delta_shorts.append(short_sha)
-
-    provenance_warning: Optional[str] = None
-    if not delta_shorts and not session_log:
-        any_trailer = _reality_git(
-            worktree_root,
-            ["log", "--pretty=%H", "--grep=^Session-Id: ", f"{merge_base}..HEAD"],
-        )
-        if any_trailer.returncode == 0 and any_trailer.stdout.strip():
-            count_result = _reality_git(
-                worktree_root, ["rev-list", "--count", f"{merge_base}..HEAD"]
-            )
-            count_str = count_result.stdout.strip() if count_result.returncode == 0 else "?"
-            provenance_warning = (
-                f"reconcile-completion-commits: {count_str} commit(s) in "
-                f"{merge_base}..HEAD carry Session-Id: trailer(s) but NONE match the "
-                f"entry authored_by/chain set ({','.join(chain_sids)}) — id-provenance "
-                "mismatch; commits: NOT reconciled. Check authored_by."
-            )
-
-    return {
-        "delta_shorts": delta_shorts,
-        "delta_count": len(delta_shorts),
-        "merge_base": merge_base,
-        "chain_session_ids": chain_sids,
-        "merge_base_unresolved": False,
-        "skip_reason": None,
-        "provenance_warning": provenance_warning,
-        "warnings": [*chain_warnings, *rev_parse_warnings],
-    }
-
-
-def reconcile_completion_commits(
-    plan_path: str,
-    commits: Optional[list[str]] = None,
-    session_id: Optional[str] = None,
-    chain_slug: Optional[str] = None,
-    worktree_root: Optional[str] = None,
-    dry_run: bool = False,
-) -> dict:
-    """Fold missing SHAs into the completion entry's ``commits:`` list (idempotent).
-
-    Byte-parity port of the write pass of ``reconcile-completion-commits.sh --append``.
-    The oracle's git-log and merge-base resolution are caller obligations; this function
-    receives the pre-computed short SHA list and applies only the file-write step.
-
-    Idempotency: SHAs already present in the file's ``commits:`` list are skipped (string
-    equality). Re-running with the same ``commits`` list produces no change (matches oracle
-    ``delta=0 OK`` path).
-
-    DR-216 bounds (D2):
-      (i)  Per-record idempotent: re-folding an already-present SHA is a no-op.
-      (ii) Git-reversible: only appends SHA items; never rewrites/reorders/deletes.
-      (iii) Content-additive in-place only: awk-equivalent fold preserves all existing content.
-      (iv)  Confined to the caller-supplied ``plan_path`` (the ``docs/plans/*.md`` noun).
-      (v)   No git commit.
-
-    REOPENED session_id call path (see module negative-spec): when ``session_id`` is
-    given, ``commits`` is ignored and the delta short-SHA list is resolved internally
-    via ``resolve_chain_commits`` (git-log/merge-base/chain-walk/canonicalization),
-    composing commit_reality.py's git machinery. ``worktree_root`` is required on this
-    path. Two early-exit outcomes precede the fold, both oracle-parity no-ops:
-      - merge-base against origin/main unresolvable -> ``{"merge_base_unresolved": True,
-        "no_op": True, "appended": 0}`` (non-blocking, mirrors the oracle's
-        exit-0 "reconcile skipped" path).
-      - zero delta (``delta_count == 0``) -> ``{"appended": 0, "no_op": True,
-        "provenance_warning": <str|None>}`` (oracle's ``delta=0 OK`` path — the
-        id-provenance-mismatch probe fires here, never blocking).
-
-    dry_run (read-only mode, added to unblock DoE-claude's detect-only facade branch —
-    docs/plans referenced in the op's producer notes): when True, every git-resolution
-    and delta-computation step still runs in full (identical to the apply path), but the
-    mutation region — ``_apply_commits_fold`` / ``tempfile.mkstemp`` / ``os.replace`` — is
-    skipped entirely. NOTHING is written to ``plan_path`` on this path; ``appended`` is
-    always ``0``. The two early-return no-ops (``merge_base_unresolved`` and
-    ``delta_count == 0``) execute identically regardless of ``dry_run`` — they precede the
-    dry_run gate and already never write, so their return SHAPE is dry_run-invariant by
-    construction (see ``TestDryRunReturnShapeInvariant`` in the test module for the
-    assertion). The delta SHA list is now included in the return payload
-    UNCONDITIONALLY (``delta_shorts``) — both dry-run and apply paths — so a dry-run
-    caller can reproduce the same output the apply path would have produced.
-
-    Parameters:
-        plan_path:     Absolute path to the completion plan file.
-        commits:       List of short SHA strings to fold in (oracle's ``delta_shorts``).
-                       Backward-compat path only — ignored when ``session_id`` is given.
-        session_id:    REOPENED path trigger. When given, commits are resolved internally.
-        chain_slug:    Optional override for the REOPENED path's chain-widening slug;
-                       defaults to the entry's own ``chain:`` frontmatter field.
-        worktree_root: Repo root for git resolution — required when ``session_id`` is given.
-        dry_run:       When True, computes the delta but performs ZERO writes. Defaults to
-                       False — see the handler docstring for why this default deliberately
-                       diverges from handoff.reconcile_open's default-True dry_run.
-
-    Returns:
-        dict with keys: ``plan_path``, ``appended`` (int count of SHAs folded in — always
-        ``0`` when ``dry_run`` is True), ``skipped`` (int count of SHAs already present),
-        ``no_op`` (bool), ``dry_run`` (bool, echoed back), ``delta_shorts`` (list[str] — the
-        SHAs that were folded in, or would have been under dry_run), and — on the
-        REOPENED path only — ``merge_base_unresolved`` (bool), ``provenance_warning``
-        (str | None), ``chain_session_ids`` (list[str]), ``resolution_warnings`` (list[str]).
-
-    Raises:
-        ValueError: ``session_id`` given but invalid (allowlist/"null" guard), or
-            ``session_id`` given without ``worktree_root``.
-
-    Locking (DR-216 § D2 criterion (vi), AMENDED 2026-08-06): the read-modify-write
-    of ``plan_path`` runs under ``coordinator_core.locked_write.locked_rmw``, keyed
-    to ``plan_path``, whenever a git repo root is resolvable for it (``worktree_root``
-    when given, else derived directly from ``plan_path`` — the backward-compat
-    pre-computed-commits call path is not guaranteed a git repo at all, e.g. a bare
-    tmp-dir entry in a unit test, matching ``plan_status_transition._stamp_implemented``'s
-    identical no-repo plain-RMW fallback). ``resolve_chain_commits`` (merge-base,
-    chain-walk, multi-session ``git log``) deliberately runs BEFORE and OUTSIDE the
-    lock: holding the lock across several git subprocesses would widen the
-    contention window on a lock that also guards a break-glass path (another
-    session annotating a plan to warn its executing owner) enough to make the 10s
-    ``LockTimeout`` a realistic, harmful outcome. The delta short-SHA list
-    (``commits``) resolved outside the lock may therefore be stale by the time the
-    mutate closure runs — the closure re-derives ``existing`` from the FRESH
-    lock-held read and re-filters ``commits`` against it, so a SHA already folded
-    in by a concurrent writer between resolution and the lock is never
-    double-appended (no-op-safe by construction, not merely by convention).
-    """
-    path = Path(plan_path)
-
-    resolution_meta: dict = {}
-    if session_id is not None:
-        if not worktree_root:
-            raise ValueError(
-                "completion.reconcile_commits: worktree_root is required when "
-                "session_id is given (REOPENED git-resolution path)"
-            )
-        resolved = resolve_chain_commits(
-            Path(worktree_root), plan_path, session_id, chain_slug=chain_slug
-        )
-        resolution_meta = {
-            "merge_base_unresolved": resolved["merge_base_unresolved"],
-            "provenance_warning": resolved["provenance_warning"],
-            "chain_session_ids": resolved["chain_session_ids"],
-            "resolution_warnings": resolved["warnings"],
-        }
-        if resolved["merge_base_unresolved"]:
-            return {
-                "plan_path": plan_path,
-                "appended": 0,
-                "skipped": 0,
-                "no_op": True,
-                "dry_run": dry_run,
-                "delta_shorts": [],
-                **resolution_meta,
-            }
-        if resolved["delta_count"] == 0:
-            return {
-                "plan_path": plan_path,
-                "appended": 0,
-                "skipped": 0,
-                "no_op": True,
-                "dry_run": dry_run,
-                "delta_shorts": [],
-                **resolution_meta,
-            }
-        commits = resolved["delta_shorts"]
-
-    if commits is None:
-        commits = []
-
-    # Closure-captured state — locked_rmw's return value (new_text) doesn't tell
-    # us whether a write happened, so the rich structured fields this function
-    # returns are threaded out via `_state` (idiom: plan_status_transition.
-    # _stamp_implemented's `_state` dict).
-    _state: dict = {
-        "appended": 0,
-        "skipped": 0,
-        "no_op": True,
-        "dry_run": dry_run,
-        "delta_shorts": [],
-    }
-
-    def mutate(old_text: str) -> str:
-        # `existing`/`new_shas` are re-derived from the FRESH lock-held read —
-        # see the "Locking" docstring section above for why this must not reuse
-        # the pre-lock-resolution `commits` computation's own stale content.
-        existing = _parse_existing_commits(old_text)
-        new_shas = [sha for sha in commits if sha not in existing]
-        skipped = len(commits) - len(new_shas)
-
-        if not new_shas:
-            _state.update(
-                appended=0, skipped=skipped, no_op=True, dry_run=dry_run, delta_shorts=[]
-            )
-            return old_text  # byte-identical -> locked_rmw skips the write
-
-        if dry_run:
-            # Read-only gate: NOTHING is written on this path — old_text is
-            # returned unchanged so locked_rmw's own no-op skip applies.
-            _state.update(
-                appended=0, skipped=skipped, no_op=False, dry_run=True, delta_shorts=new_shas
-            )
-            return old_text
-
-        modified = _apply_commits_fold(old_text, new_shas)
-        _state.update(
-            appended=len(new_shas),
-            skipped=skipped,
-            no_op=False,
-            dry_run=False,
-            delta_shorts=new_shas,
-        )
-        return modified
-
-    from coordinator_core.locked_write import locked_rmw
-
-    lock_repo_root: Optional[Path] = Path(worktree_root) if worktree_root else None
-    if lock_repo_root is None:
-        from coordinator_core.archive_stamp import _resolve_repo_root_for
-
-        _derived_worktree, _derived_common = _resolve_repo_root_for(path)
-        lock_repo_root = _derived_common
-
-    if lock_repo_root is not None:
-        locked_rmw(path, mutate, repo_root=lock_repo_root)
-    else:
-        # No resolvable git repo root for `plan_path` — same fallback shape as
-        # `plan_status_transition._stamp_implemented`'s no-repo branch: locking
-        # exists to serialise concurrent writers sharing one lock-sidecar
-        # namespace keyed off a repo's git common dir, and a path outside any
-        # git worktree has no such namespace and (by this module's existing
-        # backward-compat contract, exercised only by the pre-computed-commits
-        # call path) no concurrent-writer hazard to serialise against.
-        if not path.exists():
-            raise FileNotFoundError(str(path))
-        old_text = path.read_text(encoding="utf-8")
-        new_text = mutate(old_text)
-        if new_text != old_text:
-            dir_path = path.parent
-            fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-                    fh.write(new_text)
-                os.replace(tmp_path, str(path))
-            except Exception:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    # Best-effort tmp-file cleanup on the error path; the
-                    # original exception is re-raised below regardless.
-                    pass
-                raise
-
-    return {
-        "plan_path": plan_path,
-        "appended": _state["appended"],
-        "skipped": _state["skipped"],
-        "no_op": _state["no_op"],
-        "dry_run": _state["dry_run"],
-        "delta_shorts": _state["delta_shorts"],
-        **resolution_meta,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1401,150 +557,6 @@ def append_plan_session(
 # ---------------------------------------------------------------------------
 
 
-@register_op("completion.reconcile_commits")
-async def _reconcile_commits_handler(
-    params: dict, repo_root: Optional[Path] = None
-) -> dict:
-    """JSON-RPC ``completion.reconcile_commits`` handler.
-
-    MUTATING (DR-216): folds missing SHAs into the caller-supplied plan file's
-    ``commits:`` YAML list. Blocking FS I/O runs via ``asyncio.to_thread`` (DR-216 D3).
-
-    Required params:
-        plan_path (str): absolute path to the completion plan file.
-        commits (list[str] | str): short SHAs to fold in; accepts comma-separated string.
-            Ignored when ``session_id`` is given (REOPENED path resolves internally).
-
-    Optional params (REOPENED git-resolution path — see module negative-spec):
-        session_id (str): when given, triggers internal git resolution (merge-base +
-            chain-walk + multi-session log collection + SHA canonicalization) instead
-            of trusting the caller-supplied ``commits`` list. Must pass the oracle's
-            allowlist and not be the literal "null".
-        chain_slug (str): optional override for chain-widening; defaults to the entry's
-            own ``chain:`` frontmatter field when omitted.
-        dry_run (bool, optional) — DEFAULTS TO FALSE. This DIVERGES deliberately from
-            handoff.reconcile_open's default-True dry_run: that op is an autonomous
-            policy sweep, this op is caller-invoked with an explicit plan_path and
-            already has DoE-side callers (``--append``) that rely on writes happening
-            by default — defaulting True here would silently stop every existing
-            append caller from writing. When True, computes the full delta (identical
-            git resolution to the apply path) but performs ZERO writes — no
-            ``_apply_commits_fold``, no ``mkstemp``, no ``os.replace``. A non-bool
-            value fails CONSERVATIVE the opposite direction from the default: it
-            coerces to True (dry-run / no mutation), not False, since an unrecognized
-            value should never silently authorize a write.
-
-    Returns:
-        {plan_path, appended, skipped, no_op, dry_run, delta_shorts} — plus, on the
-        REOPENED path, {merge_base_unresolved, provenance_warning, chain_session_ids,
-        resolution_warnings}. ``delta_shorts`` is populated unconditionally (both
-        dry-run and apply paths) so a dry-run caller can reproduce the apply path's
-        output contract (see DoE's reconcile-completion-commits.sh detect-only branch,
-        which this dry_run mode exists to let that facade eventually collapse onto).
-
-    ``repo_root`` is provided by the IPC engine (``_OP_KEY_SCOPE: common_dir``) and, since
-    the op-family path-containment sweep (2026-07-08), is used to derive the allowed-root(s)
-    (``archive/completed/`` and ``docs/plans/``) for the containment check — ``plan_path``
-    itself remains the DR-216 noun and is never derived from ``repo_root``. The REOPENED
-    path additionally threads ``main_worktree_root(repo_root)`` through as
-    ``worktree_root`` for git resolution — derived from ``repo_root``, never read directly
-    out of ``params``, so it cannot be smuggled by a JSON-RPC caller via the method's own
-    parameter list (no UDS socket in the current in-process model — retired by DR-215).
-    (Review: code-reviewer — Finding 4/7: docstring was stale after the containment guard
-    landed, and "socket-authoritative" overclaimed the trust boundary post-DR-215.)
-
-    DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
-    """
-    plan_path: str = params.get("plan_path", "")
-    commits = params.get("commits", [])
-    if isinstance(commits, str):
-        commits = [c.strip() for c in commits.split(",") if c.strip()]
-    elif not isinstance(commits, list):
-        commits = []
-
-    # A present-but-empty "session_id" param is a fail-loud condition, not "not given" —
-    # distinguish key-absent from key-present-but-empty/falsy here so an upstream
-    # serialization bug that empties the field can't silently reroute the request onto
-    # the backward-compat pre-computed-commits path instead of raising the allowlist
-    # guard this module explicitly designed for this exact input shape. (Review:
-    # code-reviewer — Finding 5, P2: "" or None coerced an explicitly-empty session_id
-    # to "not given", the opposite of the module's stated fail-loud posture.)
-    raw_session_id = params.get("session_id", None)
-    if raw_session_id == "":
-        return {
-            "error": "completion.reconcile_commits: session_id is empty or the literal 'null'",
-            "no_op": True,
-        }
-    session_id: Optional[str] = raw_session_id or None
-    chain_slug: Optional[str] = params.get("chain_slug") or None
-
-    # dry_run: default False (deliberate divergence from handoff.reconcile_open's
-    # default-True — see docstring above). Non-bool coerces to True: an unrecognized
-    # value must never silently authorize a write, so the fail-conservative direction
-    # here is the opposite of the absent-key default.
-    raw_dry_run = params.get("dry_run", False)
-    dry_run: bool = raw_dry_run if isinstance(raw_dry_run, bool) else True
-
-    # DR-216 D2(iv) noun confinement: empty-path guard (mandatory).
-    if not plan_path:
-        return {"error": "completion.reconcile_commits: 'plan_path' param is required", "no_op": True}
-
-    # Op-family path-containment sweep, 2026-07-08: repo_root is required to derive the
-    # worktree root (common_dir scope keying guarantees the command-type invoker always
-    # supplies --repo; see ipc.py's _OP_KEY_SCOPE["completion.reconcile_commits"] = "common_dir").
-    # Mirrors handoff.transition/handoff.stamp's repo_root-required gate — containment is not
-    # optional, so the worktree root must always be derivable.
-    if repo_root is None:
-        return {
-            "error": (
-                "completion.reconcile_commits: repo_root is required "
-                "(no founding root available — handler called without socket-authoritative common_dir)"
-            ),
-            "no_op": True,
-        }
-
-    worktree = main_worktree_root(repo_root)
-
-    # Containment: resolved plan_path MUST be under <worktree>/archive/completed/ (the real
-    # production noun — completion entries with status: pending-release empirically live here;
-    # 61 confirmed, 0 under docs/plans/) OR <worktree>/docs/plans/ (DR-216's originally-stated
-    # noun, kept as a conservative superset in case that framing has a real flow).
-    # Mirrors handoff.has_live_children's dual-root allow-list (state/handoffs/ + archive/handoffs/).
-    # docs/problems/2026-07-08-op-family-path-containment-investigation.md § 4.
-    # (Review: code-reviewer — Finding 1, P1: docs/plans/-only rejected the oracle's real
-    # archive/completed/ entries; widened to both allowed roots.)
-    p = Path(plan_path)
-    if not p.is_absolute():
-        p = worktree / p
-    contained = contained_path(
-        p, [worktree / "docs" / "plans", worktree / "archive" / "completed"]
-    )
-    if contained is None:
-        return {
-            "error": (
-                "completion.reconcile_commits: plan_path escapes "
-                f"docs/plans/ or archive/completed/: {plan_path!r}"
-            ),
-            "no_op": True,
-        }
-    plan_path = str(contained)
-
-    try:
-        return await asyncio.to_thread(
-            reconcile_completion_commits,
-            plan_path=plan_path,
-            commits=commits,
-            session_id=session_id,
-            chain_slug=chain_slug,
-            worktree_root=str(worktree),
-            dry_run=dry_run,
-        )
-    except ValueError as exc:
-        # session_id allowlist/"null" guard (oracle Step 3 exit-1 parity) — never
-        # crash the handler; return the structured error shape like every other guard.
-        return {"error": f"completion.reconcile_commits: {exc}", "no_op": True}
-
-
 @register_op("plan.append_session")
 async def _append_session_handler(
     params: dict, repo_root: Optional[Path] = None
@@ -1681,7 +693,7 @@ def _contains_all_commits(worktree_root: Path, tag: str, commits: Sequence[str])
     discrimination), NOT independent ranges: there is exactly one ref
     involved, so no ``reachable(positives) \\ reachable(negatives)`` collapse risk
     applies. Reuses the proven shape of
-    ``coordinator_core.ops.emit.envelope.classify_shas_on_origin_main`` (its
+    ``coordinator_core.ops.emit.resolvers.classify_shas_on_origin_main`` (its
     ancestor-set half): everything printed by ``git rev-list <tag>`` is, by
     definition, both a valid commit AND an ancestor of ``tag``.
 

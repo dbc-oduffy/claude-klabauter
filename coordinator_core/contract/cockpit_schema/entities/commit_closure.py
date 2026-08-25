@@ -28,7 +28,7 @@ note).
 
 "Default branch" in `reachable_on_default_branch` resolves to `origin/main`
 verbatim — matching `_stamp_shipped_sha`/`_sha_on_origin_main` semantics
-(envelope.py) — not a per-repo-configurable default-branch lookup.
+(resolvers.py) — not a per-repo-configurable default-branch lookup.
 """
 from __future__ import annotations
 
@@ -61,7 +61,10 @@ class CommitClosure(BaseModel):
     item_id: str
     sha: str = Field(pattern=r"^[0-9a-f]{40}$", description="Full 40-char commit SHA.")
     # True/false = resolved reachability on origin/main; null = indeterminate
-    # (fetch-unavailable or equivalent degrade case) — never coerced to false.
+    # (no local origin/main ref at all — the porter never fetches; a fetch-unavailable
+    # degrade case existed only while `envelope.fetch_origin_main` did, and that leg was
+    # deleted 2026-08-21 per docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md
+    # § G5, before this comment was corrected) — never coerced to false.
     reachable_on_default_branch: bool | None
 
     # C3 (DR-318 §D4/D8, revised 2026-08-18 after review finding F4). Null on an ordinary
@@ -90,7 +93,7 @@ class CommitClosure(BaseModel):
         ),
     )
 
-    # Review: code-reviewer (Finding 1, P1) — envelope.py's version-gated
+    # Review: code-reviewer (Finding 1, P1) — resolvers.py's version-gated
     # _stamp_content_hash walks every SECMAP dotpath (including commit_closures,
     # already wired) and unconditionally attaches content_hash once
     # schema_version >= 2.5.0; extra="forbid" would reject the stamped record

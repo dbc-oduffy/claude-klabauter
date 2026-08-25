@@ -52,14 +52,6 @@ def test_bar_default_agrees_with_the_one_place_it_is_stated():
     assert DEFAULT_BREACH_BAR_MS == PROCESS_TIME_BAR_MS
 
 
-def test_max_telemetry_rows_agrees_with_the_census_sibling():
-    """The breach op restates the census's read bound rather than importing
-    it through the corpus-scan import graph; the two must not drift."""
-    from coordinator_core.ops import op_budget_breaches, op_census_report
-
-    assert op_budget_breaches.MAX_TELEMETRY_ROWS == op_census_report.MAX_TELEMETRY_ROWS
-
-
 def test_the_three_breach_kinds_are_counted_separately():
     """A caller timeout, an over-bar completion, and a vanished invocation
     are three different reconcile hazards. Merging any two of them into one

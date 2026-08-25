@@ -409,7 +409,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/coordinator-safe-commit.py",
         "coordinator/bin/coordinator-write-review-trail.py",
         "coordinator/bin/cross-repo-memo.py",
-        "coordinator/bin/derive-file-attribution.py",
         "coordinator/bin/emit-goal-from-artifact.py",
         "coordinator/bin/fan-out-dispatch.py",
         "coordinator/bin/handoff-loe-summary.py",
@@ -519,7 +518,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/draft_plan_aging.py",
         "coordinator_core/ops/emit/context.py",
         "coordinator_core/ops/emit/doe_drift.py",
-        "coordinator_core/ops/emit/envelope.py",
+        "coordinator_core/ops/emit/resolvers.py",
         "coordinator_core/ops/emit/lma_cache.py",
         "coordinator_core/ops/emit/sections/_shared.py",
         "coordinator_core/ops/emit/sections/handoff_columns.py",
@@ -997,8 +996,8 @@ def test_the_pre_split_spellings_are_gone_and_stay_gone():
     them from growing back.
 
     `LOCAL_PLUMBING_TIMEOUT_SECS` / `REMOTE_TIMEOUT_SECS` existed only because
-    `ops/emit/envelope.py` migrated onto this seam under the pre-split
-    spellings mid-flight. Their written deletion condition -- `envelope.py`
+    `ops/emit/resolvers.py` migrated onto this seam under the pre-split
+    spellings mid-flight. Their written deletion condition -- `resolvers.py`
     and `emit/sections/commit_closures.py`'s comment naming the
     `*_BUDGET_SECS` spellings -- is discharged, so they are gone.
 

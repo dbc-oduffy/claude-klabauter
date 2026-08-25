@@ -32,13 +32,13 @@ Review: code-reviewer Finding 1): authors write the FORWARD edge ``supersedes:``
 or YAML list of paths) on the superseding plan; nothing authors the backward edge directly,
 and asking authors to double-write both directions is redundant and drift-prone. The backward
 edge is derived cross-record as a SECOND PASS at the end of this module's own ``collect()`` —
-NOT a post-collect ``envelope.py`` enricher. Unlike ``_stamp_initiative_goals`` (a genuine
+NOT a post-collect ``resolvers.py`` enricher. Unlike ``_stamp_initiative_goals`` (a genuine
 CROSS-SECTION join — initiatives and goals are different section modules, each with only its
 own ``collect(ctx)`` call and no visibility into the other's output), ``supersedes``/
 ``superseded_by`` is an INTRA-section self-join (plans × plans): ``collect()`` already has the
 entire plan record set in scope via one ``_query_plan_records(ctx)`` call, so a second in-
 function pass over the already-built ``records`` list reproduces the identical behavior with
-zero coupling to ``envelope.py``. ``_apply_superseded_by`` stages the raw ``supersedes`` value
+zero coupling to ``resolvers.py``. ``_apply_superseded_by`` stages the raw ``supersedes`` value
 under a private ``_supersedes_raw`` key during the first pass and pops it from every record
 unconditionally before ``collect()`` returns — the staging key never leaks into the returned
 records (strict/``additionalProperties: false`` schema).
@@ -94,7 +94,7 @@ _REVIEWER_SIDECAR_KIND_STAFF_TIER = 0
 # reordering; a plain ".review.md" sidecar with no named-reviewer marker sits between the
 # named tier and the model-marker tier). Matched by substring against the sidecar's suffix
 # segment (case-insensitive); an unrecognized future marker falls back to the "plain" tier.
-_REVIEWER_SIDECAR_PRIORITY: tuple[str, ...] = ("the Staff Engineer", "eng-director", "the Director of Engineering")
+_REVIEWER_SIDECAR_PRIORITY: tuple[str, ...] = ("patrik", "eng-director", "zoli")
 _REVIEWER_SIDECAR_PLAIN_TIER = 100
 _REVIEWER_SIDECAR_MODEL_MARKERS: tuple[str, ...] = ("sonnet",)
 _REVIEWER_SIDECAR_MODEL_TIER = 200
@@ -313,7 +313,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
 def _apply_superseded_by(records: list[dict]) -> None:
     """Second pass: derive ``superseded_by`` as the reverse edge of authored ``supersedes``
-    (dead-join fix, 2026-07-21; relocated from ``envelope.py`` same day — Review: code-reviewer
+    (dead-join fix, 2026-07-21; relocated from ``resolvers.py`` same day — Review: code-reviewer
     Finding 1 — intra-section self-join, not a cross-section enrichment).
 
     Purpose: nothing authors the backward edge directly (asking authors to double-write both

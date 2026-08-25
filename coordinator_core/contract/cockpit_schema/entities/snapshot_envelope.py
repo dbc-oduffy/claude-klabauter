@@ -48,7 +48,6 @@ from coordinator_core.contract.cockpit_schema.entities.decision_guide_summary im
     DecisionGuideSummary,
 )
 from coordinator_core.contract.cockpit_schema.entities.exec_summary import ExecSummary
-from coordinator_core.contract.cockpit_schema.entities.file_attribution import FileAttribution
 from coordinator_core.contract.cockpit_schema.entities.goal import Goal
 from coordinator_core.contract.cockpit_schema.entities.health_status_summary import (
     HealthStatusSummary,
@@ -100,7 +99,6 @@ class MalformedRecords(BaseModel):
     health: list[dict[str, Any]]
     decision_guides: list[dict[str, Any]]
     session_hierarchies: list[dict[str, Any]]
-    file_attributions: list[dict[str, Any]]
     initiatives: list[dict[str, Any]]
     exec_summaries: list[dict[str, Any]]
     roadmap_dag_nodes: list[dict[str, Any]]
@@ -200,9 +198,6 @@ class SnapshotEnvelope(BaseModel):
     # Session-hierarchy summaries, present-but-empty until the emit section
     # wires it (D9).
     session_hierarchies: list[SessionHierarchy]
-    # File-attribution records, present-but-empty until the emit section
-    # wires it (D9).
-    file_attributions: list[FileAttribution]
     # Initiative summaries — lightweight parent entities for work identity
     # (D2). Present-but-empty until C4 emitter wires the initiatives SECTION
     # (D9).

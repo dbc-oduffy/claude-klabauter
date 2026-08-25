@@ -46,6 +46,7 @@ import contextvars
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -60,13 +61,18 @@ from coordinator_core.git.divergence import (
     DivergenceCheckFailed,
     V2Record,
     diverging_paths,
-    parse_v2_records,
 )
+from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.git.git_index import scoped_status as _git_index_scoped_status
+from coordinator_core.git.git_objects import cas_ref, write_object
 from coordinator_core.git.git_state import (
+    IndexEntry,
     IndexParseError,
     head_blobs as _git_state_head_blobs,
     head_sha as _git_state_head_sha,
+    head_tree_sha as _git_state_head_tree_sha,
     read_index,
+    read_tree_spine,
 )
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
@@ -197,52 +203,93 @@ def _v2_state_records_chunked(
     *,
     timeout: float,
 ) -> "Dict[str, V2Record]":
-    """Chunked `git status --porcelain=v2 -z --no-renames -- <paths>`, merged
-    into one `{path: V2Record}` map.
+    """In-process `{path: V2Record}` map -- the spawn-free replacement for
+    what was a chunked `git status --porcelain=v2 -z --no-renames`
+    (C11, `state/dispatch-briefs/2026-08-23-the-scoped-commit-rebuilt-from-
+    first-principles/C11.md`; census: `docs/plans/2026-08-23-the-scoped-
+    commit-rebuilt-from-first-principles.md` "What the census established").
+    `timeout` is accepted and unused -- kept so `commit_scoped()`'s call site
+    does not need its own signature edit; nothing here can hang the way a
+    subprocess can.
 
     The single state read `commit_scoped()` takes for BOTH of its
-    branch-selection questions. Those were two separate chunked spawns over
-    the same `path_list` at the same point in the function with no mutation
-    between them -- content divergence (`_diverging_paths_chunked`, `X`/`Y`)
-    and mode delta (`_mode_delta_paths_chunked`, `m_head`/`m_index` +
-    `sha_head`/`sha_index`) -- and one porcelain-v2 record already carries
-    every field both of them read. Under DR-344 the spawn IS the cost, so
-    asking one process two questions instead of two processes one each is the
-    whole point.
+    branch-selection questions: content divergence (`X`/`Y`) and mode delta
+    (`m_head`/`m_index` + `sha_head`/`sha_index`) -- unchanged from the
+    porcelain-v2-backed version's own contract; only the SOURCE of each
+    field moved off a `git` spawn:
 
-    Same `_chunk_paths()` seam and the same fail-loud posture as the two
-    functions it consolidates: any chunk that fails raises
-    `DivergenceCheckFailed` rather than collapsing to an empty map, because
-    `commit_scoped()` picks the commit MECHANISM off this answer and an
-    indeterminate read must never read as "clean".
+      `m_index`/`sha_index` -- `coordinator_core.git.git_state.read_index`
+          (already spawn-free, C2 promotion). Absent index entry -> the
+          porcelain-v2 zero shape (`"000000"` mode, 40 `"0"` sha), exactly
+          what git itself prints for a missing side of a changed-entry line.
+      `m_head`/`sha_head`  -- `coordinator_core.git.git_state.read_tree_spine`
+          (C3's in-process HEAD-tree reader -- walks only the directory
+          spine each path needs, never spawns `git ls-tree`). `None` back
+          from `read_tree_spine` (unresolvable/corrupt HEAD) folds to the
+          same "absent from HEAD" zero shape as an unborn repo, matching
+          `_head_blobs`'s own fold for that case one call site up.
+      `x`   -- `"."` when `(m_head, sha_head) == (m_index, sha_index)`,
+          else a non-`.` placeholder. `_diverged_from_records()` (the sole
+          reader) only ever tests `!= "."`, never the letter itself, so this
+          function is not required to reproduce git's actual status-letter
+          vocabulary (`M`/`A`/`D`/...) -- only the same/differ verdict.
+      `y`   -- derived from `coordinator_core.git.git_index.scoped_status`'s
+          verdict for the path: `"clean"` -> `"."`, `"candidate"`/`"deleted"`
+          -> a non-`.` placeholder. `"untracked"` (no index entry at all)
+          also maps non-`.`, conservatively -- this call site's own `path_
+          list` is always a path already staged or about to be, so an
+          `"untracked"` verdict here means the world moved out from under
+          this call, and the safe direction is to read it as changed, never
+          as `"."`.
+
+    Same fail-loud posture as the version this replaces: `read_index`/
+    `scoped_status` raising `IndexParseError` (a malformed/unsupported/
+    unmerged index) is re-raised as `DivergenceCheckFailed` rather than
+    ever collapsing to an empty/partial map -- `commit_scoped()` still picks
+    the commit MECHANISM off this answer, so an indeterminate read must
+    never read as "clean".
 
     Negative-spec: this does NOT answer "does the worktree match HEAD".
-    Porcelain v2 carries the HEAD and index blob OIDs but no worktree OID,
-    and it omits CLEAN paths entirely -- so `_reject_stale_index_paths`,
+    Same as the porcelain-v2-backed version, `_reject_stale_index_paths`,
     `_index_blobs` and `_head_blobs` stay on their own reads. Folding those
     in would silently turn "clean" into "absent"."""
+    del timeout  # unused -- see docstring
+    path_list = list(paths)
+    try:
+        index_snapshot = read_index(cwd)
+        worktree_verdicts = _git_index_scoped_status(cwd, path_list)
+    except IndexParseError as exc:
+        raise DivergenceCheckFailed(
+            f"_v2_state_records_chunked: in-process index read failed for "
+            f"{len(path_list)} path(s) -- index/worktree state indeterminate ({exc})"
+        ) from exc
+    spine = read_tree_spine(cwd, path_list)
+
+    zero_sha = "0" * 40
     records: "Dict[str, V2Record]" = {}
-    for chunk in _chunk_paths(list(paths)):
-        result = _git(
-            [
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--no-renames",
-                "--",
-                *chunk,
-            ],
-            cwd=cwd,
-            timeout=timeout,
+    for p in path_list:
+        idx_entry = index_snapshot.get(p)
+        m_index = f"{idx_entry.mode:06o}" if idx_entry is not None else "000000"
+        sha_index = idx_entry.sha if idx_entry is not None else zero_sha
+
+        head_entry = None
+        if spine is not None:
+            parts = p.split("/")
+            dirpath = "/".join(parts[:-1])
+            name = parts[-1]
+            dir_entries = spine.get(dirpath)
+            if dir_entries is not None:
+                head_entry = dir_entries.get(name)
+        m_head = f"{head_entry[0]:06o}" if head_entry is not None else "000000"
+        sha_head = head_entry[1] if head_entry is not None else zero_sha
+
+        x = "." if (m_head, sha_head) == (m_index, sha_index) else "M"
+        y_verdict = worktree_verdicts.get(p, "untracked")
+        y = "." if y_verdict == "clean" else "M"
+
+        records[p] = V2Record(
+            x=x, y=y, m_head=m_head, m_index=m_index, sha_head=sha_head, sha_index=sha_index
         )
-        if not result.ok:
-            raise DivergenceCheckFailed(
-                f"_v2_state_records_chunked: `git status --porcelain=v2` failed or "
-                f"timed out (rc={result.returncode}) for {len(chunk)} path(s) -- "
-                "index/worktree state indeterminate"
-            )
-        records.update(parse_v2_records(result.stdout))
     return records
 
 
@@ -1730,75 +1777,61 @@ def _index_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
 
 def _head_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
     """Return `{path: HEAD-blob-sha}` for `paths`, via
-    `coordinator_core.git.git_state.head_blobs` -- C1's ONE retained
-    `git ls-tree` spawn (C2, 2026-08-21; see this module's `_index_blobs`
-    for the sibling INDEX-side re-point onto `read_index`, and
-    `state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-
-    without-spawning-git/C2.md`). A path absent from HEAD (new/untracked,
-    or an unborn branch with no commits yet -- `git_state.head_blobs`
-    folds `"not a valid object name HEAD"` into the same "chunk answered
-    nothing" shape as any other per-chunk git failure, so both read as the
-    ordinary absent-from-HEAD `None` here, matching this function's
-    pre-C2 behaviour for the unborn case) maps to `None`.
+    `coordinator_core.git.git_state.read_tree_spine` -- C3's in-process
+    HEAD-tree reader (C11, `state/dispatch-briefs/2026-08-23-the-scoped-
+    commit-rebuilt-from-first-principles/C11.md`; census: `docs/plans/
+    2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md` "What
+    the census established", spawn #1). Walks only the directory spine each
+    path needs (never `git ls-tree`), replacing this call site's former
+    `git_state.head_blobs` spawn -- that function's own memoised spawn
+    remains in place for its OTHER call sites in this module
+    (`_reject_stale_index_paths`, `_resolve_content_sources`), which are
+    outside this chunk's scope. A path absent from HEAD (new/untracked, or
+    an unborn branch with no commits yet -- `read_tree_spine` returns `None`
+    for either) maps to `None`, matching this function's pre-C11 fold for
+    the same case.
 
-    Reconciliation posture matches `_index_blobs` above: `git_state.
-    head_blobs` hands back `{path-as-git-printed-it: (mode, sha)}`, and this
-    function reconciles that back to the caller's own key string via
-    `_normalize_path_key` exactly as before -- `_GIT_PATH_UNRECONCILED`
-    REMAINS REACHABLE here (unlike on the INDEX side, see `_index_blobs`'s
-    own docstring): `git ls-tree` is still a real git invocation whose
-    printed path can still diverge from the caller's key (case, primarily),
-    so the case-divergence hazard this sentinel exists to catch is still
-    live on this side.
+    No reconciliation pass needed here, unlike the spawn-backed version this
+    replaces: `read_tree_spine`'s tree-entry names are looked up by DIRECT
+    dict key (this function's own `paths`, split on `/`), never round-
+    tripped through a git-printed line, so there is no printed-path string
+    to diverge from the caller's key and `_GIT_PATH_UNRECONCILED` is
+    structurally unreachable from this call site now. This does not weaken
+    the case-divergence guard `_agree_branch_cas_refusal` relies on -- as
+    that function's own docstring already notes, the hazard is entirely an
+    INDEX-side fact, caught by `_index_blobs`'s own `:(icase)` rescan before
+    `_head_blobs`'s answer for the same path is ever consulted; a
+    case-mismatched key here now simply reads as "absent from HEAD" (`None`),
+    the same terminal fold the old reconciliation path produced for it via
+    `_GIT_PATH_UNRECONCILED` -> refusal one layer up.
 
-    `_GIT_READ_FAILED` here now covers a narrower case than before C2:
-    `git_state.head_blobs` is documented to never raise on an ordinary
-    per-chunk `git` failure (it folds that into "this chunk answered
-    nothing", the same shape as the unborn-HEAD case above -- see its own
-    docstring's "never raises" contract) -- there is no longer a
-    `result.ok`/stderr signal at this call site to distinguish "git itself
-    failed" from "genuinely absent". `_GIT_READ_FAILED` is still reachable
-    for a genuine INFRASTRUCTURE failure below `head_blobs` itself (e.g. the
-    `.git` directory cannot be resolved) -- caught here and forced onto
-    every requested path, never silently downgraded to `None`.
-
-    Deliberately has NO `:(icase)` rescan of its own, unlike `_index_blobs`
-    -- unchanged from pre-C2: `git ls-tree` REJECTS that pathspec magic
-    outright (verified empirically, 2026-08-14). Not a gap: the
-    case-divergence hazard this exists to catch (`git add` silently reusing
-    an EXISTING INDEX entry under a different case) is entirely an
-    index-side fact -- `_index_blobs`'s own `:(icase)` rescan already forces
-    `_GIT_PATH_UNRECONCILED` into `pre_index_blobs`/`current_index_blobs`
-    for that path, which `_agree_branch_cas_refusal` already refuses on
-    before `_head_blobs`'s answer for that same path is ever consulted.
-
-    No `_chunk_paths()` call at THIS call site any more -- `git_state.
-    head_blobs` chunks internally (via a function-local import of this
-    module's own `_chunk_paths`, to keep `coordinator_core.git.*` off the
-    cold-start import path; see its own docstring), so this function passes
-    the whole `paths` sequence through in one call.
+    `_GIT_READ_FAILED` is reachable only for a genuine exception out of
+    `read_tree_spine` itself (e.g. the `.git` directory cannot be resolved)
+    -- caught here and forced onto every requested path, never silently
+    downgraded to `None`. An unresolvable/corrupt HEAD is NOT such a case:
+    `read_tree_spine` returns `None` (not a raise) for it, which this
+    function folds to ordinary absent-from-HEAD `None` for every path,
+    matching the unborn-repo case above.
     """
     if not paths:
         return {}
     blobs: Dict[str, object] = {p: None for p in paths}
-    key_by_normalized = {_normalize_path_key(p): p for p in paths}
     try:
-        raw = _git_state_head_blobs(root, paths)
+        spine = read_tree_spine(root, paths)
     except Exception:
         return {p: _GIT_READ_FAILED for p in paths}
-    matched: Set[str] = set()
-    unreconciled: List[Tuple[str, str]] = []
-    for path, (_mode, sha) in raw.items():
-        norm = _normalize_path_key(path)
-        key = key_by_normalized.get(norm)
-        if key is not None:
-            blobs[key] = sha
-            matched.add(norm)
-        else:
-            blobs[path] = sha
-            unreconciled.append((path, sha))
-    if unreconciled:
-        _mark_unreconciled(blobs, paths, matched, unreconciled)
+    if spine is None:
+        return blobs
+    for p in paths:
+        parts = p.split("/")
+        dirpath = "/".join(parts[:-1])
+        name = parts[-1]
+        entries = spine.get(dirpath)
+        if entries is None:
+            continue
+        entry = entries.get(name)
+        if entry is not None:
+            blobs[p] = entry[1]
     return blobs
 
 
@@ -2385,6 +2418,204 @@ def _resolve_content_sources(
     return resolution
 
 
+#: Value `_assemble_commit_tree_input` maps a resolved path's mode+sha pair
+#: to: `(mode_string, blob_sha)`, e.g. `("100644", "<40-hex-sha>")` -- the
+#: same two-tuple shape `_parse_ls_files_cacheinfo`'s cacheinfo entries
+#: already carry (minus the path, which is the caller's own dict key here).
+_TreeEntry = Tuple[str, str]
+
+
+def _assemble_commit_tree_input(
+    resolution: Dict[str, str],
+    *,
+    index_snapshot: Dict[str, IndexEntry],
+    head_spine: Optional[Dict[str, Dict[str, Tuple[int, str]]]],
+    worktree_blobs: Optional[Dict[str, str]] = None,
+    supplied_blobs: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, _TreeEntry], Set[str]]:
+    """Pure function from `_resolve_content_sources`'s output to
+    `{path: (mode, sha)}` plus an explicit ABSENT set -- the tree-input
+    assembler for the multi-path, in-process (spine-rewrite) commit arm.
+    C8a, docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md.
+
+    NO git spawn, NO `read_index`/`read_tree_spine` call of its own, NO
+    blob writing -- every read this function needs is a PARAMETER (R3,
+    staff-eng review round 2): `index_snapshot` (the caller's single
+    `read_index()` result -- never re-read here, preserving AC11(a)'s
+    one-snapshot rule) and `head_spine` (the caller's single
+    `read_tree_spine()` result, or `None` if the caller had none to give,
+    e.g. an unborn HEAD -- treated as "nothing to fall back to", never a
+    refusal on its own). `worktree_blobs`/`supplied_blobs` are `{path: sha}`
+    for paths `resolution` resolved to `_SOURCE_WORKTREE`/`_SOURCE_SUPPLIED`
+    respectively, each blob already written by the caller (`git hash-object
+    -w --stdin-paths` for the worktree case, `stage_from_patch()` for the
+    supplied case) BEFORE this function runs -- this function never writes
+    a blob, only resolves which sha/mode a path's tree entry should carry.
+
+    Mode precedence, per path, is the same ladder `_resolve_mode_for_paths`
+    already implements minus both of its own reads: the REAL index entry
+    (from `index_snapshot`) first, the HEAD tree spine (`head_spine`)
+    second, `_SUPPLIED_BLOB_MODE` ("100644") last -- reached only for a
+    path with no prior entry anywhere (a genuinely new file). A
+    `_SOURCE_STAGED` path's mode+sha come verbatim from its `index_snapshot`
+    entry -- never re-derived from `head_spine` or a supplied/worktree sha,
+    preserving the "commit the deliberately-staged blob as-is" property
+    `_resolve_content_sources` exists to protect (AC14).
+
+    Staged deletion (the trap this function exists to close): a
+    `_SOURCE_STAGED` path absent from `index_snapshot` is a path staged for
+    deletion under the real index. A `read-tree HEAD`-seeded private index
+    resurrects such a path (today's arm); a spine rewrite has no implicit
+    resurrection, so this function puts that path in the returned ABSENT
+    set instead of a `(mode, sha)` entry -- the caller must remove it from
+    its parent tree explicitly. Silently omitting a path from BOTH the
+    tree-input dict and the ABSENT set would make the deletion vanish with
+    no spawn count or `git fsck` symptom to catch it.
+
+    `mode_only_paths` (AC15's "must not appear in the exclusion report")
+    is deliberately NOT a parameter here -- every `mode_only_paths` member
+    resolves `_SOURCE_STAGED` like any other staged path and is committed
+    identically; the exclusion-report carve-out is a reporting concern at
+    the caller, not a tree-input-assembly concern here.
+
+    Path lookups are refuse-on-divergence, exactly like `_index_blobs`
+    (AC10): a caller path with no exact `_normalize_path_key` match against
+    `index_snapshot`/`head_spine` but a CASEFOLD match is a case-divergent
+    key this function cannot silently resolve without risking the same
+    "git add reuses a differently-cased index entry" hazard
+    `_GIT_PATH_UNRECONCILED` exists to catch (see that sentinel's own
+    module-level docstring) -- raises `ValueError` rather than guessing or
+    dropping the path.
+    """
+    worktree_blobs = worktree_blobs or {}
+    supplied_blobs = supplied_blobs or {}
+    head_spine = head_spine or {}
+
+    index_by_normalized = {_normalize_path_key(p): entry for p, entry in index_snapshot.items()}
+    index_casefold_keys = {norm.casefold() for norm in index_by_normalized}
+
+    def _refuse(path: str, where: str) -> None:
+        raise ValueError(
+            f"_assemble_commit_tree_input: refusing case-divergent path {path!r} -- "
+            f"no exact match in {where}, only a case-insensitive one "
+            "(see _GIT_PATH_UNRECONCILED's module docstring)"
+        )
+
+    def _index_entry(path: str) -> Optional[IndexEntry]:
+        norm = _normalize_path_key(path)
+        entry = index_by_normalized.get(norm)
+        if entry is not None:
+            return entry
+        if norm.casefold() in index_casefold_keys:
+            _refuse(path, "index_snapshot")
+        return None
+
+    def _spine_mode(path: str) -> Optional[int]:
+        norm = _normalize_path_key(path)
+        if "/" in norm:
+            dirpath, name = norm.rsplit("/", 1)
+        else:
+            dirpath, name = "", norm
+        entries = head_spine.get(dirpath)
+        if not entries:
+            return None
+        entry = entries.get(name)
+        if entry is not None:
+            return entry[0]
+        name_cf = name.casefold()
+        if any(k.casefold() == name_cf for k in entries):
+            _refuse(path, "head_spine")
+        return None
+
+    def _resolved_mode(path: str, index_entry: Optional[IndexEntry]) -> str:
+        if index_entry is not None:
+            return f"{index_entry.mode:06o}"
+        spine_mode = _spine_mode(path)
+        if spine_mode is not None:
+            return f"{spine_mode:06o}"
+        return _SUPPLIED_BLOB_MODE
+
+    tree_input: Dict[str, _TreeEntry] = {}
+    absent: Set[str] = set()
+
+    for path, source in resolution.items():
+        if source == _SOURCE_STAGED:
+            index_entry = _index_entry(path)
+            if index_entry is None:
+                absent.add(path)
+                continue
+            tree_input[path] = (f"{index_entry.mode:06o}", index_entry.sha)
+        elif source == _SOURCE_WORKTREE:
+            if path not in worktree_blobs:
+                raise ValueError(
+                    f"_assemble_commit_tree_input: worktree-source path {path!r} has "
+                    "no entry in worktree_blobs -- caller must hash-object it before "
+                    "calling this function"
+                )
+            index_entry = _index_entry(path)
+            tree_input[path] = (_resolved_mode(path, index_entry), worktree_blobs[path])
+        elif source == _SOURCE_SUPPLIED:
+            if path not in supplied_blobs:
+                raise ValueError(
+                    f"_assemble_commit_tree_input: supplied-source path {path!r} has "
+                    "no entry in supplied_blobs"
+                )
+            index_entry = _index_entry(path)
+            tree_input[path] = (_resolved_mode(path, index_entry), supplied_blobs[path])
+        else:
+            raise ValueError(
+                f"_assemble_commit_tree_input: unresolved/unknown source {source!r} "
+                f"for path {path!r}"
+            )
+
+    return tree_input, absent
+
+
+def _hash_object_stdin_paths(
+    paths: Sequence[str],
+    *,
+    cwd: Union[str, Path],
+    timeout: float = _DEFAULT_TIMEOUT_SECS,
+) -> GitResult:
+    """`git hash-object -w --stdin-paths` -- write a blob per `path` in
+    `paths`, reading each path's CONTENT FROM DISK itself (through the same
+    clean-filter machinery a plain `git add -- <path>` would apply), in ONE
+    subprocess regardless of how many paths are given (AC13, C8b,
+    docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md). Replaces the
+    `git add -- <worktree_paths>` fan-in `_commit_scoped_private_index` used
+    to issue against its private index for every worktree-sourced path in
+    one commit -- this call never touches any index, private or shared, at
+    all; it only writes loose blob objects.
+
+    Unlike every other batched wrapper in this module (`_chunk_paths()` and
+    its callers), this is NEVER chunked against the Windows argv-length cap
+    -- the path LIST travels over stdin, not argv, so there is no cap to
+    hit regardless of how many paths are given.
+
+    Routed through `_git()` (unlike `_hash_object_stdin_bytes` above, which
+    bypasses it deliberately): the data crossing `_git()`'s `text=True` leg
+    here is the PATH LIST itself, not file content, so none of that
+    function's raw-bytes/non-ASCII-content hazards apply -- git reads each
+    path's actual bytes from disk on its own, off the filesystem, never
+    through this call's stdin.
+
+    Returns a `GitResult` whose `stdout`, on success, is one 40-hex sha per
+    line, in the SAME ORDER `paths` was given in (git's own `--stdin-paths`
+    contract) -- callers zip that order back onto `paths` themselves; this
+    wrapper does no parsing of its own; on an empty `paths` this short-
+    circuits to an `ok` empty result, spawning no subprocess.
+    """
+    if not paths:
+        return GitResult(returncode=0, stdout="", stderr="")
+    stdin_data = "\n".join(paths) + "\n"
+    return _git(
+        ["hash-object", "-w", "--stdin-paths"],
+        cwd=cwd,
+        input_data=stdin_data,
+        timeout=timeout,
+    )
+
+
 def _commit_scoped_private_index(
     diverged: Sequence[str],
     non_diverged: Sequence[str],
@@ -2431,7 +2662,7 @@ def _commit_scoped_private_index(
     landed here PURELY because their staged mode differs from HEAD's while
     their content is unchanged (never because of a real worktree/index
     content divergence). These paths still resolve `_SOURCE_STAGED` and are
-    replayed via the same `cacheinfo_entries` route as any other
+    committed via the same staged-blob tree-input route as any other
     `staged_paths` member -- the ONLY thing this changes is the success
     report: a mode-only path has no excluded WORKTREE edit (worktree and
     staged content already agree for it), so it must never appear in the
@@ -2440,217 +2671,293 @@ def _commit_scoped_private_index(
     would emit a false exclusion warning. `None` (the default) reproduces
     prior behaviour exactly -- every `staged_paths` member is reported,
     same as before this parameter existed.
+
+    C8b rewire (docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md):
+    this no longer builds a throwaway private index at all -- `git
+    read-tree`/`git add`/the per-path `git update-index --cacheinfo`
+    fan-out/`git write-tree`/`git commit-tree`/`git update-ref` are all
+    gone. The whole tree is now assembled IN PROCESS: `read_index()` (C2,
+    spawn-free) supplies the one real-index snapshot AC11(a) requires,
+    `_hash_object_stdin_paths()` writes every worktree-sourced blob in ONE
+    spawn regardless of pathspec length (AC13), `_assemble_commit_tree_input`
+    (C8a) resolves each path's `(mode, sha)` (or ABSENT, for a staged
+    deletion) off that snapshot plus the HEAD tree spine, and
+    `_commit_via_head_spine` (C4) rewrites HEAD's tree spine, builds the
+    commit object, and lands it via a locked `cas_ref` CAS -- zero further
+    git spawns. `_resolve_mode_for_paths()` is retired from this call site
+    (its own `read_index`/`ls-tree` reads must not survive the rewire, or
+    AC11(a)'s one-snapshot rule silently breaks on any pathspec containing a
+    new file) -- the function itself is untouched, still covered by its own
+    tests elsewhere, simply no longer called from here.
     """
     root = Path(cwd)
     supplied_blobs = supplied_blobs or {}
     resolution = _resolve_content_sources(diverged, non_diverged, supplied_blobs)
     staged_paths = [p for p in diverged if resolution[p] == _SOURCE_STAGED]
     worktree_paths = [p for p in non_diverged if resolution[p] == _SOURCE_WORKTREE]
-    supplied_paths = [p for p in resolution if resolution[p] == _SOURCE_SUPPLIED]
 
-    old_head_result = _git(["rev-parse", "HEAD"], cwd=root)
-    if not old_head_result.ok:
-        return old_head_result
-    old_head = old_head_result.stdout.strip()
+    old_head = _git_state_head_sha(root)
+    if old_head is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                "_commit_scoped_private_index: HEAD has no resolvable commit "
+                "(unborn branch or a symref with no loose ref and no "
+                "packed-refs entry) -- this branch requires an existing HEAD "
+                "commit to read the parent and the spine to rewrite from"
+            ),
+        )
 
-    # Capture the CURRENTLY STAGED blob for each staged-blob-source path
-    # (`staged_paths`, resolved above) from the REAL index, before any
-    # mutation -- this is the deliberately-staged content (partial hunk,
-    # etc.) that must survive VERBATIM, never re-derived from the worktree
-    # (that would reproduce the exact bug this selector exists to close).
-    cacheinfo_entries: List[_CacheInfoEntry] = []
-    if staged_paths:
-        ls_files_result = _git(["ls-files", "-s", "--", *staged_paths], cwd=root)
-        if not ls_files_result.ok:
-            return ls_files_result
-        cacheinfo_entries = _parse_ls_files_cacheinfo(ls_files_result.stdout)
+    # AC11(a): the ONE real-index snapshot this whole commit is built from,
+    # read fresh, in process, no git spawn -- never re-read below.
+    index_snapshot = read_index(root)
 
-    # Supplied-blob-source paths (`supplied_paths`, empty until C2's
-    # `stage_from_patch()` populates `supplied_blobs`) never touch `git
-    # ls-files` at all -- the blob was already written by the caller, and
-    # the resolution above guarantees a supplied path can never ALSO be a
-    # `staged_paths`/`worktree_paths` member, so appending here is safe
-    # regardless of statement order (see `_resolve_content_sources`'s own
-    # docstring for why this is now a stated property, not an ordering
-    # accident).
-    supplied_modes = _resolve_mode_for_paths(root, supplied_paths)
-    for p in supplied_paths:
-        # Negative spec: a non-empty `supplied_paths` with no `supplied_blobs`
-        # is a broken resolution, not a recoverable state -- KeyError here is
-        # the loud failure. Never append a None sha: `update-index
-        # --cacheinfo` would take it as a literal and stage garbage.
-        blob = (supplied_blobs or {})[p]
-        mode = supplied_modes.get(p, _SUPPLIED_BLOB_MODE)
-        cacheinfo_entries.append((mode, blob, p))
+    # AC13: ONE `git hash-object -w --stdin-paths` spawn covers every
+    # worktree-sourced path in this commit, regardless of pathspec length --
+    # replaces the `git add -- <worktree_paths>` fan-in this branch's
+    # private index used to take.
+    worktree_blobs: Dict[str, str] = {}
+    if worktree_paths:
+        hash_result = _hash_object_stdin_paths(worktree_paths, cwd=root)
+        if not hash_result.ok:
+            return hash_result
+        shas = hash_result.stdout.splitlines()
+        if len(shas) != len(worktree_paths):
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    "_commit_scoped_private_index: `git hash-object --stdin-"
+                    f"paths` returned {len(shas)} sha(s) for {len(worktree_paths)} "
+                    "requested path(s) -- refusing to guess an alignment"
+                ),
+            )
+        worktree_blobs = dict(zip(worktree_paths, shas))
 
-    temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+    # Directory spine off HEAD's tree, scoped to every path this commit
+    # touches -- feeds `_assemble_commit_tree_input`'s own mode-precedence
+    # fallback (index -> HEAD spine -> `_SUPPLIED_BLOB_MODE`). `None` when
+    # unresolvable is passed straight through -- "nothing to fall back to",
+    # never a refusal on its own (see that function's own docstring).
+    head_spine = read_tree_spine(root, list(resolution.keys()))
 
     try:
-        private_env: Dict[str, str] = dict(os.environ)
-        private_env["GIT_INDEX_FILE"] = str(temp_index)
+        tree_input, absent = _assemble_commit_tree_input(
+            resolution,
+            index_snapshot=index_snapshot,
+            head_spine=head_spine,
+            worktree_blobs=worktree_blobs,
+            supplied_blobs=supplied_blobs,
+        )
+    except ValueError as exc:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"_commit_scoped_private_index: {exc}",
+        )
 
-        # Seed the private index straight from HEAD into this FRESH temp
-        # index, never via `shutil.copy2` of the shared `.git/index` --
-        # DR-272 § 3.4 (drift 2): the shared-index copy this function used
-        # to do was a genuine violation of form 2's own parenthetical
-        # ("initialized from HEAD (never from the shared worktree index)"),
-        # corrected here to match the idiom `commit_authored_content`
-        # already uses. This also removes the prior `reset -q HEAD -- .`
-        # cwd-relative subdirectory hazard and the uncaught
-        # `FileNotFoundError` when `.git/index` did not yet exist.
-        read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
-        if not read_tree_result.ok:
-            return read_tree_result
+    assembled: Dict[str, Union[Tuple[int, str], object]] = {
+        path: (int(mode, 8), sha) for path, (mode, sha) in tree_input.items()
+    }
+    for path in absent:
+        assembled[path] = _ABSENT
 
-        # Worktree-source paths (`worktree_paths` -- staged==worktree, or
-        # newly-added) are safe to (re-)stage straight from the worktree. A
-        # staged-deletion path is covered too WITHOUT `-A`: the `reset -q
-        # HEAD` above resurrects it in THIS PRIVATE copy (HEAD still has
-        # it), so it exists in the private index even though the worktree
-        # lacks it -- `git add -- path` stages a removal for a path present
-        # in the index but missing from the worktree (verified empirically;
-        # `-A` is only needed when a path is untracked/gone from BOTH,
-        # which is not this shape post-reset).
-        if worktree_paths:
-            add_result = _git(["add", "--", *worktree_paths], cwd=root, env=private_env)
-            if not add_result.ok:
-                return add_result
+    # `commit-tree` is plumbing -- it runs NO git hooks, so the
+    # `prepare-commit-msg` hook that stamps Session-Id/Deliverable-Id on
+    # every ordinary `git commit` never fires here. Replay its resolution
+    # logic explicitly so a commit landed via this branch carries identical
+    # trailers to one landed via the agree branch (AC18,
+    # docs/plans/2026-07-27-computed-commit-mechanism-selection.md chunk
+    # C10-remainder). Mutates `msg_file` in place, BEFORE it is read for the
+    # commit object body below, exactly mirroring what the hook would have
+    # done to the same file had `git commit` fired normally.
+    trailer_args = compute_missing_trailer_args(
+        msg_file, root, paths=[*diverged, *non_diverged],
+        session_id_override=attributed_session_id,
+    )
+    # C7a: an explicit caller `deliverable_id` folds into the SAME
+    # `interpret-trailers` call above, mirroring `commit_authored_
+    # content`'s `_drop_trailer_arg`-then-append shape -- EXCEPT for
+    # precedence against a pre-existing message trailer, which does NOT
+    # mirror that sibling (its message-first rule is silent about the
+    # THIRD source `commit_anchors.py` may have already stamped here; see
+    # `commit_scoped`'s own docstring and PM ruling (2)). May raise
+    # `DeliverableIdAssertionConflictError` -- see `_check_deliverable_id_
+    # precedence`'s own docstring; deliberately uncaught here. Gated on the
+    # caller-supplied `deliverable_id` parameter, never on a tier-0-resolved
+    # value, so this raise site is opt-in (staff-eng review finding 4).
+    if deliverable_id:
+        msg_text_before = Path(msg_file).read_text(encoding="utf-8")
+        if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
+            trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
+            trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+    if trailer_args:
+        interpret_result = _git(
+            ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
+            cwd=root,
+        )
+        if not interpret_result.ok:
+            return interpret_result
 
-        # Staged-blob- and supplied-blob-source paths are restored from
-        # `cacheinfo_entries`, never from the worktree.
-        for mode, sha, path in cacheinfo_entries:
-            cacheinfo_result = _git(
-                ["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"],
+    # Fast path: rewrite HEAD's tree spine in process, build the commit
+    # object in process, land it via a locked ref CAS -- zero further git
+    # spawns for this leg. `index_stat_identity` is passed (unlike
+    # `commit_authored_content`'s single-path caller, which reads no index
+    # at all): this branch's tree input is partly built from
+    # `index_snapshot` above, so a peer mutating the shared index between
+    # that snapshot and this CAS must be caught, never silently committed
+    # past. `_commit_via_head_spine` returns `None` -- take the ladder,
+    # below, unchanged, no side effect surviving that decision -- whenever
+    # a changed path's PARENT DIRECTORY does not already exist in HEAD's
+    # tree (a brand-new file under a brand-new subdirectory): a spine
+    # rewrite can only re-point existing directory levels, it cannot
+    # synthesize a new one that `write-tree` would otherwise happily create
+    # from a freshly-populated index.
+    fast_result = _commit_via_head_spine(
+        root, assembled, old_head, msg_file,
+        index_stat_identity=index_snapshot.stat_identity,
+    )
+    if fast_result is not None:
+        if not fast_result.ok:
+            return fast_result
+        new_sha = fast_result.stdout.strip()
+    else:
+        # ---- ladder: a private index, populated from `tree_input`/
+        # `absent` (never re-derived from `ls-files`/`_resolve_mode_for_
+        # paths`) ------------------------------------------------------
+        temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+        try:
+            private_env: Dict[str, str] = dict(os.environ)
+            private_env["GIT_INDEX_FILE"] = str(temp_index)
+
+            # Seed the private index straight from HEAD into this FRESH temp
+            # index, never via `shutil.copy2` of the shared `.git/index`
+            # (DR-272 § 3.4 drift 2) -- same idiom `commit_authored_content`'s
+            # own ladder and the pre-rewire private index both used.
+            read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
+            if not read_tree_result.ok:
+                return read_tree_result
+
+            # Every resolved path lands via an explicit cacheinfo entry --
+            # never from the worktree (`git add`) -- so a brand-new
+            # subdirectory materializes in the private index exactly like
+            # `write-tree` needs, with no dependency on that directory
+            # already existing anywhere.
+            for path, (mode, sha) in tree_input.items():
+                # `mode` here is already the "100644"-shaped STRING
+                # `_assemble_commit_tree_input` returns (never the int form
+                # `assembled`, above, converts to for the fast path) --
+                # `update-index --cacheinfo` takes it verbatim.
+                cacheinfo_result = _git(
+                    ["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"],
+                    cwd=root,
+                    env=private_env,
+                )
+                if not cacheinfo_result.ok:
+                    return cacheinfo_result
+
+            # `absent` (a staged deletion `_assemble_commit_tree_input`
+            # could not resolve against `index_snapshot`) must be removed
+            # explicitly -- `read-tree HEAD` above resurrects it into this
+            # private index by construction, and this branch never wants
+            # that resurrection (see `_assemble_commit_tree_input`'s own
+            # docstring on the staged-deletion trap it exists to close).
+            # ONE spawn for the whole set, never per-path.
+            if absent:
+                rm_result = _git(
+                    ["rm", "--cached", "-q", "--", *sorted(absent)],
+                    cwd=root,
+                    env=private_env,
+                )
+                if not rm_result.ok:
+                    return rm_result
+
+            write_tree_result = _git(["write-tree"], cwd=root, env=private_env)
+            if not write_tree_result.ok:
+                return write_tree_result
+            tree_sha = write_tree_result.stdout.strip()
+            empty_tree_refusal = _empty_private_index_refusal(
+                tree_sha, root=root, caller="_commit_scoped_private_index"
+            )
+            if empty_tree_refusal is not None:
+                return empty_tree_refusal
+
+            msg_text = Path(msg_file).read_text(encoding="utf-8")
+            subject_lines = msg_text.splitlines()
+            subject = subject_lines[0] if subject_lines else "commit"
+
+            commit_tree_result = _git(
+                ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
                 cwd=root,
                 env=private_env,
             )
-            if not cacheinfo_result.ok:
-                return cacheinfo_result
+            if not commit_tree_result.ok:
+                return commit_tree_result
+            new_sha = commit_tree_result.stdout.strip()
 
-        write_tree_result = _git(["write-tree"], cwd=root, env=private_env)
-        if not write_tree_result.ok:
-            return write_tree_result
-        tree_sha = write_tree_result.stdout.strip()
-        empty_tree_refusal = _empty_private_index_refusal(
-            tree_sha, root=root, caller="_commit_scoped_private_index"
-        )
-        if empty_tree_refusal is not None:
-            return empty_tree_refusal
-
-        # `commit-tree` is plumbing -- it runs NO git hooks, so the
-        # `prepare-commit-msg` hook that stamps Session-Id/Deliverable-Id on
-        # every ordinary `git commit` never fires here. Replay its
-        # resolution logic explicitly so a commit landed via this branch
-        # carries identical trailers to one landed via the agree branch
-        # (AC18, docs/plans/2026-07-27-computed-commit-mechanism-selection.md
-        # chunk C10-remainder). Mutates `msg_file` in place, BEFORE it is
-        # read for `-F` below, exactly mirroring what the hook would have
-        # done to the same file had `git commit` fired normally.
-        trailer_args = compute_missing_trailer_args(
-            msg_file, root, paths=[*diverged, *non_diverged],
-            session_id_override=attributed_session_id,
-        )
-        # C7a: an explicit caller `deliverable_id` folds into the SAME
-        # `interpret-trailers` call above, mirroring `commit_authored_
-        # content`'s `_drop_trailer_arg`-then-append shape -- EXCEPT for
-        # precedence against a pre-existing message trailer, which does NOT
-        # mirror that sibling (its message-first rule is silent about the
-        # THIRD source `commit_anchors.py` may have already stamped here;
-        # see `commit_scoped`'s own docstring and PM ruling (2)). May raise
-        # `DeliverableIdAssertionConflictError` -- see `_check_deliverable_id_
-        # precedence`'s own docstring; deliberately uncaught here. Gated on
-        # the caller-supplied `deliverable_id` parameter, never on a tier-0-
-        # resolved value, so this raise site is opt-in (staff-eng review
-        # finding 4).
-        if deliverable_id:
-            msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
-                trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
-                trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-        if trailer_args:
-            interpret_result = _git(
-                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
+            # Compare-and-swap landing -- the 4-argument form fails loud if
+            # HEAD moved since `old_head` was captured, rather than silently
+            # orphaning a peer commit that landed in the window. NOT
+            # env-scoped: `update-ref` moves the real branch ref, which
+            # lives in the shared git-dir regardless of which index built
+            # the tree being pointed at.
+            update_ref_result = _git(
+                ["update-ref", "-m", subject, "HEAD", new_sha, old_head],
                 cwd=root,
             )
-            if not interpret_result.ok:
-                return interpret_result
-
-        msg_text = Path(msg_file).read_text(encoding="utf-8")
-        subject_lines = msg_text.splitlines()
-        subject = subject_lines[0] if subject_lines else "commit"
-
-        commit_tree_result = _git(
-            ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
-            cwd=root,
-            env=private_env,
-        )
-        if not commit_tree_result.ok:
-            return commit_tree_result
-        new_sha = commit_tree_result.stdout.strip()
-
-        # Compare-and-swap landing -- the 4-argument form fails loud if HEAD
-        # moved since `old_head` was captured, rather than silently
-        # orphaning a peer commit that landed in the window. This call is
-        # NOT env-scoped: `update-ref` moves the real branch ref, which
-        # lives in the shared git-dir regardless of which index built the
-        # tree being pointed at.
-        update_ref_result = _git(
-            ["update-ref", "-m", subject, "HEAD", new_sha, old_head],
-            cwd=root,
-        )
-        if not update_ref_result.ok:
-            return GitResult(
-                returncode=update_ref_result.returncode,
-                stdout=update_ref_result.stdout,
-                stderr=(
-                    "commit_scoped: compare-and-swap failed -- HEAD moved "
-                    f"concurrently since {old_head} was captured; refusing to "
-                    f"retry silently (a retry needs a tree rebuilt against the "
-                    f"new HEAD). {update_ref_result.stderr}"
-                ),
-            )
-        # `staged_paths` is exactly the resolved staged-blob subset of
-        # `diverged` -- `diverged` is the set that had unstaged
-        # working-tree modifications (`commit_scoped()` only reaches this
-        # function when `diverging_paths` returned a non-empty answer, and
-        # passes that exact answer through unmodified), and
-        # `_resolve_content_sources` carves out any path ALSO present in
-        # `supplied_blobs` before it ever reaches `staged_paths` -- so no
-        # separate worktree-vs-staged recomputation is needed here; reusing
-        # the resolution's own answer is that answer (see the P1 bug
-        # backlog entry cited on `GitResult.worktree_excluded` for the
-        # incident this closes: this field was previously not populated at
-        # all, so a caller had no way to learn its worktree edits were
-        # excluded). With `supplied_blobs` empty (this chunk's only
-        # exercised shape), `staged_paths == diverged` exactly, so this is
-        # byte-identical to the prior behaviour.
-        #
-        # `mode_only_paths` are excluded from the reported set here (never
-        # from `cacheinfo_entries`/`staged_paths` above, which still commit
-        # them via the same staged-blob route) -- a mode-only path has no
-        # excluded WORKTREE edit (worktree and staged content already agree
-        # for it; only the MODE differs from HEAD), so reporting it as
-        # "worktree edits ... were NOT included" would be a false exclusion
-        # warning on every ordinary re-mode commit. See `mode_only_paths`'
-        # own docstring parameter above.
-        excluded_paths = [p for p in staged_paths if p not in (mode_only_paths or set())]
-        return GitResult(
-            returncode=0,
-            stdout=new_sha,
-            stderr=(
-                (
-                    "commit_scoped: worktree edits to %s were NOT included -- "
-                    "the staged (index) version was committed instead (private-"
-                    "index branch; see GitResult.worktree_excluded)"
-                    % (", ".join(excluded_paths),)
+            if not update_ref_result.ok:
+                return GitResult(
+                    returncode=update_ref_result.returncode,
+                    stdout=update_ref_result.stdout,
+                    stderr=(
+                        "commit_scoped: compare-and-swap failed -- HEAD moved "
+                        f"concurrently since {old_head} was captured; refusing "
+                        "to retry silently (a retry needs a tree rebuilt "
+                        f"against the new HEAD). {update_ref_result.stderr}"
+                    ),
                 )
-                if excluded_paths
-                else ""
-            ),
-            worktree_excluded=tuple(excluded_paths),
-        )
-    finally:
-        temp_index.unlink(missing_ok=True)
+        finally:
+            temp_index.unlink(missing_ok=True)
+
+    # `staged_paths` is exactly the resolved staged-blob subset of
+    # `diverged` -- `diverged` is the set that had unstaged working-tree
+    # modifications (`commit_scoped()` only reaches this function when
+    # `diverging_paths` returned a non-empty answer, and passes that exact
+    # answer through unmodified), and `_resolve_content_sources` carves out
+    # any path ALSO present in `supplied_blobs` before it ever reaches
+    # `staged_paths` -- so no separate worktree-vs-staged recomputation is
+    # needed here; reusing the resolution's own answer is that answer (see
+    # the P1 bug backlog entry cited on `GitResult.worktree_excluded` for
+    # the incident this closes: this field was previously not populated at
+    # all, so a caller had no way to learn its worktree edits were
+    # excluded). With `supplied_blobs` empty (this chunk's only exercised
+    # shape), `staged_paths == diverged` exactly, so this is byte-identical
+    # to the prior behaviour.
+    #
+    # `mode_only_paths` are excluded from the reported set here (never from
+    # `tree_input`/`staged_paths` above, which still commit them via the
+    # same staged-blob route) -- a mode-only path has no excluded WORKTREE
+    # edit (worktree and staged content already agree for it; only the MODE
+    # differs from HEAD), so reporting it as "worktree edits ... were NOT
+    # included" would be a false exclusion warning on every ordinary
+    # re-mode commit. See `mode_only_paths`' own docstring parameter above.
+    excluded_paths = [p for p in staged_paths if p not in (mode_only_paths or set())]
+    return GitResult(
+        returncode=0,
+        stdout=new_sha,
+        stderr=(
+            (
+                "commit_scoped: worktree edits to %s were NOT included -- "
+                "the staged (index) version was committed instead (private-"
+                "index branch; see GitResult.worktree_excluded)"
+                % (", ".join(excluded_paths),)
+            )
+            if excluded_paths
+            else ""
+        ),
+        worktree_excluded=tuple(excluded_paths),
+    )
 
 
     # Claim-release classification (C3, docs/plans/2026-08-11-claim-release-
@@ -3172,6 +3479,18 @@ def commit_scoped(
             if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+        # KEPT AS A SPAWN -- C11 (state/dispatch-briefs/2026-08-23-the-scoped-
+        # commit-rebuilt-from-first-principles/C11.md) named this call as its
+        # third removal candidate but its own brief conditions that removal
+        # on matching git's trailer-block formatting byte-for-byte, and the
+        # ratified anti-scope one plan over (docs/plans/2026-08-21-a-commit-
+        # stops-paying-for-thirty-processes.md, AC3/"Do not hand-write a
+        # replacement for `git interpret-trailers` that guesses at trailer
+        # semantics") already declined exactly this replacement, unattempted,
+        # for the risk of malformed trailers without a byte-identity fixture
+        # corpus authored first. No such corpus exists for THIS call site
+        # either, so this call is left alone per C11's own "or leave this
+        # one alone and say so" clause -- not attempted here.
         if trailer_args:
             interpret_result = _git(
                 ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
@@ -3372,6 +3691,393 @@ def _replay_post_commit_auto_push(root: Union[str, Path]) -> None:
         pass
 
 
+#: Sentinel marking a DELETED path in an `assembled` map handed to
+#: `_rewrite_head_spine`/`_commit_via_head_spine` -- distinct from "absent
+#: from the map at all" (which means "this path is not part of this
+#: commit"). `commit_authored_content` (single-path, in-place mutation
+#: only -- see its own docstring) never produces this value; it exists so
+#: C8b's multi-path assembler can express a deletion through the SAME
+#: helper without a second, narrower helper shape.
+_ABSENT = object()
+
+
+def _write_tree_level(gitdir: Path, entries: Dict[str, Tuple[int, str]]) -> str:
+    """Serialize ONE directory level's `{name: (mode, sha)}` into a tree
+    object and return its sha. Mirrors `coordinator_core.git.git_objects.
+    build_tree`'s single-level emission (same sort rule -- a directory
+    entry sorts as if its name carried a trailing `/`; same mode encoding
+    -- `oct(mode)[2:]` ASCII, five digits for `040000`, six for
+    `100644`/`100755`/`120000`/`160000`) -- NOT reused from there directly
+    because `build_tree` walks a whole nested dict bottom-up in one call,
+    while a spine rewrite touches only the directories along the changed
+    paths and must write each level independently as `_rewrite_head_spine`
+    below climbs the spine.
+    """
+    items = []
+    for name, (mode, sha) in entries.items():
+        sort_name = name + "/" if mode == 0o40000 else name
+        items.append((sort_name, name, oct(mode)[2:].encode("ascii"), sha))
+    items.sort(key=lambda t: t[0])
+    buf = b"".join(
+        mode_bytes + b" " + name.encode("utf-8") + b"\x00" + bytes.fromhex(sha)
+        for _, name, mode_bytes, sha in items
+    )
+    return write_object(gitdir, b"tree", buf)
+
+
+def _rewrite_head_spine(
+    gitdir: Path,
+    spine: Dict[str, Dict[str, Tuple[int, str]]],
+    assembled: Dict[str, Union[Tuple[int, str], object]],
+) -> Optional[str]:
+    """Apply `assembled`'s `{path: (mode, sha) | _ABSENT}` leaf changes onto
+    the directory spine `read_tree_spine()` returned, and return the new
+    ROOT tree sha -- the whole of C4/C8b's "rewrite the path's spine off
+    HEAD's tree" step, shared by both the single-path and multi-path
+    assemblers (see this module's own `commit_authored_content` section
+    header for why only the ASSEMBLY differs between the two).
+
+    Every directory NOT an ancestor of a changed path is left untouched --
+    its sha is copied verbatim from `spine`, never re-read or re-written.
+    Directories that ARE touched are re-serialized bottom-up (deepest
+    first) via `_write_tree_level`, propagating each rewritten subtree's
+    new sha into its own parent's entry before that parent is serialized.
+
+    Returns `None` -- take the ladder -- when a changed path's parent
+    directory is not present in `spine` at all (a structural mismatch
+    `read_tree_spine()` itself did not already refuse outright, e.g. a
+    caller-declared path whose parent turns out not to be a directory in
+    HEAD's tree)."""
+    dir_leaf_changes: Dict[str, Dict[str, object]] = {}
+    for path, val in assembled.items():
+        parent, _, name = path.rpartition("/")
+        dir_leaf_changes.setdefault(parent, {})[name] = val
+
+    for parent in dir_leaf_changes:
+        if parent not in spine:
+            return None
+
+    def _dir_depth(d: str) -> int:
+        return 0 if d == "" else d.count("/") + 1
+
+    dirs_sorted = sorted(spine.keys(), key=_dir_depth, reverse=True)
+    new_subtree_sha: Dict[str, str] = {}
+
+    for d in dirs_sorted:
+        entries: Dict[str, Tuple[int, str]] = dict(spine[d])
+        for name, val in dir_leaf_changes.get(d, {}).items():
+            if val is _ABSENT:
+                entries.pop(name, None)
+            else:
+                entries[name] = val  # type: ignore[assignment]
+        for child_full in [c for c in new_subtree_sha if c.rpartition("/")[0] == d]:
+            child_name = child_full.rpartition("/")[2]
+            entries[child_name] = (0o40000, new_subtree_sha.pop(child_full))
+        new_subtree_sha[d] = _write_tree_level(gitdir, entries)
+
+    return new_subtree_sha.get("")
+
+
+def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
+    """Return `(gitdir, ref_relpath)` -- the physical LOOSE ref file
+    `cas_ref()`'s lockfile protocol must act on for the branch HEAD
+    currently points at, or `None` -- take the ladder -- when this cannot
+    be resolved with confidence.
+
+    A normal (non-detached) checkout: `HEAD` (worktree-private) is a
+    symref, `ref: refs/heads/<x>`; the real commit sha -- and the CAS
+    target -- lives at `<common_dir>/refs/heads/<x>` (refs are never
+    worktree-private; see `git_state.head_sha`'s own docstring). Detached
+    HEAD: the CAS target IS `HEAD` itself, in the WORKTREE-PRIVATE gitdir
+    (`cas_ref`'s own docstring names this case explicitly).
+
+    Returns `None` when the resolved branch ref is not a loose file (e.g.
+    packed only) -- `cas_ref`'s `O_CREAT|O_EXCL` lock protocol assumes a
+    loose ref at the target path, and a packed-only ref is rare enough
+    (freshly-committed branches are always loose) that reproducing git's
+    own pack-then-loose ref resolution here is not worth the risk of
+    silently CAS-ing against the wrong file.
+    """
+    worktree_gitdir = resolve_git_dir(root)
+    try:
+        head_text = (worktree_gitdir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not head_text.startswith("ref:"):
+        return worktree_gitdir, "HEAD"
+    ref_rel = head_text[len("ref:") :].strip()
+    common_dir = resolve_git_common_dir(root)
+    if not (common_dir / ref_rel).is_file():
+        return None
+    return common_dir, ref_rel
+
+
+def _read_config_user_section(config_path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Best-effort `[user] name = ...` / `email = ...` read from one git
+    config file -- same simple line-scanning shape as `git_objects.
+    _log_all_ref_updates`'s `[core]` reader, for the same reason: a full
+    git-config parser (multi-file include chains, `includeIf`, quoted
+    values with escapes) is out of scope for a fast-path identity lookup
+    whose failure just means "take the ladder", never a wrong commit."""
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    in_user = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_user = stripped.lower().startswith("[user]")
+            continue
+        if in_user and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            key = key.strip().lower()
+            value = value.strip().strip('"')
+            if key == "name" and name is None:
+                name = value
+            elif key == "email" and email is None:
+                email = value
+    return name, email
+
+
+def _resolve_commit_identity(root: Path) -> Optional[Tuple[str, str]]:
+    """Resolve `(name, email)` for the commit object's author/committer
+    lines, usually without spawning -- env vars first (git's own
+    precedence: `GIT_AUTHOR_*`/`GIT_COMMITTER_*` override config), then
+    this repo's own `config` (in the COMMON dir -- `user.*` is not a
+    worktree-private setting), then the user's global `~/.gitconfig`.
+
+    Negative spec -- a miss here must NOT cost the ladder. These sources
+    are narrower than git's own resolution (no `includeIf`, no system
+    config), so a correctly-configured identity git would find can still
+    miss. Falling back to the ~9-spawn ladder to recover a name and an
+    email trades the entire in-process win for one string: the identity
+    is not worth that. `_commit_identity_via_git_var` pays ONE spawn to
+    get git's full resolution instead. Only if THAT fails -- no identity
+    configured anywhere, which is a real refusal condition git itself
+    would hit -- does this return `None` and take the ladder.
+
+    A partial identity is never returned: both halves, or nothing. A
+    half-resolved pair would silently commit as `"None <None>"` in the
+    object body."""
+    name = os.environ.get("GIT_AUTHOR_NAME") or os.environ.get("GIT_COMMITTER_NAME")
+    email = os.environ.get("GIT_AUTHOR_EMAIL") or os.environ.get("GIT_COMMITTER_EMAIL")
+    if name and email:
+        return name, email
+    for config_path in (
+        resolve_git_common_dir(root) / "config",
+        Path.home() / ".gitconfig",
+    ):
+        cfg_name, cfg_email = _read_config_user_section(config_path)
+        name = name or cfg_name
+        email = email or cfg_email
+        if name and email:
+            return name, email
+    return _commit_identity_via_git_var(root)
+
+
+def _commit_identity_via_git_var(root: Path) -> Optional[Tuple[str, str]]:
+    """One `git var GIT_COMMITTER_IDENT` spawn -- git's OWN full identity
+    resolution, `includeIf` and system config included -- for the case the
+    cheap sources above miss.
+
+    Purpose: bound the cost of an identity miss at one process instead of
+    the ladder's nine. `git var` prints
+    `Name <email> <epoch> <±HHMM>`; only the name and email are taken,
+    since `_author_stamp` produces the timestamp (git would stamp "now"
+    here too, and re-using `git var`'s instant would drift from the
+    author line by however long the rest of the commit takes).
+
+    Returns `None` when git itself cannot resolve an identity -- exit
+    code 128, the "Please tell me who you are" refusal. That is a genuine
+    ladder condition, not a parsing gap: the ladder's `commit-tree` will
+    fail the same way and produce git's own diagnostic, which is a better
+    error than anything invented here."""
+    result = _git(["var", "GIT_COMMITTER_IDENT"], cwd=root)
+    if not result.ok:
+        return None
+    ident = (result.stdout or "").strip()
+    open_bracket = ident.rfind(" <")
+    close_bracket = ident.rfind("> ")
+    if open_bracket == -1 or close_bracket == -1 or close_bracket < open_bracket:
+        return None
+    name = ident[:open_bracket].strip()
+    email = ident[open_bracket + 2 : close_bracket].strip()
+    if not name or not email:
+        return None
+    return name, email
+
+
+def _author_stamp() -> str:
+    """`<epoch-seconds> <±HHMM>` -- git's commit-object timestamp format,
+    for the CURRENT instant in the local timezone (matches what a spawned
+    `git commit-tree` with no `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`
+    override would stamp: "now", local offset)."""
+    now = int(time.time())
+    is_dst = time.localtime(now).tm_isdst > 0
+    offset_seconds = -(time.altzone if is_dst else time.timezone)
+    sign = "+" if offset_seconds >= 0 else "-"
+    offset_seconds = abs(offset_seconds)
+    return f"{now} {sign}{offset_seconds // 3600:02d}{(offset_seconds % 3600) // 60:02d}"
+
+
+def _commit_via_head_spine(
+    root: Path,
+    assembled: Dict[str, Union[Tuple[int, str], object]],
+    old_head: str,
+    msg_file: Union[str, Path],
+    *,
+    index_stat_identity: Optional[Any] = None,
+) -> Optional[GitResult]:
+    """The shared "rewrite HEAD's tree spine -> build the commit object ->
+    land it via a locked ref CAS" landing helper (C4 body: "one helper, two
+    input assemblers") -- ZERO git spawns of its own. `msg_file` must
+    already carry every trailer this commit needs (`interpret-trailers`,
+    the caller's own spawn, has already run against it); this helper only
+    reads its final bytes for the commit object's message body.
+
+    `assembled` -- `{path: (mode, sha) | _ABSENT}`, repo-relative,
+    `/`-separated paths. `commit_authored_content` assembles exactly one
+    entry (its own path, never `_ABSENT` -- that entrypoint is in-place
+    mutation of an existing path only); a future multi-path caller (C8b)
+    assembles many, deletions included.
+
+    Returns `None` -- take the ladder, UNCHANGED, no side effect from this
+    call survives that decision (every write below is a content-addressed
+    loose object; an orphaned one is harmless) -- when any PRECONDITION
+    fails: `head_tree_sha`/`read_tree_spine` do not resolve, a changed
+    path's spine is structurally missing, the CAS ref cannot be resolved
+    to one confident loose-file target, that ref is currently lock-held by
+    a peer (`cas_ref`'s own protocol: an existing `<ref>.lock` is a
+    fall-back, never a wait), or this process cannot resolve a commit
+    identity.
+
+    Once every precondition holds, every subsequent problem is returned as
+    a REAL failing `GitResult`, never silently downgraded back to a ladder
+    fall-back: AC11(b)'s index `stat_identity` re-check (immediately
+    before the CAS, when `index_stat_identity` is given -- `commit_
+    authored_content` never passes one, since it reads no index at all;
+    C8b's multi-path arm does) and a lost ref CAS both refuse loud in the
+    `compare-and-swap failed` diagnostic family. A re-read-and-retry here
+    would risk committing a peer's newer staged blob (index case) or
+    orphaning a peer's own commit (ref case) -- exactly the hazard each
+    refusal exists to prevent.
+    """
+    root_tree_sha = _git_state_head_tree_sha(root)
+    if root_tree_sha is None:
+        return None
+
+    spine = read_tree_spine(root, list(assembled.keys()))
+    if spine is None:
+        return None
+
+    ref_target = _resolve_cas_ref_target(root)
+    if ref_target is None:
+        return None
+    ref_gitdir, ref_relpath = ref_target
+    lock_path = ref_gitdir / (ref_relpath + ".lock")
+    if lock_path.exists():
+        return None
+
+    identity = _resolve_commit_identity(root)
+    if identity is None:
+        return None
+    name, email = identity
+
+    if index_stat_identity is not None:
+        fresh_identity = read_index(root).stat_identity
+        if fresh_identity != index_stat_identity:
+            return GitResult(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "compare-and-swap failed -- the shared index changed "
+                    "since it was snapshotted for this commit; refusing to "
+                    "retry silently (a retry needs a tree rebuilt from a "
+                    "fresh snapshot, and a fall-back here would re-read and "
+                    "commit a peer's newer staged blob, defeating this "
+                    "detector rather than discharging it)"
+                ),
+            )
+
+    common_dir = resolve_git_common_dir(root)
+    new_tree_sha = _rewrite_head_spine(common_dir, spine, assembled)
+    if new_tree_sha is None:
+        return None
+
+    empty_tree_refusal = _empty_private_index_refusal(
+        new_tree_sha, root=root, caller="commit_authored_content"
+    )
+    if empty_tree_refusal is not None:
+        return empty_tree_refusal
+
+    msg_bytes = Path(msg_file).read_bytes()
+    subject_line, _, _ = msg_bytes.decode("utf-8", errors="replace").partition("\n")
+    subject = subject_line or "commit"
+
+    stamp = _author_stamp()
+    who = f"{name} <{email}> {stamp}"
+    header = f"tree {new_tree_sha}\nparent {old_head}\nauthor {who}\ncommitter {who}\n\n".encode(
+        "utf-8"
+    )
+    new_commit_sha = write_object(common_dir, b"commit", header + msg_bytes)
+
+    landed = cas_ref(
+        ref_gitdir,
+        ref_relpath,
+        old_head,
+        new_commit_sha,
+        reflog_committer=who,
+        reflog_message=subject,
+        head_gitdir=resolve_git_dir(root),
+    )
+    if not landed:
+        return GitResult(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "commit_authored_content: compare-and-swap failed -- HEAD moved "
+                f"concurrently since {old_head} was captured; refusing to retry "
+                "silently (a retry needs a tree rebuilt against the new HEAD)."
+            ),
+        )
+
+    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
+
+
+def _head_entry_for(root: Path, normalized: str) -> Optional[Tuple[int, str]]:
+    """`(mode, sha)` for `normalized` in HEAD's tree, or `None` when the
+    path does not exist there.
+
+    Reads HEAD's tree spine IN PROCESS first (C3's `read_tree_spine`) and
+    only falls back to `head_blobs` -- which spawns `git ls-tree` -- when
+    the spine is unreadable, which is the same condition that sends the
+    commit to the ladder anyway.
+
+    Negative spec -- this is a PROCESS-COUNT reduction, not a routing
+    tidy-up, and the distinction is the whole point. `head_blobs` reaches
+    git through `run_git`, NOT through this module's `_git()` seam, so a
+    spawn counter wrapped around `_git()` cannot see it: AC1 measured at
+    that seam read 3 while the leg actually issued 4 processes
+    (`ls-tree`, `hash-object`, `interpret-trailers`, `update-index`).
+    That is the "a falling seam with a flat op_total means a spawn moved,
+    not disappeared" failure this plan's own cited lesson names, caught by
+    `test_ledger_leg_spawn_count_is_upper_bound_not_exact` rather than by
+    any spawn assertion in this plan.
+
+    Both arms answer the same question of the same source -- HEAD's tree --
+    so the "does not exist in HEAD" refusal is identical either way."""
+    spine = read_tree_spine(root, [normalized])
+    if spine is not None:
+        parent, _, leaf = normalized.rpartition("/")
+        entry = spine.get(parent, {}).get(leaf)
+        return entry
+    raw = _git_state_head_blobs(root, [normalized]).get(normalized)
+    return raw  # type: ignore[return-value]
+
+
 def commit_authored_content(
     path: str,
     content: str,
@@ -3518,14 +4224,7 @@ def commit_authored_content(
             ),
         )
 
-    # `git ls-tree HEAD -- <path>` -> `git_state.head_blobs()`. NOTE this is
-    # NOT a spawn elimination like the read above -- `head_blobs()` is "the
-    # one retained spawn" in `git_state.py` (its own docstring), still
-    # issuing `git ls-tree` via `run_git`. The win here is routing through
-    # the shared, ratchet-tracked runner instead of this module's private
-    # `_git()` wrapper, and consolidating this read behind git_state's one
-    # call site -- not a process-count reduction.
-    head_entry = _git_state_head_blobs(root, [normalized]).get(normalized)
+    head_entry = _head_entry_for(root, normalized)
     if head_entry is None:
         return GitResult(
             returncode=-1,
@@ -3544,140 +4243,192 @@ def commit_authored_content(
         return hash_result
     new_sha = hash_result.stdout.strip()
 
-    temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
-    try:
-        private_env: Dict[str, str] = dict(os.environ)
-        private_env["GIT_INDEX_FILE"] = str(temp_index)
+    # Bound 2 -- trailer tier-0 resolves from the CALLER-SUPPLIED
+    # `deliverable_id`, never by opening `path` on disk.
+    # `compute_missing_trailer_args(..., paths=None)` is the pre-tier-0
+    # session-only resolution (Session-Id, plus Deliverable-Id only via
+    # the session/claimed-plan tiers, never the artifact-first tier that
+    # reads a committed path) -- passing `paths=[normalized]` here would
+    # reintroduce exactly the worktree read this bound forbids. Computed
+    # ONCE, ahead of the fast/ladder fork below: both arms need `msg_file`
+    # to already carry every trailer before they read its final bytes for
+    # the commit message body -- trailer computation itself is NOT part of
+    # `_commit_via_head_spine`'s shared "spine rewrite -> commit object ->
+    # CAS" contract (see that helper's own docstring).
+    trailer_args = compute_missing_trailer_args(
+        msg_file, root, paths=None,
+        session_id_override=attributed_session_id,
+    )
+    msg_text_before = Path(msg_file).read_text(encoding="utf-8")
+    message_already_has_deliverable_trailer = "Deliverable-Id:" in msg_text_before
+    if deliverable_id:
+        # Bound 2 -- an explicitly-passed `deliverable_id` is the tier-0
+        # join key and wins over anything `compute_missing_trailer_args`
+        # resolved from the session/claimed-plan tiers; drop that
+        # session-resolved trailer pair rather than stacking both.
+        trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
+        if not message_already_has_deliverable_trailer:
+            trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
-        # Bound 3 -- seeded straight from HEAD into a FRESH temp index, never
-        # via `shutil.copy2` of the shared `.git/index`.
-        read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
-        if not read_tree_result.ok:
-            return read_tree_result
-
-        cacheinfo_result = _git(
-            ["update-index", "--add", "--cacheinfo", f"{mode},{new_sha},{normalized}"],
+    if trailer_args:
+        interpret_result = _git(
+            ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
             cwd=root,
-            env=private_env,
         )
-        if not cacheinfo_result.ok:
-            return cacheinfo_result
+        if not interpret_result.ok:
+            return interpret_result
 
-        write_tree_result = _git(["write-tree"], cwd=root, env=private_env)
-        if not write_tree_result.ok:
-            return write_tree_result
-        tree_sha = write_tree_result.stdout.strip()
-        empty_tree_refusal = _empty_private_index_refusal(
-            tree_sha, root=root, caller="commit_authored_content"
-        )
-        if empty_tree_refusal is not None:
-            return empty_tree_refusal
+    # Fast path: rewrite HEAD's tree spine in process, build the commit
+    # object in process, land it via a locked ref CAS -- zero further git
+    # spawns. `_commit_via_head_spine` returns `None` (take the ladder,
+    # unchanged, below) when any of its own preconditions is unmet; a
+    # non-`None` result -- success or a genuine failure (CAS lost, empty
+    # tree) -- is this call's own outcome, never re-tried on the ladder.
+    fast_result = _commit_via_head_spine(
+        root, {normalized: (mode_int, new_sha)}, old_head, msg_file,
+    )
+    if fast_result is not None:
+        if not fast_result.ok:
+            return fast_result
+        new_commit_sha = fast_result.stdout.strip()
+    else:
+        # ---- fall-back: today's ladder, unchanged --------------------
+        temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+        try:
+            private_env: Dict[str, str] = dict(os.environ)
+            private_env["GIT_INDEX_FILE"] = str(temp_index)
 
-        # Bound 2 -- trailer tier-0 resolves from the CALLER-SUPPLIED
-        # `deliverable_id`, never by opening `path` on disk.
-        # `compute_missing_trailer_args(..., paths=None)` is the pre-tier-0
-        # session-only resolution (Session-Id, plus Deliverable-Id only via
-        # the session/claimed-plan tiers, never the artifact-first tier that
-        # reads a committed path) -- passing `paths=[normalized]` here would
-        # reintroduce exactly the worktree read this bound forbids.
-        trailer_args = compute_missing_trailer_args(
-            msg_file, root, paths=None,
-            session_id_override=attributed_session_id,
-        )
-        msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-        message_already_has_deliverable_trailer = "Deliverable-Id:" in msg_text_before
-        if deliverable_id:
-            # Bound 2 -- an explicitly-passed `deliverable_id` is the tier-0
-            # join key and wins over anything `compute_missing_trailer_args`
-            # resolved from the session/claimed-plan tiers; drop that
-            # session-resolved trailer pair rather than stacking both.
-            trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
-            if not message_already_has_deliverable_trailer:
-                trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+            # Bound 3 -- seeded straight from HEAD into a FRESH temp index,
+            # never via `shutil.copy2` of the shared `.git/index`.
+            read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
+            if not read_tree_result.ok:
+                return read_tree_result
 
-        if trailer_args:
-            interpret_result = _git(
-                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
+            cacheinfo_result = _git(
+                ["update-index", "--add", "--cacheinfo", f"{mode},{new_sha},{normalized}"],
+                cwd=root,
+                env=private_env,
+            )
+            if not cacheinfo_result.ok:
+                return cacheinfo_result
+
+            write_tree_result = _git(["write-tree"], cwd=root, env=private_env)
+            if not write_tree_result.ok:
+                return write_tree_result
+            tree_sha = write_tree_result.stdout.strip()
+            empty_tree_refusal = _empty_private_index_refusal(
+                tree_sha, root=root, caller="commit_authored_content"
+            )
+            if empty_tree_refusal is not None:
+                return empty_tree_refusal
+
+            msg_text = Path(msg_file).read_text(encoding="utf-8")
+            subject_lines = msg_text.splitlines()
+            subject = subject_lines[0] if subject_lines else "commit"
+
+            commit_tree_result = _git(
+                ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
+                cwd=root,
+                env=private_env,
+            )
+            if not commit_tree_result.ok:
+                return commit_tree_result
+            new_commit_sha = commit_tree_result.stdout.strip()
+
+            # Bound 4 -- compare-and-swap; a concurrent HEAD move fails loud
+            # rather than silently orphaning a peer commit.
+            update_ref_result = _git(
+                ["update-ref", "-m", subject, "HEAD", new_commit_sha, old_head],
                 cwd=root,
             )
-            if not interpret_result.ok:
-                return interpret_result
+            if not update_ref_result.ok:
+                return GitResult(
+                    returncode=update_ref_result.returncode,
+                    stdout=update_ref_result.stdout,
+                    stderr=(
+                        "commit_authored_content: compare-and-swap failed -- HEAD moved "
+                        f"concurrently since {old_head} was captured; refusing to retry "
+                        f"silently (a retry needs a tree rebuilt against the new HEAD). "
+                        f"{update_ref_result.stderr}"
+                    ),
+                )
+        finally:
+            temp_index.unlink(missing_ok=True)
 
-        msg_text = Path(msg_file).read_text(encoding="utf-8")
-        subject_lines = msg_text.splitlines()
-        subject = subject_lines[0] if subject_lines else "commit"
+    # Bound 6 -- refresh the SHARED index for this one path only, so it
+    # no longer reads as a staged reversion of the commit that just
+    # landed (AC11). Inferred hazard, not a cited one -- see this
+    # function's own docstring bound 6. Best-effort like bound 5's
+    # auto-push replay below: the commit already landed via a
+    # successful CAS by the time this runs, so a refresh failure must
+    # never be reported as this function's own failure (that would
+    # discard `new_commit_sha` for a write that genuinely succeeded and
+    # could send a caller into a spurious retry/duplicate commit). Common
+    # to both the fast and ladder arms -- the one spawn AC1 retains beyond
+    # `hash-object`/`interpret-trailers`.
+    _git(
+        ["update-index", "--add", "--cacheinfo", f"{mode},{new_sha},{normalized}"],
+        cwd=root,
+    )
 
-        commit_tree_result = _git(
-            ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
-            cwd=root,
-            env=private_env,
-        )
-        if not commit_tree_result.ok:
-            return commit_tree_result
-        new_commit_sha = commit_tree_result.stdout.strip()
+    # Bound 5 -- replay the post-commit auto-push; only after a
+    # successful CAS, mirroring the trailer replay's own "replay what
+    # the hook would have done" precedent.
+    _replay_post_commit_auto_push(root)
 
-        # Bound 4 -- compare-and-swap; a concurrent HEAD move fails loud
-        # rather than silently orphaning a peer commit.
-        update_ref_result = _git(
-            ["update-ref", "-m", subject, "HEAD", new_commit_sha, old_head],
-            cwd=root,
-        )
-        if not update_ref_result.ok:
-            return GitResult(
-                returncode=update_ref_result.returncode,
-                stdout=update_ref_result.stdout,
-                stderr=(
-                    "commit_authored_content: compare-and-swap failed -- HEAD moved "
-                    f"concurrently since {old_head} was captured; refusing to retry "
-                    f"silently (a retry needs a tree rebuilt against the new HEAD). "
-                    f"{update_ref_result.stderr}"
-                ),
-            )
+    # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
+    # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of
+    # the sibling commit producers C5 left unwired -- last step, after
+    # the CAS has already landed, per `apply_base.record_ledger_entry`'s
+    # own contract (never fails the commit it accompanies). Local
+    # import: `contract.apply_base` transitively imports back into this
+    # `ops.ceremony` package (`ops.review_brightline_gate`) -- a
+    # module-level import here creates the same partially-initialized-
+    # module cycle `commit_ledger.resolve_owner` already documents its
+    # own deferred `baton_assemble` import to avoid.
+    from coordinator_core.contract.apply_base import record_ledger_entry
 
-        # Bound 6 -- refresh the SHARED index for this one path only, so it
-        # no longer reads as a staged reversion of the commit that just
-        # landed (AC11). Inferred hazard, not a cited one -- see this
-        # function's own docstring bound 6. Best-effort like bound 5's
-        # auto-push replay below: the commit already landed via a
-        # successful CAS by the time this runs, so a refresh failure must
-        # never be reported as this function's own failure (that would
-        # discard `new_commit_sha` for a write that genuinely succeeded and
-        # could send a caller into a spurious retry/duplicate commit).
-        _git(
-            ["update-index", "--add", "--cacheinfo", f"{mode},{new_sha},{normalized}"],
-            cwd=root,
-        )
+    record_ledger_entry(
+        root, [normalized], new_commit_sha,
+        committer_id_override=attributed_session_id,
+    )
 
-        # Bound 5 -- replay the post-commit auto-push; only after a
-        # successful CAS, mirroring the trailer replay's own "replay what
-        # the hook would have done" precedent.
-        _replay_post_commit_auto_push(root)
-
-        # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
-        # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of
-        # the sibling commit producers C5 left unwired -- last step, after
-        # the CAS has already landed, per `apply_base.record_ledger_entry`'s
-        # own contract (never fails the commit it accompanies). Local
-        # import: `contract.apply_base` transitively imports back into this
-        # `ops.ceremony` package (`ops.review_brightline_gate`) -- a
-        # module-level import here creates the same partially-initialized-
-        # module cycle `commit_ledger.resolve_owner` already documents its
-        # own deferred `baton_assemble` import to avoid.
-        from coordinator_core.contract.apply_base import record_ledger_entry
-
-        record_ledger_entry(
-            root, [normalized], new_commit_sha,
-            committer_id_override=attributed_session_id,
-        )
-
-        return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
-    finally:
-        temp_index.unlink(missing_ok=True)
+    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
 
 
 def rev_parse_head(cwd: Union[str, Path]) -> GitResult:
-    """`git rev-parse HEAD` — post-commit SHA capture (Position A, no branch-tip fallback)."""
-    return _git(["rev-parse", "HEAD"], cwd=cwd)
+    """HEAD's commit sha — post-commit SHA capture (Position A, no branch-tip fallback).
+
+    ZERO SPAWNS. `git_state.head_sha()` answers this from `.git/HEAD` plus the
+    loose ref or `packed-refs`, which is the same resolution `git rev-parse HEAD`
+    performs, and the file reads cost no process. Eight production call sites
+    reach this, several of them twice per commit (pre-commit capture, post-commit
+    capture, post-push capture), so the spawn was recurring rather than incidental.
+
+    Returns a synthesized `GitResult` rather than a bare string, because every
+    caller branches on `.ok`/`.stdout` and this wrapper's contract is the
+    envelope, not the mechanism. `stdout` carries the sha WITH a trailing
+    newline, exactly as `git rev-parse` emits it -- callers `.strip()` it and one
+    that sliced instead would otherwise see a silent off-by-one.
+
+    UNBORN/UNRESOLVABLE HEAD returns `returncode=1`, matching what `git rev-parse
+    HEAD` does on a repo with no commits (`ambiguous argument 'HEAD'`), so the
+    failure branch every caller already has stays reachable. `head_sha()` returns
+    None for exactly that case and never raises on a missing HEAD.
+
+    Deliberately NOT memoised, unlike `git_state.head_blobs`: this function's
+    whole job at three of its call sites is to observe that HEAD MOVED. A cache
+    keyed on HEAD would be either useless or wrong here, and the read is already
+    two small file opens.
+    """
+    sha = _git_state_head_sha(cwd)
+    if not sha:
+        return GitResult(
+            returncode=1,
+            stdout="",
+            stderr="rev_parse_head: HEAD does not resolve to a commit",
+        )
+    return GitResult(returncode=0, stdout=sha + "\n", stderr="")
 
 
 def log_grep(cwd: Union[str, Path], grep_pattern: str, *, extra_args: Optional[Sequence[str]] = None) -> GitResult:

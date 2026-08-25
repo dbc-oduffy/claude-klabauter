@@ -2,8 +2,8 @@
 `sweep_argv.parse_repo_root_argv` leading-dash-argument guard
 (coordinator/bin/lib/sweep_argv.py).
 
-Every CLI parametrized here (`sweep-actioned-memos.py`, `sweep-terminal-plans.py`,
-`sweep-boot.py`, `sweep-consumed-handoffs.py`) previously either took `argv[0]`
+Every CLI parametrized here (`sweep-actioned-memos.py`, `sweep-boot.py`)
+previously either took `argv[0]`
 unconditionally as the repo-root positional, or fell through to treating any
 unrecognized leading-dash token as a positional — both shapes forwarded `--help`
 (or a typo'd flag) downstream as a bogus repo-root value instead of rejecting it.
@@ -39,9 +39,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _CLI_SCRIPTS = [
     "sweep-actioned-memos.py",
-    "sweep-terminal-plans.py",
     "sweep-boot.py",
-    "sweep-consumed-handoffs.py",
 ]
 
 

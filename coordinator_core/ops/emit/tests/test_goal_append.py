@@ -582,7 +582,7 @@ class TestGoalAppendHandlerPassthrough:
         kr_status = [{"id": "kr1", "text": "Ship X", "kind": "leading", "status": "on_track"}]
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -608,7 +608,7 @@ class TestGoalAppendHandlerPassthrough:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -630,7 +630,7 @@ class TestGoalAppendHandlerPassthrough:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -724,7 +724,7 @@ class TestGoalAppendHandlerNormalizesCoordinatorRootPath:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -746,7 +746,7 @@ class TestGoalAppendHandlerNormalizesCoordinatorRootPath:
         sub.mkdir(parents=True, exist_ok=True)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1009,7 +1009,7 @@ class TestAppendGoalExplicitGoalId:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=tmp_path / "fake-coordinator",
         ):
             (tmp_path / "fake-coordinator" / "bin").mkdir(parents=True, exist_ok=True)
@@ -1032,7 +1032,7 @@ class TestAppendGoalExplicitGoalId:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=tmp_path / "fake-coordinator",
         ):
             (tmp_path / "fake-coordinator" / "bin").mkdir(parents=True, exist_ok=True)
@@ -1075,7 +1075,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1103,7 +1103,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1126,7 +1126,7 @@ class TestGoalAppendBatch:
         kr_status = [{"id": "kr1", "text": "Ship X", "kind": "leading", "status": "on_track"}]
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1161,7 +1161,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1188,7 +1188,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             result = _goal_append(
@@ -1203,7 +1203,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             with pytest.raises(ValueError, match="events"):
@@ -1219,7 +1219,7 @@ class TestGoalAppendBatch:
         repo = _make_git_repo(tmp_path)
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             single = _goal_append(
@@ -1263,7 +1263,7 @@ class TestGoalAppendHandlerRejectsOutOfRepoAbsoluteCrp:
         outside.mkdir()
 
         with patch(
-            "coordinator_core.ops.emit.envelope.resolve_coordinator_root",
+            "coordinator_core.ops.emit.resolvers.resolve_coordinator_root",
             return_value=self._fake_coordinator_root(tmp_path),
         ):
             with pytest.raises(ValueError, match="outside repo_root"):

@@ -84,7 +84,7 @@ class TestFlippedGuardProducesOneRecord:
         entry = _fake_advisory_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -103,7 +103,7 @@ class TestFlippedGuardProducesOneRecord:
         entry = _fake_advisory_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -119,7 +119,7 @@ class TestHardDenyNeverCounted:
         entry = _fake_hard_deny_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -148,7 +148,7 @@ class TestWriteFailureLeavesEnvelopeUnchanged:
         entry = _fake_advisory_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
         try:

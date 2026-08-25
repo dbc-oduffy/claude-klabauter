@@ -270,6 +270,7 @@ def test_check_health_false_on_opener_exception() -> None:
 def test_ensure_listener_returns_url_when_live_and_healthy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
         port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
     )
@@ -285,6 +286,7 @@ def test_ensure_listener_returns_url_when_live_and_healthy(
 def test_ensure_listener_spawns_and_returns_none_when_no_discovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-test")
     spawned = []
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 
@@ -295,6 +297,7 @@ def test_ensure_listener_spawns_and_returns_none_when_no_discovery(
 def test_ensure_listener_none_and_no_spawn_when_recent_boot_already_vouched_for(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
         port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
     )
@@ -312,6 +315,7 @@ def test_ensure_listener_none_and_no_spawn_when_recent_boot_already_vouched_for(
 def test_ensure_listener_spawns_when_discovery_is_dead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
         port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
     )
@@ -323,9 +327,36 @@ def test_ensure_listener_spawns_when_discovery_is_dead(
     assert len(spawned) == 1
 
 
+def test_ensure_listener_refuses_an_unstamped_root_before_touching_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamp gate, pinned positively -- without this, the stamps its sibling tests
+    carry look like ceremony rather than the precondition they are.
+
+    An unstamped tree is not an engine, and `_compute_engine_token` already refuses one,
+    so a listener spawned against it could only ever answer `_serve_line`'s
+    untrusted-caller refusal. The spawn is therefore pure litter -- and litter on the
+    OPERATOR'S REAL MACHINE, since `svc_dir()` keys off the real `%LOCALAPPDATA%` rather
+    than a test's HOME-only quarantine. Asserts the gate fires BEFORE the three
+    primitives, not merely that the return value is None: every one of them is patched to
+    raise, so reaching any of them fails loudly instead of passing vacuously.
+    """
+    def _raise(*a, **kw):
+        raise AssertionError("gate did not fire before this primitive")
+
+    monkeypatch.setattr(supervisor, "read_discovery", _raise)
+    monkeypatch.setattr(supervisor, "should_spawn", _raise)
+    spawned = []
+    monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
+
+    assert supervisor.ensure_listener(tmp_path) is None
+    assert spawned == []
+
+
 def test_ensure_listener_never_raises_even_if_a_primitive_blows_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skew.write_engine_stamp(tmp_path, "sha-test")
     def _raise(*a, **kw):
         raise RuntimeError("boom")
 

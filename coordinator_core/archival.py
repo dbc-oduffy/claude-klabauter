@@ -57,6 +57,7 @@ from typing import List, Optional, Set, Tuple
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
 from coordinator_core.dag import referenced_by as _referenced_by
+from coordinator_core.dag import referenced_by_indexed as _referenced_by_indexed
 from coordinator_core.lifecycle_constants import HANDOFF_ARCHIVAL_TERMINAL_STATUSES
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
@@ -204,6 +205,7 @@ def reverse_membership(
     *,
     exclude: Optional[List[str]] = None,
     edge_kinds: Optional[Set[str]] = None,
+    index: Optional[dict] = None,
 ) -> frozenset:
     """Return the set of handoff paths that still name node_path as a live parent.
 
@@ -268,12 +270,25 @@ def reverse_membership(
         )
 
     # Delegate to dag.referenced_by — single-hop, edge-kind-aware, exclude-aware
-    result = _referenced_by(
-        target=os.path.abspath(node_path),
-        live_set=live_paths,
-        edge_kinds=edge_kinds,   # None → dag.py default (all three kinds)
-        exclude=exclude,
-    )
+    if index is not None:
+        # Prebuilt index (dag.build_reverse_edge_index): same answer, without
+        # re-walking dag_index per call. A caller asking about N candidates
+        # over one corpus builds it once instead of paying N x M reads —
+        # see that builder's docstring for the equivalence argument and for
+        # the measurement that motivated it.
+        result = _referenced_by_indexed(
+            target=os.path.abspath(node_path),
+            index=index,
+            edge_kinds=edge_kinds,
+            exclude=exclude,
+        )
+    else:
+        result = _referenced_by(
+            target=os.path.abspath(node_path),
+            live_set=live_paths,
+            edge_kinds=edge_kinds,   # None → dag.py default (all three kinds)
+            exclude=exclude,
+        )
 
     # Exclude terminal-status and archive-resident children from the live set —
     # fail-closed on indeterminate frontmatter (see _is_terminal_or_archived_child).

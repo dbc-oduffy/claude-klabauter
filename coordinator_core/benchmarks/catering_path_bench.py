@@ -431,7 +431,12 @@ def _verify_spawn_count_derivation() -> None:
     cmd = [
         sys.executable,
         "-c",
-        "import subprocess; subprocess.run(['%s', '--version'], "
+        # `%r`, never `'%s'`: the path is interpolated into the child's SOURCE
+        # text, so a Windows git path ending `...\Git\mingw64\bin\git.EXE`
+        # interpolated raw has `\bin` parsed as a backspace escape -- the child
+        # then raises FileNotFoundError, spawns no git, and the fixture reads
+        # `procs_per_call=1.0` and aborts the whole bench as a platform defect.
+        "import subprocess; subprocess.run([%r, '--version'], "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)" % (git_path,),
     ]
     timed = batched_process_time_ms(cmd, k=1, cwd=_REPO_ROOT)

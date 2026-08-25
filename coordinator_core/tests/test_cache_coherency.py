@@ -301,13 +301,13 @@ class TestAC13MicroBenchmark:
 
 
 class TestEnvelopeCallPathUnchangedByPersistedTier:
-    """Pin (op_census C1, PM Ruling 3-C / hard constraint 8): envelope.py's
+    """Pin (op_census C1, PM Ruling 3-C / hard constraint 8): resolvers.py's
     existing `cache.compute_stamp` content-hash call path must stay pure
     in-memory, unchanged semantics and cost, after cache.py grows the
-    persisted `read_disk_revalidated` tier. envelope.py never calls
+    persisted `read_disk_revalidated` tier. resolvers.py never calls
     `read_disk_revalidated` and never touches an on-disk index — only
     `compute_stamp` (no caching at all) and `_REVALIDATED_CACHE` (via
-    `read_revalidated`, unused by envelope.py today) exist on its path.
+    `read_revalidated`, unused by resolvers.py today) exist on its path.
     """
 
     def test_envelope_uses_compute_stamp_not_disk_revalidated(self):
@@ -325,7 +325,7 @@ class TestEnvelopeCallPathUnchangedByPersistedTier:
             and node.func.value.id == "cache"
         }
         assert called_attrs == {"compute_stamp"}, (
-            f"envelope.py's cache.* call surface changed to {called_attrs!r} -- "
+            f"resolvers.py's cache.* call surface changed to {called_attrs!r} -- "
             "expected only compute_stamp. The persisted tier (read_disk_revalidated) "
             "must stay opt-in and unused by this existing caller."
         )

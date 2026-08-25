@@ -260,7 +260,7 @@ def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, mon
 
 
 def test_unknown_error_when_origin_main_missing(tmp_path, monkeypatch, capsys):
-    """No 'origin' remote at all -> envelope.main rc=2 -> propagated as unknown-error, not not-shipped."""
+    """No 'origin' remote at all -> resolvers.main rc=2 -> propagated as unknown-error, not not-shipped."""
     work = tmp_path / "work"
     subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)

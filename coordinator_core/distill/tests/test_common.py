@@ -198,10 +198,10 @@ def test_sidecar_bare_dash_review_suffix_matches():
     # matched via the closed, named per-reviewer dotted entries (narrowed from
     # an open-ended bare "-review.md" trailing-segment match, 2026-07-23 code
     # review) rather than the generic dotted ".review.md" entry.
-    assert is_sidecar_filename("2026-07-19-coverage-gate-single-graph-walk.the Staff Engineer-review.md") is True
+    assert is_sidecar_filename("2026-07-19-coverage-gate-single-graph-walk.patrik-review.md") is True
     assert is_sidecar_filename("2026-07-19-coverage-gate-single-graph-walk.sonnet-review.md") is True
     assert is_sidecar_filename("2026-07-06-claude-klabauter-native-op-central-subject-delegation.eng-director-review.md") is True
-    assert is_sidecar_filename("OVERVIEW.the Director of Engineering-review.md") is True
+    assert is_sidecar_filename("OVERVIEW.zoli-review.md") is True
 
 
 def test_sidecar_narrowed_suffixes_reject_plausible_non_reviewer_plan_filename():

@@ -11,7 +11,7 @@ whichever test module imports it. Three modules were dark this way on
 2026-08-22, one of them (`ops/introspect/verify_shipped.py`) production code:
 
   - `session/tests/test_liveness.py` -> `pickup_assemble.compute_competing_claim`
-  - `ops/introspect/verify_shipped.py` -> `ops.emit.envelope.fetch_origin_main`
+  - `ops/introspect/verify_shipped.py` -> `ops.emit.resolvers.fetch_origin_main`
   - `tests/test_dag_edge_kind_ssot.py` -> `workstream_complete._LEG_B_EDGE_KINDS`
 
 All three were deliberate deletions whose reverse-reference scan missed a

@@ -41,15 +41,11 @@ Responsibilities:
      detector; see coordinator_core.ops.install_claude_klabauter_precommit_hook) as best-effort —
      skipped in --register-only mode, and a clean no-op on any checkout that isn't
      claude-klabauter itself (the op's own identity guard).
-  7. Advisory: pip-install `coordinator_whoami` editable under the operator's
-     `coordinator.python` general pin, when healthy and distinct from wherever it
-     already imports (`provision_whoami_under_general_pin`, invoked after step 5's
-     bin-forwarder install so C10a has already relocated the whoami source tree).
-     This is the machine-first replacement for
-     `coordinator_core.install.ensure_venv._ensure_whoami_under_general_pin`, whose
-     only call site (`ensure_coordinator_venv`) is reachable solely via
-     --allow-venv-fallback — see that function's docstring and this step's own for
-     the full rationale. Never fatal; skipped under --register-only.
+  (There is no `coordinator_whoami` provisioning step. The package is RETIRED —
+     this chain used to pip-install it editable under the operator's
+     `coordinator.python` general pin, and that step is deliberately absent, not
+     lost. Restoring it would reinstall a package the fleet removed on purpose,
+     which is precisely the silent self-revert its retirement had to disarm.)
 
 Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C2
 Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C6
@@ -3280,189 +3276,6 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
 
 
-def _whoami_importable_under(python_bin: str) -> bool:
-    """True iff ``coordinator_whoami`` imports under ``python_bin``.
-
-    Isolation-boundary probe, not an in-process import — ``python_bin`` is,
-    in the case this function exists for, a DIFFERENT interpreter than the
-    one running this script (the operator's ``coordinator.python`` general
-    pin), so there is no in-process substitute for asking it directly.
-    Mirrors ``coordinator_core.install.ensure_venv._whoami_importable_under``
-    (pre-relocation original) without importing it — this script runs before
-    ``coordinator_core``'s own third-party deps are guaranteed provisioned.
-    """
-    try:
-        proc = subprocess.run(
-            [python_bin, "-c", "import coordinator_whoami"],
-            capture_output=True,
-            timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
-
-
-def _resolve_whoami_pkg_dir(plugin_root: Path) -> Path:
-    """WHOAMI_PKG seam: registry ``coordinator.whoami_src`` -> dir, else
-    ``plugin_root/whoami`` — same fallback shape as
-    ``coordinator_core.install.ensure_venv._resolve_whoami_pkg``, reimplemented
-    here (not imported) so this advisory step stays reachable even when
-    ``coordinator_core``'s own deps are not yet importable under THIS
-    script's interpreter."""
-    from coordinator_core.machine_resolver import registry_get
-
-    seam = registry_get("coordinator.whoami_src")
-    if seam:
-        seam_path = Path(seam)
-        if seam_path.is_dir():
-            return seam_path
-        print(
-            f"[ADVISORY] coordinator.whoami_src='{seam}' is not a directory; "
-            f"falling back to {plugin_root / 'whoami'}",
-            file=sys.stderr,
-        )
-    return plugin_root / "whoami"
-
-
-def _advise_manual_whoami_install(python_bin: str, whoami_pkg: Path, reason: str, stderr: str) -> None:
-    """The degradation path: name the exact command a human would run,
-    mirroring ``ensure_venv._advise_manual_whoami_install``'s remediation
-    text (pre-relocation original)."""
-    print(
-        f"[ADVISORY] could not install coordinator_whoami under the coordinator.python "
-        f"pin ({python_bin}) — {reason}.",
-        file=sys.stderr,
-    )
-    print(
-        f"  probe_p5 will read red until it is installed. Run:\n"
-        f"    {python_bin} -m pip install -e {whoami_pkg}/",
-        file=sys.stderr,
-    )
-    tail = "\n".join(stderr.splitlines()[-20:])
-    if tail:
-        print(tail, file=sys.stderr)
-
-
-def provision_whoami_under_general_pin(
-    repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args
-) -> None:
-    """Advisory install-chain step: pip-installs ``coordinator_whoami``
-    editable under the operator's ``coordinator.python`` general pin, when
-    that interpreter is healthy but does not yet have it importable.
-
-    NAMED MECHANISM (AC1 of docs/plans/2026-08-18-retire-coordinator-venv.md):
-    this is the machine-first install path's replacement for
-    ``coordinator_core.install.ensure_venv._ensure_whoami_under_general_pin``,
-    which only ever ran as a side effect of ``ensure_coordinator_venv`` — a
-    call site that C4 (same plan) reduces to break-glass-only
-    (``--allow-venv-fallback``). Without this relocation, a fresh box that
-    never opts into the venv fallback would never install
-    ``coordinator_whoami`` under ANY interpreter the operator's general pin
-    names, regressing the exact defect that function was written to close:
-    ``probe_p5`` (``coordinator_core.plugin_health.sentinel``) reads red at
-    first doctor run and stays red until a human runs the pip line by hand
-    (cross-repo/archive/2026-08-10-doe-claude-em-general-pin-is-self-
-    sufficient-here-fresh-install-is-not.md).
-
-    Placement: invoked from ``main()`` AFTER ``install_bin_forwarders`` (not
-    inside ``provision_deps``) for two reasons. (1) Ordering:
-    ``install_bin_forwarders`` shells out to ``substrate.py --setup-only``,
-    which relocates the whoami SOURCE tree to
-    ``<settings-home>/coordinator-whoami`` (its own docstring: "Steps 1-3,
-    C10a venv/whoami, seed-wikis") — provisioning whoami before its source
-    tree exists would fail on the exact fresh-box case this function exists
-    to close. ``provision_deps`` runs even earlier (top of ``main()``), so
-    folding this in there is doubly wrong. (2) This function needs
-    ``plugin_root`` (to resolve ``ml_cli``-equivalent registry reads and the
-    whoami source fallback), which only becomes resolvable once
-    ``_resolve_coordinator_claude_root``/``_resolve_plugin_root_for_machine_local``
-    are reachable — a post-registration-step concern, not a
-    ``provision_deps(claude_klabauter_root, py, allow_venv_fallback)``-signature concern.
-    ``coordinator_whoami`` is also coordinator-claude's package, not one of
-    claude-klabauter's declared deps — folding it into ``provision_deps`` would muddy
-    that function's documented "declared deps AND the claude-klabauter package itself"
-    contract.
-
-    ADVISORY-ONLY, NEVER FATAL — mirrors
-    ``_ensure_whoami_under_general_pin``'s contract exactly: no exception
-    escapes this function, and it never changes ``main()``'s status word/exit
-    code. Skipped entirely under ``--register-only`` (see caller in
-    ``main()``), matching every other post-registration step it sits beside.
-    """
-    print()
-    print("--- Install: coordinator_whoami under the coordinator.python general pin ---")
-
-    if str(claude_klabauter_root_resolved) not in sys.path:
-        sys.path.insert(0, str(claude_klabauter_root_resolved))
-
-    try:
-        from coordinator_core.machine_resolver import registry_get
-
-        coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
-        if coord_source.is_publish_mirror_rejected:
-            print(
-                "[ADVISORY] coordinator-claude root resolved to a publish mirror — "
-                "skipping coordinator_whoami provisioning.",
-                file=sys.stderr,
-            )
-            return
-        plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
-        if plugin_root is None or not (plugin_root / "templates").is_dir():
-            print(
-                f"[ADVISORY] coordinator-claude plugin root not resolvable from {coord_path} "
-                "(no templates/ dir) — skipping coordinator_whoami provisioning.",
-                file=sys.stderr,
-            )
-            return
-
-        general = registry_get("coordinator.python") or ""
-        if not general:
-            print("[ADVISORY] coordinator.python is unset — skipping coordinator_whoami provisioning.")
-            return
-        if not Path(general).exists():
-            print(
-                f"[ADVISORY] coordinator.python='{general}' does not exist on disk — "
-                "skipping coordinator_whoami provisioning.",
-                file=sys.stderr,
-            )
-            return
-        if _whoami_importable_under(general):
-            print(
-                f"PASS [whoami] coordinator_whoami already importable under coordinator.python "
-                f"({general}) — no-op."
-            )
-            return
-
-        whoami_pkg = _resolve_whoami_pkg_dir(plugin_root)
-        proc = subprocess.run(
-            [general, "-m", "pip", "install", "-e", f"{whoami_pkg}/"],
-            capture_output=True,
-            text=True,
-            timeout=PACKAGE_INSTALL_SECS,
-            **_NO_CONSOLE,
-        )
-        if proc.returncode == 0:
-            print(
-                f"PASS [whoami] installed coordinator_whoami under the coordinator.python "
-                f"pin ({general})."
-            )
-            return
-        _advise_manual_whoami_install(general, whoami_pkg, f"pip exited {proc.returncode}", proc.stderr or "")
-    except subprocess.TimeoutExpired as exc:
-        print(
-            f"[ADVISORY] coordinator_whoami install under the coordinator.python pin timed "
-            f"out: {exc}",
-            file=sys.stderr,
-        )
-    except Exception as exc:  # noqa: BLE001 — advisory surface, never fatal
-        print(
-            "[ADVISORY] coordinator_whoami provisioning under the coordinator.python pin "
-            f"failed unexpectedly ({type(exc).__name__}: {exc}).",
-            file=sys.stderr,
-        )
-
-
 def migrate_whoami_pin_off_venv(repo_root: Path, args: Args) -> None:
     """Advisory install-chain step: fires the one-time `coordinator.whoami_python`
     repoint leg on boxes whose pin still names the retired `.coordinator-venv`.
@@ -3474,11 +3287,20 @@ def migrate_whoami_pin_off_venv(repo_root: Path, args: Args) -> None:
     hand, which is the "no hand-edit instruction to operators" clause AC1 rules
     out. This is that call site.
 
-    Ordering: invoked AFTER `provision_whoami_under_general_pin`, deliberately.
-    The migration REFUSES to repoint onto an interpreter that cannot import
-    `coordinator_whoami` (never repoint blind), so the provisioning step that
-    makes it importable has to have run first; inverting the two turns a healthy
-    box into a refusal on first install.
+    Ordering: this used to be invoked AFTER `provision_whoami_under_general_pin`,
+    because the migration REFUSES to repoint onto an interpreter that cannot
+    import `coordinator_whoami` (never repoint blind). That provisioning step is
+    gone with the package.
+
+    CONSEQUENCE, STATED SO IT IS NOT REDISCOVERED AS A BUG: with
+    `coordinator_whoami` retired, that importability precondition can no longer
+    be satisfied on any box, so this migration now refuses UNIVERSALLY and is
+    inert. It is advisory and never fatal, so nothing breaks — but it is dead
+    plumbing, and its subject (`coordinator.whoami_python`) is a retired key.
+    Removing it belongs to claude-klabauter's own venv-retirement campaign, which owns
+    this pin's whole lifecycle; it is deliberately left standing here rather
+    than half-removed by an outside change that was only chartered to disarm
+    the reinstall trigger.
 
     Advisory and never fatal, matching the step it sits beside: a box that cannot
     be migrated keeps its old pin and says so, rather than failing the install.
@@ -4107,7 +3929,6 @@ def main(argv: list[str]) -> int:
     if not args.register_only:
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
-        provision_whoami_under_general_pin(repo_root, engine_py, claude_klabauter_root_resolved, args)
         migrate_whoami_pin_off_venv(repo_root, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_precommit_hook(repo_root, engine_py, args.agent_mode)

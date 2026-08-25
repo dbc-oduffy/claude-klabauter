@@ -45,6 +45,11 @@ REPORT_SIDECAR_TYPE = "coordinator:executor"
 
 BARE_HEX_AGENT_ID = "abc123def4567890"
 NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
+#: EM-side canonical teammate id — the shape a NAMED dispatch actually presents
+#: and the shape `.agents/<agent_id>/` is keyed by. Grammar taken from the three
+#: writers that mint it (track_dispatched_agents._TEAMMATE_AGENT_RE and the two
+#: _TEAMMATE_CANONICAL_RE copies), not from observed samples.
+CANONICAL_TEAMMATE_AGENT_ID = "c7-agent-probe@session-2c79e462"
 
 
 @pytest.fixture
@@ -217,6 +222,92 @@ def test_canonical_agent_id_named_teammate_session_absent_fallback() -> None:
 
 def test_canonical_agent_id_unrecognized_form_empty() -> None:
     assert engine._canonical_agent_id("not-a-valid-id", None) == ""
+
+
+def test_canonical_agent_id_em_side_canonical_teammate() -> None:
+    """A NAMED dispatch presents `<name>@session-<short>`, not the raw
+    subagent-side `a<name>-<16hex>`. Accepting only the latter returned "" for
+    every named dispatch, so resolve_effective_types skipped the back-pointer
+    leg entirely and the teammate's true subagent_type never resolved."""
+    assert (
+        engine._canonical_agent_id(CANONICAL_TEAMMATE_AGENT_ID, "em-session-1")
+        == CANONICAL_TEAMMATE_AGENT_ID
+    )
+    assert (
+        engine._canonical_agent_id(CANONICAL_TEAMMATE_AGENT_ID, None)
+        == CANONICAL_TEAMMATE_AGENT_ID
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "c7-agent-probe@session-",           # empty short
+        "@session-2c79e462",                 # empty name
+        "c7-agent-probe@session-2C79E462",   # short is lowercase-only
+        "c7/agent@session-2c79e462",         # separator outside the name grammar
+        "c7-agent-probe@session-2c79e462" + chr(10),  # trailing newline (fullmatch, not match)
+    ],
+)
+def test_canonical_agent_id_rejects_near_miss_canonical(raw: str) -> None:
+    """The widening is exactly the writers' grammar and no wider — this is an
+    id-matching predicate on a guard surface, so a near miss must still fail
+    closed rather than resolve a back-pointer directory it was not keyed to."""
+    assert engine._canonical_agent_id(raw, "em-session-1") == ""
+
+
+def test_canonical_agent_id_grammar_matches_the_minters() -> None:
+    """Pins the reader to its writers: if a writer's grammar moves, this fails
+    rather than the named leg silently going dead again."""
+    from coordinator_core.hooks import track_dispatched_agents, track_touched_files
+    from coordinator_core.write_guards import _subagent_identity
+
+    assert (
+        engine._TEAMMATE_CANONICAL_RE.pattern
+        == track_dispatched_agents._TEAMMATE_AGENT_RE.pattern
+    )
+    # Review: coordinator:code-reviewer (2026-08-23, P3) -- track_touched_files
+    # is named as one of the three writers by this module's docstring and was
+    # the one copy this test never referenced, so a drift in ITS charset alone
+    # would have gone uncaught and killed the leg again for exactly the
+    # population that writer governs.
+    assert (
+        engine._TEAMMATE_CANONICAL_RE.pattern
+        == track_touched_files._TEAMMATE_CANONICAL_RE.pattern
+    )
+    # _subagent_identity's copy adds named capture groups, so its .pattern
+    # string differs by construction -- compare behaviour, both directions, so
+    # a copy growing STRICTER than the built id is caught too, not only a laxer
+    # one (the one-directional check this replaces could not see that).
+    built = _subagent_identity._cs_build_canonical_agent_id("c7-agent-probe", "2c79e462")
+    assert engine._TEAMMATE_CANONICAL_RE.fullmatch(built)
+    assert _subagent_identity._TEAMMATE_CANONICAL_RE.fullmatch(built)
+    for raw in ("c7-agent-probe@session-2C79E462", "@session-2c79e462", "c7/agent@session-2c79e462"):
+        assert engine._TEAMMATE_CANONICAL_RE.fullmatch(raw) is None
+        assert _subagent_identity._TEAMMATE_CANONICAL_RE.fullmatch(raw) is None
+        assert track_touched_files._TEAMMATE_CANONICAL_RE.fullmatch(raw) is None
+
+
+def test_older_predicates_reject_trailing_newline() -> None:
+    """Review: coordinator:code-reviewer (2026-08-23, P3). `match` with a `$`
+    anchor also matches immediately before one trailing newline, so the two
+    pre-existing legs accepted `"<id>
+"` and keyed a `.agents/<id>
+/`
+    directory no writer creates. All three legs now use `fullmatch`."""
+    assert engine._canonical_agent_id(BARE_HEX_AGENT_ID + chr(10), None) == ""
+    assert engine._canonical_agent_id(NAMED_AGENT_ID + chr(10), "em-session-1") == ""
+
+
+def test_read_backpointer_resolves_for_canonical_teammate_id(git_repo: Path) -> None:
+    """End of the chain the regex was cutting: with the canonical id accepted,
+    resolve_effective_types reaches the back-pointer and returns the real type."""
+    _write_backpointer(git_repo, CANONICAL_TEAMMATE_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _, _, subagent_type = engine.resolve_effective_types(
+        {"agent_id": CANONICAL_TEAMMATE_AGENT_ID, "session_id": "em-session-1"},
+        str(git_repo),
+    )
+    assert subagent_type == CONFINED_TYPE
 
 
 # ---------------------------------------------------------------------------

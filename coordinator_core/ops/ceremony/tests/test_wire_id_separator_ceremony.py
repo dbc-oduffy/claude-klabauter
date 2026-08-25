@@ -37,13 +37,18 @@ CEREMONY_DIR = Path(__file__).resolve().parent.parent
 # wsc_resolve.py's engine (still live, imported by ceremony.session_instructions)
 # survives as branch_resolution.py, which replaces it on this list; wsc_commit.py
 # had no live consumer and was deleted outright, with no replacement entry.
+#
+# wsc_tail.py was removed 2026-08-23 in the eleven-op kill (c07062c99;
+# state/kill-ledger.md, `ceremony.wsc_tail` — 150021ms against a 2000ms bar).
+# No replacement entry: the op is a REBUILD CANDIDATE, not a rename, so there is
+# no successor module to guard yet. Whatever rebuilds /workstream-complete's tail
+# step joins this tuple deliberately, the same way any new ceremony module does.
 GUARDED_MODULES = (
     "branch_resolution.py",
     "git_native.py",
     "records_query.py",
     "renderers.py",
     "resolver.py",
-    "wsc_tail.py",
 )
 
 

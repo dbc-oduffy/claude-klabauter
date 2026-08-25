@@ -260,50 +260,34 @@ class TestTrackTouchedFiles:
         last_verb, last_path = matches[-1]
         assert last_verb == "T" and last_path == "lib/util.py"
 
-    def test_meta_json_backfilled_when_dir_precreated_without_meta(self, tmp_path: Path) -> None:
-        """Regression (defect A, 2026-07-24): meta.json is backfilled even when
-        another bookkeeping writer created the session dir first (dir present,
-        meta.json absent). Before the fix the handler short-circuited on dir
-        existence, leaving meta.json — and Layer-1 liveness — permanently
-        unwritten, so a killed session read live for the full 30-min Layer-2
-        recency window and held /pickup claims hostage.
-        """
-        from coordinator_core.hooks.track_touched_files import _handler
-        ctx = self._ctx(tmp_path)
-        sid = "aabbccddeeff0033"
-        # Simulate the race: dir + touched.txt exist (e.g. push-failure cursor
-        # writer won), but NO meta.json.
-        session_dir, _ = _make_session(tmp_path, sid, create_meta=False)
-        assert not (session_dir / "meta.json").exists(), "precondition: no meta.json"
-
-        _run(_handler(
-            {"session_id": sid, "tool_name": "Edit", "file_path": "src/foo.py", "agent_id": ""},
-            repo_root=ctx.repo_root,
-        ))
-
-        meta_path = session_dir / "meta.json"
-        assert meta_path.is_file(), "meta.json must be backfilled on first edit"
-        meta = json.loads(meta_path.read_text())
-        assert meta["session_id"] == sid
-
-    def test_needs_session_init_gate_goes_quiet_once_stable_pid_present(self, tmp_path: Path) -> None:
-        """The bootstrap gate re-fires while meta.json is absent or unstamped,
-        then goes quiet once a stable_pid is present — so the hot edit path pays
-        no git-subprocess cost in steady state.
-        """
-        from coordinator_core.hooks.track_touched_files import _needs_session_init
-        sid = "aabbccddeeff0044"
-        session_dir = _cs_dir(tmp_path) / sid
-        meta_path = session_dir / "meta.json"
-
-        assert _needs_session_init(str(session_dir), str(meta_path)) is True  # dir absent
-        session_dir.mkdir(parents=True, exist_ok=True)
-        assert _needs_session_init(str(session_dir), str(meta_path)) is True  # meta absent
-        meta_path.write_text(json.dumps({"session_id": sid}))
-        assert _needs_session_init(str(session_dir), str(meta_path)) is True  # no stable_pid
-        meta_path.write_text(json.dumps({"session_id": sid, "stable_pid": "1234"}))
-        assert _needs_session_init(str(session_dir), str(meta_path)) is False  # steady state
-
+    # NEGATIVE SPEC -- do not restore these two tests, and do not write their
+    # equivalent against `_handler`.
+    #
+    # `test_meta_json_backfilled_when_dir_precreated_without_meta` (defect A,
+    # 2026-07-24) and `test_needs_session_init_gate_goes_quiet_once_stable_pid_present`
+    # both asserted that the edit hook performs session bootstrap. C1 of
+    # docs/plans/2026-08-22-track-touched-files-pays-only-for-the-append.md
+    # removed that bootstrap deliberately (landed bf09715e2): `_needs_session_init`,
+    # `_bootstrap_session` and `_ensure_session_dir` are gone, and with them both
+    # cold `git rev-parse` spawns on every session's first edit.
+    #
+    # The behaviour they guarded did not become unowned. `stable_pid` exists to
+    # adjudicate CLAIMS, and claims are made through the claiming ceremony, so the
+    # stamp now happens there (`archive_stamp.py::cs_claim_handoff` ->
+    # `session/core.py::ensure_meta`), guarded by
+    # `coordinator_core/tests/test_claim_ceremony_stamps_stable_pid.py`. The
+    # population that used to be caught here -- a session dir with no `meta.json`
+    # at all -- is kept visible by `session/stable_pid_watch.py::scan_stable_pid_misses`,
+    # which counts a `touched.txt`-carrying dir with no `meta.json` as a miss
+    # (reason `no_meta_json`, C4 of the same plan).
+    #
+    # A session that edits files but neither claims a handoff nor commits now
+    # carries no `meta.json`. That is the plan's named, accepted consequence, not
+    # a regression: such a session holds no claim for anyone to adjudicate, and its
+    # liveness resolves via the harness session registry or the Layer-2 recency
+    # window. Reinstating a bootstrap on the edit hook is the WRONG repair if that
+    # consequence is ever judged unacceptable -- the fix would be a stamp at the
+    # investigate-only pickup path.
     def test_agent_keyed_write(self, tmp_path: Path) -> None:
         """Subagent fire: writes a T-event to .agents/<canonical_id>/touched.txt as well."""
         from coordinator_core.hooks.track_touched_files import _handler
@@ -1880,9 +1864,17 @@ class TestRegistryBookkeepingOps:
     """All 4 bookkeeping ops must be present in the IPC registry after import."""
 
     def test_all_four_bookkeeping_ops_registered(self) -> None:
-        """import coordinator_core.ops → all 4 hooks.* bookkeeping ops in _REGISTRY."""
-        import coordinator_core.ops  # noqa: F401 — triggers registration side-effects
-        from coordinator_core.ipc import _REGISTRY
+        """All 4 hooks.* bookkeeping ops are dispatchable.
+
+        Was: import coordinator_core.ops, then assert each key is in _REGISTRY.
+        That proved "registered right now", which depended on package-init having
+        an eager registration side effect. Registration is unconditionally lazy
+        since 2026-08-22, so a bare import registers nothing and the old form
+        asserted against an empty dict. resolves() proves the property the
+        bookkeeping surface actually needs: the key is dispatchable, whether or
+        not its owning module happens to be imported yet.
+        """
+        from coordinator_core.ops._registry_map import resolves
 
         expected = {
             "hooks.track_touched_files",
@@ -1891,8 +1883,9 @@ class TestRegistryBookkeepingOps:
             "hooks.track_dispatched_agents",
         }
         for name in expected:
-            assert name in _REGISTRY, (
-                f"Bookkeeping op {name!r} not in _REGISTRY. Registered: {sorted(_REGISTRY)}"
+            assert resolves(name), (
+                f"Bookkeeping op {name!r} is not dispatchable: absent from "
+                f"OP_MODULE_MAP and not already registered."
             )
 
 

@@ -367,7 +367,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #         (D1 terminality re-verify); archive_plans.py:340 live-reference guard at T3.
     #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
     #     no HTTP route was ever added, negative-spec in archive_plans.py:48.
-    "fleet.archive_completed_plans": OpClass.MUTATING,
     # fleet.handoffs_for_plan — COMPUTE_ONLY: pure read, the "which handoffs did this
     # plan mint, live and archived" aggregation, built entirely on two unmodified
     # query_records() calls (ops/fleet/plan_handoffs.py). Same DR-208 five-question
@@ -1169,18 +1168,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "peer_notice.send": OpClass.MUTATING,
     # peer_notice.check — read-only listing of unread notices addressed to a session.
     "peer_notice.check": OpClass.COMPUTE_ONLY,
-    # queue.close — MUTATING: stamps an improvement-queue entry's terminal status
-    # (plus closed_at/closed_by), commits that one path with an explicit pathspec,
-    # then delegates archival to fleet.archive_queue_entry — which therefore
-    # receives a write that is already committed rather than one it merely found.
-    # Write-shape is wider than queue.append's additive-create: this one mutates
-    # an existing entry in place AND commits, where queue.append only ever
-    # creates a new file. Scope-keying class is unchanged, though — both are
-    # still confined to a single caller-supplied path under the caller's own
-    # worktree (common_dir keying), so the pathspec stays the one entry path.
-    # Authority: docs/decisions/DR-270-queue-closure-writer-side-commit-ownership.md
-    #            docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § 4
-    "queue.close": OpClass.MUTATING,
     # queue.promote — MUTATING: writes a per-entry YAML file to state/lessons-outbox/
     # (central claude-klabauter state; outbox for /learn-lessons --central drain). Distinct from
     # queue.append: lessons-outbox schema (not lesson-entry alias), uuid id field, ISO-ts
@@ -1510,45 +1497,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # entry is the thing that must change with it.
     # Spec: docs/plans (baton-closes-when-its-plan-ships) § C7
     "deliverable.fork_detect": OpClass.COMPUTE_ONLY,
-    # memo.send — MUTATING: writes one schema-valid memo file (non-committing dirty file)
-    # into the cross-repo/inbox/ of a registry-enumerated receiver repo. The receiver's
-    # session-init sweep archives it. No remote route: DR-215 retired the UDS/HTTP transport
-    # outright, so there is no network surface to reach this op from (Q-c HARD negative-spec).
-    # Strongest crossing in the strang-0x sequence (cross-repo, not merely cross-tree-within-
-    # own-repo); the full D2 seven-bound set applies (DR-214-send-class-cross-tree-write-
-    # boundary.md § D2). This op does NOT use _common.archive_and_commit — non-committing
-    # per DR-211 D2 re-affirmation for send (AC5 of strang-03).
-    # DR-208 five-question affirmation (citing ops/fleet/memo_send.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      memo_send.py writes one dirty file into the registry-enumerated receiver's
-    #      cross-repo/inbox/ tree (non-committing; receiver's session-init sweep archives it).
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only the receiver's cross-repo/inbox/ (non-committing dirty file).
-    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      memo_send.py opens the target inbox path for write (D2 criterion 3 — one dirty file).
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      cross-repo/inbox/ files are coordinator substrate shared across repos and EM sessions.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The written memo file is read by the receiver's session-init sweep and sibling EM.
-    # DR-214-send-class D2 seven-bound affirmed (send-class DR, NOT DR-211 archival-move):
-    #   D2-1 (single-file): one file per invocation; no batch cross-tree writes.
-    #   D2-2 (registry-enumerated receiver): target inbox is registry-derived, never wire-derived.
-    #   D2-3 (non-committing): engine writes one dirty file; receiver's sweep archives it.
-    #   D2-4 (fail-loud on collision): read-before-write → refuse; no silent clobber.
-    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright, so there is
-    #     no network surface to reach any op from -- the only caller path is the local
-    #     spawn-per-call entrypoint `python -m coordinator_core.invoke`.
-    #   D2-6 (schema-valid emission): correct to:/from:/status:open/kind: frontmatter.
-    #   D2-7 (B3 gitignore delivery guard): engine runs git check-ignore before writing.
-    # Authority: docs/decisions/DR-214-send-class-cross-tree-write-boundary.md § D2
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec:
-    #   - NOT reachable over any network transport: DR-215 removed the UDS/HTTP surface
-    #     entirely, so this holds by absence of a route, not by a per-op refusal.
-    #   - NO legacy direct-write fallback (Q-c HARD; single write path; refuse when down).
-    # Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C3
-    "memo.send": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # memo.list / memo.draft / memo.compose (strang-0x memo-tool-rebuild C7) —
     # memo.list is COMPUTE_ONLY (pure read); memo.draft/memo.compose are MUTATING
@@ -1791,33 +1739,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md
     "changelog.upsert_reviewed": OpClass.MUTATING,
-    # completion.reconcile_commits — MUTATING: in-place fold of missing SHAs into the
-    # commits: YAML list of a caller-supplied docs/plans/<plan>.md. Locked read-modify-write
-    # (coordinator_core.locked_write.locked_rmw) + atomic os.replace (DR-216 D3, locking per
-    # the 2026-08-06 amendment). Handler enforces noun confinement at runtime (DR-216 D2(iv)).
-    # DR-208 five-question affirmation (citing ops/completion_ops.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      completion_ops.py:reconcile_completion_commits — locked read-modify-write writes
-    #      the caller-supplied docs/plans/<plan>.md with new SHA entries folded in.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only docs/plans/<plan>.md (caller-supplied path). Dual-write ban satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      _atomic_write opens a tempfile; os.replace atomically renames it to the plan file.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      docs/plans/*.md completion entries are coordinator substrate read by the EM,
-    #      git history, and the review pipeline.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The modified plan file is read by subsequent sessions and the facade.
-    # DR-216 D2 five-bound affirmed (completion in-place-mutation sub-category):
-    #   D2(i) (per-record idempotent): already-present SHA → no-op (skipped count only).
-    #   D2(ii) (git-reversible): additive SHA entries; git checkout -- <plan> recovers.
-    #   D2(iii) (content-additive): folds new SHAs only; commits: [] → multi-line is the one
-    #           permitted substitution (oracle-faithful, semantically additive — see DR-216 D2(iii) note).
-    #   D2(iv) (confined noun): handler enforces plan_path in docs/plans/ at runtime.
-    #   D2(v) (no git commit): handler writes plan file only; EM retains commit responsibility.
-    # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "completion.reconcile_commits": OpClass.MUTATING,
     # completion.flip_to_released — MUTATING: in-place flip of release fields on a
     # caller-supplied archive/completed/**/*.md entry. Locked read-modify-write
     # (coordinator_core.locked_write.locked_rmw) + atomic os.replace, locking per DR-216's
@@ -2018,39 +1939,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
     "handoff.columns": OpClass.COMPUTE_ONLY,
-    # ceremony.wsc_tail — MUTATING: the C9 single-pass rebuild orchestrator (docs/plans/
-    # 2026-07-16-wsc-pure-python-tail-rebuild.md). Supersedes the two-phase
-    # ceremony.wsc_resolve / ceremony.wsc_commit pipeline (both ops' registrations were
-    # removed 2026-07-29, kill-list op removal — wsc_resolve.py's engine survives as
-    # coordinator_core/ops/ceremony/branch_resolution.py, still imported live by
-    # ceremony.session_instructions; wsc_commit.py was deleted outright). Writes
-    # state/ceremony/wsc/<sid-short>-<emitted_at>.json (the same session-keyed receipt
-    # shard the retired ops used), git commit objects (the main ceremony commit + the C5
-    # AC17 follow-up stamp commit),
-    # a per-session commit sentinel under <common_dir>/coordinator-sessions/<sid>/
-    # (AC18 crash-resumption), consumed-handoff frontmatter (shipped_in/deployment_state
-    # stamps), and — when a completion_title is supplied — a new completion-entry file
-    # under archive/completed/.
-    # DR-208 five-question affirmation (citing ceremony.wsc_tail handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Writes the phase-2 receipt shard, creates git commit objects (main + AC17
-    #      follow-up), and stamps consumed-handoff frontmatter files.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only coordinator state/ceremony/ JSON, git objects, and repo-tracked
-    #      markdown/frontmatter files. Dual-write ban satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      Creates/updates the AC18 commit sentinel, the receipt shard, and (when
-    #      applicable) the completion-entry scaffold.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      state/ceremony/wsc/, archive/completed/, and consumed-handoff frontmatter
-    #      are coordinator substrate shared across sessions.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The receipt, the landed git commits, and any stamped shipped_in/
-    #      deployment_state are read by subsequent EM sessions and fleet sweeps.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
-    # surface; the sole caller path is `python -m coordinator_core.invoke`).
-    "ceremony.wsc_tail": OpClass.MUTATING,
     # ceremony.post_commit_tail — MUTATING: the C3a (docs/plans/2026-07-23-wsc-tail-
     # slim-down.md § C3a) extraction of wsc_tail's steps 5c/5d (post-commit
     # consumed-handoff stamp+ship, origin-stub close) into one standalone op. Writes
@@ -2141,29 +2029,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (ops/fleet/archive_sizings.py, dest-collision handling + git-mv + commit).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "fleet.archive_terminal_sizings": OpClass.MUTATING,
-    # fleet.archive_actioned_memos — MUTATING: git-mv actioned memos from cross-repo/inbox/
-    # into cross-repo/archive/ (flat layout), reusing archive_and_commit.
-    # DR-208 five-question affirmation (citing ops/fleet/archive_actioned_memos.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      archive_and_commit() git-mv + git-commit moves each actioned memo into
-    #      cross-repo/archive/.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only into cross-repo/archive/ tree and git commit objects.
-    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      Git-mv via archive_and_commit() writes destination files.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      Git commit is a repo-shared state mutation visible to all git clients.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The git commit and archived memo files are observable by any git client after return.
-    # DR-211 D2 five-bound affirmed (archival-writer sub-category):
-    #   D2-1 (idempotent): source-gone or destination already exists → skipped.
-    #   D2-2 (commutative): git-mv order does not change final archive/ contents.
-    #   D2-3 (git-reversible): cross-repo/archive/ is git-tracked; git revert recovers any memo.
-    #   D2-4 (act-time re-verify): handler re-checks status:actioned at act time.
-    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
-    #     no HTTP route was ever added, negative-spec in archive_actioned_memos.py.
-    "fleet.archive_actioned_memos": OpClass.MUTATING,
     # fleet.backfill_dispositionless_memos (C5,
     # docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md) — MUTATING:
     # writes realized_by/actioned_note frontmatter fields onto memos already resident
@@ -2365,55 +2230,41 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      branch_resolution reads pickup.happened/pickup.handoff on a later WSC resolve.
     "session.record_pickup": OpClass.MUTATING,
-    # session.boot_sweep — MUTATING (Class A+B composite): single-cold-start composite boot
-    # entrypoint that calls all archival sweeps' per-family internals in ONE process. Covers
-    # consumed-handoff archival (with deployment_state flip, shipped_in stamp, WARN marker,
-    # 30-min recency floor), terminal-plan archival, shipped-handoff archival, and actioned-memo
-    # archival. No session reaper (session.reap is 12h-gated, invoked separately by session-init).
-    # DR-208 five-question affirmation (citing ops/session/boot_sweep.py):
+    # session.boot_sweep — MUTATING (Class A+B): rebuilt boot-time archival BACKSTOP
+    # (C5, docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md), module
+    # coordinator_core/ops/session/boot_backstop.py — op id preserved across the
+    # rebuild, module renamed from boot_sweep.py. The former twelve-subsystem
+    # composite (five archival families plus seven cadence riders) is gone: the
+    # backstop enumerates state/handoffs/*.md, frontmatter-selects the terminal
+    # subset, layers the surviving DR-084 (a)/(b)/(e) consumed-handoff semantics
+    # (30-min claimed_at recency floor, non-heir in_flight skip-and-surface, heir
+    # deployment_state:shipped stamp), relocates every candidate via
+    # session.scope.relocate_touched_path, then records the whole batch as ONE
+    # scoped `git add -A` plus ONE `git commit` — no per-path git QUERY spawn of any
+    # kind (AC1). The seven riders (priority_drain, fold_observed_set,
+    # handoff_reconcile, the two eol riders, drain_pending_push, session.reap's
+    # sub-reap (iii)) no longer run from this op — see C3 of the same plan; each is
+    # its own dispatchable op invoked from a ceremony gate instead.
+    # DR-208 five-question affirmation (citing ops/session/boot_backstop.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Each archival family issues a git-mv + git-commit; the consumed-handoff path also
-    #      writes in-place frontmatter (deployment_state flip, shipped_in stamp) and appends
-    #      to tasks/orphan-sweep-notes.md.
+    #      One git add -A + one git commit per run; the DR-084 heir path also writes
+    #      in-place frontmatter (deployment_state stamped shipped) and appends to
+    #      tasks/orphan-sweep-notes.md.
     #   2. Writes into rag's relational store?                                 No.
     #      Writes archive/ trees and git commits; state/handoffs/ in-place mutations; no rag write.
     #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      archive_and_commit() writes destination files; in-place mutations write source files.
+    #      relocate_touched_path moves destination files; in-place mutations write source files.
     #   4. Mutates shared mutable state outside its own module?                YES.
     #      Git commits and in-place frontmatter mutations are shared state across all clients.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      All git commits and file mutations are observable by any git client after return.
     # Authority: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C1b / AC5
+    #            docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md § C4a/C4b/C5
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
     # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "session.boot_sweep": OpClass.MUTATING,
-    # session.sweep_consumed_handoffs — MUTATING (Class A+B): the consumed-handoff leg of
-    # session.boot_sweep, isolated as a single-family on-demand command (C21). It calls
-    # boot_sweep._sweep_consumed_handoffs DIRECTLY, so it inherits that leg's mutations
-    # verbatim; the classification is inherited for the same reason.
-    # DR-208 five-question affirmation (citing ops/session/sweep_consumed_handoffs.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      git-mv + git-commit per archived baton, plus in-place frontmatter mutation
-    #      (deployment_state flip, shipped_in stamp) on state/handoffs/*.md.
-    #   2. Writes into rag's relational store?                                 No.
-    #      archive/ trees, git commits, and state/handoffs/ only — dual-write ban
-    #      (DR-208 / tri-plane DD#1) satisfied, identically to session.boot_sweep.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      archive_and_commit() writes destination files; in-place frontmatter writes.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      Git commits and frontmatter mutations are shared across all clients.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      Every archival commit is observable by any git client after return.
-    # Note: dry_run=true previews without mutating, but classification is a property of
-    # the op, not of one param binding — the ambiguous-defaults-MUTATING rule is moot here
-    # since the live path plainly mutates.
-    # Authority: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
-    # surface; the sole caller path is `python -m coordinator_core.invoke`).
-    "session.sweep_consumed_handoffs": OpClass.MUTATING,
     # session.scope_report — COMPUTE_ONLY: the op's own module docstring names it
     # a "read-only session-scope reporter" — reports THIS session's own scope, no
     # writes. Spec: coordinator_core/ops/session/scope_report.py module docstring.
@@ -2445,29 +2296,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (resolve_engine_sha) and runs `git merge-base --is-ancestor` against MIN_KNOWN_GOOD_SHA
     # in the engine's own checkout; no state write, no rag store write (dual-write ban).
     "engine.drift": OpClass.COMPUTE_ONLY,
-    # probes.fork_census — COMPUTE_ONLY: named, re-runnable transcript fork-cost
-    # measurement (coordinator_core/probes/fork_census.py). Registered but missing
-    # from this table since landing (6928d410e) — classify() fails closed on the
-    # omission, denying a purely read-and-report probe. Module docstring's own
-    # Negative-spec: "Does NOT write to the transcript corpus or to any fleet
-    # store — pure read-and-report, same COMPUTE_ONLY posture as coordinator_core.ops."
-    # DR-208 five-question affirmation (citing probes/fork_census.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      run_fork_census only globs/opens transcript `.jsonl` files for read
-    #      (`transcript.open("r", ...)`, line 371) and accumulates in-memory counters.
-    #      Grepped the module for any write call (`open(..., "w")`/`write_text`/
-    #      `json.dump`/`mkdir`) — none found.
-    #   2. Writes into rag's relational store?                                 No.
-    #      No I/O beyond the transcript reads above. Dual-write ban satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      Same grep as (1); the handler (`_fork_census`) returns the in-memory
-    #      `corpus`/`by_machine`/`pooled_for_reference_only` dict built by
-    #      `run_fork_census`.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #      Pure accumulation over `_MachineAccumulator` instances local to the call.
-    #   5. Persistent state changes observable across process boundaries?     No.
-    #      Nothing written; the reply is a transient measurement snapshot.
-    "probes.fork_census": OpClass.COMPUTE_ONLY,
     # cruft_sweep.run — MUTATING: with apply=True this op deletes coordinator substrate
     # (stale harness/scratch/orphan dirs and files via rm -rf/unlink) and appends
     # per-class rows to the cruft-sweep log — fail-closed default applies regardless,
@@ -2869,21 +2697,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # required.
     # Spec: tasks/strategic-feed-emission/stub.md
     "strategic.emit": OpClass.MUTATING,
-    # testing.full_runner — MUTATING (ambiguous-defaults-MUTATING, DR-208 §
-    # "New ops default to MUTATING until a reviewer explicitly affirms
-    # COMPUTE_ONLY"): the handler itself only reads (discover() walks the tree
-    # read-only) and computes a summary, but it dispatches arbitrary
-    # subprocess suites (pytest/node/bats/bash, coordinator_core.testing.run)
-    # against the caller-supplied target_root — unlike coverage.gate's/
-    # cartography.churn's read-only-git-query precedent, an invoked test
-    # suite is arbitrary code that MAY write to disk (temp artifacts, fixture
-    # output, etc.) as a side-effect of running. That subprocess side-effect
-    # profile fails the DR-208 five-question affirmation's question 4 ("Does
-    # the handler invoke any subprocess that may [write/mutate]?") honestly —
-    # "maybe", not "no" — so this op is classified MUTATING rather than
-    # asserting an unverifiable COMPUTE_ONLY.
-    # Spec: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C5
-    "testing.full_runner": OpClass.MUTATING,
     # session_hierarchy.derive — MUTATING: writes state/session-hierarchy.<slug>.json
     # (full-rebuild atomic temp+rename). Read side only queries claude-klabauter's own
     # state/handoffs + archive/handoffs via coordinator_core.ops.ceremony.records_query
@@ -4088,7 +3901,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #     the same reading this file already applied to context_pressure_
     #     precompact's tempdir sentinel above.
     "branch.merge_into_workstream": OpClass.MUTATING,
-    "ceremony.scoped_git_commit": OpClass.MUTATING,
     "commit.exec_bit_change": OpClass.MUTATING,
     "findings.self_persist_fallback": OpClass.MUTATING,
     "fleet.archive_paper_trail": OpClass.MUTATING,
@@ -4258,26 +4070,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?       YES.
     #      The sidecar/companion files it writes are read by the dispatched child.
     "hooks.cater_subagent_start": OpClass.MUTATING,
-    # op_census.report — MUTATING: unlike its op_census.breaches sibling (COMPUTE_ONLY,
-    # see that entry above), this op PERSISTS a module-summary cache index and a
-    # spawn-evidence index to disk on every call where persist_index resolves True
-    # (ops/op_census_report.py::census — module_summary.save_index(index, index_path),
-    # save_spawn_index(spawn_index, spawn_index_path)). persist_index defaults True and
-    # is gated only on the corpus's own `.git` directory existing, not disabled by
-    # default at the handler (ops/op_census_report.py::_op_census_report calls
-    # census(repo_root=repo_root) with persist_index left at its True default).
-    # DR-208 five-question affirmation:
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?   YES.
-    #      Writes a cache index file under the corpus's own .git-relative cache path
-    #      on the default (persist_index=True) call path.
-    #   2. Writes into rag's relational store?                                  No.
-    #      Cache index is local to the corpus tree, not rag's workstate_store.
-    #   3. Opens any file for write (including sentinel creation)?              YES.
-    #   4. Mutates shared mutable state outside its own module?                 No
-    #      beyond the cache files it writes itself.
-    #   5. Persistent state changes observable across process boundaries?       YES.
-    #      A later call reads the same cache index this call wrote.
-    "op_census.report": OpClass.MUTATING,
     # plan.tasks.spine_drift_check — COMPUTE_ONLY, affirmed against the handler per
     # DR-208 § Classification correctness discipline. The module's own NEGATIVE-SPEC
     # states plainly: "Does NOT write, anywhere, under any code path. No locked_rmw,

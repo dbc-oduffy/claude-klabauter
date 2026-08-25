@@ -668,11 +668,11 @@ _PLAN_SIDECAR_SUFFIXES = (
     ".docs-check",
     ".eng-director-review",
     ".node-map",
-    ".the Staff Engineer-review",
+    ".patrik-review",
     ".plan-coverage-check",
     ".prior-art-check",
     ".review",
-    ".review-the Director of Engineering",
+    ".review-zoli",
     ".sonnet-review",
 )
 

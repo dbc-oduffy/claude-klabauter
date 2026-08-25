@@ -143,6 +143,18 @@ Negative-spec:
     for JSON-RPC callers, not the primary call path (the DoE trampoline
     imports and calls the phase functions in-process — see recipe § DoE-side
     work item 5).
+  - Does NOT absorb `session.reap` sub-reap (iii) (orphaned claim-dir rm -rf)
+    (C3, docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md, AC6e):
+    that passenger needs a two-call TOCTOU liveness re-read
+    (`cs_claim_holder_live`) immediately before each rm, and a
+    fail-closed-to-keep defer on any liveness-check exception — a predicate
+    this module's phases have no equivalent of (they key on git-untracked
+    status, name/fingerprint match, or bare mtime age, never on a live-process
+    liveness check). Folding it in here would either dilute that check for
+    every other phase or bolt a claim-specific liveness branch onto a sweep
+    that has none today. It stays a standalone passenger, routed straight to
+    `session.reap_claims_for_repos` (already registered, already
+    target-root-parameterized) rather than through this module.
 """
 
 from __future__ import annotations

@@ -99,7 +99,14 @@ def test_sidecar_files_excluded_from_count(tmp_path: Path) -> None:
     specs_dir = tmp_path / "archive" / "specs" / "2026-06"
     (specs_dir / "2026-06-01-plan-fake-1.review.md").write_text("# review sidecar\n")
     (specs_dir / "2026-06-01-plan-fake-1.v3-divergence-check.md").write_text("# check sidecar\n")
-    (specs_dir / "2026-06-01-plan-fake-1.the Director of Engineering-review.md").write_text("# the Director of Engineering review\n")
+    # NOT illustrative: `.the Director of Engineering-review.md` is a literal member of
+    # `distill._common.SIDECAR_SUFFIXES`, so this exercises a real suffix and
+    # cannot be renamed without changing that constant. The persona name here is
+    # therefore load-bearing test data, not a stray mention.
+    # The FILENAME's persona slug is load-bearing and is permitted by the
+    # identity check as a functional identifier; the file's CONTENT is not, and
+    # a persona name there is an incidental leak that blocks the publish.
+    (specs_dir / "2026-06-01-plan-fake-1.zoli-review.md").write_text("# review sidecar\n")
     exit_code, out, _ = _run(tmp_path)
     assert exit_code == 0
     assert out == "6 un-harvested archived plans — run /distill"

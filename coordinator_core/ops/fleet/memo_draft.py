@@ -79,7 +79,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     suggest_nearest_receiver as _suggest_nearest_receiver,
     unique_nearest_receiver as _unique_nearest_receiver,
 )
-from coordinator_core.ops.fleet.memo_send import (
+from coordinator_core.ops.fleet._memo_compose import (
     _ENGINE_ACTOR_ID,
     _SCOPED_TO_KNOWN_SUBKEYS,
     _TOPIC_SLUG_RE,

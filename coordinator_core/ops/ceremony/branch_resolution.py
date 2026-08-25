@@ -163,7 +163,7 @@ from coordinator_core.ops.ceremony.receipt_emit import emit_receipt
 from coordinator_core.ops.ceremony.receipt_schema import make_x_node
 from coordinator_core.ops.completion_nature import classify_nature
 from coordinator_core.ops.fleet._common import main_worktree_root, rel_id
-from coordinator_core.ops.fleet.memo_send import _normalize_in_reply_to
+from coordinator_core.ops.fleet._memo_compose import _normalize_in_reply_to
 
 log = logging.getLogger(__name__)
 

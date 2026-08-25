@@ -827,9 +827,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "spawn-census": frozenset({"self_location"}),
     "standup.py": frozenset({"env_first"}),
     "sweep-actioned-memos.py": frozenset({"env_first"}),
-    "sweep-consumed-handoffs.py": frozenset({"env_first"}),
     "sweep-shipped-handoffs.py": frozenset({"env_first"}),
-    "sweep-terminal-plans.py": frozenset({"env_first"}),
     # Both families by design: this file is cc_invoke's own test, and asserts on
     # BOTH ladders' behaviour (notably the env-first-vs-self-location-first order
     # divergence, plan AC8). Not a bootstrap, and not family drift.

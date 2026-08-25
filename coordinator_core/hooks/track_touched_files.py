@@ -8,7 +8,7 @@ tool call into two append-only T-event logs:
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
-Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
+Port of the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-touched-files.sh (deleted 2026-07-22, DoE ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
@@ -39,7 +39,7 @@ track_dispatched_agents._write_backpointer_sync, so a real dispatch-time record
 always wins (idempotent, non-empty-file-wins).
 
 That first writer resolves the dispatching EM through
-`ops.session_context.resolve_current_session_id`, NOT a direct env read. This op
+`session.core.resolve_session_id`, NOT a direct env read. This op
 is registered, so it can be served by a resident warm engine whose own
 environment names the session that spawned the server; reading the env there
 yields a stranger, which passes the `!= session_id` test and gets written as the
@@ -68,8 +68,6 @@ Spec backlink: pln-track-touched-files-emits-t-ev-0befc7 § C1
 
 from __future__ import annotations
 
-import datetime
-import json
 import os
 import re
 from pathlib import Path
@@ -90,7 +88,6 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.session.scope import format_touch_event, normalize_touch_path
-from coordinator_core.win_portability import no_console_creationflags
 
 # ---------------------------------------------------------------------------
 # D6 — per-target-file asyncio.Lock registry.
@@ -154,12 +151,13 @@ def _get_lock(path: str) -> "asyncio.Lock":
         # archived). A held lock is never a stale-sweep candidate even if its
         # session dir happens to be gone — that combination cannot happen for a
         # live caller, but the check is unconditional defense-in-depth.
-        stale = [
-            p for p, lock in _FILE_LOCKS.items()
-            if not lock.locked() and not os.path.isdir(os.path.dirname(p))
-        ]
-        for p in stale:
-            del _FILE_LOCKS[p]
+        if len(_FILE_LOCKS) >= _MAX_FILE_LOCKS:
+            stale = [
+                p for p, lock in _FILE_LOCKS.items()
+                if not lock.locked() and not os.path.isdir(os.path.dirname(p))
+            ]
+            for p in stale:
+                del _FILE_LOCKS[p]
         # Hard cap: evict oldest insertion-order UNHELD entries one at a time until
         # under cap, or until no unheld entry remains (every entry held → stop and
         # let the table grow past the cap rather than evict a held lock).
@@ -230,140 +228,6 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
 
     # (c) Unrecognised shape — fail-closed.
     return ""
-
-
-# ---------------------------------------------------------------------------
-# Session-dir lazy init — mirrors the "lib missing — minimal bootstrap" branch.
-#
-# Fires on first touch per session (SESSION_DIR not yet present). The lib-sourced
-# cs_init path is omitted; the Python engine runs standalone. This bootstrap is
-# byte-compatible with the bash lib-missing fallback — same files, same formats.
-# ---------------------------------------------------------------------------
-def _ensure_session_dir(
-    session_dir: str,
-    session_id: str,
-    touched_file: str,
-    git_root: str,
-) -> None:
-    """Create the per-session coordinator-sessions directory (blocking — call via to_thread).
-
-    Minimal bootstrap:
-    - mkdir -p session_dir
-    - touch touched.txt
-    - write started_at   (ISO 8601 UTC)
-    - write head_at_start (git HEAD sha or "unknown")
-    - write meta.json    (minimal session fields)
-
-    Idempotent: each file is written only if absent, so a concurrent caller
-    racing on first-touch — or a call against a dir another bookkeeping writer
-    already created (push cursor, session-shape) with meta.json still missing —
-    backfills the missing files rather than short-circuiting on dir existence.
-    """
-    import subprocess
-
-    os.makedirs(session_dir, exist_ok=True)
-
-    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # Review: code-reviewer F4 — utcnow() deprecated Python 3.12+
-
-    # Touch touched.txt
-    if not os.path.exists(touched_file):
-        Path(touched_file).touch()
-
-    # Write started_at
-    started_at_path = os.path.join(session_dir, "started_at")
-    if not os.path.exists(started_at_path):
-        with open(started_at_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(now_iso + "\n")
-
-    # Write head_at_start (git HEAD sha; fall back to "unknown" on any error)
-    head_at_start_path = os.path.join(session_dir, "head_at_start")
-    if not os.path.exists(head_at_start_path):
-        try:
-            head = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=git_root,
-                stderr=subprocess.DEVNULL,
-                **no_console_creationflags(),
-            ).decode("utf-8", errors="replace").strip()
-        except Exception:
-            head = "unknown"
-        with open(head_at_start_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(head + "\n")
-
-    # Write meta.json (minimal fields — mirrors the bash printf format exactly)
-    meta_path = os.path.join(session_dir, "meta.json")
-    if not os.path.exists(meta_path):
-        try:
-            branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=git_root,
-                stderr=subprocess.DEVNULL,
-                **no_console_creationflags(),
-            ).decode("utf-8", errors="replace").strip()
-        except Exception:
-            branch = "unknown"
-        meta = {
-            "session_id": session_id,
-            "branch": branch,
-            "pid": str(os.getpid()),
-            "last_activity": now_iso,
-            "goal": "",
-        }
-        with open(meta_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(meta, separators=(",", ":")) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# Session bootstrap gate + canonical-writer dispatch (defect A, 2026-07-24).
-#
-# meta.json — and its Layer-1 `stable_pid` liveness signal — was landing only
-# when a meta-writing op happened to win the race to create the session dir.
-# Because the push-failure cursor / session-shape / dispatched-agents writers
-# usually create the dir first, meta.json was absent for ~all sessions, forcing
-# liveness onto the 30-min Layer-2 recency fallback — so a killed session read
-# LIVE for up to half an hour and held /pickup claims hostage. The fix routes
-# meta.json creation through the canonical core.init() writer whenever it is
-# missing OR unstamped, decoupled from dir creation.
-# ---------------------------------------------------------------------------
-def _needs_session_init(session_dir: str, meta_file: str) -> bool:
-    """True when session bootstrap should run (blocking — call via to_thread).
-
-    Fires when the session dir or meta.json is absent, or when meta.json exists
-    but lacks the Layer-1 `stable_pid` signal. Cheap (one isdir + at most one
-    small JSON read) and returns False in the steady state — meta.json present
-    WITH a stable_pid — so the hot edit path pays no git-subprocess cost once
-    liveness is stamped.
-    """
-    if not os.path.isdir(session_dir):
-        return True
-    try:
-        with open(meta_file, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return True  # absent / unreadable / malformed → (re)init
-    return not (isinstance(data, dict) and data.get("stable_pid"))
-
-
-def _bootstrap_session(
-    session_id: str, git_root: str, session_dir: str, touched_file: str
-) -> None:
-    """Create/refresh the session dir + meta.json (blocking — call via to_thread).
-
-    Primary: the canonical ``coordinator_core.session.core.init`` writer, which
-    is idempotent (backfills into an existing dir) and stamps ``stable_pid`` via
-    Guard-1 when the session's ``claude`` process resolves — the case on this
-    in-process PostToolUse hook path. Falls back to the self-contained
-    ``_ensure_session_dir`` bootstrap when core.init cannot resolve a git session
-    hub (non-git test fixtures) or is unavailable.
-    """
-    try:
-        from coordinator_core.session import core as _session_core
-
-        if _session_core.init(session_id, cwd=git_root or None):
-            return
-    except Exception:
-        pass
-    _ensure_session_dir(session_dir, session_id, touched_file, git_root)
 
 
 # ---------------------------------------------------------------------------
@@ -442,17 +306,6 @@ def _append_locked(target_file: str, entry: str, repo_root_path: Path) -> None:
         # Fall back to in-process append. Cross-process protection absent on this path;
         # the asyncio.Lock held by the caller serialises concurrent invocations in-process.
         _append(target_file, entry)
-
-
-# ---------------------------------------------------------------------------
-# Per-file "touch if absent" helper (blocking — call via to_thread).
-# ---------------------------------------------------------------------------
-def _touch_if_absent(path: str) -> None:
-    """Create path as an empty file if it does not already exist (blocking)."""
-    try:
-        Path(path).touch()
-    except Exception:
-        pass  # best-effort pre-create; the actual append below will surface any real write failure
 
 
 @register_op("hooks.track_touched_files")
@@ -536,27 +389,21 @@ async def _handler(params: dict, repo_root=None) -> dict:
         _sessions_base = Path(git_root) / "coordinator-sessions"
     session_dir = str(_sessions_base / session_id)
     touched_file = os.path.join(session_dir, "touched.txt")
-    meta_file = os.path.join(session_dir, "meta.json")
 
-    # --- Session-dir + meta.json bootstrap (defect A, 2026-07-24) ---
-    # DECOUPLED from a "dir absent" fast-path: another bookkeeping writer (the
-    # push-failure cursor, session-shape.json, dispatched-agents) can create the
-    # session dir before the first edit, which previously skipped bootstrap and
-    # left meta.json — the Layer-1 stable_pid liveness signal — unwritten. Route
-    # through the canonical core.init() writer whenever meta.json is missing OR
-    # its stable_pid is unpopulated; Guard-1 stamps stable_pid with the live
-    # claude pid on the first edit — from `CLAUDE_PID` where the harness exports
-    # it, falling back to POSIX direct-parent comm-verify or the bounded Windows
-    # ancestor walk. The gate goes quiet once stable_pid lands (no per-edit git
-    # subprocess cost in steady state). See _needs_session_init / _bootstrap_session.
-    if await asyncio.to_thread(_needs_session_init, session_dir, meta_file):
-        await asyncio.to_thread(
-            _bootstrap_session, session_id, git_root, session_dir, touched_file
-        )
-
-    # --- Ensure touched.txt exists (belt-and-suspenders — mirrors sh:124) ---
-    if not await asyncio.to_thread(os.path.exists, touched_file):
-        await asyncio.to_thread(_touch_if_absent, touched_file)
+    # --- Session dir precondition for the append below ---
+    # This mkdir is the append's own precondition, not liveness bookkeeping.
+    # locked_rmw (locked_write.py :: locked_rmw) creates the target's parent
+    # directory itself before it mkstemps, so on the primary _append_locked
+    # path this mkdir is redundant with that self-creation. It is load-bearing
+    # only on the fallback: _append opens "a", which does not create parents,
+    # and locked_rmw falls back to _append when it is unavailable or raises for
+    # an unrelated reason (no POSIX locking, a non-git fixture, a lock-backend
+    # failure). Without this mkdir, a session whose first tool call is an Edit
+    # hits that fallback and raises FileNotFoundError into the module's
+    # silent-failure contract, losing the T event with NO signal. This is the
+    # ONLY mkdir on the session-keyed path; do not drop it
+    # (docs/plans/2026-08-22-track-touched-files-pays-only-for-the-append.md § C1).
+    await asyncio.to_thread(os.makedirs, session_dir, exist_ok=True)
 
     # --- Normalize file_path to repo-relative (mirrors sh:130-147) ---
     # normalize_touch_path's ``cwd`` MUST be the worktree root, NOT git_common_dir
@@ -599,12 +446,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
             agent_touched = os.path.join(agent_dir, "touched.txt")
 
             # Ensure agent dir exists (mirrors sh:220)
-            if not await asyncio.to_thread(os.path.isdir, agent_dir):
-                await asyncio.to_thread(
-                    lambda: os.makedirs(agent_dir, exist_ok=True)
-                )
-            if not await asyncio.to_thread(os.path.exists, agent_touched):
-                await asyncio.to_thread(_touch_if_absent, agent_touched)
+            await asyncio.to_thread(
+                lambda: os.makedirs(agent_dir, exist_ok=True)
+            )
 
             # Imported function-local: the module-level import sweep in
             # coordinator_core.hooks reaches both modules, and a top-level edge
@@ -662,19 +506,19 @@ async def _handler(params: dict, repo_root=None) -> dict:
             #     wins), and an identity ladder that disagrees with the canonical one
             #     is the defect class this whole seam is being swept for.
             # Function-local: this hooks module is eagerly imported by the
-            # hooks package sweep, but ops.session_context (and the ops
-            # registry it drags in — percolate engine, publish transport,
-            # close_out_and_stamp, urllib.request, http.client, yaml) is
-            # otherwise unused by any catering fire. Moving the import to
-            # call time (this branch fires only for subagent tool calls)
-            # keeps the ops graph off the top-level catering hook path.
-            # WHAT this resolves is unchanged — only WHEN the module loads.
-            from coordinator_core.ops.session_context import (
-                resolve_current_session_id,
-            )
+            # hooks package sweep. Imported directly from session.core rather
+            # than through ops.session_context (2026-08-22, § C2) so this
+            # hook's cost no longer depends on whether the invoking process
+            # armed lazy ops — ops.session_context is a thin delegate to the
+            # same core.resolve_session_id (KS-6, 2026-08-07), nothing lost.
+            from coordinator_core.session.core import resolve_session_id
 
-            _em_session_id = resolve_current_session_id() or ""
-            if _em_session_id and _em_session_id != session_id:
+            # resolve_session_id returns "" (not None) when no tier resolves —
+            # the `or ""` below is now a no-op for that path, kept because the
+            # call site's shape (truthy-check + fallback) is unchanged.
+            _em_session_id = resolve_session_id() or ""
+            _piece2_fired = bool(_em_session_id and _em_session_id != session_id)
+            if _piece2_fired:
                 await asyncio.to_thread(
                     _write_backpointer_sync,
                     os.path.join(agent_dir, "em-session-id.txt"),
@@ -706,11 +550,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
             # Workflow-internal attribution wins first; this remains the
             # fallback for the shapes Piece 2's env guard intentionally skips
             # (env unset — older harness contexts, non-Workflow test fixtures).
-            await asyncio.to_thread(
-                _write_backpointer_sync,
-                os.path.join(agent_dir, "em-session-id.txt"),
-                session_id,
-            )
+            if not _piece2_fired:
+                await asyncio.to_thread(
+                    _write_backpointer_sync,
+                    os.path.join(agent_dir, "em-session-id.txt"),
+                    session_id,
+                )
 
             # D6: asyncio.Lock + locked_rmw cross-process layer — separate lock from session lock
             agent_lock = _get_lock(agent_touched)

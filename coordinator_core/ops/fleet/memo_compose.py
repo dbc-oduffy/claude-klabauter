@@ -98,7 +98,7 @@ from coordinator_core.ops.fleet.memo_draft import (
     _OUTBOX_DIRNAME,
     compose_draft_frontmatter,
 )
-from coordinator_core.ops.fleet.memo_send import _TOPIC_SLUG_RE, _yaml_quote
+from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE, _yaml_quote
 from coordinator_core.ops.fleet._memo_summary import (
     derive_prose_summary,
     is_placeholder_summary,

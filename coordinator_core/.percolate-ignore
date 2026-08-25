@@ -1,0 +1,86 @@
+# .percolate-ignore — coordinator_core/ contributing source root for the
+# claude-klabauter OSS mirror (row 1 of the three publish rows authored in
+# docs/plans/2026-07-31-claude-klabauter-oss-release.md § C5).
+#
+# SOURCE_DIR for this file is `claude-klabauter/coordinator_core/` itself.
+# Patterns are SOURCE_DIR-RELATIVE — they carry NO `coordinator_core/`
+# prefix, or they double-prefix to `coordinator_core/coordinator_core/…`
+# and match nothing (same trap the sibling `coordinator/.percolate-ignore`
+# warns about in its own header).
+#
+# PM RULING (2026-07-31-claude-klabauter-oss-release.md § C3, "settled, do
+# not re-argue"): `coordinator_core/**` INCLUDING ITS TEST SUITE SHIPS — the
+# 2045 test files are the artifact's main credibility signal. Do NOT add
+# `tests/` or `fixtures/` exclusions here the way the sibling
+# `coordinator/.percolate-ignore` does for the bin/lib row: that file's
+# rationale (dev-only tests should never reach a doctrine-only mirror) does
+# not apply to an engine mirror that is explicitly publishing its own test
+# suite as proof of correctness.
+#
+# MECHANISM — READ BEFORE ADDING A PATTERN HERE. Row 1 is SINGLE-SOURCE
+# (contributing_roots == {coordinator_core/} only, so
+# `build_allowlisted_source`'s multi-source branch never fires — see
+# coordinator/lib/percolate/allowlist.py:377-395,
+# `build_allowlisted_source`). In single-source mode
+# `build_allowlisted_source` does NOT build a copy-time `ignore_fn`
+# (allowlist.py:426-432, `build_allowlisted_source`: `ignore_fn = None`
+# unless multi_source) — this file is only copied verbatim into the
+# restricted temp tree (allowlist.py:468-474, same function), never
+# consulted while that tree is assembled. It becomes live one stage later,
+# when coordinator/bin/publish.py's `dispatch_mirror_like`
+# (publish.py:1772-1815) loads it (publish.py:1790-1791) and hands it to
+# DoE-claude's `setup/publish_sync.py::sync_mirror`, which consults it
+# symmetrically on BOTH the copy phase (Phase 1, `ignore.matches(...)` at
+# publish_sync.py:512) and the destination delete phase (Phase 2,
+# `ignore.matches(...)` at publish_sync.py:537) — an ignored file is neither
+# copied nor deleted on either leg.
+#
+# This file has NO effect on the earlier `check_working_data_paths`
+# secondary-assertion gate (allowlist.py:482-554, invoked from
+# `run_pre_sync_gates` in publish.py:1352-1358), which scans the raw,
+# unfiltered restricted tree BEFORE this file is ever read for filtering
+# purposes. That gate is confirmed (2026-07-31, this chunk's run report) to
+# hard-fail row 1 as currently allowlisted: several
+# `*/tests/fixtures/.../{state,docs/plans,cross-repo,archive}/...` paths
+# under coordinator_core/benchmarks, coordinator_core/ops/ceremony, and
+# coordinator_core/ops/emit exist purely as test fixtures but contain
+# deny-listed path segments, and `check_working_data_paths`'s any-depth
+# substring match (`f"/{prefix}/" in rel`) cannot distinguish them from real
+# working data. See this chunk's run-report sidecar for the full violation
+# list. Fixing that is an allowlist/check_working_data_paths-shape decision,
+# not a `.percolate-ignore` one — out of this file's reach by construction.
+#
+# SUPERSEDED (2026-08-12, docs/plans/2026-08-12-publish-allowlist-acknowledges-
+# imported-modules.md § C3): the hard-fail claim above is no longer current.
+# Row 1's field 7 in `setup/publish-targets.portable` has since gained three
+# `!`-exclusions — `!benchmarks/fixtures/repo`,
+# `!ops/ceremony/tests/fixtures/render_handoff_tracker`, and
+# `!ops/emit/tests/fixtures/root` — which between them account for all 40
+# deny-prefix hits under coordinator_core that the gate was flagging.
+# Re-measured 2026-08-12: `check_working_data_paths(tmp,
+# paths=get_pre_filter_paths(tmp))` on the current row-1 allowlist returns
+# `True` ("no working-data paths in publish set"). The gate is green as of
+# this writing; treat the paragraph above as historical record of a
+# now-resolved state, not a live blocker.
+
+# --- Python build artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# --- Editor / OS detritus ---
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+# Bare (unprefixed) names match ONLY at the ignore file's own root (branch 4,
+# exact full-rel_path match — see ignore.py's docstring); a `*`-leading
+# basename glob is required to also catch these files nested inside any of
+# coordinator_core's subdirectories.
+*.DS_Store
+*Thumbs.db
+*desktop.ini

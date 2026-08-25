@@ -216,42 +216,6 @@ def test_a_missing_sink_degrades_to_an_empty_report(tmp_path, monkeypatch):
     assert summary["totals"]["breaching_ops"] == 0
 
 
-def test_census_folds_the_headline_in_without_a_second_read():
-    """The census pays one extra pass over rows it has already read.
-
-    Asserted against the module SOURCE rather than by calling `census()`:
-    `census()` walks the whole non-test corpus and refuses via
-    `line_count.RatchetError` whenever the tree sits above its frozen
-    high-water, which is a fact about the corpus and has nothing to say
-    about this wiring. Same source-reading discipline as
-    `coordinator_core/op_census/tests/test_census_no_per_invocation_engine_boot.py`.
-    """
-    from coordinator_core.ops import op_census_report
-
-    with open(op_census_report.__file__, "r", encoding="utf-8") as fh:
-        source = fh.read()
-
-    assert "breach_summary(telemetry_entries" in source
-    assert "top_n=CENSUS_BREACH_TOP_N" in source
-    assert "bar_ms=PROCESS_TIME_BAR_MS" in source
-    assert '"budget_breaches": breaches' in source
-
-
-def test_census_headline_is_capped_and_still_counts_the_whole_population():
-    """The census's short list must never read as a clean box — exercised
-    over the exact call `census()` makes."""
-    from coordinator_core.op_census.timing import PROCESS_TIME_BAR_MS
-    from coordinator_core.ops.op_census_report import CENSUS_BREACH_TOP_N
-    from coordinator_core.telemetry.op_latency import breach_summary
-
-    entries = [_complete(f"op.{i}", 1_000.0 + i) for i in range(10)]
-    breaches = breach_summary(entries, bar_ms=PROCESS_TIME_BAR_MS, top_n=CENSUS_BREACH_TOP_N)
-
-    assert len(breaches["ops"]) == CENSUS_BREACH_TOP_N
-    assert breaches["totals"]["breaching_ops"] == 10
-    assert breaches["bar_ms"] == 500.0
-
-
 def test_truncated_read_refuses_a_trend_direction(tmp_path, monkeypatch):
     """A tail read must not report a DIRECTION, only unqualified figures.
 

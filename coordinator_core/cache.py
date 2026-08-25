@@ -39,7 +39,7 @@ Persisted tier (op_census/C1, additive, opt-in):
     grows cache.py, it does not stand up a parallel cache). It shares
     compute_stamp with read_revalidated but keeps a fully separate storage path
     (a caller-owned `index` dict, never `_REVALIDATED_CACHE`) — an existing
-    caller of read_revalidated/compute_stamp (envelope.py's content-hash stamp)
+    caller of read_revalidated/compute_stamp (resolvers.py's content-hash stamp)
     is untouched: same signature, same in-process dict, same cost, unchanged.
 
     read_disk_revalidated does no disk I/O of its own beyond compute_stamp's

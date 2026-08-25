@@ -9,7 +9,7 @@ from disk and asserts set-equality across the full triple — no leg is
 covered transitively via a hand-maintained comment:
 
   1. coordinator/bin/cross-repo-memo.py             — `_VALID_KINDS` (sender-side CLI authority)
-  2. coordinator_core/ops/fleet/memo_send.py     — `_VALID_KINDS` (native engine-side send gate)
+  2. coordinator_core/ops/fleet/_memo_compose.py — `_VALID_KINDS` (engine-side compose gate)
   3. coordinator/skills/pickup/SKILL.md          — M3 "Pinned enum:" line (reader/consumer doc)
 
 Reconciled 2026-07-25 (test made collectable/failable by 23f65fce surfaced a
@@ -142,13 +142,19 @@ def _parse_pinned_enum_from_skill(path: str) -> set[str]:
 
 
 def _valid_kinds_from_memo_send() -> set[str]:
-    """The native engine-side send gate's `_VALID_KINDS` — imported directly,
-    not regexed. Successor to schema.js's `validKinds` (retired 2026-07-22
-    de-node cutover); this is the same tuple `emit_memo_schema.py` imports for
-    DoE's derived JSON Schema projections, so a real import here is strictly
-    more precise than the regex-on-a-vendored-file shape this replaces.
+    """The engine-side `_VALID_KINDS` — imported directly, not regexed. Successor
+    to schema.js's `validKinds` (retired 2026-07-22 de-node cutover); this is the
+    same tuple `emit_memo_schema.py` imports for DoE's derived JSON Schema
+    projections, so a real import here is strictly more precise than the
+    regex-on-a-vendored-file shape this replaces.
+
+    Repointed 2026-08-25 from `ops.fleet.memo_send` to `ops.fleet._memo_compose`.
+    The `memo.send` op was killed in `c07062c99` (30016ms against a 2000ms bar) and
+    its module deleted; the enum itself did not die with it — it moved, and
+    `emit_memo_schema` imports it from the new home. The gate stayed load-bearing
+    across that kill: two hand-authored copies still have to agree.
     """
-    from coordinator_core.ops.fleet.memo_send import _VALID_KINDS
+    from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
 
     return set(_VALID_KINDS)
 

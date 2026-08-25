@@ -2584,6 +2584,16 @@ _EOL_STALE_WINDOW_MULTIPLE = 3
 # marker existed anywhere in the tree).
 _EOL_RIDER_HOST_OP = "session.boot_sweep"
 
+# Cadence windows of the two eol riders, held here rather than imported.
+# Their host module (`coordinator_core.ops.session.boot_sweep`) was deleted with the
+# composite in `2e7eff5c1`; importing from it made both probes report an
+# engine-tree import failure instead of the rider-host suspension that is the real
+# cause, sending the operator to a green claude-klabauter.core.import probe. The values are the
+# rider's own, recovered from `2e7eff5c1^`, and are read only to age a sentinel that
+# rider wrote — a stale threshold, never a schedule.
+_EOL_CENSUS_CADENCE_WINDOW_SECONDS: float = 60 * 60.0
+_EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS: float = 24 * 60 * 60.0
+
 
 def _eol_rider_host_suspension(claude_klabauter_root: Path) -> dict | None:
     """Return `session.boot_sweep`'s suspension record, or None if it is live.
@@ -2701,9 +2711,6 @@ def _run_probe_eol_census(claude_klabauter_root: Path | None) -> _ProbeResult:
 
         try:
             from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
-            from coordinator_core.ops.session.boot_sweep import (  # type: ignore[import]
-                _EOL_CENSUS_CADENCE_WINDOW_SECONDS,
-            )
         except Exception as exc:
             return _ProbeResult(
                 probe=_EOL_CENSUS_PROBE,
@@ -2909,9 +2916,6 @@ def _run_probe_eol_audit_producers(claude_klabauter_root: Path | None) -> _Probe
 
         try:
             from coordinator_core.lifecycle import git_common_dir  # type: ignore[import]
-            from coordinator_core.ops.session.boot_sweep import (  # type: ignore[import]
-                _EOL_AUDIT_PRODUCERS_CADENCE_WINDOW_SECONDS,
-            )
         except Exception as exc:
             return _ProbeResult(
                 probe=_EOL_DRIFT_PROBE,

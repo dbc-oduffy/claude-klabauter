@@ -264,12 +264,10 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 #: `ops.ceremony` anything) before taking this dependency. The one real cost
 #: is that importing `coordinator_core.hooks.auto_push` also runs
 #: `coordinator_core.hooks/__init__.py` (Python always executes a parent
-#: package's `__init__` before a submodule), which eagerly registers all 15
-#: `hooks.*` ops as a side effect UNLESS the caller has already armed the
-#: shared lazy-hooks channel (`COORDINATOR_CORE_LAZY_OPS` /
-#: `sys._coordinator_core_lazy_ops` -- see that `__init__.py`'s own
-#: docstring). That side effect is idempotent, additive (registers ops into
-#: a dict, no I/O, no mutation of shared state), and already paid by any
+#: package's `__init__` before a submodule), which registers the `hooks.*`
+#: ops as a side effect of that import. That side effect is idempotent,
+#: additive (registers ops into a dict, no I/O, no mutation of shared state),
+#: and already paid by any
 #: process that imports `coordinator_core.hooks` for any other reason -- not
 #: a new hazard this import introduces, just a real (small) cost worth
 #: naming rather than a hard blocker; a shared module hosting only the

@@ -259,8 +259,9 @@ def cs_claim_holder_live(claim_path: str) -> bool:
         takeover / reaping of a session that might still be alive; the error
         was never actually "indeterminate", it was silently promoted to
         "definitely dead". EVERY current caller of this function (session.reap,
-        ops.fleet.archive_handoffs, ops.handoff_reconcile,
-        ops.fleet.archive_actioned_memos) now
+        ops.fleet.archive_handoffs, ops.handoff_reconcile —
+        ops.fleet.archive_actioned_memos was a caller too until it was killed
+        outright 2026-08-23, PM ruling) now
         wraps this call in its own try/except and fails closed toward
         "assume alive, do not reap/archive/reclaim" on any exception — so the
         indeterminate case is handled at the call site, with the fallback

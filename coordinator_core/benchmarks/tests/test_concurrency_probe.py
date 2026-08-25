@@ -16,6 +16,7 @@ from unittest import mock
 
 import pytest
 
+from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.benchmarks.concurrency_probe import (
     LevelExceedsCapError,
     MachineState,
@@ -90,14 +91,45 @@ def test_compute_parallelism_cap_rejects_bad_input():
 
 # --- refuse_if_not_compute_only ------------------------------------------
 
+#: A live MUTATING op, used as the specimen for the refusal tests below. Held in
+#: one place and pinned by the premise test that follows, so that retiring it
+#: fails loudly here rather than silently turning these tests into duplicates of
+#: the unknown-op case. Was `artifact.emit` until the PM cut that op 2026-08-22.
+_MUTATING_SPECIMEN = "backlog.record"
+
 
 def test_refuse_if_not_compute_only_allows_ping():
     refuse_if_not_compute_only("ping")
 
 
+def test_the_mutating_specimen_is_actually_registered_mutating():
+    """Pins the specimen below against the registry it is a specimen OF.
+
+    Without this, the mutating-op test decays into a duplicate of the unknown-op
+    test the moment its specimen is deleted from OP_CLASSIFICATION:
+    `.get()` returns None for a retired op exactly as it does for a nonsense one,
+    both fail the `is not COMPUTE_ONLY` check, and both raise MutatingOpRefusal.
+    The suite stays green while one of the two tests stops testing anything.
+
+    That is not hypothetical -- it is what happened. The specimen used to be
+    `artifact.emit`, which the PM cut on 2026-08-22, and the test went on passing
+    for the wrong reason until someone read it. Assert the premise, not just the
+    behaviour.
+    """
+    assert _MUTATING_SPECIMEN in OP_CLASSIFICATION, (
+        f"{_MUTATING_SPECIMEN!r} is no longer a registered op -- the mutating-op "
+        "test below is now a duplicate of the unknown-op test. Repoint "
+        "_MUTATING_SPECIMEN at a live MUTATING op."
+    )
+    assert OP_CLASSIFICATION[_MUTATING_SPECIMEN] is not OpClass.COMPUTE_ONLY, (
+        f"{_MUTATING_SPECIMEN!r} is now classified COMPUTE_ONLY -- it can no "
+        "longer serve as the mutating specimen."
+    )
+
+
 def test_refuse_if_not_compute_only_refuses_mutating_op():
     with pytest.raises(MutatingOpRefusal):
-        refuse_if_not_compute_only("artifact.emit")
+        refuse_if_not_compute_only(_MUTATING_SPECIMEN)
 
 
 def test_refuse_if_not_compute_only_refuses_unknown_op():
@@ -117,7 +149,7 @@ def test_run_probe_refuses_before_any_spawn(monkeypatch):
 
     with pytest.raises(MutatingOpRefusal):
         run_probe(
-            op="artifact.emit",
+            op=_MUTATING_SPECIMEN,
             params_json="{}",
             repo=None,
             levels=[1],

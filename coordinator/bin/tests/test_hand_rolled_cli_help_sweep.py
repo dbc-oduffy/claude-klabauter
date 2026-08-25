@@ -283,7 +283,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "reap-sessions.py",
     "reaper-resting-batons.py",
     "reassess-goal-krs.py",
-    "reconcile-completion-commits.py",
     "refresh-queries.py",
     "refresh-roadmap-callout.py",
     # render-handoff-tracker.py: Review: code-reviewer (690dd6f9) -- deleted by
@@ -308,9 +307,10 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "stitch-observer-sidecar.py",
     "sweep-actioned-memos.py",
     "sweep-boot.py",
-    "sweep-consumed-handoffs.py",
     "sweep-shipped-handoffs.py",
-    "sweep-terminal-plans.py",
+    # sweep-terminal-plans.py: deleted -- fleet.archive_completed_plans killed
+    # and rebuilt from scratch, 2026-08-23 PM ruling; dangling sweep row of the
+    # same shape as the render-handoff-tracker.py note above.
     "sync-cockpit-contract.py",
     "sync-main.py",
     "sync-plugin-wiki.py",

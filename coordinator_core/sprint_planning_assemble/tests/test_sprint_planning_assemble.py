@@ -221,6 +221,8 @@ class TestRealCliStructuralAndPerf(unittest.TestCase):
         env["COORDINATOR_ENGINE_ROOT"] = _ENGINE_ROOT
         return env
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_no_module_scope_coordinator_core_ops_import(self):
         probe = (
             "import sys, os; "

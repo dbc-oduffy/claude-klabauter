@@ -28,6 +28,7 @@ from coordinator_core.ops.emit.context import (
     META_REPO_NAME_FALLBACK,
     EmitContext,
     _remote_url_to_slug,
+    _resolve_git_branch,
     resolve_repo_name,
 )
 
@@ -200,17 +201,20 @@ class TestEmitContextResolve:
 
         A valid repo_root with no parseable git remote is a local-only / air-gapped repo —
         resolve_repo_name returns local/<basename>; EmitContext.resolve must NOT raise.
+
+        git_branch/git_sha are resolved SPAWN-FREE (C11) — only the remote-URL lookup
+        still goes through ``_run_git``, so only that call is patched here.
         """
         def _fake_run_git(repo_root: Path, *args: str):
             if "remote" in args:
                 return None
-            if "--abbrev-ref" in args:
-                return "main"
-            if "rev-parse" in args:
-                return "b" * 40
             return None
 
-        with patch("coordinator_core.ops.emit.context._run_git", side_effect=_fake_run_git):
+        with patch("coordinator_core.ops.emit.context._run_git", side_effect=_fake_run_git), patch(
+            "coordinator_core.ops.emit.context._resolve_git_branch", return_value="main"
+        ), patch(
+            "coordinator_core.ops.emit.context._git_state_head_sha", return_value="b" * 40
+        ):
             # Positional args — see module docstring (no-rename gate note).
             ctx = EmitContext.resolve(tmp_path, tmp_path, tmp_path / "state")
 
@@ -226,13 +230,13 @@ class TestEmitContextResolve:
         def _fake_run_git(repo_root: Path, *args: str):
             if "remote" in args:
                 return fixture_url
-            if "--abbrev-ref" in args:
-                return "main"
-            if "rev-parse" in args:
-                return "c" * 40
             return None
 
-        with patch("coordinator_core.ops.emit.context._run_git", side_effect=_fake_run_git):
+        with patch("coordinator_core.ops.emit.context._run_git", side_effect=_fake_run_git), patch(
+            "coordinator_core.ops.emit.context._resolve_git_branch", return_value="main"
+        ), patch(
+            "coordinator_core.ops.emit.context._git_state_head_sha", return_value="c" * 40
+        ):
             ctx = EmitContext.resolve(tmp_path, tmp_path, tmp_path / "state")
 
         assert ctx.repo_name == "dbc-oduffy/claude-klabauter"
@@ -242,6 +246,68 @@ class TestEmitContextResolve:
         # D7a regression guard: a regression back to coordinator_root/state would fail this.
         # Review: code-reviewer (Slice-4 F5) — central_state_root must be repo_root/state, not ~/.claude/state.
         assert ctx.central_state_root == tmp_path / "state"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _resolve_git_branch and git_sha spawn-free readers (C11)
+# ---------------------------------------------------------------------------
+
+class TestResolveGitBranchSpawnFree:
+    """``_resolve_git_branch`` mirrors ``git rev-parse --abbrev-ref HEAD`` without
+    spawning ``git`` — reads ``.git/HEAD`` directly via ``resolve_git_dir``."""
+
+    def test_attached_branch_strips_refs_heads_prefix(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+        assert _resolve_git_branch(tmp_path) == "main"
+
+    def test_detached_head_returns_literal_head(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("a" * 40 + "\n", encoding="utf-8")
+
+        assert _resolve_git_branch(tmp_path) == "HEAD"
+
+    def test_missing_head_file_returns_unknown(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+
+        assert _resolve_git_branch(tmp_path) == "unknown"
+
+    def test_no_git_dir_returns_unknown(self, tmp_path: Path) -> None:
+        assert _resolve_git_branch(tmp_path) == "unknown"
+
+
+class TestResolveOnRealRepoIsSpawnFreeForBranchAndSha:
+    """EmitContext.resolve() against THIS repo's real .git resolves git_branch/git_sha
+    without spawning ``git`` — the remote-URL lookup is the only remaining spawn."""
+
+    def test_no_git_subprocess_spawned_for_branch_or_sha(self) -> None:
+        import subprocess
+
+        real_repo_root = Path(__file__).resolve().parents[4]
+        assert (real_repo_root / ".git").exists(), "expected the claude-klabauter repo root"
+
+        original_run = subprocess.run
+        spawned_argvs = []
+
+        def _spy_run(cmd, *args, **kwargs):
+            spawned_argvs.append(cmd)
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=_spy_run):
+            ctx = EmitContext.resolve(real_repo_root, real_repo_root, real_repo_root / "state")
+
+        # Only the remote-URL lookup (resolve_repo_name -> _run_git) may spawn git;
+        # branch/sha resolution must contribute zero subprocess.run calls.
+        rev_parse_argvs = [
+            argv for argv in spawned_argvs
+            if isinstance(argv, list) and "rev-parse" in argv and "remote" not in argv
+        ]
+        assert rev_parse_argvs == [], (
+            f"git_branch/git_sha resolution spawned a subprocess: {rev_parse_argvs!r}"
+        )
+        assert ctx.git_branch != "unknown"
+        assert ctx.git_sha != "unknown"
 
 
 # ---------------------------------------------------------------------------

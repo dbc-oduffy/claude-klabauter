@@ -30,8 +30,6 @@ either kind of passive observation.
 
 from __future__ import annotations
 
-import os
-import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -389,28 +387,8 @@ def _sweep_consolidate_assemble(acc: dict[str, set[str]], tmp_path: Path) -> Non
 
 
 def _sweep_backlog_grind_assemble(acc: dict[str, set[str]]) -> None:
-    # Mirrors `_phantom_sweep_providers.sweep_backlog_grind_assemble`'s own
-    # process-global-flag snapshot/restore around the `orient_assemble` ->
-    # `cc_invoke.py` transitive import (see that function's docstring).
-    had_var = "COORDINATOR_CORE_LAZY_OPS" in os.environ
-    prior_value = os.environ.get("COORDINATOR_CORE_LAZY_OPS")
-    had_attr = hasattr(sys, "_coordinator_core_lazy_ops")
-    prior_attr = getattr(sys, "_coordinator_core_lazy_ops", None)
-    try:
-        from coordinator_core import backlog_grind_assemble as bga
-        from coordinator_core.backlog_grind_assemble import CADENCES, brief as bga_brief
-    finally:
-        if had_var:
-            os.environ["COORDINATOR_CORE_LAZY_OPS"] = prior_value  # type: ignore[assignment]
-        else:
-            os.environ.pop("COORDINATOR_CORE_LAZY_OPS", None)
-        if had_attr:
-            setattr(sys, "_coordinator_core_lazy_ops", prior_attr)
-        else:
-            try:
-                delattr(sys, "_coordinator_core_lazy_ops")
-            except AttributeError:
-                pass
+    from coordinator_core import backlog_grind_assemble as bga
+    from coordinator_core.backlog_grind_assemble import CADENCES, brief as bga_brief
 
     mp = _FakeMonkeyPatch()
     mp.setattr(

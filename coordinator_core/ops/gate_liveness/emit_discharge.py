@@ -16,15 +16,15 @@ discharge by the block's presence, never by `kind`.
 Spec backlink: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C4
 
 Scope, deliberately narrow: this module VALIDATES and COMPOSES the memo text
-carrying the block — it does not deliver it. `memo.send`'s underlying
-delivery path commits the written memo via a scoped git subprocess
-(`coordinator_core.ops.fleet.memo_send._commit_delivered_memo`), and this
-plan's Executor hard constraints forbid `subprocess`/`git` in every chunk
-("No subprocess, no git. If a chunk seems to need one, that is a BLOCKED
-report, not a spawn."). `emit_discharge` therefore stops at composing a
-schema-valid memo document string; an actual send goes through the existing
-`memo.send` op exactly as any other memo does, with this module's output
-supplying the frontmatter fragment / composed body.
+carrying the block — it does not deliver it. Cross-tree delivery is a
+committing, subprocess-using operation, and this plan's Executor hard
+constraints forbid `subprocess`/`git` in every chunk ("No subprocess, no git.
+If a chunk seems to need one, that is a BLOCKED report, not a spawn.").
+`emit_discharge` therefore stops at composing a schema-valid memo document
+string; this module's output supplies the frontmatter fragment / composed
+body to whatever delivery surface the caller uses (memo.send was killed
+2026-08-23, no stub — a replacement delivery op is a separate concern from
+this composer).
 
 `evidence` reuses `realized_by`'s validated shape, so the existing validator
 (`coordinator_core.frontmatter.schema_validate.
@@ -38,9 +38,9 @@ Negative-spec: does not write a file, does not compute a `closure_key`
 identity on this module's own initiative (the caller — the code that knows
 what landed and what a sibling declared as its blocker — supplies
 `closure_key`/`evidence`/`landed_at` verbatim), and does not touch
-`memo_send.py`, `ops/__init__.py`, or `authz/classification.py` — this
-module is a plain composer/validator, not a registered op (C4's `writes:`
-scope names only this file and its test).
+`ops/__init__.py` or `authz/classification.py` — this module is a plain
+composer/validator, not a registered op (C4's `writes:` scope names only
+this file and its test).
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ from typing import Any, Optional
 from coordinator_core.frontmatter.schema_validate import (
     _memo_cf_actioned_decision_requires_realized_by,
 )
-from coordinator_core.ops.fleet.memo_send import _compose_memo, _render_extra_field
+from coordinator_core.ops.fleet._memo_compose import _compose_memo, _render_extra_field
 
 #: The SAME two-member enum as the vendored plan-tasks.schema.json 1.10.0's
 #: `external_gate[].closure_key.kind` (and cross-repo-memo.schema.json

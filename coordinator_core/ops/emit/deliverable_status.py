@@ -222,7 +222,7 @@ def _compute_map(
     from tests calling ``_compute_map`` directly. Still NOT done: no production consumer
     of ``stamp()``'s output (i.e. the emit envelope) collects the set yet -- wiring a
     collector through ``envelope.emit`` and surfacing it in the emitted artifact is out of
-    scope for this stub (``envelope.py`` is not touched here) and is a named, bounded
+    scope for this stub (``resolvers.py`` is not touched here) and is a named, bounded
     follow-on, not an implied completion.
     """
     # Collect (deliverable_id, phase) pairs — skip records with null deliverable_id.

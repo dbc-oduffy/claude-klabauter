@@ -1077,6 +1077,8 @@ def record_ledger_entry(
     sha: Optional[str],
     *,
     committer_id_override: Optional[str] = None,
+    closes: Optional[List[str]] = None,
+    reverts_sha: Optional[str] = None,
 ) -> None:
     """Append `sha`'s commit-ledger entry (C1/C5) for a producer that
     committed OUTSIDE `ceremony.scoped_git_commit` -- this module's own
@@ -1094,6 +1096,13 @@ def record_ledger_entry(
     `commit_authored_content`'s own docstring names for its trailer
     resolution). `None` (the default) falls back to
     `_committer_id_for_ledger`.
+
+    `closes`/`reverts_sha` (C1, state/dispatch-briefs/2026-08-22-the-commit-
+    closure-pipe-carries-rows/C1.md): the closure facts a caller already
+    extracted from the commit message's own raw text (`coordinator_core.git.
+    commit_trailers.extract_closure_facts_from_text`), threaded straight
+    through into the ledger append -- additive, `None` by default,
+    byte-identical to before this chunk when omitted.
 
     Hard constraint, mirrored from C5's own: a ledger write must never
     fail the commit it accompanies -- `sha` is `None` (a clean no-op commit)
@@ -1121,6 +1130,8 @@ def record_ledger_entry(
                 kind,
                 weight_basis=weight_basis,
                 cwd=str(repo_root),
+                closes=closes,
+                reverts_sha=reverts_sha,
             )
         # `handoff_id is None` is the legitimate standalone outcome
         # (`resolve_owner_handoff_id`'s own zero-held-claims arm) -- not an
@@ -1197,5 +1208,17 @@ def scoped_commit(
     with _mirror_session_env_for_subprocess():
         sha_proc = run_git(["rev-parse", "HEAD"], repo_root)
     landed_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
-    record_ledger_entry(repo_root, [artifact_rel_path], landed_sha)
+
+    # C1 (state/dispatch-briefs/2026-08-22-the-commit-closure-pipe-carries-
+    # rows/C1.md): `message` is already in hand -- this is the raw commit
+    # message text about to become `sha`'s own commit object, read
+    # line-anchored (never git's parsed trailer block) so a demoted
+    # `Closes:` (its own paragraph above a trailing `Commit-Token:` block)
+    # still records.
+    from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
+
+    closes, reverts_sha = extract_closure_facts_from_text(message)
+    record_ledger_entry(
+        repo_root, [artifact_rel_path], landed_sha, closes=closes, reverts_sha=reverts_sha
+    )
     return landed_sha

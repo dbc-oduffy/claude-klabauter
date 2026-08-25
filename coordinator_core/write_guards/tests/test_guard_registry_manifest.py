@@ -33,6 +33,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "block_completion_monolith_write",
         "block_confined_agent_write",
         "block_consumed_handoff_edit",
+        "block_duplicate_decision_record_id",
         "bump_out_of_repo_tool_write",
         "guard_memory_store_cap",
         "block_cutover_phase_hand_edit",

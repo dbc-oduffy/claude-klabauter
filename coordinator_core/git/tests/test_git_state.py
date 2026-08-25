@@ -11,12 +11,17 @@ INVERSE of `git_state._decode_varint`, independently re-derived from
 `Documentation/technical/index-format.txt`'s offset-encoding description
 rather than copied from the module under test, so a bug shared by both would
 not cancel out silently.
+
+Nothing in this file spawns a process. The `head_tree_sha` / `read_tree_spine`
+readers and the `git ls-files` / `ls-tree` cross-checks live in the sibling
+`test_git_state_against_real_git.py`, which is module-level cadence-tiered for
+exactly that reason -- see its docstring for why the two populations are kept
+apart rather than faked together.
 """
 
 from __future__ import annotations
 
 import struct
-import subprocess
 import sys
 from pathlib import Path
 
@@ -30,7 +35,6 @@ from coordinator_core.git.git_state import (  # noqa: E402
     head_sha,
     read_index,
 )
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 _SIGNATURE = b"DIRC"
 _ZERO_SHA = "0" * 40
@@ -409,94 +413,9 @@ def test_linked_worktree_head_symref_resolves_loose_ref_from_common_dir(tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Equality against `git ls-files -s` over this repo's own live index
+# head_blobs -- the early return that reaches no repo and spawns nothing.
+# Its real-git siblings live in `test_git_state_against_real_git.py`.
 
 
-@pytest.mark.spawns_process
-def test_read_index_matches_git_ls_files_over_live_repo():
-    repo_root = str(Path(__file__).resolve().parents[3])
-    out = subprocess.run(
-        ["git", "-C", repo_root, "ls-files", "-s"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        **no_console_creationflags(),
-    ).stdout
-
-    git_map = {}
-    for line in out.splitlines():
-        meta, path = line.split("\t", 1)
-        mode_str, sha, stage_str = meta.split(" ")
-        git_map[path] = (int(mode_str, 8), sha, int(stage_str))
-
-    snap = read_index(repo_root)
-
-    only_in_git = [p for p in git_map if p not in snap]
-    only_in_parse = [p for p in snap if p not in git_map]
-    mismatched = [
-        p
-        for p, v in git_map.items()
-        if p in snap and (snap[p].mode, snap[p].sha, snap[p].stage) != v
-    ]
-
-    assert only_in_git == []
-    assert only_in_parse == []
-    assert mismatched == []
-    assert len(snap) == len(git_map)
-
-
-# ---------------------------------------------------------------------------
-# head_blobs -- the one retained spawn
-
-
-@pytest.mark.spawns_process
-def test_head_blobs_reads_this_repos_own_head_tree():
-    # `git_state.py` itself is uncommitted while this chunk lands, so this
-    # probes a file already present in HEAD -- `run.py`, its sibling module.
-    repo_root = str(Path(__file__).resolve().parents[3])
-    result = head_blobs(repo_root, ["coordinator_core/git/run.py"])
-
-    assert "coordinator_core/git/run.py" in result
-    mode, sha = result["coordinator_core/git/run.py"]
-    assert mode in (0o100644, 0o100755)
-    assert len(sha) == 40
-
-
-@pytest.mark.spawns_process
 def test_head_blobs_empty_paths_returns_empty_dict_no_spawn():
     assert head_blobs(".", []) == {}
-
-
-@pytest.mark.spawns_process
-def test_head_blobs_admits_gitlink_160000(tmp_path):
-    """A submodule gitlink at HEAD MUST appear in `head_blobs`'s result --
-    filtering it out (obj_type == "commit", not "blob") makes any caller
-    that treats an absent `head_entry` as "no HEAD counterpart" misreport a
-    genuinely dirty tracked gitlink as staged (the regression this test
-    pins). SYNTHESISED via a direct index write, per this file's module
-    docstring -- this repo's own index carries no 160000 entry to build a
-    fixture from."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    kwargs = dict(cwd=str(repo), check=True, capture_output=True, text=True, **no_console_creationflags())
-    subprocess.run(["git", "init", "-q"], **kwargs)
-    subprocess.run(["git", "config", "user.email", "t@t.example"], **kwargs)
-    subprocess.run(["git", "config", "user.name", "t"], **kwargs)
-    (repo / "README.md").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "README.md"], **kwargs)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], **kwargs)
-    head_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], **kwargs
-    ).stdout.strip()
-    subprocess.run(
-        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head_sha},vendor/sub"],
-        **kwargs,
-    )
-    subprocess.run(["git", "commit", "-q", "-m", "add gitlink"], **kwargs)
-
-    result = head_blobs(str(repo), ["vendor/sub"])
-
-    assert "vendor/sub" in result
-    mode, sha = result["vendor/sub"]
-    assert mode == 0o160000
-    assert sha == head_sha

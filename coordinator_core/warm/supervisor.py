@@ -79,12 +79,13 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.warm.engine_root import current_engine_clone
+from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
-from coordinator_core.warm import breadcrumb, election, lifecycle, skew
-from coordinator_core.warm.server import InFlightCounter
+from coordinator_core.warm import breadcrumb, election, hook_http, lifecycle, skew
+from coordinator_core.warm.http_listener import _collect_response, _frame_from_request
+from coordinator_core.warm.server import InFlightCounter, _serve_line
 
 __all__ = [
     "DISCOVERY_FILENAME",
@@ -113,6 +114,15 @@ DISCOVERY_FILENAME = "warm-http.json"
 
 HEALTH_PATH = "/health"
 HOOK_PATH = "/hook"
+
+# The op name `/hook` dispatches through `_serve_line`. Placeholder pending
+# `state/handoffs/2026-08-23-the-warm-guard-op-gets-registered.md`, which has not landed:
+# no op is registered under this (or any) name yet, so today every `/hook` POST resolves
+# to `_serve_line`'s METHOD_NOT_FOUND envelope, and `hook_http.interpret_result` turns
+# that into a loud "guard did not run" response -- never a fabricated allow, never a
+# fabricated deny. Whoever lands that op registers it under this exact name, or repoints
+# this constant in the same change.
+GUARD_OP_NAME = "warm_guard.evaluate"
 
 # A liveness probe, not a work budget -- mirrors `warm.client.
 # READ_DEADLINE_SECS`'s "is the server wedged" framing, sized the same
@@ -329,11 +339,26 @@ def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] 
        spawn that has not yet bound a port) also returns `None` -- fail
        open, no wait, no exception.
 
+    GATED ON A STAMPED ENGINE ROOT, BEFORE ANY OF THE THREE. An unstamped
+    tree is not an engine (`docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md`),
+    and `_compute_engine_token` already refuses one -- so a listener spawned
+    against it could only ever answer `_serve_line`'s untrusted-caller
+    refusal. Spawning it anyway is pure litter, and it is litter on the
+    OPERATOR'S REAL MACHINE: `svc_dir()` keys off the real `%LOCALAPPDATA%`,
+    not a test's HOME-only quarantine, so an ungated call from any test that
+    does not mock this function spawns a real detached process per run. The
+    gate lives HERE, not at each call site, so that every caller inherits it
+    rather than each one remembering -- `warm/entry_seam.py :: _trigger_listener_boot`
+    keeps its own copy only to avoid IMPORTING this module on the Bash hot
+    path, which is a different job.
+
     Never raises: every read/health-check primitive it calls already has
     a "never raises, degrade to None/False" contract, and this function
     adds no unguarded call of its own.
     """
     root = engine_root if engine_root is not None else _default_engine_clone()
+    if not is_engine_root(root):
+        return None
     try:
         record = read_discovery(root)
         if record is not None and discovery_is_live(record):
@@ -386,10 +411,48 @@ class _ServerContext:
     ever asked for).
     """
 
-    def __init__(self, *, httpd: Any, engine_root: Optional[Path]) -> None:
+    def __init__(
+        self,
+        *,
+        httpd: Any,
+        engine_root: Optional[Path],
+        version_state: "skew.ServerVersionState",
+        dispatch: Optional[Any] = None,
+    ) -> None:
         self.httpd = httpd
         self.engine_root = engine_root
         self.in_flight = InFlightCounter()
+        self.version_state = version_state
+        self.server_sha = version_state.server_sha
+        # `dispatch` overrides `_serve_line`'s own default (`_run_dispatch`) -- production
+        # never sets it, a test does, to stand in for the op this row's own docstring
+        # names as not yet registered (see `GUARD_OP_NAME`).
+        self.dispatch = dispatch
+        self.engine_token = self._compute_engine_token()
+
+    def _compute_engine_token(self) -> Optional[str]:
+        """This transport's own trust proof, SELF-STAMPED rather than read off a
+        caller-supplied header -- `hooks.json`'s `type: "http"` caller (Claude Code) has
+        no notion of `_engine_token` and sends none. Supervisor knows its own engine
+        root, so it computes the identical token `_serve_line`'s version-skew check
+        expects (`skew.compute_client_token`, the SAME primary token a named-pipe
+        client stamps) and places it into every frame itself, rather than inventing a
+        second scheme beside `_serve_line`'s existing one (module docstring's
+        negative-spec: no second auth scheme). `None` on any failure to resolve it (an
+        unstamped clone) degrades every `/hook` POST to `_serve_line`'s own
+        untrusted-caller refusal -- loud, never a crash, never a silent allow.
+        """
+        try:
+            return skew.compute_client_token(self.engine_root)
+        except Exception:  # noqa: BLE001 -- fail-open parity: a bad stamp must not crash boot
+            return None
+
+    def drain(self) -> None:
+        """The `drain` `_serve_line` requires for a detected skew eviction. A no-op here:
+        unlike the pipe transport's bounded worker pool, this listener has no queue of
+        pending connections to drain -- `close_listener` (below) already stops accepting
+        new ones, which is the whole of what this transport owes on skew."""
+        return None
 
     def close_listener(self) -> None:
         try:
@@ -440,24 +503,52 @@ def _make_handler(ctx: "_ServerContext"):
                 return
 
             ctx.in_flight.enter()
+            # `_serve_line` releases the in-flight slot itself, on the skew-eviction
+            # path, before this handler ever gets a response back -- so this closure
+            # (not a second `ctx.in_flight.exit()` call) is what both `_serve_line` and
+            # this method's own `finally` share, exactly as the pipe transport's
+            # `_exit_once` does (`warm.server._handle_connection`).
+            released = False
+
+            def _release_once() -> None:
+                nonlocal released
+                if not released:
+                    released = True
+                    ctx.in_flight.exit()
+
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 raw = self.rfile.read(length) if length > 0 else b""
                 try:
-                    payload = json.loads(raw.decode("utf-8")) if raw else {}
+                    event = json.loads(raw.decode("utf-8")) if raw else {}
                 except (UnicodeDecodeError, json.JSONDecodeError):
-                    payload = {}
+                    event = {}
+                if not isinstance(event, dict):
+                    event = {}
 
-                # WIRING NOTE (module docstring): this seam does not
-                # translate real hook semantics -- it answers a default
-                # "allow", present and health-checked, never a hang or an
-                # error a fired hook would have to fail open against.
-                response = {
-                    "hookSpecificOutput": {
-                        "hookEventName": payload.get("hook_event_name"),
-                        "permissionDecision": "allow",
-                    }
+                event_name = event.get("hook_event_name")
+
+                # posted JSON -> hook_http.payload_from_event (inside build_request)
+                #             -> request frame (http_listener._frame_from_request)
+                #             -> warm.server._serve_line
+                #             -> http_listener._collect_response
+                #             -> hook_http.interpret_result
+                request_frame = hook_http.build_request(event, GUARD_OP_NAME)
+                request_frame = _frame_from_request(request_frame, ctx.engine_token)
+
+                serve_kwargs = {
+                    "version_state": ctx.version_state,
+                    "server_sha": ctx.server_sha,
+                    "close_listener": ctx.close_listener,
+                    "drain": ctx.drain,
+                    "release_in_flight": _release_once,
                 }
+                if ctx.dispatch is not None:
+                    serve_kwargs["dispatch"] = ctx.dispatch
+
+                raw_response = _collect_response(request_frame, _serve_line, serve_kwargs)
+                response = hook_http.interpret_result(event_name, raw_response)
+
                 body = json.dumps(response, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -465,7 +556,7 @@ def _make_handler(ctx: "_ServerContext"):
                 self.end_headers()
                 self.wfile.write(body)
             finally:
-                ctx.in_flight.exit()
+                _release_once()
 
     return _Handler
 
@@ -526,7 +617,8 @@ def main() -> int:
         pass
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
-    ctx = _ServerContext(httpd=httpd, engine_root=root)
+    version_state = skew.ServerVersionState(root)
+    ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state)
     httpd.RequestHandlerClass = _make_handler(ctx)
 
     port = httpd.server_address[1]

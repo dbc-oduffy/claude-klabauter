@@ -687,7 +687,7 @@ class TestHandlerWiring:
         result = _handler({}, repo_root=repo_root)
 
         noisy_suffixes = (
-            ".the Staff Engineer-review.md",
+            ".patrik-review.md",
             ".sonnet-review.md",
             ".prior-art-check.md",
             ".plan-coverage-check.md",

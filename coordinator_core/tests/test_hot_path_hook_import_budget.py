@@ -1,7 +1,54 @@
-"""Import-budget gate for the three hottest hot-path hook interpreters.
+"""Import-budget gate for the hottest hot-path hook/CLI interpreters.
 
 Spec backlink: pln-spawn-storm-culprit-taxonomy-p-805aa9,
-chunk D9 / AC11.
+chunk D9 / AC11. Extended by chunk C12 of
+`docs/plans/2026-08-22-the-import-path-costs-nothing.md`
+(dispatch brief `state/dispatch-briefs/2026-08-22-the-import-path-costs-nothing/C12.md`)
+to gate the `coordinator/bin/query-*.py` CLASS -- see "C12: gate the class,
+not four named interpreters" below.
+
+C12 reconciliation (do not re-derive, cite): C12's brief flagged that
+`coordinator_core/benchmarks/import_budget.py` already exists, already
+gates three of this file's four named entrypoints via a wall-clock-refusing,
+`len(sys.modules)`-delta mechanism, and asked whoever executes C12 to either
+(a) extend that mechanism to the newly-in-scope class or (b) reverse its
+documented wall-clock refusal. THIS FILE ALREADY independently mirrors (a)'s
+`module_count_ceiling` pattern -- it predates `import_budget.py`'s manifest
+route and gates by the same deterministic module-set-cardinality logic, just
+against hand-written `_Target` rows instead of `import-budget-manifest.json`
+entries. C12's `writes:` scope covers this file and
+`import-budget-manifest.json` but NOT `import_budget.py` itself, so (a) is
+applied here as: extend THIS file's own already-existing mirror of that
+pattern (`_Target` / `module_count_ceiling`) to the query-*.py class, via
+`_discover_query_bin_scripts()` below, rather than editing the out-of-scope
+sibling module. No reversal of the wall-clock refusal (b) is made; the
+secondary CPU-time guard here stays the pre-existing catastrophic-only floor,
+unchanged in kind.
+
+C12: gate the class, not four named interpreters. `coordinator/bin/
+query-*.py` (12 scripts at C12 authorship) was previously ungated on process
+time entirely -- not one of the four named `_Target` rows below, not
+`test_pickup_assemble_import_perf`, not the amplification gate (spawn count,
+not per-item cost). `_discover_query_bin_scripts()` globs the directory
+rather than enumerating file names, so a future 13th `query-*.py` script is
+swept in automatically; see that helper's own docstring for the shared,
+class-wide ceiling sizing rationale (as opposed to the four hook targets
+below, whose ceilings stay per-target/hand-tuned because their baselines
+differ from each other by up to ~2.4x -- the query-bin class does not have
+that spread).
+
+Note on AC1 (`<50ms`, `coordinator_core.ops` import)/AC8 (`<80ms`,
+`coordinator_core.hooks` unarmed import)/AC9 (`<50ms`, write-guard
+discovery delta) statistic/load-regime pinning, named in C12's brief: those
+three ACs belong to a different gate (measured against
+`coordinator_core.ops`/`coordinator_core.hooks`/write-guard-discovery-delta
+directly, not against this file's four named `_Target` entrypoints or the
+query-bin class), and are outside this file's `writes:` scope -- not
+addressed by this edit. This file's own targets already carry their
+pinned statistic (min-of-`_SAMPLE_COUNT` CPU-time samples) and load regime
+(idle box at authorship) per-target, unchanged by this chunk except for the
+newly-added query-bin class, which states the same pinning explicitly in
+`_query_bin_targets()`'s docstring.
 
 Targets one entrypoint per hook family, each a cold interpreter spawned by a
 DoE-claude `coordinator/hooks/scripts/*.py` PLUMBING wrapper on every matching
@@ -202,6 +249,17 @@ class _Target:
     # for the three targets that ARE already the real payload module, not a
     # CLI trampoline over it.
     cli_script_path: str | None = None
+    # Whether firing a `cli_script_path` target should call the trampoline's
+    # own `_import_main()` after `exec_module` (AC9's deferred-import shape --
+    # `detect_staged_rollback_fired` needs this, see its own comment) or stop
+    # at `exec_module` alone. The `coordinator/bin/query-*.py` family (C12)
+    # has no `_import_main()` split: every one of them does its real work via
+    # module-level `import` statements already executed by `exec_module`
+    # itself (confirmed by grep -- none of the 12 define `_import_main`), so
+    # calling a nonexistent method there would be an AttributeError, not a
+    # measurement. Ignored (must stay True, the default) for a target with no
+    # `cli_script_path`.
+    cli_call_import_main: bool = True
     # Named heavy modules confirmed ABSENT today for THIS target specifically.
     # Deliberately per-target, not a shared list: `yaml` is present in the
     # bash-dispatch and write-guards import graphs but absent from the
@@ -348,6 +406,70 @@ _TARGETS: Sequence[_Target] = (
     ),
 )
 
+def _discover_query_bin_scripts() -> Sequence[Path]:
+    """The `coordinator/bin/query-*.py` CLASS this chunk (C12) gates.
+
+    Glob, not an enumerated list: the whole point (per this file's dispatch
+    brief, `state/dispatch-briefs/2026-08-22-the-import-path-costs-nothing/
+    C12.md`) is that a future porter adding `query-whatever-new.py` to this
+    family is caught by construction, not by remembering to hand-add a row
+    here -- the north-star "make the correct path cheaper than the wrong
+    one" this repo's CLAUDE.md names. Sorted for deterministic parametrize
+    IDs across platforms/filesystems.
+    """
+    bin_dir = _REPO_ROOT / "coordinator" / "bin"
+    return tuple(sorted(bin_dir.glob("query-*.py")))
+
+
+def _query_bin_targets() -> Sequence[_Target]:
+    """Build one `_Target` per discovered `query-*.py` script (AC9 shape:
+    `cli_script_path` set, `cli_call_import_main=False` since none of these
+    12 scripts defer real work behind an `_import_main()` split -- every one
+    does its work via module-level imports that `exec_module` alone already
+    exercises, per `cli_call_import_main`'s own field doc).
+
+    Ceilings are a SHARED, class-wide budget, not twelve individually-tuned
+    ones: measured on this machine at authorship (min-of-2 fresh-subprocess
+    samples per script, idle box) the class clusters tightly --
+    module-count 25-34, `sys.path` growth 1-3, CPU time 0.0-62.5ms -- because
+    every member shares the same `coordinator/bin/lib/records_query.py` (or
+    sibling lib) transport shape. `module_count_ceiling=45` (~32% above the
+    34-module observed max), `sys_path_entry_ceiling=5` (2 above the 3
+    observed max), `cpu_floor_ms=250.0` (~4x the 62.5ms observed max,
+    matching this file's own convention of a wide catastrophic-only
+    multiplier over idle-box measurement, see `bash_guards_dispatch`'s and
+    `detect_staged_rollback_fired`'s comments) are sized so ONE new heavy
+    script joining the family with a materially different (bigger) import
+    graph still trips the gate, while ordinary cross-script variance within
+    the family does not. Per-target (not shared) sizing, elsewhere in this
+    file, exists because those four targets differ from each other by up to
+    ~2.4x in baseline size (module docstring); this family does not have
+    that spread, so one shared ceiling is the correctly-scoped choice here,
+    not a shortcut.
+
+    Statistic and load regime (chunk C12's "pin the statistic" instruction):
+    min-of-`_SAMPLE_COUNT` (2) CPU-time samples, same as every other target
+    in this file (`test_hot_path_hook_import_floor`); measured on an idle
+    box at authorship, same regime the other three named targets' comments
+    record -- none of the four pre-existing targets in this file were
+    re-measured under the ~50-peer load norm either, so this class does not
+    newly diverge from that file-wide convention.
+    """
+    return tuple(
+        _Target(
+            name=f"query_bin_{script.stem.replace('-', '_')}",
+            import_path=f"coordinator/bin/{script.name}",
+            module_count_ceiling=45,
+            sys_path_entry_ceiling=5,
+            cli_script_path=str(script),
+            cli_call_import_main=False,
+            cpu_floor_ms=250.0,
+        )
+        for script in _discover_query_bin_scripts()
+    )
+
+
+_TARGETS = tuple(_TARGETS) + _query_bin_targets()
 _TARGETS_BY_NAME = {t.name: t for t in _TARGETS}
 
 
@@ -380,13 +502,15 @@ def _fire_lines(target: _Target) -> list:
     or a plain `import target.import_path` for a target that already IS the
     real payload module."""
     if target.cli_script_path is not None:
-        return [
+        lines = [
             "import importlib.util as _ilu",
             f"_spec = _ilu.spec_from_file_location('_hot_path_probe_target', {target.cli_script_path!r})",
             "_mod = _ilu.module_from_spec(_spec)",
             "_spec.loader.exec_module(_mod)",
-            "_mod._import_main()",
         ]
+        if target.cli_call_import_main:
+            lines.append("_mod._import_main()")
+        return lines
     return [f"import {target.import_path}"]
 
 

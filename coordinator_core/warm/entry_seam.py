@@ -85,6 +85,8 @@ __all__ = [
     "reentrant_dispatch",
     "emit_diagnostic",
     "collecting_diagnostics",
+    "WarmGuardOutcome",
+    "try_warm_guard_dispatch",
 ]
 
 
@@ -194,6 +196,189 @@ def per_request_state(
             else:
                 with collecting_diagnostics(diagnostics):
                     yield declared
+
+
+from dataclasses import dataclass
+
+
+# ---------------------------------------------------------------------------
+# Warm-first CLIENT PRIMITIVE (C14a, no live caller yet).
+#
+# WHY THIS EXISTS. C14 (docs/plans/2026-08-22-a-bash-call-stops-costing-a-
+# second-and-a-half.md) came back BLOCKED on a trap in the existing
+# `warm.client.try_warm_dispatch` contract: that function's own docstring
+# says ANY well-formed JSON-RPC response counts as a served warm hit,
+# INCLUDING AN ERROR ENVELOPE (the anti-storm table's `well-formed JSON-RPC
+# response, including an error envelope -- server up; USE the response`
+# row). A guard-shaped caller (e.g. a Bash PreToolUse hook) that dispatches
+# an op name the warm server has never registered gets back exactly that
+# shape -- a real, well-formed `error` envelope with `code ==
+# ipc.METHOD_NOT_FOUND` (-32601) -- and `try_warm_dispatch` alone cannot
+# tell that apart from a genuine guard verdict the op computed on purpose.
+# Mistaking the former for the latter corrupts the result of every Bash
+# call routed through it.
+#
+# `try_warm_guard_dispatch` below is the seam that makes that distinction
+# explicit: it treats a `METHOD_NOT_FOUND` error envelope as "the warm
+# server does not know this op" -- a cold fall-through, not a hit -- and
+# everything else `try_warm_dispatch` would return (a real result, or any
+# OTHER error envelope, which is a legitimate answer the op computed) as a
+# genuine warm hit.
+#
+# `METHOD_NOT_FOUND` is redefined locally rather than imported from
+# `coordinator_core.ipc` (`ipc.METHOD_NOT_FOUND == -32601`): `ipc` is
+# neither small nor free to import (`warm.client`'s own module docstring
+# measures pulling the op-registry chain at ~330ms over a 40ms interpreter
+# floor), and this module already sits on hot per-call paths. The value is
+# a JSON-RPC 2.0 §5.1 reserved code, not project-specific, so duplicating
+# the constant does not risk drifting out of sync with a project decision
+# -- only with the JSON-RPC spec itself.
+#
+# Negative-spec (RAG-bait):
+#     This module does NOT decide which op to dispatch, does NOT retry, and
+#     does NOT add a live caller anywhere in the guard/hook path -- that is
+#     C14b's job, gated on a warm-side op plus a change to the hook
+#     invocation site in the DoE-claude repo (PM-gated, out of scope here).
+#     It also makes NO measurement claim: AC13's <50ms number belongs to
+#     C14b, not to this inert primitive.
+# ---------------------------------------------------------------------------
+
+#: JSON-RPC 2.0 §5.1 reserved code for "the method does not exist / is not
+#: available" -- mirrors `coordinator_core.ipc.METHOD_NOT_FOUND` (-32601)
+#: without importing `ipc`. See this section's module-docstring note above
+#: for why the duplication is deliberate rather than an oversight.
+METHOD_NOT_FOUND = -32601
+
+
+@dataclass(frozen=True)
+class WarmGuardOutcome:
+    """The result of one `try_warm_guard_dispatch` attempt.
+
+    `hit=True` means the warm server genuinely answered the dispatched op
+    -- `response` is the full JSON-RPC envelope (a result OR an
+    op-computed error, verbatim) and the caller should use it instead of
+    falling through to a cold path. `hit=False` means every other outcome
+    `warm.client.try_warm_dispatch` can produce (warmth disabled, no pipe,
+    a busy/contended server, a malformed response, an unhandled exception,
+    a `METHOD_NOT_FOUND` envelope) -- `response` is always `None` in that
+    case, and the caller falls through to its existing cold path exactly
+    as it would on any other warm miss.
+    """
+
+    hit: bool
+    response: Optional[dict] = None
+
+
+def _trigger_listener_boot() -> None:
+    """Best-effort, cold-guard-path nudge toward a live http listener (C3 of
+    docs/plans/2026-08-25-the-http-listener-gets-something-keeping-it-up.md).
+
+    C2 gives the PIPE server's own boot a call to `supervisor.ensure_listener()`;
+    this covers the box that boot does not -- neither process running, the
+    ordinary state after any quiet period under idle demotion. Every call here
+    costs one discovery-file read when a listener is already live, or a
+    `should_spawn`-debounced spawn trigger when it is not; `ensure_listener`
+    itself never waits and never raises by contract (its own docstring).
+
+    GATED ON `is_engine_root`, DELIBERATELY -- `ensure_listener` does not gate
+    on this itself (verified live: it happily `spawn_detached()`s an unstamped
+    tree), but this seam does, for the same reason every other trust boundary
+    in this package treats "stamped build" as the definition of an engine
+    (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md). Production
+    hook traffic runs through the klabauter publish clone, a stamped build
+    (this repo's own CLAUDE.md); the bare dev tree this module also runs from
+    (unstamped by design) is not that surface. Without this gate, EVERY
+    existing caller of `try_warm_guard_dispatch` in an unstamped dev clone --
+    including this suite's own tests, none of which mock `supervisor.
+    ensure_listener` -- would trigger a real detached process spawn against
+    the operator's real machine on each test run: exactly the litter class
+    `test_warm_suite_does_not_litter_the_real_runtime_base.py` exists to
+    catch, just reached through a path that guard does not cover.
+
+    Never raises, never waits: every exception (an unresolvable engine root,
+    an unimportable `supervisor` module, anything `ensure_listener` itself
+    fails to absorb) is swallowed here, mirroring `try_warm_guard_dispatch`'s
+    own fail-open contract -- this trigger must never become a new failure
+    mode for the caller it decorates.
+    """
+    try:
+        from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
+
+        root = current_engine_clone()
+        if not is_engine_root(root):
+            return
+
+        from coordinator_core.warm import supervisor
+
+        supervisor.ensure_listener(root)
+    except Exception:  # noqa: BLE001 -- fail-open: this trigger must never fail the caller
+        pass
+
+
+def try_warm_guard_dispatch(
+    op_name: str,
+    params: Optional[dict] = None,
+    *,
+    request_id: Any = 1,
+) -> WarmGuardOutcome:
+    """Attempt one warm dispatch for a guard/hook-shaped caller, distinguishing
+    a genuine warm hit from a `METHOD_NOT_FOUND` envelope the caller could
+    otherwise mistake for one (see this module's section docstring above).
+
+    FAILS OPEN on every failure mode: warmth disabled, no door (socket/pipe
+    absent), the server refusing or timing out, a malformed or non-JSON-RPC
+    response, an unregistered op, and any unanticipated exception -- all
+    resolve to `WarmGuardOutcome(hit=False, response=None)`, never a raise.
+    This function itself adds no new failure mode beyond what `warm.client.
+    try_warm_dispatch` already fails open on; it only narrows what counts
+    as a hit.
+
+    `warm.client` is imported lazily, at call time, not at this module's
+    top level: `client.py` performs real (if lightweight) work at import
+    time in some environments and this primitive must stay inert -- an
+    import failure here is itself just another fail-open case, not a
+    reason to crash the caller.
+
+    Also fires `_trigger_listener_boot()` -- the http listener's own
+    autostart nudge (C3, see that function's docstring) -- best-effort and
+    before the dispatch attempt itself, so a failure or slowness in THIS
+    call's own warm dispatch can never suppress the listener nudge, and the
+    nudge can never delay or fail this call's own result.
+    """
+    _trigger_listener_boot()
+
+    try:
+        from coordinator_core.warm.client import try_warm_dispatch
+    except Exception:
+        return WarmGuardOutcome(hit=False)
+
+    msg = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": op_name,
+        "params": params or {},
+    }
+
+    try:
+        response = try_warm_dispatch(msg)
+    except Exception:
+        # Backstop, mirroring `try_warm_dispatch`'s own never-raise contract:
+        # that function already catches everything internally, but this
+        # primitive must never depend on that discipline holding forever.
+        return WarmGuardOutcome(hit=False)
+
+    if not isinstance(response, dict):
+        return WarmGuardOutcome(hit=False)
+
+    error = response.get("error")
+    if isinstance(error, dict) and error.get("code") == METHOD_NOT_FOUND:
+        # THE TRAP THAT BLOCKED C14: a well-formed error envelope about an
+        # op the server has never heard of is not a guard verdict -- it is
+        # the server telling us it cannot answer this question at all.
+        # Treated as a cold fall-through, never as a hit.
+        return WarmGuardOutcome(hit=False)
+
+    return WarmGuardOutcome(hit=True, response=response)
 
 
 def reentrant_dispatch(

@@ -42,8 +42,6 @@ from coordinator_core.ops.fleet.memo_draft import (
     _validate_scoped_to,
     compose_draft_frontmatter,
 )
-from coordinator_core.ops.fleet.memo_send import _memo_send
-from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS as _SEND_SUMMARY_MAX_CHARS
 from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox, unique_nearest_receiver
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
@@ -199,14 +197,6 @@ class TestValidateDraftParams:
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", at_cap_summary,
             None, None, False, None, None, None, None,
         )
-
-    def test_draft_and_send_agree_on_the_summary_cap(self):
-        """The 120-char cap must exist exactly once, not as two magic numbers
-        that could drift apart — memo_draft and memo_send both import
-        _SUMMARY_MAX_CHARS from the shared _memo_summary module, so this
-        would fail if either op ever hardcoded its own value instead of
-        importing the single source of truth."""
-        assert _SUMMARY_MAX_CHARS == _SEND_SUMMARY_MAX_CHARS
 
 
 # ===========================================================================
@@ -698,30 +688,6 @@ class TestClassifyReceiver:
         assert isinstance(classify_result, dict)
         assert classify_result["exit_code"] == 1
 
-    def test_classification_agrees_with_memo_send_dry_run(self, tmp_path, monkeypatch):
-        """(e) end-to-end lock: a `to` memo.draft classifies clean for also
-        dry-runs clean via memo.send — the two verbs never disagree.
-        """
-        receiver_repo = tmp_path / "example-retrieval-repo-repo"
-        receiver_repo.mkdir()
-        claude_home = _make_claude_home(
-            tmp_path, receiver_repos={"example_retrieval_repo": receiver_repo},
-        )
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-
-        assert _classify_receiver_for_draft("example-retrieval-repo-em", dry_run=True) is None
-
-        send_result = _run(_memo_send({
-            "dry_run": True,
-            "topic": "agreement-check",
-            "to": "example-retrieval-repo-em",
-            "title": "T",
-            "body": "B",
-            "kind": "fyi",
-            "summary": "Agreement check.",
-        }))
-        assert send_result["exit_code"] == 0
-
 
 # ===========================================================================
 # 3c. rejection_class — cross-repo wire field (2026-07-21, DoE consult)
@@ -1005,9 +971,9 @@ class TestComposeDraftFrontmatter:
 
 class TestInReplyToDraft:
     """in_reply_to (2026-07-25 write-side addition) — normalized at draft
-    time, NOT existence-checked (that gate is send-time only, see
-    memo_send._validate_in_reply_to_exists / TestInReplyToExistenceGate in
-    test_memo_send.py)."""
+    time, NOT existence-checked (that gate was send-time only, in
+    memo.send's own `_validate_in_reply_to_exists` — removed with the op,
+    2026-08-23, PM ruling: a killed op dies outright, no stub)."""
 
     def test_omitted_emits_no_key_in_draft(self):
         fm = compose_draft_frontmatter(
@@ -1042,62 +1008,6 @@ class TestInReplyToDraft:
         split = split_frontmatter(content)
         assert read_fm_field(split.fm_text, "in_reply_to") == '"2026-07-25-foo.md"'
 
-    def test_draft_then_send_lifecycle_preserves_field(self, tmp_path, monkeypatch):
-        """draft -> send: the field staged into the outbox draft survives
-        through to the delivered memo (mirrors the CLI's own draft->send
-        flow, engine-side)."""
-        import coordinator_core.ops.fleet.memo_send as memo_send_mod
-
-        sender = _make_sender_git_repo(tmp_path)
-        common_dir = sender / ".git"
-
-        # A receiver repo for the eventual send.
-        receiver = tmp_path / "receiver-repo"
-        receiver.mkdir()
-        _git(receiver, "init", "-b", "main")
-        _git(receiver, "config", "user.email", "test@claude-klabauter.test")
-        _git(receiver, "config", "user.name", "ClaudeKlabauterTest")
-        _git(receiver, "config", "commit.gpgsign", "false")
-        (receiver / "cross-repo" / "inbox").mkdir(parents=True)
-        (receiver / "cross-repo" / "inbox" / ".gitkeep").write_text("", encoding="utf-8")
-        _git(receiver, "add", "-A")
-        _git(receiver, "commit", "-m", "init receiver")
-
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver})
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-
-        # Sender's own inbox holds the memo we're replying to (send-time
-        # existence gate reads THIS repo's own cross-repo/inbox/).
-        inbound_dir = sender / "cross-repo" / "inbox"
-        inbound_dir.mkdir(parents=True)
-        (inbound_dir / "2026-07-25-inbound.md").write_text("x", encoding="utf-8")
-
-        draft_params = _base_params(dry_run=False, kind="consult", to="example-retrieval-repo-em")
-        draft_params["in_reply_to"] = "2026-07-25-inbound.md"
-        draft_result = _run(_memo_draft(draft_params, repo_root=common_dir))
-        assert draft_result["exit_code"] == 0
-
-        draft_path = sender / "state" / "memo-outbox" / "some-topic.md"
-        draft_content = draft_path.read_text(encoding="utf-8")
-        draft_split = split_frontmatter(draft_content)
-        assert read_fm_field(draft_split.fm_text, "in_reply_to") == '"2026-07-25-inbound.md"'
-
-        send_result = _run(memo_send_mod._memo_send(
-            {
-                "dry_run": False,
-                "topic": "some-topic",
-                "to": "example-retrieval-repo-em",
-                "title": "A draft memo",
-                "body": "Reply body.",
-                "kind": "consult",
-                "summary": "Reply summary.",
-                "in_reply_to": "2026-07-25-inbound.md",
-            },
-            repo_root=common_dir,
-        ))
-        assert send_result["exit_code"] == 0, send_result
-        delivered_content = Path(send_result["acted"][0]["id"]).read_text(encoding="utf-8")
-        assert 'in_reply_to: "2026-07-25-inbound.md"' in delivered_content
 
 
 # ===========================================================================
@@ -1107,8 +1017,10 @@ class TestInReplyToDraft:
 # memo_send's space/supersedes validation with no direct unit test of its
 # own (only exercised incidentally, via happy-path overrides, in
 # test_memo_compose.py::TestCarriedDraftFields). These tests exercise the
-# draft path directly via _validate_draft_params, mirroring
-# test_memo_send.py's TestSpaceParam / TestSupersedesListForm.
+# draft path directly via _validate_draft_params (the shared validators now
+# live in `coordinator_core.ops.fleet._memo_compose`, moved there when
+# memo.send was killed 2026-08-23 — its own TestSpaceParam/
+# TestSupersedesListForm coverage was removed with the op's test file).
 #
 # Unified rule (EM correction, 2026-07-28): the two pre-extraction callers
 # disagreed on the bare-string branch — memo.draft used to strip-and-reject

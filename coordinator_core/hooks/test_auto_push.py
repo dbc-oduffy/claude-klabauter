@@ -2538,8 +2538,9 @@ def test_wire_path_respawn_actually_pushes_to_a_real_remote(tmp_path):
 # throwaway repo carrying a REAL generated post-commit hook shim mirror, per
 # the brief's Closed-brief wording -- "produced by toggling the suppression
 # env var directly" refers to how the *publisher* env is set, not to the hook
-# shim, which is real in every arm here). Arm 3 is the one the plan currently
-# lacks: a REAL `ceremony.wsc_tail` invocation at its real default.
+# shim, which is real in every arm here). Arm 3 -- a REAL `ceremony.wsc_tail`
+# invocation at its real default -- died with that op (PM kill ruling
+# 2026-08-23) and is not replaced: no surviving caller drives this leg.
 # ---------------------------------------------------------------------------
 
 #: `coordinator-auto-push.py`'s own DoE-side trampoline over
@@ -2632,40 +2633,8 @@ def _commit_env(claude_klabauter_root: str, *, suppress: bool) -> dict:
     return env
 
 
-def _init_ceremony_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """Minimal real-git + real bare-remote repo shape for driving
-    `ceremony.wsc_tail`'s real `_handler` end-to-end. Inlined (rather than
-    imported from `ops/ceremony/tests/test_wsc_tail_parity.py`'s
-    `WscTailRepo`/`wsc_tail_repo` fixture) because this chunk's Writes
-    constraint is this file ONLY -- see the C1 brief header. Returns
-    (repo_root, common_dir)."""
-    root = tmp_path / "repo"
-    root.mkdir()
-
-    def _git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)
-
-    _git("init", "-q", "-b", "main")
-    _git("config", "user.email", "oracle-arm3@claude-klabauter.test")
-    _git("config", "user.name", "Oracle Arm3")
-    _git("config", "commit.gpgsign", "false")
-    (root / "state" / "handoffs").mkdir(parents=True)
-    (root / "state" / "handoffs" / ".gitkeep").write_text("", encoding="utf-8")
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "chore: initial skeleton")
-
-    bare = tmp_path / "origin.git"
-    subprocess.run(
-        ["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True, capture_output=True,
-    )
-    _git("remote", "add", "origin", str(bare))
-    push = _git("push", "-u", "origin", "main")
-    assert push.returncode == 0, push.stderr
-    return root, (root / ".git").resolve()
-
-
-def test_oracle_arm1_suppressed_scoped_git_commit_default_one_interpreter_start(tmp_path):
-    """Arm 1: `scoped_git_commit`'s inherited sync default --
+def test_oracle_arm1_suppressed_sync_publisher_one_interpreter_start(tmp_path):
+    """Arm 1: a synchronous publisher's default --
     `_sole_publisher_env` (git_native.py) sets
     `COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH=1` because the caller
     publishes synchronously, in the SAME invocation. `auto_push.main()`
@@ -2689,8 +2658,8 @@ def test_oracle_arm1_suppressed_scoped_git_commit_default_one_interpreter_start(
     assert header_count == 0, "suppressed arm must never detach/respawn"
 
 
-def test_oracle_arm2_unsuppressed_wsc_tail_default_two_on_nt_one_on_posix(tmp_path):
-    """Arm 2: `wsc_tail`'s deferred default (suppression OFF) -- the hook
+def test_oracle_arm2_unsuppressed_deferred_default_two_on_nt_one_on_posix(tmp_path):
+    """Arm 2: a deferred publisher's default (suppression OFF) -- the hook
     runs its own async self-detach unconditionally
     (`async_mode = not bool(os.environ.get(_ENV_SYNC))`, unset here -> True).
     Platform-gated per `_detach_and_run`: nt has no `os.fork()`, so the
@@ -2720,157 +2689,6 @@ def test_oracle_arm2_unsuppressed_wsc_tail_default_two_on_nt_one_on_posix(tmp_pa
     else:
         assert header_count == 1
         assert interpreter_starts == 2
-
-
-def test_oracle_arm3_end_to_end_wsc_tail_ceremony_real_deferred_push(tmp_path, monkeypatch):
-    """Arm 3 -- THE measurement this chunk exists to build (C1 brief): a REAL
-    `ceremony.wsc_tail` invocation, at its real default
-    (`COORDINATOR_WSC_SYNC_PUSH` unset -> `push_mode="deferred"`), against a
-    repo carrying the real generated post-commit hook shim for real. Not a
-    proxy: no seam is monkeypatched on the push/detach path.
-
-    Re-derived against the LANDED fix (`dde488e12`, C5): `wsc_tail.
-    _deferred_publisher_backstop` now wraps steps 5a-5d in `git_native.
-    deferred_publisher_span()`, which widens `_sole_publisher_env()` for
-    EVERY `git commit` in that span -- including 5a's main ceremony commit,
-    the one whose post-commit hook is under test. The hook's own subprocess
-    inherits `COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH=1` from that
-    commit's env and stands down "before resolving a branch or detaching at
-    all" (see `main()`'s suppression check, and arm 1's docstring for the
-    same stand-down on the suppressed-sync leg) -- so the hook contributes
-    NO interpreter start on EITHER platform any more. The only respawn left
-    is step 5e's own `_spawn_deferred_push_skip_loud`, which always
-    Popen-respawns (`spawn_detached_push` is "respawn-Popen, both
-    platforms", never fork-based) and so writes exactly ONE respawn header
-    regardless of platform:
-      nt:    1 (hook process, stands down) + 1 (wsc_tail's explicit spawn) = 2
-      POSIX: 1 (hook process, stands down) + 1 (wsc_tail's explicit spawn) = 2
-    A disagreement with either number IS the finding this chunk exists to
-    surface -- see this file's dispatch brief.
-
-    AC2's actual discharge is the assertion block below the header count,
-    not the header count itself (see brief §2): on POSIX, the pre-fix hook
-    published via `os.fork()`, which `_open_respawn_stderr_log` never
-    touches -- so `header_count` reads 1 whether or not the hook ALSO
-    pushed, both before and after the fix. A POSIX-only reading of this
-    oracle would show no change at all while the two-publisher defect was
-    real and is now fixed. The pending-push record `wsc_tail.
-    _deferred_publisher_backstop` writes directly (in-process, before the
-    span opens) is the signal that discriminates: its `holder_pid` is THIS
-    process's pid (the backstop's own synchronous write, never a
-    subprocess), so if a second, independent publisher (a not-suppressed
-    hook fork/respawn) raced in, the earliest observable symptom is that
-    record disappearing (drained via `run_push_with_retry`'s own head-of-
-    function `drain_pending_push` call, reachable from ANY caller that
-    still gets that far) before step 5e's spawn has had time to run at all.
-    Reading it immediately after `_handler()` returns -- before
-    `_respawn_header_count`'s own stabilization wait below gives step 5e's
-    detached child time to run -- catches that. A process that merely
-    started (wrote a header, or forked) but never actually pushed cannot
-    satisfy either half of that assertion: not the immediate-presence read
-    (a hook that stood down never touches the record) and not the later
-    drained-and-landed read (a crashed starter never clears it or reaches
-    the remote).
-    """
-    from coordinator_core.ops.ceremony import wsc_tail as wsc_tail_mod
-
-    monkeypatch.delenv(wsc_tail_mod._ENV_SYNC_PUSH, raising=False)
-    root, common_dir = _init_ceremony_repo(tmp_path)
-
-    def _git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)
-
-    branch = "work/test/oracle-arm3"
-    checkout = _git("checkout", "-q", "-b", branch)
-    assert checkout.returncode == 0, checkout.stderr
-    push_branch = _git("push", "-u", "origin", branch)
-    assert push_branch.returncode == 0, push_branch.stderr
-
-    _install_mirror_post_commit_hook(common_dir)
-
-    sid = f"oracle-arm3-{uuid.uuid4().hex[:8]}"
-    (root / "tasks" / "feature").mkdir(parents=True)
-    (root / "tasks" / "feature" / "todo.md").write_text("content", encoding="utf-8")
-
-    result = asyncio.run(
-        wsc_tail_mod._handler(
-            {
-                "sid": sid,
-                "subject": "workstream-complete: feature",
-                "stage_paths": ["tasks/feature/todo.md"],
-                "caller_paths": ["tasks/feature/todo.md"],
-            },
-            repo_root=common_dir,
-        )
-    )
-
-    assert result["exit_code"] == 0, result
-    assert result["committed_sha"] is not None
-    assert result["push_status"] == "deferred"
-
-    # AC2 discharge, part 1: the backstop-written pending-push record proves
-    # the SUPPRESSION MARKER actually widened for this commit -- see this
-    # test's own docstring for why this, not the header count below, is the
-    # signal that cannot be satisfied by a process that merely started.
-    # Read BEFORE `_respawn_header_count`'s stabilization wait gives step
-    # 5e's detached push time to run and clear it.
-    pending_record_path = common_dir / auto_push._PENDING_RECORD_NAME  # noqa: SLF001 -- reading the durable record this arm's oracle pins directly
-    record = json.loads(pending_record_path.read_text(encoding="utf-8"))
-    assert record["holder_pid"] == os.getpid(), (
-        "pending-push record's holder is not THIS process's own in-process "
-        "backstop write -- a second, independent publisher raced it and "
-        "drained/rewrote the record before wsc_tail's own spawn could run"
-    )
-    assert record["sha"] is None
-    assert record["branch"] == branch
-
-    header_count = _respawn_header_count(common_dir)
-    interpreter_starts = 1 + header_count
-
-    if hasattr(os, "fork"):
-        assert header_count == 1, (
-            f"expected 1 respawn header on POSIX (wsc_tail's own spawn only "
-            f"-- the hook now stands down for the whole span), got {header_count}"
-        )
-        assert interpreter_starts == 2
-    else:
-        assert header_count == 1, (
-            f"expected 1 respawn header on nt (wsc_tail's own spawn only -- "
-            f"the hook now stands down for the whole span, see the "
-            f"suppression-marker inheritance in this test's docstring), "
-            f"got {header_count}"
-        )
-        assert interpreter_starts == 2
-
-    # AC2 discharge, part 2: the record above proves the backstop engaged;
-    # this proves the SOLE detached push (step 5e) actually completed and
-    # cleared it -- not merely started. A process that started and then
-    # crashed before pushing would leave header_count==1 satisfied but the
-    # record still present, exactly the gap a start-count-only oracle misses.
-    deadline = time.time() + 15
-    while pending_record_path.exists() and time.time() < deadline:
-        time.sleep(0.2)
-    assert not pending_record_path.exists(), (
-        "pending-push backstop record was never cleared -- step 5e's "
-        "detached push (the sole publisher AC2 requires) never completed"
-    )
-
-    def _remote_tip() -> str:
-        out = subprocess.run(
-            ["git", "-C", str(tmp_path / "origin.git"), "rev-parse", branch],
-            capture_output=True, text=True,
-        )
-        return out.stdout.strip() if out.returncode == 0 else ""
-
-    assert _remote_tip() == result["committed_sha"], (
-        "the sole publisher's push never reached the remote"
-    )
-
-
-# ---------------------------------------------------------------------------
-# _release_claims_for_head — the claim ledger is released for EVERY commit
-# route, not only the coordinator ops that release their own.
-# ---------------------------------------------------------------------------
 
 
 def test_release_claims_for_head_releases_the_landed_commits_paths(monkeypatch):

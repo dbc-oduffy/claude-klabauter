@@ -228,24 +228,13 @@ Negative-spec (hard-won):
         registry block cites for that leg.
         Classification: MUTATING (DR-208, classification.py).
 
-      MEMO send op (1, DR-214-send-class) — sanctioned MUTATING cross-tree write category
-        (deliberate DR-214-send-class carve-out; strongest crossing in the strang-0x sequence
-        — cross-repo write, not merely cross-tree-within-own-repo):
-        - memo.send: writes one schema-valid memo file (non-committing dirty file) into
-                     the cross-repo/inbox/ of a registry-enumerated receiver repo.
-        D2 seven-bound (send-class, all must hold — docs/decisions/DR-214-send-class-…):
-          single-file per invocation; registry-enumerated receiver (never wire-derived);
-          non-committing dirty file; fail-loud on collision (read-before-write → refuse);
-          in-process command-type dispatch only (HTTP/UDS transport and gate 6 vacated
-          by DR-215; MUTATING gating is now inherent to command-type serial execution);
-          schema-valid emission; B3 gitignore delivery guard.
-        Write confinement (hard): memo.send MAY write ONLY to the cross-repo/inbox/ of a
-        registry-enumerated receiver; MUST NOT commit into the sibling tree; MUST NOT write
-        the sibling's state/, .git/, or rag's relational store (dual-write ban); MUST NOT
-        traverse outside the resolved inbox path.
-        Q-c HARD (AC4): refuses when the claude-klabauter engine is unreachable — no legacy
-        direct-write fallback. UDS-only negative-spec: NOT reachable over HTTP.
-        Classification: MUTATING (DR-208, classification.py).
+      MEMO send op — RETIRED 2026-08-23 (PM ruling: killed op dies outright, no
+        stub). The DR-214-send-class cross-tree write category this registry block
+        used to authorize (memo.send: schema-valid memo file into a registry-
+        enumerated receiver's cross-repo/inbox/, non-committing) has no live
+        handler; `memo.send` is not in the op registry. See
+        docs/decisions/DR-214-send-class-cross-tree-write-boundary.md for the
+        historical D2 seven-bound this category was admitted under.
 
       DISTILL-DISPOSAL ops (7, DR-228) — sanctioned MUTATING category split into two
         tiers by write-shape, both crossing ``state/`` (the reserved-noun question
@@ -1743,9 +1732,10 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     ``"fleet.archive_completed_plans"``) can call this directly — a registry MISS
     triggers the same lazy-import + eager-fallback resolution as the IPC dispatch
     path (`_lazy_import_and_lookup`) before returning None, so it works correctly
-    under `COORDINATOR_CORE_LAZY_OPS=1` without the caller having to pre-import the
-    op's owning module itself. Returns None only when the op is genuinely
-    unregistered — callers should treat None as a not-found condition.
+    without the caller having to pre-import the op's owning module itself (lazy
+    registration is now unconditional — see coordinator_core/ops/__init__.py).
+    Returns None only when the op is genuinely unregistered — callers should
+    treat None as a not-found condition.
 
     2026-07-25 break-class fix: this used to be a bare `_REGISTRY.get(name)`, which
     returned None for any sibling op not yet imported under lazy ops — breaking
@@ -1825,6 +1815,26 @@ def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
     return _decorator
 
 
+def _record_registry_fallback(method: str, stage: str, mapped: bool) -> None:
+    """Count one escalation past the targeted-import fast path — never raise.
+
+    Deliberately swallowing: an op must not fail to resolve because its
+    telemetry could not be written (registry_fallback_counter's
+    CANNOT-BREAK-DISPATCH CONTRACT). Imports are function-local and the write
+    is unconditional-cost only on a path already paying for a 233-module
+    sweep, so this adds nothing measurable to the fast path it is absent from.
+    """
+    try:
+        from coordinator_core import registry_fallback_counter as _fbc
+        from coordinator_core.ops.session_context import resolve_current_session_id
+
+        _fbc.record_registry_fallback(
+            method, stage, resolve_current_session_id() or "", mapped=mapped
+        )
+    except Exception:  # noqa: BLE001 -- see docstring; telemetry never breaks dispatch
+        pass
+
+
 def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
     """Import the owning module for *method* on a registry MISS, then re-check.
 
@@ -1841,10 +1851,10 @@ def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
          routine (`coordinator_core.hooks._eager_import_all()`) and re-check.
          Every `hooks.*` key in OP_MODULE_MAP maps to the shared
          "coordinator_core.hooks" package value (one import registers all 15
-         hooks.* ops — see that map's header comment), so under
-         COORDINATOR_CORE_LAZY_OPS/`sys._coordinator_core_lazy_ops` the step-1
-         import of "coordinator_core.hooks" is a lazy-gated no-op that never
-         registers anything and would otherwise always fall through to step 3.
+         hooks.* ops — see that map's header comment), so — lazy registration
+         now being unconditional — the step-1 import of "coordinator_core.hooks"
+         is always a no-op that never registers anything and would otherwise
+         always fall through to step 3.
          This stage is ordered AHEAD of step 3 specifically so a hooks.* miss
          is served by importing only the coordinator_core.hooks package (~15
          modules) rather than escalating to all ~160 op modules (~562
@@ -1859,14 +1869,14 @@ def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
          a broken dispatch.
 
          Calling _eager_import_all() directly (rather than
-         importlib.import_module("coordinator_core.ops")) is deliberate: when
-         lazy op registration is active (armed by the CLI dispatcher), the
-         coordinator_core.ops package is already in sys.modules with its
-         eager-import block SKIPPED — a bare re-import of the package is a
-         cached no-op and would NOT trigger the other op modules. Calling the
-         function directly forces every op module to import regardless of the
-         package's cached lazy-init state (each already-imported submodule
-         import is itself a cheap no-op, so this is safe to call unconditionally).
+         importlib.import_module("coordinator_core.ops")) is deliberate: lazy
+         registration is unconditional now, so the coordinator_core.ops
+         package is always already in sys.modules with its eager-import
+         skipped — a bare re-import of the package is a cached no-op and would
+         NOT trigger the other op modules. Calling the function directly
+         forces every op module to import regardless of the package's cached
+         init state (each already-imported submodule import is itself a cheap
+         no-op, so this is safe to call unconditionally).
 
     Returns:
         The registered handler callable if found after import, else None.
@@ -1900,6 +1910,14 @@ def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
     if method.startswith("hooks."):
         from coordinator_core.hooks import _eager_import_all as _hooks_eager_import_all
 
+        # DELIBERATELY NOT COUNTED HERE. Every `hooks.*` key in OP_MODULE_MAP
+        # maps to the shared "coordinator_core.hooks" package value, so step 1
+        # is ALWAYS a no-op for them and this stage is the designed resolution
+        # path, not a miss — measured firing on 100% of hooks.* dispatches.
+        # Counting it would put a record on every tool call and bury the
+        # ops-wide cliff this telemetry exists to surface. A hooks.* op that
+        # this stage fails to resolve still falls through to the safe fallback
+        # below, which does count it.
         _hooks_eager_import_all()
         handler = _REGISTRY.get(method)
         if handler is not None:
@@ -1915,6 +1933,9 @@ def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
     # above) and retry. Never-worse invariant.
     from coordinator_core.ops import _eager_import_all
 
+    _record_registry_fallback(
+        method, "safe-fallback", mapped=module_path is not None
+    )
     _eager_import_all()
     return _REGISTRY.get(method)
 
@@ -2707,6 +2728,7 @@ def dispatch_ops_from_hook(
         - Does NOT schedule concurrently. See above.
     """
     import asyncio
+    import time as _time
 
     op_list = list(ops)
     if not op_list:
@@ -2715,9 +2737,30 @@ def dispatch_ops_from_hook(
     async def _run_all() -> list:
         results: list = []
         for op_name, params in op_list:
-            response = await dispatch_message(
-                _hook_envelope(op_name, params, origin_worktree)
-            )
+            envelope = _hook_envelope(op_name, params, origin_worktree)
+            # Per-op process time, same contract as dispatch_from_hook's own
+            # sample. This loop is sequential and single-threaded inside one
+            # process -- it awaits each dispatch to completion before starting
+            # the next and never schedules concurrently (see this function's
+            # negative spec) -- so a `process_time()` delta taken around one
+            # iteration contains that op's CPU and no sibling's. That is the
+            # PER_OP_PROCESS case, not the accept-thread PROCESS_WIDE one,
+            # where `WORKER_POOL_SIZE` threads share a clock.
+            t_start = _time.time()
+            process_start = _time.process_time()
+            try:
+                response = await dispatch_message(envelope)
+            finally:
+                record_op_process_time(
+                    op=op_name,
+                    process_ms=(_time.process_time() - process_start) * 1000.0,
+                    measurement_scope=MEASUREMENT_SCOPE_PER_OP_PROCESS,
+                    source_path="hook_batch",
+                    t_start=t_start,
+                    repo_root=(
+                        resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
+                    ),
+                )
             try:
                 results.append(_unwrap_hook_response(op_name, response))
             except HookDispatchError as exc:

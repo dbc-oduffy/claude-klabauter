@@ -73,6 +73,34 @@ def _commit_chunk(
     _run_git(["commit", "-q", *message_args], root)
 
 
+def _resolve_chunk_coded(root: Path, plan_rel: str, chunk_id: str) -> None:
+    """Stamp `chunk_id`'s spine row `coded` against HEAD, the way
+    `plan-tasks-resolve --coded` does.
+
+    C3 (2026-08-21, "the close ceremony stops paying for the join") DELETED
+    the commit-subject/`Deliverable-Id` join outright -- see
+    `_determine_shipped`'s own docstring. Landing a commit whose subject
+    leads with the chunk id therefore proves nothing to the oracle; the two
+    surviving evidence paths are a `disposition: coded` row's own
+    `disposition_ref` and a legacy Dispatch Ledger `committed <sha>` cell,
+    both pure sha-ancestry checks. A fixture that only commits is a fixture
+    the oracle correctly reports as missing.
+    """
+    sha = _run_git(["rev-parse", "HEAD"], root).stdout.strip()
+    plan_file = root / plan_rel
+    lines = plan_file.read_text(encoding="utf-8").splitlines(keepends=True)
+    for idx, line in enumerate(lines):
+        if line.rstrip() == f"- id: {chunk_id}":
+            lines.insert(idx + 1, "  disposition: coded\n")
+            lines.insert(idx + 2, f"  disposition_ref: '{sha}'\n")
+            break
+    else:  # pragma: no cover -- fixture drift, not a runtime path
+        raise AssertionError(f"{chunk_id} not found in {plan_rel}")
+    plan_file.write_text("".join(lines), encoding="utf-8")
+    _run_git(["add", plan_rel], root)
+    _run_git(["commit", "-q", "-m", f"resolve {chunk_id} coded"], root)
+
+
 def _run_close_out(
     monkeypatch: pytest.MonkeyPatch, root: Path, plan_rel: str
 ) -> tuple[int, dict]:
@@ -92,6 +120,7 @@ class TestMissingChunkIdsRemedyMessage:
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
+        _resolve_chunk_coded(root, "plan.md", "C1")
 
         exit_code, result = _run_close_out(monkeypatch, root, "plan.md")
 

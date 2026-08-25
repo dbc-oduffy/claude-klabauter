@@ -48,21 +48,22 @@ import pytest
 # Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
 # FIRST, then assert non-empty registry BEFORE any per-op assertion.
 # ---------------------------------------------------------------------------
-import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
+import coordinator_core.ops  # noqa: F401 — kept so an import failure surfaces here; registers nothing (lazy-only since 2026-08-22)
 
-from coordinator_core.ipc import _REGISTRY
+from coordinator_core.ipc import _REGISTRY  # noqa: F401 — retained for per-test reads
+from coordinator_core.ops._registry_map import resolves
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after 'import coordinator_core.ops' — "
     "all @register_op decorators must have fired at module import time"
 )
-assert "queue.append" in _REGISTRY, (
-    "import guard failed: 'queue.append' not in _REGISTRY — "
-    "coordinator_core.ops.queue_append @register_op did not fire"
+assert resolves("queue.append"), (
+    "dispatchability guard failed: 'queue.append' not in _REGISTRY — "
+    "coordinator_core.ops.queue_append is neither in OP_MODULE_MAP nor already registered"
 )
-assert "queue.promote" in _REGISTRY, (
-    "import guard failed: 'queue.promote' not in _REGISTRY — "
-    "coordinator_core.ops.queue_promote @register_op did not fire"
+assert resolves("queue.promote"), (
+    "dispatchability guard failed: 'queue.promote' not in _REGISTRY — "
+    "coordinator_core.ops.queue_promote is neither in OP_MODULE_MAP nor already registered"
 )
 
 import coordinator_core.ops.queue_append as _qa_mod  # noqa: E402

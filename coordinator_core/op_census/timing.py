@@ -83,6 +83,54 @@ Negative-spec:
       it is a NEW axis alongside this one, keyed `process_time` honestly —
       not a redefinition of `handler_elapsed` in place, for the same reason
       `process_ms` was never a redefinition of `elapsed_ms`.
+    - CORRECTED 2026-08-23, recorded rather than swapped out. This is the
+      module's THIRD wrong-value-producer on the invocation-tax axis — the
+      `os.times()` note and the wall-clock/`process_time` naming pair above
+      are the first two — and the FIRST to reach the census's EMITTED
+      output rather than only its docstring; the first two were caught by a
+      peer audit before shipping, this one shipped and reported "every op
+      breaches" for an unknown span. `measure_invocation_tax_ms` spawned
+      `[sys.executable, "-S", "-c", "import coordinator_core.ops"]` — a
+      bare interpreter with `site` disabled, a shape nothing in production
+      runs. Measured on this box, this pass, n=5: mean 431.25ms / 598
+      modules against the 50ms bar (the bug row that filed this fix cites a
+      close but distinct n=3 sample, 395.8ms / 594 modules, taken in the
+      same shape — both over the bar by roughly 8x). `invocation_tax_dispositions`
+      applies that ONE measured floor uniformly to every op (by design —
+      see the top of this docstring), so it stamped `OVER_BAR` on the
+      entire population, always, and `cleared_ops` (which requires
+      `UNDER_BAR` on every axis) returned an empty set regardless of how
+      good `handler_elapsed` looked, for as long as this shipped.
+
+      DR-344 constraint 3 is "the cost to *get to* the warm engine must be
+      under 50ms." Nothing in production starts a bare interpreter and
+      imports `coordinator_core.ops` cold — the two real shapes are the
+      warm engine itself (0.0ms, package already resident) and the
+      one-shot/trampoline cold path, where op registration is lazy
+      unconditionally, so only the package's own `__init__` runs rather
+      than all ~55 op modules. The probe now measures THAT shape: `-S`
+      dropped (nothing in production disables `site`), and the child's
+      `env=` built here rather than by routing through
+      `coordinator/bin/lib/cc_invoke.py::child_env()`, whose job is
+      stripping that exact variable from children spawned along the
+      trampoline path. Measured on this box, this pass, under the new
+      shape: mean 6.25ms / 99 modules over 5 iterations (plain `-c`,
+      `canary_op_imported: False` confirmed on every sample) — under the
+      50ms bar, inverting every op's disposition on this axis from breach
+      to pass. See
+      `measure_invocation_tax_ms`'s docstring for the full shape argument
+      and the two traps (the `sys`-attribute boundary, the `child_env()`
+      stripper) a naive rewrite hits.
+
+      Also added: a uniformity guard at the `emit_dispositions` boundary
+      (`UniformInvocationTaxError`) that refuses to emit a cleared set when
+      the tax axis reports `OVER_BAR` for every op — the exact shape that
+      hid this incident. Uniformity itself is not the guarded-against
+      signature (this axis is a single floor broadcast to every op BY
+      DESIGN, so it is always uniform whenever it has data at all);
+      uniform `OVER_BAR` specifically is, because it is indistinguishable
+      from a broken measurement from inside this module and it is what
+      silently emptied `cleared_ops` here.
     - `no_data` never collapses into `under_bar`. `cleared_ops` dispatches
       the three `Disposition` states exhaustively with an explicit
       `RuntimeError` else-branch — no default branch — so a fourth state
@@ -112,6 +160,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -125,6 +174,8 @@ __all__ = [
     "AxisResult",
     "PROCESS_TIME_BAR_MS",
     "INVOCATION_TAX_BAR_MS",
+    "UniformInvocationTaxError",
+    "_raise_if_tax_uniformly_over_bar",
     "routed_entries",
     "handler_elapsed_by_op",
     "measure_invocation_tax_ms",
@@ -277,47 +328,150 @@ def handler_elapsed_by_op(
     return results
 
 
+#: Canary op module. `coordinator_core.ops` never imports this module as
+#: part of its own package init UNLESS an eager 55-module sweep ran — so
+#: its presence in the child's `sys.modules` after the probe import is proof
+#: registration was NOT lazy, distinguishing a genuine trampoline-cold-path
+#: sample from a silently-reverted bare-interpreter one.
+_TAX_PROBE_CANARY_MODULE = "coordinator_core.ops.ping"
+
 #: The measurement script run by `measure_invocation_tax_ms`. Reports the
-#: CHILD's own `time.process_time()` around importing the op registry — the
-#: dominant tax per the spike verdict (365.8ms of a 443.4ms cold import
-#: attributed to `coordinator_core.ops`). Deliberately never `os.times()`
-#: (child fields are always `0.0` on Windows — see module docstring).
+#: CHILD's own `time.process_time()` around importing the op registry, plus
+#: `module_count` and `canary_op_imported` so the caller can PROVE the child
+#: actually reached the shape it asked for rather than assuming it (see
+#: `measure_invocation_tax_ms`'s arming check). Deliberately never
+#: `os.times()` (child fields are always `0.0` on Windows — see module
+#: docstring).
 _TAX_PROBE_SCRIPT = (
     "import json, sys, time\n"
     "t0 = time.process_time()\n"
     "import coordinator_core.ops\n"
     "t1 = time.process_time()\n"
-    "sys.stdout.write(json.dumps({'process_time_ms': (t1 - t0) * 1000.0}))\n"
+    "sys.stdout.write(json.dumps({\n"
+    "    'process_time_ms': (t1 - t0) * 1000.0,\n"
+    "    'module_count': len(sys.modules),\n"
+    f"    'canary_op_imported': {_TAX_PROBE_CANARY_MODULE!r} in sys.modules,\n"
+    "}))\n"
 )
 
 
+class UniformInvocationTaxError(RuntimeError):
+    """Raised when the invocation-tax axis reports `OVER_BAR` for every op.
+
+    This axis is one measured floor broadcast identically to every op
+    (module docstring), so `OVER_BAR`-uniform is the exact signature a
+    broken measurement leaves: it is indistinguishable, from inside this
+    module, from "the fleet is genuinely uniform" — see
+    `emit_dispositions`'s uniformity guard. Raised there rather than
+    swallowed, because a permanently-OVER_BAR axis silently empties
+    `cleared_ops` (staff-eng Finding 7 / this axis's THIRD wrong-value
+    incident, module docstring) and a guard that only lived in-memory would
+    not have caught that emitted output was wrong.
+    """
+
+
+def _raise_if_tax_uniformly_over_bar(invocation_tax: Dict[str, AxisResult]) -> None:
+    """Raise `UniformInvocationTaxError` iff every op with an invocation-tax
+    result reports `OVER_BAR`.
+
+    Single source of truth for the discriminator both emission boundaries
+    need — `emit_dispositions` (this module) and
+    `coordinator_core/ops/op_census_report.py::_four_axis_report` (the real
+    emitted boundary `op_census.report` clients read). Before this factor-
+    out (review finding #6, slice C review of commit c7cb4a565) the same
+    condition, exception type, and near-identical message were hand-copied
+    verbatim into both call sites — nothing forced them to stay in sync, so
+    an edit to one (e.g. tightening the guard, or changing what counts as
+    "uniform") could silently leave the other, including the live one,
+    unchanged. That is exactly the "one cause, both halves wrong" pattern
+    this axis's own 2026-08-23 CORRECTED negative-spec block describes for
+    the original incident. See `UniformInvocationTaxError`'s docstring for
+    why uniform `OVER_BAR` specifically is the guarded-against signature.
+    """
+    tax_dispositions = {r.disposition for r in invocation_tax.values()}
+    if tax_dispositions == {Disposition.OVER_BAR}:
+        raise UniformInvocationTaxError(
+            f"invocation_tax is OVER_BAR for all {len(invocation_tax)} op(s) it "
+            "covers -- this is the signature of a broken measurement (module "
+            "docstring's 2026-08-23 CORRECTED block), not evidence that the "
+            "entire fleet breaches DR-344 constraint 3. Refusing to emit a "
+            "cleared set built on this axis."
+        )
+
+
 def measure_invocation_tax_ms(*, iterations: int = 5, timeout_secs: float = 30.0) -> float:
-    """Live-measure the interpreter-start-to-warm-engine floor.
+    """Live-measure the cost of reaching a warm engine via the TRAMPOLINE
+    COLD PATH — DR-344 constraint 3 ("the cost to *get to* the warm engine
+    must be under 50ms").
 
-    Spawns `iterations` child processes running `_TAX_PROBE_SCRIPT` and
-    averages the CHILD-reported `time.process_time()` values — the
-    ~15.6ms Windows process-time quantum makes a single sample pure noise
-    near the 50ms bar (§ Measured basis), so multiple iterations are
-    averaged rather than trusted individually.
+    Shape, and why (module's THIRD wrong-value incident on this axis, see
+    docstring's 2026-08-23 CORRECTED block): production never starts a bare
+    interpreter and imports `coordinator_core.ops` cold. The two real
+    shapes are the warm engine itself (0.0ms — the package is already
+    resident, nothing to measure) and the one-shot/trampoline cold path,
+    where op registration is lazy unconditionally, so only the package's
+    own `__init__` runs, not all ~55 op modules. This probe measures that
+    second shape.
 
-    Returns `float("nan")` if every child failed to report a usable value
-    (never raises) — callers must treat NaN as "no measurement", not as a
-    disposition input; `invocation_tax_dispositions` does this.
+    Laziness needs no arming and no channel: `ops/__init__.py` registers
+    nothing at import, so a child inherits the measured shape by default.
+    The canary above proves it per sample rather than assuming it. This
+    function builds its own `env=` rather than routing through
+    `coordinator/bin/lib/cc_invoke.py::child_env()` — simpler, and
+    independent of that function's own internal state, which is the actual
+    reason to prefer it here.
+
+    `-S` is dropped: nothing in production disables `site`, and doing so
+    was most of the old probe's inflated module count.
+
+    The canary is a RESIDUAL GUARD, and this is deliberately not called
+    per-sample proof. Each child reports whether `_TAX_PROBE_CANARY_MODULE`
+    reached its own `sys.modules`, and a hit raises `RuntimeError`. But
+    `_TAX_PROBE_SCRIPT` only does `import coordinator_core.ops`, and package
+    init now registers nothing at all — `_eager_import_all()` runs only for an
+    explicit caller (ipc's SAFE FALLBACK, the census enumerators). So the
+    branch cannot fire for a real child: the mechanism it used to catch (an
+    arming flag failing to take) no longer exists, and only the mocked unit
+    test reaches it.
+
+    Kept anyway, because it is free and the failure it would catch is real —
+    but a regression that made package init eager again would break every
+    consumer of `coordinator_core.ops` identically, and would be caught there
+    long before this probe was the thing that noticed. Do not read a passing
+    run as evidence that laziness was verified for that sample.
+
+    Multiple `iterations` are averaged because the ~15.6ms Windows
+    process-time quantum makes a single sample pure noise near the 50ms
+    bar. Returns `float("nan")` if every child failed to report a usable
+    value (never raises for THAT case) — callers must treat NaN as "no
+    measurement", not as a disposition input; `invocation_tax_dispositions`
+    does this.
     """
     samples: List[float] = []
+    child_env = dict(os.environ)
     for _ in range(iterations):
         try:
             proc = subprocess.run(
-                [sys.executable, "-S", "-c", _TAX_PROBE_SCRIPT],
+                [sys.executable, "-c", _TAX_PROBE_SCRIPT],
                 capture_output=True,
                 text=True,
                 timeout=timeout_secs,
+                env=child_env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except (OSError, subprocess.SubprocessError):
             continue
         try:
             payload = json.loads(proc.stdout)
+            if payload.get("canary_op_imported"):
+                raise RuntimeError(
+                    "measure_invocation_tax_ms: child registered ops eagerly "
+                    f"({_TAX_PROBE_CANARY_MODULE} was imported anyway). "
+                    "Registration is unconditionally lazy; an eager child "
+                    "silently reverts the measurement to the bare-interpreter "
+                    "shape this axis was rewritten to stop measuring (see "
+                    "module docstring's 2026-08-23 CORRECTED block)."
+                )
             samples.append(float(payload["process_time_ms"]))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
@@ -427,8 +581,28 @@ def emit_dispositions(
     asserts an op carrying `no_data` on any axis never appears there,
     checked against THIS emitted shape, not only the in-memory `Disposition`
     enum.
+
+    Uniformity guard, at THIS emitted-disposition boundary rather than only
+    in-memory (staff-eng Finding 7 — an enum-only check would not have
+    caught the incident this guards against, which was a wrong-value
+    PRODUCER, not a collapsed enum): the invocation-tax axis is one measured
+    floor broadcast identically to every op (module docstring), so a
+    genuinely broken measurement and a genuinely uniform fleet look
+    identical from inside this module. Raises `UniformInvocationTaxError`
+    if every op with an invocation-tax result reports `OVER_BAR` — the
+    specific shape that hid this axis's third wrong-value incident: it
+    silently made `cleared_ops` permanently empty while reporting "every op
+    breaches" as though it were a real finding. Uniform `UNDER_BAR` is not
+    flagged — it is what a healthy, passing measurement looks like by this
+    axis's own single-floor design, and is not the failure signature this
+    guard exists for.
+
+    Discriminator itself lives in `_raise_if_tax_uniformly_over_bar`, shared
+    with `op_census_report.py::_four_axis_report` (review finding #6, slice
+    C) so the two emission boundaries cannot drift apart.
     """
     ops = sorted(handler_elapsed.keys() | invocation_tax.keys())
+    _raise_if_tax_uniformly_over_bar(invocation_tax)
     passing = cleared_ops(handler_elapsed, invocation_tax)
     return {
         "ops": {

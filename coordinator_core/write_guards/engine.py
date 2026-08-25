@@ -33,10 +33,20 @@ crash, matching the DoE dispatcher's per-check isolation).
 Stateless / spawn-per-call (DR-215). stdin-based (no argv params) so it is not
 exposed to the Windows ARG_MAX / fcntl regressions that affect argv/locked_rmw
 paths.
+
+Prior-question check (docs/plans/2026-08-22-the-import-path-costs-nothing.md
+chunk C10): discovery itself does need to happen on every Write/Edit/MultiEdit
+/NotebookEdit — a write cannot be evaluated without first knowing which guards
+match its path/tool — so the question is not "should this run at all" but
+"does it need to cost 53 imports to run". `_discover_guards()` below is
+the answer: two-stage lazy import (static AST metadata scan, then a deferred
+real import only for guards actually reached this call), not memoization —
+see `evaluate()`'s own docstring for why those are orthogonal fixes.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import pkgutil
@@ -81,8 +91,151 @@ class _Guard:
         self.check = check
 
 
+def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
+    """Stage ONE of the two-stage lazy import (reusing the shape already shipped
+    by the DoE-side registry, 9 guards, and the Stop-family registry, 4 guards
+    -- DoE-claude repo's `coordinator/hooks/scripts/_guard_runner.py`'s
+    `GuardScopeDescriptor` / `build_registry_entries`): read `CLASS`, `MATCHERS`,
+    `PRIORITY` off the module's SOURCE via `ast.parse`, without importing it or
+    any of its (often heavy, transitively-chained) dependencies.
+
+    Every write_guards module declares these three names as bare top-level
+    literal assignments (INTERFACE.md) — no expression evaluation, no executed
+    imports, needed to read them. Returns `None` when the static scan cannot
+    establish a confident literal value (missing name, non-literal expression,
+    unparseable source) — the caller's job is to fall back to a real import for
+    just that one module, correctness taking precedence over speed for the rare
+    case a guard's metadata is not a plain literal.
+    """
+    path = Path(_PKG_DIR) / f"{name}.py"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return None
+    cls_val: Any = None
+    matchers_val: Any = None
+    priority_val: Any = 100
+    found_cls = False
+    found_matchers = False
+    for node in tree.body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            continue
+        target = node.targets[0].id
+        if target not in ("CLASS", "MATCHERS", "PRIORITY"):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except Exception:
+            return None
+        if target == "CLASS":
+            cls_val, found_cls = value, True
+        elif target == "MATCHERS":
+            matchers_val, found_matchers = value, True
+        elif target == "PRIORITY":
+            priority_val = value
+    if not (found_cls and found_matchers):
+        return None
+    if cls_val not in _VALID_CLASSES:
+        return None
+    if not isinstance(matchers_val, (list, tuple)):
+        return None
+    matchers_val = [m for m in matchers_val if m in _VALID_MATCHERS]
+    if not matchers_val:
+        return None
+    if not isinstance(priority_val, int):
+        return None
+    return cls_val, matchers_val, priority_val
+
+
+def _make_lazy_check(
+    name: str, import_failed: List[str]
+) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Stage TWO of the two-stage lazy import: the real `importlib.import_module`
+    is deferred into this closure, reached only when the guard it belongs to is
+    actually about to run its `check()` — i.e. only for guards up to and
+    including whichever one decides the call (hard-deny) or fires first
+    (advisory, non-aggregate). A guard past that point is never imported at all
+    for this call.
+
+    A raise on import is recorded into `import_failed` here, at invocation
+    time, instead of upfront during discovery — the direct consequence of
+    going lazy: a guard whose import would have failed but that this call
+    never reached (short-circuited past) is not detected as failing THIS call.
+    `discover_guard_names()` (full eager discovery, unchanged) remains the
+    surface that always surfaces every import failure regardless of
+    short-circuiting.
+    """
+
+    def _check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            mod = importlib.import_module(f"{_PKG_NAME}.{name}")
+        except Exception:
+            if name not in import_failed:
+                import_failed.append(name)
+            return None
+        return mod.check(payload)
+
+    return _check
+
+
 def _discover_guards() -> Tuple[List[_Guard], List[str]]:
+    """Hot-path discovery, called by `evaluate()` on every Write/Edit/MultiEdit
+    /NotebookEdit — and the monkeypatch seam every existing `evaluate()` test
+    uses to inject fake guards; keep this name stable. Builds the same
+    `(guards, import_failed)` shape as `_discover_guards_full()` but never
+    imports a guard module merely to learn its `CLASS`/`MATCHERS`/`PRIORITY`
+    (`_cheap_guard_metadata`, stage one). The real import of a guard's body is
+    deferred to `_make_lazy_check` (stage two) and only happens if
+    `evaluate()` actually reaches that guard's `check()` this call.
+
+    A module the static scan cannot confidently classify falls back to the
+    original eager import for THAT module only — same filtering rules as
+    `_discover_guards_full()` (broken/non-guard modules silently absent, a
+    raise on import recorded into `import_failed`).
+    """
+    guards: List[_Guard] = []
+    import_failed: List[str] = []
+    for mod_info in pkgutil.iter_modules([_PKG_DIR]):
+        name = mod_info.name
+        if name in ("engine", "__main__") or name.startswith("_"):
+            continue
+        meta = _cheap_guard_metadata(name)
+        if meta is None:
+            try:
+                mod = importlib.import_module(f"{_PKG_NAME}.{name}")
+            except Exception:
+                import_failed.append(name)
+                continue
+            cls = getattr(mod, "CLASS", None)
+            matchers = getattr(mod, "MATCHERS", None)
+            check = getattr(mod, "check", None)
+            priority = getattr(mod, "PRIORITY", 100)
+            if cls not in _VALID_CLASSES or not callable(check):
+                continue
+            if not isinstance(matchers, (list, tuple)):
+                continue
+            matchers = [m for m in matchers if m in _VALID_MATCHERS]
+            if not matchers:
+                continue
+            guards.append(_Guard(name, cls, list(matchers), int(priority), check))
+            continue
+        cls, matchers, priority = meta
+        guards.append(
+            _Guard(name, cls, matchers, priority, _make_lazy_check(name, import_failed))
+        )
+    return guards, import_failed
+
+
+def _discover_guards_full() -> Tuple[List[_Guard], List[str]]:
     """Import every sibling module exposing the guard interface; skip the rest.
+
+    Full-introspection path, used ONLY by `discover_guard_names()` (below) —
+    never on the per-write hot path (that's `_discover_guards()`, the lazy
+    one). Kept eager and complete on purpose: a caller wanting every import
+    failure surfaced regardless of any evaluate()-style short-circuit (CI's
+    `test_guard_registry_manifest.py`, an operator-visible signal) needs the
+    unconditional full scan this function still performs.
 
     Returns `(guards, import_failed)`. `import_failed` names modules that
     RAISED on import — the anomaly this return exists to surface (see
@@ -135,7 +288,7 @@ def discover_guard_names() -> Tuple[List[str], List[str]]:
     one (unresolvable claude-klabauter root, missing dependency, a Windows-only import
     quirk on one operator's machine) is exactly what this runtime signal is for.
     """
-    guards, import_failed = _discover_guards()
+    guards, import_failed = _discover_guards_full()
     return [g.name for g in guards], import_failed
 
 
@@ -168,7 +321,21 @@ def evaluate(
     `_discover_guards()` runs fresh on every call within a process (no
     memoization here — see `docs/plans/2026-08-06-windows-hot-path-less-
     work-per-interpreter.md` chunk C5, deliberately `wont_do`); a repeat
-    caller wanting to avoid re-discovery should memoize its own result.
+    caller wanting to avoid re-discovery should memoize its own result. That
+    question (memoizing a repeat caller's own result across TWO calls in one
+    process) is orthogonal to the two-stage lazy-import fix in this chunk (not
+    importing 53 modules' worth of transitive dependencies on the FIRST call):
+    a cache only ever saves the second of at most two calls per process, but
+    every hook invocation is a fresh process, so it never touches this cost —
+    only not-importing does. `_discover_guards()` reads each guard
+    module's `CLASS`/`MATCHERS`/`PRIORITY` via a static AST scan of its
+    source (`_cheap_guard_metadata`), never importing the module itself; the
+    real import (`_make_lazy_check`) is deferred until `evaluate()` actually
+    reaches that guard's `check()` in PRIORITY order this call — a guard
+    short-circuited past (a hard-deny fired before it, or the first-wins
+    advisory already fired) is never imported at all. The two-stage shape
+    mirrors what the DoE-side (9 guards) and Stop-family (4 guards) registries
+    already ship.
 
     AGGREGATION (opt-in, `docs/plans/2026-08-06-windows-hot-path-less-work-
     per-interpreter.md` chunk C6): pass `aggregate=True` to get EVERY

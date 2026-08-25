@@ -319,6 +319,8 @@ def test_compose_catering_process_time_within_ac6_ceiling(
     reason="sibling DoE-claude checkout not resolvable on this machine "
     "(see coordinator_core.testing.doe_root.resolve_doe_root)",
 )
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compose_catering_process_time_companion_write_widest_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -385,6 +387,8 @@ def test_compose_catering_process_time_companion_write_widest_type(
     reason="sibling DoE-claude checkout not resolvable on this machine "
     "(see coordinator_core.testing.doe_root.resolve_doe_root)",
 )
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_every_catered_type_composes_under_the_char_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

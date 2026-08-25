@@ -1095,112 +1095,34 @@ def _compute_residue(
 async def _commit_group(
     worktree_root: str, group: CommitGroup, session_id: Optional[str] = None
 ) -> GroupResult:
-    """Run one group through `ceremony.scoped_git_commit`, and classify the
-    result into `committed` / benign-no-op / genuine-`commit_failed` -- the
-    op's own response conflates "committed": False across THREE materially
-    different outcomes (see `scoped_git_commit._handler`'s own docstring):
-    the benign already-committed no-op (`reason: "empty-commit-set"`,
-    `commit_failed: False`), a genuine gate/commit failure
-    (`commit_failed: True`, `diagnostics: [...]`, no `error` key at all --
-    this was previously swallowed here, since this function only ever read
-    `result.get("error")`), and a handler-level validation error (`error`
-    set directly, `commit_failed` absent). All three collapse to `error`/
-    `commit_failed` values a caller can act on without re-deriving them.
-    """
-    from coordinator_core.ipc import get_op_handler
-    from coordinator_core.op_budget_suspension import OpSuspendedError
+    """Killed 2026-08-23 (PM ruling, DR-344): this function composed
+    `ceremony.scoped_git_commit` in-process via `ipc.get_op_handler` — that
+    op is now deleted, not suspended, and nothing replaces it. Resolving a
+    permanently-deleted op by name is a defect in itself (the suspension
+    machinery this used to route through, `OpSuspendedError`, presumes a
+    registered-but-refusing op, which is no longer this function's
+    situation), so this no longer attempts resolution at all: every call
+    returns the same `commit_failed` result the old `handler is None`
+    branch did, uncaught, loud, and non-blocking (DR-227 — this function's
+    caller documents that it never raises).
 
-    try:
-        handler = get_op_handler("ceremony.scoped_git_commit")
-    except OpSuspendedError as exc:
-        # A SUSPENDED op is registered and would work; it is refused because it
-        # blew the box budget (`coordinator_core.op_budget_suspension`). That
-        # refusal is meant to be LOUD, and it stays loud here: the group lands
-        # in `failed_groups` carrying the refusal message verbatim, the report
-        # renders it, `_log_failed_groups_diagnostic` writes it to the sink the
-        # unattended SessionEnd hook can actually surface, and `main` exits
-        # non-zero on it.
-        #
-        # Loud is not the same as UNCAUGHT, and the difference is this
-        # function's whole reason for catching. `auto_commit_session_async`
-        # documents that it never raises (DR-227, advisory-only), and its
-        # production caller is a SessionEnd hook that reads an exit code and
-        # nothing else. Let the exception through and that hook gets a
-        # traceback on a path whose contract is "report why, change nothing" --
-        # the operator learns less, not more, than the refusal message would
-        # have told them. Kept DISTINCT from the `handler is None` arm below
-        # for the same reason `OpSuspendedError` exists at all: "suspended"
-        # and "never registered" are different facts and must not collapse.
-        return {
-            "paths": group["paths"],
-            "message": group["message"],
-            "committed": False,
-            "sha": None,
-            "push_state": None,
-            "error": str(exc),
-            "commit_failed": True,
-            "reason": None,
-        }
-    if handler is None:
-        return {
-            "paths": group["paths"],
-            "message": group["message"],
-            "committed": False,
-            "sha": None,
-            "push_state": None,
-            "error": "ceremony.scoped_git_commit not registered",
-            "commit_failed": True,
-            "reason": None,
-        }
-    params = {
-        "worktree_root": worktree_root,
-        "paths": group["paths"],
-        "message": group["message"],
-        "prose": group.get("prose", ""),
-    }
-    if session_id:
-        # Name the committing session explicitly rather than letting the op
-        # re-resolve it from the ambient environment. THIS module already
-        # resolved it (`main`'s `--session`, or `core.resolve_session_id`) and
-        # computed `safe_paths` FROM it, so an op that re-derives its own
-        # answer can disagree with the very scope the pathspec was built from
-        # -- and does, whenever the caller passed `--session <id>` for a
-        # session other than the ambient one (the unattended SessionEnd-hook
-        # shape). The op ignores this key on any build that predates its
-        # sink-side scope gate.
-        params["session_id"] = session_id
-    # `ceremony.scoped_git_commit`'s handler is a PLAIN SYNC `def` as of
-    # `3241c7c95` (see that commit for the dispatch-timeout rationale).
-    #
-    # Called plainly rather than via an await-if-awaitable adapter: handler
-    # sync-vs-async is a per-op fact, not a per-call-site unknown — the one
-    # place that legitimately branches on it is `ipc.dispatch_message`, which
-    # must serve every registered op. A composer resolving ONE named op knows
-    # that op's shape, and tolerating both here would hide the same drift a
-    # second time instead of failing on it.
-    result = handler(params)
-    committed = bool(result.get("committed"))
-    commit_failed = bool(result.get("commit_failed")) if not committed else False
-    error = result.get("error")
-    if not committed and commit_failed and not error:
-        diagnostics = result.get("diagnostics") or []
-        error = "; ".join(str(d) for d in diagnostics) if diagnostics else "commit failed"
-    if not committed and error and not commit_failed:
-        # A handler-level validation error (missing/empty required param) --
-        # never reachable in practice from this module's own callers (every
-        # group here always supplies non-empty paths/message), but treated
-        # as a genuine failure defensively rather than silently matching the
-        # benign empty-commit-set no-op shape.
-        commit_failed = True
+    This is the ONLY mutating step in this module's auto-commit path
+    (`auto_commit_session_async` / `auto_commit_session`) — with it gone,
+    that path can no longer commit anything; it degrades to reporting
+    every group as a failed commit. See
+    `docs/reference/scoped-commit-guarantees.md` for what a rebuilt
+    committer must guarantee; wiring one back in here is that rebuild's
+    job, not this deletion's.
+    """
     return {
         "paths": group["paths"],
         "message": group["message"],
-        "committed": committed,
-        "sha": result.get("sha"),
-        "push_state": result.get("push_state"),
-        "error": error,
-        "commit_failed": commit_failed,
-        "reason": result.get("reason"),
+        "committed": False,
+        "sha": None,
+        "push_state": None,
+        "error": "ceremony.scoped_git_commit was deleted 2026-08-23 (DR-344) and has no replacement wired here yet",
+        "commit_failed": True,
+        "reason": None,
     }
 
 

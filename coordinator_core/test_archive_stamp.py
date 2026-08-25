@@ -3106,10 +3106,9 @@ class TestRepairArchivedDeploymentState:
 # ---------------------------------------------------------------------------
 # Regression: archive_stamp <-> handoff_archive_transition circular import.
 #
-# archive_stamp imports coordinator_core.ops.session_context, whose package
-# import (coordinator_core.ops/__init__.py's eager-import sweep, unless
-# COORDINATOR_CORE_LAZY_OPS is set) reaches handoff_archive_transition in
-# turn. If handoff_archive_transition imports archive_stamp's _run_git /
+# archive_stamp imports coordinator_core.ops.session_context, whose targeted
+# import reaches handoff_archive_transition in turn. If
+# handoff_archive_transition imports archive_stamp's _run_git /
 # stamp_shipped_in at module top-level, that back-edge fires while
 # archive_stamp is still mid-import (its own _run_git isn't defined yet) —
 # ImportError: cannot import name '_run_git' from partially initialized

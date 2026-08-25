@@ -98,9 +98,9 @@ def read_and_collapse(central_state_root: Path, *, default_repo: str = "") -> Go
         goal_id = record.get("goal_id", "")
         if not goal_id:
             # Deferred (function-local, not module-scope): a module-scope import here
-            # closes a real circular-import cycle — envelope -> sections/goals ->
-            # wire_read -> goal_append -> envelope (goal_append imports
-            # resolve_context from emit.envelope at module scope). Do not hoist.
+            # closes a real circular-import cycle — resolvers -> sections/goals ->
+            # wire_read -> goal_append -> resolvers (goal_append imports
+            # resolve_context from emit.resolvers at module scope). Do not hoist.
             from coordinator_core.ops.goal_append import _goal_id  # noqa: PLC0415
 
             goal_id = _goal_id(

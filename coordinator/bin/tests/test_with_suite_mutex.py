@@ -21,7 +21,12 @@ own runner). This suite pins:
 5. An interrupted (SIGINT/SIGTERM-equivalent) run does not leave the lock
    behind.
 6. The `--` separator is required and rejected when absent or empty.
-7. Invoked as an ENTRYPOINT via the sanctioned `python3 <path>` invocation
+7. A `--max-runtime` ceiling kills a child that stops making progress,
+   kills its DESCENDANTS too, releases the mutex, and exits 124 -- the
+   wedge that made this necessary is an xdist controller deadlock, where
+   pytest's own `--timeout`/`--session-timeout` provably cannot fire
+   because no test is running to fire them.
+8. Invoked as an ENTRYPOINT via the sanctioned `python3 <path>` invocation
    (mode 100644, no shebang, per the ratified `coordinator/bin/`
    convention, `e167d08d1`) across a real subprocess boundary, the child's
    stdout and stderr both reach the parent's streams.
@@ -421,3 +426,87 @@ def test_bare_name_resolves_a_cmd_shim_on_windows(tmp_path):
 
     assert "WinError 2" not in result.stderr, result.stderr
     assert result.returncode == 7, (result.returncode, result.stdout, result.stderr)
+
+
+def test_max_runtime_kills_a_stuck_child_and_releases_the_lock(tmp_path):
+    """A child that never exits is killed at the ceiling, not waited on forever.
+
+    Regression for the 2026-08-25 fast-tier hang: an xdist worker died
+    uninterruptibly, the controller blocked in `dsession.loop_once` ->
+    `queue.get()`, every surviving worker sat idle in `execnet ... serve()`,
+    and because NO test was running neither `--timeout` nor
+    `--session-timeout` could fire. The run hung indefinitely while holding
+    the machine-wide mutex, which blocks every other session's suite -- so
+    the lock being gone afterwards is the load-bearing assertion here, not
+    the exit code.
+    """
+    env = _base_env(tmp_path)
+    started = time.monotonic()
+    result = _run(
+        ["--max-runtime", "5", "--", sys.executable, "-c", "import time; exec('while True: time.sleep(5)')"],
+        env=env,
+        timeout=90,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 124, result.stderr
+    assert not _lock_dir(tmp_path).exists(), "ceiling must release the mutex"
+    # Generous upper bound: the ceiling plus terminate/kill escalation, sized so
+    # a loaded box cannot flake it. The point is bounded-vs-unbounded, not a
+    # tight deadline -- the failure this guards against never returned AT ALL.
+    assert elapsed < 60, f"ceiling did not bound the run (took {elapsed:.1f}s)"
+
+
+def test_max_runtime_kills_grandchildren_not_just_the_direct_child(tmp_path):
+    """The tree, not the child. pytest-xdist's workers are children of the
+    controller, and killing only the controller leaves them alive in
+    `execnet ... serve()` holding real memory -- observed 2026-08-25, where
+    six orphaned workers had to be killed by hand afterwards.
+    """
+    psutil = pytest.importorskip("psutil")
+    env = _base_env(tmp_path)
+    marker = tmp_path / "grandchild_pid.txt"
+    result = _run(
+        ["--max-runtime", "5", "--", sys.executable, "-c", 'import subprocess, sys, pathlib, time; gc = subprocess.Popen([sys.executable, \'-c\', "import time; exec(\'while True: time.sleep(5)\')"]); pathlib.Path(sys.argv[1]).write_text(str(gc.pid)); exec(\'while True: time.sleep(5)\')', str(marker)],
+        env=env,
+        timeout=90,
+    )
+
+    assert result.returncode == 124, result.stderr
+    assert marker.is_file(), "grandchild never started -- test did not exercise the tree"
+    grandchild_pid = int(marker.read_text().strip())
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if not psutil.pid_exists(grandchild_pid):
+            break
+        time.sleep(0.25)
+    else:
+        # Never leak a spinning orphan out of a failing test.
+        try:
+            psutil.Process(grandchild_pid).kill()
+        except psutil.Error:
+            pass
+        pytest.fail(f"grandchild {grandchild_pid} survived the ceiling -- tree kill regressed")
+
+
+def test_max_runtime_zero_is_unbounded_and_a_normal_child_is_untouched(tmp_path):
+    """`0` disables the ceiling, and a command that finishes normally is never
+    interfered with -- the ceiling is a backstop, not a budget.
+    """
+    env = _base_env(tmp_path)
+    result = _run(
+        ["--max-runtime", "0", "--", sys.executable, "-c", "import sys; sys.exit(3)"],
+        env=env,
+    )
+    assert result.returncode == 3
+    assert not _lock_dir(tmp_path).exists()
+
+
+def test_max_runtime_rejects_a_non_numeric_value(tmp_path):
+    env = _base_env(tmp_path)
+    result = _run(
+        ["--max-runtime", "soon", "--", sys.executable, "-c", "print(1)"], env=env
+    )
+    assert result.returncode == 2
+    assert "--max-runtime" in result.stderr

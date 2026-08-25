@@ -262,25 +262,26 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     # the brief was authored, or the brief's name was informal). Same site,
     # same settled reason; corrected function name so the enumerator's
     # actual output matches.
-    "ops/fleet/memo_send.py::_commit_delivered_memo": {
-        "reason": "ineligible: commits into the RECEIVER's repo -- releasing "
-        "the local sid's claims against a peer worktree is meaningless",
-        "confirmed": True,  # settled ineligible per plan, not a C3a open question
-    },
     "ops/ceremony/commit_exec_bit.py::_handler": {
         "reason": "ineligible: commits with no pathspec at all, so a release "
         "keyed off \"what this commit covered\" has no bounded answer",
         "confirmed": True,  # settled ineligible per plan, not a C3a open question
     },
+    # DELIBERATELY RETAINED WHILE STALE (2026-08-25). `test_no_stale_allowlist_
+    # entry` fails on these two, and removing them to get green would launder a
+    # coverage regression into a pass. Both functions are alive and still commit --
+    # they stopped being `git commit` argv sites when the DR-211 plumbing rewrite
+    # moved them to `git commit-tree` + `git update-ref`, a fifth mechanism this
+    # enumerator does not track. So two live commit paths now sit outside the
+    # tripwire entirely. The fix is a fifth tracked mechanism plus a release-
+    # coverage decision for the plumbing shape, which is the plumbing rewrite's
+    # premise to answer, not this allowlist's. Delete these rows only alongside
+    # that decision.
     "ops/fleet/_common.py::archive_and_commit": {
         "reason": "release",
         "confirmed": False,
     },
     "ops/fleet/_common.py::rm_and_commit": {
-        "reason": "release",
-        "confirmed": False,
-    },
-    "ops/session/boot_sweep.py::_commit_consumed_metadata": {
         "reason": "release",
         "confirmed": False,
     },

@@ -252,28 +252,26 @@ def test_render_is_resolved_at_call_time_not_trusted_off_a_persisted_decision_ob
     assert second["address"] != persisted_decision_object["gates"]["sender_reachability"]["address"]
 
 
-def test_sentinel_literal_agrees_with_the_send_path_that_writes_it():
-    """The sentinel is mirrored, not imported — pin the two copies together.
+def test_sentinel_literal_matches_the_historical_send_path_spelling():
+    """Pin `pickup_assemble._SENT_BY_UNRESOLVED` to the literal every already-
+    delivered memo on disk was written with.
 
-    `pickup_assemble` deliberately re-declares `_SENT_BY_UNRESOLVED` rather
-    than importing it from `ops.fleet.memo_send`, to keep the send path and
-    the pickup path from acquiring a module-level import coupling. That is a
-    considered tradeoff, but a duplicated magic string drifts silently: if
-    the writer's sentinel changed, the reader would stop recognising it and
-    every unresolved-sender memo would fall through to `resolve_address`
-    with a non-uuid string, rendering `not_reachable` — a wrong fact, and a
-    quiet one. Test-time coupling costs nothing and makes that drift loud.
+    `ops.fleet.memo_send` (the writer that used to own this sentinel) and its
+    CLI counterpart (`coordinator/bin/cross-repo-memo.py`'s own copy) were
+    both removed 2026-08-23 when memo.send was killed (PM ruling: a killed op
+    dies outright, no stub) — there is no live writer of `sent_by:` left to
+    pin this reader against. `pickup_assemble` still needs its own copy: it
+    reads `sent_by:` off memos already delivered under the old op, and a
+    changed literal here would silently stop recognising them (every
+    unresolved-sender memo would fall through to `resolve_address` with a
+    non-uuid string, rendering `not_reachable` — a wrong fact, and a quiet
+    one). Pinned to the literal itself now, not a sibling module's copy.
     """
-    # A third copy lives in coordinator/bin/cross-repo-memo.py (a bin script,
-    # not importable here without the loader that file needs) — the fuller
-    # three-way pin lives at
-    # coordinator/tests/test_cross_repo_memo_self_receipt_sent_by.py::test_sentinel_literal_agrees_with_the_send_and_read_paths.
-    from coordinator_core.ops.fleet import memo_send
-
-    assert pa._SENT_BY_UNRESOLVED == memo_send._SENT_BY_UNRESOLVED, (
-        "pickup_assemble._SENT_BY_UNRESOLVED and ops.fleet.memo_send._SENT_BY_UNRESOLVED "
-        "are duplicated on purpose (no import coupling between send and read paths) — "
-        "they drifted apart. Re-sync the literal, do not delete either copy."
+    assert pa._SENT_BY_UNRESOLVED == "unresolved", (
+        "pickup_assemble._SENT_BY_UNRESOLVED must keep reading the literal "
+        "every already-delivered memo's sent_by: field was written with "
+        "(the writer that used it, memo.send, was killed 2026-08-23 — this "
+        "reader still has to make sense of the memos it left behind)."
     )
 
 

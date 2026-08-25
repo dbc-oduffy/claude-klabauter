@@ -169,7 +169,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
 )
-from coordinator_core.ops.fleet.memo_send import (
+from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _memo_filename,
     resolve_sender_id,

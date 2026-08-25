@@ -1,7 +1,7 @@
 """
 dag.py — Python port of bin/lib/walk-handoff-dag.js.
 
-Port source: plugins/coordinator/bin/lib/walk-handoff-dag.js
+Port source: plugins/coordinator-claude/coordinator/bin/lib/walk-handoff-dag.js
 Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § Primitive interface
 
 Purpose: edge-kind-aware handoff DAG traversal primitive. Shared kernel for forward
@@ -1371,7 +1371,9 @@ _resolve_target = resolve_target
 # input (C6 pointer-normalization seam, 2026-07-26).
 # ---------------------------------------------------------------------------
 
-def build_handoff_id_index(paths: List[str]) -> Dict[str, str]:
+def build_handoff_id_index(
+    paths: List[str], metas: Optional[Dict[str, dict]] = None
+) -> Dict[str, str]:
     """Map frontmatter `handoff_id` -> absolute path, for the given handoff paths.
 
     This is the missing link for `predecessor_id` / `origin_handoff_id`
@@ -1397,7 +1399,14 @@ def build_handoff_id_index(paths: List[str]) -> Dict[str, str]:
     """
     index: Dict[str, str] = {}
     for p in paths:
-        meta = _read_meta(p)
+        # `metas` is a caller-supplied read the same way build_reverse_edge_index
+        # takes one: this index otherwise re-reads the entire corpus a caller
+        # has usually just read for its own reasons (62.5ms over 267 handoffs,
+        # measured on the boot backstop). Keyed by os.path.abspath, matching
+        # the key this function itself writes.
+        meta = None if metas is None else metas.get(os.path.abspath(p))
+        if meta is None:
+            meta = _read_meta(p)
         hid = meta.get('handoff_id') if meta else None
         if hid is None:
             continue
@@ -1725,6 +1734,157 @@ def walk_forward(
 # ---------------------------------------------------------------------------
 # Exported: referenced_by — DIRECT non-transitive reverse-membership test
 # ---------------------------------------------------------------------------
+
+def build_reverse_edge_index(
+    live_set: List[str],
+    handoff_dir: Optional[str] = None,
+    id_index_source: Optional[List[str]] = None,
+    metas: Optional[Dict[str, dict]] = None,
+) -> Dict[str, Any]:
+    """One forward pass over live_set producing a reverse-edge index that
+    `referenced_by_indexed` answers any number of single-target lookups from.
+
+    WHY THIS EXISTS. `referenced_by` re-walks the entire live_set on every
+    call — one `_read_meta` per node per call — because the only
+    target-dependent step is the final path comparison. A caller asking about
+    N candidates over an M-node index therefore pays N x M reads to answer a
+    question that needs M. Measured on `session.boot_sweep`'s backstop before
+    this function existed: 176 candidates over ~548 nodes = **96,534 file
+    opens, 21.5s in `_read_meta`**, against a 200ms budget.
+
+    `_FRONTMATTER_CACHE` does NOT solve this and is not the defect. It caches
+    PARSING; every `_read_meta` still does `read_bytes()` + sha256 by design,
+    to close the TOCTOU window between stamp-read and content-read. The cost
+    is the reads, not the parses, so the fix has to be asking fewer times.
+
+    Equivalence to `referenced_by`, which is what makes this safe to swap in:
+    the per-node work (read frontmatter, enumerate `handoff_edges`, resolve
+    each ref through `resolve_target`) is IDENTICAL and target-independent, so
+    it is hoisted verbatim. Only the comparison against `abs_target` is
+    per-target, and that is what `referenced_by_indexed` does in memory. Both
+    resolution outcomes are preserved: a ref that resolves to a disk path is
+    keyed by its absolute path, and one that is unresolvable or tier-3-only
+    keeps the SAME basename fallback (including the `_ref_names_foreign_family`
+    exclusion) under a separate key space.
+
+    Tier 3 stays off here for exactly the reason `referenced_by` names in its
+    own negative-spec: it can only return the sentinel, never a disk path, and
+    a live-membership test needs a disk path on both sides.
+
+    Returns an opaque index. Treat it as such — pass it to
+    `referenced_by_indexed`, do not read its shape.
+    """
+    if handoff_dir is None:
+        if live_set:
+            handoff_dir = os.path.dirname(live_set[0])
+        else:
+            raise ValueError(
+                "dag.build_reverse_edge_index: handoff_dir is required when "
+                "live_set is empty"
+            )
+    repo_root = _repo_root_from_handoff_dir(handoff_dir)
+    all_kinds = set(ARCHIVAL_EDGE_KINDS)
+
+    # The id index resolves `*_id` edge aliases to paths, so it must span the
+    # caller's FULL corpus even when the scan set below is narrowed — a live
+    # node's id-form ref is resolved against every known handoff, not just the
+    # ones being scanned for edges.
+    id_index: Optional[Dict[str, str]] = None
+    if any(EDGE_KIND_FIELD_ALIASES.get(k) for k in all_kinds):
+        id_index = build_handoff_id_index(
+            id_index_source if id_index_source is not None else live_set,
+            metas=metas,
+        )
+
+    by_abspath: Dict[str, List[Tuple[str, str]]] = {}
+    by_basename: Dict[str, List[Tuple[str, str]]] = {}
+
+    # NEGATIVE SPEC — do not "parallelise the reads". Tried and reverted
+    # 2026-08-23: an 8-worker ThreadPoolExecutor prefetching `_read_meta`
+    # across this scan moved p50 from 546.9ms to 562.5ms over n=12, i.e.
+    # nothing outside noise. `_read_meta` is not I/O-bound in the way the
+    # shape suggests — its cost is the sha256 stamp and the frontmatter parse,
+    # both CPU-bound and GIL-serialised, so threads add a pool and buy no
+    # latency. Reach for a different lever (fewer nodes, cheaper per-node
+    # work), not a wider one.
+    for node_abs_path in live_set:
+        # `metas` lets a caller that has ALREADY read the corpus hand its
+        # parsed frontmatter in rather than making this scan read every file a
+        # second time. `_read_meta`'s cache does not close that gap: it is
+        # keyed by (abspath, content-hash), so every call still pays the read
+        # and the hash to discover whether it hit. Measured on the boot
+        # backstop, where three phases each walked the same 266 handoffs:
+        # 31ms + 47ms + 94ms, most of it the same bytes read three times.
+        meta = None if metas is None else metas.get(node_abs_path)
+        if meta is None:
+            meta = _read_meta(node_abs_path)
+        node_handoff_dir = os.path.dirname(node_abs_path)
+        for kind in all_kinds:
+            for raw_ref in handoff_edges(meta, {kind}):
+                resolved_ref = resolve_target(
+                    raw_ref,
+                    node_handoff_dir,
+                    repo_root,
+                    id_index=id_index,
+                    include_history_tier=False,
+                )
+                if resolved_ref is None or resolved_ref == 'git-history':
+                    if not _ref_names_foreign_family(raw_ref):
+                        by_basename.setdefault(
+                            os.path.basename(raw_ref), []
+                        ).append((node_abs_path, kind))
+                    continue
+                by_abspath.setdefault(
+                    os.path.abspath(resolved_ref), []
+                ).append((node_abs_path, kind))
+
+    return {
+        'by_abspath': by_abspath,
+        'by_basename': by_basename,
+        'live_set_size': len(live_set),
+    }
+
+
+def referenced_by_indexed(
+    target: str,
+    index: Dict[str, Any],
+    edge_kinds: Optional[Set[str]] = None,
+    exclude: Optional[Union[List[str], Set[str], FrozenSet[str]]] = None,
+) -> Dict[str, Any]:
+    """`referenced_by`'s answer for one target, read out of a prebuilt index.
+
+    Same return shape and same semantics; see `build_reverse_edge_index` for
+    the equivalence argument. `edge_kinds` filters in memory exactly as
+    `handoff_edges` filtered at scan time.
+    """
+    if edge_kinds is None:
+        edge_kinds = set(ARCHIVAL_EDGE_KINDS)
+
+    exclude_set: Set[str] = set()
+    if exclude:
+        for ex in exclude:
+            if ex:
+                exclude_set.add(os.path.abspath(str(ex)))
+
+    abs_target = os.path.abspath(target)
+    hits = list(index['by_abspath'].get(abs_target, ()))
+    hits += list(index['by_basename'].get(os.path.basename(abs_target), ()))
+
+    referencers: List[str] = []
+    seen: Set[str] = set()
+    for node_abs_path, kind in hits:
+        if kind not in edge_kinds:
+            continue
+        if node_abs_path in seen or node_abs_path in exclude_set:
+            continue
+        seen.add(node_abs_path)
+        referencers.append(node_abs_path)
+
+    return {
+        'referenced': len(referencers) > 0,
+        'referencedBy': referencers,
+    }
+
 
 def referenced_by(
     target: str,

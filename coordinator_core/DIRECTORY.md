@@ -44,7 +44,6 @@ Each sub-module self-registers its op via `register_op()` at import time.
 |---|---|---|
 | `_fm_util.py` | — | Shared frontmatter scalar extraction primitive |
 | `_path_guard.py` | — | Shared caller-supplied-path containment helpers (generalized from `handoff_lineage_ancestry.py`) |
-| `artifact_emit.py` | `artifact.emit` | Produces the authoritative `cockpit-emission.json` |
 | `assert_doctrine_cross_reference_counts.py` | `doctrine.assert_cross_reference_counts` | Read-only doctrine cross-reference count assertion over the caller's skills/wiki doctrine tree |
 | `cartography_stack.py` | `cartography.stack` | Read-only project-stack fingerprint (languages, test frameworks, config files) via pathlib scan |
 | `changelog_ops.py` | — | Family-A changelog write ops (strang-10 C1) |
@@ -60,7 +59,6 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `detect_changed_dependency_manifests.py` | `dependency.detect_changed_manifests` | Detects whether a repo's dependency manifests changed within a since-days window |
 | `detect_plugin_layout.py` | `detect.plugin_layout` | Detects flat vs. nested plugin directory layout via a docs/install/AGENT.md existence check |
 | `detect_primary_languages.py` | `detect.primary_languages` | Read-only file-extension tally (pathlib.rglob + Counter) to detect a repo's primary language(s) |
-| `emit_cadence.py` | `emit.cadence` | Composite sequencer: `backlog.record` then `artifact.emit`, guaranteeing recorder-before-aggregate ordering |
 | `engine_drift.py` | `engine.drift` | Read-only three-state drift probe — running engine SHA vs. `MIN_KNOWN_GOOD_SHA` floor |
 | `goal_append.py` | `goal.append` | Appends a goal-event record |
 | `goals_match.py` | `goal.match_candidates` | Read-only ranked resolver over `state/goals/*.md` |
@@ -133,7 +131,7 @@ Spine in `context.py`/`validate.py`; per-entity porters under `sections/`.
 | `deliverable_status.py` | §8.16 `deliverable_status` cross-entity join |
 | `doe_drift.py` | DoE-HEAD conformance fixture resolver + drift-check |
 | `enrich.py` | Parallel, order-preserving last-modified-at enrichment |
-| `envelope.py` | Top-level snapshot assembly + output write |
+| `resolvers.py` | Run-context resolution, root resolvers, git-ancestor / shipped-on-main helpers (not an emitter — the writer half was cut 2026-08-22/23) |
 | `normalizers.py` | Shared AC5-PROVENANCE normalization utilities |
 | `recorder.py` | Backlog-history recorder (`backlog.record` op) |
 | `validate.py` | Zod validation against the vendored contract pin |
@@ -141,7 +139,7 @@ Spine in `context.py`/`validate.py`; per-entity porters under `sections/`.
 `ops/emit/sections/` — one porter module per cockpit entity family (envelope key noted):
 `backlogs` (backlogs), `branch` (branches), `coordinator_roots` (coordinator_roots),
 `cross_repo_memos` (cross_repo_memos), `decision_guides` (decision_guides),
-`exec_summary` (exec_summaries), `file_attribution` (file_attributions),
+`exec_summary` (exec_summaries),
 `goals` (goals_current), `handoffs` (handoffs), `health` (health),
 `initiatives` (initiatives), `lessons` (lessons), `plans` (plans),
 `review_trail` (review_trail), `roadmap_dag` (roadmap_dag_nodes/edges),
@@ -150,7 +148,7 @@ Spine in `context.py`/`validate.py`; per-entity porters under `sections/`.
 `_shared.py` holds constants/helpers used across ≥2 porters.
 
 `competitor_summaries` / `intelligence_signals` (cockpit-contract v2.16.0) have NO porter —
-present-but-empty-by-design in `envelope.py`'s skeleton. Claude-klabauter is not the data path for
+present-but-empty-by-design in `resolvers.py`'s skeleton. Claude-klabauter is not the data path for
 Example-market-data-repo (routes to cockpit `ingestEmission` directly); do not add a section here.
 
 ### `ops/fleet/` — fleet.* MUTATING archival ops
@@ -160,10 +158,8 @@ Confirm→act (`dry_run:true`/`dry_run:false`) wire contract; git-mv terminal ar
 |---|---|---|
 | `_common.py` | — | Shared helpers for fleet.* ops |
 | `_findings_reap.py` | — | Shared polarity-agnostic scan/act core (`scan_findings`/`reap_findings`) consumed by both review-findings reap legs (DR-218) |
-| `archive_actioned_memos.py` | `fleet.archive_actioned_memos` | Sweeps actioned cross-repo memos |
 | `archive_handoffs.py` | `fleet.archive_completed_handoffs` | Sweeps completed handoffs |
 | `archive_paper_trail.py` | `fleet.archive_paper_trail` | Archives a research-session paper-trail workdir into the caller's own `docs/research/archive/` tree, dry_run/act contract |
-| `archive_plans.py` | `fleet.archive_completed_plans` | Sweeps completed plans |
 | `archive_queue_entry.py` | `fleet.archive_queue_entry` | Single-entry git-mv of one closed `state/improvement-queue/*.yaml` entry into `archive/improvement-queue/YYYY-MM/`, dry_run/act contract |
 | `archive_release_accumulator.py` | `fleet.archive_release_accumulator` | git-mv's the most recent `state/week-changelog/*-pending-release.md` accumulator into `archive/release-notes/` under a tag-suffixed name, if one exists |
 | `archive_shipped_handoffs.py` | `fleet.archive_shipped_handoffs` | Deployment-axis handoff sweep |
@@ -187,7 +183,6 @@ live — imported directly by `ceremony.session_instructions`) survives as
 | `pipeline_context.py` | — | Ceremony resolved-state data model |
 | `receipt_emit.py` | — | Ceremony evidence receipt emitter |
 | `receipt_schema.py` | — | Ceremony evidence receipt schema |
-| `scoped_git_commit.py` | `ceremony.scoped_git_commit` | Standalone scoped-commit op wrapping `run_commit_pipeline` |
 | `snapshot_diff_and_head.py` | `review.snapshot_diff_and_head` | Idempotency-token-keyed git range-diff + HEAD SHA snapshot for ceremony use |
 | `branch_resolution.py` | — | Branch-resolution engine (session-shape read, 17-branch resolution) — the surviving engine of the retired `ceremony.wsc_resolve` op; imported live by `ceremony.session_instructions` |
 | `git_native.py` | — | Windows-safe shared `git` subprocess helper (`_git`) — every native git call in the `wsc_tail` rebuild routes through this single choke point (creationflags/stdin/capture_output/text) |
@@ -208,7 +203,7 @@ Answers questions about live repo state; never mutates. Distinct from `ops/emit/
 
 | File | Purpose |
 |---|---|
-| `verify_shipped.py` | `verify_shipped(ref_or_sha, plan_path=None)` — combines git ancestry (`ops/emit/envelope.py`'s promoted `check_origin_main_reachable`/`sha_on_origin_main`/`resolve_ref`), live plan/handoff frontmatter, and an advisory `state/cockpit-emission.json` cross-check into one `ShipVerdict`, keeping disagreement between signals visible (`verdict: shipped/not_shipped/disagreement/indeterminate`) rather than collapsing to a boolean |
+| `verify_shipped.py` | `verify_shipped(ref_or_sha, plan_path=None)` — combines git ancestry (`ops/emit/resolvers.py`'s promoted `check_origin_main_reachable`/`sha_on_origin_main`/`resolve_ref`), live plan/handoff frontmatter, and a leg-3 `state/cockpit-emission.json` cross-check that can no longer fire (the artifact was deleted 2026-08-23, DR-351 — the leg degrades to None by design and is now permanently silent) into one `ShipVerdict`, keeping disagreement between signals visible (`verdict: shipped/not_shipped/disagreement/indeterminate`) rather than collapsing to a boolean |
 
 ### `ops/session/` — Class-B session-substrate ops
 Ops mutating untracked `.git/coordinator-sessions/` substrate — do NOT use `git commit` /

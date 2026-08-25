@@ -10,7 +10,7 @@ the real data sat under a different key or in a file never joined):
   3. ``PlanSummary.superseded_by`` — authors write the forward edge ``supersedes:``; the
      backward edge is derived cross-record inside ``sections/plans.py::collect()`` itself, as
      a second pass over the already-built records list (``plans_section._apply_superseded_by``
-     — relocated 2026-07-21 from a post-collect ``envelope.py`` enricher; Review: code-reviewer
+     — relocated 2026-07-21 from a post-collect ``resolvers.py`` enricher; Review: code-reviewer
      Finding 1: this is an intra-section self-join, not a cross-section join, so it belongs in
      the section porter that already has the full plan set in scope).
 
@@ -146,7 +146,7 @@ def test_reviewer_join_precedence_named_reviewer_over_model_reviewer(mock_qr, tm
         "---\nreviewer: sonnet-5\n---\n\nbody\n",
     )
     _write(
-        tmp_path / "docs/plans/2026-07-01-foo.the Staff Engineer-review.md",
+        tmp_path / "docs/plans/2026-07-01-foo.patrik-review.md",
         "---\nreviewer: staff-eng\n---\n\nbody\n",
     )
 
@@ -171,13 +171,13 @@ def test_reviewer_join_kind_based_staff_reviewer_outranks_sonnet_review(
         "---\nreviewer: sonnet-5\nkind: sonnet-review\n---\n\nbody\n",
     )
     _write(
-        tmp_path / "docs/plans/2026-07-01-foo.the Data Science Reviewer-review.md",
+        tmp_path / "docs/plans/2026-07-01-foo.camelia-review.md",
         "---\nreviewer: the Data Science Reviewer\nkind: staff-eng-review\n---\n\nbody\n",
     )
 
     records, malformed = plans_section.collect(ctx)
 
-    assert records[0]["reviewer"] == "the Data Science Reviewer"
+    assert records[0]["reviewer"] == "camelia"
 
 
 @patch("coordinator_core.ops.emit.sections.plans._query_plan_records")

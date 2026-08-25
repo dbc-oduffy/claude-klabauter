@@ -99,11 +99,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -937,6 +939,45 @@ _REVIEWED_RANGE_SCHEMA_NAMES = ("review-findings", "run-report")
 _REVIEWED_RANGE_FIELD_RE = re.compile(r"^reviewed_range\[(\d+)\]$")
 _BARE_HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")
 _RANGE_SEPARATOR_RE = re.compile(r"^(.+?)(\.{2,3})(.+)$")
+_HEX_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+
+
+def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
+    """Resolve one git ref token to its concrete full SHA via ``git rev-parse``.
+
+    Own copy (review_trail_write.py, the prior sole owner of this helper, was
+    deleted with the ``review_trail.write`` op — PM ruling 2026-08-23): a hex
+    token (full or abbreviated SHA, optionally suffixed with ``^``/``~N`` ops)
+    is returned unchanged; anything else is resolved via
+    ``git rev-parse --verify --quiet``. Raises ``ValueError`` if git cannot
+    resolve the token.
+    """
+    if _HEX_TOKEN_RE.match(token) or (
+        token and _HEX_TOKEN_RE.match(re.split(r"[\^~]", token, maxsplit=1)[0])
+    ):
+        return token
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", token],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            f"could not resolve ref {token!r} to a concrete SHA ({exc}) — "
+            "refusing to persist an unresolvable/symbolic ref"
+        ) from exc
+    out = proc.stdout.strip()
+    if proc.returncode != 0 or not out:
+        raise ValueError(
+            f"could not resolve ref {token!r} to a concrete SHA (git rev-parse "
+            "failed) — refusing to persist an unresolvable/symbolic ref"
+        )
+    return out
 
 # reviewed_targets closed prefix set (review-findings 3.2.0 / run-report
 # 2.2.0, vendored at coordinator_core/frontmatter/schemas/) — see plan-tasks
@@ -1036,8 +1077,6 @@ def _reviewed_range_offer(
             return
         if not any(_REVIEWED_RANGE_FIELD_RE.match(e.get("field") or "") for e in errors):
             return
-
-        from coordinator_core.ops.review_trail_write import _resolve_ref_to_sha
 
         rewrites: list[tuple[dict, Optional[str], Optional[str]]] = []
         for err in errors:

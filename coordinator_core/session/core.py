@@ -331,11 +331,29 @@ def ensure_meta(sid: str, cwd: Optional[str] = None) -> str:
           initialized returns the resolved path anyway, so the caller's
           existing no-op-and-warn branch stays reachable rather than turning
           a diagnostic field into a new failure mode.
+
+    Re-stamp arm (C4, guard-claim-ceremony-stable-pid): an EXISTING
+    meta.json with an EMPTY ``stable_pid`` is re-run through ``init()``
+    instead of being returned untouched. Without this, an existing record
+    is permanently unstamped once created record-but-unstamped (Guard-1
+    missed at ``init()`` time -- psutil absent, or a partial write) --
+    the early ``is_file()`` return below never reaches ``init()``'s own
+    refresh arm, which is the only other place that writes ``stable_pid``.
+    ``init()`` is still idempotent-safe to call here: its refresh branch
+    only rewrites ``pid``/``last_activity``/``branch``/``stable_pid*``,
+    never ``goal`` (see that branch's own comment), so a repeat call
+    cannot clobber a concurrent writer's ``goal``/other fields.
     """
     sdir = session_dir(sid, cwd)
     if not sdir:
         return ""
-    if (Path(sdir) / "meta.json").is_file():
+    meta_path = Path(sdir) / "meta.json"
+    if meta_path.is_file():
+        if not read_meta_field(sdir, "stable_pid"):
+            try:
+                init(sid, cwd=cwd)
+            except Exception:  # noqa: BLE001 -- best-effort; caller handles a still-unstamped record
+                pass
         return sdir
     try:
         init(sid, cwd=cwd)

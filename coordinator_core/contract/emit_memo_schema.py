@@ -12,9 +12,10 @@ BEHAVIOR-ownership, not a hand-authored-file relocation — claude-klabauter's e
 never consumed the DoE JSON for validation in the first place (memos are
 validated cross-field-only, no schema file — see
 `coordinator_core.frontmatter.schema_validate.validate_memo_cross_fields`);
-the real SSOT for required-ness is the send-time gate in
-`coordinator_core.ops.fleet.memo_send` (`_VALID_KINDS`, `_SUMMARY_MAX_CHARS`,
-`_self_validate_frontmatter_fields`), and the cross-field lifecycle rules live
+the real SSOT for required-ness is
+`coordinator_core.ops.fleet._memo_compose` (`_VALID_KINDS`,
+`_self_validate_frontmatter_fields`) and `coordinator_core.ops.fleet.
+_memo_summary` (`_SUMMARY_MAX_CHARS`), and the cross-field lifecycle rules live
 in `coordinator_core.frontmatter.schema_validate._MEMO_CROSS_FIELD_RULES`. So
 these two JSON Schema documents are DERIVED artifacts describing that
 behavior for DoE's routing hook / the legacy JS `query-records` CLI to
@@ -56,7 +57,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KINDS
+from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 
 # ---------------------------------------------------------------------------
 # x-schema-version — bumped independently of DoE's prior vendored "1.0.0"

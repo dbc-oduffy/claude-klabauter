@@ -27,6 +27,41 @@
 > breaking change.
 >
 > **Changelog:**
+> - **2026-08-22 (commit-closure ledger extraction pattern — breaking, no version bump):** § 1.2a's
+>   `Closes:` reader shifts from git's emit-time parsed trailer block
+>   (`%(trailers:key=Closes,valueonly)`) to a write-time raw-text scan over the trailing region (C1,
+>   superseding DECISION-2 of `docs/plans/2026-07-17-commit-closure-emission-fact.md`; see C1). §
+>   1.2a's documented Reader sentence, naming the emit-time scan, becomes false the moment C1 lands.
+>   **Verdict, applying § 5.2's own test by name: semantics changed, not additive** — an earlier
+>   plan-stage reading of this as additive-only (0 rows to N rows, a pure relaxation) is withdrawn
+>   here, re-argued against review feedback (the Director of Engineering, F3), reasoning kept rather than silently edited.
+>   The four prior entries above each discharged on FOUR axes ("no key, grain, enum, or cardinality
+>   changed") but the operative test is FIVE: key, grain, enum, cardinality, **and extraction
+>   pattern**. This change leaves key, grain, and enum untouched and only relaxes cardinality
+>   (0 rows to N going forward), but it moves extraction pattern — and not as a pure widen either:
+>   recognition **widens** (any line-anchored `Closes:` in the trailing region, not only git's
+>   parsed trailer block) while the emitted population simultaneously **narrows** to ledger-wired,
+>   baton-owned commits (33.5% of landing-forward commits — see coverage boundary below). A
+>   consumer holding the vendored pin cannot derive either shift from "0 rows became N rows" alone,
+>   so this is § 5.2's **breaking arm**, not the additive arm, and is flagged as such in the
+>   cross-repo notification memo, not silently folded into a widen note. **No schema version bump is
+>   owed** — key, grain, and enum are unchanged, and § 5's version-bump trigger is keyed to those,
+>   not to extraction-pattern or cardinality changes — but the changelog entry and memo both name
+>   this a semantics change, not an additive widen, so a consumer cannot mistake it for one.
+>
+>   **§ 5.2 step 3 gate is split, not blanket-deferred.** Step 3 ("claude-klabauter begins emitting only
+>   after both consumers confirm") gates *rag's and cockpit's own decision to consume* the new
+>   surface — theirs to make, not claude-klabauter's landing gate. It does NOT gate claude-klabauter's own internal
+>   work: the recording (C1) and the query CLI (C4) land now, since nothing here is visible to a
+>   consumer until they query it — no round trip is in the critical path of landing.
+>
+>   **Coverage boundaries — state both, do not make a consumer infer either.** (1) Rows exist from
+>   C1's landing forward only, never retroactively (no historical backfill; § Anti-scope, this
+>   contract's own § 7). (2) Even the going-forward set is bounded: 33.5% of landing-forward
+>   commits (931 of 2,779 commits since 2026-08-19), gated on the commit being ledger-producer-wired
+>   and baton-owned (§ Problem, source plan's § Anti-scope) — the other ~two-thirds of ordinary
+>   commits carry no `Closes:` row even after C1 lands. Source:
+>   `docs/plans/2026-08-22-the-commit-closure-pipe-carries-rows.md`, tasks C1, C4.
 > - **2026-08-19 (commit-scoping key retired):** § 1.2 records that `deliverable_id` divergence
 >   is retired as a commit-scoping identity per `docs/decisions/DR-328-commit-scoping-keys-on-
 >   the-baton.md` — the handoff baton is the scoping key now, not `deliverable_id`. None of the

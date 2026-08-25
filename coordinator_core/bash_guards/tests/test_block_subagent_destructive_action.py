@@ -2580,6 +2580,48 @@ def test_git_stash_pathspec_with_redirect_still_allows():
     assert guard.check(payload) is None
 
 
+def test_git_stash_bare_with_input_redirect_denies():
+    # 2026-08-23 fix: `<`-family input redirection is a distinct character
+    # class from `>`-family output redirection, and the original regex only
+    # matched the latter. `git stash </dev/null` tokenized `remaining` to
+    # `["</dev/null"]`, undetected, and fell through to allow.
+    payload = _payload("git stash </dev/null", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_heredoc_marker_denies():
+    payload = _payload("git stash <<EOF", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_herestring_denies():
+    payload = _payload("git stash <<< x", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_bare_with_separated_input_redirect_target_denies():
+    payload = _payload("git stash < /dev/null", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_stash_pathspec_with_input_redirect_still_allows():
+    # Same over-stripping boundary as the `>`-family case above, for the
+    # newly-widened `<`-family branch.
+    payload = _payload(
+        "git stash push -- state/subagent-share/my-file.md </dev/null",
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
 def test_git_stash_pop_still_denies_as_pop_apply():
     payload = _payload("git stash pop", agent_type="coordinator:executor")
     result = guard.check(payload)

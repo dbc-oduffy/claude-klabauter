@@ -75,7 +75,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -333,6 +332,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     the fleet.* op family); the worktree is derived via main_worktree_root,
     never taken from params.
     """
+    import asyncio
+
     dry_run = _coerce_dry_run(params.get("dry_run"))
 
     if repo_root is None:

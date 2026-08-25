@@ -81,7 +81,7 @@ def _extract_authored_date(filename: str) -> Optional[date]:
                (e.g. "20260705-114527-...")
       tier 3 — EMBEDDED ISO: re.search(r"(\\d{4})-(\\d{2})-(\\d{2})", name)
                (first ISO date hit anywhere in the name, e.g.
-               "wsc-2026-07-01-....md", "the Director of Engineering-...-2026-07-02.md")
+               "wsc-2026-07-01-....md", "zoli-...-2026-07-02.md")
 
     Returns None if no tier yields a valid date (fail-closed-to-keep — the
     caller must treat None as "cannot determine age, do not reap").

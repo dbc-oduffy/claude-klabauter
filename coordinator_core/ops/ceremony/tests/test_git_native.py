@@ -78,7 +78,13 @@ _WRAPPER_INVOCATIONS = [
         ("/tmp/repo", "/tmp/msg", ["a.txt"]),
         {},
     ),
-    (git_native.rev_parse_head, ("/tmp/repo",), {}),
+    # rev_parse_head is deliberately ABSENT: it no longer spawns at all (it
+    # reads `git_state.head_sha()`), so there is no subprocess call for this
+    # list's flag assertions to inspect. Its replacement guard, which asserts
+    # the STRONGER property, is
+    # `test_rev_parse_head_spawns_nothing` below -- removing a wrapper from
+    # this list without pinning zero-spawn elsewhere would let a future edit
+    # quietly reintroduce the process with nothing to catch it.
     (git_native.log_grep, ("/tmp/repo", "Session-Id: abc"), {}),
     (git_native.log_diff_filter, ("/tmp/repo", "R"), {}),
     (git_native.remote, ("/tmp/repo",), {}),
@@ -154,11 +160,27 @@ _COMPOSITE_ENTRYPOINTS = {
 #: — the former would assert a call count of 1 against a function that never
 #: spawns. Its actual behaviour (including the nested-span reset contract) is
 #: covered by `test_sole_publisher_suppression.py`.
+#: `rev_parse_head` (2026-08-23) is the first entry here that was ONCE a real
+#: spawning wrapper and stopped being one, rather than never having been one.
+#: It now reads `git_state.head_sha()` -- `.git/HEAD` plus the loose ref or
+#: `packed-refs`, the same resolution `git rev-parse HEAD` performs -- so the
+#: (a) harness has no `subprocess.run` call to assert its flags against.
+#: Listed as an exemption from THAT harness, never from coverage: it is
+#: covered directly and more strictly by
+#: `test_rev_parse_head_spawns_nothing` (patches `run` AND `Popen`, asserts
+#: zero, and asserts the failure branch stays reachable for callers that
+#: check `.ok`) and `test_rev_parse_head_returns_head_sha_with_trailing_
+#: newline` (compares the in-process text byte-for-byte against a real `git
+#: rev-parse HEAD`, which is the control the whole substitution rests on).
+#: A wrapper that stops spawning must land in this set AND gain a zero-spawn
+#: guard in the same commit -- moving it here alone would silently retire the
+#: only assertion standing over it.
 _NON_SUBPROCESS_HELPERS = {
     "directory_pathspecs",
     "directory_pathspec_diagnostic",
     "parse_check_ignore_stdin_z",
     "deferred_publisher_span",
+    "rev_parse_head",
 }
 
 #: `check_ignore()` is a thin single-`git`-call wrapper like everything in
@@ -256,6 +278,62 @@ def test_directory_pathspec_diagnostic_names_the_path():
     assert "some/dir" in diagnostic
     assert "matches whatever is inside it AT COMMIT TIME" in diagnostic
     assert "Pass explicit file paths instead" in diagnostic
+
+
+def test_rev_parse_head_spawns_nothing(tmp_path):
+    """`rev_parse_head` must reach HEAD's sha WITHOUT a process.
+
+    Replaces its row in `_WRAPPER_INVOCATIONS` (see the note there). That row
+    asserted the Windows-safe flags on the spawn this wrapper used to make;
+    the wrapper now reads `git_state.head_sha()` -- `.git/HEAD` plus the loose
+    ref or `packed-refs`, the same resolution `git rev-parse HEAD` performs --
+    so there is no call for those assertions to inspect.
+
+    Dropping the row without this test would leave the wrapper unguarded in
+    BOTH directions: nothing would notice a reintroduced spawn, and nothing
+    would notice it going back to being wrong about the flags. Asserting zero
+    is the stronger claim and the one worth pinning.
+
+    Envelope shape is asserted alongside the spawn count deliberately: every
+    caller branches on `.ok`/`.stdout`, and `stdout` must keep `git
+    rev-parse`'s trailing newline, because a caller that sliced instead of
+    stripping would otherwise see a silent off-by-one.
+    """
+    subprocess_module = git_native.subprocess
+    with patch.object(subprocess_module, "run") as mock_run:
+        with patch.object(subprocess_module, "Popen") as mock_popen:
+            result = git_native.rev_parse_head(str(tmp_path))
+
+    assert mock_run.call_count == 0, "rev_parse_head spawned a process"
+    assert mock_popen.call_count == 0, "rev_parse_head spawned a process"
+
+    # tmp_path is not a repo -- HEAD does not resolve, so this is the failure
+    # branch, which must stay reachable for every caller that checks `.ok`.
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_rev_parse_head_returns_head_sha_with_trailing_newline(tmp_path):
+    """The success branch, against a real repo: same text `git rev-parse` emits."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _real_git(["add", "--", "seed.txt"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    result = git_native.rev_parse_head(repo)
+
+    assert result.returncode == 0
+    assert result.stdout.endswith("\n"), "callers strip(); the newline is contract"
+    assert len(result.stdout.strip()) == 40
+
+    # Matches what the spawn used to return, byte for byte. This is the
+    # control the whole change rests on: the in-process read is only a
+    # legitimate substitution if it produces the same text git does.
+    spawned = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    )
+    assert result.stdout == spawned.stdout
 
 
 @pytest.mark.parametrize(
@@ -795,27 +873,52 @@ def test_composite_entrypoints_never_call_subprocess_run_directly():
 
 def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_wrapper(tmp_path):
     """`commit_authored_content()` never reaches `subprocess.run` directly --
-    every step of its `hash-object`/`read-tree`/`update-index`/`write-tree`/
-    `commit-tree`/`update-ref` sequence goes through this module's own
-    `_git()` (whose Windows-safe-flag contract is already independently
-    covered by `test_git_returns_typed_result_on_success` and friends
-    above), so patching `subprocess.run` directly here would double-count
+    every step of its residual `_git()`-routed sequence (whose Windows-
+    safe-flag contract is already independently covered by
+    `test_git_returns_typed_result_on_success` and friends above) is
+    asserted here, so patching `subprocess.run` directly would double-count
     that contract and, worse, would also catch unrelated background
     subprocess activity elsewhere in the process (`git_native.subprocess`
     IS the shared stdlib module object, not a private import). This
     asserts the composite's actual call sequence instead -- the genuine
     coverage gap `test_all_public_wrappers_are_covered` flagged.
 
-    C3 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-
-    spawning-git.md): the former leading `rev-parse`/`ls-tree` pair is gone
-    from THIS wrapper's own call sequence. `rev-parse HEAD` is now a direct
-    `.git/HEAD` file read (`git_state.head_sha`, zero spawns -- asserted
-    separately below by patching `_git` to fail loud on any `rev-parse`
-    call). `ls-tree HEAD -- <path>` still spawns git -- it is `git_state.
-    head_blobs`'s own documented "one retained spawn" -- but now goes
-    through `coordinator_core.git.run.run_git`, not this module's private
-    `_git()`, so it is spied on separately and asserted to precede the
-    `_git()`-routed sequence below."""
+    C4 (docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md): on the
+    happy path exercised here (a plain, non-detached checkout with no
+    concurrent lock holder and a resolvable commit identity), the whole
+    tree-spine rewrite, the commit object, and the ref CAS are now built
+    IN PROCESS (`_commit_via_head_spine`) -- the former `read-tree`/
+    `update-index --cacheinfo`/`write-tree`/`commit-tree`/`update-ref`
+    quintet is gone from this wrapper's own `_git()`-routed sequence
+    entirely (AC1: at most `interpret-trailers` and the bound-6 shared
+    `update-index` remain, alongside `_hash_object_stdin_bytes`'s own
+    bytes-mode `hash-object` spawn, which bypasses `_git()` and is
+    covered separately below). `rev-parse HEAD` is also gone -- `head_sha()`
+    is a direct `.git/HEAD` file read (C3, asserted separately below by
+    patching `_git` to fail loud on any `rev-parse` call).
+
+    `ls-tree HEAD -- <path>` is gone TOO, and this assertion is the point of
+    the test rather than a detail. An earlier revision pinned it at
+    `== ["ls-tree"]` with the rationale "the one retained read spawn ...
+    should route through git_state's shared `run_git`, not git_native
+    `_git()`" -- a ROUTING property, written when that spawn was believed
+    irreducible. It was not: `commit_authored_content` was calling
+    `head_blobs` unconditionally BEFORE the fast/ladder fork, so the
+    in-process arm paid an `ls-tree` it never needed. `_head_entry_for` now
+    reads HEAD's tree spine in process and falls back to `head_blobs` only
+    when the spine is unreadable -- which is the ladder condition anyway.
+    Not spawning beats spawning through the right wrapper, so the assertion
+    is inverted: ZERO `run_git` calls on this arm.
+
+    Why this mattered more than one stale literal: `head_blobs` reaches git
+    through `run_git` and never crosses the `git_native._git()` seam, so a
+    spawn counter wrapped on `_git()` reported AC1's "<=3" while the leg
+    genuinely issued FOUR processes (`ls-tree`, `hash-object`,
+    `interpret-trailers`, `update-index`). No spawn assertion in this plan
+    caught that; `test_ledger_leg_spawn_count_is_upper_bound_not_exact` did,
+    by asserting a PAIR moved together. Hence the ladder-arm case below: an
+    assertion that only ever sees the fast arm cannot tell "correctly not
+    spawned" from "silently routed elsewhere"."""
     repo = _init_real_repo(tmp_path)
     (repo / "file.txt").write_text("original\n", encoding="utf-8")
     _real_git(["add", "--", "file.txt"], repo)
@@ -831,6 +934,12 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
         assert args[0] != "rev-parse", (
             "commit_authored_content must not spawn `git rev-parse HEAD` any "
             "more -- head_sha() is a direct file read (C3)"
+        )
+        assert args[0] not in ("read-tree", "write-tree", "commit-tree", "update-ref"), (
+            f"commit_authored_content took the fast in-process path's "
+            f"preconditions but still spawned `git {args[0]}` -- the "
+            "spine/commit/CAS build must stay in process on this happy path "
+            "(AC1)"
         )
         git_argvs.append(list(args))
         return real_git(args, **kwargs)
@@ -851,21 +960,24 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
         )
 
     assert result.ok, result.stderr
-    assert [argv[0] for argv in run_git_argvs] == ["ls-tree"], (
-        "the one retained read spawn for HEAD's tree entry should route "
-        "through git_state's shared run_git, not git_native._git"
+    assert run_git_argvs == [], (
+        "the in-process arm must not spawn AT ALL for HEAD's tree entry -- "
+        "_head_entry_for reads the spine in process. Got %r. `head_blobs` "
+        "does not cross the _git() seam, so an `ls-tree` reappearing here is "
+        "invisible to every spawn counter wrapped on that seam: this "
+        "assertion is the only thing standing between a silent 4th process "
+        "and an AC1 that reads <=3" % (run_git_argvs,)
     )
     verbs = [argv[0] for argv in git_argvs]
-    assert verbs == [
-        "read-tree",
-        "update-index",
-        "write-tree",
-        "interpret-trailers",
-        "commit-tree",
-        "update-ref",
-        "update-index",
-    ]
+    assert verbs == ["interpret-trailers", "update-index"], (
+        "AC1: only the trailer spawn and the bound-6 shared update-index "
+        "should remain through _git() on the fast, in-process path"
+    )
     assert _committed_content_at_head(repo, "file.txt") == "AUTHORED CONTENT\n"
+    fsck = subprocess.run(
+        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True,
+    )
+    assert fsck.returncode == 0, fsck.stderr
 
 
 def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path):
@@ -894,13 +1006,19 @@ def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path):
 
 def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tmp_path):
     """C3's swap of `rev-parse HEAD` for `git_state.head_sha()` must not
-    weaken `update-ref`'s own compare-and-swap: `old_head` (however it was
-    obtained) is passed as `update-ref`'s old-value argument, and git
-    refuses atomically if the ref no longer matches it at call time. Force
-    exactly that race by advancing HEAD (a concurrent sibling's commit) in
-    the window between `commit_authored_content`'s own `old_head` read and
-    its `update-ref` call, and assert the CAS still refuses loud rather
-    than silently orphaning the sibling's commit."""
+    weaken the ref CAS: `old_head` (however it was obtained) is passed as
+    the CAS's expected old value, and the write is refused atomically if
+    the ref no longer matches it at call time. Force exactly that race by
+    advancing HEAD (a concurrent sibling's commit) in the window between
+    `commit_authored_content`'s own `old_head` read and the CAS itself, and
+    assert it still refuses loud rather than silently orphaning the
+    sibling's commit.
+
+    C4: the CAS now lands via `cas_ref()` (in-process, `git_objects.py`),
+    not a spawned `git update-ref` -- so the race is injected by wrapping
+    `git_native.cas_ref` itself (the module-level name this file's own
+    `_commit_via_head_spine` calls), not by intercepting an `update-ref`
+    argv through `_git()`."""
     repo = _init_real_repo(tmp_path)
     (repo / "file.txt").write_text("original\n", encoding="utf-8")
     _real_git(["add", "--", "file.txt"], repo)
@@ -909,16 +1027,15 @@ def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tm
     msg_file = tmp_path / "msg.txt"
     msg_file.write_text("a commit message\n", encoding="utf-8")
 
-    real_update_ref = git_native._git
+    real_cas_ref = git_native.cas_ref
 
-    def _sibling_commits_first(args, **kwargs):
-        if args[0] == "update-ref":
-            (repo / "sibling.txt").write_text("sibling\n", encoding="utf-8")
-            _real_git(["add", "--", "sibling.txt"], repo)
-            _real_git(["commit", "-q", "-m", "concurrent sibling commit"], repo)
-        return real_update_ref(args, **kwargs)
+    def _sibling_commits_first(*args, **kwargs):
+        (repo / "sibling.txt").write_text("sibling\n", encoding="utf-8")
+        _real_git(["add", "--", "sibling.txt"], repo)
+        _real_git(["commit", "-q", "-m", "concurrent sibling commit"], repo)
+        return real_cas_ref(*args, **kwargs)
 
-    with patch.object(git_native, "_git", side_effect=_sibling_commits_first):
+    with patch.object(git_native, "cas_ref", side_effect=_sibling_commits_first):
         result = git_native.commit_authored_content(
             "file.txt", "AUTHORED CONTENT\n", msg_file, repo
         )
@@ -1350,15 +1467,19 @@ def test_head_blobs_unborn_branch_reads_as_absent_not_read_failed(tmp_path):
 
 
 def test_head_blobs_infra_failure_maps_to_git_read_failed_sentinel(tmp_path, monkeypatch):
-    """A genuine infrastructure failure below `git_state.head_blobs` (e.g.
-    an unresolvable `.git` dir) must still surface as `_GIT_READ_FAILED`,
-    never silently downgraded to `None`."""
+    """A genuine infrastructure failure below `git_state.read_tree_spine`
+    (e.g. an unresolvable `.git` dir) must still surface as
+    `_GIT_READ_FAILED`, never silently downgraded to `None`. C11 (`state/
+    dispatch-briefs/2026-08-23-the-scoped-commit-rebuilt-from-first-
+    principles/C11.md`) re-pointed `_head_blobs` off `git_state.head_blobs`
+    (a `git ls-tree` spawn) onto `git_state.read_tree_spine` (in-process),
+    so this test now monkeypatches the load-bearing dependency."""
     repo = _init_real_repo(tmp_path)
 
     def _raise(*_a, **_kw):
         raise OSError("boom")
 
-    monkeypatch.setattr(git_native, "_git_state_head_blobs", _raise)
+    monkeypatch.setattr(git_native, "read_tree_spine", _raise)
 
     blobs = git_native._head_blobs(repo, ["a.txt"])
 
@@ -1446,3 +1567,142 @@ def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# (h) commit identity: a miss on the cheap sources costs ONE spawn, not the ladder
+# ---------------------------------------------------------------------------
+
+
+def test_commit_identity_prefers_env_vars_without_spawning(tmp_path, monkeypatch):
+    """Env vars are git's own highest-precedence source, so a hit here must
+    not spawn at all -- the common case on every commit this box makes."""
+    repo = _init_real_repo(tmp_path)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Env Name")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "env@example.test")
+
+    with patch.object(git_native, "_git") as spawn:
+        assert git_native._resolve_commit_identity(repo) == ("Env Name", "env@example.test")
+
+    spawn.assert_not_called()
+
+
+def test_commit_identity_falls_back_to_one_git_var_spawn_not_the_ladder(tmp_path, monkeypatch):
+    """The regression this test exists for: when the cheap config readers
+    miss -- `includeIf`, system config, any shape they do not parse -- the
+    identity must be recovered by ONE `git var GIT_COMMITTER_IDENT` spawn,
+    NOT by returning None and dropping the whole commit to the ~9-spawn
+    ladder. The identity is not worth trading the in-process win for."""
+    repo = _init_real_repo(tmp_path)
+    for var in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(git_native, "_read_config_user_section", lambda _path: (None, None))
+
+    calls: list[list[str]] = []
+    real_git = git_native._git
+
+    def _counting_git(args, **kwargs):
+        calls.append(list(args))
+        return real_git(args, **kwargs)
+
+    monkeypatch.setattr(git_native, "_git", _counting_git)
+    identity = git_native._resolve_commit_identity(repo)
+
+    assert identity is not None, "a configured identity must not fall through to the ladder"
+    name, email = identity
+    assert name and email
+    assert calls == [["var", "GIT_COMMITTER_IDENT"]], "exactly one spawn, and only git var"
+
+
+def test_commit_identity_returns_none_when_git_itself_cannot_resolve(tmp_path, monkeypatch):
+    """`git var` failing is a genuine ladder condition -- git has no identity
+    either, so the ladder's own commit-tree will produce git's diagnostic,
+    which beats anything invented here."""
+    repo = _init_real_repo(tmp_path)
+    for var in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(git_native, "_read_config_user_section", lambda _path: (None, None))
+    monkeypatch.setattr(
+        git_native,
+        "_git",
+        lambda args, **kwargs: git_native.GitResult(
+            returncode=128, stdout="", stderr="fatal: unable to auto-detect email address",
+        ),
+    )
+
+    assert git_native._resolve_commit_identity(repo) is None
+
+
+def test_commit_identity_never_returns_a_half_pair(tmp_path, monkeypatch):
+    """A malformed `git var` line must be a ladder fall-back, never a commit
+    object carrying `"None <None>"` in its author line."""
+    repo = _init_real_repo(tmp_path)
+    for var in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(git_native, "_read_config_user_section", lambda _path: (None, None))
+    monkeypatch.setattr(
+        git_native,
+        "_git",
+        lambda args, **kwargs: git_native.GitResult(
+            returncode=0, stdout="no brackets here at all\n", stderr="",
+        ),
+    )
+
+    assert git_native._resolve_commit_identity(repo) is None
+
+
+def test_head_entry_falls_back_to_head_blobs_when_the_spine_is_unreadable(tmp_path, monkeypatch):
+    """The sibling of the zero-`run_git` assertion above, and the reason that
+    one can be trusted.
+
+    An assertion that only ever observes the fast arm cannot distinguish
+    "correctly did not spawn" from "silently stopped being called at all" --
+    if `_head_entry_for` regressed to returning `None` unconditionally, the
+    fast-arm test would still see zero `run_git` calls and pass while every
+    commit quietly took the ladder. This pins the OTHER direction: when the
+    spine is unreadable, `head_blobs` must still be consulted and its
+    `ls-tree` must still spawn, because that is the fall-back the
+    in-process read is allowed to lean on.
+
+    Together the pair says: zero spawns when the spine reads, exactly one
+    when it does not, and never a silent third state."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("ladder-arm commit\n", encoding="utf-8")
+
+    monkeypatch.setattr(git_native, "read_tree_spine", lambda *a, **kw: None)
+
+    from coordinator_core.git import git_state as _git_state_module
+
+    real_run_git = _git_state_module.run_git
+    run_git_argvs = []
+
+    def _run_git_spy(args, **kwargs):
+        run_git_argvs.append(list(args))
+        return real_run_git(args, **kwargs)
+
+    with patch.object(_git_state_module, "run_git", side_effect=_run_git_spy):
+        result = git_native.commit_authored_content(
+            "file.txt", "LADDER CONTENT\n", msg_file, repo
+        )
+
+    assert result.ok, result.stderr
+    assert [argv[0] for argv in run_git_argvs] == ["ls-tree"], (
+        "with the spine unreadable, the HEAD tree-entry read must fall back "
+        "to head_blobs' ls-tree -- got %r. Zero here would mean the mode and "
+        "existence read had been dropped rather than relocated" % (run_git_argvs,)
+    )
+    assert _committed_content_at_head(repo, "file.txt") == "LADDER CONTENT\n"

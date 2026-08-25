@@ -200,8 +200,9 @@ def live_registry_op_names() -> FrozenSet[str]:
     Ruling 3-B require — never the fast-path map alone. Safe to call from a
     test process or a once-per-boot/once-per-cold-run caller; not safe to call
     on a per-invocation hot path (see module docstring)."""
-    import coordinator_core.ops  # noqa: F401 -- side effect: populates ipc._REGISTRY
+    import coordinator_core.ops as _ops_pkg
 
+    _ops_pkg._eager_import_all()
     return frozenset(ipc._REGISTRY.keys())
 
 
@@ -275,8 +276,9 @@ def resolve_op_entrypoints(
     cost) when omitted -- pass an already-populated registry mapping to avoid
     paying that import a second time in a caller that already has one."""
     if registry is None:
-        import coordinator_core.ops  # noqa: F401 -- side effect: populates ipc._REGISTRY
+        import coordinator_core.ops as _ops_pkg
 
+        _ops_pkg._eager_import_all()
         registry = ipc._REGISTRY
 
     out: Dict[str, OpEntrypoint] = {}

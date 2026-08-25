@@ -521,7 +521,7 @@ def test_state_root_sibling_repo_is_repo_root_slash_state(tmp_path: Path) -> Non
     assert _state_root(repo_root) == repo_root / "state"
 
 
-def test_state_root_meta_repo_resolves_via_claude_klabauter_root_env(
+def test_state_root_meta_repo_resolves_via_engine_root_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_claude_home = tmp_path / "fake-claude-home"
@@ -529,7 +529,8 @@ def test_state_root_meta_repo_resolves_via_claude_klabauter_root_env(
     fake_claude_klabauter = tmp_path / "fake-claude-klabauter-repo"
     fake_claude_klabauter.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(fake_claude_home))
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(fake_claude_klabauter))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(fake_claude_klabauter))
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
     assert _state_root(fake_claude_home) == fake_claude_klabauter / "state"
 
@@ -548,9 +549,34 @@ def test_state_root_meta_repo_unresolvable_claude_klabauter_root_fails_loud(
         _state_root(fake_claude_home)
 
 
-def test_claude_klabauter_root_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/explicit/override")
+def test_engine_root_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/explicit/override")
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     assert _claude_klabauter_root() == "/explicit/override"
+
+
+def test_retired_claude_klabauter_root_env_no_longer_answers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """C14 closed the dual-read window: `coordinator_engine_root_env` still
+    READS `CLAUDE_KLABAUTER_ROOT` (to emit the retired advisory and a census row) but
+    never RETURNS it. A set-but-retired old name must not resolve, or the
+    rename it completes is cosmetic."""
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/retired/name")
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-settings-home"))
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(tmp_path / "does-not-exist.py"))
+
+    assert _claude_klabauter_root() is None
+
+
+def test_engine_root_wins_while_both_are_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Precedence is load-bearing: a stale `CLAUDE_KLABAUTER_ROOT` inherited from an
+    ancestor process must never override a fresh `COORDINATOR_ENGINE_ROOT`
+    set by the immediate parent."""
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/stale/ancestor")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/fresh/parent")
+    assert _claude_klabauter_root() == "/fresh/parent"
 
 
 def test_claude_klabauter_root_pointer_file_fast_path(

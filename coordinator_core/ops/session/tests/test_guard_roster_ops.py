@@ -8,9 +8,9 @@ docstring and DR-297). Nothing here asserts carrier delivery, and no test
 added later should.
 
 Purpose: `coordinator_core.ipc::_REGISTRY` only reflects whatever has been
-imported so far in this process; under `COORDINATOR_CORE_LAZY_OPS=1` a
+imported so far in this process; since op registration is lazy, a
 naive read of it is silently PARTIAL. This file pins that `list_ported_advisory_ops`
-stays exhaustive under that env var (the whole reason the module exists),
+stays exhaustive regardless (the whole reason the module exists),
 and that a resolution failure raises `AdvisoryRosterUnavailable` rather than
 degrading to a short list.
 
@@ -34,11 +34,10 @@ from coordinator_core.ops.session.guard_roster_ops import (
 )
 
 # `test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter`
-# spawns a real `sys.executable -c` fresh interpreter because
-# `COORDINATOR_CORE_LAZY_OPS=1`'s exhaustiveness property -- that
-# `list_ported_advisory_ops` still resolves all six ops when `_REGISTRY` starts
-# empty -- only exists in a process with no prior op imports, which no
-# same-process mock can reproduce. The spawn ratchet's `_BASELINE` is
+# spawns a real `sys.executable -c` fresh interpreter because the
+# exhaustiveness property -- that `list_ported_advisory_ops` still resolves
+# all six ops when `_REGISTRY` starts empty -- only exists in a process with
+# no prior op imports, which no same-process mock can reproduce. The spawn ratchet's `_BASELINE` is
 # shrink-only pre-existing residue and is explicitly not the route for this
 # file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -77,8 +76,8 @@ def test_list_ported_advisory_ops_returns_all_six_ops_as_plain_data():
 
 
 def test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter():
-    """The same result set with `COORDINATOR_CORE_LAZY_OPS=1` in a FRESH
-    interpreter -- this is the whole reason the module exists, since a naive
+    """The same result set in a FRESH interpreter, where `_REGISTRY` starts
+    empty -- this is the whole reason the module exists, since a naive
     `_REGISTRY` read would be partial there."""
     probe = (
         "from coordinator_core.ops.session.guard_roster_ops import ("
@@ -92,7 +91,6 @@ def test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interp
     import os
 
     env = dict(os.environ)
-    env["COORDINATOR_CORE_LAZY_OPS"] = "1"
     result = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,

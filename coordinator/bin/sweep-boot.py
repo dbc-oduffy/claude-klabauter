@@ -238,6 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     explicit_repo_root = positional[0] if len(positional) >= 1 and positional[0] else None
     state_common_dir = positional[1] if len(positional) >= 2 and positional[1] else None
 
+    # `coordinator_core` lives at the engine root, NOT under `<bin>/lib` -- the
+    # module-level bootstrap above puts only `_LIB_DIR` on sys.path, so this import
+    # raises ModuleNotFoundError unless the engine root is resolved onto sys.path
+    # first. Every other engine import in this file sits behind a
+    # `require_dispatch_engine_on_path()` call inside its own helper
+    # (`_import_housekeeping_seam`, `_resolve_repo_root`); this one is the only site
+    # reached directly from `main()`, so it must make the call itself.
+    require_dispatch_engine_on_path()
+
     from coordinator_core.install.forwarder_self_heal import self_heal_forwarders
 
     self_heal_forwarders()

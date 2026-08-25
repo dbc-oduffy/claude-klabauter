@@ -79,7 +79,12 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+# Imported from the LEAF (`row_spans`), never from `close_out_and_stamp`.
+# Reaching back into that module put `deliverable_cascade` and
+# `cascade_backstop_sweep` behind a partially-initialized-module ImportError
+# whenever close-out was the entry point -- see `row_spans`'s own docstring for
+# the three times this cycle has now been closed.
+from coordinator_core.execute_plan_assemble.row_spans import (
     _OPEN,
     _all_spine_ids,
     _commit_required_chunk_ids,

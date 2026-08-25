@@ -58,7 +58,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(dispatch, "_consume_unlock", lambda session_id, guard_name: False)
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -78,7 +78,7 @@ class TestUnclearedHardDenyProducesOneRecord:
     def test_no_record_when_session_id_unresolvable(self, tmp_path, monkeypatch):
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -94,7 +94,7 @@ class TestClearedHardDenyProducesOneRecordAndChainContinues:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(dispatch, "_consume_unlock", lambda session_id, guard_name: True)
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 

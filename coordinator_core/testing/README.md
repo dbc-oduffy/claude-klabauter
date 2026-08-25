@@ -62,9 +62,9 @@ recurring hazard class, not a novel claim:
 **This runner is NEVER wired through `strangle_route` / `cc_invoke` for the
 `full_test_cmd:` path.** Test-command semantics (exit = pass/fail, streamed
 output) are structurally incompatible with the RPC-result-envelope shape.
-The registered op (`testing.full_runner`, see § Registered op below) is a
-*separate* structured-JSON surface for programmatic consumers and is
-explicitly not a substitute for the bare-CLI `full_test_cmd:` path.
+There is no registered-op surface for this runner — a structured-JSON
+`testing.full_runner` op existed and was killed (PM ruling, 2026-08-23); this
+CLI is the only supported entrypoint.
 
 ## DEC-11 — the exact `full_test_cmd:` value DoE should set
 
@@ -187,32 +187,6 @@ python3 -m coordinator_core.testing.full_runner \
 
 Per-suite PASS/FAIL is streamed as suites complete, followed by a final
 machine-scannable tally line (`N passed, M failed across K families`).
-
-## DEC-9 — scope-"none" target-resolution model (for the registered op)
-
-A companion registered op, `@register_op("testing.full_runner")`
-(`coordinator_core/ops/testing_full_runner.py`), runs the same
-collect/run engine and returns a structured JSON summary for programmatic
-consumers via `strangle_route "testing.full_runner"`. It takes an explicit
-`target_root` parameter rather than using the op registry's `common_dir`
-(own-dispatching-tree) resolution model — this is the **scope-"none"`**
-fleet-generic target-resolution model used by ops that operate against an
-arbitrary caller-supplied repo rather than claude-klabauter's own working tree. See:
-
-- `[DoE-claude] coordinator/docs/wiki/coordinator-core-engine.md:231-236`
-  for the scope-"none" vs `common_dir` op target-resolution model.
-- `coordinator_core/ops/_path_guard.py`'s `contained_path`/`safe_id` helpers,
-  which the op uses to validate the caller-supplied `target_root` stays
-  within a safe, contained path before the engine touches disk.
-
-**This op is explicitly NOT the `full_test_cmd:` path.** `full_test_cmd:`
-uses the direct CLI documented above (DEC-1/DEC-11) — routing it through
-this op's `strangle_route` path would reintroduce the exact green-wash
-hazard DEC-1 exists to avoid (`cc_invoke` returns exit 0 on RPC-success
-regardless of the op's own structured `.exit_code`/`.overall_ok` field). The
-op reports its pass/fail verdict inside the JSON result object's own field
-(never the transport exit code) — consumers read the structured field per
-the two-signal contract.
 
 ## Out of scope here
 

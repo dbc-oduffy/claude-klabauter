@@ -27,7 +27,7 @@ Malformed bucket: none — unparseable JSONL lines (bad JSON syntax, or syntacti
 that isn't an object) are silently skipped, and goals has no ``malformed_records`` key in the
 envelope. Because there is no malformed channel for this section (the placement contract's
 ``"goals": {..., "malformed": []}`` row means any second-tuple-element content is discarded
-unread by ``envelope.py``), a scan failure on ``central_state_root`` itself — as opposed to a
+unread by ``resolvers.py``), a scan failure on ``central_state_root`` itself — as opposed to a
 plain empty/absent directory — cannot be silently reported through that channel; see
 ``GoalsStateRootUnreadable`` below.
 
@@ -77,7 +77,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     # An unscannable central_state_root FAILS the emit loud (raise) rather than
     # silently degrading to the zero-goals ([], []) shape. Chosen over stamping a
     # degraded flag into the malformed bucket because this section's malformed return
-    # value is discarded unread by envelope.py's placement table ("goals": {...,
+    # value is discarded unread by resolvers.py's placement table ("goals": {...,
     # "malformed": []}) — raising is the only channel that actually surfaces the failure.
     # This is an emit-path POLICY choice, not something the shared reader decides — the
     # reader stays policy-neutral and only reports the unreadable-root signal back.

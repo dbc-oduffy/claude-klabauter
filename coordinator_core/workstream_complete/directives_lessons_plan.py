@@ -306,8 +306,9 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     fails `d-stamp-plan-implemented` loud into `report["failed"]` when the
     claim never landed (denied, blocked, or failed) — the same idiom
     `directives_commit_tail.py`'s `build_release_plan_claim_directive` /
-    `build_emit_cadence_directive` already use for their own
-    `{d-run-wsc-tail.landed}` tokens. `archive-stamp-cli`'s
+    `build_emit_cadence_directive` used for their own
+    `{d-run-wsc-tail.landed}` tokens (both removed in the ceremony.wsc_tail
+    kill, 2026-08-23). `archive-stamp-cli`'s
     `stamp-plan-implemented` verb reads only `rest[0]` (the plan path) and
     silently ignores any trailing argv, so appending the token as an extra
     positional is safe — it never reaches `cs_stamp_plan_implemented` as a

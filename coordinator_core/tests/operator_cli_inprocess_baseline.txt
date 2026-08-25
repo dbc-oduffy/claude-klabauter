@@ -159,9 +159,7 @@ coordinator/bin/publish.py
 coordinator/bin/review-brightline-gate.py
 coordinator/bin/safe-commit-offer.py
 coordinator/bin/spinoff-deliverable-and-commit.py
-coordinator/bin/sweep-actioned-memos.py
 coordinator/bin/sweep-boot.py
-coordinator/bin/sweep-consumed-handoffs.py
 coordinator/bin/sweep-terminal-plans.py
 coordinator/bin/sync-main.py
 coordinator/bin/update-docs-probes.py

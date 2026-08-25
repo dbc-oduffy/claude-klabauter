@@ -1,4 +1,4 @@
-"""Tests for envelope.main's migration onto classify_shas_on_origin_main (C32).
+"""Tests for resolvers.main's migration onto classify_shas_on_origin_main (C32).
 
 Purpose: pin that the ``check-shipped-on-main.sh`` CLI port classifies its whole argv sha
 set with ONE ``classify_shas_on_origin_main`` call, not one ``sha_on_origin_main`` spawn per
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.emit import envelope
-from coordinator_core.ops.emit.envelope import main
+from coordinator_core.ops.emit import resolvers
+from coordinator_core.ops.emit.resolvers import main
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -92,13 +92,13 @@ def repo_with_origin(_shared_repo, monkeypatch):
 def test_main_calls_classify_shas_on_origin_main_exactly_once(repo_with_origin, monkeypatch, capsys):
     """Many refs against origin/main -> ONE batched classification call, not one per ref."""
     calls: list[list[str]] = []
-    real_classify = envelope.classify_shas_on_origin_main
+    real_classify = resolvers.classify_shas_on_origin_main
 
     def _counting_classify(repo_root, shas):
         calls.append(list(shas))
         return real_classify(repo_root, shas)
 
-    monkeypatch.setattr(envelope, "classify_shas_on_origin_main", _counting_classify)
+    monkeypatch.setattr(resolvers, "classify_shas_on_origin_main", _counting_classify)
 
     rc = main([
         "--verbose",
@@ -122,7 +122,7 @@ def test_main_never_calls_sha_on_origin_main(repo_with_origin, monkeypatch, caps
     def _fail(*args, **kwargs):
         raise AssertionError("main() must not call sha_on_origin_main per ref anymore")
 
-    monkeypatch.setattr(envelope, "sha_on_origin_main", _fail)
+    monkeypatch.setattr(resolvers, "sha_on_origin_main", _fail)
 
     rc = main([
         "--verbose",
@@ -157,7 +157,7 @@ def test_sha_absent_from_classified_map_degrades_to_not_on_main(repo_with_origin
         # (rather than an explicit False/None) -- the absence case this chunk pins.
         return {}
 
-    monkeypatch.setattr(envelope, "classify_shas_on_origin_main", _classify_dropping_entry)
+    monkeypatch.setattr(resolvers, "classify_shas_on_origin_main", _classify_dropping_entry)
 
     rc = main(["--verbose", on_main_sha])
     out = capsys.readouterr().out
@@ -171,7 +171,7 @@ def test_main_resolves_all_refs_in_one_cat_file_batch_check_call(repo_with_origi
     """Many refs -> ONE `git cat-file --batch-check` call, not one `git rev-parse` per ref
     (amp-wave4 C11: `main -> resolve_ref`)."""
     calls: list[list[str]] = []
-    real_run = envelope.subprocess.run
+    real_run = resolvers.subprocess.run
 
     def _counting_run(argv, *args, **kwargs):
         if len(argv) >= 3 and argv[1] == "-C" and any(
@@ -180,7 +180,7 @@ def test_main_resolves_all_refs_in_one_cat_file_batch_check_call(repo_with_origi
             calls.append(list(argv))
         return real_run(argv, *args, **kwargs)
 
-    monkeypatch.setattr(envelope.subprocess, "run", _counting_run)
+    monkeypatch.setattr(resolvers.subprocess, "run", _counting_run)
 
     rc = main([
         "--verbose",
@@ -198,7 +198,7 @@ def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
     correspondence rather than losing the failed entry's position."""
     repo_root = Path(".")
     refs = ["HEAD", "not-a-real-ref-xyz"]
-    result = envelope._resolve_refs_batch(repo_root, refs)
+    result = resolvers._resolve_refs_batch(repo_root, refs)
     assert set(result) == set(refs)
     assert result["HEAD"] is not None and len(result["HEAD"]) == 40
     assert result["not-a-real-ref-xyz"] is None
@@ -207,17 +207,17 @@ def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
 def test_commit_age_labels_batch_covers_multiple_shas_in_one_call(repo_with_origin, monkeypatch):
     """`_commit_age_labels_batch` resolves >=2 shas' ages via ONE `git show` call."""
     calls: list[list[str]] = []
-    real_run = envelope.subprocess.run
+    real_run = resolvers.subprocess.run
 
     def _counting_run(argv, *args, **kwargs):
         if len(argv) >= 3 and argv[1] == "-C" and "show" in argv:
             calls.append(list(argv))
         return real_run(argv, *args, **kwargs)
 
-    monkeypatch.setattr(envelope.subprocess, "run", _counting_run)
+    monkeypatch.setattr(resolvers.subprocess, "run", _counting_run)
 
     shas = [repo_with_origin["off_main"], repo_with_origin["off_main_2"]]
-    labels = envelope._commit_age_labels_batch(Path(repo_with_origin["work"]), shas)
+    labels = resolvers._commit_age_labels_batch(Path(repo_with_origin["work"]), shas)
 
     assert len(calls) == 1, f"expected exactly one git show call, got {len(calls)}: {calls}"
     assert set(labels) == set(shas)
@@ -228,13 +228,13 @@ def test_unresolvable_ref_never_reaches_classify_call(repo_with_origin, monkeypa
     """A ref that fails to resolve must be excluded from the batched sha set entirely, not
     passed through as None/'' and misclassified."""
     calls: list[list[str]] = []
-    real_classify = envelope.classify_shas_on_origin_main
+    real_classify = resolvers.classify_shas_on_origin_main
 
     def _counting_classify(repo_root, shas):
         calls.append(list(shas))
         return real_classify(repo_root, shas)
 
-    monkeypatch.setattr(envelope, "classify_shas_on_origin_main", _counting_classify)
+    monkeypatch.setattr(resolvers, "classify_shas_on_origin_main", _counting_classify)
 
     rc = main(["--verbose", "not-a-real-ref", repo_with_origin["on_main"]])
     err = capsys.readouterr().err

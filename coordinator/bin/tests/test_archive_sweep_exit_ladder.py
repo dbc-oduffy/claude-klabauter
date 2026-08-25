@@ -1,10 +1,12 @@
-"""test_archive_sweep_exit_ladder.py — the three archive sweeps must refuse
+"""test_archive_sweep_exit_ladder.py — the archive sweeps must refuse
 (non-zero exit, no liveness stamp) on an unrecognized `exit_code`, not just
 on `exit_code == 2`.
 
 Defect this closes (C11, plan 2026-08-20-a-refusal-cannot-exit-zero): each of
-sweep-terminal-plans.py, sweep-actioned-memos.py, and prune-closed-bugs.py
-checked `act_exit == 2` (DETERMINATE-PARTIAL) and nothing else on the ACT
+sweep-actioned-memos.py and prune-closed-bugs.py (sweep-terminal-plans.py's
+own coverage was removed when fleet.archive_completed_plans was killed and
+rebuilt from scratch — PM ruling 2026-08-23) checked `act_exit == 2`
+(DETERMINATE-PARTIAL) and nothing else on the ACT
 call's exit_code, so `exit_code == 1` -- the op's setup-error shape
 (state/lessons/2026-07-14-destructive-engine-ops-must-fail-closed-a5fa9ceef812.yaml's
 fail-closed-refusal prescription) -- fell through the `if`, printed the acted
@@ -68,28 +70,6 @@ class _RouteStub:
         if params.get("dry_run"):
             return {"candidates": [{"id": "state/x.md"}], "exit_code": 0}
         return {"acted": [], "exit_code": self._act_exit_code}
-
-
-class SweepTerminalPlansExitLadderTest(unittest.TestCase):
-    def setUp(self):
-        self.mod = _load_module("sweep-terminal-plans.py", "sweep_terminal_plans_c11_test")
-        self.mod._resolve_repo_root = lambda positional: "/fake-repo"
-        self.stamped = []
-        self.mod._stamp_archive_sweeps_liveness = lambda repo_root: self.stamped.append(repo_root)
-
-    def test_act_exit_1_refuses_non_zero_and_no_stamp(self):
-        stub = _RouteStub(1)
-        _install_route(self, self.mod, stub)
-        rc = self.mod.main([])
-        self.assertNotEqual(rc, 0)
-        self.assertEqual(self.stamped, [])
-
-    def test_act_exit_2_still_stamps_and_exits_zero(self):
-        stub = _RouteStub(2)
-        _install_route(self, self.mod, stub)
-        rc = self.mod.main([])
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.stamped, ["/fake-repo"])
 
 
 class SweepActionedMemosExitLadderTest(unittest.TestCase):

@@ -174,6 +174,17 @@ def _has_pathspec_less_commit(fn: ast.AST) -> bool:
     That is the catastrophic shape and the reason this file exists. WITH a
     pathspec a lost index commits nothing; WITHOUT one it commits git's empty
     tree, i.e. deletes every tracked file. See `_empty_private_index_breach`.
+
+    `commit-tree` counts as the same shape, unconditionally: the HEAD-race CAS
+    ladder (2026-08-23) replaced both fleet seams' `git commit` with
+    `write-tree` → `commit-tree` → `update-ref`, and this walk keying only on
+    the literal `"commit"` went blind on both of them the moment it landed —
+    caught here because both tests below fail loud on an empty walk rather
+    than passing vacuously. The hazard did not move with the argv: `write-tree`
+    against a lost index still yields git's canonical empty tree, and
+    `commit-tree` then lands exactly that. A pathspec cannot rescue it either,
+    since `commit-tree` takes none by construction — so there is no
+    `"--"` escape hatch to check for.
     """
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
@@ -185,6 +196,8 @@ def _has_pathspec_less_commit(fn: ast.AST) -> bool:
         }:
             continue
         lits = _arg_literals(node)
+        if "commit-tree" in lits:
+            return True
         if "commit" not in lits:
             continue
         if not any(lit == "--" for lit in lits):

@@ -1954,6 +1954,26 @@ def _run_guarded() -> int:
 
     _preload_op_registry()
 
+    # C2 (docs/plans/2026-08-25-the-http-listener-gets-something-keeping-it-up.md):
+    # this pipe server is the one resident, per-machine, elected process the box
+    # runs, so its own boot -- past its OWN election, never before -- is what gives
+    # the http listener a supervisor that is itself supervised. Lazy-imported: a
+    # module-level `from coordinator_core.warm import supervisor` would be
+    # circular, since `supervisor.py` itself imports `InFlightCounter`/`_serve_line`
+    # from this module. Return value ignored by contract -- `ensure_listener` never
+    # waits and returns `None` on every failure mode (unreadable discovery, a dead
+    # pid, a failed health check, a spawn not yet bound). Wrapped anyway, mirroring
+    # the breadcrumb write just above: `ensure_listener` is DOCUMENTED never to
+    # raise, but this boot sequence must not take that on faith -- a pipe server
+    # that failed to boot because an http listener could not start would invert
+    # the guarantee this call exists to provide.
+    try:
+        from coordinator_core.warm import supervisor
+
+        supervisor.ensure_listener(repo_root)
+    except Exception as exc:  # noqa: BLE001 -- fail-open by construction, see comment above
+        print(f"[warm-server] http listener ensure_listener() failed: {exc!r}", file=sys.stderr)
+
     ctx = _ServerContext(
         name=elected.endpoint,
         sid=elected.identity,
@@ -2020,9 +2040,22 @@ def _preload_op_registry() -> None:
         registry (registration is an import side effect); a synthetic
         warm-up request would also mutate telemetry's served counts and
         make `served_count` lie about real traffic.
+
+    EAGER, DELIBERATELY (2026-08-22): calls `coordinator_core.ops._eager_import_all()`
+    directly rather than a bare `import coordinator_core.ops`. Under the lazy-only
+    package (`ops/__init__.py` no longer eager-imports anything at package-init
+    time), a bare import registers NOTHING and raises nothing — the except branch
+    below never fires, nothing is printed, and this preload silently becomes a
+    no-op while the server reports healthy. The warm server is the ONE caller in
+    this repo that legitimately wants a full eager registry: a long-lived process
+    serving arbitrary ops, the precise case the lazy channel was carved AROUND
+    rather than for (see `op_census/spawn_bearing_ops.py`'s census enumerators for
+    the same pattern). Do not revert this to a bare import.
     """
     try:
-        import coordinator_core.ops  # noqa: F401 -- registration is the side effect
+        import coordinator_core.ops as _ops_pkg
+
+        _ops_pkg._eager_import_all()  # noqa: SLF001 -- the one legitimate eager caller, see docstring above
         from coordinator_core.ipc import dispatch_message  # noqa: F401
     except Exception as exc:  # noqa: BLE001 -- a slow first call beats no server
         print(f"[warm-server] op-registry preload failed: {exc!r}", file=sys.stderr)

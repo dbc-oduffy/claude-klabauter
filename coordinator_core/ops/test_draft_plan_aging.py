@@ -574,7 +574,7 @@ def test_is_census_local_sidecar_review_variant_excluded(tmp_path):
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
     (plans_dir / "foo.md").write_text("---\nstatus: draft\n---\n\nbody\n", encoding="utf-8")
-    sidecar = plans_dir / "foo.review-the Director of Engineering.md"
+    sidecar = plans_dir / "foo.review-zoli.md"
     sidecar.write_text("body\n", encoding="utf-8")
 
     assert _is_census_local_sidecar(sidecar, plans_dir) is True
@@ -584,7 +584,7 @@ def test_list_orphaned_excludes_review_variant_sidecar_from_population(tmp_path)
     today = date(2026, 8, 20)
     _init_repo(tmp_path)
     _write_census_plan(tmp_path, "foo.md", created=_POST_CARRY_DATE)
-    (tmp_path / "docs" / "plans" / "foo.review-the Director of Engineering.md").write_text(
+    (tmp_path / "docs" / "plans" / "foo.review-zoli.md").write_text(
         "---\nstatus: draft\ncreated: 2026-08-01\n---\n\nbody\n", encoding="utf-8"
     )
 

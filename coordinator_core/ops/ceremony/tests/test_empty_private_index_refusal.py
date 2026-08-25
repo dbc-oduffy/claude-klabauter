@@ -74,6 +74,6 @@ def test_both_commit_tree_seams_call_the_refusal():
     from coordinator_core.ops.ceremony import git_native
 
     src = inspect.getsource(git_native)
-    assert src.count("_empty_private_index_refusal(") == 3  # 1 def + 2 call sites
+    assert src.count("_empty_private_index_refusal(") == 4  # 1 def + 3 call sites
     for caller in ("_commit_scoped_private_index", "commit_authored_content"):
         assert 'caller="%s"' % caller in src

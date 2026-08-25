@@ -44,7 +44,7 @@ repo or machine root, raising/returning falsy on failure":
 ``coordinator_core.machine_resolver.registry_get``,
 ``coordinator_core.doe_root_pointer.read_doe_root_pointer``,
 ``coordinator_core.install._shared.resolve_coordinator_root`` /
-``coordinator_core.ops.emit.envelope.resolve_coordinator_root`` (same name,
+``coordinator_core.ops.emit.resolvers.resolve_coordinator_root`` (same name,
 two call sites, both live-root oracles),
 ``coordinator_core.plugin_health.relocation_ledger.default_ledger_path``,
 ``coordinator_core.engine_root.coordinator_engine_root``. Matched by bare

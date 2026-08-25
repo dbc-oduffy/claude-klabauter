@@ -1,0 +1,45 @@
+# .percolate-ignore — bin/ contributing source root for the claude-klabauter
+# OSS mirror (row 4, `claude-klabauter-bin`, authored sibling-side in
+# DoE-claude:setup/publish-targets.portable).
+#
+# SOURCE_DIR for this file is `claude-klabauter/bin/` itself. Patterns are
+# SOURCE_DIR-RELATIVE — they carry NO `bin/` prefix, or they double-prefix to
+# `bin/bin/…` and match nothing. Same trap the sibling
+# `coordinator_core/.percolate-ignore` header warns about; read that file's
+# MECHANISM block for the full single-source explanation, which applies here
+# verbatim (row 4 is likewise single-source, so this file is inert during
+# restricted-tree assembly and becomes live only when `dispatch_mirror_like`
+# hands it to `sync_mirror`, which consults it symmetrically on both the copy
+# and destination-delete legs).
+#
+# WHY THIS FILE EXISTS: row 4's allowlist admits `tests`, and the first
+# resolved dry-run against the live destination (2026-08-02) put 27
+# `__pycache__/*.pyc` files into the publish set — build artifacts from two
+# interpreter versions, carrying no source value and pinning local pytest
+# versions into a public artifact. The allowlist cannot express this: it gates
+# top-level entries, and `__pycache__` appears nested under an admitted one.
+#
+# The published test suite itself SHIPS and must keep shipping — same PM
+# ruling as row 1 (§ C3, "settled, do not re-argue"): the tests are the
+# adopter's means of verifying an install. Do NOT add `tests/` here.
+
+# --- Python build artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# --- Editor / OS detritus ---
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+# Bare (unprefixed) names match ONLY at this file's own root (exact full
+# rel_path match); a `*`-leading basename glob is required to also catch these
+# nested inside bin/'s subdirectories.
+*.DS_Store
+*Thumbs.db
+*desktop.ini

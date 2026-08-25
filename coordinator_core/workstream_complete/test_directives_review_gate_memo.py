@@ -327,7 +327,7 @@ def test_execute_directives_symbolic_tip_re_dispatches_every_pass(
 
 _SINGLE_REVIEW = {
     "sha_range": f"{_FLOOR_SHA}..{_TIP_SHA}",
-    "reviewer": "the Staff Engineer",
+    "reviewer": "patrik",
     "scope": "chain",
     "verdict": "PASS",
     "diff_loc": 42,

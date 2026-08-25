@@ -19,13 +19,13 @@ Coverage:
       time via other modules in the same pytest session, so sys.modules /
       coordinator_core.ipc._REGISTRY are already fully populated by the time
       any in-process assertion here would run):
-        (b1) with COORDINATOR_CORE_LAZY_OPS=1, dispatching a MAPPED op
+        (b1) dispatching a MAPPED op (lazy is unconditional since 2026-08-22)
              ("ping") imports ONLY that op's owning module
              (coordinator_core.ops.ping) -- not the rest of the ~55-module
              eager-import list (spot-checked via coordinator_core.ops.
              handoff_children, an unrelated module never touched by the ping
              dispatch path).
-        (b2) with COORDINATOR_CORE_LAZY_OPS=1 AND OP_MODULE_MAP missing the
+        (b2) with OP_MODULE_MAP missing the
              entry for a real, registerable op ("workflow.scaffold", entry
              deleted in-process to simulate map drift/staleness), dispatching
              that op still succeeds -- proving the SAFE FALLBACK
@@ -44,7 +44,7 @@ from pathlib import Path
 
 import coordinator_core.ops  # noqa: F401 -- triggers every op module's register_op(...) side-effect
 import coordinator_core.ipc as ipc
-from coordinator_core.ops._registry_map import OP_MODULE_MAP
+from coordinator_core.ops._registry_map import OP_MODULE_MAP, resolves
 
 import pytest
 
@@ -62,6 +62,23 @@ pytestmark = [
 
 
 def test_op_module_map_matches_live_registry():
+    # Lazy is unconditional since 2026-08-22, so the live registry is EMPTY until
+    # something forces registration -- without this call every OP_MODULE_MAP entry
+    # reads as "stale", which is what this assert reported before the fix. This is
+    # the sanctioned full-registration caller pattern (see ops/__init__.py's
+    # _eager_import_all docstring), the same one C4's census enumerators and C17's
+    # warm-server preload use.
+    import coordinator_core.hooks as _hooks_pkg
+    import coordinator_core.ops as _ops_pkg
+
+    # BOTH packages, not just ops. OP_MODULE_MAP carries hooks.* keys, but
+    # coordinator_core.hooks is a parallel registration surface with its OWN
+    # _eager_import_all (see hooks/__init__.py) -- forcing only the ops side leaves
+    # every hooks.* key reading as "stale in map", which is exactly what this assert
+    # reported. Two packages, one registry.
+    _ops_pkg._eager_import_all()
+    _hooks_pkg._eager_import_all()
+
     live_keys = set(ipc._REGISTRY.keys())
     map_keys = set(OP_MODULE_MAP.keys())
 
@@ -93,13 +110,17 @@ def test_op_module_map_matches_live_registry():
 _MAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
     """
     import asyncio
-    import os
     import sys
 
-    os.environ["COORDINATOR_CORE_LAZY_OPS"] = "1"
-
-    import coordinator_core.ops  # noqa: F401 -- lazy mode: SKIPS the eager import list
+    import coordinator_core.ops  # noqa: F401 -- lazy is unconditional: registers nothing
     import coordinator_core.ipc as ipc
+
+    # Sanctioned unstamped-dispatch caller (ipc.py :: allow_unstamped_dispatch):
+    # this tree is a development clone with no engine build stamp, and the test is
+    # deliberate manual dispatch. Same carve-out benchmarks/catering_path_bench.py
+    # uses. Without it every dispatch below refuses with -32005 before reaching the
+    # targeted-import behaviour this test exists to prove.
+    ipc.allow_unstamped_dispatch()
 
     assert "coordinator_core.ops.ping" not in sys.modules, (
         "coordinator_core.ops.ping must not be imported yet under lazy mode "
@@ -130,13 +151,17 @@ _MAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
 _UNMAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
     """
     import asyncio
-    import os
     import sys
 
-    os.environ["COORDINATOR_CORE_LAZY_OPS"] = "1"
-
-    import coordinator_core.ops  # noqa: F401 -- lazy mode: SKIPS the eager import list
+    import coordinator_core.ops  # noqa: F401 -- lazy is unconditional: registers nothing
     import coordinator_core.ipc as ipc
+
+    # Sanctioned unstamped-dispatch caller (ipc.py :: allow_unstamped_dispatch):
+    # this tree is a development clone with no engine build stamp, and the test is
+    # deliberate manual dispatch. Same carve-out benchmarks/catering_path_bench.py
+    # uses. Without it every dispatch below refuses with -32005 before reaching the
+    # targeted-import behaviour this test exists to prove.
+    ipc.allow_unstamped_dispatch()
     from coordinator_core.ops import _registry_map
 
     assert "workflow.scaffold" in _registry_map.OP_MODULE_MAP, (
@@ -186,6 +211,34 @@ def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
         cwd=project_root,
         env=env,
     )
+
+
+# ---------------------------------------------------------------------------
+# resolves() predicate -- the C3 resolver used by the codemodded assertions
+# across the wider test suite (docs/plans/2026-08-22-the-import-path-costs-
+# nothing.md § C3). This module's own `assert not ipc._REGISTRY` lines above
+# stay real registry reads (empty-registry is the very fact being proved,
+# which resolves() would trivially satisfy via OP_MODULE_MAP) -- these tests
+# cover the predicate itself, not a codemod of this file's own assertions.
+# ---------------------------------------------------------------------------
+
+
+def test_resolves_true_for_op_module_map_key():
+    assert resolves("ping")
+
+
+def test_resolves_true_for_live_registry_key_absent_from_map():
+    # Any key present in the live _REGISTRY (this test file already imports
+    # coordinator_core.ops, populating it eagerly) must resolve, independent
+    # of OP_MODULE_MAP membership.
+    live_only_keys = set(ipc._REGISTRY.keys()) - set(OP_MODULE_MAP.keys())
+    if not live_only_keys:
+        pytest.skip("no live-registry key currently absent from OP_MODULE_MAP")
+    assert resolves(next(iter(live_only_keys)))
+
+
+def test_resolves_false_for_unknown_key():
+    assert not resolves("definitely.not.a.real.op")
 
 
 def test_mapped_op_dispatch_imports_only_its_module():

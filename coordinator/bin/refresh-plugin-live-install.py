@@ -73,6 +73,40 @@ PROG = "refresh-plugin-live-install.py"
 GENERATES = []  # writes live_path (a registered plugin's live checkout under the Claude plugins dir), the refresh audit log, and snapshot dirs — all under the operator's Claude home, outside claude-klabauter's own tree (abs-path-ok: descriptive prose, not a resolve site)
 
 
+def _resolved_uv():
+    """The absolute path `shutil.which` resolved for uv, or None.
+
+    WHY NOT THE BARE NAME. `shutil.which` honours `PATHEXT` on Windows and will happily
+    return a `uv.bat` / `uv.cmd` shim; `subprocess.run` without `shell=True` goes through
+    `CreateProcess`, which appends only `.exe` and never consults `PATHEXT`. So a gate
+    written as `which("uv")` can succeed on a shim that the matching `run(["uv", ...])`
+    cannot launch -- FileNotFoundError [WinError 2] at best, and at worst a DIFFERENT
+    `uv.exe` elsewhere on PATH runs silently in place of the one that was detected.
+    POSIX is unaffected: `execvp` resolves the same way `which` does.
+
+    Reported with measurements by example-retrieval-repo (example-retrieval-repo-d5) against seven reds in
+    their install suite, where a `uv.bat` test shim was detected and then bypassed. An
+    absolute path to a `.bat` DOES launch via CreateProcess -- their first diagnosis said
+    otherwise, they retested and refuted it themselves, and that is what makes resolving
+    the path a sufficient fix rather than a cosmetic one.
+
+    Resolved fresh per call rather than cached: the bootstrap leg installs uv partway
+    through a run, so a value captured at entry would still be None afterwards.
+    """
+    return shutil.which("uv")
+
+
+def _uv_or_die():
+    """`_resolved_uv()` at a spawn site, where None means the gate above it lied.
+
+    Falls back to the bare name rather than raising: every caller is already inside a
+    branch that established uv is present, so a None here means uv vanished mid-run.
+    The bare name is what the code did before this fix, so the fallback is exactly the
+    old behaviour rather than a new failure mode.
+    """
+    return _resolved_uv() or "uv"
+
+
 def _no_console_kwargs() -> dict:
     """Deferred coordinator_core import — matches this file's engine-root
     bootstrap posture (see ``_import_registry_deps``) so ``--help``/usage
@@ -1023,12 +1057,12 @@ def _handle_source_is_live_venv(plugin: str, sil_source: str, sil_dist: str, ref
             )
             return 1
         rc = result.returncode
-    elif shutil.which("uv"):
+    elif _resolved_uv() is not None:
         from cc_invoke import child_env  # noqa: E402 (path injected at module top)
 
         install_tool = "uv"
         result = subprocess.run(
-            ["uv", "pip", "install", "-e", str(sil_source_path), "--python", str(venv_py)],
+            [_resolved_uv(), "pip", "install", "-e", str(sil_source_path), "--python", str(venv_py)],
             env=child_env(),
         )
         rc = result.returncode
@@ -1382,7 +1416,7 @@ def _handle_editable_sibling_venv(
         venv_created_by_pip = _venv_created_by_pip(pyvenv_cfg)
         venv_python = _venv_python_path(live_path / ".venv")
 
-        if shutil.which("uv"):
+        if _resolved_uv() is not None:
             install_tool = "uv"
         elif venv_created_by_pip:
             print(f"{PROG}: [editable_sibling_venv] [venv-leg] venv created by pip; using pip for editable install.")
@@ -1415,7 +1449,7 @@ def _handle_editable_sibling_venv(
 
         if install_tool == "uv":
             r = subprocess.run(
-                ["uv", "pip", "install", "-e", str(source_path), "--python", str(venv_python)],
+                [_uv_or_die(), "pip", "install", "-e", str(source_path), "--python", str(venv_python)],
                 env=child_env(),
             )
             if r.returncode != 0:
@@ -1613,7 +1647,7 @@ def _handle_default(
         venv_created_by_pip = _venv_created_by_pip(pyvenv_cfg)
         venv_python = _venv_python_path(live_path / ".venv")
 
-        if shutil.which("uv"):
+        if _resolved_uv() is not None:
             install_tool = "uv"
         elif venv_created_by_pip:
             print(
@@ -1648,7 +1682,7 @@ def _handle_default(
 
         if install_tool == "uv":
             r = subprocess.run(
-                ["uv", "pip", "install", "-e", ".", "--python", str(venv_python)],
+                [_uv_or_die(), "pip", "install", "-e", ".", "--python", str(venv_python)],
                 cwd=str(live_path),
                 env=child_env(),
             )

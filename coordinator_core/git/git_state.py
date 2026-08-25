@@ -55,10 +55,12 @@ from __future__ import annotations
 
 import os
 import struct
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.run import run_git
 
 __all__ = [
@@ -68,6 +70,8 @@ __all__ = [
     "IndexParseError",
     "read_index",
     "head_sha",
+    "head_tree_sha",
+    "read_tree_spine",
     "head_blobs",
 ]
 
@@ -362,11 +366,152 @@ def head_sha(repo: Union[str, Path]) -> Optional[str]:
     return None
 
 
+def head_tree_sha(repo: Union[str, Path]) -> Optional[str]:
+    """`head_sha(repo)`, then read the HEAD commit object (loose or packed,
+    via `coordinator_core.git.git_objects._read_object`) and parse its
+    `tree <sha>` first line. Returns `None` -- never raises -- for an
+    unresolvable HEAD, an unreadable/corrupt commit object, or a HEAD sha
+    that resolves to something other than a `commit` object; a caller sees
+    `None` as "take the ladder", same as every other three-valued reader in
+    this module.
+    """
+    sha = head_sha(repo)
+    if sha is None:
+        return None
+    common_dir = resolve_git_common_dir(repo)
+    result = _read_object(common_dir, sha)
+    if result is None:
+        return None
+    otype, payload = result
+    if otype != "commit":
+        return None
+    first_line, _, _ = payload.partition(b"\n")
+    if not first_line.startswith(b"tree "):
+        return None
+    tree_sha = first_line[len(b"tree ") :].decode("ascii", errors="replace").strip()
+    if len(tree_sha) != 40:
+        return None
+    return tree_sha
+
+
+def _parse_tree_entries(payload: bytes) -> Optional[Dict[str, Tuple[int, str]]]:
+    """`<mode> <name>\\0<20-byte-sha>` repeated -- the inverse of
+    `git_objects.build_tree`'s emission. Returns `None` (never raises) on
+    any structural surprise -- a missing separator, a non-octal mode, a
+    short trailing sha -- so a corrupt/unexpected tree object reads as
+    "unreadable", not as a partial or wrong entry set.
+    """
+    entries: Dict[str, Tuple[int, str]] = {}
+    pos = 0
+    n = len(payload)
+    try:
+        while pos < n:
+            sp = payload.index(b" ", pos)
+            mode = int(payload[pos:sp], 8)
+            nul = payload.index(b"\x00", sp + 1)
+            name = payload[sp + 1 : nul].decode("utf-8", "surrogateescape")
+            sha_bytes = payload[nul + 1 : nul + 21]
+            if len(sha_bytes) != 20:
+                return None
+            entries[name] = (mode, sha_bytes.hex())
+            pos = nul + 21
+    except (ValueError, IndexError):
+        return None
+    return entries
+
+
+def read_tree_spine(
+    repo: Union[str, Path], paths: Sequence[str]
+) -> Optional[Dict[str, Dict[str, Tuple[int, str]]]]:
+    """For `paths` (repo-relative), returns the tree objects along each
+    path's directory spine: `{dir: {name: (mode, sha)}}`, root keyed as
+    `""`, root always included. Walks ONLY the directory components each
+    path actually needs -- O(path depth), never O(repo) -- reading a given
+    directory's tree object at most once even when multiple `paths` share a
+    prefix. Never touches `.git/index`.
+
+    A path's own leaf component (its last `/`-segment) is never descended
+    into regardless of its mode -- a gitlink (`160000`) or any other
+    non-tree entry there is simply the value the caller finds in its
+    parent directory's dict, not a directory this function opens.
+
+    Returns `None` -- take the ladder -- for an unresolvable HEAD or any
+    unreadable/corrupt tree object encountered along a spine (including the
+    root); never returns a partial spine silently missing a directory it
+    could not read.
+    """
+    root_sha = head_tree_sha(repo)
+    if root_sha is None:
+        return None
+    common_dir = resolve_git_common_dir(repo)
+    spine: Dict[str, Dict[str, Tuple[int, str]]] = {}
+    dir_sha: Dict[str, str] = {"": root_sha}
+
+    def _load_dir(dirpath: str) -> Optional[Dict[str, Tuple[int, str]]]:
+        if dirpath in spine:
+            return spine[dirpath]
+        sha = dir_sha.get(dirpath)
+        if sha is None:
+            return None
+        result = _read_object(common_dir, sha)
+        if result is None:
+            return None
+        otype, payload = result
+        if otype != "tree":
+            return None
+        entries = _parse_tree_entries(payload)
+        if entries is None:
+            return None
+        spine[dirpath] = entries
+        return entries
+
+    if _load_dir("") is None:
+        return None
+
+    for path in paths:
+        if not path:
+            continue
+        parts = path.split("/")
+        cur_dir: Optional[str] = ""
+        for part in parts[:-1]:
+            entries = _load_dir(cur_dir)
+            if entries is None:
+                return None
+            entry = entries.get(part)
+            if entry is None or entry[0] != 0o40000:
+                cur_dir = None
+                break
+            cur_dir = f"{cur_dir}/{part}" if cur_dir else part
+            dir_sha[cur_dir] = entry[1]
+        if cur_dir is not None:
+            if _load_dir(cur_dir) is None:
+                return None
+
+    return spine
+
+
+#: `head_blobs` memo, keyed `(repo, head_sha, paths)`. See that function for why
+#: the key makes this correct without invalidation. Bounded because the warm
+#: engine is long-lived and every distinct HEAD leaves its entries behind
+#: unreachable-but-resident; LRU eviction by insertion order keeps the working
+#: set (one HEAD, a handful of pathspecs) and drops the history. Deliberately
+#: NOT a `functools.lru_cache`: the key includes a value read at call time
+#: (`head_sha`), which a decorator over the public signature cannot see.
+_HEAD_BLOBS_CACHE: "OrderedDict[Tuple[str, str, Tuple[str, ...]], Dict[str, Tuple[int, str]]]" = OrderedDict()
+_HEAD_BLOBS_CACHE_MAX = 64
+
+
 def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[int, str]]:
     """`{path: (mode, sha)}` for `paths` as they exist in HEAD's tree. THE
     ONE RETAINED SPAWN in this module (`git ls-tree`, via `run_git`) --
-    isolated behind this single call site so a future packfile-reading
-    replacement has exactly one place to change. Argv-chunked via
+    isolated behind this single call site. This was written believing no
+    in-process packfile/loose-object reader existed; one now does
+    (`coordinator_core.git.git_objects._read_object`, extracted in C2 and
+    used directly by `head_tree_sha`/`read_tree_spine` above), so "exactly
+    one place to change" no longer describes a future replacement -- it
+    describes THIS call site, today, as the one spot left where a caller
+    still prefers `git ls-tree`'s own path-to-entry resolution over walking
+    the tree spine itself. Argv-chunked via
     `_chunk_paths` so a large batch cannot overrun the Windows argv cap.
 
     A path absent from HEAD (untracked, or repo has no commits yet) is
@@ -383,6 +528,40 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
     paths = [p for p in paths if p]
     if not paths:
         return {}
+
+    # MEMOISED ON HEAD's OWN SHA, which makes the cache correct by
+    # construction rather than by discipline: this function's whole answer is
+    # a projection of HEAD's tree, so two calls that agree on `repo`, `paths`
+    # and `head_sha()` cannot disagree on the result. Anything that could
+    # change the answer -- a commit here, a peer's commit, a branch switch,
+    # a reset -- moves HEAD, changes the key, and misses. Nothing invalidates
+    # by hand, so nothing can forget to.
+    #
+    # Why it is worth a cache at all: a single `ceremony.scoped_git_commit`
+    # called this three times on identical arguments (measured 2026-08-23 --
+    # `_reject_stale_index_paths`, `commit_gates.dirty_tree_gate`, and
+    # `git_native._head_blobs`), and on this box a spawn IS the cost of the
+    # call (`git --version`, doing nothing, ranges 15.3ms to 279.3ms under
+    # the load norm). Three identical `ls-tree` spawns per commit is a
+    # missing cache, not a mechanism that needs rebuilding.
+    #
+    # `head_sha()` is spawn-free (it reads `.git/HEAD` plus the loose ref or
+    # `packed-refs`), so the key costs file reads, never a process.
+    #
+    # NOT cached when HEAD is unborn/unresolvable (`head_sha()` -> None):
+    # there is no key that would distinguish one unborn state from the next,
+    # so those calls fall through to the spawn exactly as before. The freshness
+    # re-reads before a CAS are deliberately NOT special-cased -- they want
+    # "HEAD's blobs as of now", and if HEAD has not moved the cached value IS
+    # that, while if it has moved the key has changed.
+    cache_key = None
+    head = head_sha(repo)
+    if head is not None:
+        cache_key = (str(repo), head, tuple(paths))
+        cached = _HEAD_BLOBS_CACHE.get(cache_key)
+        if cached is not None:
+            _HEAD_BLOBS_CACHE.move_to_end(cache_key)
+            return dict(cached)
 
     result: Dict[str, Tuple[int, str]] = {}
     for chunk in _chunk_paths(paths):
@@ -408,4 +587,12 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
             if obj_type not in ("blob", "commit"):
                 continue
             result[path] = (int(mode_str, 8), sha)
-    return result
+
+    if cache_key is not None:
+        _HEAD_BLOBS_CACHE[cache_key] = dict(result)
+        while len(_HEAD_BLOBS_CACHE) > _HEAD_BLOBS_CACHE_MAX:
+            _HEAD_BLOBS_CACHE.popitem(last=False)
+    # A COPY out, always -- callers mutate what they get back (`git_native`
+    # merges freshness re-reads into its own dict), and handing out the cached
+    # object would let one caller's edit become the next caller's truth.
+    return dict(result)

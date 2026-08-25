@@ -59,7 +59,7 @@ Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 generations of defect found in the same session:
 
   1. The ORIGINAL bash-ported version baked a literal
-     `$HOME/.claude/plugins/coordinator/bin/...` path into
+     `$HOME/.claude/plugins/coordinator-claude/coordinator/bin/...` path into
      every emitted hook. Commit b644d5a9 migrated the whole executable
      surface into this repo (`claude-klabauter/coordinator/bin/`); that literal
      directory has not existed since. Every gate was guarded by a plain
@@ -93,6 +93,29 @@ generations of defect found in the same session:
      missing interpreter — there is no gate whose absence is silent or
      advisory, and every registered script is invoked with the interpreter
      its own shebang declares (`python3`, never `bash`).
+
+2026-08-25 — the same defect a THIRD way: currency was version-only.
+`_bin_dir()` resolves self-relative at INSTALL time and that result is baked
+into the emitted hook, so the hook is a photograph of wherever the engine
+lived that day. `_gate_is_stale()` compared only the `# gate-version: N`
+stamp, so moving the engine clone — which bumps no version — was invisible
+forever: the gates failed CANNOT-RUN on every commit, and the remediation the
+BLOCKED banner itself prints (re-run the installer) reported "already
+installed and current — no-op" and changed nothing.
+
+Observed on the Windows box: `~/.claude`'s hook was generated against
+`E:/dev/claude-klabauter`; that clone later moved to `X:/claude-klabauter`.
+Every commit to Claude Central blocked, and a reinstall repaired exactly one
+gate — `detect-staged-rollback`, which happened to carry a stale version
+stamp — while silently leaving the other two pointing at the dead path.
+
+Fixed by giving `_gate_is_stale()` a PATH axis alongside the version axis
+(both derived from `_gate_script_line()`, one source of truth shared with
+emission). Deliberately fixed at install time: making the hook resolve the
+engine at COMMIT time via the settings-home forwarders was considered and
+rejected on cost — that puts an extra Python interpreter start on each of
+four gates on every commit, against a floor of ~54 ms best / ~294 ms typical
+per start on this hardware. A hook is a hot path; an installer is not.
 
   Escape hatch (PM ruling, same session): a hard `exit 1` on every commit to
   the meta-repo, with no way out short of re-running the installer, risks
@@ -358,6 +381,19 @@ def _gate_version_line(gate: _Gate) -> str:
     return f"# gate-version: {gate.version}"
 
 
+def _gate_script_line(gate: _Gate, bin_dir: Path) -> str:
+    """The exact `_gate_script=` assignment this installer emits for `gate`.
+
+    ONE source of truth for two readers: `_gate_block()` writes it into the
+    hook, and `_gate_is_stale()` reads it back to decide whether an installed
+    region still points where this engine lives. Deriving both from here is
+    what keeps "what we emit" and "what we consider current" from drifting —
+    a drift that is invisible by construction, since the only symptom is a
+    gate that silently stays stale forever.
+    """
+    return f'_gate_script="{"/".join([bin_dir.as_posix(), gate.filename])}"'
+
+
 def _find_gate_region(text: str, marker: str) -> Optional[Tuple[int, int, str]]:
     """Locate the on-disk region for the gate whose header comment names
     `marker` — `(start_char, end_char, indent)`, or None if no such header
@@ -433,19 +469,49 @@ def _find_gate_region(text: str, marker: str) -> Optional[Tuple[int, int, str]]:
     return start_char, end_char, indent
 
 
-def _gate_is_stale(text: str, gate: _Gate) -> bool:
-    """True iff `gate`'s region can be LOCATED in `text` and that region's
-    body does not carry today's version stamp. False if the region cannot
-    be located at all (an unrecognized/legacy shape — not a claim this
-    module can safely act on, see the `stale_gates` comprehension's
-    docstring at its one call site) or if the region is current. Callers
-    are expected to already have established marker presence
-    (`gate.marker in text`) before calling this — it does not re-check it."""
+def _gate_is_stale(text: str, gate: _Gate, bin_dir: Optional[Path] = None) -> bool:
+    """True iff `gate`'s region can be LOCATED in `text` and is out of date on
+    either axis: its body does not carry today's version stamp, OR (when
+    `bin_dir` is supplied) the path it shells out to is not the path this
+    installer would emit now. False if the region cannot be located at all
+    (an unrecognized/legacy shape — not a claim this module can safely act
+    on, see the `stale_gates` comprehension's docstring at its one call site)
+    or if the region is current on both axes. Callers are expected to already
+    have established marker presence (`gate.marker in text`) before calling
+    this — it does not re-check it.
+
+    THE PATH AXIS (2026-08-25). Version-only currency made a relocated engine
+    permanently invisible. `_bin_dir()` resolves self-relative at INSTALL time
+    and the result is baked into the emitted hook, so the hook is a photograph
+    of wherever the engine lived that day — correct when taken, wrong the
+    moment the clone moves. Because a moved engine bumps no `version`, every
+    gate stayed "current" forever: the gates failed CANNOT-RUN on every
+    commit, and re-running the installer — the exact remediation the BLOCKED
+    banner prints — reported "already installed and current — no-op" and
+    changed nothing. See the module docstring's 2026-08-25 note for the
+    observed case that produced this.
+
+    Fixing this at install time is deliberate, and the alternative was
+    rejected on cost: making the hook resolve the engine at COMMIT time (via
+    the settings-home forwarders) would put an extra Python interpreter start
+    on every gate of every commit — four of them, against a floor of ~54 ms
+    best / ~294 ms typical per start on this hardware. A hook is a hot path;
+    an installer is not. The path belongs baked, and the installer's job is to
+    notice when its own photograph has gone out of date.
+
+    `bin_dir` is optional so the version-only contract stays available to
+    callers that have no bin dir in hand (and to the existing tests that
+    assert it); the install path always passes it."""
     region = _find_gate_region(text, gate.marker)
     if region is None:
         return False
     start, end, _indent = region
-    return _gate_version_line(gate) not in text[start:end]
+    body = text[start:end]
+    if _gate_version_line(gate) not in body:
+        return True
+    if bin_dir is not None and _gate_script_line(gate, bin_dir) not in body:
+        return True
+    return False
 
 
 def _replace_stale_gate_regions(text: str, stale_gates: List[_Gate], bin_dir: Path) -> str:
@@ -683,7 +749,7 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
     changing its text would itself be an unrelated-looking diff every time
     a gate's version bumps.
     """
-    script_path = "/".join([bin_dir.as_posix(), gate.filename])
+    script_line = _gate_script_line(gate, bin_dir)
     override_test = f'[ "${gate.override_env}" = "1" ]'
 
     def _cannot_run_branch(reason: str, remediation: str) -> List[str]:
@@ -720,7 +786,7 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
     lines = [
         f"# --- Gate: {gate.label} ({gate.marker}) ---",
         _gate_version_line(gate),
-        f'_gate_script="{script_path}"',
+        script_line,
         'if [ ! -f "$_gate_script" ]; then',
     ]
     lines += _cannot_run_branch(
@@ -867,7 +933,15 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
     # shape, or references the marker only inside a script PATH) is left
     # alone rather than guessed-at — "stale" is only ever a claim this
     # module can back with a located, replaceable region.
-    stale_gates = [g for g in gates if g.marker in existing_text and _gate_is_stale(existing_text, g)]
+    #
+    # `bin_dir` is passed so a region that still carries today's version
+    # stamp but points at an engine location that no longer exists counts as
+    # stale too — see `_gate_is_stale`'s "THE PATH AXIS". Without it, moving
+    # the engine clone wedges every commit and reinstalling reports "current"
+    # while fixing nothing.
+    stale_gates = [
+        g for g in gates if g.marker in existing_text and _gate_is_stale(existing_text, g, bin_dir)
+    ]
 
     if hook_exists and not missing_gates and not stale_gates and not orphaned_gates:
         print(f"{_PROG}: gate already installed and current at {hook_path} — no-op.", file=sys.stderr)

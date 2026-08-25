@@ -414,14 +414,6 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/workstream_complete/directives_commit_tail.py",
-      "directive_id": "d-release-plan-claim",
-      "cli": "session-claim-cli",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
       "module": "coordinator_core/workstream_complete/directives_completion.py",
       "directive_id": "d-complete-entry",
       "cli": "coordinator-complete-entry",
@@ -433,14 +425,6 @@
       "module": "coordinator_core/workstream_complete/directives_completion.py",
       "directive_id": "d-fold-execution-observations",
       "cli": "coordinator-fold-execution-record",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/workstream_complete/directives_completion.py",
-      "directive_id": "d-reconcile-completion-commits",
-      "cli": "reconcile-completion-commits",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

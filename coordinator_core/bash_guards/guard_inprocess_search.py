@@ -351,31 +351,33 @@ def check(
     unused: answering is strictly better than spawning on every platform, so there is no
     platform split to make here.
 
-    C5 (row 21, `docs/reference/guard-dialect-coverage.md`) disposition: stays
-    bash-only for PowerShell, by design -- its parse delegates through
-    `coordinator_core.search.answer` down to `search.engine.parse_grep_segment`, a
-    hand-rolled GNU-grep flag grammar with ZERO `Select-String` vocabulary, and the two
-    flag surfaces do not map 1:1 even semantically (grep's `-C` is one symmetric count;
-    `Select-String -Context` takes two asymmetric ones). Converting would mean authoring
-    a second, parallel flag grammar for an entirely different cmdlet's option surface --
-    out of this chunk's scope (`coordinator_core/search/engine.py` is outside this
-    plan's declared scope list). Records SILENT for a recognized Select-String/sls
-    invocation this guard can SEE but cannot safely translate -- mirroring
-    `guard_grep_via_bash._check_powershell`'s shape-scoped SILENT (row 12) rather than
-    declaring every PowerShell command "declined to rule" -- an ordinary, non-search
-    PowerShell command genuinely clean-passes here, same as the Bash leg below returns
-    bare `None` for a non-search command.
+    C10c (row 21, `docs/reference/guard-dialect-coverage.md`) disposition: dispatches
+    a PowerShell command through `coordinator_core.search.answer.answer(...,
+    tool_name="PowerShell")`, mirroring the Bash leg below -- `search.answer` (C10b)
+    now carries its own `_plan_for_powershell`/`PowerShellSource` recognition for
+    `Get-Content`/`Get-ChildItem` (and their aliases), so this guard no longer needs
+    -- and must not keep -- a parallel bash-only carve-out. A `Select-String`/`sls`
+    invocation still records SILENT below: `search.answer` has zero `Select-String`
+    vocabulary (its parse delegates through `search.engine.parse_grep_segment`, a
+    hand-rolled GNU-grep flag grammar, and the two flag surfaces do not map 1:1 even
+    semantically -- grep's `-C` is one symmetric count, `Select-String -Context`
+    takes two asymmetric ones), so `answer()` faithfully declines it and this guard
+    surfaces that as a named, shape-scoped SILENT rather than a bare, unexplained
+    fall-through -- mirroring `guard_grep_via_bash._check_powershell`'s own SILENT
+    (row 12). An ordinary, non-search PowerShell command genuinely clean-passes here,
+    same as the Bash leg returns bare `None` for a non-search command.
     """
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is Dialect.POWERSHELL:
+        command = (
+            (payload.get("tool_input") or {}).get("command")
+            if isinstance(payload.get("tool_input"), dict)
+            else None
+        ) or ""
+        command = command.replace("\r", "") if command else ""
         tokens = _dialect.tokenize_command(
-            (
-                (payload.get("tool_input") or {}).get("command")
-                if isinstance(payload.get("tool_input"), dict)
-                else None
-            )
-            or "",
+            command,
             Dialect.POWERSHELL,
             guard_name="guard_inprocess_search",
         )
@@ -394,7 +396,30 @@ def check(
                         "do not map 1:1",
                     )
                     break
-        return None
+        if not command:
+            return None
+        if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
+            return None
+        try:
+            # Review: mirrors the Bash leg's own deferred-import comment
+            # below -- an import-time failure here must degrade to
+            # `return None`, never crash the PreToolUse hook for every
+            # PowerShell call in a session.
+            from coordinator_core._hook_envelope import rewrite_input
+            from coordinator_core.search.answer import answer
+
+            cwd = payload.get("cwd") or os.getcwd()
+            rendered = answer(command, cwd=cwd, tool_name="PowerShell")
+        except Exception:
+            return None
+        if rendered is None:
+            return None
+        tool_input = payload.get("tool_input") or {}
+        updated_input = dict(tool_input)
+        updated_input["command"] = "true"
+        return rewrite_input(
+            "PreToolUse", updated_input, context="%s\n\n%s" % (_footer(cwd), rendered)
+        )
     command = _extract_command(payload)
     if not command:
         return None

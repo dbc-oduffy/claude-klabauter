@@ -15,7 +15,7 @@ error. **Confirmed dead on this machine at port time**: the
 ``check-machine-path-leak.sh`` filename no longer exists anywhere in
 ``coordinator/bin/`` (only the renamed ``.py`` does) -- the settings.json
 HARD-BLOCK guard was firing on nobody. Separately, this machine's
-``~/.claude/plugins/coordinator/bin/`` mirror is empty, so
+``~/.claude/plugins/coordinator-claude/coordinator/bin/`` mirror is empty, so
 even ``check-schema-version-bump.sh``/``check-bin-sh-polyglot.sh`` (which still
 exist as ``.sh`` in the DoE source repo) were unreachable via
 ``_find_bin_script``'s fallback rung on this install -- all three delegates

@@ -342,17 +342,15 @@ def test_archive_sweeps_failure_surfaces_remedy_commands(tmp_path):
 
     repo = _make_repo(tmp_path)
     detached_spawn.record_child_failure(
-        str(repo), "coordinator/bin/sweep-consumed-handoffs.py", exit_code=1
+        str(repo), "coordinator/bin/sweep-shipped-handoffs.py", exit_code=1
     )
 
     result = mod.build_cache(invoker="handoff", repo_root=repo, pinboard="note", pinboard_set=True)
     output = result["output"]
 
     assert "## Housekeeping" in output
-    assert "sweep-consumed-handoffs.py" in output
+    assert "sweep-shipped-handoffs.py" in output
     assert "python3 coordinator/bin/sweep-shipped-handoffs.py" in output
-    assert "python3 coordinator/bin/sweep-terminal-plans.py" in output
-    assert "python3 coordinator/bin/sweep-actioned-memos.py" in output
     # Rendered once, not once per failure line.
     assert output.count("python3 coordinator/bin/sweep-shipped-handoffs.py") == 1
 
@@ -367,7 +365,7 @@ def test_unrelated_failure_does_not_surface_archive_sweeps_remedy(tmp_path):
     output = result["output"]
 
     assert "## Housekeeping" in output
-    assert "sweep-consumed-handoffs.py" not in output
+    assert "sweep-shipped-handoffs.py" not in output
 
 
 def test_stale_archive_sweeps_liveness_surfaces_remedy_sub_bullets(tmp_path):
@@ -384,7 +382,7 @@ def test_stale_archive_sweeps_liveness_surfaces_remedy_sub_bullets(tmp_path):
     output = result["output"]
 
     assert "stale" in output
-    assert "python3 coordinator/bin/sweep-consumed-handoffs.py" in output
+    assert "python3 coordinator/bin/sweep-shipped-handoffs.py" in output
 
 
 def test_stale_class_with_no_remedy_renders_no_extra_commands(tmp_path):

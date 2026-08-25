@@ -20,8 +20,8 @@ crash-recovery pre-flight, the commit and the push.
 Negative-spec — this module SEQUENCES, it does not reimplement. Every leg
 delegates to `percolate-round.py`'s own helpers (imported by file path, since a
 dashed filename is not importable as a module name): `_resolve_dest`,
-`_resolve_repo_root`, `_round_held_lock`, `_preflight_dest_reconcile`,
-`_split_stdout_by_row_dest`, `_extract_change_lines`, `_build_commit_pathspec`,
+`_resolve_repo_root`, `_round_held_lock`, `_split_stdout_by_row_dest`,
+`_extract_change_lines`, `_read_fresh_round_manifest`, `_pathspec_from_manifest`,
 `_push_dest`. It does NOT own gate policy, does NOT widen any allowlist, and
 does NOT decide a seed amendment — those stay where they are.
 
@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -383,15 +384,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Stop before the push; print the state instead of pushing.",
     )
     parser.add_argument(
-        "--reconcile-dest",
-        choices=("refuse", "discard"),
-        default="refuse",
-        help=(
-            "How to handle a dirty dest left by a prior crashed round. Applied "
-            "INSIDE the dest lock (§ percolate-round._preflight_dest_reconcile)."
-        ),
-    )
-    parser.add_argument(
         "--no-delta",
         dest="delta",
         action="store_false",
@@ -471,10 +463,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             holder_label=f"percolate-mirror:{Path(mirror_root).name}",
             timeout=_round._round_lock_wait_secs(),
         ):
-            preflight_rc = _round._preflight_dest_reconcile(args, repo_root)
-            if preflight_rc is not None:
-                return preflight_rc
-
+            # The destination-dirtiness preflight is GONE (plan AC5). It existed
+            # only because a stdout-derived pathspec could not tell this round's
+            # bytes from a crashed predecessor's; the manifest read below names
+            # them, and its freshness check does the job the preflight did.
             print(f"=== percolate-mirror {mirror_root} — publish ({len(targets)} rows, one invocation) ===")
             # Inherited-holder handoff. This process already holds the dest
             # lock, and `publish.py::main` acquires the SAME key
@@ -494,6 +486,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # engine owns that, not each caller. Only an explicit opt-out
                 # is forwarded.
                 real_cmd.append("--no-delta")
+            # Stamped BEFORE the run so `_read_fresh_round_manifest` can reject a
+            # manifest this round did not write (a crashed predecessor's, or a
+            # prior round's leftover when this one is a no-op).
+            manifest_not_before = time.time()
             real = _round._run(
                 real_cmd,
                 timeout=_round._PUBLISH_LEG_TIMEOUT_SECS,
@@ -515,16 +511,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             if gate_rc is not None:
                 return gate_rc
 
-            pathspec_seen: dict = {}
-            for row_dest, row_stdout in _round._split_stdout_by_row_dest(
-                real.stdout, dest
-            ):
-                row_changes, row_renames = _round._extract_change_lines(row_stdout)
-                for entry in _round._build_commit_pathspec(
-                    row_dest, row_changes, row_renames, repo_root=repo_root
-                ):
-                    pathspec_seen.setdefault(entry, None)
-            pathspec = list(pathspec_seen.keys())
+            # The commit pathspec comes from the manifest publish.py persisted,
+            # never from parsing its printed NEW:/UPDATE:/REMOVE: lines. Same fix
+            # as percolate-round.py's `_cmd_round_default`; this file carried a
+            # structurally identical copy of that defect.
+            manifest = _round._read_fresh_round_manifest(
+                Path(repo_root), manifest_not_before
+            )
+            pathspec = (
+                []
+                if manifest is None
+                else _round._pathspec_from_manifest(manifest, repo_root)
+            )
 
             if not pathspec:
                 print(

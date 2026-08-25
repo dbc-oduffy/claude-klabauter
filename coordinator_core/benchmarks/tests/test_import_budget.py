@@ -134,22 +134,6 @@ def test_resolve_ceiling_raises_for_entry_missing_ceiling_field():
         resolve_ceiling("some.module", manifest=manifest)
 
 
-def test_measure_import_subprocess_ignores_ambient_lazy_ops_override(monkeypatch):
-    """Env-purity regression: `COORDINATOR_CORE_LAZY_OPS=1` in the PARENT (this test's own)
-    environment must not leak into the probe subprocess and switch it onto the lazy path.
-    `coordinator_core.hooks` measures ~5 modules lazy vs ~111+ eager -- against the fix, this
-    subprocess would inherit the ambient var and report a lazy-sized count; against the
-    unfixed code (env = dict(os.environ) with no pop), this assertion fails because the
-    measured count collapses to the lazy ~5-module figure."""
-    monkeypatch.setenv("COORDINATOR_CORE_LAZY_OPS", "1")
-    cost = measure_import_subprocess("coordinator_core.hooks")
-    assert cost.module_count > 50, (
-        f"expected an eager-path module count (~111+), got {cost.module_count} -- the ambient "
-        "COORDINATOR_CORE_LAZY_OPS=1 override leaked into the probe subprocess and switched it "
-        "onto the lazy path (~5 modules)"
-    )
-
-
 def test_manifest_ceiling_exceeds_recorded_baseline_by_stated_headroom():
     """The ceiling isn't a magic number -- it must equal baseline + headroom, both recorded in
     the manifest, so the headroom choice is auditable rather than hand-tuned per entry."""

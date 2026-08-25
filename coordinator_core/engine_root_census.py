@@ -55,11 +55,14 @@ path, which is where all 26 of the measured reads came from:
       `engine_root._ENGINE_ROOT_FALLBACK_EMITTED`, so a process pays at
       most a handful of appends for its whole lifetime, not one per read.
     - No `coordinator_core.ops` import ANYWHERE in this module, and this
-      module deliberately does not live under that package. Importing
-      `coordinator_core.ops.<anything>` triggers `_eager_import_all` over
-      ~206 op modules; paying that on an engine-root read would tax the
-      exact path this plan exists to unload. Imports here are stdlib plus
-      `coordinator_core._settings_home`, which is bootstrap-safe and makes
+      module deliberately does not live under that package. Post-lazy-only
+      (2026-08-22, the import-path-costs-nothing sprint), a bare
+      `import coordinator_core.ops` no longer forces `_eager_import_all` over
+      ~206 op modules — that rationale is retired, not merely stale — but the
+      rule it justified still holds: this accessor has zero need for any op,
+      and even a single targeted per-op import still pays a real compile/import
+      cost this hot-path read has no reason to spend. Imports here stay stdlib
+      plus `coordinator_core._settings_home`, which is bootstrap-safe and makes
       zero external calls.
     - No subprocess spawn, no lock. `open(path, "a")`'s append-mode write
       is what POSIX and NTFS both guarantee is atomic for a SINGLE

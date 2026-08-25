@@ -103,10 +103,7 @@ KNOWN_CLASSES: tuple = (
 # tuple and MUST render nothing (do not invent commands for classes with no CLI yet).
 REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     ARCHIVE_SWEEPS: (
-        "python3 coordinator/bin/sweep-consumed-handoffs.py",
         "python3 coordinator/bin/sweep-shipped-handoffs.py",
-        "python3 coordinator/bin/sweep-terminal-plans.py",
-        "python3 coordinator/bin/sweep-actioned-memos.py",
     ),
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: (),

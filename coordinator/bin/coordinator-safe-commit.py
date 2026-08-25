@@ -402,26 +402,23 @@ def parse_args(argv: Sequence[str]) -> Args:
 
 
 def do_pathspec(args: "Args") -> None:
-    """Port of Defect 1's fix (cross-repo/inbox/2026-08-06-doe-claude-em-
-    safe-commit-pathspec-and-allowlist-naming.md): delegates a `-- <paths>`
-    invocation to `scoped-git-commit -m "<subject>" -- <paths>`
-    (coordinator_core/ops/ceremony/scoped_git_commit.py) — a subprocess
-    handoff, not a re-implementation, so the delegate's own ownership gate,
-    agree-case/private-index selection, and push-state handling apply
-    unchanged. `--dry-run` is honored here directly (the delegate has no
-    dry-run flag of its own) and never reaches the subprocess."""
-    if args.dry_run:
-        print("DRY RUN — pathspec: would delegate to scoped-git-commit:", file=sys.stderr)
-        print(
-            "  scoped-git-commit -m %s -- %s" % (shlex.quote(args.subject), " ".join(shlex.quote(p) for p in args.paths)),
-            file=sys.stderr,
-        )
-        print("(no git add or commit executed)", file=sys.stderr)
-        sys.exit(0)
-
-    target = os.path.join(SCRIPT_DIR, "scoped-git-commit")
-    result = subprocess.run([sys.executable, target, "-m", args.subject, "--", *args.paths])
-    sys.exit(result.returncode)
+    """Killed 2026-08-23 (PM ruling, DR-344): this mode used to delegate a
+    `-- <paths>` invocation to the `scoped-git-commit` CLI
+    (coordinator_core/ops/ceremony/scoped_git_commit.py), a subprocess
+    handoff onto that op's ownership gate, agree-case/private-index
+    selection, and push-state handling. Both the op and the CLI are
+    deleted, not suspended, and nothing replaces them yet — this must not
+    silently spawn a script that no longer exists, so the mode refuses
+    instead. See docs/reference/scoped-commit-guarantees.md for what a
+    rebuilt committer must guarantee before this delegation can be wired
+    back in."""
+    print(
+        "ERROR: `-- <paths>` delegates to `scoped-git-commit`, which was killed "
+        "2026-08-23 (DR-344) and has no replacement yet. Stage explicitly "
+        "(git add -- <paths>) and commit directly, or use --blanket/--scope-from.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _commit_message_argv(subject: str, body: str) -> List[str]:

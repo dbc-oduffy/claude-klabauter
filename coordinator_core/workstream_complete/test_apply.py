@@ -87,14 +87,15 @@ def test_cli_dispatch_keys_exactly_match_consumes_manifest() -> None:
 
 
 def test_legacy_convert2_names_are_a_subset_of_the_manifest() -> None:
-    """The four CLI names the plan body pins by hand are still individually
-    correct `CONSUMES_MANIFEST` members — just not an exhaustive dispatch
-    boundary any more."""
+    """Three of the four CLI names the plan body originally pinned by hand
+    are still individually correct `CONSUMES_MANIFEST` members — just not an
+    exhaustive dispatch boundary any more. (`wsc-tail` was the fourth; it
+    was removed from the manifest in the ceremony.wsc_tail kill,
+    2026-08-23.)"""
     legacy = {
         "wsc-coverage-gate-runner",
         "check-workstream-complete-deletion-blocks",
         "wsc-close",
-        "wsc-tail",
     }
     assert legacy <= set(CONSUMES_MANIFEST)
     assert legacy <= set(ws_apply._CLI_DISPATCH)
@@ -552,10 +553,10 @@ def test_execute_directives_partial_mutation_when_some_land_some_fail(
     def failing_main(argv: list[str]) -> int:
         return 1
 
-    modules = {"session-claim-cli": _fake_module(ok_main, "fake_ok"), "check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
+    modules = {"wsc-close": _fake_module(ok_main, "fake_ok"), "check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "session-claim-cli"), _directive("d_fail", "check-machine-local-regeneratability")]
+    directives = [_directive("d_ok", "wsc-close"), _directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -578,10 +579,10 @@ def test_execute_directives_one_failure_does_not_block_other_ready_directives(
         order.append("ok")
         return 0
 
-    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail"), "session-claim-cli": _fake_module(ok_main, "fake_ok")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail"), "wsc-close": _fake_module(ok_main, "fake_ok")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "check-machine-local-regeneratability"), _directive("d_ok", "session-claim-cli")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability"), _directive("d_ok", "wsc-close")]
     ws_apply._execute_directives(directives, [], {})
 
     assert order == ["fail", "ok"]
@@ -591,25 +592,25 @@ def test_execute_directives_one_failure_does_not_block_other_ready_directives(
 # jp-consumed-handoff-completeness — AC5/AC6/AC7 (2026-08-05-session-shape-
 # attribution-structural-gate, C3's redirect). Pinned here, not by asserting
 # `depends_on` field values in `test_workstream_complete.py` — that only
-# proves the edges EXIST, not that they actually block anything (or that the
-# arg-token consumer `d-reconcile-completion-commits` doesn't get stranded
-# into `report["failed"]` when its own gate AND its producer's gate are both
-# closed). Mirrors `build_consumed_handoff_completeness_judgment_point`'s own
-# `resolves` shape exactly, rather than a hand-invented stand-in.
+# proves the edges EXIST, not that they actually block anything. Mirrors
+# `build_consumed_handoff_completeness_judgment_point`'s own `resolves`
+# shape exactly, rather than a hand-invented stand-in. (Originally six
+# gated directives; `d-run-wsc-tail` and `d-reconcile-completion-commits`
+# dropped from the fixture in the ceremony.wsc_tail /
+# completion.reconcile_commits kills, 2026-08-23, matching the real
+# judgment point's own now-four-member `resolves`.)
 # ---------------------------------------------------------------------------
 
 _CONSUMED_HANDOFF_COMPLETENESS_RESOLVED_IDS = (
-    "d-run-wsc-tail",
     "d-claim-plan-execution-lock",
     "d-stamp-plan-implemented",
     "d-harvest-deferrals-1",
     "d-complete-entry",
-    "d-reconcile-completion-commits",
 )
 
 
 def _consumed_handoff_completeness_fixture() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The six gated directives plus one unaffected sibling (`d-coverage-gate`,
+    """The four gated directives plus one unaffected sibling (`d-coverage-gate`,
     which stays independently keyed to `jp-session-shape` — AC6's negative
     half) and the real `jp-consumed-handoff-completeness` judgment point
     shape (`build_consumed_handoff_completeness_judgment_point`'s own
@@ -645,17 +646,6 @@ def _consumed_handoff_completeness_fixture() -> tuple[list[dict[str, Any]], list
             "coordinator-complete-entry",
             depends_on="jp-consumed-handoff-completeness",
         ),
-        _directive(
-            "d-reconcile-completion-commits",
-            "reconcile-completion-commits",
-            args=["--append", "{d-complete-entry.entry_path}"],
-            depends_on=["jp-consumed-handoff-completeness", "d-complete-entry"],
-        ),
-        _directive(
-            "d-run-wsc-tail",
-            "wsc-tail",
-            depends_on="jp-consumed-handoff-completeness",
-        ),
         # Deliberately a DIFFERENT (fake) cli name than the two gated
         # `wsc-coverage-gate-runner` directives above, purely so the two
         # halves of this fixture can be dispatched (or not) independently in
@@ -667,14 +657,12 @@ def _consumed_handoff_completeness_fixture() -> tuple[list[dict[str, Any]], list
 
 
 @pytest.mark.parametrize("decisions", [{}, {"jp-consumed-handoff-completeness": {"disposition": "stop-and-handoff"}}])
-def test_consumed_handoff_completeness_default_blocks_all_six_and_fails_none(
+def test_consumed_handoff_completeness_default_blocks_all_four_and_fails_none(
     monkeypatch: pytest.MonkeyPatch, decisions: dict[str, Any]
 ) -> None:
-    """AC5: by default (unresolved OR resolved stop-and-handoff), all six
-    directives stay blocked, the run halts at judgment, and — the assertion
-    that catches the arg-token failure mode d-reconcile-completion-commits's
-    `{d-complete-entry.entry_path}` token could otherwise produce — NONE of
-    the six lands in `report["failed"]`."""
+    """AC5: by default (unresolved OR resolved stop-and-handoff), all four
+    directives stay blocked, the run halts at judgment, and NONE of
+    the four lands in `report["failed"]`."""
 
     def fake_load(cli_name: str) -> ModuleType:
         if cli_name == "coordinator-fold-execution-record":
@@ -693,10 +681,10 @@ def test_consumed_handoff_completeness_default_blocks_all_six_and_fails_none(
     assert not (failed_ids & set(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVED_IDS)), report["failed"]
 
 
-def test_consumed_handoff_completeness_override_known_in_flight_clears_all_six(
+def test_consumed_handoff_completeness_override_known_in_flight_clears_all_four(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC6: selecting `override-known-in-flight` clears all six directives."""
+    """AC6: selecting `override-known-in-flight` clears all four directives."""
 
     def producer_main(argv: list[str]) -> int:
         print("archive/completed/2026-07/entry.md")
@@ -707,8 +695,6 @@ def test_consumed_handoff_completeness_override_known_in_flight_clears_all_six(
         "coordinator-fold-execution-record": _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone"),
         "coordinator-harvest-deferrals": _fake_module(lambda argv: 0, "fake_harvest"),
         "coordinator-complete-entry": _fake_module(producer_main, "fake_complete_entry"),
-        "reconcile-completion-commits": _fake_module(lambda argv: 0, "fake_reconcile"),
-        "wsc-tail": _fake_module(lambda argv: 0, "fake_tail"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
     directives, judgment_points = _consumed_handoff_completeness_fixture()
@@ -804,198 +790,6 @@ def test_apply_executes_directives_from_a_successful_brief(monkeypatch: pytest.M
 
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
     assert report["landed"] == ["d_a"]
-
-
-# ---------------------------------------------------------------------------
-# jp-completion-entry-scaffold halt (state/bug-backlog/2026-07-28-
-# workstream-complete-apply-re-scaffolds-t-e925d597e0af.yaml) — apply must
-# HALT before d-run-wsc-tail (never dispatch it) while the completion entry
-# is still a scaffold, via the existing HALTED_AT_JUDGMENT contract. The two
-# hand-built-envelope tests below feed `apply()` the EXACT shape
-# `workstream_complete.__init__.brief()` produces (a `d-run-wsc-tail`
-# directive whose `depends_on` names the synthetic judgment point, plus that
-# judgment point itself, structurally unresolvable via `decisions`) — that
-# pins `apply()`'s halt MECHANISM given the shape, but neither drives the
-# real `brief()` that PRODUCES the shape; `test_apply_halts_before_wsc_
-# tail_via_real_brief_against_a_stood_down_chain_entry` below closes that
-# gap end-to-end.
-# ---------------------------------------------------------------------------
-
-
-def test_apply_halts_before_wsc_tail_while_completion_entry_still_scaffolded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import coordinator_core.workstream_complete as wsc
-
-    def dispatched_main(argv: list[str]) -> int:
-        raise AssertionError(f"d-run-wsc-tail must never dispatch while blocked; got argv={argv!r}")
-
-    modules = {"wsc-close": _fake_module(lambda argv: 0, "wsc_close")}
-    monkeypatch.setattr(
-        ws_apply,
-        "_load_cli_module",
-        lambda cli_name: modules.get(cli_name) or _fake_module(dispatched_main, cli_name),
-    )
-
-    scaffold_jp = wsc.build_completion_entry_scaffold_judgment_point(
-        "archive/completed/2026-07/2026-07-28-adhoc-abcdef.md", ("title", "nature", "prose")
-    )
-    close_tail_args = _directive("d-close-tail-args", "wsc-close", args=["tail-args"])
-    wsc_tail = _directive(
-        "d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef"], depends_on=["d-close-tail-args", "jp-completion-entry-scaffold"]
-    )
-
-    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        return {
-            "directives": [close_tail_args, wsc_tail],
-            "judgment_points": [scaffold_jp],
-            "decisions": decisions or {},
-        }
-
-    monkeypatch.setattr(ws_apply, "brief", fake_brief)
-    exit_code, report = ws_apply.apply(decisions={})
-
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.HALTED_AT_JUDGMENT)
-    assert "d-run-wsc-tail" in report["blocked"]
-    assert "d-run-wsc-tail" not in report["landed"]
-    assert "d-close-tail-args" in report["landed"]
-
-
-def test_apply_fires_wsc_tail_once_completion_entry_is_fully_authored(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The mirror case: once `directives_completion.compute_completion_
-    entry_scaffold_gate` stops firing (entry fully authored), `brief()`
-    no longer emits `jp-completion-entry-scaffold` at all and `d-run-wsc-
-    tail`'s `depends_on` reverts to just the pre-existing ordering member —
-    apply proceeds to dispatch it."""
-    landed_ids: list[str] = []
-
-    def ok_main(argv: list[str]) -> int:
-        landed_ids.append(tuple(argv))
-        return 0
-
-    modules = {"wsc-close": _fake_module(ok_main, "wsc_close"), "wsc-tail": _fake_module(ok_main, "wsc_tail")}
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    close_tail_args = _directive("d-close-tail-args", "wsc-close", args=["tail-args"])
-    wsc_tail = _directive("d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef", "--subject", "a subject"], depends_on="d-close-tail-args")
-
-    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        return {
-            "directives": [close_tail_args, wsc_tail],
-            "judgment_points": [],
-            "decisions": decisions or {},
-        }
-
-    monkeypatch.setattr(ws_apply, "brief", fake_brief)
-    exit_code, report = ws_apply.apply(decisions={})
-
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
-    assert report["landed"] == ["d-close-tail-args", "d-run-wsc-tail"]
-    assert len(landed_ids) == 2
-
-
-def test_apply_halts_before_wsc_tail_via_real_brief_against_a_stood_down_chain_entry(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """End-to-end: drives the REAL `workstream_complete.brief()` (not a
-    hand-built envelope) against a realistic `archive/completed/` fixture,
-    through `apply()`'s real halt path. The two hand-built-envelope tests
-    above pin `apply()`'s halt MECHANISM given a shape someone else already
-    produced; this test pins the WIRING from `brief()`'s scaffold-gate
-    output into `apply()`'s halt, against the exact chain-terminal
-    stand-down fixture shape (a completion entry already authored from a
-    prior day/session) that state/bug-backlog/2026-07-28-workstream-
-    complete-apply-re-scaffolds-t-e925d597e0af.yaml's stubbed tests never
-    exercised — closing the gap that let that regression ship unguarded."""
-    import coordinator_core.workstream_complete as wsc
-
-    # single-session, not chain-terminal: chain-terminal pulls in a raft of
-    # unrelated untrusted-gate judgment points (coverage gate, review
-    # dispatch, ...) that would also halt apply() and swamp what this test
-    # targets. The scaffold-gate/stand-down mechanism under test keys only
-    # on `chain_slug` truthiness, never on disposition — a chain slug can be
-    # (and here is) supplied on a single-session close.
-    (tmp_path / "archive").mkdir()
-    monkeypatch.setattr(
-        wsc,
-        "compute_session_shape_gate",
-        lambda root: wsc.SessionShapeGate(
-            sid="testsid123",
-            disposition="single-session",
-            consumed_handoff="",
-            diagnostics=[],
-            consumed_handoff_paths=(),
-        ),
-    )
-
-    chain_slug = "some-plan"
-    prior_entry = tmp_path / "archive" / "completed" / "2026-06" / "2026-06-01-some-plan-abc123.md"
-    prior_entry.parent.mkdir(parents=True, exist_ok=True)
-    prior_entry.write_text(
-        "---\n"
-        'title: "Did the thing"\n'
-        "created: 2026-06-01\n"
-        "nature: bugfix\n"
-        "nature_inferred: false\n"
-        "commits: []\n"
-        'chain: "some-plan"\n'
-        "status: pending-release\n"
-        "chain_terminal: true\n"
-        'authored_by: "abc123"\n'
-        "loe:\n"
-        "  agent_dispatches: null\n"
-        "  opus_dispatches: null\n"
-        "  em_tokens: null\n"
-        "  tshirt: null\n"
-        "---\n\nDid the thing, verified.\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(ws_apply, "brief", lambda decisions=None: wsc.brief(decisions=decisions, repo_root=tmp_path))
-
-    landed_ids: list[tuple[str, ...]] = []
-
-    def ok_main(argv: list[str]) -> int:
-        landed_ids.append(tuple(argv))
-        # Every fake CLI prints a harmless stdout line so
-        # d-reconcile-completion-commits's {d-complete-entry.entry_path}
-        # arg-token has something to resolve from — that threading
-        # mechanism is exercised elsewhere (test_resolve_arg_tokens_*,
-        # test_execute_directives_resolves_and_dispatches_an_entry_path_
-        # token) and is not what this test is targeting.
-        print(str(prior_entry))
-        return 0
-
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: _fake_module(ok_main, cli_name))
-
-    exit_code, report = ws_apply.apply(
-        decisions={
-            "subject": "a commit subject",
-            "governing_plan_slug": chain_slug,
-            "stage_paths": ["state/handoff-tracker.md"],
-        }
-    )
-
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
-    assert "d-run-wsc-tail" not in report["blocked"]
-    assert "d-run-wsc-tail" in report["landed"]
-    # Every fake CLI (including d-close-tail-args's own wsc-close stand-in)
-    # prints `str(prior_entry)` — that single non-blank line is what the
-    # trailing `{d-close-tail-args.argv}` token on d-run-wsc-tail's args
-    # expands to, appended after the build-time-known flags.
-    assert (
-        "--sid",
-        "testsid123",
-        "--subject",
-        "a commit subject",
-        "--stage-paths",
-        "state/handoff-tracker.md",
-        "--governing-plan-slug",
-        chain_slug,
-        str(prior_entry),
-    ) in landed_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1300,7 +1094,8 @@ def test_resolve_arg_tokens_unrecognized_token_shape_fails_loud() -> None:
 # ---------------------------------------------------------------------------
 # Residual backstop is NAME-shaped, not BRACE-shaped (2026-08-13
 # doe-claude-em-wsc-review-list-collides-with-token-syntax) —
-# `directives_commit_tail.build_close_tail_args_directive` serializes a
+# `directives_commit_tail.build_close_tail_args_directive` (removed in the
+# ceremony.wsc_tail kill, 2026-08-23) used to serialize a
 # per-slice review entry with `json.dumps(payload, sort_keys=True)` into
 # `--review-slice <json>`. That flat JSON object is brace-delimited but
 # contains quotes, colons, and spaces — never a token candidate — and must
@@ -1371,10 +1166,12 @@ def test_resolve_arg_tokens_nested_json_review_slice_also_passes_through_unchang
 # ---------------------------------------------------------------------------
 # `.landed` token — the ordering-only field (no value threaded) that
 # `directives_commit_tail.build_emit_cadence_directive`/`build_release_
-# plan_claim_directive` use to express a genuine producer dependency on
+# plan_claim_directive` (both removed in the ceremony.wsc_tail kill,
+# 2026-08-23) used to express a genuine producer dependency on
 # `d-run-wsc-tail` through the arg-token seam, since `ceremony_common.
 # apply_halt._directive_gate_open` deliberately never gates a directive-id
-# `depends_on` member (see that function's docstring).
+# `depends_on` member (see that function's docstring). The generic
+# `.landed` mechanism itself remains live infrastructure.
 # ---------------------------------------------------------------------------
 
 
@@ -1407,12 +1204,14 @@ def test_resolve_arg_tokens_landed_field_fails_loud_when_producer_never_landed()
 
 # ---------------------------------------------------------------------------
 # `.argv` token — the whole-arg, list-expanding field
-# (`directives_commit_tail.build_wsc_tail_directive`'s
-# `"{d-close-tail-args.argv}"`) that closes the 2026-08-03
+# (formerly `directives_commit_tail.build_wsc_tail_directive`'s
+# `"{d-close-tail-args.argv}"`, removed in the ceremony.wsc_tail kill,
+# 2026-08-23) that closed the 2026-08-03
 # doe-claude-em-wsc-tail-review-metadata-dropped hole: `d-close-tail-args`
-# (`wsc-close tail-args`) prints one argv token per line on stdout, and this
-# field is what actually splices those tokens into `d-run-wsc-tail`'s own
-# argv -- `depends_on` alone only orders the two directives.
+# (`wsc-close tail-args`) printed one argv token per line on stdout, and this
+# field is what spliced those tokens into `d-run-wsc-tail`'s own
+# argv -- `depends_on` alone only orders the two directives. The generic
+# `.argv` mechanism itself remains live infrastructure.
 # ---------------------------------------------------------------------------
 
 
@@ -1481,7 +1280,7 @@ def test_execute_directives_argv_token_expands_into_consumer_argv(
 
     modules = {
         "coordinator-complete-entry": _fake_module(producer_main, "fake_producer"),
-        "reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer"),
+        "coordinator-fold-execution-record": _fake_module(consumer_main, "fake_consumer"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
@@ -1489,7 +1288,7 @@ def test_execute_directives_argv_token_expands_into_consumer_argv(
         _directive("d-close-tail-args", "coordinator-complete-entry"),
         _directive(
             "d-run-wsc-tail",
-            "reconcile-completion-commits",
+            "coordinator-fold-execution-record",
             args=["--sid", "abcdef", "{d-close-tail-args.argv}"],
             depends_on="d-close-tail-args",
         ),
@@ -1512,7 +1311,7 @@ def test_execute_directives_argv_token_producer_never_landed_never_dispatches(
     directives = [
         _directive(
             "d-run-wsc-tail",
-            "reconcile-completion-commits",
+            "coordinator-fold-execution-record",
             args=["--sid", "abcdef", "{d-close-tail-args.argv}"],
         ),
     ]
@@ -1524,159 +1323,7 @@ def test_execute_directives_argv_token_producer_never_landed_never_dispatches(
 
 
 # ---------------------------------------------------------------------------
-# Regression: state/subagent-share dispatch brief, 2026-07-28 --
-# `directives_commit_tail.build_emit_cadence_directive`/`build_release_
-# plan_claim_directive` set `cadence["args"] = []` (`d-emit-cadence`) with
-# no arg token referencing `d-run-wsc-tail`'s output. Because a directive-id
-# `depends_on` member never gates (`_directive_gate_open`'s docstring), and
-# because there was no token for `_resolve_arg_tokens` to fail on, both
-# directives dispatched and landed even when `d-run-wsc-tail` never ran —
-# including when the tail was BLOCKED by a judgment point. Net effect:
-# cadence emitted / plan claim released for a ceremony whose commit never
-# happened. Both tests below FAIL against the pre-fix `args=[]`/`args=[...,
-# slug]` shape (proving the regression) and PASS once the trailing
-# `{d-run-wsc-tail.landed}` token is present and `_execute_directives`
-# refuses to dispatch it.
-# ---------------------------------------------------------------------------
-
-
-def test_emit_cadence_does_not_dispatch_when_wsc_tail_is_blocked_by_a_judgment_point(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from coordinator_core.workstream_complete import directives_commit_tail
-
-    def dispatched_main(argv: list[str]) -> int:
-        raise AssertionError(
-            f"d-emit-cadence must never dispatch while its producer d-run-wsc-tail "
-            f"is blocked; got argv={argv!r}"
-        )
-
-    modules = {"emit-cadence": _fake_module(dispatched_main, "emit_cadence")}
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    wsc_tail = _directive("d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef"], depends_on="jp-commit-subject-missing")
-    jp = {
-        "id": "jp-commit-subject-missing",
-        "dispositions": [{"value": "subject-not-yet-supplied", "resolves": []}],
-    }
-    cadence = directives_commit_tail.build_emit_cadence_directive()
-
-    exit_code, report = ws_apply._execute_directives([wsc_tail, cadence], [jp], {})
-
-    assert "d-run-wsc-tail" in report["blocked"]
-    assert "d-emit-cadence" not in report["landed"]
-    assert [entry["id"] for entry in report["failed"]] == ["d-emit-cadence"], (
-        "d-emit-cadence must fail loud on its unresolved '.landed' token rather "
-        "than dispatch, since its producer d-run-wsc-tail is blocked, not landed"
-    )
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
-
-
-def test_emit_cadence_does_not_dispatch_when_wsc_tail_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from coordinator_core.workstream_complete import directives_commit_tail
-
-    def dispatched_main(argv: list[str]) -> int:
-        raise AssertionError(
-            f"d-emit-cadence must never dispatch when its producer d-run-wsc-tail "
-            f"failed; got argv={argv!r}"
-        )
-
-    def failing_wsc_tail(argv: list[str]) -> int:
-        return 1
-
-    modules = {
-        "wsc-tail": _fake_module(failing_wsc_tail, "wsc_tail"),
-        "emit-cadence": _fake_module(dispatched_main, "emit_cadence"),
-    }
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    wsc_tail = _directive("d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef"])
-    cadence = directives_commit_tail.build_emit_cadence_directive()
-
-    exit_code, report = ws_apply._execute_directives([wsc_tail, cadence], [], {})
-
-    assert [entry["id"] for entry in report["failed"]] == ["d-run-wsc-tail", "d-emit-cadence"]
-    assert "d-emit-cadence" not in report["landed"]
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
-
-
-def test_release_plan_claim_does_not_dispatch_when_wsc_tail_is_blocked_by_a_judgment_point(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from coordinator_core.workstream_complete import directives_commit_tail
-
-    def dispatched_main(argv: list[str]) -> int:
-        raise AssertionError(
-            f"d-release-plan-claim must never dispatch while its producer "
-            f"d-run-wsc-tail is blocked; got argv={argv!r}"
-        )
-
-    modules = {"session-claim-cli": _fake_module(dispatched_main, "session_claim_cli")}
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    wsc_tail = _directive("d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef"], depends_on="jp-commit-subject-missing")
-    jp = {
-        "id": "jp-commit-subject-missing",
-        "dispositions": [{"value": "subject-not-yet-supplied", "resolves": []}],
-    }
-    release = directives_commit_tail.build_release_plan_claim_directive("some-governing-plan")
-
-    exit_code, report = ws_apply._execute_directives([wsc_tail, release], [jp], {})
-
-    assert "d-run-wsc-tail" in report["blocked"]
-    assert "d-release-plan-claim" not in report["landed"]
-    assert [entry["id"] for entry in report["failed"]] == ["d-release-plan-claim"], (
-        "d-release-plan-claim must fail loud on its unresolved '.landed' token "
-        "rather than dispatch, since its producer d-run-wsc-tail is blocked, "
-        "not landed"
-    )
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.DIRECTIVE_FAILED)
-
-
-# ---------------------------------------------------------------------------
-# jp-stage-paths-missing's own apply-level HALT coverage -- its sibling
-# jp-commit-subject-missing is exercised at the `_execute_directives` level
-# above (via the emit-cadence/release-plan-claim blocked-producer tests);
-# this is the matching direct-HALT coverage for jp-stage-paths-missing
-# gating d-run-wsc-tail ITSELF (state/bug-backlog/2026-07-29-workstream-
-# complete-silently-under-commi-33e5cdf24112.yaml). Both judgment points
-# share `build_untrusted_gate_judgment_point`'s "structurally unresolvable,
-# resolves=[]" shape -- see `judgments.build_stage_paths_missing_judgment_
-# point`'s own docstring.
-# ---------------------------------------------------------------------------
-
-
-def test_wsc_tail_does_not_dispatch_when_stage_paths_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from coordinator_core.workstream_complete import judgments as _judgments
-
-    def dispatched_main(argv: list[str]) -> int:
-        raise AssertionError(
-            f"d-run-wsc-tail must never dispatch while jp-stage-paths-missing "
-            f"is unresolved (decisions['stage_paths'] absent); got argv={argv!r}"
-        )
-
-    modules = {"wsc-tail": _fake_module(dispatched_main, "wsc_tail")}
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    wsc_tail = _directive(
-        "d-run-wsc-tail", "wsc-tail", args=["--sid", "abcdef"], depends_on="jp-stage-paths-missing"
-    )
-    jp = _judgments.build_stage_paths_missing_judgment_point(candidate_paths=[])
-
-    exit_code, report = ws_apply._execute_directives([wsc_tail], [jp], {})
-
-    assert report["blocked"] == ["d-run-wsc-tail"]
-    assert report["landed"] == []
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.HALTED_AT_JUDGMENT)
-
-
-# ---------------------------------------------------------------------------
-# jp-open-spine-rows-block-stamp's own apply-level HALT coverage -- mirrors
-# jp-commit-subject-missing's `_execute_directives`-level test above: the
+# jp-open-spine-rows-block-stamp's own apply-level HALT coverage -- the
 # claim "this blocks" must be proven at the wire, not inferred from the
 # envelope shape alone. Uses the real builder, not a hand-authored jp dict.
 # ---------------------------------------------------------------------------
@@ -1740,7 +1387,7 @@ def test_execute_directives_resolves_and_dispatches_an_entry_path_token(
 
     modules = {
         "coordinator-complete-entry": _fake_module(producer_main, "fake_producer"),
-        "reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer"),
+        "coordinator-fold-execution-record": _fake_module(consumer_main, "fake_consumer"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
@@ -1748,7 +1395,7 @@ def test_execute_directives_resolves_and_dispatches_an_entry_path_token(
         _directive("d-complete-entry", "coordinator-complete-entry"),
         _directive(
             "d-reconcile-completion-commits",
-            "reconcile-completion-commits",
+            "coordinator-fold-execution-record",
             args=["--append", "{d-complete-entry.entry_path}"],
             depends_on="d-complete-entry",
         ),
@@ -1779,7 +1426,7 @@ def test_execute_directives_never_dispatches_an_unresolved_token(
     directives = [
         _directive(
             "d-reconcile-completion-commits",
-            "reconcile-completion-commits",
+            "coordinator-fold-execution-record",
             args=["--append", "{d-complete-entry.entry_path}"],
         ),
     ]
@@ -1982,15 +1629,13 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
         ],
         "directives_completion.py": [
             ("d-complete-entry", False),
-            ("d-reconcile-completion-commits", False),
             ("d-fold-execution-observations", False),
         ],
-        "directives_commit_tail.py": [
-            ("d-release-plan-claim", False),
-            ("d-close-tail-args", False),
-            ("d-run-wsc-tail", False),
-            ("d-emit-cadence", False),
-        ],
+        # directives_commit_tail.py's row was removed here (ceremony.wsc_tail
+        # kill, 2026-08-23): every directive it used to build
+        # (d-release-plan-claim, d-close-tail-args, d-run-wsc-tail,
+        # d-emit-cadence) is gone, and the module no longer exposes any
+        # `build_*_directive` function at all.
         "directives_memo_lifecycle.py": [
             ("d-flip-memo-status", True),
             ("d-emit-deletion-blocks", False),
@@ -2056,10 +1701,10 @@ def test_best_effort_nonzero_exit_lands_in_degraded_not_failed(
     def failing_main(argv: list[str]) -> int:
         return 3
 
-    modules = {"emit-cadence": _fake_module(failing_main, "fake_degraded")}
+    modules = {"coordinator-fold-execution-record": _fake_module(failing_main, "fake_degraded")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_degraded", "emit-cadence")
+    directive = _directive("d_degraded", "coordinator-fold-execution-record")
     directive["best_effort"] = True
     exit_code, report = ws_apply._execute_directives([directive], [], {})
 
@@ -2083,14 +1728,14 @@ def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
         return 3
 
     modules = {
-        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
-        "emit-cadence": _fake_module(degraded_main, "fake_degraded"),
+        "wsc-close": _fake_module(ok_main, "fake_ok"),
+        "coordinator-fold-execution-record": _fake_module(degraded_main, "fake_degraded"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    degraded_directive = _directive("d_degraded", "emit-cadence")
+    degraded_directive = _directive("d_degraded", "coordinator-fold-execution-record")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d_ok", "session-claim-cli"), degraded_directive]
+    directives = [_directive("d_ok", "wsc-close"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -2154,16 +1799,16 @@ def test_degraded_entry_error_carries_captured_stderr(
         print("route_mutation: transport failure detail here", file=_sys.stderr)
         return 3
 
-    modules = {"emit-cadence": _fake_module(failing_main, "fake_degraded")}
+    modules = {"coordinator-fold-execution-record": _fake_module(failing_main, "fake_degraded")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directive = _directive("d_degraded", "emit-cadence")
+    directive = _directive("d_degraded", "coordinator-fold-execution-record")
     directive["best_effort"] = True
     exit_code, report = ws_apply._execute_directives([directive], [], {})
 
     assert len(report["degraded"]) == 1
     error = report["degraded"][0]["error"]
-    assert "emit-cadence exited 3" in error
+    assert "coordinator-fold-execution-record exited 3" in error
     assert "route_mutation: transport failure detail here" in error
 
 
@@ -2186,14 +1831,14 @@ def test_best_effort_dispatch_exception_lands_in_degraded_not_failed(
         return 0
 
     modules = {
-        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
+        "wsc-close": _fake_module(ok_main, "fake_ok"),
         "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     degraded_directive = _directive("d-emit-cadence", "freeze-review-diff")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d-run-wsc-tail", "session-claim-cli"), degraded_directive]
+    directives = [_directive("d-run-wsc-tail", "wsc-close"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
@@ -2217,12 +1862,12 @@ def test_non_best_effort_dispatch_exception_still_reports_partial_mutation(
         return 0
 
     modules = {
-        "session-claim-cli": _fake_module(ok_main, "fake_ok"),
+        "wsc-close": _fake_module(ok_main, "fake_ok"),
         "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "session-claim-cli"), _directive("d_raising", "freeze-review-diff")]
+    directives = [_directive("d_ok", "wsc-close"), _directive("d_raising", "freeze-review-diff")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["degraded"] == []
@@ -2260,13 +1905,13 @@ def test_already_satisfied_producer_registers_empty_stdout_for_landed_token(
     def consumer_main(argv: list[str]) -> int:
         return 0
 
-    modules = {"reconcile-completion-commits": _fake_module(consumer_main, "fake_consumer")}
+    modules = {"coordinator-fold-execution-record": _fake_module(consumer_main, "fake_consumer")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    producer = _directive("d-run-wsc-tail", "wsc-tail", already_satisfied=True)
+    producer = _directive("d-run-wsc-tail", "wsc-close", already_satisfied=True)
     consumer = _directive(
         "d-emit-cadence",
-        "reconcile-completion-commits",
+        "coordinator-fold-execution-record",
         args=["{d-run-wsc-tail.landed}"],
         depends_on="d-run-wsc-tail",
     )
@@ -2295,7 +1940,7 @@ def test_already_satisfied_producer_still_fails_an_entry_path_token_honestly(
     producer = _directive("d-complete-entry", "coordinator-complete-entry", already_satisfied=True)
     consumer = _directive(
         "d-reconcile-completion-commits",
-        "reconcile-completion-commits",
+        "coordinator-fold-execution-record",
         args=["--append", "{d-complete-entry.entry_path}"],
         depends_on="d-complete-entry",
     )
@@ -2328,19 +1973,19 @@ def test_execute_directives_repro_from_plan_dispatch_message(
         return 3
 
     modules = {
-        "wsc-tail": _fake_module(ok_tail_main, "fake_tail"),
-        "emit-cadence": _fake_module(failing_cadence_main, "fake_cadence"),
+        "wsc-close": _fake_module(ok_tail_main, "fake_tail"),
+        "coordinator-fold-execution-record": _fake_module(failing_cadence_main, "fake_cadence"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     cadence_directive = _directive(
         "d-emit-cadence",
-        "emit-cadence",
+        "coordinator-fold-execution-record",
         args=["{d-run-wsc-tail.landed}"],
         depends_on="d-run-wsc-tail",
     )
     cadence_directive["best_effort"] = True
-    directives = [_directive("d-run-wsc-tail", "wsc-tail"), cadence_directive]
+    directives = [_directive("d-run-wsc-tail", "wsc-close"), cadence_directive]
 
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
@@ -2455,17 +2100,18 @@ def test_disabled_op_line_is_silent_on_an_ordinary_failure() -> None:
 def test_disabled_op_line_covers_degraded_entries_too() -> None:
     """A best_effort directive lands its refusal in `degraded`, not `failed`.
     The operator still needs to know an op is off."""
-    from coordinator_core.op_budget_suspension import refusal_message
+    from coordinator_core.op_budget_suspension import SUSPENDED_OPS, refusal_message
 
+    op = next(iter(SUSPENDED_OPS))
     report = {
         "failed": [],
-        "degraded": [{"id": "d_best_effort", "error": refusal_message("ceremony.wsc_tail")}],
+        "degraded": [{"id": "d_best_effort", "error": refusal_message(op)}],
     }
 
     lines = ws_apply.render_disabled_op_lines(report)
 
     assert len(lines) == 1
-    assert "ceremony.wsc_tail" in lines[0]
+    assert op in lines[0]
     assert "d_best_effort" in lines[0]
 
 

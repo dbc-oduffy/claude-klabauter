@@ -113,10 +113,22 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         "_round_held_lock",
         lambda target, **kw: _RecordingLockCtx(order, target, **kw),
     )
+    # `_split_stdout_by_row_dest` survives chunk C4 for exactly this caller
+    # (`_run_gate_legs`'s scan-secrets/inverse-drift row attribution) --
+    # unrelated to the commit pathspec, so still monkeypatched here.
     monkeypatch.setattr(_mod._round, "_split_stdout_by_row_dest", lambda s, d: [("X:/claude-klabauter", s)])
-    monkeypatch.setattr(_mod._round, "_extract_change_lines", lambda s: ([("NEW", "a.py")], []))
+    # Chunk C4: the commit pathspec now comes from a `RoundManifest`
+    # `_read_fresh_round_manifest` reads off disk, never from `_extract_
+    # change_lines`/`_build_commit_pathspec` parsing publish.py's stdout
+    # (both gone). Stubbed here the same way test_percolate_round.py's
+    # `_install_manifest_stub` does -- a fixed manifest standing in for what
+    # publish.py's real run would have persisted.
     monkeypatch.setattr(
-        _mod._round, "_build_commit_pathspec", lambda *a, **kw: ["a.py"]
+        _mod._round,
+        "_read_fresh_round_manifest",
+        lambda repo_root, not_before: _mod._round._RoundManifest(
+            round_id="test", added_or_updated=frozenset({"a.py"})
+        ),
     )
     monkeypatch.setattr(
         _mod._round, "_push_dest", lambda d: subprocess.CompletedProcess([], 0, "", "")
@@ -239,32 +251,6 @@ def test_gate_legs_run_for_every_row_not_just_the_first(tmp_path, monkeypatch):
     )
 
     assert order.count("scan") == len(targets), order
-
-
-def test_preflight_discard_runs_inside_the_lock(tmp_path, monkeypatch):
-    """Same invariant `percolate-round` was fixed for in 7ba2aa100: the discard
-    resets the dest tree, so it must never run before the lock is held."""
-    order: List[str] = []
-    _wire(monkeypatch, order)
-
-    def _recording_preflight(args, dest):
-        order.append("preflight")
-        return None
-
-    monkeypatch.setattr(_mod._round, "_preflight_dest_reconcile", _recording_preflight)
-
-    _mod.main(
-        [
-            "claude-klabauter",
-            "--percolate-root",
-            str(tmp_path),
-            "--invocation-authorized",
-            "--reconcile-dest=discard",
-        ]
-    )
-
-    assert order.index("lock-acquired") < order.index("preflight"), order
-    assert order.index("preflight") < order.index("publish"), order
 
 
 def test_no_publish_commits_but_does_not_push(tmp_path, monkeypatch):

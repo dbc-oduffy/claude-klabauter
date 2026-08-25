@@ -89,7 +89,7 @@ which this module (or rollup_derive) repairs:
       completion event yet has no trailer for rollup_derive to find at all
       (surfaces here as `no-resolving-commits`, scored quiet above).
   (2) the origin/main ancestry requirement rollup_derive's shipped/not-shipped
-      check enforces (coordinator_core.ops.emit.envelope) — even a commit
+      check enforces (coordinator_core.ops.emit.resolvers) — even a commit
       that DOES carry the trailer reads `not-shipped` until it lands on
       origin/main, which by definition excludes unmerged branch work.
 Both are load-bearing for why "in_flight" is the correct steady state for

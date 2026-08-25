@@ -3,39 +3,29 @@ coordinator_core.ops — IPC operation handlers package.
 
 Purpose: Namespace for all coordinator_core op implementations. Each sub-module
 self-registers its handler(s) via register_op() at import time. Importing this
-package is the trigger that populates the op-registry before the IPC server
-begins accepting connections — UNLESS lazy mode is active (see below), in which
-case the eager import list is skipped and callers must trigger targeted
-per-op imports themselves (see coordinator_core.ipc._lazy_import_and_lookup).
+bare package NEVER populates the op-registry — registration is lazy
+unconditionally, with no flag or channel to arm it: a caller must trigger a
+targeted per-op import itself (see coordinator_core.ipc._lazy_import_and_lookup),
+or call _eager_import_all() directly for the rare full-registration need.
 
 Op registration list is maintained in coordinator_core/op_scopes.py::_OP_KEY_SCOPE
 (coordinator_core/ipc.py:441 only imports it from there).
 Review: code-reviewer — replaced stale hand-enumeration (8 of 19+ ops) with a canonical
 reference to _OP_KEY_SCOPE, which is kept current as each op lands.
 
-Lazy op registration (F6 / claude-klabauter-windows-portability § C4): dispatching a single
-op via coordinator_core.invoke used to unconditionally `import coordinator_core.ops`,
+Lazy op registration (F6 / claude-klabauter-windows-portability § C4, made unconditional
+2026-08-22 — the import-path-costs-nothing sprint): dispatching a single op via
+coordinator_core.invoke used to unconditionally `import coordinator_core.ops`,
 which (because Python always executes a package's __init__.py in full before any
 of its submodules) forced ALL ~55 op modules to compile/import to run just ONE op
 — a ~150-250ms Windows cold-compile tax per invoke (no __pycache__ warm-up there).
-
-The eager-import list below is gated behind `_lazy_ops_requested()` (see its
-docstring for the two channels and their precedence):
-  - NEITHER CHANNEL ARMED (default) — behavior is UNCHANGED from before this
-    chunk: importing this package (bare `import coordinator_core.ops`, as ~50
-    existing test files do) eagerly imports every op module and populates the
-    FULL registry, exactly as today. This preserves every existing consumer's
-    contract untouched.
-  - LAZY REQUESTED — the eager-import block is SKIPPED, so that a targeted
-    per-op import (driven by coordinator_core.ops._registry_map.OP_MODULE_MAP
-    via ipc.py's registry-miss path) is the ONLY import that happens — cheap,
-    because this package's own __init__.py no longer forces the other 54
-    modules to compile first. Armed by the one-shot command-type CLI dispatcher
-    (coordinator_core.invoke.__main__) and by the shared trampoline seam
-    (coordinator/bin/lib/cc_invoke.py), each for its OWN process only, before
-    any op is looked up. Safe because both are short-lived processes with no
-    other consumer depending on the full-eager side-effect (DR-215
-    command-type execution model).
+A two-channel flag (`COORDINATOR_CORE_LAZY_OPS` env var / `sys._coordinator_core_lazy_ops`
+in-process attribute) used to gate this package's eager-import block; both
+channels, and the writers that armed the in-process one, are retired — every
+consumer of a bare `import coordinator_core.ops` (including the ~50 test modules
+that assert the registry at import time) now goes through the targeted-import or
+SAFE FALLBACK paths below instead of relying on package-init to populate the
+registry as a side effect.
 
 _eager_import_all() is also exposed for ipc.py's registry-miss SAFE FALLBACK: if
 an op is absent from OP_MODULE_MAP (or a mapped import didn't register it — map
@@ -60,14 +50,17 @@ re-surfaces the ORIGINAL exception instead of a generic "Method not found" —
 see coordinator_core/ipc.py's METHOD_NOT_FOUND branch for that half of the fix.
 
 Failure-mode analysis (why this design, not a stricter one):
-  - The package-init default path (neither lazy channel armed) is the one
-    hit by test collection and any ad-hoc `import coordinator_core.ops` — this
-    is exactly the path the reported defect broke, so it MUST be resilient:
-    one broken module must never take ~8000 unrelated tests down with it.
-  - The actual PRODUCTION dispatch path (the one-shot CLI, DR-215) already
-    arms lazy registration and does a TARGETED import via
-    OP_MODULE_MAP — it only reaches _eager_import_all() via the SAFE FALLBACK,
-    and only for the one op being dispatched. Making package-init "fail hard"
+  - The _eager_import_all() path is the one reached by ipc.py's registry-miss
+    SAFE FALLBACK and by the handful of callers that force full registration
+    explicitly (the census enumerators, the warm server's preload) — this is
+    exactly the path the reported defect broke, so it MUST be resilient: one
+    broken module must never take ~8000 unrelated tests down with it. Before
+    2026-08-22 this was the package-init default, reached whenever neither lazy
+    channel was armed; package-init now registers nothing at all.
+  - The actual PRODUCTION dispatch path (the one-shot CLI, DR-215) does a
+    TARGETED import via OP_MODULE_MAP — it needs no arming, since lazy is the
+    only mode; it reaches _eager_import_all() only via the SAFE FALLBACK, and
+    only for the one op being dispatched. Making package-init "fail hard"
     would not make production stricter (production doesn't take that path);
     it would only reintroduce the test-collision collapse this fix removes.
   - Production strictness instead lives at the DISPATCH boundary: an op whose
@@ -99,7 +92,6 @@ from __future__ import annotations
 
 import importlib
 import logging as _logging
-import os as _os
 import sys as _sys
 import traceback as _traceback
 from typing import Dict, List, Tuple
@@ -134,7 +126,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.goal_kr_status", 'registers "goal.set_kr_status"'),
     ("coordinator_core.ops.goal_close_day", 'registers "goal.close_day", "goal.close_day_apply"'),
     ("coordinator_core.orientation.regenerate_cache", 'registers "orientation.regenerate_cache"'),
-    ("coordinator_core.ops.fleet.archive_plans", 'registers "fleet.archive_completed_plans"'),
     ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
@@ -165,15 +156,15 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.roadmap_serve", 'registers "roadmap.serve"'),
     ("coordinator_core.ops.roadmap_link_stubs", 'registers "roadmap.link_stubs"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
+    ("coordinator_core.ops.decision_record_mint",
+     'registers "decision_record.mint_id" + "decision_record.release_id"'),
     ("coordinator_core.ops.peer_notice_send", 'registers "peer_notice.send"'),
     ("coordinator_core.ops.peer_notice_check", 'registers "peer_notice.check"'),
-    ("coordinator_core.ops.queue_close", 'registers "queue.close"'),
     ("coordinator_core.ops.queue_promote", 'registers "queue.promote"'),
     ("coordinator_core.ops.queue_cluster", 'registers "queue.cluster"'),
     ("coordinator_core.ops.queue_age_ping", 'registers "queue.age_ping"'),
     ("coordinator_core.ops.queue_scaffold_baton", 'registers "handoff.scaffold_from_queue"'),
     ("coordinator_core.ops.updatedocs_gates", 'registers "updatedocs.gates"'),
-    ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send"'),
     ("coordinator_core.ops.fleet.memo_list", 'registers "memo.list"'),
     ("coordinator_core.ops.fleet.memo_list_outbox", 'registers "memo.list_outbox"'),
     ("coordinator_core.ops.fleet.memo_check_addressee", 'registers "memo.check_addressee"'),
@@ -218,7 +209,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "deliverable.fork_detect" (C7 report-only slug-prefix fork-family '
         "detector, AC12 — reachable by name, from no boot/commit-path trigger)",
     ),
-    ("coordinator_core.ops.ceremony.wsc_tail", 'registers "ceremony.wsc_tail"'),
     (
         "coordinator_core.ops.ceremony.post_commit_tail",
         'registers "ceremony.post_commit_tail" (C3a, 2026-07-23 wsc-tail-slim-down: '
@@ -270,7 +260,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "review-diff-freeze-op-wanted.md)",
     ),
     ("coordinator_core.ops.fleet.archive_shipped_handoffs", 'registers "fleet.archive_shipped_handoffs"'),
-    ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
@@ -279,11 +268,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
     ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos"'),
-    ("coordinator_core.ops.session.boot_sweep", 'registers "session.boot_sweep"'),
     (
-        "coordinator_core.ops.session.sweep_consumed_handoffs",
-        'registers "session.sweep_consumed_handoffs" (C21 on-demand single-family '
-        "consumed-handoff sweep, wraps session.boot_sweep's own consumed-leg internal)",
+        "coordinator_core.ops.session.boot_backstop",
+        'registers "session.boot_sweep" (C5, docs/plans/2026-08-22-the-boot-backstop-'
+        "asks-git-nothing.md — rebuilt zero-git-query-spawn backstop; module renamed "
+        "from boot_sweep.py, op id preserved)",
     ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
@@ -307,7 +296,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.plugin_health.scan", 'registers "plugin_health.scan"'),
     ("coordinator_core.plugin_health.sentinel", 'registers "plugin_health.sentinel"'),
     ("coordinator_core.plugin_health.forwarder_drift", 'registers "plugin_health.forwarder_drift"'),
-    ("coordinator_core.probes.fork_census", 'registers "probes.fork_census"'),
     ("coordinator_core.ops.cartography_tree", 'registers "cartography.tree"'),
     ("coordinator_core.ops.cartography_file_index", 'registers "cartography.file_index"'),
     ("coordinator_core.ops.cartography_churn", 'registers "cartography.churn"'),
@@ -332,7 +320,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_close_origin_stub", 'registers "handoff.close_origin_stub"'),
     ("coordinator_core.ops.session_hierarchy_derive", 'registers "session_hierarchy.derive"'),
     ("coordinator_core.goals.reassess_krs", ""),
-    ("coordinator_core.ops.testing_full_runner", 'registers "testing.full_runner"'),
     ("coordinator_core.ops.deferral_detect_orphan_memo", 'registers "deferral.detect_orphan_memo"'),
     ("coordinator_core.ops.deferral_detect_partial_strangle", 'registers "deferral.detect_partial_strangle"'),
     ("coordinator_core.ops.fleet.archive_release_accumulator", 'registers "fleet.archive_release_accumulator"'),
@@ -349,7 +336,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ensure_python3_exe_shim", 'registers "install.detect_python3_appx_stub"'),
     ("coordinator_core.ops.draft_plan_aging", 'registers "plan.list_stale_executing", "plan.list_orphaned"'),
     ("coordinator_core.ops.plan_suggest_completion_steps", 'registers "plan.suggest_completion_steps"'),
-    ("coordinator_core.ops.ceremony.scoped_git_commit", 'registers "ceremony.scoped_git_commit"'),
     ("coordinator_core.ops.ceremony.chunk_commits", 'registers "ceremony.chunk_commits"'),
     ("coordinator_core.ops.session_commits", 'registers "session.commits"'),
     ("coordinator_core.ops.session_baton_mint", 'registers "session_baton.mint"'),
@@ -466,7 +452,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.tracker.fold_observed_set",
         'registers "tracker.fold_observed_set" (sat-01b C5, DR-241-affirmed; '
-        "actuated from session.boot_sweep, opt-in-by-existence only)",
+        "no longer actuated from session.boot_sweep as of the C3/C5 boot-backstop "
+        "rebuild, docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md — "
+        "relocated to a ceremony-gate call site (coordinator-claude side, per "
+        "C3's cross-repo-memo wiring), opt-in-by-existence only)",
     ),
     (
         "coordinator_core.ops.tracker.mint_person",
@@ -566,11 +555,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "its-own-eol-drift.md § C3)",
     ),
     (
-        "coordinator_core.ops.op_census_report",
-        'registers "op_census.report" (docs/plans/2026-08-21-the-census-that-'
-        "cannot-miss-an-op.md § C6)",
-    ),
-    (
         "coordinator_core.ops.op_budget_breaches",
         'registers "op_census.breaches" (the budget-breach surface — DR-344-the-'
         "brightline-process-budget-for-claude-klabauter.md)",
@@ -602,8 +586,9 @@ def _eager_import_all() -> None:
     side-effect. This is the exact set of imports that used to run
     unconditionally at package-init time; it is now also independently
     callable (by ipc.py's registry-miss fallback) to force full registration
-    on demand, regardless of the COORDINATOR_CORE_LAZY_OPS flag or of which
-    submodules (if any) are already imported.
+    on demand, regardless of which submodules (if any) are already imported.
+    (Before 2026-08-22 this also read "regardless of the
+    COORDINATOR_CORE_LAZY_OPS flag"; there is no such flag now.)
 
     Resilient-and-loud (2026-07-21): each module is imported independently.
     A single module's import failure is:
@@ -652,42 +637,10 @@ def _eager_import_all() -> None:
             _POISONED_MODULES.pop(module_path, None)
 
 
-def _lazy_ops_requested() -> bool:
-    """Whether eager op registration is suppressed for this process.
-
-    Two channels, environment-first:
-
-      - `COORDINATOR_CORE_LAZY_OPS` is the OPERATOR override, settable from
-        outside the process and authoritative in BOTH directions — "1" forces
-        lazy, any other value forces eager, whatever the in-process channel
-        says. `coordinator/tests/test_install_substrate.sh` Test 15 depends on
-        the eager direction: it compares a trampoline's output under
-        `LAZY_OPS=1` against a `LAZY_OPS=0` baseline, and an in-process channel
-        able to override "0" would turn that into lazy-vs-lazy — a test that
-        passes while detecting nothing.
-      - `sys._coordinator_core_lazy_ops` is the IN-PROCESS channel, set by the
-        two writers that only ever need lazy registration for their own
-        process: coordinator_core.invoke.__main__ (the one-shot CLI dispatch,
-        DR-215) and coordinator/bin/lib/cc_invoke.py (the shared trampoline
-        seam). Neither can import the other, so the attribute name is repeated
-        at each writer rather than shared from here — this reader must not be
-        importable-before-arming, which is the whole ordering constraint.
-
-    Why the in-process channel is not an environment variable (2026-07-28):
-    both writers used to set `os.environ`, which every child spawned without an
-    explicit `env=` inherits. 59 test modules in this tree assert the op
-    registry at import time, so any pytest child of such a process failed
-    collection on a green tree. A `sys` attribute is inherited by nothing,
-    making the leak structurally impossible instead of stripped per spawn site.
-    Scoping study: docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md § 6 (c).
-    """
-    operator_override = _os.environ.get("COORDINATOR_CORE_LAZY_OPS")
-    if operator_override is not None:
-        return operator_override == "1"
-    return getattr(_sys, "_coordinator_core_lazy_ops", False) is True
-
-
-# Default behavior (neither channel armed) — UNCHANGED from before this chunk:
-# importing this package eagerly registers every op.
-if not _lazy_ops_requested():
-    _eager_import_all()
+# Lazy is the only mode: importing this bare package never eagerly registers
+# any op. The former `_lazy_ops_requested()` gate (COORDINATOR_CORE_LAZY_OPS
+# env var / sys._coordinator_core_lazy_ops in-process attribute) is retired —
+# there is no longer a flag to read or a channel to arm, so no conditional
+# call to _eager_import_all() happens here. Callers reach registration
+# through the targeted per-op import (ipc.py's registry-miss path) or, for the
+# rare full-registration need, by calling _eager_import_all() directly.

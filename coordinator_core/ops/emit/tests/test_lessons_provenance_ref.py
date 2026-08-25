@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.emit.context import _GIT_BACKED_SOURCE_KINDS, EmitContext
-from coordinator_core.ops.emit.envelope import resolve_coordinator_root
+from coordinator_core.ops.emit.resolvers import resolve_coordinator_root
 from coordinator_core.ops.emit.sections.lessons import collect
 
 # Spawns a real external process; runs at cadence gates, not per-commit.

@@ -14,12 +14,12 @@ what these tests exist to catch.
 from __future__ import annotations
 
 import os
-import subprocess
 import textwrap
 
 import pytest
 
 from coordinator_core.search.answer import answer
+from coordinator_core.search.tests._posix_shell import requires_posix_shell, run_real
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -127,8 +127,8 @@ def tree(tmp_path):
 
 
 def _real(cmd: str, cwd) -> tuple[int, list[str]]:
-    proc = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True, text=True)
-    return proc.returncode, [ln for ln in proc.stdout.splitlines()]
+    returncode, stdout = run_real(cmd, cwd)
+    return returncode, stdout.splitlines()
 
 
 def _answered_body(cmd: str, cwd) -> list[str] | None:
@@ -142,6 +142,7 @@ def _answered_body(cmd: str, cwd) -> list[str] | None:
 
 
 @pytest.mark.parametrize("cmd,recursive", CASES)
+@requires_posix_shell
 def test_answer_matches_real_command(cmd, recursive, tree):
     ours = _answered_body(cmd, tree)
     if ours is None:
@@ -164,6 +165,7 @@ def test_answer_matches_real_command(cmd, recursive, tree):
         )
 
 
+@requires_posix_shell
 def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
     """`wc -l`: the VALUE must agree; BSD's width-8 padding deliberately does not.
 
@@ -180,8 +182,17 @@ def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
 
 
 def test_declines_when_grep_is_fed_by_upstream(tree):
-    """`<cmd> | grep` cannot be answered -- the input does not exist yet."""
-    assert answer("cat notes.md | grep alpha", cwd=str(tree)) is None
+    """`<cmd> | grep` cannot be answered -- the input does not exist yet.
+
+    The upstream here must be a command this package does NOT serve. The original
+    spelling used `cat notes.md | grep alpha`, which was a faithful decline only for as
+    long as `cat` was unservable; once the read shapes are served (C1/C3) that pipeline
+    became a legitimate read-source + grep-stage answer, and the assertion started
+    encoding the absence of a feature rather than the rule it names. The RULE is what is
+    pinned here: an upstream whose output does not exist yet cannot feed an answer. A
+    served upstream is verified positively in `test_read_shapes_differential.py`.
+    """
+    assert answer("curl https://example.com | grep alpha", cwd=str(tree)) is None
 
 
 def test_declines_on_semicolon_compound(tree):
@@ -215,6 +226,7 @@ def test_declines_include_on_explicitly_named_target(tree):
     assert answer("grep --include=*.py -n alpha notes.md", cwd=str(tree)) is None
 
 
+@requires_posix_shell
 def test_multi_path_glob_is_not_a_silent_empty_answer(tree):
     """B1 regression, stated as the failure it closes rather than as a diff.
 

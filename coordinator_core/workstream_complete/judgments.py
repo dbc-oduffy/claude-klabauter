@@ -1079,30 +1079,6 @@ def build_unattributable_file_disposition_judgment_point() -> dict[str, Any]:
     )
 
 
-def build_commit_message_authoring_judgment_point() -> dict[str, Any]:
-    """Step 3's mandatory-commit-shape: EM-authored commit subject/body
-    prose -- "same bar as any commit"."""
-    return build_judgment_point(
-        {
-            "disposition": "drafted",
-            "rationale": (
-                "the diff itself is sufficient evidence to draft a conforming "
-                "subject/body; escalate only if the change's intent genuinely can't be "
-                "summarized from the diff alone"
-            ),
-        },
-        id="commit-message-authoring",
-        question="What should this commit's subject and body prose say?",
-        dispositions=[
-            build_disposition("drafted", resolves=["d-run-wsc-tail"]),
-            build_disposition("needs-second-pass", resolves=[]),
-        ],
-        evidence="this session's actual diff + the commit-message conventions this repo already enforces",
-        reason='explicitly named "same bar as any commit" -- authorial',
-        revalidate_at_dispatch=False,
-    )
-
-
 def build_session_work_summary_judgment_point() -> dict[str, Any]:
     """Step 4: 1-2 sentence "work done" summary -- authorial synthesis of
     the whole session."""
@@ -1161,87 +1137,9 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
     )
 
 
-def build_stage_paths_missing_judgment_point(
-    candidate_paths: list[str] | None = None,
-    known_concurrent_paths: "frozenset[str] | set[str] | tuple[str, ...] | None" = None,
-) -> dict[str, Any]:
-    """Blocks `d-run-wsc-tail` when `decisions['stage_paths']` did not
-    resolve to a non-empty value. `wsc-tail.py --stage-paths` is OPTIONAL
-    at the CLI layer (unlike `--subject`, which argparse hard-requires) --
-    but its omission is not benign: `build_wsc_tail_directive`
-    (`directives_commit_tail.py`, C2e) simply drops the flag, and the tail
-    then stages/commits only whatever its own dirty-tree gates independently
-    sweep, silently under-committing the session's own completion entry,
-    lessons, and review-trail records while still reporting `landed`
-    (state/bug-backlog/2026-07-29-workstream-complete-silently-under-commi-
-    33e5cdf24112.yaml, DoE-claude).
-
-    `candidate_paths` is the CALLER's already-derived candidate set --
-    `resolve_session_start_time` -> `classify_session_authored_files` ->
-    `accumulate_session_paths` (`directives_memo_lifecycle`/
-    `directives_commit_tail`), with `known_concurrent_paths` supplied by
-    `directives_commit_tail.resolve_known_concurrent_paths` (the Step 3.0
-    case-(b) peer-exclusion producer) -- this function does not read disk or
-    call the chain itself (this module's own negative-spec: no subprocess,
-    no git, purely declarative), it only formats what the caller already
-    computed into this gate's `evidence` string. The candidate set is a
-    BETTER-INFORMED set now that a real producer backs it, but it is still
-    only advisory evidence for this gate -- the EM reviews and narrows it
-    before handing back `decisions['stage_paths']`, never auto-staged.
-
-    `known_concurrent_paths` is the CALLER's own already-computed exclusion
-    set (the SAME `directives_commit_tail.resolve_known_concurrent_paths`
-    result the caller already threaded into `classify_session_authored_
-    files` to PRODUCE `candidate_paths` above) -- passed through here purely
-    so `evidence` can report the real set that was actually applied, rather
-    than a hardcoded `frozenset()` literal that claimed no exclusion ever
-    ran. This function still does not compute it, call it, or read disk for
-    it -- it only echoes what the caller already has.
-
-    Offered as EVIDENCE only, in a structurally unresolvable gate (its one
-    disposition's `resolves` list is deliberately empty, mirroring
-    `build_commit_subject_missing_judgment_point`'s own contract) -- never
-    auto-staged, never auto-committed. Trading a silent under-commit for a
-    silent over-commit (staging a live peer session's untracked files on a
-    shared branch) would be strictly worse, so the EM must review the
-    candidate list, exclude any concurrent peer's paths, and hand the
-    narrowed result back as `decisions['stage_paths']` before this gate
-    clears."""
-    if candidate_paths:
-        candidate_line = "; ".join(candidate_paths)
-    else:
-        candidate_line = "(none derived -- no dirty-tree path matched the session-authored predicate)"
-
-    if known_concurrent_paths:
-        known_concurrent_line = "{" + ", ".join(sorted(known_concurrent_paths)) + "}"
-    else:
-        known_concurrent_line = "frozenset()"
-
-    return build_untrusted_gate_judgment_point(
-        id="jp-stage-paths-missing",
-        question=(
-            "d-run-wsc-tail needs an explicit stage-paths pathspec -- supply it as "
-            "decisions['stage_paths'] (a list of paths for `git add`/`git commit`), or the "
-            "tail will silently commit only whatever its own gates happen to sweep."
-        ),
-        dispositions=[build_disposition("stage-paths-not-yet-supplied", resolves=[])],
-        evidence=(
-            "decisions['stage_paths'] absent. CANDIDATE session-authored path set "
-            "(resolve_session_start_time -> classify_session_authored_files -> "
-            f"accumulate_session_paths, known_concurrent_paths={known_concurrent_line}): {candidate_line}"
-        ),
-        reason=(
-            "directives_commit_tail.resolve_known_concurrent_paths is the Step 3.0 case-(b) "
-            "known_concurrent_paths exclusion-set producer, wired into this candidate set "
-            "above; the EM must still review and narrow this candidate list before "
-            "supplying it back as decisions['stage_paths'] -- that producer is best-effort "
-            "and conservative, not a guarantee, so the candidate list above may still "
-            "include a live peer session's untracked files this pass's exclusion set did "
-            "not catch. Auto-staging it unreviewed would trade a silent under-commit for a "
-            "silent over-commit onto another session's work; this gate never stages or "
-            "commits anything itself."
-        ),
-    )
+# build_stage_paths_missing_judgment_point (jp-stage-paths-missing) —
+# REMOVED (ceremony.wsc_tail kill, 2026-08-23): existed solely to gate
+# `d-run-wsc-tail`, which no longer exists.
 
 
 # ---------------------------------------------------------------------------
@@ -1302,8 +1200,9 @@ def build_no_commit_row_disposition_judgment_point(
 
     Returns `None` when `no_commit_row_ids` is empty/`None` -- mirrors
     every other conditionally-emitted point in this module (e.g.
-    `build_stage_paths_missing_judgment_point`'s caller-side `if not
-    decisions.get(...)` gate): a caller only invokes this builder once it
+    `build_stage_paths_missing_judgment_point`'s former caller-side `if not
+    decisions.get(...)` gate, before that builder's removal in the
+    ceremony.wsc_tail kill, 2026-08-23): a caller only invokes this builder once it
     already knows there is something to ask about, so an empty list here
     is the "nothing to surface" case, not an error.
 
@@ -1460,12 +1359,17 @@ JUDGMENT_POINT_BUILDERS: tuple[Callable[[], dict[str, Any]], ...] = (
     build_quota_retry_vs_escalate_judgment_point,
     build_concurrent_peer_attribution_judgment_point,
     build_unattributable_file_disposition_judgment_point,
-    build_commit_message_authoring_judgment_point,
     build_session_work_summary_judgment_point,
     build_flag_severity_classification_judgment_point,
 )
 
-assert len(JUDGMENT_POINT_BUILDERS) == 29, (
-    f"JUDGMENT_POINT_BUILDERS must carry exactly 29 entries per the governing plan's "
-    f"explicit enumeration, got {len(JUDGMENT_POINT_BUILDERS)}"
+# 28, not the governing plan's original 29 (`build_commit_message_authoring_
+# judgment_point` — commit-message-authoring — REMOVED, ceremony.wsc_tail
+# kill, 2026-08-23: its only `resolves` target, `d-run-wsc-tail`, no longer
+# exists, and nothing else reads decisions["subject"]/["prose"] any more —
+# see `directives_commit_tail.py`'s module docstring).
+assert len(JUDGMENT_POINT_BUILDERS) == 28, (
+    f"JUDGMENT_POINT_BUILDERS must carry exactly 28 entries (29 minus "
+    f"commit-message-authoring, removed with ceremony.wsc_tail), got "
+    f"{len(JUDGMENT_POINT_BUILDERS)}"
 )

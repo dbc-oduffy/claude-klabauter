@@ -6502,23 +6502,12 @@ class TestHandoffSpinoffPerDirectiveHalt:
             for disposition in jp["dispositions"]:
                 assert disposition["resolves"] == []
 
-        try:
-            with apply_mod._session_identity("sid-probe-halt"):
-                exit_code, report = apply_mod._execute_directives(
-                    directives, judgment_points, repo,
-                    decisions={},
-                    resolve_claim_grant=lambda: {"verdict": "granted"},
-                )
-        finally:
-            # `coordinator-tasks-mirror`'s dynamically-loaded module arms lazy
-            # op registration as a side effect of import — an interpreter-global
-            # write this test doesn't own and must not leak into later tests.
-            # Both channels: the env var was the mechanism until 2026-07-28,
-            # when the in-process signal moved to `sys._coordinator_core_lazy_ops`
-            # so that no spawned child could inherit it.
-            os.environ.pop("COORDINATOR_CORE_LAZY_OPS", None)
-            if hasattr(sys, "_coordinator_core_lazy_ops"):
-                delattr(sys, "_coordinator_core_lazy_ops")
+        with apply_mod._session_identity("sid-probe-halt"):
+            exit_code, report = apply_mod._execute_directives(
+                directives, judgment_points, repo,
+                decisions={},
+                resolve_claim_grant=lambda: {"verdict": "granted"},
+            )
 
         assert "d1" in report["landed"]
         mirror_directives = [d["id"] for d in directives if d["cli"] == "coordinator-tasks-mirror"]

@@ -221,25 +221,29 @@ def test_every_scope_table_key_resolves_to_a_registered_op():
     today's) fails it too.
 
     Blind spots (state explicitly, not implied by a clean run):
-      - _REGISTRY is populated by `import coordinator_core.ops`, which is
-        coordinator_core.ops.__init__.py's UNCONDITIONAL default path. If a
-        future op module is added to _EAGER_OP_MODULES but its import raises
+      - _REGISTRY is populated by calling `coordinator_core.ops._eager_import_all()`
+        DIRECTLY. This test used to rely on `import coordinator_core.ops` doing it,
+        on that package-init default path being unconditional. It is not, and has
+        not been since the COORDINATOR_CORE_LAZY_OPS gate was retired in favour of
+        lazy-only registration: the bare package import registers nothing. The test
+        kept passing on borrowed state — whatever op modules a sibling test module
+        in the same pytest process happened to import first — and turned red the
+        moment a batch stopped including one. Order-dependent green is not green;
+        the call below makes the population this test asserts against its own doing.
+      - If a future op module is added to _EAGER_OP_MODULES but its import raises
         (see _POISONED_MODULES in that package's __init__.py), the failing
         module's ops silently do not register, and this test would then
         report a false positive "stale row" for a genuinely-live op whose
         import merely errored — that failure mode is a REAL registration
         bug this test cannot distinguish from an actually-deleted op.
-      - Any op that registers ONLY under the lazy per-op channel
-        (coordinator_core.ops._registry_map.OP_MODULE_MAP) via a code path
-        this test never exercises (it never arms lazy mode) is still covered
-        here, because the package-init default path this test uses eagerly
-        imports every module in _EAGER_OP_MODULES regardless of lazy state —
-        but an op registered by a module that is NOT listed in
-        _EAGER_OP_MODULES at all would be invisible to both this test and to
-        production's eager-import default; that is a distinct, pre-existing
-        gap this test does not newly create or claim to close.
+      - An op registered by a module that is NOT listed in _EAGER_OP_MODULES
+        at all is invisible both here and to any caller doing a full
+        registration; that is a distinct, pre-existing gap this test does not
+        newly create or claim to close.
     """
-    import coordinator_core.ops  # noqa: F401  (eager import populates _REGISTRY)
+    import coordinator_core.ops
+
+    coordinator_core.ops._eager_import_all()
     from coordinator_core.ipc import _REGISTRY, _OP_KEY_SCOPE
 
     scope_keys = frozenset(_OP_KEY_SCOPE.keys())
@@ -282,7 +286,12 @@ def test_dr_279_blast_radius_table_matches_live_registry():
     changed the none-scoped set, or the op was reclassified — in either case DR-279's
     prose table needs a matching update, not silent drift.
     """
-    import coordinator_core.ops  # noqa: F401  (eager import populates _REGISTRY)
+    import coordinator_core.ops
+
+    # Populate the registry here rather than borrowing whatever a sibling test
+    # module imported first — see the sibling test's Blind spots note: the bare
+    # package import registers nothing since lazy-only registration landed.
+    coordinator_core.ops._eager_import_all()
     from coordinator_core.ipc import _REGISTRY
 
     live_none_scoped = frozenset(

@@ -2,9 +2,9 @@
 path on a registry MISS, exactly as coordinator_core.ipc.dispatch_message
 already does -- not a bare `_REGISTRY.get(name)`.
 
-Why this matters: `COORDINATOR_CORE_LAZY_OPS=1` (set by the invoke process
-itself, coordinator_core/invoke/__main__.py) imports ONLY the directly
-dispatched op's owning module. Any op handler that resolves a SIBLING op by
+Why this matters: `coordinator_core.ops` registers ops lazily, unconditionally --
+importing the package imports ONLY the directly dispatched op's owning module,
+not the whole registry. Any op handler that resolves a SIBLING op by
 key via `get_op_handler` -- e.g. `cutover.advance` resolving `cutover.gate`
 (coordinator_core/ops/cutover_advance.py), or `cutover_gate.py`'s
 `_reverify_probe_op_key` resolving an arbitrary caller-supplied probe op key --
@@ -48,12 +48,9 @@ pytestmark = [
 
 _SIBLING_OP_LAZY_RESOLUTION_SCRIPT = textwrap.dedent(
     """
-    import os
     import sys
 
-    os.environ["COORDINATOR_CORE_LAZY_OPS"] = "1"
-
-    import coordinator_core.ops  # noqa: F401 -- lazy mode: SKIPS the eager import list
+    import coordinator_core.ops  # noqa: F401 -- lazy registration: SKIPS the eager import list
     import coordinator_core.ipc as ipc
 
     # Import only cutover_advance's owning module -- mirrors what actually

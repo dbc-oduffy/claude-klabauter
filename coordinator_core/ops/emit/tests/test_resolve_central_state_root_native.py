@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from coordinator_core.ops.emit.envelope import _resolve_central_state_root
+from coordinator_core.ops.emit.resolvers import _resolve_central_state_root
 
 
 class TestResolveCentralStateRootNative:

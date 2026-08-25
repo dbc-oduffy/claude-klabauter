@@ -23,6 +23,11 @@ Entry shape (one JSON object per line)::
       "kind": str,
       "weight_basis": <any JSON-serialisable value>,
       "reviewed_by": [str, ...],
+      "closes": [str, ...],       # optional, additive (C1) -- item_ids the
+                                   # commit's OWN message closes; follows
+                                   # "kind"'s first-line-wins rule, not
+                                   # "reviewed_by"'s union rule
+      "reverts_sha": str,         # optional, additive (C1)
     }
 
 Append-only, NO read-modify-write: locked append only needs the ``write()``
@@ -191,6 +196,8 @@ def _entry_line(
     reviewed_by: Optional[List[str]],
     agent_id: Optional[str] = None,
     sidecar_path: Optional[str] = None,
+    closes: Optional[List[str]] = None,
+    reverts_sha: Optional[str] = None,
 ) -> str:
     entry = {
         "sha": sha,
@@ -208,6 +215,16 @@ def _entry_line(
         entry["agent_id"] = agent_id
     if sidecar_path:
         entry["sidecar_path"] = sidecar_path
+    # C1 extension (state/dispatch-briefs/2026-08-22-the-commit-closure-pipe-
+    # carries-rows/C1.md): the closure fact recorded at commit time, off the
+    # commit message's OWN raw text (`coordinator_core.git.commit_trailers.
+    # extract_closure_facts_from_text`) -- never git's parsed trailer block.
+    # Additive-only, same convention as `agent_id`/`sidecar_path` above --
+    # omitted entirely when not supplied.
+    if closes:
+        entry["closes"] = list(closes)
+    if reverts_sha:
+        entry["reverts_sha"] = reverts_sha
     return json.dumps(entry, sort_keys=True) + "\n"
 
 
@@ -220,6 +237,8 @@ def append_entry(
     cwd: Optional[str] = None,
     agent_id: Optional[str] = None,
     sidecar_path: Optional[str] = None,
+    closes: Optional[List[str]] = None,
+    reverts_sha: Optional[str] = None,
 ) -> bool:
     """Append one commit entry to ``handoff_id``'s ledger. Pure append — NO
     read-modify-write: a duplicate ``sha`` (a retry of a commit that landed
@@ -267,7 +286,9 @@ def append_entry(
     except OSError:
         return False
 
-    line = _entry_line(sha, kind, weight_basis, reviewed_by, agent_id, sidecar_path)
+    line = _entry_line(
+        sha, kind, weight_basis, reviewed_by, agent_id, sidecar_path, closes, reverts_sha
+    )
 
     def _append() -> None:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:

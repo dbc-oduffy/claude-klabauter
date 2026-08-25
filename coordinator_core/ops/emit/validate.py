@@ -109,16 +109,6 @@ _VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor"
 _VENDOR_CONTRACT = _VENDOR_ROOT / "cockpit-contract"
 _VENDOR_SCHEMA_DIR = _VENDOR_CONTRACT / "schema"
 VENDOR_SCHEMA_BUNDLE = _VENDOR_SCHEMA_DIR / "cockpit-contract.schema.json"
-# ScopedEmission standalone-projection schema (D25 §6). Present on disk once the vendored
-# pin reaches 2.14.0 (it has, as of the C2 re-vendor) — the jsonschema-preferred path in
-# _validate_scoped_emission_per_repo is live, not dormant, for the current pin. It is still
-# legitimately absent for any caller that injects a schema_version below (2, 14, 0) — see
-# the version gate in _validate_emission_scope. Naming a specific "current pin" number here
-# is what went stale last time (Review: code-reviewer, Finding 3) — check
-# read_schema_version() for the live value rather than trusting a number in this comment.
-VENDOR_EMISSION_SCOPE_SCHEMA = _VENDOR_SCHEMA_DIR / "emission-scope.schema.json"
-
-
 class ContractPinError(RuntimeError):
     """Raised when the vendored cockpit-contract pin is missing or internally inconsistent.
 
@@ -317,45 +307,12 @@ def contract_declares_backlog_history() -> bool:
     return False
 
 
-def _record_dotpaths_from_secmap() -> "set[str]":
-    """Return the flattened set of record dot-paths declared across SECMAP.
-
-    Local import of ``envelope.SECMAP`` to avoid a module-level import cycle
-    (``envelope`` already imports ``validate``). Mirrors the exact set
-    ``_stamp_content_hash`` walks in envelope.py — excludes malformed_records,
-    narrative_views, and scalar envelope fields by construction (SECMAP only ever
-    declares record-array dot-paths).
-    """
-    from coordinator_core.ops.emit.envelope import SECMAP  # local: avoid import cycle
-
-    return {dotpath for spec in SECMAP.values() for dotpath in spec["records"]}
-
-
-def _get_dotpath_value(envelope: dict, dotpath: str):
-    """Read the value at a one- or two-level dot-path (e.g. 'backlogs.bug').
-
-    Standalone copy of envelope._get_dotpath's read semantics (not imported, to keep
-    this module's only envelope.py dependency the local SECMAP import above) — raises
-    KeyError if any segment is absent, which the caller treats as "nothing to walk". A
-    structurally wrong intermediate node (e.g. a list or scalar where a dict was expected)
-    raises TypeError instead; the caller catches both (KeyError, TypeError) and treats
-    either as "nothing to walk" rather than letting a malformed intermediate node crash
-    the whole validation pass.
-
-    # keep in sync with envelope._get_dotpath
-    """
-    node = envelope
-    for part in dotpath.split("."):
-        node = node[part]
-    return node
-
-
 # Enums and the ref-null conditional, pinned from the vendored schema (Review: code-reviewer
 # — slice1-F2/F3 — read directly from
 # _vendor/cockpit-contract/schema/emission-scope.schema.json's per-repo `provenance` shape,
-# not guessed). Retained as a defense-in-depth structural check even now that `jsonschema` is
-# a declared dependency (pyproject.toml, 2026-07-21) and therefore always available in
-# practice — see `_validate_scoped_emission_per_repo` for how the two checks compose.
+# not guessed). Retained because `validate_array` still reads these enums; the
+# emission-scope projection pass that used to compose with them went with `artifact.emit`
+# (PM cut 2026-08-22).
 _SOURCE_KIND_ENUM = frozenset(
     {
         "github_graphql",
@@ -388,250 +345,6 @@ _SOURCE_KIND_REQUIRES_NULL_REF = frozenset(
 )
 
 
-def _provenance_shape_is_valid(provenance: dict) -> bool:
-    """Structural fallback check for the provenance-envelope shape (per-repo case).
-
-    Used when the vendored ``emission-scope.schema.json`` is not present (``jsonschema``
-    itself is a declared dependency as of 2026-07-21 — see pyproject.toml and
-    ``_validate_scoped_emission_per_repo`` — so this is a schema-FILE-absence fallback, not a
-    package-absence one). Mirrors the vendored ``provenance-envelope.schema.json`` shape
-    beyond mere key presence:
-
-      - ``source_kind``, ``repo``, ``ref``, ``path``, ``observed_at``, ``derivation``,
-        ``entity_anchor`` all present (required-field set — ``entity_anchor`` is
-        present-as-null, not optional; a missing key fails this gate).
-      - ``source_kind`` is one of the schema's enum members (``_SOURCE_KIND_ENUM``).
-      - ``derivation`` is one of the schema's enum members (``_DERIVATION_ENUM``).
-      - the ref-null-iff-source_kind conditional: ``ref`` MUST be non-null when
-        ``source_kind`` is a real-pointer kind (``github_graphql``, ``github_rest``,
-        ``git_commit``); ``ref`` MUST be null when ``source_kind`` is a no-pointer kind
-        (``local_fs``, ``coordinator_artifact``, ``transcript_summary``, ``sec_edgar``,
-        ``code_comparison``).
-      - ``entity_anchor`` is ``None``, or a dict carrying both ``kind`` and ``value``
-        keys.
-
-    Does NOT (yet) enforce ``ref``'s own nested shape (``{branch, sha}`` object when
-    non-null) or ``observed_at``'s date-time pattern — those remain jsonschema-only checks,
-    exercised only when the vendored ``emission-scope.schema.json`` schema FILE is present
-    (see docstring above).
-    """
-    if not isinstance(provenance, dict):
-        return False
-    # Review: code-reviewer — Finding 1 (2026-07-14 entity_anchor slice review) — the
-    # v2.17.0 re-vendor added entity_anchor as present-as-null (nullable, not optional)
-    # on ProvenanceEnvelope; this structural fallback had silently fallen out of sync
-    # with the schema it mirrors, defeating the exact hazard this diff's own
-    # context.py docstring warns about.
-    required = (
-        "source_kind",
-        "repo",
-        "ref",
-        "path",
-        "observed_at",
-        "derivation",
-        "entity_anchor",
-    )
-    if not all(key in provenance for key in required):
-        return False
-
-    source_kind = provenance.get("source_kind")
-    if source_kind not in _SOURCE_KIND_ENUM:
-        return False
-
-    derivation = provenance.get("derivation")
-    if derivation not in _DERIVATION_ENUM:
-        return False
-
-    ref = provenance.get("ref")
-    if source_kind in _SOURCE_KIND_REQUIRES_NON_NULL_REF and ref is None:
-        return False
-    if source_kind in _SOURCE_KIND_REQUIRES_NULL_REF and ref is not None:
-        return False
-
-    # entity_anchor: present-as-null (EntityAnchor.nullable()) — either None, or a
-    # dict carrying both `kind` and `value` keys.
-    entity_anchor = provenance.get("entity_anchor")
-    if entity_anchor is not None:
-        if not isinstance(entity_anchor, dict):
-            return False
-        if "kind" not in entity_anchor or "value" not in entity_anchor:
-            return False
-
-    return True
-
-
-@functools.lru_cache(maxsize=8)
-def _compiled_scoped_emission_validator(schema_path: Path):
-    """Build+cache a compiled ``jsonschema`` validator for ``schema_path``, ONCE per path.
-
-    Perf: ``_validate_scoped_emission_per_repo`` runs once per per-repo record (~3802 calls
-    on the live corpus). ``jsonschema.validate(instance, schema)`` internally re-runs
-    ``check_schema(schema)`` and rebuilds the validator/ref-resolver from the raw dict on
-    EVERY call — for a schema with no ``$ref``s (confirmed: the vendored
-    ``emission-scope.schema.json`` is a single self-contained document, no ``$ref`` usage)
-    this recompilation is pure waste, profiled at ~18.9s of a ~22.3s ``build()`` (root cause
-    of ``emit.cadence`` exceeding its 10s invoke budget). This helper reads the schema file
-    and compiles the validator class ONCE per distinct ``schema_path``, then every record
-    reuses the same compiled ``Validator`` instance via ``.validate()``.
-
-    ``maxsize=8`` (not 1): the module constant ``VENDOR_EMISSION_SCOPE_SCHEMA`` is the only
-    path used in production, but unit tests ``monkeypatch.setattr`` it to distinct temp
-    paths per test (degrade-branch coverage) — keying the cache on ``schema_path`` (rather
-    than a bare no-arg memo) makes a monkeypatched path a cache MISS, not a stale HIT from an
-    earlier test's path. A small bound avoids unbounded growth across a long-lived process
-    that monkeypatches many distinct paths (not a concern for the single real vendored path).
-
-    Raises ``json.JSONDecodeError``/``ValueError`` (malformed schema file, not cached — the
-    caller degrades to the structural check) or propagates ``jsonschema.exceptions.SchemaError``
-    (the schema itself doesn't validate as a schema — a pin defect, not a producer-data
-    defect; matches the not-caught-here contract on the caller's ``validate()`` call).
-    """
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    jsonschema = _jsonschema()
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls.check_schema(schema)
-    return validator_cls(schema)
-
-
-def _validate_scoped_emission_per_repo(projection: dict) -> bool:
-    """Validate an ephemeral ``{scope, repo, provenance}`` projection, per-repo case.
-
-    The structural check (``_provenance_shape_is_valid``) always runs first as a fast,
-    dependency-free gate. ``jsonschema`` is a declared dependency (pyproject.toml,
-    2026-07-21) and therefore always importable in practice; when the vendored
-    ``emission-scope.schema.json`` schema FILE is present, this additionally exercises the
-    full JSON Schema for the ``ScopedEmission`` discriminated union (catching e.g. ``ref``'s
-    nested ``{branch, sha}`` shape and ``observed_at``'s date-time pattern, which the
-    structural check does not enforce).
-
-    Returns True/False — never raises for a genuine per-repo validation failure. The
-    caller (``_validate_emission_scope``) is the fail-loud boundary; this function is a
-    pure predicate. A ``jsonschema.exceptions.SchemaError`` (the vendored schema itself is
-    malformed — a re-vendor defect, not a producer-data defect) is allowed to propagate
-    rather than being misattributed to the record under test.
-    """
-    scope = projection.get("scope")
-    repo = projection.get("repo")
-    provenance = projection.get("provenance")
-
-    if scope != "per-repo":
-        return False
-    if not isinstance(repo, str) or not repo:
-        return False
-    if not _provenance_shape_is_valid(provenance):
-        return False
-
-    if VENDOR_EMISSION_SCOPE_SCHEMA.exists():
-        jsonschema = _jsonschema()
-        try:
-            # NOTE: ``jsonschema.validate(instance, schema)`` does NOT simply raise the
-            # first error from ``iter_errors`` — it raises ``exceptions.best_match(...)``,
-            # which picks the most-relevant sub-error for a top-level ``oneOf``/``anyOf``
-            # schema (this vendored schema's top level IS a ``oneOf`` over the 3 scope
-            # cases). Calling ``validator.validate()`` directly would raise the FIRST
-            # ``iter_errors`` hit instead, changing which error message surfaces — so this
-            # replicates ``jsonschema.validate``'s own best_match call against the reused
-            # compiled validator, preserving byte-identical error selection.
-            validator = _compiled_scoped_emission_validator(VENDOR_EMISSION_SCOPE_SCHEMA)
-            error = jsonschema.exceptions.best_match(validator.iter_errors(projection))
-            if error is not None:
-                raise error
-        except (json.JSONDecodeError, ValueError):
-            pass  # Malformed schema file — degrade to the structural check, not a hard fail.
-            # Deliberately tolerated (unlike the retired ImportError swallow above): this
-            # branch guards a CORRUPT vendored schema FILE on disk, not a missing PACKAGE —
-            # jsonschema itself is now a declared pyproject.toml dependency (Phase 1), so an
-            # ImportError here would mean the install itself is broken, which must be loud.
-            # A malformed schema file is a narrower, still-legitimate degrade: the structural
-            # check above already passed, and re-vendoring the bundle is a separate remediation
-            # step from "is jsonschema installed".
-        except jsonschema.exceptions.ValidationError:
-            return False
-        # jsonschema.exceptions.SchemaError (and any other jsonschema-internal fault, e.g.
-        # RefResolutionError) is intentionally NOT caught here — it propagates, so a broken
-        # vendored schema is diagnosed as a pin problem, not misattributed to the record.
-
-    return True
-
-
-def _validate_emission_scope(envelope: dict, ctx, schema_version: str) -> None:
-    """Post-build projection-validation pass — the D25 §6 emission-scope conformance gate.
-
-    Purpose: for every per-repo entity record (one carrying both a non-empty ``repo`` and
-    a ``provenance`` dict), construct the EPHEMERAL projection ``{"scope": "per-repo",
-    "repo": record["repo"], "provenance": record["provenance"]}`` — a brand-new dict,
-    discarded immediately after the check — and validate THAT projection against the
-    vendored ``ScopedEmission`` discriminated union's per-repo case. Records are NEVER
-    mutated by this pass, at 2.13.0, 2.14.0, or any future version: byte-identity is
-    structural, not a version-gate side effect. ``ScopedEmission`` is a standalone
-    projection type (D25 §6), not an entity key — no ``scope`` field is ever written back
-    onto a record.
-
-    Version-gated: parses the dotted ``schema_version`` and no-ops (returns immediately,
-    reading nothing) below (2, 14, 0) — same gate field/threshold idiom as
-    ``envelope._stamp_content_hash``'s ``(2, 5, 0)`` gate. This pass is LIVE on every
-    ``build()`` call for any caller reading a vendored ``schema_version`` at or above the
-    gate (true of the current pin since the C2 re-vendor) — the no-op branch only fires for
-    a caller that explicitly injects a schema_version below (2, 14, 0) (e.g. the unit tests'
-    2.13.0 case). State the gate threshold, not a "current pin" number, when reasoning about
-    liveness here — Review: code-reviewer, Finding 3: a version-relative "current bundle is
-    below/above the gate" claim is inherently stale-prone; check
-    ``validate.read_schema_version()`` for the live pin instead.
-
-    Walks exactly ``{dotpath for spec in SECMAP.values() for dotpath in spec["records"]}``
-    (via ``_record_dotpaths_from_secmap``) — the same set ``_stamp_content_hash`` walks;
-    excludes ``malformed_records``, ``narrative_views``, and scalar envelope fields by
-    construction. ``narrative_views`` is never touched by this pass (D25 §5 — no producer,
-    stays null/deferred).
-
-    Fail-loud: raises ``ValidationError`` if a constructed projection is INVALID — this
-    fires when the record's own ``repo``/``provenance`` data would not reconstruct a valid
-    ``ScopedEmission`` instance, i.e. the real ingestability gate. ``ctx`` is accepted for
-    interface uniformity with the section/envelope layer (unused here — this check is
-    record-relative, not repo-relative).
-
-    Spec backlink: pln-claude-klabauter-emission-scope-conforma-1f0dbb § C1, D25 §6.
-    """
-    try:
-        ver_tuple = tuple(int(x) for x in schema_version.split("."))
-        if len(ver_tuple) < 3:
-            return
-    except (ValueError, AttributeError):
-        return
-    if ver_tuple < (2, 14, 0):
-        return
-
-    for dotpath in _record_dotpaths_from_secmap():
-        try:
-            records = _get_dotpath_value(envelope, dotpath)
-        except (KeyError, TypeError):
-            # Section absent from this envelope -- nothing to walk, not a validation failure.
-            continue
-        if not isinstance(records, list):
-            continue
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-            repo = record.get("repo")
-            provenance = record.get("provenance")
-            if not isinstance(repo, str) or not repo:
-                continue
-            if not isinstance(provenance, dict):
-                continue
-
-            # Ephemeral projection — constructed fresh, never written back onto `record`.
-            projection = {"scope": "per-repo", "repo": repo, "provenance": provenance}
-            if not _validate_scoped_emission_per_repo(projection):
-                raise ValidationError(
-                    "emission-scope conformance failed (D25 §6) — the {scope:'per-repo', "
-                    f"repo, provenance}} projection for a record at envelope path {dotpath!r} "
-                    f"(repo={repo!r}) does not validate against ScopedEmission's per-repo "
-                    "case. The record's own repo/provenance data would not reconstruct a "
-                    "valid ScopedEmission instance; this is the real ingestability gate, "
-                    "not a missing key the contract never asked the record to carry."
-                )
-
-
 def _entity_schema_path(entity_name: str) -> Path:
     """Resolve the vendored per-entity JSON Schema file for ``entity_name``.
 
@@ -661,9 +374,8 @@ def _schema_registry():
     resolution shape a same-directory sibling schema could plausibly use.
 
     ``maxsize=1``: the vendored ``schema/`` directory is a fixed set of files under one pin,
-    read once per process; no per-test path variance to key on (unlike
-    ``_compiled_scoped_emission_validator``'s ``VENDOR_EMISSION_SCOPE_SCHEMA`` monkeypatch
-    case — nothing here is monkeypatched per-test).
+    read once per process; nothing here is monkeypatched per-test, so there is no path
+    variance to key on.
     """
     from referencing import Registry, Resource
 
@@ -678,17 +390,14 @@ def _schema_registry():
 def _compiled_entity_validator_for_path(schema_path: Path):
     """Build+cache a compiled ``jsonschema`` validator for ``schema_path``, ONCE per path.
 
-    Perf: mirrors ``_compiled_scoped_emission_validator``'s rationale — recompiling the
-    validator/registry from the raw schema dict on every call is pure waste when
+    Perf: recompiling the validator/registry from the raw schema dict on every call is pure waste when
     ``validate_array`` runs once per entity ARRAY (not per record), so this cache amortizes
     the compile cost across every record in the array, and across every call for the same
     entity within a process. ``maxsize=None`` (unbounded): the vendored ``schema/`` directory
     holds a fixed, small (29-entity) set — there is no monkeypatch-per-test variance to bound
-    against here (contrast ``_compiled_scoped_emission_validator``'s ``maxsize=8``).
+    against here.
 
-    Keyed on ``schema_path`` (not ``entity_name``) — Review: code-reviewer, Finding 5:
-    this is the exact keying precedent ``_compiled_scoped_emission_validator`` already
-    established for ``_VENDOR_EMISSION_SCOPE_SCHEMA`` monkeypatch-per-test safety. Keying on
+    Keyed on ``schema_path`` (not ``entity_name``) — Review: code-reviewer, Finding 5. Keying on
     the resolved path means a future test that monkeypatches ``_VENDOR_SCHEMA_DIR`` to
     exercise a missing-schema-file ``ContractPinError`` path for a previously-validated
     entity name gets a cache MISS (fresh path key), not a stale cached validator for a name

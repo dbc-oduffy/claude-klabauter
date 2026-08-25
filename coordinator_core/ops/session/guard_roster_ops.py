@@ -25,8 +25,11 @@ registration edit — never this tuple.
 → docs/decisions/DR-297-the-ported-advisory-grouping-is-not-carrier-membership.md
 
 Purpose: `coordinator_core.ipc::_REGISTRY` only reflects whatever has been
-imported so far in this process — under `COORDINATOR_CORE_LAZY_OPS=1` a
-naive read of it is silently PARTIAL. DoE's `x-effective-delivery` manifest
+imported so far in this process — since `coordinator_core.hooks` retired its
+eager-by-default import (2026-08-22, mirroring `coordinator_core.ops`'s own
+retirement), a bare `import coordinator_core.hooks` registers nothing at
+all, so a naive read of `_REGISTRY` is now unconditionally PARTIAL, not only
+under an operator flag. DoE's `x-effective-delivery` manifest
 treats an incomplete listing as worse than an absent one (`stale` outranks
 `absent` in its own reader semantics —
 docs/reference/hook-delivery-manifest.md § The five states). This module

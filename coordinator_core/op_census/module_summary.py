@@ -7,7 +7,7 @@ Never parses a module on demand outside a cache miss.
 
 Design (staff-eng Finding 0 / Ruling 1): this module GROWS `coordinator_core
 .cache` with a persisted tier (`cache.read_disk_revalidated`) rather than
-building a second cache. `envelope.py`'s existing `cache.compute_stamp` /
+building a second cache. `resolvers.py`'s existing `cache.compute_stamp` /
 `cache.read_revalidated` call path is untouched — this module never touches
 `cache._REVALIDATED_CACHE`.
 

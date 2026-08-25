@@ -328,17 +328,55 @@ def _mechanical_commit_denylist() -> Sequence[str]:
     return denylist
 
 
+#: Field/record separators for the single candidate-walk `git log`. ASCII unit
+#: (0x1f) and record (0x1e) separators rather than a space split: `%s` is
+#: free-form and a Session-Id trailer value is `valueonly`-extracted but still
+#: newline-terminated, so neither field is safe to delimit positionally. Same
+#: choice `coverage.py` and `session_attribution.py` already make for their own
+#: trailer reads.
+_SCOPE_LOG_FIELD_SEP = "\x1f"
+_SCOPE_LOG_RECORD_SEP = "\x1e"
+
+#: Per-sha commit facts the candidate walk already paid for: `{sha: (committer
+#: date `%cI`, raw Session-Id trailer)}`. Populated by `_scope_commit_candidates`
+#: and consumed by `_commit_committer_date` / `_commit_session_id`, which fall
+#: back to their own `git log -1` ONLY on a miss — a sha resolved outside the
+#: scope window (branch-tip fallback, or an explicit `sha=` override) is not in
+#: this cache and still costs its own spawn.
+#:
+#: NEGATIVE SPEC: this is a per-call dict threaded through the call chain, never
+#: module-level state. A sha's committer date and trailer are immutable, but a
+#: process-lifetime cache would outlive the worktree it was read from — this
+#: module is imported by long-lived op handlers serving more than one repo.
+ScopeCommitFacts = dict
+
+
 def _scope_commit_candidates(
-    worktree: Path, scope_paths: list[str], limit: int = _WALK_BACK_MAX_CANDIDATES
+    worktree: Path,
+    scope_paths: list[str],
+    limit: int = _WALK_BACK_MAX_CANDIDATES,
+    facts: Optional[ScopeCommitFacts] = None,
 ) -> list[tuple[str, str]]:
     """Returns up to `limit` (sha, subject) pairs touching `scope_paths`, newest
     first — the raw candidate list `_resolve_scope_sha` walks to find the first
-    non-mechanical one."""
+    non-mechanical one.
+
+    When `facts` is supplied it is filled with `{sha: (committer_date, raw
+    Session-Id trailer)}` for every candidate in the window, from the SAME `git
+    log` that produces the pair list. The committer date and the trailer are
+    fields of the record this walk already reads; asking git for them again per
+    sha was three process spawns to re-read bytes already in hand (measured
+    2026-08-23: `handoff.archive_transition` spent 4 of its 5 spawns resolving
+    one `shipped_in`, and on the sampled call resolved nothing).
+    """
     if not scope_paths:
         return []
+    fmt = _SCOPE_LOG_FIELD_SEP.join(
+        ("%H", "%cI", "%(trailers:key=Session-Id,valueonly)", "%s")
+    ) + _SCOPE_LOG_RECORD_SEP
     try:
         proc = _run_git(
-            ["log", "--pretty=format:%H %s", "--no-color", f"-n{limit}", "--", *scope_paths],
+            ["log", f"--pretty=format:{fmt}", "--no-color", f"-n{limit}", "--", *scope_paths],
             cwd=worktree,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
@@ -347,18 +385,26 @@ def _scope_commit_candidates(
     if proc.returncode != 0:
         return []
     candidates: list[tuple[str, str]] = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
+    for record in proc.stdout.split(_SCOPE_LOG_RECORD_SEP):
+        record = record.strip("\r\n")
+        if not record:
             continue
-        parts = line.split(" ", 1)
-        sha = parts[0]
-        subject = parts[1] if len(parts) > 1 else ""
+        fields = record.split(_SCOPE_LOG_FIELD_SEP)
+        if len(fields) != 4:
+            continue
+        sha, committer_date, session_trailer, subject = fields
+        sha = sha.strip()
+        if not sha:
+            continue
         candidates.append((sha, subject))
+        if facts is not None:
+            facts[sha] = (committer_date.strip(), session_trailer)
     return candidates
 
 
-def _resolve_scope_sha(worktree: Path, scope_paths: list[str]) -> Optional[str]:
+def _resolve_scope_sha(
+    worktree: Path, scope_paths: list[str], facts: Optional[ScopeCommitFacts] = None
+) -> Optional[str]:
     """The most recent commit touching `scope_paths` whose subject is NOT a
     denylisted mechanical/housekeeping subject (2026-08-05) — walks back through
     up to `_WALK_BACK_MAX_CANDIDATES` touching commits, newest first, and returns
@@ -380,7 +426,7 @@ def _resolve_scope_sha(worktree: Path, scope_paths: list[str]) -> Optional[str]:
     permanently unresolvable even when its genuine ship commit is one commit
     further back.
     """
-    candidates = _scope_commit_candidates(worktree, scope_paths)
+    candidates = _scope_commit_candidates(worktree, scope_paths, facts=facts)
     if not candidates:
         return None
     denylist = _mechanical_commit_denylist()
@@ -446,13 +492,17 @@ def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
     return dt
 
 
-def _commit_committer_date(worktree: Path, sha: str) -> Optional[datetime]:
+def _commit_committer_date(
+    worktree: Path, sha: str, facts: Optional[ScopeCommitFacts] = None
+) -> Optional[datetime]:
     """Committer date (timezone-aware) for `sha`, or None when unresolvable/
     unparseable/timed out. Deliberately committer date (`%cI`), not author
     date (`%aI`) — the committer date is the honest "when did this land"
     signal for a rebased/cherry-picked/amended commit, matching the same
     choice `git log --format=%H` elsewhere in this module already implies by
     ordering on commit recency rather than authorship."""
+    if facts is not None and sha in facts:
+        return _parse_iso_timestamp(facts[sha][0])
     try:
         proc = _run_git(["log", "-1", "--format=%cI", sha], cwd=worktree)
     except (subprocess.TimeoutExpired, OSError) as exc:
@@ -463,7 +513,12 @@ def _commit_committer_date(worktree: Path, sha: str) -> Optional[datetime]:
     return _parse_iso_timestamp(proc.stdout.strip())
 
 
-def _scope_sha_postdates_trigger(worktree: Path, sha: str, not_after: Optional[str]) -> bool:
+def _scope_sha_postdates_trigger(
+    worktree: Path,
+    sha: str,
+    not_after: Optional[str],
+    facts: Optional[ScopeCommitFacts] = None,
+) -> bool:
     """True when `sha` cannot be plausible evidence because it postdates
     `not_after` — the cascade's own trigger timestamp (`advanced_at`, per
     `deliverable_cascade._advance_one`) — or because either date is
@@ -491,7 +546,7 @@ def _scope_sha_postdates_trigger(worktree: Path, sha: str, not_after: Optional[s
     trigger_dt = _parse_iso_timestamp(not_after)
     if trigger_dt is None:
         return True
-    commit_dt = _commit_committer_date(worktree, sha)
+    commit_dt = _commit_committer_date(worktree, sha, facts=facts)
     if commit_dt is None:
         return True
     return commit_dt > trigger_dt
@@ -506,7 +561,12 @@ def _handoff_created_field(handoff_path: Path) -> Optional[str]:
     return str(created).strip() if created else None
 
 
-def _scope_sha_predates_creation(worktree: Path, sha: str, created: Optional[str]) -> bool:
+def _scope_sha_predates_creation(
+    worktree: Path,
+    sha: str,
+    created: Optional[str],
+    facts: Optional[ScopeCommitFacts] = None,
+) -> bool:
     """True when `sha` cannot be plausible SCOPE-DERIVED evidence because it
     predates the handoff's own `created` frontmatter field — or because either
     date is unparseable/unresolvable while `created` WAS supplied (fail-closed,
@@ -538,7 +598,7 @@ def _scope_sha_predates_creation(worktree: Path, sha: str, created: Optional[str
     created_dt = _parse_iso_timestamp(created)
     if created_dt is None:
         return True
-    commit_dt = _commit_committer_date(worktree, sha)
+    commit_dt = _commit_committer_date(worktree, sha, facts=facts)
     if commit_dt is None:
         return True
     return commit_dt < created_dt
@@ -569,10 +629,17 @@ def _resolve_branch_tip_sha(worktree: Path) -> Optional[str]:
 _SESSION_ID_UUID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]+[0-9a-fA-F]$")
 
 
-def _commit_session_id(worktree: Path, sha: str) -> Optional[str]:
+def _commit_session_id(
+    worktree: Path, sha: str, facts: Optional[ScopeCommitFacts] = None
+) -> Optional[str]:
     """Extracts and UUID-shape-validates `sha`'s Session-Id trailer, or None if
     absent/malformed/unreadable (mirrors coverage.py's fidelity guard 1 —
     a malformed trailer must never be treated as a match)."""
+    if facts is not None and sha in facts:
+        sid = facts[sha][1].strip().strip("\r\n")
+        if not sid or not _SESSION_ID_UUID_RE.match(sid):
+            return None
+        return sid
     try:
         proc = _run_git(
             ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", sha],
@@ -588,7 +655,11 @@ def _commit_session_id(worktree: Path, sha: str) -> Optional[str]:
     return sid
 
 
-def _ownership_block_reason(resolve_worktree: Path, resolved_sha: str) -> Optional[str]:
+def _ownership_block_reason(
+    resolve_worktree: Path,
+    resolved_sha: str,
+    facts: Optional[ScopeCommitFacts] = None,
+) -> Optional[str]:
     """Returns None when `resolved_sha` is established as the CALLING session's own
     commit (safe to stamp); otherwise a distinct, human-readable reason the write
     must be skipped instead.
@@ -621,7 +692,7 @@ def _ownership_block_reason(resolve_worktree: Path, resolved_sha: str) -> Option
             "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID set in the environment) — "
             "cannot establish ownership of anything, so nothing is safe to stamp"
         )
-    candidate_sid = _commit_session_id(resolve_worktree, resolved_sha)
+    candidate_sid = _commit_session_id(resolve_worktree, resolved_sha, facts=facts)
     if candidate_sid is None:
         return (
             f"ownership unestablished for {resolved_sha[:8]} — candidate commit has "
@@ -943,7 +1014,8 @@ def stamp_shipped_in(
             )
             return StampOutcome(exit_code=1, error=f"kind={kind!r} with no sha override")
         scope_paths = _parse_scope_paths(hpath)
-        resolved = _resolve_scope_sha(resolve_worktree, scope_paths)
+        scope_facts: ScopeCommitFacts = {}
+        resolved = _resolve_scope_sha(resolve_worktree, scope_paths, facts=scope_facts)
         # Co-commit guard (2026-07-26): a scope-path-derived sha can never be
         # the ship commit while the ship itself is still sitting uncommitted
         # in the worktree — see `_scope_paths_have_uncommitted_changes`'s
@@ -966,7 +1038,7 @@ def stamp_shipped_in(
         # see `_scope_sha_postdates_trigger`'s docstring for the structural
         # tooth (refuse-only, never re-select) and the incident it closes.
         if resolved is not None and scope_paths and _scope_sha_postdates_trigger(
-            resolve_worktree, resolved, not_after
+            resolve_worktree, resolved, not_after, facts=scope_facts
         ):
             print(
                 f"stamp_shipped_in: not-after guard — leaving shipped_in unset for "
@@ -984,7 +1056,7 @@ def stamp_shipped_in(
         # — see that docstring for the structural tooth (refuse-only, never
         # re-select) and the incident it closes.
         if resolved is not None and scope_paths and _scope_sha_predates_creation(
-            resolve_worktree, resolved, _handoff_created_field(hpath)
+            resolve_worktree, resolved, _handoff_created_field(hpath), facts=scope_facts
         ):
             print(
                 f"stamp_shipped_in: created-date guard — leaving shipped_in unset for "
@@ -1016,7 +1088,7 @@ def stamp_shipped_in(
         # resolution both funnel through here); never applied to `override`
         # above. See _ownership_block_reason's docstring for the invariant and
         # the structural tooth (refuse-only, never re-select).
-        block_reason = _ownership_block_reason(resolve_worktree, resolved)
+        block_reason = _ownership_block_reason(resolve_worktree, resolved, facts=scope_facts)
         if block_reason is not None:
             print(
                 f"stamp_shipped_in: ownership guard — leaving shipped_in unset for "
@@ -1143,7 +1215,8 @@ def resolve_source_ship_sha(
     resolve_worktree = worktree if worktree is not None else derived_worktree
     if resolve_worktree is None:
         return None
-    resolved = _resolve_scope_sha(resolve_worktree, [source_path])
+    source_facts: ScopeCommitFacts = {}
+    resolved = _resolve_scope_sha(resolve_worktree, [source_path], facts=source_facts)
     if resolved is None:
         return None
     if _scope_paths_have_uncommitted_changes(resolve_worktree, [source_path]):
@@ -1154,7 +1227,7 @@ def resolve_source_ship_sha(
             file=sys.stderr,
         )
         return None
-    if _scope_sha_postdates_trigger(resolve_worktree, resolved, not_after):
+    if _scope_sha_postdates_trigger(resolve_worktree, resolved, not_after, facts=source_facts):
         print(
             f"resolve_source_ship_sha: {resolved[:8]} postdates the cascade "
             f"trigger ({not_after}) — cannot be evidence for a cascade that "
@@ -1763,6 +1836,11 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
         # contract -- so this write reported "did not complete" on every
         # claim in such a session and `goal` stayed permanently unset, which
         # is what a peer's claim-contention check reads.
+        # Second consumer of this call: `stable_pid` liveness stamping —
+        # `ensure_meta` is also the writer that (re-)stamps `stable_pid` on
+        # a claim (see its own docstring's re-stamp arm). Narrowing this
+        # call to `session_dir`/`update_meta_field` would silently drop
+        # that stamp too, not just `goal`.
         sdir = _session_core.ensure_meta(sid, str(worktree))
         if not sdir:
             return

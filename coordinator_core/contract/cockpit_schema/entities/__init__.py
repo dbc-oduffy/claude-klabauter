@@ -46,9 +46,6 @@ from coordinator_core.contract.cockpit_schema.entities.deliverable_spine import 
     WorkstreamType,
 )
 from coordinator_core.contract.cockpit_schema.entities.exec_summary import ExecSummary
-from coordinator_core.contract.cockpit_schema.entities.file_attribution import (
-    FileAttribution,
-)
 from coordinator_core.contract.cockpit_schema.entities.financial_metric_summary import (
     FinancialMetricSummary,
 )
@@ -123,7 +120,6 @@ __all__ = [
     "DeliverableStatus",
     "WorkstreamType",
     "ExecSummary",
-    "FileAttribution",
     "FinancialMetricSummary",
     "Goal",
     "GoalKeyResultStatus",

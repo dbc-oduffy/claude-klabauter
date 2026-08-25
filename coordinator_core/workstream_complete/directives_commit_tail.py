@@ -4,9 +4,8 @@ dirty-tree, commit-tail, push-verification, claim-release, cadence and
 final-summary builders for the `workstream-complete-assemble` computed-skill
 engine.
 
-Purpose: computes Steps 3.0/3/3.5/3.6/4 (`SKILL.md` census rows
-`d-accumulate-session-paths`, `d-run-wsc-tail`, `d-verify-push-landed`,
-`d-release-plan-claim`, `d-emit-cadence`,
+Purpose: computes what remains of Steps 3.0/3.6/4 (`SKILL.md` census rows
+`d-accumulate-session-paths`, `d-verify-push-landed`,
 `d-render-final-summary`) for `coordinator_core.workstream_complete`'s
 `brief()` assembly seam (C3) — the terminal leg of the ceremony, run only
 after every earlier directive/judgment has resolved. Mirrors
@@ -30,14 +29,19 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C2e. Source census: state/plan-sidecars/2026-07-26-workstream-complete-
 computed-frontage.census-steps.md, Step 3.0/3/3.5/3.6/4 rows.
 
+Step 3/3.5 REMOVED (ceremony.wsc_tail kill, 2026-08-23): `d-close-tail-args`
+(`build_close_tail_args_directive`, fronting `coordinator/bin/wsc-close.py
+tail-args`), `d-run-wsc-tail` (`build_wsc_tail_directive`, fronting the now-
+deleted `coordinator/bin/wsc-tail.py` trampoline for the killed
+`ceremony.wsc_tail` op), and `d-release-plan-claim`
+(`build_release_plan_claim_directive`, fronting `session-claim-cli
+release-artifact`) are gone — the last depended on `d-run-wsc-tail` landing
+to know its own precondition and has no replacement signal now that
+producer is gone (delete-the-step, don't-redesign). `/workstream-complete`
+no longer commits the session's own staged paths or auto-releases a
+governing-plan claim; see `state/kill-ledger.md`.
+
 Consumes (orchestrates, reimplements none):
-    coordinator/bin/wsc-close.py (tail-args subcommand)
-        -> build_close_tail_args_directive's directives[].cli. (The
-        `archive-session` subcommand is still live but is no longer
-        invoked from this module — see the Step 3.5 section below.)
-    coordinator/bin/wsc-tail.py -> build_wsc_tail_directive's directives[].cli.
-    coordinator/bin/session-claim-cli (release-artifact) ->
-        build_release_plan_claim_directive's directives[].cli.
     coordinator/bin/emit-cadence.py -> build_emit_cadence_directive's
         directives[].cli, via the shared
         `coordinator_core.ceremony_common.tail.build_ceremony_close_tail`
@@ -167,9 +171,11 @@ def accumulate_session_paths(
     (`d-accumulate-session-paths` row), this is "fully derivable by the
     engine from the same session-authored-file tracking Step 2.67 already
     computes" — there is no separate mutating CLI to name, only a set
-    union already known by the time this step runs. Callers splice the
-    result into `build_close_tail_args_directive`'s / `build_wsc_tail_
-    directive`'s `--stage-paths` argument.
+    union already known by the time this step runs. Previously spliced by
+    callers into `build_close_tail_args_directive`'s / `build_wsc_tail_
+    directive`'s `--stage-paths` argument (both removed, ceremony.wsc_tail
+    kill, 2026-08-23); this function is now unused pending a replacement
+    caller.
 
     Reconciliation with C5's in-process auto-commit safety net
     (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
@@ -301,23 +307,6 @@ _COMMIT_HEADER_SENTINEL = "\x02"
 #: commits/24h) reaches in ordinary operation, not as a contrived edge
 #: case.
 _COMMITTED_PATHS_CHUNK = 300
-
-#: Whether `build_close_tail_args_directive` may emit `--review-slice` flags for
-#: a list-shaped `decisions["review"]`.
-#:
-#: TRUE since the consuming half landed alongside it: `wsc_tail.
-#: _run_precommit_tail` branches dict-vs-list and routes a list to `tail_ops.
-#: write_review_trail_many`, so `--review-slice` now reaches an op that
-#: understands it.
-#:
-#: The constant is retained rather than inlined because it names the coupling
-#: this emission has: without a consuming `wsc_tail.py`, the plumbing below is a
-#: TRAP rather than dead code — the directive path already accepts a list
-#: (`build_write_trail_directives`, a3d90f24dc16), so a list-shaped review emits
-#: `--review-slice`, reaches `bin/wsc-tail.py`, and hands the op a list where
-#: `tail_ops.write_review_trail` expects a dict. Flipping it back off, or landing
-#: either half without the other, re-opens exactly that.
-_COMMIT_TAIL_ACCEPTS_REVIEW_SLICES = True
 
 #: Bounded retry budget for a single `_chunked_committed_paths` chunk spawn.
 #: `_run_git_ok`/`_spawn_git` themselves carry NO retry of any kind (verified
@@ -821,15 +810,14 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
 def _review_fields_present(review: Any) -> bool:
     """Whether a SINGLE `review` dict carries all five required fields,
     non-empty. Used two ways: (1) directly, on `decisions["review"]` when it
-    is the pre-existing single-`dict` shape (`build_close_tail_args_
-    directive`'s scalar `--review-*` branch, byte-identical to today); (2)
-    per-ENTRY, when `decisions["review"]` is the additive `list[dict]`
-    shape (partitioned-review fix, `workstream_complete.build_write_trail_
-    directives`) — `build_close_tail_args_directive`'s list branch calls
-    this once per list entry to decide which entries qualify for a
-    `--review-slice` token, mirroring `build_write_trail_directives`'s own
-    "an incomplete entry contributes nothing, silently" convention rather
-    than forwarding a partial slice for `wsc-tail.py` to reject.
+    is the pre-existing single-`dict` shape; (2) per-ENTRY, when
+    `decisions["review"]` is the additive `list[dict]` shape (partitioned-
+    review fix, `workstream_complete.build_write_trail_directives`), which
+    calls this once per list entry to decide which entries qualify,
+    mirroring `build_write_trail_directives`'s own "an incomplete entry
+    contributes nothing, silently" convention. (`build_close_tail_args_
+    directive`/`wsc-tail.py`, formerly the other consumer of this shape,
+    were removed in the ceremony.wsc_tail kill, 2026-08-23.)
 
     Returns `False` for any non-`dict` input (a bare falsy `review`, or a
     list entry that is itself not a dict) — this function only ever judges
@@ -841,16 +829,15 @@ def _review_fields_present(review: Any) -> bool:
 
 
 def _review_any_qualifies(review: Any) -> bool:
-    """The ONE qualification predicate both commit-tail builders below share
-    for "does decisions['review'] back anything real" — dict shape delegates
-    straight to `_review_fields_present`; list shape is true iff ANY entry
-    qualifies (mirrors `build_close_tail_args_directive`'s own per-entry
-    `--review-slice` gate). Anything else (falsy, or a shape `validate_
-    review_shape` would already have rejected) is `False`.
+    """The qualification predicate for "does decisions['review'] back
+    anything real" — dict shape delegates straight to `_review_fields_
+    present`; list shape is true iff ANY entry qualifies. Anything else
+    (falsy, or a shape `validate_review_shape` would already have rejected)
+    is `False`.
 
-    Extracted so `build_wsc_tail_directive`'s `--adjudication-present`
-    predicate and `build_close_tail_args_directive`'s `--review-*`/
-    `--review-slice` predicate decide the SAME fact from the SAME code —
+    Formerly extracted so `build_wsc_tail_directive`'s `--adjudication-
+    present` predicate and `build_close_tail_args_directive`'s `--review-*`/
+    `--review-slice` predicate decided the SAME fact from the SAME code —
     before this helper existed they were two independent predicates (bare
     truthiness vs. `_review_fields_present`) that could disagree on an
     incomplete-but-recognized shape (a dict missing required fields, a list
@@ -859,8 +846,9 @@ def _review_any_qualifies(review: Any) -> bool:
     `--review-slice` token at all, so the mismatch surfaced only after a
     live ceremony had already committed, as a `failed_critical`-driven
     exit_code 2 the operator is told not to re-run for. `_raise_on_review_
-    truthy_unqualified` (below) now catches that class at assemble time,
-    before either builder's directive is even constructed."""
+    truthy_unqualified` (below) caught that class at assemble time, before
+    either builder's directive was even constructed. Both builders were
+    removed in the ceremony.wsc_tail kill, 2026-08-23."""
     if isinstance(review, list):
         return any(_review_fields_present(entry) for entry in review)
     return _review_fields_present(review)
@@ -869,12 +857,13 @@ def _review_any_qualifies(review: Any) -> bool:
 def _raise_on_review_truthy_unqualified(review: Any) -> None:
     """Raises `ValueError` when `review` is truthy but `_review_any_
     qualifies` is `False` — the disagreement class `_review_any_qualifies`'s
-    own docstring names. Called once, from `build_wsc_tail_directive` (the
-    `--adjudication-present` producer), which `__init__.py` always calls in
-    the same assemble pass as `build_close_tail_args_directive` — raising
-    here aborts assembly before either directive reaches `directives[]`,
-    same loud-at-ingestion posture `validate_review_shape` already
-    establishes for shape, one layer up for completeness. Leaves the
+    own docstring names. Formerly called once, from `build_wsc_tail_
+    directive` (the `--adjudication-present` producer, removed in the
+    ceremony.wsc_tail kill, 2026-08-23), which `__init__.py` always called in
+    the same assemble pass as `build_close_tail_args_directive` (also
+    removed) — raising here aborted assembly before either directive reached
+    `directives[]`, same loud-at-ingestion posture `validate_review_shape`
+    already establishes for shape, one layer up for completeness. Leaves the
     post-commit `failed_critical` branch (`tail_ops.write_review_trail`) as
     the defence-in-depth backstop it was designed to be, rather than the
     primary detector for this class."""
@@ -967,7 +956,8 @@ _REVIEW_FLAT_ALIAS_KEYS: tuple[str, ...] = tuple(
 def _warn_unrecognized_review_keys(decisions: dict[str, Any]) -> None:
     """This module's own Negative-spec already states the flag-shape
     principle one layer down: "a flag either parser rejects is worse than a
-    missing one" (see `build_close_tail_args_directive`'s own docstring).
+    missing one" (formerly `build_close_tail_args_directive`'s own docstring,
+    removed in the ceremony.wsc_tail kill, 2026-08-23).
     This applies that SAME principle one layer up, at the `decisions` dict
     itself — a legitimately absent `review` dict must not fail loud (the
     review slice is genuinely optional), but a flat `review_*` key sitting
@@ -977,10 +967,8 @@ def _warn_unrecognized_review_keys(decisions: dict[str, Any]) -> None:
     (the review dict, if genuinely supplied, is unaffected), it just stops
     doing so quietly. Printed to stderr, never stdout: this module's own
     `brief`/`apply` CLI seams (`coordinator_core.workstream_complete.
-    __init__`) serialize their JSON result to stdout, and `wsc-close
-    tail-args`' own stdout is a parsed argv/token channel spliced into
-    `d-run-wsc-tail` — polluting either would be worse than the silent drop
-    this closes.
+    __init__`) serialize their JSON result to stdout, and polluting it
+    would be worse than the silent drop this closes.
     """
     present = sorted(k for k in _REVIEW_FLAT_ALIAS_KEYS if k in decisions)
     if not present:
@@ -1032,9 +1020,10 @@ def _raise_on_unrecognized_review_dict(entry: dict[str, Any]) -> None:
 
 def validate_review_shape(review: Any) -> None:
     """The shared POSITIVE shape validator for `decisions['review']` --
-    called from BOTH reader sites (`build_close_tail_args_directive` below,
-    and `workstream_complete.build_write_trail_directives`) so they cannot
-    diverge. Two independent silent-dropping sites for one key was the
+    called from `workstream_complete.build_write_trail_directives` (formerly
+    also from `build_close_tail_args_directive`, removed in the
+    ceremony.wsc_tail kill, 2026-08-23) so they could not diverge. Two
+    independent silent-dropping sites for one key was the
     structural defect under state/bug-backlog/2026-08-14-wsc-apply-accepts-
     an-unconsumed-decision-debea052f8c5.yaml (corroborated cross-repo:
     cross-repo/inbox/2026-08-14-example-cockpit-repo-em-review-decisions-dict-
@@ -1070,261 +1059,6 @@ def validate_review_shape(review: Any) -> None:
             _raise_on_unrecognized_review_dict(entry)
         return
     raise ValueError(f"{_REVIEW_SHAPE_MESSAGE} Got {type(review).__name__}.")
-
-
-def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]:
-    """Assembles the OPTIONAL `--deleted-paths` / `--kept-entries` /
-    `--review-*` flags via `wsc-close tail-args` — this mirrors the
-    bash conditional-array logic the pre-conversion SKILL inlined, and its
-    stdout (one argv token per line) is spliced into `d-run-wsc-tail`'s
-    own invocation at apply time, per `depends_on`. The two optional-flag
-    groups are each all-or-nothing at the wsc-tail layer (a partial
-    `--review-*` supply is rejected there, not here) — this builder only
-    omits a group whose backing value is absent, never partially supplies
-    one.
-
-    Negative-spec — every flag emitted here must be accepted by BOTH
-    `wsc-close tail-args` (which parses this argv) and `wsc-tail.py` (which
-    parses the spliced stdout). A flag either parser rejects is worse than a
-    missing one: `tail-args` exits 2, `d-run-wsc-tail` splices an EMPTY argv,
-    and the whole `--review-*` group is silently dropped — the tail then
-    commits with no review metadata while the ceremony still reports success.
-    `--review-scope-kind` is spelled to match `wsc-tail.py`'s own parser, NOT
-    shortened to the `review` dict's `scope_kind` key.
-
-    `reviewer_evidence` is forwarded on BOTH branches — as
-    `--review-reviewer-evidence` on the scalar branch, as a slice key on the
-    list branch. It is optional here and outside the all-or-nothing five, but
-    `review_trail_write._verify_reviewer_evidence` requires it for every
-    reviewer except `wsc-auto-adjudication`; that gate is advisory today and
-    designed to become enforcing, so a value accepted in `decisions["review"]`
-    and dropped in this argv silently defeats the correlation the gate exists
-    to establish. Spec backlink: cross-repo/inbox/2026-08-13-doe-claude-em-wsc-
-    tail-ipc-timeout-and-reviewer-evidence-drop.md § 2.
-
-    Applies that same "silent drop is worse than a loud rejection" principle
-    one layer up, at the `decisions` dict itself: an unrecognized flat
-    `review_*` key on `decisions` (a caller's plausible-looking but wrong
-    spelling of the nested `review` object) now gets a one-line stderr
-    diagnostic via `_warn_unrecognized_review_keys` rather than a silent
-    drop — a genuinely absent `review` dict stays quiet, per that helper's
-    own docstring.
-
-    `decisions["review"]` may be a single `dict` (unchanged: the scalar
-    `--review-*` flags above, byte-identical to before the partitioned-
-    review fix) OR a `list[dict]` (additive — same shape `build_write_
-    trail_directives` reads for the standalone directive path): one
-    `--review-slice <json>` token per list entry that passes `_review_
-    fields_present`, in original list order, via `wsc-tail.py`'s
-    repeatable `--review-slice` flag (`docs/plans/...` — see that CLI's
-    own module docstring for the JSON shape and per-slice foreign-session
-    isolation this now carries through the commit-tail path). An entry
-    failing `_review_fields_present` contributes NO token — silently
-    dropped, mirroring `build_write_trail_directives`'s "an incomplete
-    entry contributes nothing" convention rather than forwarding a partial
-    slice for `wsc-tail.py` to reject. The scalar five-flag form and the
-    repeatable `--review-slice` form are mutually exclusive at every layer
-    downstream (`wsc-close.py tail-args`, `wsc-tail.py`) — `decisions["review"]`
-    being a `dict` XOR a `list` at this call site is what keeps that
-    exclusivity automatic; this function never emits both.
-    """
-    _warn_unrecognized_review_keys(decisions)
-    validate_review_shape(decisions.get(_KEY_REVIEW))
-    # Same shared predicate `build_wsc_tail_directive` raises on (see
-    # `_review_any_qualifies`'s docstring) — checked here too so a caller
-    # invoking this builder alone (not just via `__init__.py`'s always-both
-    # sequencing) gets the same loud-at-assemble-time failure rather than a
-    # silently review-less `wsc-close tail-args` argv.
-    _raise_on_review_truthy_unqualified(decisions.get(_KEY_REVIEW))
-    _raise_on_review_enum_values(decisions.get(_KEY_REVIEW) or {})
-    args: list[str] = ["tail-args"]
-    if decisions.get(_KEY_DELETED_PATHS):
-        args += ["--deleted-paths", *[str(p) for p in decisions[_KEY_DELETED_PATHS]]]
-    if decisions.get(_KEY_KEPT_ENTRIES):
-        args += ["--kept-entries", *[str(p) for p in decisions[_KEY_KEPT_ENTRIES]]]
-    review = decisions.get(_KEY_REVIEW) or {}
-    if isinstance(review, list) and _COMMIT_TAIL_ACCEPTS_REVIEW_SLICES:
-        for entry in review:
-            if not _review_fields_present(entry):
-                continue
-            payload = {k: str(entry[k]) for k in _REVIEW_REQUIRED_FIELDS}
-            if entry.get("scope_kind"):
-                payload["scope_kind"] = str(entry["scope_kind"])
-            if entry.get("reviewer_evidence"):
-                payload["reviewer_evidence"] = str(entry["reviewer_evidence"])
-            args += ["--review-slice", json.dumps(payload, sort_keys=True)]
-    elif _review_fields_present(review):
-        args += [
-            "--review-sha-range", str(review["sha_range"]),
-            "--review-reviewer", str(review["reviewer"]),
-            "--review-scope", str(review["scope"]),
-            "--review-verdict", str(review["verdict"]),
-            "--review-diff-loc", str(review["diff_loc"]),
-        ]
-        if review.get("scope_kind"):
-            args += ["--review-scope-kind", str(review["scope_kind"])]
-        if review.get("reviewer_evidence"):
-            args += ["--review-reviewer-evidence", str(review["reviewer_evidence"])]
-    return _directive("d-close-tail-args", "wsc-close", args)
-
-
-def build_wsc_tail_directive(
-    sid: str, decisions: dict[str, Any], *, partition_mandatory: bool = False
-) -> dict[str, Any]:
-    """The single trampoline call that stages `WSC_PATHS`, composes the
-    commit message, runs the Step 2.67 deletion-claim + Step 3.0 dirty-tree
-    gates, commits, and chains the async post-commit push — everything the
-    pre-conversion SKILL walked as a multi-call keystone block, now ONE
-    `wsc-tail.py` invocation (`d-run-wsc-tail`). `subject`/`prose` are
-    `commit-message-authoring`'s ALREADY-DECIDED output (C2f); `stage_paths`
-    is `accumulate_session_paths`'s result. Depends on `d-close-tail-args`,
-    and the apply half splices that call's stdout into this one's argv via
-    the trailing `"{d-close-tail-args.argv}"` arg token below —
-    `apply._resolve_arg_tokens`'s `.argv` field expands that single
-    standalone arg into every non-blank, stripped line of `d-close-tail-
-    args`' captured stdout (the `--deleted-paths`/`--kept-entries`/
-    `--review-*` flags `wsc-close tail-args` composed), appended in order
-    after this directive's own build-time-known args
-    (sid/subject/prose/stage-paths/governing-plan-slug), same shape the
-    pre-existing inline `d-tail` directive in `__init__.py` already used
-    plus the one token. `depends_on="d-close-tail-args"` is kept for
-    ordering; the token is what actually threads the value.
-
-    `--adjudication-present` (bare, `store_true`) is composed whenever
-    `decisions["review"]` qualifies per `_review_any_qualifies` — the SAME
-    predicate `build_close_tail_args_directive` uses to decide whether it
-    composes any `--review-*`/`--review-slice` token, so the two can no
-    longer disagree (see `_review_any_qualifies`'s own docstring for the
-    disagreement class this closes). A truthy-but-unqualified `review`
-    (state/bug-backlog/2026-08-14-no-caller-composes-b-adjudication-present-
-    9f4c21a0e5d3.yaml's `proposed_action` names the original bare-truthiness
-    predicate, ruled by the PM; this refines it) raises `ValueError` at
-    assemble time instead — see `_raise_on_review_truthy_unqualified`. This
-    is the one caller that closes the loop `7c19e190ae86` opened: the flag
-    reaches `ceremony.wsc_tail`, which forwards it into `tail_ops.
-    write_review_trail`/`write_review_trail_many`'s fail-loud branch
-    (`failed_critical` instead of a silent `skipped`) when no review-trail
-    record is actually written. `validate_review_shape` (this module,
-    above) already guarantees a PRESENT `review` is well-shaped before this
-    function ever sees it, so "the EM asserted there was a review" now
-    means: a missing trail record composes a `failed_critical` tail entry,
-    which maps to `wsc-tail.py` exit_code 2 (`WSC_TAIL_EXIT_LADDER[2]`,
-    `directives_commit_tail.py` — status `commit-landed-tail-item-needs-
-    attention`, `halted=False`). The commit has ALREADY landed by the time
-    this fires (the review_trail write runs in the precommit tail phase,
-    not as a commit precondition) and the ceremony does not halt — this
-    converts a silent skip into a non-halting diagnostic the operator must
-    address directly, per the exit ladder's own "Do NOT re-run
-    d-run-wsc-tail" guidance, not a hard fail that blocks the commit. A
-    falsy/absent `review` composes NO flag — argv byte-identical to before
-    this predicate existed.
-    """
-    args: list[str] = ["--sid", sid]
-    if decisions.get(_KEY_SUBJECT):
-        args += ["--subject", str(decisions[_KEY_SUBJECT])]
-    if decisions.get(_KEY_PROSE):
-        args += ["--prose", str(decisions[_KEY_PROSE])]
-    stage_paths = decisions.get(_KEY_STAGE_PATHS)
-    if stage_paths:
-        args += ["--stage-paths", *[str(p) for p in stage_paths]]
-    if decisions.get(_KEY_GOVERNING_PLAN_SLUG):
-        args += ["--governing-plan-slug", str(decisions[_KEY_GOVERNING_PLAN_SLUG])]
-    review_for_flag = decisions.get(_KEY_REVIEW)
-    _raise_on_review_truthy_unqualified(review_for_flag)
-    if _review_any_qualifies(review_for_flag):
-        args.append("--adjudication-present")
-    # D (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-
-    # silently.md): `partition_mandatory` is a DEDICATED parameter, not a
-    # `decisions` key — `workstream_complete.brief` resolves it from
-    # `decide_review_scale`'s row-4/6 verdict and threads it straight
-    # through `build_directives`, never through `decisions` (which would
-    # make it look like a caller-suppliable, decisions-template-
-    # discoverable field; it is neither — see
-    # `test_every_decisions_key_read_anywhere_in_the_package_is_
-    # discoverable_from_the_template`'s AST scan, which is exactly why this
-    # is not a `decisions["..."]` read). `--partition-mandatory` mirrors
-    # `--adjudication-present`'s own bare/store_true shape and reaches the
-    # SAME fail-loud gate in `ceremony.wsc_tail` (a resolved partition-
-    # mandatory row is as strong a statement that a review was owed as an
-    # adjudication is).
-    if partition_mandatory:
-        args.append("--partition-mandatory")
-    args.append("{d-close-tail-args.argv}")
-    return _directive("d-run-wsc-tail", "wsc-tail", args, depends_on="d-close-tail-args")
-
-
-class WscTailOutcome(NamedTuple):
-    status: str
-    halted: bool
-    next_move: str
-
-
-#: The 5-way exit ladder `d-run-wsc-tail` (`wsc-tail.py`) resolves to at
-#: RUN TIME — not something this read-only assembler can pre-resolve, but
-#: the branch tree itself is fully known and deterministic per exit code
-#: (SKILL.md § Exit ladder), so it is data here rather than re-narrated
-#: prose at every call site. Key `"timeout"` is not a `wsc-tail.py` process
-#: exit code (it never returns one on a client-side timeout — the process
-#: is still running server-side); it is the caller's OWN `cc_invoke`
-#: 10s-cap TimeoutExpired condition, included here because the SKILL
-#: documents it as the ladder's 5th rung and a caller dispatching this
-#: directive needs the same lookup for both cases.
-WSC_TAIL_EXIT_LADDER: dict[Any, WscTailOutcome] = {
-    0: WscTailOutcome(
-        status="success",
-        halted=False,
-        next_move="Proceed to d-release-plan-claim / d-emit-cadence.",
-    ),
-    2: WscTailOutcome(
-        status="commit-landed-tail-item-needs-attention",
-        halted=False,
-        next_move=(
-            "The commit already landed (e.g. an origin-stub close soft-failed). Read "
-            "the diagnostics/tail_results printed to stderr and address the named item "
-            "directly. Do NOT re-run d-run-wsc-tail — the tree is already clean."
-        ),
-    ),
-    1: WscTailOutcome(
-        status="hard-failure",
-        halted=True,
-        next_move=(
-            "The op refused (commit_failed, or a bare error string) or the trampoline "
-            "itself failed. No commit landed. Diagnose before re-running."
-        ),
-    ),
-    3: WscTailOutcome(
-        status="transport-failure",
-        halted=True,
-        next_move="Surface to the PM — this is an install/seam problem, not a ceremony-content one.",
-    ),
-    "timeout": WscTailOutcome(
-        status="client-timeout-reconcile",
-        halted=False,
-        next_move=(
-            "Do NOT blind-retry. Check `git log -1` / `git status` and the op's tail "
-            "artifacts (completion entry, swept memos) for evidence the commit already "
-            "landed server-side before deciding anything failed or re-running."
-        ),
-    ),
-}
-
-
-def describe_wsc_tail_outcome(exit_code: Any) -> WscTailOutcome:
-    """Looks up `WSC_TAIL_EXIT_LADDER` for a `wsc-tail.py` process exit
-    code (`0`/`1`/`2`/`3`) or the literal string `"timeout"` for a
-    client-side `cc_invoke` timeout. An unrecognized code degrades to the
-    same disposition as `wsc-tail.py`'s own `main()` fallback for an
-    out-of-band `exit_code` (treated as a hard failure, not silently
-    ignored) — see `wsc-tail.py`'s own `if exit_code != 0` branch.
-    """
-    outcome = WSC_TAIL_EXIT_LADDER.get(exit_code)
-    if outcome is not None:
-        return outcome
-    return WscTailOutcome(
-        status="unrecognized-exit-code",
-        halted=True,
-        next_move=f"wsc-tail.py returned unrecognized exit_code={exit_code!r} — diagnose before re-running.",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1461,8 +1195,16 @@ def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Step 3.5 — d-release-plan-claim
-# ---------------------------------------------------------------------------
+# Step 3.5 — d-release-plan-claim — REMOVED (ceremony.wsc_tail kill,
+# 2026-08-23): the governing-plan claim-release directive depended
+# exclusively on `d-run-wsc-tail` landing (`depends_on`/`{d-run-wsc-tail.
+# landed}` ordering token) to know the commit it was guarding actually
+# happened. With that producer gone, this directive has no way to
+# establish its own precondition without inventing a replacement signal —
+# not done here, per the kill's own delete-the-step, don't-redesign rule.
+# `/workstream-complete` no longer auto-releases a governing-plan
+# execution-lock claim; `session-claim-cli release-artifact` itself is
+# untouched and remains callable directly.
 # (Session archival — formerly `d-archive-session-claim` here — moved to
 # session END, not workstream close; see `__init__.py`'s call-site comment
 # at the Step 3/3.5/3.6 assembly point. `wsc-close.py archive-session` and
@@ -1470,38 +1212,6 @@ def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
 # SessionEnd-hook caller; only this module's builder was removed.)
 
 
-def build_release_plan_claim_directive(governing_plan_slug: Optional[str]) -> Optional[dict[str, Any]]:
-    """Releases the governing-plan execution-lock claim ONLY when a
-    governing plan was in scope (the Step 2.4 governing-plan predicate),
-    and only AFTER the Step 3 commit has landed — `depends_on="d-run-wsc-
-    tail"` encodes that ordering as a directive-id dependency, which
-    `ceremony_common.apply_halt._directive_gate_open` deliberately does
-    NOT gate on (see that function's docstring); producer readiness is
-    instead enforced here via the trailing `{d-run-wsc-tail.landed}`
-    ordering-only arg token (`apply._resolve_arg_tokens`), which resolves
-    to the empty string — behaviorally identical to the omitted optional
-    `baton_repo_root` positional `session-claim-cli release-artifact`
-    already accepts (`claims.release_artifact`'s `if baton_repo_root:`
-    truthiness check treats `""` the same as absent) — when `d-run-wsc-
-    tail` landed this pass, and fails the directive loud into
-    `report["failed"]` otherwise, so a blocked-at-judgment or failed
-    commit tail can never let the plan claim release out from under a
-    commit that never happened. `release_artifact`'s frontmatter-revert
-    precondition is vacuous for the plan claim class (full atomic-mkdir
-    lock, no frontmatter execution-stamp; SKILL.md's own ORDERING-CONTRACT
-    annotation) and `session-claim-cli release-artifact` is itself
-    holder-identity-checked and safe to call unconditionally once the
-    predicate is true. Returns `None` (no directive) when no governing
-    plan was identified — a plan-less session acquired no claim and
-    releases nothing."""
-    if not governing_plan_slug:
-        return None
-    return _directive(
-        "d-release-plan-claim",
-        "session-claim-cli",
-        ["release-artifact", "plan", str(governing_plan_slug), "{d-run-wsc-tail.landed}"],
-        depends_on="d-run-wsc-tail",
-    )
 # ---------------------------------------------------------------------------
 # Step 4 — d-render-final-summary (read-only fan-in, no CLI)
 # ---------------------------------------------------------------------------

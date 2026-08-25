@@ -71,6 +71,17 @@ verb: `git stash push -m drop -- <paths>` is a legitimate scoped push whose
 first non-flag token is the literal word `drop`. Positional matching never
 sees it.
 
+`remaining[0]` IS STRIPPED OF A LEADING REDIRECTION FIRST (2026-08-23 fix, one
+shared helper: `block_subagent_destructive_action._strip_leading_redirection_
+tokens`, imported here rather than copied). `shlex`/the PowerShell tokenizer
+has no concept of shell redirection -- `git stash 2>&1 drop` tokenizes to
+`["2>&1", "drop"]` after `stash`, and reading `remaining[0]` unstripped hands
+`_classify_stash_subcommand` `"2>&1"` instead of `"drop"`, which this module's
+own DELIBERATE ALLOW-LIST then allows as unrecognized -- exactly the
+irrecoverable case this guard exists to deny. This was the identical shape
+already fixed in the two sibling create-side guards; this file's own two
+`remaining[0]` sites had not been patched.
+
 NOT a `stash`-substring ban, and specifically not the sibling module's
 `_STASH_DROP_CLEAR_RE` (`\bstash\b.*\b(?:drop|clear)\b`). That regex is
 correct in its own module, where it runs only as a free-text fallback on a
@@ -130,6 +141,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _real_git_subcommand,
     _segments_from_tokens,
     _strip_heredoc_bodies,
+    _strip_leading_redirection_tokens,
     _strip_leading_subshell_and_env,
     _tokenize_full_command,
 )
@@ -304,8 +316,16 @@ def _evaluate(cmd: str) -> Optional[str]:
             continue
 
         # `remaining[0]`, never a flag-skipping scan -- see module docstring
-        # "CLASSIFICATION IS `remaining[0]`".
-        second = remaining[0] if remaining else None
+        # "CLASSIFICATION IS `remaining[0]`". 2026-08-23 fix (same
+        # UNSCOPED-STASH GAP shape as the sibling create-side guards, see
+        # `_strip_leading_redirection_tokens`'s docstring): this module never
+        # applied the strip, so `git stash 2>&1 drop` displaced `remaining[0]`
+        # to `"2>&1"`, `_classify_stash_subcommand` allowed it as an
+        # unrecognized token (this module's own DELIBERATE ALLOW-LIST), and
+        # the irrecoverable `drop`/`clear` this guard exists to catch sailed
+        # through.
+        stash_remaining = _strip_leading_redirection_tokens(remaining)
+        second = stash_remaining[0] if stash_remaining else None
         verdict = _classify_stash_subcommand(second)
         if verdict is not None:
             return verdict
@@ -399,7 +419,9 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
             continue
 
         # `remaining[0]` is already quote-normalized (part of `clean`).
-        second = remaining[0] if remaining else None
+        # 2026-08-23 fix -- see the Bash leg's identical comment above.
+        stash_remaining = _strip_leading_redirection_tokens(remaining)
+        second = stash_remaining[0] if stash_remaining else None
         verdict = _classify_stash_subcommand(second)
         if verdict is not None:
             return verdict

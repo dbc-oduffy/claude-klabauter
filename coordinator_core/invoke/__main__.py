@@ -890,32 +890,14 @@ def main() -> None:
     `invoke.from_argv` op), so there is exactly one place that can diverge
     from the plain `python -m coordinator_core.invoke` CLI contract.
     """
-    # Lazy op registration (F6 / claude-klabauter-windows-portability § C4): tell
-    # coordinator_core.ops to SKIP its eager 55-module import list at package-
-    # init time. This process is a one-shot command-type CLI dispatch (DR-215)
-    # — nothing else in it depends on the full-eager side-effect — so only the
-    # single dispatched op's owning module gets imported (via ipc.py's
-    # registry-miss lazy-import path), instead of all ~55. Must be set before
-    # anything imports coordinator_core.ops (directly or transitively).
-    #
-    # On `sys`, not in `os.environ` (2026-07-28): this signal is for THIS
-    # process only, and an os.environ write is inherited by every child spawned
-    # without an explicit `env=` — including the pytest runs three op modules
-    # spawn (cutover_gate, copy_plugin_template, whoami_run_tests), whose
-    # collection then fails against the 59 modules that assert the op registry
-    # at import time. A `sys` attribute crosses no process boundary.
-    # Scoping study: docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md § 6 (c).
-    # COORDINATOR_CORE_LAZY_OPS in the environment stays the operator override
-    # and, per coordinator_core/ops/__init__.py, outranks this line — so an
-    # operator who exports it as "0" gets an eager dispatch process, where this
-    # write was previously unconditional.
-    #
-    # NOT set on the served (`invoke.from_argv`) path: that op runs inside the
-    # long-lived warm server, whose own boot already imported
-    # coordinator_core.ops eagerly (see that op module's docstring) — setting
-    # this attribute there would be a pointless-by-then global-interpreter-
-    # state mutation on a process this function does not own.
-    setattr(sys, "_coordinator_core_lazy_ops", True)
+    # Lazy op registration (F6 / claude-klabauter-windows-portability § C4) is
+    # unconditional as of 2026-08-22 (the import-path-costs-nothing sprint):
+    # coordinator_core.ops never eagerly imports its op modules at
+    # package-init time, flag or no flag, so this process no longer needs to
+    # arm anything before dispatch — the single dispatched op's owning module
+    # is imported via ipc.py's registry-miss lazy-import path regardless.
+    # (Formerly armed `sys._coordinator_core_lazy_ops` here; retired along
+    # with the two-channel flag it fed — see coordinator_core/ops/__init__.py.)
 
     stdout, stderr, exit_code = _dispatch_argv(sys.argv[1:], os.getcwd())
 

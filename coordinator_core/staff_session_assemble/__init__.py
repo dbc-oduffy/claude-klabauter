@@ -71,7 +71,7 @@ _HEADING_SUBAGENT_TYPE = "### Persona Slug -> subagent_type"
 
 SESSION_MODE_ENUM = ("plan", "review")
 
-_SYNTHESIZER_SLUG = "the Director of Engineering"
+_SYNTHESIZER_SLUG = "zoli"
 
 
 class StaffSessionAssembleError(ValueError):
@@ -191,7 +191,11 @@ _PAIR_SLUG_RE = re.compile(r"`([a-z0-9_-]+)`")
 
 
 def _split_pair_cell(cell: str) -> list[str]:
-    """Splits a "`the Staff Engineer` + `sid`" default-pair cell into ["the Staff Engineer", "sid"]."""
+    """Splits a "`reviewer-a` + `reviewer-b`" default-pair cell into
+    ["reviewer-a", "reviewer-b"]. The slugs here are illustrative of the SHAPE
+    only -- do not restore real persona names, which reach the public mirror
+    verbatim: this line's own bare-quoted persona name defeated the substitution
+    pass and was one of the two findings that blocked the 2026-08-25 publish."""
     slugs = _PAIR_SLUG_RE.findall(cell)
     if not slugs:
         raise StaffSessionAssembleError(f"malformed default-pair cell: {cell!r}")
@@ -272,7 +276,7 @@ def resolve_roster(
 
     if _SYNTHESIZER_SLUG in resolved_slugs:
         raise StaffSessionAssembleError(
-            "'the Director of Engineering' cannot appear as a debater slug — he is the staff-session "
+            "'zoli' cannot appear as a debater slug — he is the staff-session "
             "synthesizer, never a debater (see staff-session/SKILL.md Step 4)."
         )
 

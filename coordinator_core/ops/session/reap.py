@@ -2,15 +2,39 @@
 coordinator_core.ops.session.reap — session.reap op (Class B cadence-gated reaper).
 
 Purpose: Reap stale/orphaned session substrate from .git/coordinator-sessions/.
-Three sub-reaps run; (i)/(ii) share a 12h .last-reap cadence gate, (iii) runs on
-EVERY invocation (decoupled from the gate — Decision D1 shape (a), PM-ratified
-2026-07-14 claim-lock-liveness plan § C4, see Cadence decoupling below):
+Three sub-reaps run behind the shared 12h .last-reap cadence gate:
   (i)  Stale sessions (last_activity > 24h inactive) → .archive/<sid>-<YYYY-MM-DD>/
   (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-<YYYYMMDD>/
-  (iii) Orphaned claim dirs (liveness-checked, TOCTOU re-read) → rm -rf
   (iv) Stale agent-archive prune: .archive/_agents-* entries older than
        _AGENT_ARCHIVE_RETENTION_SECONDS (14d mtime) → rm -rf. Behind the same
        12h gate as (i)/(ii); prunes what (ii) archives but never deletes.
+
+Sub-reap (iii) (orphaned claim dirs, liveness-checked TOCTOU-re-read rm -rf) is
+NOT invoked by this handler at all — see "Boot backstop cull removal" below.
+`_reap_orphaned_claims` (the predicate) still lives in this module and is still
+reachable, but only via the already-registered, already-decoupled
+`session.reap_claims_for_repos` op (`_handler_reap_claims_for_repos`, target_root
+param), which a ceremony gate (`/workday-start`, `/workday-complete`,
+`/consolidate-git`, `/merge-to-main`) invokes with the calling repo's own root
+as its sole `target_roots` entry. session.reap itself never runs it, on any
+path — boot, which invokes session.reap, therefore never reaches the
+irreversible cull.
+
+Boot backstop cull removal (C3, PM ruling 2026-08-22, "the boot backstop asks
+git nothing" — docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md,
+AC6/AC6d): this supersedes the prior Decision D1 shape (a) cadence-DECOUPLING
+(PM-ratified 2026-07-14 claim-lock-liveness plan § C4), which ran (iii) on
+every session.reap invocation including boot. That decoupling correctly took
+(iii) off the 12h gate, but left it firing at boot — an aggressive,
+NOT-git-reversible rm -rf at precisely the moment the box is busiest. The
+gate was the wrong axis; the fix is relocation, not re-tuning the gate: (iii)
+now runs ONLY from a supervised ceremony gate, via the op that already existed
+for exactly this shape (`session.reap_claims_for_repos`), never composed
+behind session.reap or boot_sweep — no new op identity was needed, and no rider
+was added back onto session.reap as a convenience (that would reintroduce the
+Decision D1 conflict this dissolves: session.reap's own identity carries
+nothing but its own sub-reaps (i)/(ii)/(iv), never mixing in the untracked
+rm -rf a ceremony gate now owns).
 
 Class-B safety contract (NOT DR-211 git-archival — untracked .git/ substrate):
   - Per-record idempotency: if archive dest already exists, skip (no error).
@@ -24,20 +48,18 @@ Class-B safety contract (NOT DR-211 git-archival — untracked .git/ substrate):
     NOT flock — .last-reap is a long-lived persistence marker, not a short-held
     write-critical-section (session-state-contract.md § Negative-Spec).
 
-Cadence decoupling (Decision D1, shape (a) — PM-ratified 2026-07-14
-claim-lock-liveness plan § C4, docs/plans/2026-07-14-claim-lock-liveness-archival-gate-unification.md):
-  sub-reap (iii) (orphaned claim dirs) is NOT gated by the shared 12h .last-reap
-  marker — it runs at EVERY session-init (boot cadence), since dead claim-lock
-  cleanup is the true residual of the archival-gate-liveness unification.  Only
-  sub-reaps (i)/(ii) (stale sessions/agents) remain behind the 12h gate.  On the
-  fast (iii)-only path, .last-reap is NOT touched — touching it there would
-  silently reset the (i)/(ii) cadence window on every boot and starve stale
-  session/agent cleanup.  session.reap is already invoked every session-init
-  (boot_sweep.py:790); this decoupling is purely internal cadence-gate wiring,
-  not a new caller — session.boot_sweep does NOT invoke session.reap directly
-  (shape (b), folding claim-reap into boot_sweep, was REJECTED: it would mix
-  Class-B untracked rm-rf into boot_sweep's DR-211 tracked-archival safety
-  identity).
+Cadence decoupling — SUPERSEDED (C3, see "Boot backstop cull removal" above):
+  the original Decision D1 shape (a) (PM-ratified 2026-07-14 claim-lock-liveness
+  plan § C4, docs/plans/2026-07-14-claim-lock-liveness-archival-gate-unification.md)
+  decoupled sub-reap (iii) from the 12h .last-reap marker so it ran at EVERY
+  session-init instead. C3 goes further: (iii) no longer runs from session.reap
+  at all, gated or not — it runs only from a ceremony gate via
+  session.reap_claims_for_repos. Only sub-reaps (i)/(ii)/(iv) remain behind
+  the 12h gate here. session.boot_sweep still does NOT invoke session.reap
+  directly (shape (b), folding claim-reap into boot_sweep, remains REJECTED:
+  it would mix Class-B untracked rm-rf into boot_sweep's DR-211 tracked-archival
+  safety identity) — session.reap is invoked by session-init (boot cadence),
+  and after C3 that boot-path invocation performs no irreversible cull.
 
 Self-registration: importing this module calls
 register_op("session.reap", _handler) as a side-effect, and (C5)
@@ -66,6 +88,11 @@ Negative-spec:
   - Does NOT treat params.repo_root as the path source — D3 check only.
   - Does NOT expose a dry_run/candidate_ids two-phase contract — this is not a fleet op;
     it has no cockpit-facing reviewer loop.
+  - Does NOT invoke `_reap_orphaned_claims` (sub-reap (iii)) from the `session.reap`
+    handler, on any path — cadence-gated or full-run (C3, PM ruling 2026-08-22).
+    A caller wanting the irreversible claim-dir cull must call the already-registered
+    `session.reap_claims_for_repos` op directly; session.reap's own identity carries
+    only (i)/(ii)/(iv).
 """
 
 from __future__ import annotations
@@ -720,12 +747,19 @@ def _build_error_result(reason: str) -> dict:
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """session.reap — cadence-gated reaper for .git/coordinator-sessions/ substrate.
 
-    Four sub-reaps run behind a single 12h .last-reap cadence gate (except
-    (iii), decoupled — see Cadence decoupling below):
+    Three sub-reaps run behind a single 12h .last-reap cadence gate:
       (i)  Stale sessions (last_activity > 24h) → .archive/<sid>-YYYY-MM-DD/
       (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-YYYYMMDD/
-      (iii) Orphaned claim dirs (two liveness checks, TOCTOU re-read) → rm -rf
       (iv) Stale agent-archive prune: .archive/_agents-* older than 14d mtime → rm -rf
+
+    Sub-reap (iii) (orphaned claim dirs, two liveness checks + TOCTOU re-read →
+    rm -rf) is NOT run by this handler at all (C3, PM ruling 2026-08-22 — see
+    module docstring "Boot backstop cull removal"). It is the one irreversible,
+    NOT-git-reversible cull among the four, and boot must not reach it. Call
+    the already-registered `session.reap_claims_for_repos` op from a ceremony
+    gate instead — it invokes the identical `_reap_orphaned_claims` predicate
+    (same TOCTOU + fail-closed-to-keep guarantee), scoped to the caller-named
+    target_roots.
 
     Class-B op: no git commit; substrate is untracked .git/coordinator-sessions/.
     Fail-closed-to-keep: any liveness-check error or ambiguity defers the record.
@@ -744,17 +778,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
       cadence_gated bool  true iff the 12h gate fired and all sub-reaps were skipped
       reaped_sessions  [str]   session IDs successfully moved to .archive/
       reaped_agents    [str]   agent IDs successfully moved to .archive/
-      reaped_claims    [str]   claim paths (subdir/name) successfully rm'd
+      reaped_claims    [str]   ALWAYS [] — sub-reap (iii) no longer runs here (C3);
+                               field is kept for wire-shape stability only.
       pruned_agent_archive [str]  .archive/_agents-* entry names successfully rm'd
       deferred         [dict]  records kept due to liveness ambiguity / fail-closed
       failed           [dict]  records that could not be moved/rm'd (mv/rm error)
-
-    Cadence decoupling (Decision D1, shape (a) — PM-ratified 2026-07-14
-    claim-lock-liveness plan § C4): sub-reap (iii) (orphaned claim dirs) runs on
-    EVERY invocation — it is NOT gated behind the 12h .last-reap marker.  Only
-    sub-reaps (i)/(ii) (stale sessions/agents) remain behind the cadence gate.
-    `cadence_gated` reflects whether (i)/(ii) were skipped for this reason; it
-    does NOT mean sub-reap (iii) was skipped too.
     """
     if repo_root is None:
         _LOG.error("session.reap: repo_root handler arg is None")
@@ -787,31 +815,26 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             failed=[],
         )
 
-    # Cadence gate: (i)/(ii) skip if < 12h since last reap (unless force=true).
-    # Sub-reap (iii) is decoupled from this gate (Decision D1 shape (a) — see module
-    # docstring "Cadence decoupling"): it runs on the fast path below regardless.
+    # Cadence gate: (i)/(ii)/(iv) skip if < 12h since last reap (unless force=true).
+    # Sub-reap (iii) is NOT run by this handler at all (C3) — nothing runs on the
+    # gated fast path below; .last-reap is correspondingly left untouched, since
+    # there is no sub-reap left here to gate.
     force = bool(params.get("force", False))
     if not force and not _cadence_elapsed(sessions_dir):
         _LOG.debug(
             "session.reap: cadence gate active (< %dh since last reap) — "
-            "skipping sub-reaps (i)/(ii); sub-reap (iii) still runs (boot cadence)",
+            "skipping sub-reaps (i)/(ii)/(iv); no-op (sub-reap (iii) runs only "
+            "from a ceremony gate via session.reap_claims_for_repos, never here)",
             _CADENCE_SECONDS // 3600,
-        )
-        # Fast path: ONLY sub-reap (iii) runs.  .last-reap is deliberately NOT
-        # touched here — touching it would reset the (i)/(ii) cadence window on
-        # every boot and starve stale session/agent cleanup (see module docstring
-        # "Cadence decoupling" FOOTGUN).
-        reaped_claims, deferred_claims, failed_claims = await asyncio.to_thread(
-            _reap_orphaned_claims, sessions_dir
         )
         return _build_result(
             cadence_gated=True,
             reaped_sessions=[],
             reaped_agents=[],
-            reaped_claims=reaped_claims,
+            reaped_claims=[],
             pruned_agent_archive=[],
-            deferred=deferred_claims,
-            failed=failed_claims,
+            deferred=[],
+            failed=[],
         )
 
     # --- Sub-reap (i): stale sessions ---
@@ -844,35 +867,30 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _reap_stale_agents, sessions_dir
     )
 
-    # --- Sub-reap (iii): orphaned claim dirs ---
-    # cs_claim_holder_live calls are sync subprocess bridges — wrapped inside the sync
-    # helper itself, which runs in asyncio.to_thread.  The TOCTOU double-check runs
-    # sequentially within the same thread to preserve the re-read ordering.
-    reaped_claims, deferred_claims, failed_claims = await asyncio.to_thread(
-        _reap_orphaned_claims, sessions_dir
-    )
+    # Sub-reap (iii) (orphaned claim dirs) deliberately does NOT run here — see
+    # module docstring "Boot backstop cull removal" (C3). Call
+    # session.reap_claims_for_repos from a ceremony gate instead.
 
     # --- Sub-reap (iv): stale agent-archive prune ---
     # Behind the same 12h cadence gate as (i)/(ii) — it prunes the .archive/
-    # output of sub-reap (ii), so it shares (ii)'s cadence rather than (iii)'s
-    # every-boot decoupling.
+    # output of sub-reap (ii).
     pruned_agent_archive, failed_prune = await asyncio.to_thread(
         _prune_stale_agent_archive, sessions_dir
     )
 
     # Update .last-reap cadence marker to now (regardless of partial failures).
-    # Only reached on a full run (force OR cadence-elapsed) — the fast (iii)-only
-    # path above returns before this point and never touches the marker.
+    # Only reached on a full run (force OR cadence-elapsed) — the gated fast
+    # no-op path above returns before this point and never touches the marker.
     _touch_last_reap(sessions_dir)
 
     return _build_result(
         cadence_gated=False,
         reaped_sessions=reaped_sessions,
         reaped_agents=reaped_agents,
-        reaped_claims=reaped_claims,
+        reaped_claims=[],
         pruned_agent_archive=pruned_agent_archive,
-        deferred=deferred_sessions + deferred_agents + deferred_claims,
-        failed=failed_sessions + failed_agents + failed_claims + failed_prune,
+        deferred=deferred_sessions + deferred_agents,
+        failed=failed_sessions + failed_agents + failed_prune,
     )
 
 
