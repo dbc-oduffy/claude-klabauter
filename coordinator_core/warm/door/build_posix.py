@@ -124,7 +124,7 @@ def write_provenance(output: Path, compiler_path: str, engine_root: Path) -> Pat
     }
     provenance_path = output.parent / (output.name + _PROVENANCE_SUFFIX)
     provenance_path.write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     return provenance_path
 

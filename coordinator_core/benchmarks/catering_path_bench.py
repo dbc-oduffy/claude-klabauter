@@ -592,16 +592,12 @@ def enumerate_spawn_set(cwd: str) -> List[SpawnRecord]:
 
 
 def _capture_code_sha() -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if completed.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["rev-parse", "HEAD"], cwd=_REPO_ROOT)
+    if not result.ok:
         return "unknown"
-    return completed.stdout.strip()
+    return result.stdout.strip()
 
 
 def run_and_record(n: int = 30, cwd: Optional[str] = None) -> Dict[str, Any]:
@@ -656,7 +652,7 @@ def record_baseline(n: int = 30, cwd: Optional[str] = None) -> Dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["_catering_relay_baseline"] = baseline
     manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+        json.dumps(manifest, indent=2, sort_keys=False) + "\n", encoding="utf-8", newline="\n"
     )
     return baseline
 

@@ -188,7 +188,7 @@ def write_provenance(
     }
     provenance_path = output_exe.parent / (output_exe.name + _PROVENANCE_SUFFIX)
     provenance_path.write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     return provenance_path
 
@@ -341,7 +341,7 @@ def build(
 
     with tempfile.TemporaryDirectory() as tmp:
         generated = Path(tmp) / "door_generated.c"
-        generated.write_text(rendered, encoding="utf-8")
+        generated.write_text(rendered, encoding="utf-8", newline="\n")
         _compile(kind, compiler_path, generated, output)
 
     write_sidecar(output, engine_root)

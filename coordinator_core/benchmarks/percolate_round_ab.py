@@ -89,6 +89,7 @@ from pathlib import Path
 from typing import Iterator, List, Optional
 
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -315,7 +316,6 @@ if __name__ == "__main__":
     raise SystemExit(main())
 '''
 
-_SHIM_CMD_TEMPLATE = '@"{python}" "{script}" %*\r\n'
 _SHIM_SH_TEMPLATE = "#!/bin/sh\nexec {python_q} {script_q} \"$@\"\n"
 
 
@@ -330,13 +330,13 @@ def _write_machine_local_shim(overrides: dict, shim_dir: Path) -> Path:
     script_path = shim_dir / "machine_local_shim.py"
     script_path.write_text(
         _SHIM_SOURCE.format(real_bin=_real_machine_local_exe(), overrides=overrides),
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     if os.name == "nt":
         cmd_path = shim_dir / "machine-local-shim.cmd"
         cmd_path.write_text(
-            _SHIM_CMD_TEMPLATE.format(python=sys.executable, script=str(script_path)),
-            encoding="utf-8",
+            f'@"{sys.executable}" "{script_path}" %*\r\n',
+            encoding="utf-8", newline="\n",
         )
         return cmd_path
     sh_path = shim_dir / "machine-local-shim.sh"
@@ -344,21 +344,23 @@ def _write_machine_local_shim(overrides: dict, shim_dir: Path) -> Path:
         _SHIM_SH_TEMPLATE.format(
             python_q=repr(sys.executable), script_q=repr(str(script_path))
         ),
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     sh_path.chmod(sh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return sh_path
 
 
-def _git(args: List[str], *, cwd: Optional[Path] = None, timeout: int = 300) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd is not None else None,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        creationflags=SUBPROCESS_CREATIONFLAGS,
-    )
+def _git(args: List[str], *, cwd: Optional[Path] = None, remote: bool = False) -> GitResult:
+    """This harness's git seam, a thin alias for the shared runner.
+
+    The `timeout: int = 300` parameter it used to carry is gone, and so are
+    the `timeout=600` values its two `clone` call sites passed. Neither was
+    measured: the mirror those clones copy is 40MB and both hops are
+    local-path `--no-hardlinks` clones, so `REMOTE_BUDGET_SECS` (which
+    `git/run.py` names `clone` as a legitimate consumer of) is ample where
+    600 was folklore.
+    """
+    return run_git(args, cwd=str(cwd) if cwd is not None else None, remote=remote)
 
 
 def _onerror_clear_readonly(func, path, exc_info):
@@ -395,7 +397,7 @@ def _disposable_clone(scratch_root: Path) -> Iterator[dict]:
     try:
         bare_clone = _git(
             ["clone", "--bare", "--no-hardlinks", str(live_mirror), str(origin_dir)],
-            timeout=600,
+            remote=True,
         )
         if bare_clone.returncode != 0:
             raise RuntimeError(
@@ -403,7 +405,7 @@ def _disposable_clone(scratch_root: Path) -> Iterator[dict]:
             )
         work_clone = _git(
             ["clone", "--no-hardlinks", str(origin_dir), str(work_dir)],
-            timeout=600,
+            remote=True,
         )
         if work_clone.returncode != 0:
             raise RuntimeError(
@@ -694,7 +696,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  rc:              {gate['rc']}  k: {gate['k']}")
         print(f"  dest (disposable clone): {gate['dest']}")
         if args.json:
-            Path(args.json).write_text(json.dumps({"target": args.target, "gate": gate}, indent=2))
+            Path(args.json).write_text(json.dumps({"target": args.target, "gate": gate}, indent=2), newline="\n")
             print(f"wrote {args.json}")
         return 0
 
@@ -729,7 +731,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     if args.json:
-        Path(args.json).write_text(json.dumps(result, indent=2))
+        Path(args.json).write_text(json.dumps(result, indent=2), newline="\n")
         print(f"wrote {args.json}")
 
     return 0

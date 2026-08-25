@@ -429,7 +429,7 @@ def save_spawn_index(index: SpawnIndex, disk_path: "str | pathlib.Path") -> None
         relpath: [stamp, [_spawn_site_to_dict(s) for s in sites]]
         for relpath, (stamp, sites) in index.items()
     }
-    disk_path.write_text(json.dumps(serializable, sort_keys=True), encoding="utf-8")
+    disk_path.write_text(json.dumps(serializable, sort_keys=True), encoding="utf-8", newline="\n")
 
 
 def ops_with_spawn_evidence(

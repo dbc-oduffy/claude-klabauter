@@ -203,6 +203,21 @@ EXIT_INTERPRETER_UNSUPPORTED = 96
 # (agent dispatch, packaging installer). getattr(...) resolves to 0 (no-op)
 # on macOS/Linux, where CREATE_NO_WINDOW does not exist.
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+def _print_child_detail(proc) -> None:
+    """Print a failed child's own last line of output, if it left one.
+
+    Exists because the four `machine-local set` spawns above were losing their
+    child's diagnostic entirely -- console-suppressed with no std-stream kwarg,
+    so CPython omitted STARTF_USESTDHANDLES and the output went into a
+    window-less console nobody can read. The remediation lines printed beside
+    these calls tell an operator what to run; this tells them what went wrong.
+    Defensive on both attributes: a caller that did not capture has neither.
+    """
+    detail = (getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "")
+    lines = detail.strip().splitlines() if isinstance(detail, str) else []
+    if lines:
+        print(f"  Cause: {lines[-1]}", file=sys.stderr)
+
 
 # This installer's over-a-minute bounds are members of the named `install`
 # timeout family (DR-349 § Carve-outs) and are read from it rather than
@@ -2342,6 +2357,12 @@ def register_claude_klabauter_root(
             proc = subprocess.run(
                 machine_local_argv + ["set", key, value],
                 timeout=15,
+                # capture_output: without a std-stream kwarg CPython omits
+                # STARTF_USESTDHANDLES, so the child binds its handles to the
+                # window-less console _NO_CONSOLE allocates and everything it
+                # prints is lost -- including the reason a failure below reports.
+                capture_output=True,
+                text=True,
                 **_NO_CONSOLE,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -2353,6 +2374,7 @@ def register_claude_klabauter_root(
         if proc.returncode != 0:
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed.", file=sys.stderr)
+            _print_child_detail(proc)
             print(f"  Tried to register: {value}", file=sys.stderr)
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
@@ -2446,6 +2468,9 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         proc = subprocess.run(
             machine_local_argv + ["set", "engine.warm.enabled", value],
             timeout=15,
+            # See register_claude_klabauter_root for why a std-stream kwarg is mandatory here.
+            capture_output=True,
+            text=True,
             **_NO_CONSOLE,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -3677,6 +3702,12 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
             proc = subprocess.run(
                 machine_local_argv + ["set", key, value],
                 timeout=15,
+                # capture_output: without a std-stream kwarg CPython omits
+                # STARTF_USESTDHANDLES, so the child binds its handles to the
+                # window-less console _NO_CONSOLE allocates and everything it
+                # prints is lost -- including the reason a failure below reports.
+                capture_output=True,
+                text=True,
                 **_NO_CONSOLE,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -3758,6 +3789,9 @@ def _seed_fleet_env_root_from_klabauter(repo_root: Path, claude_klabauter_root_r
         proc = subprocess.run(
             machine_local_argv + ["set", "fleet_env.root", fleet_env_root],
             timeout=15,
+            # See register_claude_klabauter_root for why a std-stream kwarg is mandatory here.
+            capture_output=True,
+            text=True,
             **_NO_CONSOLE,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -3766,6 +3800,7 @@ def _seed_fleet_env_root_from_klabauter(repo_root: Path, claude_klabauter_root_r
         return
     if proc.returncode != 0:
         print(f"[ADVISORY] fleet_env.root seeding failed (exit {proc.returncode}).", file=sys.stderr)
+        _print_child_detail(proc)
         print(f"  Set it manually: machine-local set fleet_env.root {fleet_env_root}", file=sys.stderr)
         return
     print(f"PASS [fleet-env] seeded fleet_env.root = {fleet_env_root} (from repos.claude_klabauter)")

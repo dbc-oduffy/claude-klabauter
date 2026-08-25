@@ -314,7 +314,7 @@ def main(argv=None) -> int:
         lines = portable_text.splitlines(keepends=True)
         for d in derivations:
             lines[d["line_index"]] = d["new_line"]
-        _PORTABLE_PATH.write_text("".join(lines), encoding="utf-8")
+        _PORTABLE_PATH.write_text("".join(lines), encoding="utf-8", newline="\n")
 
     for (row_name, _src), d in zip(_ROWS, derivations):
         print(

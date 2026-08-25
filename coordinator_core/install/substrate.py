@@ -81,6 +81,7 @@ from typing import FrozenSet, List, Optional, Tuple
 
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import machine_local_dir, settings_home
+from coordinator_core.git.run import run_git
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.locked_write import held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
@@ -534,42 +535,32 @@ def _resolve_directory_tracked_set(dest_dir: Path) -> Optional["FrozenSet[str]"]
     inside a git repository at all (``git ls-files`` exits non-zero, e.g.
     "not a git repository") — a real, distinct answer (nothing is tracked
     here), not a probe failure."""
-    git_bin = shutil.which("git")
-    if git_bin is None:
-        return None
     if not dest_dir.is_dir():
         return frozenset()
-    try:
-        # Review: code-reviewer (Finding 2) — routed through the shared _run
-        # wrapper (accommodates timeout/stdin/capture_output) rather than a
-        # second hand-rolled subprocess.run + _NO_CONSOLE call site.
-        proc = _run(
-            [git_bin, "-C", str(dest_dir), "ls-files", "-z", "--", "."],
-            capture_output=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    result = run_git(["-C", str(dest_dir), "ls-files", "-z", "--", "."])
+    # The three-way contract above survives the move onto the shared runner
+    # ONLY because `run_git` keeps the probe-failed cases distinguishable from
+    # a git that ran and said no: `returncode == 127` is "never spawned" (no
+    # git resolvable, bad cwd) and `timed_out` is a genuine `TimeoutExpired`,
+    # which are the two the docstring maps to None. Folding either onto the
+    # `frozenset()` arm below would report an unprobeable machine as "nothing
+    # is tracked here" and hand the caller a force-overwrite it must refuse --
+    # the exact silent failure this function's None exists to prevent.
+    if result.returncode == 127 or result.timed_out:
         return None
-    if proc.returncode != 0:
+    if not result.ok:
         # Review: code-reviewer (Finding 3) — nonzero exit is folded to "not a
         # repo" per the plan's stated two-way contract (unchanged), but we log
         # stderr so a genuine mid-repo failure (corrupt .git, permissions) isn't
         # indistinguishable from a legitimate non-repo when an operator is later
         # debugging an unexpected force-overwrite/delete.
-        stderr = proc.stderr
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
         print(
             f"install-substrate: git ls-files -C {dest_dir} exited "
-            f"{proc.returncode} (treating as not-a-repo): {(stderr or '').strip()}",
+            f"{result.returncode} (treating as not-a-repo): {result.stderr.strip()}",
             file=sys.stderr,
         )
         return frozenset()
-    raw = proc.stdout
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    return frozenset(p for p in raw.split("\x00") if p)
+    return frozenset(p for p in result.stdout.split("\x00") if p)
 
 
 # `settings.json`/`hooks.json` are produced by a wholly separate module
@@ -1121,7 +1112,7 @@ def _write_dispatch_root_bake(engine_root: Path, root: str, resolution_class: st
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.parent / f".{_DISPATCH_ROOT_CACHE_FILENAME}.{os.getpid()}.tmp"
-        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
     except OSError:
         if tmp_path is not None:
@@ -1231,7 +1222,7 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
 
 def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: str) -> None:
     """Naked-Python forwarder that resolves and execs the claude-klabauter-resident
-    CLI at ``<claude-klabauter-root>/coordinator/bin/<target>``, per the ratified
+    CLI at ``<claude-klabauter-live-root>/coordinator/bin/<target>``, per the ratified
     resolve-claude-klabauter-bin contract (DoE-claude
     ``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``).
 
@@ -1347,7 +1338,7 @@ def _write_agent_cmd_forwarder(
     ``_write_agent_forwarder`` under the SAME installed ``name``), never the
     claude-klabauter-side ``<target>.py`` directly — the resolve-claude-klabauter-bin ladder
     must exist in exactly ONE place (``_resolve_claude_klabauter.py``, exec'd by the
-    Unix half), so re-deriving claude-klabauter-root resolution in batch here would
+    Unix half), so re-deriving claude-klabauter-live-root resolution in batch here would
     duplicate that ladder once per forwarder in
     ``_derive_agent_helper_target_map``'s live ``coordinator/bin/`` scan —
     call it for the current count rather than trusting a frozen figure here.

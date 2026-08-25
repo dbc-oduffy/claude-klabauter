@@ -260,4 +260,4 @@ def save_index(index: Dict[str, Tuple[str, ModuleSummary]], disk_path: "str | Pa
     serializable: Dict[str, Any] = {
         path_str: [stamp, summary.to_dict()] for path_str, (stamp, summary) in index.items()
     }
-    disk_path.write_text(json.dumps(serializable, sort_keys=True), encoding="utf-8")
+    disk_path.write_text(json.dumps(serializable, sort_keys=True), encoding="utf-8", newline="\n")

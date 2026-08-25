@@ -615,7 +615,7 @@ def write_dispatch_root_cache(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.parent / f".{_DISPATCH_ROOT_CACHE_FILENAME}.{os.getpid()}.tmp"
-        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
     except OSError:
         if tmp_path is not None:
