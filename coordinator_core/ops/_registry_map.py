@@ -97,7 +97,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "goals.reassess_krs":                     "coordinator_core.goals.reassess_krs",
     "orientation.regenerate_cache":            "coordinator_core.orientation.regenerate_cache",
     "session.boot_sweep":                     "coordinator_core.ops.session.boot_backstop",
-    "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
+    "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_terminal_handoffs",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.work_state":                       "coordinator_core.ops.fleet.work_state",
     "fleet.record_history":                   "coordinator_core.ops.fleet.record_history",
@@ -141,6 +141,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "queue.promote":                          "coordinator_core.ops.queue_promote",
     "memo.list":                              "coordinator_core.ops.fleet.memo_list",
     "memo.draft":                             "coordinator_core.ops.fleet.memo_draft",
+    # memo.send — rebuilt 2026-08-25 (docs/plans/2026-08-25-memo-send-three-
+    # writes-and-one-commit-th.md § C2) after the 2026-08-23 kill (K-050).
+    # NOT a resurrection of the killed module — three-write shape only.
+    "memo.send":                              "coordinator_core.ops.fleet.memo_send",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
     "memo.list_outbox":                       "coordinator_core.ops.fleet.memo_list_outbox",
     "memo.blitz_buckets":                     "coordinator_core.ops.fleet.memo_blitz_buckets",
@@ -173,7 +177,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.append_session":                    "coordinator_core.ops.completion_ops",
     "review_trail.write":                     "coordinator_core.ops.review_trail_write",
     "review_trail.readjudication_report":     "coordinator_core.ops.review_trail_readjudication_report",
-    "fleet.archive_shipped_handoffs":         "coordinator_core.ops.fleet.archive_shipped_handoffs",
     "fleet.backfill_dispositionless_memos":   "coordinator_core.ops.fleet.backfill_memo_disposition",
     "fleet.reap_unintegrated_findings":       "coordinator_core.ops.fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings":         "coordinator_core.ops.fleet.reap_integrated_findings",
@@ -346,6 +349,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "eol.census":                              "coordinator_core.ops.eol.census",
     "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
     "eol.repair":                              "coordinator_core.ops.eol.repair",
+    "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
 }
 
 

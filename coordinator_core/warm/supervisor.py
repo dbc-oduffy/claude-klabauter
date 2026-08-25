@@ -85,7 +85,7 @@ from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
 from coordinator_core.warm import breadcrumb, election, hook_http, lifecycle, skew
 from coordinator_core.warm.http_listener import _collect_response, _frame_from_request
-from coordinator_core.warm.server import InFlightCounter, _serve_line
+from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
 
 __all__ = [
     "DISCOVERY_FILENAME",
@@ -113,16 +113,26 @@ __all__ = [
 DISCOVERY_FILENAME = "warm-http.json"
 
 HEALTH_PATH = "/health"
-HOOK_PATH = "/hook"
 
-# The op name `/hook` dispatches through `_serve_line`. Placeholder pending
-# `state/handoffs/2026-08-23-the-warm-guard-op-gets-registered.md`, which has not landed:
-# no op is registered under this (or any) name yet, so today every `/hook` POST resolves
-# to `_serve_line`'s METHOD_NOT_FOUND envelope, and `hook_http.interpret_result` turns
-# that into a loud "guard did not run" response -- never a fabricated allow, never a
-# fabricated deny. Whoever lands that op registers it under this exact name, or repoints
-# this constant in the same change.
-GUARD_OP_NAME = "warm_guard.evaluate"
+# Re-exported from `hook_http`, which owns routing (`op_for_path`): the endpoint and the
+# op a bare POST resolves to are one decision, and two spellings of it would let the
+# transport 404 a path the router accepts. `write_discovery` publishes THIS name, so
+# every existing reader keeps the name it already reads.
+HOOK_PATH = hook_http.HOOK_PATH
+
+# The op name `/hook` dispatches through `_serve_line`, registered by
+# `coordinator_core/ops/warm_guard_evaluate.py` (landed 2026-08-25, state/handoffs/
+# 2026-08-23-the-warm-guard-op-gets-registered.md). A `/hook` POST therefore resolves to
+# a real guard verdict computed by the same `bash_guards.dispatch.evaluate_payload_json`
+# chain every cold hook invocation runs.
+#
+# The METHOD_NOT_FOUND path this constant used to describe is not dead, only no longer
+# the everyday case: a repoint of this name without a matching `@register_op` key, or an
+# engine clone predating the op, still lands there, and `hook_http.interpret_result`
+# still turns it into a loud "guard did not run" response -- never a fabricated allow,
+# never a fabricated deny. Repointing this constant means repointing the registration in
+# the same change.
+GUARD_OP_NAME = hook_http.DEFAULT_OP_NAME
 
 # A liveness probe, not a work budget -- mirrors `warm.client.
 # READ_DEADLINE_SECS`'s "is the server wedged" framing, sized the same
@@ -425,8 +435,9 @@ class _ServerContext:
         self.version_state = version_state
         self.server_sha = version_state.server_sha
         # `dispatch` overrides `_serve_line`'s own default (`_run_dispatch`) -- production
-        # never sets it, a test does, to stand in for the op this row's own docstring
-        # names as not yet registered (see `GUARD_OP_NAME`).
+        # never sets it; a test does, standing in for the real registered op
+        # `GUARD_OP_NAME` names (`warm_guard.evaluate`, `ops/warm_guard_evaluate.py`) so
+        # it can drive a chosen verdict without running the full guard chain.
         self.dispatch = dispatch
         self.engine_token = self._compute_engine_token()
 
@@ -496,8 +507,17 @@ def _make_handler(ctx: "_ServerContext"):
             self.send_response(404)
             self.end_headers()
 
+        def _respond_json(self, payload: Any) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_POST(self) -> None:  # noqa: N802 -- stdlib-mandated name
-            if self.path.rstrip("/") != HOOK_PATH:
+            op_name = hook_http.op_for_path(self.path)
+            if op_name is None:
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -528,12 +548,23 @@ def _make_handler(ctx: "_ServerContext"):
 
                 event_name = event.get("hook_event_name")
 
+                # A bare `/hook` POST carries no route of its own, so the event has to
+                # supply one -- and for anything outside `SERVED_EVENTS` there is none.
+                # Answering it with the guard op would evaluate a SessionStart against a
+                # chain that reads `tool_name`/`tool_input`, producing a confident verdict
+                # on a question nobody asked. An explicit `/hook/<op>` needs no such
+                # inference: the registration already named the op.
+                if op_name == hook_http.DEFAULT_OP_NAME and not self.path.rstrip("/").startswith(HOOK_PATH + "/"):
+                    if hook_http.route_for_event(event_name) is None:
+                        self._respond_json(hook_http.unserved_response(event_name))
+                        return
+
                 # posted JSON -> hook_http.payload_from_event (inside build_request)
                 #             -> request frame (http_listener._frame_from_request)
                 #             -> warm.server._serve_line
                 #             -> http_listener._collect_response
                 #             -> hook_http.interpret_result
-                request_frame = hook_http.build_request(event, GUARD_OP_NAME)
+                request_frame = hook_http.build_request(event, op_name)
                 request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
                 serve_kwargs = {
@@ -572,10 +603,15 @@ def main() -> int:
        OS-assigned ephemeral port, the port-discovery scope item's actual
        mechanism: no fixed port to collide across 50-70 concurrent
        sessions on one machine.
-    3. Write the discovery record (port, pid, birth epoch, generation sha)
+    3. Declare this process's execution route (`server._declare_execution_route`,
+       reused rather than a second copy) BEFORE the request-handling context is
+       built -- every op-latency row a `/hook` fire writes stamps `warm_server`
+       from this point on, instead of the `in_process` default every prior boot
+       left in place (AC2: the route must be provable from telemetry, not timing).
+    4. Write the discovery record (port, pid, birth epoch, generation sha)
        -- only reachable past step 1, so a process that lost the election
        never clobbers the winner's record.
-    4. Serve forever until `lifecycle.begin_shutdown` (bound to `_stop`)
+    5. Serve forever until `lifecycle.begin_shutdown` (bound to `_stop`)
        ends the process.
     """
     root = _default_engine_clone()
@@ -618,6 +654,9 @@ def main() -> int:
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
     version_state = skew.ServerVersionState(root)
+
+    _declare_execution_route()
+
     ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state)
     httpd.RequestHandlerClass = _make_handler(ctx)
 

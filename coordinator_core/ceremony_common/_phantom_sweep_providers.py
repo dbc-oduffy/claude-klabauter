@@ -555,3 +555,37 @@ def sweep_pickup_assemble(monkeypatch: Any, tmp_path: Path) -> PhantomSweepResul
         resolves_ids=frozenset(resolves_ids),
         judgment_point_ids=frozenset(judgment_point_ids),
     )
+
+
+# ---------------------------------------------------------------------------
+# roadmap_planning_assemble / sprint_planning_assemble -- both landed after
+# the 2026-07-27 generalization pass and went unregistered, which is why
+# `test_this_repos_live_discovery_matches_the_eleven_known_brief_packages`
+# and `test_every_discovered_package_is_registered_or_allowlisted` were both
+# red on 2026-08-25 (found by the ceremony-sweep-05 audit, which enumerates
+# `brief(`-defining packages for its own reasons and got 15 against the
+# pinned 13).
+#
+# Registered as REAL sweeps rather than `_VERIFIED_RESOLVES_FREE`: both do
+# emit `resolves` (sprint's PM-authorization dispositions resolve
+# `d-dispatch-cluster-scout`), so the resolves-free bucket would have been a
+# false claim. Both take their inputs as plain keyword arguments and touch no
+# disk in `brief()`, so neither provider needs a fixture.
+# ---------------------------------------------------------------------------
+
+
+def sweep_roadmap_planning_assemble() -> PhantomSweepResult:
+    from coordinator_core import roadmap_planning_assemble as rpa
+
+    decision_object = rpa.brief()
+    return _collect(decision_object["directives"], decision_object["judgment_points"])
+
+
+def sweep_sprint_planning_assemble() -> PhantomSweepResult:
+    from coordinator_core import sprint_planning_assemble as spa
+
+    # `run_id` and `sprint_id` are both required (the module's entry contract);
+    # the values are opaque to directive/judgment-point construction, which is
+    # what this sweep reads.
+    decision_object = spa.brief(run_id="phantom-sweep", sprint_id="1")
+    return _collect(decision_object["directives"], decision_object["judgment_points"])

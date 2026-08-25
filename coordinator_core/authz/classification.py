@@ -379,12 +379,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?   No.
     #      Returns a build_dry_run_result/build_setup_error_result envelope only.
     "fleet.handoffs_for_plan": OpClass.COMPUTE_ONLY,
-    # fleet.archive_completed_handoffs — MUTATING: git-mv consumed, childless, unclaimed
-    # handoffs from state/handoffs/ into archive/handoffs/YYYY-MM/.
-    # DR-208 five-question affirmation (citing ops/fleet/archive_handoffs.py):
+    # fleet.archive_completed_handoffs — MUTATING: git-mv terminal, childless, unclaimed
+    # handoffs from state/handoffs/ into archive/handoffs/YYYY-MM/, cap-bounded per
+    # invocation (C1b of docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-
+    # capped.md repointed this entry's handler module onto
+    # ops/fleet/archive_terminal_handoffs.py; the op key is unchanged).
+    # DR-208 five-question affirmation (citing ops/fleet/archive_terminal_handoffs.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      archive_handoffs.py:297-305 — archive_and_commit() git-mv + git-commit moves
-    #      each validated handoff into archive/handoffs/YYYY-MM/.
+    #      archive_terminal_handoffs.py's _handle_act — archive_and_commit() git-mv +
+    #      git-commit moves each validated handoff into archive/handoffs/YYYY-MM/.
     #   2. Writes into rag's relational store?                                 No.
     #      Writes only into archive/handoffs/ tree and git commit objects.
     #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
@@ -395,14 +398,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The git commit and moved files are observable by any git client after return.
     # DR-211 D2 five-bound affirmed:
-    #   D2-1 (idempotent): archive_handoffs.py:282-284 — source-gone or absent from
-    #         live_handoffs map → skipped "already-archived".
+    #   D2-1 (idempotent): archive_terminal_handoffs.py's _handle_act — source-gone or
+    #         absent from the terminal set → skipped "already-archived".
     #   D2-2 (commutative): git-mv order does not change final archive/ contents.
     #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any handoff.
-    #   D2-4 (act-time re-verify): archive_handoffs.py:287 — _is_terminal() re-checks
-    #         status, reverse_membership, and live session claim at T3 (D1 re-verify).
+    #   D2-4 (act-time re-verify): archive_terminal_handoffs.py's _handle_act re-checks
+    #         terminality, reverse_membership, and live session/claim at act time.
     #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
-    #     no HTTP route was ever added, negative-spec in archive_handoffs.py:35.
+    #     no HTTP route was ever added, negative-spec in archive_terminal_handoffs.py.
     "fleet.archive_completed_handoffs": OpClass.MUTATING,
     # fleet.prune_closed_bugs — MUTATING: git-mv closed bug-backlog YAML entries from
     # state/bug-backlog/ into archive/bug-backlog/YYYY-MM/.
@@ -1458,6 +1461,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.send DR-214 (send-class) cross-tree write op — classified MUTATING
     # (DR-214-send-class D2 bounds affirmed per handler code; DR-208 § 5 affirmation below)
     # ---------------------------------------------------------------------------
+    # Row restored 2026-08-25 with the op's rebuild (C2). The kill of 2026-08-23 removed the
+    # entry but left this header block standing, so the op read as classified while
+    # OP_CLASSIFICATION.get("memo.send") returned None.
+    # Spec: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C2/AC8
+    "memo.send": OpClass.MUTATING,
     # deliverable.rollup — COMPUTE_ONLY: scans docs/plans/*.md, state/handoffs/*.md, and
     # archive/handoffs/**/*.md frontmatter for artifacts whose deliverable_id FK equals the
     # queried value, unions their non-null initiative FKs, and resolves each to its
@@ -1993,37 +2001,19 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # handoff-tracker-and-project-tracker-renders.md § C2. Its OP_CLASSIFICATION
     # entry is removed here too (test_no_stale_classification_entries).
     # ---------------------------------------------------------------------------
-    # strang-11 B8 new ops — session.boot_sweep, fleet.archive_shipped_handoffs,
-    # fleet.archive_actioned_memos, session.reap. All MUTATING.
-    # Class-A ops (archive_shipped_handoffs, archive_actioned_memos) sanctioned by DR-211
-    # archival-writer sub-category (D1–D4 affirmed per handler code). Class-B ops
-    # (session.reap, session.boot_sweep) sanctioned by the strang-11-B8 non-git safety spec
+    # strang-11 B8 new ops — session.boot_sweep, fleet.archive_actioned_memos,
+    # session.reap. All MUTATING.
+    # fleet.archive_shipped_handoffs (Class-A, DR-211 archival-writer sub-category)
+    # was the third strang-11 B8 op landed alongside these two; its module
+    # (ops/fleet/archive_shipped_handoffs.py) and this entry were DELETED
+    # 2026-08-25 (C1b, docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-
+    # capped.md § "The sibling op is subsumed") — the op it was subsumed into,
+    # fleet.archive_completed_handoffs, has carried the SHA-gate, live-claim
+    # gate, and handoff_claim_dir reuse this op required since C1a.
+    # Class-B ops (session.reap, session.boot_sweep) sanctioned by the strang-11-B8 non-git safety spec
     # (per-record idempotency, recency liveness, fail-closed-to-keep; no git commit).
     # Spec: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C5 / AC5
     # ---------------------------------------------------------------------------
-    # fleet.archive_shipped_handoffs — MUTATING: git-mv handoffs with deployment_state:shipped
-    # and a resolvable shipped_in SHA from state/handoffs/ into archive/handoffs/YYYY-MM/.
-    # DR-208 five-question affirmation (citing ops/fleet/archive_shipped_handoffs.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      archive_and_commit() git-mv + git-commit moves each validated handoff into
-    #      archive/handoffs/YYYY-MM/.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only into archive/handoffs/ tree and git commit objects.
-    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      Git-mv via archive_and_commit() writes destination files.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      Git commit is a repo-shared state mutation visible to all git clients.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The git commit and moved files are observable by any git client after return.
-    # DR-211 D2 five-bound affirmed (archival-writer sub-category, same as fleet.archive_completed_handoffs):
-    #   D2-1 (idempotent): source-gone or already-archived → skipped.
-    #   D2-2 (commutative): git-mv order does not change final archive/ contents.
-    #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers any handoff.
-    #   D2-4 (act-time re-verify): handler re-checks deployment_state + shipped_in at act time.
-    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
-    #     no HTTP route was ever added, negative-spec in archive_shipped_handoffs.py.
-    "fleet.archive_shipped_handoffs": OpClass.MUTATING,
     # fleet.archive_terminal_sizings — MUTATING: git-mv terminal sizing objects into
     # archive/sizings/YYYY-MM/, via the shared archive_and_commit batch path
     # (ops/fleet/archive_sizings.py, dest-collision handling + git-mv + commit).
@@ -4099,6 +4089,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                 No.
     #   5. Persistent state changes observable across process boundaries?       No.
     "sizing.read_object_fields": OpClass.COMPUTE_ONLY,
+
+    # warm_guard.evaluate — MUTATING: the guard chain it wraps
+    # (bash_guards.dispatch.evaluate_payload_json) can write a best-effort advisory-
+    # dedupe marker file under the caller's own gitdir as a side effect of a normal
+    # evaluation (bash_guards/_advisory_dedupe.py :: mark_advised) — a real disk write,
+    # even though the op's PRIMARY job is computing a verdict. Same posture as the
+    # other hooks.* ops that write session-scoped bookkeeping (e.g.
+    # "hooks.session_heartbeat") rather than the read-only hooks.* entries above.
+    "warm_guard.evaluate": OpClass.MUTATING,
 })
 
 

@@ -38,6 +38,8 @@ Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C1
 from __future__ import annotations
 
 import difflib
+import logging
+from collections import Counter
 from typing import List, Optional, TypedDict
 
 # ---------------------------------------------------------------------------
@@ -87,6 +89,77 @@ from typing import List, Optional, TypedDict
 # ---------------------------------------------------------------------------
 AUTO_RESOLVE_MIN_SCORE = 0.5
 AUTO_RESOLVE_MIN_GAP = 0.15
+
+
+class QuarantineLog:
+    """Per-scan accumulator that collapses one-WARNING-per-skipped-candidate
+    into ONE summary line, keeping the per-file detail at DEBUG.
+
+    Both candidate enumerators (`plan_match._collect_plans`,
+    `goals_match._collect_goals`) quarantine malformed/non-candidate files and
+    used to emit a WARNING each. That is correct per file and wrong in
+    aggregate: `docs/plans/` holds ~100 sidecars (`*.review.md`,
+    `*.prior-art-check.md`, `*.plan-coverage-check.md`, `*.node-map.md`) that
+    are not plans and never will be, so every enumeration printed ~96
+    identical-shaped lines of stderr. `baton-assemble apply` calls both
+    enumerators, and the noise buried its own JSON verdict: the 2026-08-25
+    two-baton incident (bug backlog `2026-08-25-spinoff-brief-then-apply-mints-
+    two-batons-and-adopts-the-stub-as-origin.yaml`) began with an operator
+    piping `apply` through `Select-Object -First 120`, seeing 120 lines of
+    `plan.match_candidates: skipping ...` and no verdict, and re-running a
+    command that had already landed.
+
+    The signal is not dropped, it is proportioned: one WARNING states how many
+    were skipped, out of how many, bucketed by REASON -- which is the
+    actionable fact ("94 files here have no title") -- and every per-file line
+    is still there at DEBUG for whoever is diagnosing one specific file.
+
+    `reason` is the stable BUCKET (a fixed phrase, never an interpolated
+    per-file value); `detail` carries the varying part (an exception string) to
+    the DEBUG line only. Bucketing on an interpolated reason would produce one
+    bucket per file and re-create the spam inside the summary.
+
+    Negative-spec:
+      - Does NOT swallow the quarantine signal -- a scan that skipped anything
+        always emits exactly one WARNING.
+      - Does NOT emit anything when nothing was skipped (no "0 skipped" line;
+        an empty result is not news).
+      - Does NOT decide what to skip; callers own that predicate entirely.
+    """
+
+    __slots__ = ("_op_name", "_log", "_reasons", "_scanned")
+
+    def __init__(self, op_name: str, log: "logging.Logger") -> None:
+        self._op_name = op_name
+        self._log = log
+        self._reasons: "Counter[str]" = Counter()
+        self._scanned = 0
+
+    def scanned(self) -> None:
+        """Count a candidate file this scan looked at, kept or skipped."""
+        self._scanned += 1
+
+    def skip(self, fname: str, reason: str, detail: Optional[str] = None) -> None:
+        self._reasons[reason] += 1
+        if detail:
+            self._log.debug("%s: skipping %s — %s: %s", self._op_name, fname, reason, detail)
+        else:
+            self._log.debug("%s: skipping %s — %s", self._op_name, fname, reason)
+
+    def summarize(self) -> None:
+        skipped = sum(self._reasons.values())
+        if not skipped:
+            return
+        buckets = ", ".join(
+            f"{reason} ({count})" for reason, count in self._reasons.most_common()
+        )
+        self._log.warning(
+            "%s: skipped %d of %d candidate file(s) — %s. Per-file detail at DEBUG.",
+            self._op_name,
+            skipped,
+            self._scanned,
+            buckets,
+        )
 
 
 class ResolutionReason:

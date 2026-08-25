@@ -288,6 +288,30 @@ def emit_kind_resolution_failure_signal(
         file=sys.stderr,
     )
 
+    # An allow taken because the kind could not be resolved is a DECLINED
+    # RULING, not a clean -- the guard evaluated nothing and let the call
+    # through. `_verdict.record_silent` is the channel that distinguishes the
+    # two, and it is a no-op outside a collection, so this costs production
+    # nothing while making the fail-open observable to
+    # `tests/test_no_false_clean_on_unparsed_dialect.py`'s never-bare-clean
+    # property. A deny needs no record: it already IS the verdict.
+    # WRAPPED for the same reason the census import below is, and stated in the
+    # same terms: this runs on the `scoped-git-commit` hot path, and an
+    # observability write that can raise here turns every ceremony on this box
+    # into an outage. `record_silent` itself promises never to raise; the
+    # `from ... import` statement carries no such promise.
+    if verdict is None:
+        try:
+            from coordinator_core.bash_guards._verdict import record_silent
+
+            record_silent(
+                guard_name,
+                "kind-resolution-failed (leg=%s, git_root=%s) -- declined to "
+                "rule, call allowed" % (leg, "present" if git_root else "empty"),
+            )
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # (2z) Override-instruction SSOT -- the one place the escape-hatch sentence
@@ -309,49 +333,21 @@ def emit_kind_resolution_failure_signal(
 #: silent three-way drift.
 COMMAND_LINE_LABEL = "Command:"
 
-#: Reference doc carrying the full bypass-options content this function used
-#: to inline on every firing (the two relayable routes, the CONFINEMENT_DENY
-#: caveat, the pre-launch-only env-var constraint, and the generated
-#: enumeration of every COORDINATOR_OVERRIDE_*/COORDINATOR_ALLOW_* key). This
-#: module never reads the file, it only names it.
-#:
-#: Repo-root-relative. This is the RESOLUTION form -- what a caller joins to a
-#: repo root to find the file on disk (the retention suite does exactly that).
-OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
-
-#: The DISPLAY form -- a repo-qualified hint, e.g.
-#: ``"claude-klabauter docs/reference/guard-override-keys.md"``. Not
-#: interchangeable with ``OVERRIDE_KEYS_DOC`` above: that constant is the
-#: file-resolution form a caller joins to a repo root, this is what a reader
-#: of a guard MESSAGE sees.
-#:
-#: These guards are not claude-klabauter-local: DoE's PreToolUse shim resolves this
-#: engine and runs the guard logic in-process for EVERY repo on the machine,
-#: so the reader of this pointer is usually sitting in some other repo's
-#: tree, where a bare `docs/reference/...` resolves to nothing. Naming the
-#: repo matches the convention CLAUDE.md already uses for cross-repo
-#: citations ("DoE-claude coordinator/docs/wiki/..."). NEGATIVE SPEC: do not
-#: collapse these two constants back into one -- the file-resolution caller
-#: and the message reader need different strings.
-#:
-#: 2026-08-05 (PM-raised, break-class): this used to be only the FALLBACK,
-#: with a resolver (``_resolve_override_keys_doc_display``, since reduced to
-#: a trivial wrapper below) preferring an absolute, in-process-resolved path
-#: instead. That absolute form was wrong on two independent axes at once:
-#: it interpolated this operator's home directory and repo name into every
-#: guard message the suite emits (a machine-path leak matching the class
-#: ``check-machine-path-leak.py`` exists for, though that checker's scope is
-#: `settings.json`/`working-repos.yaml` only -- it never scanned
-#: runtime-rendered guard text, which is why it missed this), AND it only
-#: ever resolved correctly in the SAME process that rendered it -- wrong
-#: shape on Windows (a POSIX-joined path there is meaningless) and wrong for
-#: any other username or checkout location, i.e. every machine but the one
-#: that produced it. A pointer that does not resolve for a stranger on a
-#: different OS is not "correct but sensitive", it is simply broken, and
-#: this repo ships as an OSS mirror -- every downstream reader would have
-#: hit that. The repo-qualified relative form is the only one of the two
-#: that is portable AND leaks nothing, so it is now unconditional.
-OVERRIDE_KEYS_DOC_DISPLAY = "claude-klabauter " + OVERRIDE_KEYS_DOC
+#: Both re-exported from the leaf ``_override_doc`` module (2026-08-25, "the
+#: commit gate stops importing a subsystem") rather than defined here --
+#: ``coordinator_core.ops.detect_staged_rollback`` (on the commit pre-commit
+#: hook path) imports these two names FROM THE LEAF directly, so importing
+#: it must not pull in this module's much wider import graph
+#: (``subagent_sandbox.engine``, ``session.identity``, etc.). Every existing
+#: importer of ``_helpers.OVERRIDE_KEYS_DOC``/``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``
+#: keeps working unmodified via this re-export. See ``_override_doc.py``'s
+#: own module docstring and each constant's own docstring there for the full
+#: history (including the 2026-08-05 break-class absolute-path-leak fix) --
+#: not restated here.
+from coordinator_core.bash_guards._override_doc import (  # noqa: F401
+    OVERRIDE_KEYS_DOC,
+    OVERRIDE_KEYS_DOC_DISPLAY,
+)
 
 
 def _resolve_override_keys_doc_display() -> str:

@@ -52,6 +52,75 @@ from typing import Any, Dict, Mapping, Optional
 #: whether a blocking event may ride this transport, which is a cross-repo shape question.
 BLOCKING_EVENTS = frozenset({"PreToolUse"})
 
+#: The `hook_event_name` values this LISTENER can actually serve. A fact about our dispatch,
+#: never about the transport: DoE's 2026-08-19 spike (`docs/research/spike-verdicts/
+#: 2026-08-19-http-hook-transport.md`, verdict `viable`) established that the harness POSTs the
+#: full event object -- `hook_event_name` included -- so every event below arrives complete and
+#: is turned away here, not at the wire.
+#:
+#: WHY A SET RATHER THAN A DISPATCH TABLE. The event -> op mapping is 1:many and its source of
+#: truth is DoE's `hooks.json`, where PostToolUse alone names seven ops. A table here would be a
+#: second copy of somebody else's config, drifting silently. Widening this listener means
+#: consuming that mapping, not transcribing it.
+SERVED_EVENTS = frozenset({"PreToolUse"})
+
+
+def route_for_event(event_name: Optional[str]) -> Optional[str]:
+    """The op a posted event dispatches to, or None when this listener cannot serve it.
+
+    Negative-spec: returning None is NOT a verdict and must never be answered as one. Before
+    this existed, `supervisor.do_POST` read `hook_event_name` into a local and then framed
+    every request with `DEFAULT_OP_NAME` regardless -- so a `SessionStart` POST was evaluated
+    by the bash-guard chain, which examines `tool_name`/`tool_input` that a SessionStart event
+    does not carry, and returned a confident no-objection about a question it was never asked.
+    Silent and wrong beats loud and absent only if nobody is looking.
+    """
+    if event_name in SERVED_EVENTS:
+        return DEFAULT_OP_NAME
+    return None
+
+
+def unserved_response(event_name: Optional[str]) -> Dict[str, Any]:
+    """What to answer for an event this listener has no dispatch for.
+
+    Shaped like `unreachable_response` and for the same reason -- the operator sees
+    `systemMessage`, the model sees `additionalContext`, and neither reads as a guard that ran
+    and passed. Distinct from it in cause: the engine is fine and reachable; this listener
+    simply has no route for the event, which is a build gap rather than an outage, and the two
+    must not be diagnosed as one another.
+    """
+    label = event_name or "an unnamed event"
+    return {
+        "hookSpecificOutput": {"hookEventName": event_name},
+        "systemMessage": "coordinator: no warm route for %s -- hook did not run" % label,
+        "additionalContext": (
+            "The coordinator warm listener has no dispatch for %s, so no coordinator hook ran "
+            "for it. It did not pass -- it did not run." % label
+        ),
+        "suppressOutput": False,
+    }
+
+#: The listener's hook endpoint, and the op a bare `/hook` POST routes to. Defined HERE
+#: rather than in `supervisor` because `op_for_path` is the routing decision and the
+#: transport merely applies it; `supervisor` re-exports both under its own names, which
+#: are the ones `write_discovery` publishes and every existing caller already reads.
+HOOK_PATH = "/hook"
+DEFAULT_OP_NAME = "warm_guard.evaluate"
+
+#: The op-name namespaces a hook registration may route to. NOT "any registered op": the hook
+#: endpoint is reachable by anything that can open a loopback socket and present the engine
+#: token, and a registration is a string in a config file a plugin update can rewrite. Holding
+#: it to the hook namespaces means a rewritten registration can at worst reach a different
+#: HOOK op, never `ceremony.*` or a mutating fleet op. Widen this only with a named reason.
+ROUTABLE_OP_PREFIXES = ("hooks.", "session.", "warm_guard.")
+
+#: Keys an op result may set that Claude Code splices into the session rather than reading as
+#: a verdict. `additionalContext` reaches the model, `systemMessage` reaches the operator.
+#: These are the WHOLE reason a non-deny-capable event is worth registering at all -- the
+#: SessionStart and UserPromptExpansion registrations exist to inject, not to approve -- so
+#: dropping them on the success path silently converts six live hooks into no-ops.
+PASSTHROUGH_RESULT_KEYS = ("additionalContext", "systemMessage", "suppressOutput")
+
 #: The env keys guard evaluation actually consults. Forwarding the caller's WHOLE environ
 #: would put arbitrary session secrets on the wire for every hook fire; forwarding nothing
 #: deletes the override boundary. Forwarding the prefixes the guards read is the narrow
@@ -83,18 +152,48 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     makes `_override` fall back to ambient environment, which on a resident server is the
     server's own -- the invisible-disarm case. An empty mapping is a truthful "the caller
     set no overrides" and keeps the fallback from firing.
+
+    Every OTHER field of the event travels verbatim. The named-field subset this used to
+    forward -- `tool_name`, `tool_input` and the four envelope keys -- is the PreToolUse
+    guard's diet, and it silently starved every other event: `prompt` (UserPromptExpansion),
+    `source` (SessionStart), `tool_response` (PostToolUse), `trigger` (PreCompact) and
+    `agent_type` (SubagentStart) all reached the op as absent, so the op could not tell a
+    missing field from an empty one. `env` is the ONLY key narrowed, because it is the only
+    one that would put arbitrary session secrets on the wire.
     """
     raw_env = event.get("env")
-    env = forwardable_env(raw_env) if isinstance(raw_env, Mapping) else {}
-    return {
-        "env": env,
-        "session_id": event.get("session_id"),
-        "cwd": event.get("cwd"),
-        "hook_event_name": event.get("hook_event_name"),
-        "permission_mode": event.get("permission_mode"),
-        "tool_name": event.get("tool_name"),
-        "tool_input": event.get("tool_input"),
-    }
+    payload = {k: v for k, v in event.items() if k != "env"}
+    payload["env"] = forwardable_env(raw_env) if isinstance(raw_env, Mapping) else {}
+    for key in ("session_id", "cwd", "hook_event_name", "permission_mode", "tool_name", "tool_input"):
+        payload.setdefault(key, None)
+    return payload
+
+
+def op_for_path(path: str) -> Optional[str]:
+    """The op a hook registration's URL routes to, or None if the path is not routable.
+
+    ROUTING IS PER-REGISTRATION, NOT PER-EVENT, and that is forced by the registrations
+    themselves rather than chosen: `hooks.json` carries THREE SessionStart entries
+    (`sessionstart-dispatch`, `sweep-boot`, `sessionstart-async-dispatch`), three
+    UserPromptExpansion entries and three PostToolUse/Agent entries. `hook_event_name` cannot
+    tell them apart, so a `hook_event_name -> op` map is not a smaller version of this
+    function -- it is a shape that cannot express the live registration set at all.
+
+    `/hook` with no suffix keeps routing to the guard op, so the arms already measured in
+    `budget-manifest.json` § `_hook_seam_http_transport` remain the same request they were.
+    """
+    trimmed = (path or "").split("?", 1)[0].rstrip("/")
+    if trimmed == HOOK_PATH:
+        return DEFAULT_OP_NAME
+    prefix = HOOK_PATH + "/"
+    if not trimmed.startswith(prefix):
+        return None
+    op = trimmed[len(prefix):]
+    if not op or "/" in op:
+        return None
+    if not any(op.startswith(p) for p in ROUTABLE_OP_PREFIXES):
+        return None
+    return op
 
 
 def deny_response(event_name: str, reason: str) -> Dict[str, Any]:
@@ -112,14 +211,35 @@ def deny_response(event_name: str, reason: str) -> Dict[str, Any]:
     }
 
 
-def allow_response(event_name: str) -> Dict[str, Any]:
-    """The no-objection verdict. Deliberately carries no `permissionDecision`.
+def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """The no-objection verdict, carrying whatever the op asked to inject.
 
     An explicit `"allow"` overrides the user's own permission settings on some events; a
     guard with no objection means "I do not object", not "grant this regardless of what the
-    operator configured". Staying silent is the weaker and correct claim.
+    operator configured". Staying silent ON THE DECISION is the weaker and correct claim.
+
+    Staying silent on everything else was a defect, not a matching piece of conservatism.
+    Most registrations are not guards at all -- SessionStart and UserPromptExpansion earn
+    their slot by injecting content the harness splices into the session -- and a response
+    of nothing-but-`hookEventName` is indistinguishable from that work having happened.
+    Over this transport those hooks would have returned 200 and injected nothing, at any
+    listener availability, with no test and no availability sampling able to see it: the op
+    ran, the round trip succeeded, and the output was dropped one layer above the op.
     """
-    return {"hookSpecificOutput": {"hookEventName": event_name}}
+    body: Dict[str, Any] = {"hookSpecificOutput": {"hookEventName": event_name}}
+    if not isinstance(result, Mapping):
+        return body
+    for key in PASSTHROUGH_RESULT_KEYS:
+        if result.get(key) is not None:
+            body[key] = result[key]
+    extra = result.get("hookSpecificOutput")
+    if isinstance(extra, Mapping):
+        merged = dict(extra)
+        merged["hookEventName"] = event_name
+        merged.pop("permissionDecision", None)
+        merged.pop("permissionDecisionReason", None)
+        body["hookSpecificOutput"] = merged
+    return body
 
 
 def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
@@ -205,4 +325,4 @@ def interpret_result(event_name: str, frame: bytes) -> Dict[str, Any]:
         )
         return deny_response(event_name, reason)
 
-    return allow_response(event_name)
+    return allow_response(event_name, result)

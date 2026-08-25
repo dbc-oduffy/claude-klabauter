@@ -157,7 +157,22 @@ def brief(cadence: str) -> dict[str, Any]:
     four unconditionally for every cadence. Read-only; performs no disk
     mutation and no git fetch (the reap-family's one accepted `--dry-run`
     subprocess is documented in `readers_health_reaper.py`).
+
+    Raises `ValueError` for a `cadence` outside `CADENCES`, matching
+    `backlog_grind_assemble.brief`'s contract. `main()` below validates too,
+    so no CLI invocation could ever reach here with a bad value — but every
+    reader self-gates by comparing `cadence` against its own scope, so an
+    unrecognized string is not inert: it silently matches no gate anywhere
+    and returns the session spine under another cadence's name. A direct
+    `brief()` caller got a plausible-looking payload for a cadence that does
+    not exist. Failing here costs nothing and removes the shape entirely.
     """
+    if cadence not in CADENCES:
+        raise ValueError(
+            f"orient-assemble: unrecognized cadence {cadence!r}; "
+            f"must be one of {CADENCES}"
+        )
+
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for reader in _READER_MODULES:

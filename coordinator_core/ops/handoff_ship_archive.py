@@ -92,7 +92,27 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.fleet.archive_shipped_handoffs import _handle_act as _archive_shipped_act
+# DEGRADED 2026-08-25, deliberately not repaired here. C1b deleted
+# `ops/fleet/archive_shipped_handoffs.py` as subsumed by
+# `archive_terminal_handoffs.py` and swept its callers, but missed THIS one, so
+# this module-scope import raised ModuleNotFoundError. That took down not just
+# this op but `coordinator_core.ops` and `coordinator_core.baton_assemble` with
+# it -- every handoff and pickup in the repo, for one dead op.
+#
+# The import is now guarded so the blast radius is this op alone; it fails loudly
+# when INVOKED instead of when imported. NOT repointed at the successor's
+# `_handle_act`, because that is not a rename: the deleted signature took
+# `restage_src` and `holder_initiated` (the latter an opt-out of the live-claim
+# gate, whose docstring names THIS module as its only opt-in caller) and the
+# successor takes neither, plus a required `cap`. Silently dropping a
+# claim-gate opt-out is a safety change, not a migration, and it is C1b's
+# premise to settle rather than a handoff's.
+try:
+    from coordinator_core.ops.fleet.archive_shipped_handoffs import (  # type: ignore[import]
+        _handle_act as _archive_shipped_act,
+    )
+except ModuleNotFoundError:
+    _archive_shipped_act = None  # type: ignore[assignment]
 from coordinator_core.ops.handoff_stamp import _SHIPPED_IN_KIND_ENUM
 from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
 from coordinator_core.ops.handoff_transition import _ship
@@ -267,6 +287,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # makes _is_shipped_terminal skip Check 3 unconditionally, so common_dir would
     # never be read for this call — passing it would be a dead, misleading
     # argument.
+    if _archive_shipped_act is None:
+        return _err(
+            "handoff.ship_and_archive is inoperative: its archive leg "
+            "(ops/fleet/archive_shipped_handoffs) was deleted by the C1b "
+            "subsumption without migrating this caller. The successor drops "
+            "the live-claim-gate opt-out this op depends on, so the migration "
+            "is a safety decision, not a repoint. Ship and archive as two "
+            "steps until it is settled."
+        )
     act = await _archive_shipped_act(
         _MODE, worktree, [rel_id], restage_src=True, holder_initiated=True
     )

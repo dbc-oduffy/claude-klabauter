@@ -421,6 +421,35 @@
         "surface_where_it_exists": "X:/claude-klabauter, the stamped publish clone that carries production hook traffic. Sampling it is a cross-repo action with its own owner, not something this plan takes unilaterally.",
         "what_would_close_it": "A run of the discovery+health arms above from inside a stamped clone, over n>=25 spread across a real session's lifetime, reporting p(listener up) with its n."
       }
+    },
+    "driver_reproduced": {
+      "measured_on": "2026-08-25",
+      "produced_by": "coordinator_core.benchmarks.hook_seam_bench.run_hook_fire_breakdown (H5) -- python -m coordinator_core.benchmarks.hook_seam_bench --n 25 --k-process 20",
+      "why_this_block_exists": "H5's reconciliation: every row above this key was taken by hand, not by any code this repo owns, so a re-run cannot reproduce them. This block IS the bench's own output -- re-running the cited command reproduces it, which is the property the hand-taken rows above lack.",
+      "arms_reconciled_2026-08-25": "AC1 originally named a four-arm breakdown (client-cold-in-process, client-cold-warm-dispatch, door-warm, control floor); this dispatch brief supersedes it with three -- today's cold chain, HTTP warm hit, control -- reflecting the HTTP transport C2/C3 landed and the H4 wiring-gap fix, and reports process time, spawn count, AND wall side by side rather than wall-never per the original AC1 text.",
+      "method": "arms interleaved round-robin (Arm/run_interleaved), n=25 wall samples/arm, warmup=3 discarded; process time/spawn count via batched_process_time_ms, k=20, for the one arm that spawns a child.",
+      "wall_ms": {
+        "cold_chain_today": {"n": 25, "min": 38.071, "p50": 41.885, "p90": 43.138, "max": 43.361},
+        "http_warm_hit": {"n": 25, "min": 1.065, "p50": 1.257, "p90": 20.279, "max": 26.311},
+        "control_floor": {"n": 25, "min": 0.0, "p50": 0.001, "p90": 0.001, "max": 0.001}
+      },
+      "wall_note": "The http_warm_hit p90/max jump (1.257 -> 20.279ms) reproduces the same peer-load pattern the c4_supervised_listener block above already identified within a single interleaved run -- min/p50 are the arm's own cost, p90/max are contention on this box.",
+      "process_time_ms": {
+        "cold_chain_today": {"k": 20, "process_time_ms": 32.812, "procs_per_call": 1.0},
+        "http_warm_hit": {"process_time_ms": 0.0, "procs_per_call": 0.0, "note": "no child process; cost is in-process client time plus resident server work"},
+        "control_floor": {"process_time_ms": 0.0, "procs_per_call": 0.0, "note": "no-op; measures the interleave harness's own loop overhead"}
+      },
+      "shapes": {
+        "cold_chain_today": "python3 -c \"import coordinator_core.ipc\" -- the child process every PreToolUse hook fire spawns on this box today, no warm transport",
+        "http_warm_hit": "in-process POST to a resident ThreadingHTTPServer bound around supervisor._make_handler (real dispatch path, allow-stub op -- GUARD_OP_NAME is not registered yet)",
+        "control_floor": "no-op call, interleaved identically to the other two arms"
+      },
+      "p_listener_up_from_driver": {
+        "n": 10,
+        "value": 0.0,
+        "note": "ensure_listener() against this repo's own unstamped dev engine root -- structurally 0/n by design (is_engine_root gate), same finding as c4_supervised_listener.p_listener_up above, now produced by committed code rather than by hand."
+      },
+      "run_to_run_variance_note": "A repeat at n=5/k=3 (throwaway, not recorded) gave cold_chain_today p50=40.634ms and http_warm_hit p50=16.711ms -- both within the spread already documented in this manifest's reverification block; direction (HTTP removes the one child process) held across both runs."
     }
   }
 }

@@ -299,6 +299,7 @@ All three slice-1 ops share one params/result shape. The op is identified by `me
 | `dry_run` | bool | **yes** | `true` → compute candidates, mutate nothing. `false` → act on `candidate_ids`. |
 | `candidate_ids` | list[str] \| null | **required on `dry_run:false`** | The human-confirmed subset from a prior `dry_run:true` call. Absent or empty on `dry_run:false` → `exit_code:1` setup-error. Null / omit on `dry_run:true`. |
 | `repo_root` | str \| null | optional | Consistency check only — see § 3.3. NOT a repo selector. |
+| `cap` | int | **yes, `fleet.archive_completed_handoffs` only** | **BREAKING, added 2026-08-25.** The op was rebuilt from scratch on `coordinator_core/ops/fleet/archive_terminal_handoffs.py` and un-suspended (`d2738e6d9`); it now REQUIRES a `cap` on every call, `dry_run:true` and `dry_run:false` alike — an absent `cap` is a setup error (`exit_code:1`), never an unbounded sweep. The other two slice-1 ops (`fleet.archive_completed_plans`, `fleet.prune_closed_bugs`) do NOT take this param — see § 2.2. `fleet.archive_shipped_handoffs`, the op this one subsumed, is deleted outright (not renamed); a caller still targeting that method key will fail to resolve it. |
 
 **Result:**
 
@@ -350,6 +351,13 @@ terminality predicate the op applies at T1 (preview) and T3 (act-time re-verify)
 | `fleet.archive_completed_plans` | `status ∈ {implemented, superseded, abandoned}` (frontmatter, static field — low drift) |
 | `fleet.archive_completed_handoffs` | (`status == claimed`, dual-tolerant fallback to the archived-schema grandfather `consumed` **AND** `deployment_state != in_flight`) **OR** (`deployment_state ∈ {shipped, abandoned, continued, closed}`, `shipped` additionally requiring a resolvable `shipped_in`; `abandoned` is retired from the active schema's enum but retained in the terminal-deployment-state set for archived-corpus tolerance) — **AND**, for either branch, `has_live_children == false` **AND** no live session claim (time-varying — see § 3.1). This is the FRONTMATTER-condition predicate; the wire `status` display value stays the literal `"consumed"` sentinel regardless (§2.1). Widened 2026-07-13 at cockpit-em's request (memo) to stop stranding off-baton `active`+`shipped`/`abandoned` handoffs; wire SHAPE unchanged, only the candidate population widens. DR-084 P4 (2026-07-22) narrowed the frontmatter status vocabulary and added `continued`/`closed` as `abandoned`'s successors — see `coordinator_core/ops/fleet/archive_handoffs.py` `_is_terminal` (~:484) for the governing implementation. |
 | `fleet.prune_closed_bugs` | `status == closed` (frontmatter/queue field, static — low drift) |
+
+**`fleet.archive_completed_handoffs` param divergence (2026-08-25).** This op alone also
+requires `cap` (int, both `dry_run` values) — see § 2.1's `cap` row for the full breaking-change
+note. Measured module-path cost at the required `cap`: 93.750ms process / 2 spawns
+(`state/audits/2026-08-25-the-handoff-archive-op-earns-its-way-back.md` — cite that file as the
+source of record for the current number, including any through-the-CLI figure appended after
+this doc update).
 
 ---
 

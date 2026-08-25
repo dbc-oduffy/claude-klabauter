@@ -72,7 +72,6 @@ cold-start.md task C13.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import contextvars
 from typing import Any, Iterator, List, Optional
@@ -422,6 +421,8 @@ def reentrant_dispatch(
             result — a future migration onto this primitive is the whole
             reason this guard exists now, before any call site trips it.
     """
+    import asyncio
+
     from coordinator_core.ipc import get_op_handler
 
     handler = get_op_handler(op_name)

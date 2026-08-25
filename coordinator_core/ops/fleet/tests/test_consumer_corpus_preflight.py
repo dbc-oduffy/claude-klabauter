@@ -21,6 +21,17 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="")
 
 
+def _toml_path(repo_path) -> str:
+    r"""TOML-escape a filesystem path for a basic string.
+
+    Windows-first-class, not cosmetic: an unescaped `C:\Users\...` makes `\U`
+    a TOML unicode escape, the whole registry fails to parse, and the test
+    that appended it fails on an unrelated assertion. Every appender below
+    routes through this rather than interpolating a path straight in.
+    """
+    return str(repo_path).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _make_registry(tmp_path: Path, monkeypatch, repos: dict) -> None:
     """Minimal machine-local registry fixture (mirrors test_memo_resolver.py's factory)."""
     claude_home = tmp_path / "claude-home"
@@ -29,7 +40,7 @@ def _make_registry(tmp_path: Path, monkeypatch, repos: dict) -> None:
     (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
     lines = []
     for key_suffix, repo_path in repos.items():
-        toml_val = str(repo_path).replace("\\", "\\\\").replace('"', '\\"')
+        toml_val = _toml_path(repo_path)
         lines.append(f'"repos.{key_suffix}" = "{toml_val}"')
     (machine_local / "registry.local.toml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
@@ -253,7 +264,7 @@ class TestUnclassifiedReconciliation:
         new_repo_path = tmp_path / "some-new-em-tree"
         new_repo_path.mkdir()
         with open(registry_local, "a", encoding="utf-8") as fh:
-            fh.write(f'"repos.brand_new_em" = "{new_repo_path}"\n')
+            fh.write(f'"repos.brand_new_em" = "{_toml_path(new_repo_path)}"\n')
 
         report = preflight.run_preflight()
 
@@ -275,7 +286,7 @@ class TestUnclassifiedReconciliation:
         junk_path = tmp_path / "tmp-junk"
         junk_path.mkdir()
         with open(registry_local, "a", encoding="utf-8") as fh:
-            fh.write(f'"repos.example-smoke-test-fixture" = "{junk_path}"\n')
+            fh.write(f'"repos.example-smoke-test-fixture" = "{_toml_path(junk_path)}"\n')
 
         report = preflight.run_preflight()
 

@@ -1964,14 +1964,88 @@ def _finalize_report(exit_code: int, report: dict[str, Any]) -> tuple[int, dict[
     precedence over `_STATUS_LABELS`: it means `execute_directives`'
     pre-mutation composition-budget boundary fired, reusing
     `APPLY_EXIT_CLAIM_DENIED`'s exit code for its `landed: []` shape
-    without this being an actual claim denial."""
+    without this being an actual claim denial.
+
+    VERDICT PLACEMENT (2026-08-25, the legibility half of bug backlog
+    `2026-08-25-spinoff-brief-then-apply-mints-two-batons-and-adopts-the-stub-
+    as-origin.yaml`). `status` used to be the LAST key stamped onto a report
+    that `main_apply` prints as multi-hundred-line indented JSON, so an
+    operator reading the head of the output -- the ordinary shape,
+    `| Select-Object -First N` / `| head -N` -- saw everything except whether
+    the run had worked. In the recorded incident that cost a re-run of a
+    command that had already landed, and the re-run minted a second baton.
+
+    Two changes, one fact: `status` and a one-line `verdict` are moved to the
+    FRONT of the returned mapping (`json.dumps` preserves insertion order, so
+    they are the first thing printed), and the same `verdict` line goes to
+    stderr, where it survives a filter that keeps only stdout's head. It is a
+    RENDERING of keys the report already carries -- no new fact, no second
+    source of truth for whether the run landed."""
     report = dict(report)
     report.setdefault("landed", [])
     if "budget_breach" in report:
-        report["status"] = _BUDGET_BREACH_STATUS
+        status = _BUDGET_BREACH_STATUS
     else:
-        report["status"] = _STATUS_LABELS.get(exit_code, "unknown")
-    return exit_code, report
+        status = _STATUS_LABELS.get(exit_code, "unknown")
+    verdict = _verdict_line(status, report)
+    print(f"baton-assemble apply: {verdict}", file=sys.stderr)
+    # Both keys are dropped from the spread before it is applied. A trailing
+    # `**report` WINS over the explicit entries ahead of it (later duplicate key
+    # wins in a dict literal), so a report arriving with either key already set
+    # would silently discard the values computed here -- a verdict lying about
+    # whether the run landed, which is the exact failure class this function
+    # exists to close. No caller populates either today; this makes that a
+    # guarantee rather than a coincidence nothing checks.
+    # Review: coordinator:code-reviewer (ab5f5c7c) Finding 1.
+    report.pop("status", None)
+    report.pop("verdict", None)
+    return exit_code, {"status": status, "verdict": verdict, **report}
+
+
+def _verdict_line(status: str, report: dict[str, Any]) -> str:
+    """The whole run in one line: what happened, what landed, what was
+    committed -- or, on a failure, the first line of why.
+
+    Composed ONLY from keys `_finalize_report` already holds. Deliberately not
+    a second predicate for "did this run land": a caller that branches on the
+    verdict string rather than on `status`/`landed` is reading the label
+    instead of the fact.
+
+    Error text is truncated and newline-collapsed: this is a one-line summary,
+    and a multi-line error pasted into it would reintroduce exactly the
+    scrollback the line exists to cut. The full `error` value stays in the
+    report, one key below."""
+    landed = report.get("landed") or []
+    if landed:
+        what = "landed " + ", ".join(str(d) for d in landed)
+    else:
+        what = "nothing landed"
+
+    # `landed` counts an `already_satisfied` directive too (that accounting is
+    # `apply_base.execute_directives`', not this module's), so on a replay the
+    # bare count reads as work that did not happen. Naming the replayed ids
+    # keeps the headline honest without re-deriving what landed.
+    # Review: coordinator:code-reviewer (ab5f5c7c) Finding 2.
+    replayed_ids = [
+        str(entry.get("directive_id"))
+        for entry in (report.get("replayed") or [])
+        if isinstance(entry, dict) and entry.get("directive_id")
+    ]
+    if replayed_ids:
+        what += " (" + ", ".join(replayed_ids) + " replayed, not re-run)"
+
+    sha = report.get("commit_sha")
+    if sha:
+        what += f"; committed {str(sha)[:12]}"
+
+    error = report.get("error")
+    if error:
+        flat = " ".join(str(error).split())
+        if len(flat) > 160:
+            flat = flat[:157] + "..."
+        what += f"; {flat}"
+
+    return f"{status} — {what}"
 
 
 def _collect_directive_commits(report: dict[str, Any]) -> list[dict[str, Any]]:

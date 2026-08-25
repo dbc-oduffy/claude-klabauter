@@ -300,7 +300,10 @@ def test_no_agent_id_em_main_loop_allows_scoped_git_commit():
 _NEWLY_ADDED_COMMITTING_OPS = (
     "commit.exec_bit_change",
     "ceremony.post_commit_tail",
-    "fleet.archive_shipped_handoffs",
+    # "fleet.archive_shipped_handoffs" REMOVED -- op key SUBSUMED (not
+    # renamed), module deleted 2026-08-25 (C1b, docs/plans/2026-08-25-the-
+    # handoff-auto-archive-comes-back-capped.md) -- see guard.py's own
+    # _COMMITTING_OP_NAMES comment.
     "fleet.archive_release_accumulator",
     "fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings",
@@ -317,11 +320,12 @@ _NEWLY_ADDED_COMMITTING_OPS = (
 def test_newly_added_committing_ops_all_deny(monkeypatch):
     """Every op name added by the B-commit-matchers Finding 1 fix must be
     denied for a subagent identity, exactly like ``ceremony.scoped_git_
-    commit`` already was -- including the four (``fleet.archive_shipped_
-    handoffs``, ``fleet.archive_release_accumulator``, ``fleet.reap_
-    unintegrated_findings``, ``fleet.reap_integrated_findings``) whose names
-    contain no ``commit`` substring at all and therefore exercise the
-    prefilter path, not just the full invoke-matcher.
+    commit`` already was -- including the three (``fleet.archive_release_
+    accumulator``, ``fleet.reap_unintegrated_findings``, ``fleet.reap_
+    integrated_findings``) whose names contain no ``commit`` substring at
+    all and therefore exercise the prefilter path, not just the full
+    invoke-matcher. (A fourth, ``fleet.archive_shipped_handoffs``, used to
+    live here too -- removed 2026-08-25, op key SUBSUMED, module deleted.)
     """
     for op_name in _NEWLY_ADDED_COMMITTING_OPS:
         _denies(monkeypatch, f"python3 -m coordinator_core.invoke {op_name} '{{}}'")

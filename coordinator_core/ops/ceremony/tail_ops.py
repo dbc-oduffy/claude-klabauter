@@ -283,9 +283,19 @@ async def _run_fleet_op_by_key(op_key: str, op_label: str, common_dir: Path) -> 
 # ``<worktree_root>/coordinator/bin/``. Deliberately mirrors
 # `housekeeping_liveness.REMEDY_COMMANDS[ARCHIVE_SWEEPS]` (same scripts) -- NOT the
 # composite `sweep-boot.py` (module docstring negative-spec; plan § C2 anti-scope).
-_ARCHIVE_SWEEP_SCRIPTS: tuple = (
-    "sweep-shipped-handoffs.py",   # fleet.archive_completed_handoffs, deployment_state branch (shipped/abandoned/superseded)
-)
+#
+# ``sweep-terminal-handoffs.py`` re-earns this seam (C4, 2026-08-25 plan
+# ``docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md``) --
+# see that CLI's own module docstring. It is a thin two-phase caller over the
+# rebuilt ``fleet.archive_completed_handoffs`` op (cap-bounded, single-flight
+# locked); this tuple now has exactly ONE member again, so the two-member
+# ``.git/index.lock`` hazard this module's docstring records for the
+# ORIGINAL one-member loop does not apply in a different sense than before --
+# see that CLI's own module docstring "Index-lock disposition" note for why
+# a bounded retry lives at the op's own git add/commit pair
+# (``coordinator_core.ops.fleet._common.archive_and_commit`` /
+# ``_update_index_with_retry``) rather than here.
+_ARCHIVE_SWEEP_SCRIPTS: tuple = ("sweep-terminal-handoffs.py",)
 
 
 def fire_archive_sweeps_detached(worktree_root: Path) -> TailResult:

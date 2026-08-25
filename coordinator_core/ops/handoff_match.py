@@ -43,7 +43,7 @@ import yaml
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.match_core import rank_candidates
+from coordinator_core.ops.match_core import QuarantineLog, rank_candidates
 
 _LOG = logging.getLogger(__name__)
 
@@ -74,8 +74,17 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
     if not handoffs_dir.is_dir():
         return items
 
+    # One WARNING per scan, not per skipped file -- see `QuarantineLog`. Same
+    # collapse as `plan_match._collect_plans` / `goals_match._collect_goals`,
+    # applied here for the same reason and not merely for symmetry: this
+    # enumerator walks the whole live `state/handoffs/` corpus, so any
+    # malformed slice of it scales the same per-file spam into any caller's
+    # stderr.
+    quarantine = QuarantineLog("handoff.match_candidates", _LOG)
+
     for fpath in sorted(handoffs_dir.glob("*.md")):
         fname = fpath.name
+        quarantine.scanned()
         try:
             raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
             # Extract only the frontmatter block (between first and second "---" line).
@@ -84,26 +93,20 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
                 fm_text = parts[1]
             else:
                 # No frontmatter block — skip; handoffs without frontmatter are malformed.
-                _LOG.warning(
-                    "handoff.match_candidates: skipping %s — no YAML frontmatter block", fname
-                )
+                quarantine.skip(fname, "no YAML frontmatter block")
                 continue
             fm = yaml.safe_load(fm_text)
         except Exception as exc:  # noqa: BLE001 — parity with goals_match quarantine pattern
-            _LOG.warning("handoff.match_candidates: skipping %s — parse error: %s", fname, exc)
+            quarantine.skip(fname, "parse error", str(exc))
             continue
 
         if not isinstance(fm, dict):
-            _LOG.warning(
-                "handoff.match_candidates: skipping %s — YAML did not produce a dict", fname
-            )
+            quarantine.skip(fname, "YAML did not produce a dict")
             continue
 
         title_val = fm.get("title")
         if not isinstance(title_val, str) or not title_val:
-            _LOG.warning(
-                "handoff.match_candidates: skipping %s — missing required field: title", fname
-            )
+            quarantine.skip(fname, "missing required field: title")
             continue
 
         # Handoff id is the filename stem — the timestamp+slug convention makes this unique.
@@ -114,6 +117,7 @@ def _collect_handoffs(handoffs_dir: Path) -> List[dict]:
 
         items.append({"id": handoff_id_val, "title": title_val, "text": haystack})
 
+    quarantine.summarize()
     return items
 
 

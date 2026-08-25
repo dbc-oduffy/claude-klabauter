@@ -148,7 +148,13 @@ from typing import List, Optional, Sequence, Tuple
 # checks' remediation text below must point readers at the one doc that
 # actually enumerates these two keys, not name them inline (B6/B8, see
 # docs/wiki/guard-messaging.md § Register).
-from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
+#
+# Imported from the leaf `_override_doc` module, not `_helpers`
+# (2026-08-25, "the commit gate stops importing a subsystem"): this module
+# sits on the commit pre-commit hook path, so importing it must not pull in
+# `_helpers.py`'s wider `bash_guards`/`subagent_sandbox` import graph for a
+# module-level constant that never needed any of it.
+from coordinator_core.bash_guards._override_doc import OVERRIDE_KEYS_DOC_DISPLAY
 
 # --- Exit-code contract ---------------------------------------------------
 #

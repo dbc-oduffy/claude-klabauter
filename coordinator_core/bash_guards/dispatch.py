@@ -1525,15 +1525,29 @@ def _build_guard_chain(
     def _git_revert_full() -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         key = (cmd, session_id)
         if key not in _git_revert_cache:
-            _git_revert_cache[key] = _dc._check_destructive_git_revert_full(cmd, session_id)
+            _git_revert_cache[key] = _dc._check_destructive_git_revert_full(cmd, session_id, hook_payload=payload)
         return _git_revert_cache[key]
 
     guard_chain: List[GuardEntry] = [
         # 1. preuse-bash-dispatch.sh own internal 11-check order.
-        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # `payload=payload` / `hook_payload=payload` threaded into every `_override()`-
+        # consuming check below (C14b, state/handoffs/2026-08-23-the-warm-guard-op-gets-
+        # registered.md): C14c re-keyed `dispatch_checks._override()` to prefer
+        # `payload["env"]` over ambient `os.environ`, but that re-key does nothing unless
+        # THIS chain actually hands each check its own payload -- before this edit, every
+        # entry below called its check with only `(cmd, session_id[, ...])`, so
+        # `_override` always fell through to `os.environ` regardless of what the caller's
+        # payload carried. Harmless in the cold path (a fresh child process's own environ
+        # IS the caller's shell env, so the fallback was always correct there), but on a
+        # warm server this was the exact invisible-disarm/dead-override hazard C14c's own
+        # docstring warns about, undetected because no existing test drives an override
+        # through a NON-`os.environ` payload at this layer. Additive-only: a payload
+        # carrying no `"env"` key (every cold caller, every pre-existing test) falls back
+        # to `os.environ` unchanged -- see `_override`'s own docstring.
+        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Hard-deny leg ONLY -- never returns the advisory half (Review:
         # staff-eng, Finding 0: an advisory returned from THIS
         # CONFINEMENT_DENY slot would short-circuit `evaluate_payload_json`
@@ -1581,8 +1595,8 @@ def _build_guard_chain(
         # this widening nor a future narrowing would fail a test. Census
         # entry: `docs/reference/guard-tool-name-membership.md` § 3.
         GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Must precede `offer-git-c`. That check rewrites `cd <dir> && git <sub>`
         # into `git -C <dir> <sub>` and returns allow+updatedInput, which
         # short-circuits the rest of the chain -- so a worktree guard placed
@@ -1988,7 +2002,7 @@ def _build_guard_chain(
         # blob fetch, frontmatter diff) are all cwd-sensitive; thread cwd
         # through so they resolve against the payload's actual working
         # directory rather than this process's own os.getcwd().
-        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Review: review-integrator -- Finding 2. Registered AHEAD of
         # `probe-spray` (moved up from the dispatcher's own tail below it),
         # satisfying two ordering constraints at once:
@@ -2010,7 +2024,7 @@ def _build_guard_chain(
         #      to its position relative to the rewrite guards further down).
         GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_inprocess_search)),
         # Advisory (dispatcher own tail).
-        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # 2. block-illegal-filename.sh (cohort 1, Bash leg, advisory).
         GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_illegal_filename)),
         # 5b. check-test-suite-invocation -- no legacy bash predecessor (new
@@ -2038,10 +2052,10 @@ def _build_guard_chain(
         # position relative to EACH OTHER carries no confinement risk.
         # `inprocess-search` (formerly registered here) moved up ahead of
         # `probe-spray` -- see that entry's own comment above for why.
-        GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
-        GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
+        GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         # `git_root` is threaded here (unlike this row's cat-heredoc sibling
         # above, which needs only `cmd`) because this check's own detection
         # -- "does the write target resolve INSIDE the repo" -- is pure path
@@ -2053,7 +2067,7 @@ def _build_guard_chain(
         # own fail-closed contract on an empty/None `git_root`), never
         # firing outside a direct unit-test call.
         GuardEntry("heredoc-repo-write-advise", lambda: _dc.check_heredoc_repo_write_advise(cmd, session_id, payload, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
+        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
         # dispatch was sent to close (DoE docs/plans/2026-07-29-windows-
         # viability-stop-the-spawn-storms.md, row BX-16): MULTI_PROBE_BANNER
@@ -2065,7 +2079,7 @@ def _build_guard_chain(
         # rewrite/advisory-only checks carries no confinement risk, and both
         # still sit after every hard-deny above per the chain's own ordering
         # invariant (test_hard_denies_precede_rewrites.py).
-        GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         # Ungated chain member (C1 audit finding): guard_head_tail_rewrite.py
         # declares no MATCHERS and carries no tool_name gate of its own.
         GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),

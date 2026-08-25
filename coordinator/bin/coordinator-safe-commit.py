@@ -104,8 +104,11 @@ Usage forms:
   coordinator-safe-commit --scope-from <path> "<subject>"   # workstream-anchored
   coordinator-safe-commit --dry-run "<subject>"              # show what would be staged
   coordinator-safe-commit --body-file <path> "<subject>"     # multi-paragraph message
-  coordinator-safe-commit "<subject>" -- <path> [<path>...]  # pathspec — delegates to
-                                                               # scoped-git-commit
+  coordinator-safe-commit "<subject>" -- <path> [<path>...]  # pathspec — REFUSES:
+                                                               # delegate target killed
+                                                               # 2026-08-23, none yet.
+                                                               # Use: git add -- <paths>
+                                                               # then commit.
 
 2026-08-06 (cross-repo/inbox/2026-08-06-doe-claude-em-safe-commit-pathspec-
 and-allowlist-naming.md, Defect 1): the `-- <paths>` form above is a
@@ -275,11 +278,11 @@ Optional flags (combinable):
                                     content becomes `git commit -m <subject>
                                     -m <body>`, never replaces the subject.
 
-The `-- <path> [<path>...]` form delegates to `scoped-git-commit -m
-"<subject>" -- <paths>` — the sanctioned scoped-commit route for a caller
-who already knows exactly which files to commit. Incompatible with
---blanket, --scope-from, --include-orphans, --allow-out-of-scope-dirty, and
---body-file.
+The `-- <path> [<path>...]` form REFUSES. It delegated to `scoped-git-commit`,
+killed 2026-08-23 (DR-344), no replacement built yet. Stage explicitly
+(`git add -- <paths>`) and commit, or use --scope-from. Still incompatible
+with --blanket, --scope-from, --include-orphans, --allow-out-of-scope-dirty,
+and --body-file.
 
 Whether a caller may commit at all is enforced by the
 coordinator_core/bash_guards/block_subagent_commit.py PreToolUse(Bash)

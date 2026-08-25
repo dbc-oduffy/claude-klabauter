@@ -1215,18 +1215,19 @@ def test_argv_stays_bounded_and_uses_pathspec_file_for_add_and_commit(tmp_path, 
     assert not (set(paths) & set(add_argv))
     assert not (set(paths) & set(commit_argv))
 
-    # The chunked state read `commit_scoped()` picks its branch from. This is
-    # `git status --porcelain=v2`, not the `git diff` pair it used to be:
-    # one porcelain-v2 record carries both the divergence XY and the
-    # mode-delta mode/OID fields, so the two chunked reads became one
-    # (`git_native._v2_state_records_chunked`). The BOUND is what this test
-    # pins, and it is unchanged -- whatever command carries the pathspec must
-    # stay chunked rather than putting all 2000+ paths on one argv.
-    state_argvs = [a for a in argvs if "--porcelain=v2" in a]
-    assert state_argvs, "expected at least one chunked porcelain-v2 state read"
-    for a in state_argvs:
+    # The BOUND is what this test pins, and it survives every rearrangement of
+    # which command carries the pathspec. The state read `commit_scoped()`
+    # picks its branch from was a `git diff` pair, then one chunked
+    # `git status --porcelain=v2`, and is now in-process
+    # (`git_index.scoped_status`) with no spawn at all. Asserting against
+    # whichever spawn happened to hold it made this test decay each time;
+    # asserting over EVERY spawned argv does not, and is the stronger claim:
+    # no command this batch triggers may put the raw path list on one argv,
+    # whatever that command turns out to be.
+    for a in argvs:
         total_len = sum(len(tok) for tok in a)
-        assert total_len < 20000, f"unchunked-looking state-read argv: {total_len} chars"
+        assert total_len < 20000, f"unchunked-looking argv ({total_len} chars): {a[:6]}"
+        assert not (set(paths) & set(a)), f"raw paths on argv: {a[:6]}"
 
 
 def test_large_batch_diverged_path_preserved_amid_agree_bulk(tmp_path):

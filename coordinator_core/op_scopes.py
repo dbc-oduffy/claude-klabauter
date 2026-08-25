@@ -170,6 +170,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # session_heartbeat.py shape" note in the module docstring is about the
     # async-bookkeeping/write-side-effect PATTERN, not repo-key scoping).
     "hooks.context_pressure_precompact":     "none",
+    # warm_guard.evaluate — MUST be "none": neither hook transport (warm/hook_http.py
+    # :: build_request, nor the door caller) sends an _origin_worktree envelope field
+    # for this op, so "common_dir"/"show_top" would make ipc.resolve_op_repo_key raise
+    # on every call, not merely leave repo_root unused. The handler's repo_root param
+    # is accepted and ignored by contract: cwd (and every other repo-specific input
+    # the guard chain reads) travels on params["payload"], resolved internally by
+    # bash_guards.dispatch itself, exactly as every cold hook invocation already does.
+    "warm_guard.evaluate":                   "none",
     # percolate.run / percolate.validate_store — no repo state accessed; all paths
     # (store_path, target_root) are explicit caller-supplied params, not resolved
     # relative to a repo/worktree root. Spec: docs/plans/2026-07-10-percolation-engine-claude-klabauter.md § Tasks C15.
@@ -548,6 +556,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # fleet.* / deliverable.rollup. Without this entry dispatch resolves
     # repo_root=None and both handlers fail loud on the missing-repo_root guard.
     # Spec: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5/C7
+    # memo.send — "common_dir": the op resolves the SENDER's own worktree to move
+    # state/memo-outbox/<topic>.md into sent/, append the ledger row and commit_scoped
+    # over the three sender paths; the receiver side is resolved separately via
+    # _memo_resolver, never from repo_root. Without this entry dispatch resolves
+    # scope="none" and the door REFUSES --repo outright ("this op accesses no
+    # repo-specific state and never reads repo_root", DR-279) — fail-loud, but on a
+    # false premise, for the one op in this family that writes into two repos.
+    # Spec: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C2/AC8
+    "memo.send":                              "common_dir",
     "memo.draft":                             "common_dir",
     "memo.compose":                           "common_dir",
     # memo.list_outbox — keyed on git_common_dir: enumerates the CALLING
@@ -790,7 +807,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Class-A ops (fleet.*) use archive_and_commit and read/write main-worktree-rooted paths.
     # Class-B/composite ops (session.*) read/write .git/coordinator-sessions/ and state/ paths,
     # both derived from the main worktree root. Spec: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C5
-    "fleet.archive_shipped_handoffs":        "common_dir",
+    # "fleet.archive_shipped_handoffs" REMOVED -- op key SUBSUMED (not
+    # renamed), module deleted 2026-08-25 (C1b, docs/plans/2026-08-25-the-
+    # handoff-auto-archive-comes-back-capped.md).
     # fleet.backfill_dispositionless_memos — same "common_dir" keying as the other
     # fleet.* ops: the handler derives the worktree via main_worktree_root(common_dir)
     # to resolve cross-repo/archive/<filename> for each of the 34 backfill-table

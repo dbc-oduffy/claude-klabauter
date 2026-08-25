@@ -14,6 +14,17 @@ These tests assert both halves of that contract across a REAL
 coordinator/bin/lib/cc_invoke.py uses — because an in-process call to the op
 cannot observe the process-exit-status half at all.
 
+Op under test: `memo.check_addressee`. It was `memo.send` until 2026-08-25,
+when this module was found red because `memo.send` is no longer in the op
+registry at all (`ipc.py` says so in as many words) -- the spawn came back
+`Method not found`, so the module had stopped exercising its own subject.
+`memo.check_addressee` is live, `common_dir`-scoped, and reaches the same
+`_common._setup_error` channel, so the contract is pinned against an op that
+exists. The receiver-naming assertion did not survive the move: it tested
+`memo.send`'s unresolvable-receiver branch specifically, and that branch went
+with the op. What replaces it asserts the same underlying property -- the
+reason must identify what fired -- against a branch that is still reachable.
+
 Spec backlink: state/bug-backlog/2026-07-22-memo-send-cli-path-refuses-unregistered-sender.yaml
 """
 
@@ -39,49 +50,45 @@ def _claude_klabauter_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _invoke_memo_send_unresolvable_receiver(tmp_path: Path) -> subprocess.CompletedProcess:
-    """Spawn the real invoke CLI on a memo.send whose receiver cannot resolve.
+def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
+    """Spawn the real invoke CLI on a fleet op that takes a setup-error branch.
 
-    The isolated settings home holds a schema-only registry with no repos.* entry,
-    so _resolve_receiver_inbox returns None and memo_send takes the
-    receiver-not-registered build_setup_error_result branch.
+    `memo.check_addressee` is a pure read op that refuses `dry_run: False` --
+    a setup error, so it returns the frozen exit_code:1 envelope with the
+    reason on stderr only, which is exactly the contract under test.
+
+    `--allow-unstamped-dispatch` is load-bearing, not incidental: this repo is
+    an unstamped clone (the engine publishes through klabauter), so without it
+    dispatch refuses with a build-stamp error and never reaches the op. The
+    flag's own message names deliberate manual testing as its purpose.
     """
-    machine_local = tmp_path / "settings-home" / "machine-local"
+    claude_home = tmp_path / "settings-home"
+    machine_local = claude_home / "machine-local"
     machine_local.mkdir(parents=True)
     (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
 
-    # memo.send is common_dir-scoped: --repo must be a real git common dir, or the
-    # dispatcher rejects it before the op runs and this probe misses its target.
-    sender = tmp_path / "sender"
-    sender.mkdir()
+    caller = tmp_path / "caller"
+    caller.mkdir()
     subprocess.run(
-        ["git", "init", str(sender)],  # popup-safe-env-suppressed
+        ["git", "init", str(caller)],  # popup-safe-env-suppressed
         capture_output=True,
         check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
-    params = {
-        "dry_run": False,
-        "topic": "setup-error-channel-probe",
-        "to": "no-such-receiver-em",
-        "title": "Probe",
-        "body": "Body.\n",
-        "from_id": "probe-sender-em",
-        "kind": "fyi",
-        "summary": "Setup-error stderr channel probe.",
-    }
+    params = {"to": "no-such-receiver-em", "dry_run": False}
     env = {
         "PATH": "/usr/bin:/bin",
         "PYTHONPATH": str(_claude_klabauter_root()),
-        "COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings-home"),
-        "CLAUDE_HOME": str(tmp_path / "settings-home"),
+        "COORDINATOR_SETTINGS_HOME": str(claude_home),
+        "CLAUDE_HOME": str(claude_home),
         "SYSTEMROOT": "C:\\Windows",  # Windows: required for socket/crypto init
     }
     return subprocess.run(
         [
-            sys.executable, "-m", "coordinator_core.invoke", "memo.send",
-            "--bare", json.dumps(params), "--repo", str(sender),
+            sys.executable, "-m", "coordinator_core.invoke", "memo.check_addressee",
+            "--bare", json.dumps(params), "--repo", str(caller),
+            "--allow-unstamped-dispatch",
         ],  # popup-safe-env-suppressed
         capture_output=True,
         text=True,
@@ -96,7 +103,7 @@ def _invoke_memo_send_unresolvable_receiver(tmp_path: Path) -> subprocess.Comple
 def _setup_error_spawn(tmp_path_factory) -> subprocess.CompletedProcess:
     """One spawn shared by both assertions — the subprocess costs ~1s, the two
     halves of the contract are properties of the same invocation."""
-    return _invoke_memo_send_unresolvable_receiver(tmp_path_factory.mktemp("setup-err"))
+    return _invoke_setup_error_op(tmp_path_factory.mktemp("setup-err"))
 
 
 def test_setup_error_reason_reaches_the_spawned_process_stderr(_setup_error_spawn) -> None:
@@ -112,8 +119,8 @@ def test_setup_error_reason_reaches_the_spawned_process_stderr(_setup_error_spaw
         "setup-error reason absent from the spawned op process's stderr — the only "
         f"diagnostic channel a frozen exit_code:1 envelope has.\nstderr: {proc.stderr!r}"
     )
-    assert "no-such-receiver-em" in proc.stderr, (
-        "setup-error reason reached stderr but does not name the failing receiver — "
+    assert "memo.check_addressee" in proc.stderr, (
+        "setup-error reason reached stderr but does not name the op it came from — "
         f"the reason text must identify which branch fired.\nstderr: {proc.stderr!r}"
     )
 

@@ -810,8 +810,31 @@ def claim_artifact(
     try:
         os.mkdir(claim_dir)
         created = True
-    except OSError:
+    except FileExistsError:
         created = False
+    except OSError as exc:
+        # NOT EEXIST -- the claim dir could not be created for a reason that
+        # says nothing about who holds the claim. Falling through to the
+        # EEXIST-inspection path here (the shape this ported from bash, where
+        # the distinction did not exist) reads an absent dir's metadata as
+        # empty, concludes "session ?, PID ? not live", and announces a stale
+        # takeover of a claim it never looked at. Worse than the wrong message:
+        # if the missing parent that caused this happens to exist on a later
+        # call, the takeover's re-mkdir SUCCEEDS at the wrong key and returns a
+        # phantom claim while the real one sits untouched elsewhere -- a
+        # mutual-exclusion hole in the one primitive whose whole job is mutual
+        # exclusion (DR-110). Fail loud, name the errno, and claim nothing.
+        # Commonest trigger: a caller passing a repo-relative PATH where the
+        # signature takes a BASENAME, so `claim_dir` carries directory
+        # components whose parents do not exist under `<class>-claims/`.
+        print(
+            f"cs_claim_{class_}: cannot create claim dir for {basename!r} — "
+            f"{exc.__class__.__name__}: {exc.strerror or exc}. This is not a "
+            f"contended claim; nothing was claimed and no holder was inspected. "
+            f"If {basename!r} looks like a path, pass the basename alone.",
+            file=sys.stderr,
+        )
+        return False
     if created:
         _write_claim_meta(claim_dir, sid, stage)
         _report_claim_neighbours(class_, basename, cwd)

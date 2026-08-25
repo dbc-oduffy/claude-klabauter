@@ -419,6 +419,56 @@ class TestClaimArtifact:
         assert (cdir / "pid").read_text().strip() == str(os.getpid())
         assert (cdir / "claimed_at").read_text().strip()
 
+    def test_non_eexist_mkdir_failure_is_not_reported_as_a_stale_takeover(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A mkdir failure that is NOT EEXIST says nothing about who holds the
+        claim, and must never be dressed as a stale-holder takeover.
+
+        The ported bash shape fell through to the EEXIST-inspection path on ANY
+        mkdir failure. With no claim dir on disk, the holder-metadata reads come
+        back empty, so the takeover branch announced "session ?, PID ? not live
+        -- taking over" about a claim it had never looked at, then failed its
+        own re-mkdir. The commonest trigger is a caller passing a repo-relative
+        PATH where the signature takes a BASENAME: the derived claim dir carries
+        directory components whose parents do not exist under `<class>-claims/`.
+        """
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+
+        assert (
+            claims.claim_artifact(
+                "handoff", "state/handoffs/hb-path-not-basename.md", cwd=str(repo)
+            )
+            is False
+        )
+
+        err = capsys.readouterr().err
+        assert "taking over" not in err, (
+            "a non-EEXIST mkdir failure was announced as a stale-claim takeover"
+        )
+        assert "not live" not in err, (
+            "a holder liveness verdict was reported for a claim dir that was "
+            "never read"
+        )
+        assert "not a contended claim" in err
+        assert "basename" in err
+
+    def test_non_eexist_mkdir_failure_claims_nothing(self, tmp_path, monkeypatch):
+        """The mutual-exclusion half: the failed call must leave no claim dir
+        behind at the wrong key, so a later well-formed claim still contests the
+        real one (DR-110 -- the shared-path mkdir IS the guard)."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+
+        claims.claim_artifact(
+            "handoff", "state/handoffs/hb-phantom.md", cwd=str(repo)
+        )
+
+        claims_root = _claim_dir(repo, "handoff", "x").parent
+        assert not (claims_root / "state").exists()
+        assert not (claims_root / "hb-phantom.md").exists()
+
     def test_unresolvable_sid_fails(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _clear_all_sid_env(monkeypatch)

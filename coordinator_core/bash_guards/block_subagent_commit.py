@@ -3210,7 +3210,10 @@ _COMMITTING_OP_NAMES = frozenset(
         # substring "commit" in their op name:
         "commit.exec_bit_change",           # ceremony/commit_exec_bit.py -- _git(["commit", ...])
         "ceremony.post_commit_tail",        # ceremony/post_commit_tail.py -- commit_scoped(...)
-        "fleet.archive_shipped_handoffs",   # fleet/archive_shipped_handoffs.py -- archive_and_commit(...)
+        # "fleet.archive_shipped_handoffs" REMOVED (op key SUBSUMED, not
+        # renamed -- PM ruling, docs/plans/2026-08-25-the-handoff-auto-
+        # archive-comes-back-capped.md § C1b) -- the op no longer exists,
+        # nothing registers it, and the module it named is deleted.
         "fleet.archive_release_accumulator",  # fleet/archive_release_accumulator.py -- archive_and_commit(...)
         "fleet.reap_unintegrated_findings",  # fleet/reap_unintegrated_findings.py -- rm_and_commit(...)
         "fleet.reap_integrated_findings",   # fleet/reap_integrated_findings.py -- rm_and_commit(...)
@@ -3221,7 +3224,7 @@ _COMMITTING_OP_NAMES = frozenset(
         # one, as handoff.ship_and_archive does via archive_shipped_handoffs'
         # own _handle_act) turned up eight more:
         "fleet.archive_actioned_memos",     # fleet/archive_actioned_memos.py -- archive_and_commit(...)
-        "fleet.archive_completed_handoffs",  # fleet/archive_handoffs.py -- archive_and_commit(...)
+        "fleet.archive_completed_handoffs",  # fleet/archive_terminal_handoffs.py -- archive_and_commit(...)
         "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
         "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)
         "fleet.prune_closed_bugs",          # fleet/prune_bugs.py -- archive_and_commit(...)

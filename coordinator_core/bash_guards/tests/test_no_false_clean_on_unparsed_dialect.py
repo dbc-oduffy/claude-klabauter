@@ -136,6 +136,24 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         # parser, never resolved/executed against a real filesystem path.
         lambda mod: "Remove-Item -Recurse -Force C:/scratch/target"
     ),
+    # The two grant guards entered this test's population on 2026-08-19 with
+    # the same subagent-boundary MATCHERS widening. Each fixture is the
+    # `_MODULE_M_GRANT` constant from that guard's OWN test file, which its
+    # `TestPowerShellParity.test_subagent_grant_denies_via_powershell` already
+    # proves reaches a deny under the PowerShell tool name -- copied rather
+    # than invented so the fixture is known to land in the guard's detection
+    # domain (see this table's own header comment).
+    "block_subagent_grant_acquisition": (
+        lambda mod: (
+            'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
+        )
+    ),
+    "block_subagent_guard_grant": (
+        lambda mod: (
+            "python3 -m coordinator_core.session.em_guard_grant grant "
+            'bump-foreign-repo-write "reason"'
+        )
+    ),
     "block_subagent_plan_body_bash_write": (
         lambda mod: 'Add-Content -Path docs/plans/test.md -Value "x"'
     ),
@@ -276,6 +294,16 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
         _hazard_repo_monkeypatch(mod, mp) or {}
     ),
     "guard_branch_set_precedence": _branch_set_precedence_monkeypatch,
+    # Third guard behind the SAME `_is_hazard_repo` applicability gate as
+    # the two above -- entered this test's population on 2026-08-19 when
+    # the subagent-boundary MATCHERS parity widened its `MATCHERS` from
+    # `("Bash",)` to `COMMAND_TOOL_NAMES`. Its `check()` returns early at
+    # "REPO SCOPING" for any non-hazard repo, so without this seam the
+    # fixture command never reaches `_classify_segment` under EITHER
+    # dialect and the clean it returns says nothing about PowerShell.
+    "block_noncanonical_branch_creation": lambda mod, mp: (
+        _hazard_repo_monkeypatch(mod, mp) or {}
+    ),
 }
 
 

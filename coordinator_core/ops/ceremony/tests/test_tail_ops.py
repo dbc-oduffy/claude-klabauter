@@ -342,7 +342,12 @@ def test_fire_archive_sweeps_detached_spawns_expected_clis(tmp_path):
     was removed when fleet.archive_completed_plans was killed and rebuilt from
     scratch (PM ruling 2026-08-23). sweep-actioned-memos.py was removed the same day
     when fleet.archive_actioned_memos was killed outright (PM ruling, no replacement
-    op) -- only the shipped-handoffs sweep fires now."""
+    op). sweep-shipped-handoffs.py itself was removed 2026-08-25 (C1b, docs/plans/
+    2026-08-25-the-handoff-auto-archive-comes-back-capped.md -- the op it fired,
+    fleet.archive_shipped_handoffs, was SUBSUMED into fleet.archive_completed_handoffs)
+    -- C4 of the same plan re-earned the seam with sweep-terminal-handoffs.py, the
+    sole current member of _ARCHIVE_SWEEP_SCRIPTS; this test now pins that single
+    detached fire rather than the empty-roster interregnum."""
     worktree_root = tmp_path
     spawned: list[tuple] = []
 
@@ -353,29 +358,18 @@ def test_fire_archive_sweeps_detached_spawns_expected_clis(tmp_path):
     with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
         result = tail_ops.fire_archive_sweeps_detached(worktree_root)
 
+    repo_root_str = str(worktree_root)
+    expected_script = str(Path(worktree_root, "coordinator", "bin", "sweep-terminal-handoffs.py"))
     assert mock_spawn.call_count == 1
-    fired_scripts = {Path(script_path).name for _repo_root, script_path, _args in spawned}
-    assert fired_scripts == {
-        "sweep-shipped-handoffs.py",
-    }
-    assert "sweep-boot.py" not in fired_scripts
-
-    for repo_root, script_path, args in spawned:
-        assert repo_root == str(worktree_root)
-        assert args == (str(worktree_root),)
-        assert Path(script_path).parent == Path(worktree_root, "coordinator", "bin")
-
-    assert result["failed"] == []
-    assert len(result["acted"]) == 1
+    assert spawned == [(repo_root_str, expected_script, (repo_root_str,))]
+    assert result == {"acted": ["detached_fire:sweep-terminal-handoffs.py"], "skipped": [], "failed": []}
 
 
 def test_fire_archive_sweeps_detached_records_spawn_failure(tmp_path):
-    """A spawn_detached() False return lands in failed[], not raised. Only one
-    script remains in _ARCHIVE_SWEEP_SCRIPTS since fleet.archive_completed_plans
-    (2026-08-23 rebuild) and fleet.archive_actioned_memos (2026-08-23 kill) both
-    lost their detached fires here -- this can no longer exercise "one bad spawn
-    doesn't short-circuit the rest" with a second script; that shape returns
-    when a rebuilt op re-earns a call site."""
+    """A `spawn_detached` False return for the sole current
+    `_ARCHIVE_SWEEP_SCRIPTS` member (`sweep-terminal-handoffs.py`, C4) is
+    recorded into `failed[]`, not silently dropped -- mirrors the loop body's
+    unchanged spawn-failure handling."""
     worktree_root = tmp_path
 
     def _fake_spawn(repo_root, script_path, args):
@@ -385,9 +379,11 @@ def test_fire_archive_sweeps_detached_records_spawn_failure(tmp_path):
         result = tail_ops.fire_archive_sweeps_detached(worktree_root)
 
     assert mock_spawn.call_count == 1
-    assert len(result["acted"]) == 0
-    assert len(result["failed"]) == 1
-    assert "sweep-shipped-handoffs.py" in result["failed"][0]
+    assert result == {
+        "acted": [],
+        "skipped": [],
+        "failed": ["detached_fire:sweep-terminal-handoffs.py: spawn_detached returned False"],
+    }
 
 
 def test_unregistered_op_key_is_clean_failure(tmp_path):

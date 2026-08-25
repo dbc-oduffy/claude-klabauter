@@ -142,6 +142,29 @@ class TestBareSlugReplayConvergesOntoOnePath:
         assert lineage["adopted_mint_path"] is None
         assert Path(lineage["output_path"]).as_posix() != _mint_rel()
 
+    def test_a_symlink_escaping_state_handoffs_is_not_adopted(self, tmp_path):
+        """The containment guard, exercised rather than merely read. A mint
+        path that resolves OUTSIDE live `state/handoffs/` must decline: d1
+        writes `output_path`, so adopting an escape would author a baton
+        wherever the link pointed. Review: coordinator:code-reviewer
+        (ab5f5c7c) Finding 5."""
+        outside = _write_artifact(
+            tmp_path / "elsewhere" / "decoy.md",
+            [
+                "kind: spinoff",
+                "handoff_id: hnd-decoy-000000",
+                f"authoring_session: {_THIS_RUN_SESSION}",
+            ],
+        )
+        link = tmp_path / _mint_rel()
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this platform/account")
+
+        assert ba._adopt_prior_attempt_mint_path(_mint_rel(), tmp_path, "spinoff") is None
+
     def test_continued_prior_attempt_is_not_adopted(self, tmp_path):
         """A completed link in a longer chain is not a prior attempt's
         output."""

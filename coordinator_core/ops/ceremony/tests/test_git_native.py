@@ -132,9 +132,18 @@ _WRAPPER_INVOCATIONS = [
 #: mechanical property this module exists to enforce is covered for them by
 #: `test_composite_entrypoints_never_call_subprocess_run_directly` below,
 #: which is genuinely new coverage rather than a blanket exemption.
+#: `commit_authored_new_file` is `commit_authored_content`'s creation
+#: sibling and is excluded for the same reason -- not a thin single-call
+#: wrapper the (a) harness can express. Its own AC3-shaped property is
+#: STRONGER than the flag assertions, and is asserted in
+#: `test_commit_authored_new_file.py` rather than here: at most ONE git
+#: process for the whole entrypoint, counted at `subprocess.Popen` rather
+#: than at the `_git()` seam, plus a hook canary proving no hook of the
+#: destination repository fired on our behalf.
 _COMPOSITE_ENTRYPOINTS = {
     "commit_scoped",
     "commit_authored_content",
+    "commit_authored_new_file",
     "stage_from_patch",
     "stage_from_patch_cas_refusal",
 }

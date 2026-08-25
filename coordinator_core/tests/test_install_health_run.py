@@ -40,19 +40,25 @@ def _trust_opt_out(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     # main() unconditionally resolves coordinator_claude_klabauter_root() before
     # running any leg (see install_health_run.py's fail-loud contract) — pin
-    # it deterministically via the CLAUDE_KLABAUTER_ROOT env var (Rung 1 of the
-    # resolver's chain) rather than depend on this machine's real
+    # it deterministically via the COORDINATOR_ENGINE_ROOT env var (Rung 1 of
+    # the resolver's chain) rather than depend on this machine's real
     # machine-local registry having repos.claude_klabauter set. This is the
     # exact 3/13-on-the-PM's-machine exposure the 2026-07-22 kill-first memo
     # flagged: any test resolving claude-klabauter through the registry ladder is
     # environment-dependent by construction.
+    # The retired CLAUDE_KLABAUTER_ROOT is deleted rather than left alone: C14 closed the
+    # dual-read window, so a name inherited from an ancestor process no longer
+    # answers Rung 1 and instead makes engine_root emit its retired-name
+    # advisory to stderr, which the exact-stderr assertions below read as noise.
     # The residual glob-discovery directory (main()'s "hypothetical FUTURE
     # foreign drop-in" hook) resolves off coordinator_claude_klabauter_root() as
-    # <claude_klabauter_root>/coordinator/bin/install-health/ — pin CLAUDE_KLABAUTER_ROOT to the
-    # SAME `tmp_path / "root"` that `_mk_root()` below builds under, so a
+    # <claude_klabauter_root>/coordinator/bin/install-health/ — pin
+    # COORDINATOR_ENGINE_ROOT to the SAME `tmp_path / "root"` that
+    # `_mk_root()` below builds under, so a
     # drop-in written to `root / "coordinator" / "bin" / "install-health"`
     # is the directory main() actually globs, not an orphaned sibling tree.
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(tmp_path / "root"))
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(tmp_path / "root"))
     # seed-skill-overrides is a real `_NATIVE_LEGS` entry that runs
     # unconditionally in main() — with no real
     # <claude_klabauter_root>/coordinator/bin/seed-skill-overrides.py helper under the

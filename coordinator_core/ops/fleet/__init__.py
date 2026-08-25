@@ -6,7 +6,7 @@ under a confirm→act (dry_run:true / dry_run:false) wire contract.
 
 Ops registered by handler modules (imported by coordinator_core/ops/__init__.py):
     fleet.archive_completed_plans    — archive_plans.py
-    fleet.archive_completed_handoffs — archive_handoffs.py
+    fleet.archive_completed_handoffs — archive_terminal_handoffs.py
     fleet.prune_closed_bugs          — prune_bugs.py
 
 Shared substrate: _common.py (param validation, envelope builders, D3 check,

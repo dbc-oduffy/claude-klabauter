@@ -166,13 +166,8 @@ def test_check_stale_detailed_silent_for_never_stamped_class(tmp_path: Path) -> 
     assert hl.check_stale_detailed(repo_root) == []
 
 
-def test_remedy_commands_archive_sweeps_names_all_sweep_clis() -> None:
-    commands = hl.REMEDY_COMMANDS[hl.ARCHIVE_SWEEPS]
-    assert any("sweep-shipped-handoffs.py" in cmd for cmd in commands)
-
-
 def test_remedy_commands_classes_with_no_cli_are_empty() -> None:
-    for cls in (hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT):
+    for cls in (hl.ARCHIVE_SWEEPS, hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT):
         assert hl.REMEDY_COMMANDS[cls] == ()
 
 

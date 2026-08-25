@@ -5,6 +5,7 @@ docstring for what it dispatches and why.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,16 @@ def _base_manifest(**overrides) -> dict:
     }
     manifest.update(overrides)
     return manifest
+
+
+#: The manifest leg `coordinator_install_entry` will actually read on THIS host --
+#: production picks it as `"windows" if os.name == "nt" else "posix"`. Every fixture
+#: below declares this key rather than a hardcoded "posix": a posix-only fixture
+#: makes each of these cases green on POSIX and red on Windows, where the entry
+#: point correctly refuses a platform with no declared installer. The real
+#: `docs/install/agent-install-manifest.json` declares both legs, so a fixture that
+#: declares one was never modelling the shipped manifest either.
+_PLATFORM_KEY = "windows" if os.name == "nt" else "posix"
 
 
 def _stub_claude_klabauter_root(monkeypatch, repo_root: Path) -> None:
@@ -71,13 +82,13 @@ def test_help_after_double_dash_is_forwarded_not_intercepted(tmp_path, monkeypat
     script.write_text("", encoding="utf-8")
     _write_manifest(
         repo_root,
-        _base_manifest(standalone_setup_script={"posix": "scripts/setup.py"}),
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: "scripts/setup.py"}),
     )
     _stub_claude_klabauter_root(monkeypatch, repo_root)
 
     captured_cmd = {}
 
-    def _fake_call(cmd):
+    def _fake_call(cmd, **kwargs):
         captured_cmd["cmd"] = cmd
         return 0
 
@@ -108,7 +119,7 @@ def test_declared_installer_raises_when_platform_leg_is_non_string(tmp_path):
     repo_root = tmp_path / "repo"
     _write_manifest(
         repo_root,
-        _base_manifest(standalone_setup_script={"posix": {"nested": "object"}}),
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: {"nested": "object"}}),
     )
 
     with pytest.raises(InstallEntryError, match="not a path string"):
@@ -119,7 +130,7 @@ def test_declared_installer_raises_when_declared_path_does_not_resolve(tmp_path)
     repo_root = tmp_path / "repo"
     _write_manifest(
         repo_root,
-        _base_manifest(standalone_setup_script={"posix": "scripts/gone.py"}),
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: "scripts/gone.py"}),
     )
 
     with pytest.raises(InstallEntryError, match="does not resolve"):
@@ -135,7 +146,7 @@ def test_declared_installer_resolves_a_present_script(tmp_path):
         repo_root,
         _base_manifest(
             standalone_setup_script={
-                "posix": "scripts/setup.py",
+                _PLATFORM_KEY: "scripts/setup.py",
                 "entry_point_contract": {"check_only_flag": "--check"},
             }
         ),
@@ -161,7 +172,7 @@ def test_check_only_uses_declared_flag_spelling(tmp_path, monkeypatch):
         repo_root,
         _base_manifest(
             standalone_setup_script={
-                "posix": "scripts/setup.py",
+                _PLATFORM_KEY: "scripts/setup.py",
                 "entry_point_contract": {"check_only_flag": "--probe-only"},
             }
         ),
@@ -170,7 +181,7 @@ def test_check_only_uses_declared_flag_spelling(tmp_path, monkeypatch):
 
     captured_cmd = {}
 
-    def _fake_call(cmd):
+    def _fake_call(cmd, **kwargs):
         captured_cmd["cmd"] = cmd
         return 0
 
@@ -193,11 +204,11 @@ def test_check_only_refuses_to_guess_when_no_flag_declared(tmp_path, monkeypatch
     script.write_text("", encoding="utf-8")
     _write_manifest(
         repo_root,
-        _base_manifest(standalone_setup_script={"posix": "scripts/setup.py"}),
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: "scripts/setup.py"}),
     )
     _stub_claude_klabauter_root(monkeypatch, repo_root)
 
-    def _boom(cmd):
+    def _boom(cmd, **kwargs):
         raise AssertionError("subprocess.call must not be reached when the flag is undeclared")
 
     monkeypatch.setattr(cie.subprocess, "call", _boom)
@@ -223,10 +234,13 @@ def test_dispatched_exit_code_forwarded_verbatim(tmp_path, monkeypatch, exit_cod
     script.write_text("", encoding="utf-8")
     _write_manifest(
         repo_root,
-        _base_manifest(standalone_setup_script={"posix": "scripts/setup.py"}),
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: "scripts/setup.py"}),
     )
     _stub_claude_klabauter_root(monkeypatch, repo_root)
-    monkeypatch.setattr(cie.subprocess, "call", lambda cmd: exit_code)
+    # `**kwargs`, not a bare `cmd`: on Windows the entry point passes
+    # `creationflags` (the no-console guard), so a POSIX-shaped one-arg stub
+    # raises TypeError there and never exercises the forwarding this asserts.
+    monkeypatch.setattr(cie.subprocess, "call", lambda cmd, **kwargs: exit_code)
 
     rc = main([])
 

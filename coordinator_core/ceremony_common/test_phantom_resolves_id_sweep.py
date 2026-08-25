@@ -78,6 +78,8 @@ _PROVIDERS: dict[str, object] = {
     "merge_assemble": lambda monkeypatch, tmp_path: providers.sweep_merge_assemble(),
     "consolidate_assemble": lambda monkeypatch, tmp_path: providers.sweep_consolidate_assemble(tmp_path),
     "backlog_grind_assemble": lambda monkeypatch, tmp_path: providers.sweep_backlog_grind_assemble(monkeypatch),
+    "roadmap_planning_assemble": lambda monkeypatch, tmp_path: providers.sweep_roadmap_planning_assemble(),
+    "sprint_planning_assemble": lambda monkeypatch, tmp_path: providers.sweep_sprint_planning_assemble(),
     "review_assemble": lambda monkeypatch, tmp_path: providers.sweep_review_assemble(monkeypatch, tmp_path),
     "pickup_assemble": lambda monkeypatch, tmp_path: providers.sweep_pickup_assemble(monkeypatch, tmp_path),
 }

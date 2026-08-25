@@ -212,3 +212,229 @@ def to_json(summaries: List[Dict[str, object]],
         },
         indent=2,
     )
+
+
+# --------------------------------------------------------------------------
+# THE DRIVER. Everything above this line is the library; nothing above it
+# runs the three arms and produces a figure. Without this section the repo
+# owns a harness but not a measurement -- the manifest's hand-taken rows are
+# not reproducible by anything committed, which is the gap this driver
+# closes. Three arms, per the 2026-08-25 reconciliation of AC1 (the
+# dispatch brief for this chunk): today's cold chain, HTTP warm hit,
+# control -- not the four-arm list AC1 originally named, which predates the
+# HTTP transport C2/C3 landed and the H4 wiring-gap fix.
+# --------------------------------------------------------------------------
+
+
+def _bind_test_http_listener(engine_root, *, dispatch=None):
+    """Binds `supervisor._make_handler` to a real loopback socket, exactly
+    the pattern `warm/tests/test_supervisor_hook_serves_real_guard.py ::
+    _bind_handler` uses -- this is the harness that produced the manifest's
+    `c4_supervised_listener` rows by hand; reused here verbatim so the
+    driver reproduces the same shape rather than a different one.
+
+    `dispatch` defaults to an allow stub (the real guard op, `GUARD_OP_NAME`,
+    is not registered yet per `supervisor.py`'s own module comment) -- this
+    arm measures the TRANSPORT, not guard evaluation cost, matching the
+    manifest's own `not_yet_measured` note.
+    """
+    from http.server import ThreadingHTTPServer
+    import threading
+
+    from coordinator_core.warm import skew, supervisor
+
+    skew.write_engine_stamp(engine_root, "sha-hook-seam-bench")
+    version_state = skew.ServerVersionState(engine_root)
+
+    def _allow_dispatch(msg, *, session_id=None):
+        return {
+            "jsonrpc": "2.0",
+            "id": msg.get("id"),
+            "result": {"permissionDecision": "allow"},
+        }
+
+    ctx = supervisor._ServerContext(
+        httpd=None,
+        engine_root=engine_root,
+        version_state=version_state,
+        dispatch=dispatch or _allow_dispatch,
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), supervisor._make_handler(ctx))
+    ctx.httpd = httpd
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, port
+
+
+def _post_hook(port: int, event: dict, timeout: float = 5.0) -> None:
+    import urllib.request
+
+    from coordinator_core.warm import supervisor
+
+    body = json.dumps(event).encode("utf-8")
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d%s" % (port, supervisor.HOOK_PATH),
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read()
+
+
+def measure_p_listener_up(n: int = 10) -> Dict[str, object]:
+    """`p(listener up)` against THIS repo's own engine root, with its `n`.
+
+    Per the 2026-08-25 reconciliation: a listener that is usually down makes
+    a fast round trip irrelevant, so this is reported alongside the per-fire
+    cost, never omitted. On this clone the answer is structurally 0/n --
+    `current_engine_clone()` resolves to this unstamped dev tree, and
+    `ensure_listener`'s `is_engine_root` gate refuses it by design (never
+    autostarts a listener against a dev checkout). That is correct
+    behaviour here, not a bug this function works around; the sampled
+    number this describes exists only in a stamped publish clone, another
+    repo's surface -- see `budget-manifest.json`'s
+    `_hook_seam_http_transport.c4_supervised_listener.p_listener_up`.
+    """
+    from coordinator_core.warm.supervisor import ensure_listener
+
+    hits = 0
+    for _ in range(n):
+        try:
+            url = ensure_listener()
+        except Exception:  # noqa: BLE001 -- a failed probe counts as "not up", never a crash
+            url = None
+        if url:
+            hits += 1
+    return {
+        "n": n,
+        "p_listener_up": (hits / n) if n else None,
+        "shape": "ensure_listener() against this repo's own (unstamped dev) engine root",
+        "note": (
+            "structurally 0/n on this clone by design (is_engine_root gate) -- "
+            "not a sample of production listener uptime; see docstring"
+        ),
+    }
+
+
+def run_hook_fire_breakdown(n: int = 25, k_process: int = 20, warmup: int = 3,
+                             tmp_engine_root=None) -> Dict[str, object]:
+    """Runs the three reconciled arms -- today's cold chain, HTTP warm hit,
+    control -- interleaved round-robin, and returns both process time and
+    wall, side by side, with every arm's invocation shape.
+
+    `tmp_engine_root` is a caller-supplied directory to stamp as the test
+    listener's engine root (a pytest `tmp_path`, typically); a fresh
+    `tempfile.TemporaryDirectory` is used if omitted, e.g. for ad hoc
+    `python -m coordinator_core.benchmarks.hook_seam_bench` runs.
+    """
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    def _run(root):
+        httpd, port = _bind_test_http_listener(Path(root))
+        try:
+            def _cold_chain_call() -> None:
+                subprocess.run(
+                    [sys.executable, "-c", "import coordinator_core.ipc"],
+                    check=False, capture_output=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+
+            def _http_warm_call() -> None:
+                _post_hook(port, {"hook_event_name": "PreToolUse", "tool_name": "Bash"})
+
+            def _control_call() -> None:
+                pass
+
+            arms = [
+                Arm(
+                    "cold_chain_today",
+                    "python3 -c \"import coordinator_core.ipc\" -- the child process every "
+                    "PreToolUse hook fire spawns on this box today, no warm transport",
+                    _cold_chain_call,
+                ),
+                Arm(
+                    "http_warm_hit",
+                    "in-process POST http://127.0.0.1:%d/hook to a resident "
+                    "ThreadingHTTPServer bound around supervisor._make_handler "
+                    "(real dispatch path, allow-stub op)" % port,
+                    _http_warm_call,
+                ),
+                Arm(
+                    "control_floor",
+                    "no-op call -- measures this interleave harness's own loop "
+                    "overhead, not a real transport",
+                    _control_call,
+                ),
+            ]
+
+            wall_summaries = run_interleaved(arms, n=n, warmup=warmup)
+
+            process_rows = [
+                spawn_arm_process_time(
+                    "cold_chain_today",
+                    arms[0].shape,
+                    [sys.executable, "-c", "import coordinator_core.ipc"],
+                    k=k_process,
+                ),
+                in_process_arm("http_warm_hit", arms[1].shape),
+                in_process_arm("control_floor", arms[2].shape),
+            ]
+
+            return wall_summaries, process_rows
+        finally:
+            httpd.shutdown()
+
+    if tmp_engine_root is not None:
+        wall_summaries, process_rows = _run(tmp_engine_root)
+    else:
+        with tempfile.TemporaryDirectory(prefix="hook-seam-bench-") as td:
+            wall_summaries, process_rows = _run(td)
+
+    return {
+        "wall_summaries": wall_summaries,
+        "process_rows": process_rows,
+        "p_listener_up": measure_p_listener_up(),
+    }
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """CLI entry point: `python -m coordinator_core.benchmarks.hook_seam_bench`.
+    Prints the wall table, the process-time rows, and `p(listener up)` --
+    this is what reproduces the four-arm-turned-three-arm breakdown AC1
+    asks for, rather than the manifest's hand-taken rows."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--n", type=int, default=25)
+    parser.add_argument("--k-process", type=int, default=20)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    result = run_hook_fire_breakdown(n=args.n, k_process=args.k_process)
+
+    if args.json:
+        print(to_json(result["wall_summaries"], result["process_rows"]))
+        print(json.dumps({"p_listener_up": result["p_listener_up"]}, indent=2))
+        return 0
+
+    print(format_report(result["wall_summaries"]))
+    print()
+    print("process time (process_time_ms, procs_per_call):")
+    for row in result["process_rows"]:
+        print("  %-20s %10.3f ms  procs=%s" % (
+            row["arm"], row["process_time_ms"], row["procs_per_call"]))
+    print()
+    p = result["p_listener_up"]
+    print("p(listener up) = %s (n=%d) -- %s" % (p["p_listener_up"], p["n"], p["note"]))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+
+    _sys.exit(main())

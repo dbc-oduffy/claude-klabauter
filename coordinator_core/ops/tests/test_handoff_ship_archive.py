@@ -1,19 +1,19 @@
 """
 coordinator_core.ops.tests.test_handoff_ship_archive
 
-Regression coverage for `handoff.ship_and_archive`'s graceful-partial branch:
-when no `sha` is supplied (or none is yet resolvable), Step 2 (`_ship`) stamps
-`deployment_state: shipped` and leaves it UNCOMMITTED, and Step 3 (the fleet
-archive act path) skips archival because `shipped_in` is still absent. That
-branch's docstring, pre-`4541069c3` (2026-08-13), said the stamp "must first
-be COMMITTED before boot_sweep's batch path can act on it" — written when the
-outcome of a `restage_src=False` archival attempt against that uncommitted
-stamp was a soft skip. Post-`4541069c3`, `archive_and_commit`'s disk/HEAD
-drift guard turns that attempt into a HARD REFUSAL instead. This file drives
-the graceful-partial branch to that exact uncommitted state, then attempts
-the archival a later batch pass would attempt (`restage_src=False`, the
-`fleet.archive_shipped_handoffs` standalone-op/`session.boot_sweep` shape),
-and pins the refusal.
+Formerly regression coverage for `handoff.ship_and_archive`'s graceful-partial
+branch (no `sha` supplied → Step 2 stamps `deployment_state: shipped`
+uncommitted, Step 3 attempts a `restage_src=False` archival and hits
+`archive_and_commit`'s disk/HEAD drift HARD REFUSAL, post-`4541069c3`,
+2026-08-13). That scenario is unreachable since 2026-08-25 (C1b, docs/plans/
+2026-08-25-the-handoff-auto-archive-comes-back-capped.md): Step 3's archive
+leg (`ops/fleet/archive_shipped_handoffs.py`) was deleted as SUBSUMED into
+`fleet.archive_completed_handoffs`, and `handoff_ship_archive.py` was not
+migrated onto the successor (the successor drops a live-claim-gate opt-out
+this op depends on — a safety decision, not a repoint) — the op now fails
+loudly at invocation instead. This file now pins THAT loud-failure contract
+instead; see the single test's own docstring for the coverage this replaces
+and where the underlying disk/HEAD-drift guard is still exercised directly.
 
 Spec backlink: docs/plans/2026-08-14-placeholder-summaries-and-the-drift-guards-uncounted-callers.md § C2
 
@@ -45,12 +45,10 @@ from coordinator_core.win_portability import no_console_creationflags
 import coordinator_core.ops.handoff_ship_archive  # noqa: F401 — fires @register_op
 import coordinator_core.ops.handoff_stamp  # noqa: F401 — fires @register_op
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op
-import coordinator_core.ops.fleet.archive_shipped_handoffs as _archive_shipped_mod
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_ship_archive import _handler as _ship_archive_handler
-from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
 
 # Declared, not excused: this file spawns a real process (git) because the
 # property under test is git's own disk/HEAD drift behaviour, which no
@@ -159,60 +157,47 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_ship_and_archive_graceful_partial_then_batch_pass_hard_refuses(repo):
-    """AC4/AC5: drive `handoff.ship_and_archive`'s graceful-partial branch (no
-    sha supplied) to its uncommitted `deployment_state: shipped` state, then
-    attempt archival the way a later batch pass would (`restage_src=False`,
-    same shape as the standalone `fleet.archive_shipped_handoffs` op /
-    `session.boot_sweep`'s batch sweep). Post-4541069c3 this is a HARD
-    REFUSAL reading the disk/HEAD drift message, not the soft
-    "must be committed first" skip the pre-guard docstring described.
+def test_ship_and_archive_is_inoperative_since_c1b_subsumption(repo):
+    """`handoff.ship_and_archive`'s archive leg was `ops/fleet/archive_shipped_
+    handoffs.py`, deleted 2026-08-25 (C1b, docs/plans/2026-08-25-the-handoff-
+    auto-archive-comes-back-capped.md — "the sibling op is subsumed") without
+    migrating this caller onto `fleet.archive_completed_handoffs`: the
+    successor drops the live-claim-gate opt-out this op depends on, so the
+    migration was left as an open safety decision, not a repoint
+    (`handoff_ship_archive.py`'s own guarded-import comment). The op now
+    fails LOUDLY at invocation with exit_code:1 and a named reason, rather
+    than silently reaching the graceful-partial/disk-HEAD-drift-refusal
+    scenario this test used to pin against the deleted module.
+
+    This REPLACES the former
+    `test_ship_and_archive_graceful_partial_then_batch_pass_hard_refuses`
+    (AC4/AC5 coverage for the graceful-partial-then-batch-archive sequence):
+    that sequence is unreachable now that step 1 (`handoff.ship_and_archive`
+    itself) hard-fails before ever reaching the archive leg. The underlying
+    disk/HEAD-drift refusal it exercised is still live in
+    `archive_terminal_handoffs.py` (see that module's own docstring, "landing
+    on archive_and_commit's own disk/HEAD drift refusal at act time") and is
+    exercised directly, without the ship_and_archive front door, by
+    `coordinator_core/ops/fleet/tests/test_archive_and_commit_disk_head_
+    drift.py` — no coverage of the drift guard itself was lost, only this
+    op's (currently inoperative) composite front door onto it.
     """
     name = "2026-08-14-graceful-partial.md"
     repo.seed_handoff(name, deployment_state="ready_to_fire")
     rel = f"state/handoffs/{name}"
 
-    # --- Step: graceful-partial ship_and_archive call, no sha ---
     result = _run(_ship_archive_handler({"handoff_path": rel}, repo.common_dir))
 
-    assert result["exit_code"] == 0, result
-    assert result["shipped"] is True
-    assert result["archived"] is False
-    assert result["archive_skip_reason"] is not None
-    assert "shipped_in" in result["archive_skip_reason"], result
+    assert result["exit_code"] == 1, result
+    assert "inoperative" in result["error"], result
+    assert "archive_shipped_handoffs" in result["error"], result
 
+    # The op stamps deployment_state:shipped (Step 2) BEFORE discovering its
+    # archive leg (Step 3) is inoperative -- it fails loudly, but not before
+    # that first mutation. Pinning what actually happens, not a stronger
+    # all-or-nothing claim the current implementation does not make.
     fm = repo.fm(name)
     assert read_fm_field(fm, "deployment_state") == "shipped"
-    assert repo.is_dirty(rel), (
-        "the graceful-partial branch must leave deployment_state:shipped "
-        "UNCOMMITTED on disk — that is the exact state the drift guard reacts to"
-    )
-
-    # --- Simulate a later stamp of shipped_in (still uncommitted — mirrors a
-    # subsequent handoff.stamp call landing before any commit happens) ---
-    stamp_res = _run(_stamp_handler(
-        {"handoff_path": rel, "sha": repo.head_sha, "kind": "ship-commit"},
-        repo.common_dir,
-    ))
-    assert stamp_res["exit_code"] == 0, stamp_res
-    assert repo.is_dirty(rel), "shipped_in stamp must also land uncommitted"
-
-    # --- A later BATCH pass (restage_src=False — the standalone op / boot_sweep
-    # shape, never the holder-initiated composite) attempts to archive ---
-    act = _run(_archive_shipped_mod._handle_act(
-        "already-terminal", repo.root, [rel], restage_src=False, common_dir=repo.common_dir,
-    ))
-
-    acted_ids = [item.get("id") for item in act.get("acted", [])]
-    failed_ids = [item.get("id") for item in act.get("failed", [])]
-    assert rel not in acted_ids, (
-        "a restage_src=False batch pass must NOT succeed in archiving the "
-        f"op-authored uncommitted stamp; acted={act.get('acted')}"
-    )
-    assert rel in failed_ids, act
-    failed_item = next(item for item in act["failed"] if item["id"] == rel)
-    assert "disk/HEAD drift" in failed_item["reason"], failed_item
-    assert "refusing move" in failed_item["reason"], failed_item
 
     # The handoff must still be sitting, un-archived, in state/handoffs/.
     assert (repo.root / "state" / "handoffs" / name).is_file()

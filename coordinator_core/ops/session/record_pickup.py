@@ -94,7 +94,8 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.ops.fleet._common import _sessions_dir
+from coordinator_core.ops.ceremony import tail_ops
+from coordinator_core.ops.fleet._common import _sessions_dir, main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
@@ -486,5 +487,24 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error_result(str(exc))
     except OSError as exc:
         return _error_result(f"session-shape.json write failed for sid={sid}: {exc}")
+
+    # C4 (docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md
+    # § C4): fire the same detached archive-sweep CLI seam
+    # (sweep-terminal-handoffs.py, cap=150 owned by that CLI itself, never
+    # passed here) on the pickup path -- `fire_archive_sweeps_detached` is a
+    # synchronous, non-blocking spawn (`detached_spawn.spawn_detached`,
+    # effectively 0ms) recording only the SPAWN attempt outcome. A pickup
+    # write already landed above by this point; this fire must never fail,
+    # block, or extend `session.record_pickup`'s own result -- a spawn
+    # failure is logged and dropped, never surfaced into the pickup wire
+    # envelope (which has no field for it and is not this chunk's contract
+    # to widen).
+    try:
+        await asyncio.to_thread(tail_ops.fire_archive_sweeps_detached, main_worktree_root(common_dir))
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never fails the pickup write
+        _LOG.warning(
+            "session.record_pickup: fire_archive_sweeps_detached raised %s: %s",
+            type(exc).__name__, exc,
+        )
 
     return result

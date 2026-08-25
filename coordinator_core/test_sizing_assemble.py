@@ -986,19 +986,24 @@ def test_sizing_object_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.14.0 since the four-field widen (cross-repo memo 2026-08-13-doe-claude-
-    # em-sizing-object-schema-widened-1-14-0.md, DoE-side commit 1fabbc9c3)
-    # added `intent_source`, `precedent`, `boundary_in_notch`, and `probe` as
-    # optional top-level properties, and widened `scout_evidence.items` to
-    # accept an object. Bump class moves to `nested-field-additive`: `probe` is
-    # a new optional nested object, the strictly more-restrictive member of the
-    # bundle under this schema's own house rule.
+    # 1.18.0. Re-vendored 2026-08-25 from DoE `42cb0db61` byte-identically;
+    # `declined_note` is the sole structural delta, mirroring `superseded_note`
+    # so a `declined` record's mandated decision-record backlink has a joinable
+    # home instead of a YAML comment.
     #
-    # `boundary_in_notch` accepts the string enum `yes|no` OR a boolean: a
-    # sizing-object is YAML, and under YAML 1.1 an unquoted `no` parses as
-    # boolean `false`. `sizing_assemble` itself takes the value as a CLI string
-    # and never writes state/sizings/*.yaml, so the engine has no round-trip
-    # exposure — the widened type is what protects the hand-authored record.
+    # THIS PIN HAD SILENTLY DRIFTED THREE MINORS, and that is the finding worth
+    # keeping. It read 1.14.0 while the vendored copy was already 1.17.0
+    # (`397d0dd32` adopted `peer_notes` at 1.16.0 and optional `name` at 1.17.0),
+    # so this assertion was ALREADY RED before the 1.18.0 re-vendor — the number
+    # moved, the redness did not start here. A pin naming a version rather than
+    # deriving it goes stale the moment someone re-vendors without reading this
+    # file, and nothing else in the tier says so.
+    #
+    # NOT converted to `== json.load(doe_source)["x-schema-version"]`, which
+    # would never go stale: that makes this test unable to fail on an unreviewed
+    # re-vendor, which is the thing it exists to catch. The staleness is the
+    # cost of the check, not a defect in it. Move the number deliberately when
+    # you re-vendor, and say what the bump added.
     #
     # CORRECTION to the note this replaces, which said to hold a bump because
     # an unequal version otherwise goes silent: it does not. DoE's
@@ -1010,7 +1015,7 @@ def test_sizing_object_schema_version_and_bump_class():
     # one quiet — and it reads our COMMITTED HEAD, so their red clears when we
     # commit, not when we write. Do not reintroduce the hold-for-silence
     # reasoning.
-    assert schema["x-schema-version"] == "1.14.0"
+    assert schema["x-schema-version"] == "1.18.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

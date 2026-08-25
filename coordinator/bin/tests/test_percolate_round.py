@@ -31,6 +31,8 @@ from typing import List, Tuple
 
 import pytest
 
+from coordinator_core.ops.ceremony import commit_pipeline
+
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
@@ -296,6 +298,56 @@ def _install_manifest_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
         return _mod._RoundManifest(round_id="test", added_or_updated=added, removed=removed)
 
     monkeypatch.setattr(_mod, "_read_fresh_round_manifest", _fake_read_fresh_manifest)
+
+
+def _default_commit_pipeline_result(**overrides) -> commit_pipeline.PipelineResult:
+    """A landed, clean commit -- the shape most callers of § `_install_
+    commit_pipeline_stub` want when they are not exercising the commit leg's
+    own failure/decline modes."""
+    fields = dict(
+        stage=commit_pipeline.StageOutcome(exit_code=0),
+        deletion_gate=None,
+        dirty_gate=None,
+        carry_gate=None,
+        op_scope_gate=None,
+        commit=None,
+        push=None,
+        committed_sha="deadbeef1234",
+        pushed=None,
+        commit_failed=False,
+        integrity_breach=False,
+    )
+    fields.update(overrides)
+    return commit_pipeline.PipelineResult(**fields)
+
+
+def _install_commit_pipeline_stub(monkeypatch, *, result=None) -> list:
+    """Chunk C6 (docs/plans/2026-08-25-the-dispatchable-committer-comes-back-
+    as-an-envelope.md): the commit leg is now an in-process call to
+    `commit_pipeline.run_commit_pipeline`, not a `scoped-git-commit`
+    subprocess spawn -- so a test driving the commit leg's own outcome
+    (failure, declined paths, ...) patches the function directly here rather
+    than adding another argv-shape branch to `_SubprocessSpy`.
+
+    `_cmd_round_default` resolves `commit_pipeline` via a lazy `from
+    coordinator_core.ops.ceremony import commit_pipeline` at call time, but
+    that binds the SAME module object this file imports at collection time
+    -- patching `run_commit_pipeline` on it here is visible to that later
+    call regardless of import order.
+
+    Returns the list of (args, kwargs) tuples the fake was called with --
+    `assert calls == []` proves the commit leg was never reached at all
+    (the stronger, more direct claim than inferring it from subprocess.run
+    call absence, now that commit no longer rides that boundary)."""
+    calls: list = []
+    fixed_result = result if result is not None else _default_commit_pipeline_result()
+
+    def _fake_run_commit_pipeline(*args, **kwargs):
+        calls.append((args, kwargs))
+        return fixed_result
+
+    monkeypatch.setattr(commit_pipeline, "run_commit_pipeline", _fake_run_commit_pipeline)
+    return calls
 
 
 def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_fires=False, yes=True,
@@ -687,13 +739,13 @@ def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monke
     ever started reaching the commit step, commit leg dead or not."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
 
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, gate_fires=True, yes=False)
 
     assert rc == _mod._EXIT_OK
     assert "Publish cancelled." in out
     assert "— commit (" not in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
     assert commit_calls == []
     assert push_calls == []
@@ -771,6 +823,7 @@ def test_gate_fires_non_tty_without_token_named_refusal_no_eoferror(tmp_path, mo
         raise EOFError("EOF when reading a line")
     monkeypatch.setattr("builtins.input", _raise_eof)
 
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
     rc, out, spy, dest = _run_round(
         tmp_path, monkeypatch, gate_fires=True, yes=False, invocation_authorized=False,
         stdin_isatty=False,
@@ -782,7 +835,6 @@ def test_gate_fires_non_tty_without_token_named_refusal_no_eoferror(tmp_path, mo
     assert "Step 3 gate fired: 1 medium hit(s)" in out  # verdict-so-far still printed
     assert "— commit (" not in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
     assert commit_calls == []
     assert push_calls == []
@@ -817,6 +869,7 @@ def test_high_tier_scan_hit_aborts_before_step3(tmp_path, monkeypatch, capsys):
     this is the HIGH-tier abort specifically, not the dead commit leg: the
     named HIGH-tier stderr message, and that the round never even reached
     the commit banner Step 2c would have to clear first."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, scan_returncode=2)
 
     assert rc == _mod._EXIT_FAIL
@@ -824,7 +877,6 @@ def test_high_tier_scan_hit_aborts_before_step3(tmp_path, monkeypatch, capsys):
     assert "HIGH-tier content leak detected" in err
     assert "— commit (" not in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
     assert commit_calls == []
     assert push_calls == []
@@ -1150,39 +1202,27 @@ def test_fully_failed_real_run_keeps_existing_exit_code(tmp_path, monkeypatch):
 
 
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
-    commit_stdout = "not-json-and-nonzero-exit"
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    percolate_root = tmp_path / "percolate-root"
-    (percolate_root / "setup").mkdir(parents=True)
-
-    spy = _SubprocessSpy(
-        dryrun_stdout=_dryrun_stdout(),
-        real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
-        parse2_stdout=_parse2_stdout(),
-        commit_stdout=commit_stdout,
+    """A `commit_failed` pipeline result -- a gate failure or the `git
+    commit` step itself returning non-zero, `run_commit_pipeline`'s own
+    generic failure signal -- surfaces as `_EXIT_FAIL`, whatever the
+    specific diagnostics/reason text names."""
+    fake_result = _default_commit_pipeline_result(
+        stage=commit_pipeline.StageOutcome(exit_code=1, failed=["commit exploded"]),
+        committed_sha=None,
+        commit_failed=True,
+        diagnostics=["commit exploded"],
+        reason="commit_failed",
     )
-    _install_manifest_stub(monkeypatch, spy)
+    calls = _install_commit_pipeline_stub(monkeypatch, result=fake_result)
 
-    def _commit_fail(cmd, **kwargs):
-        joined = " ".join(str(c) for c in cmd)
-        if str(_mod._SCOPED_GIT_COMMIT) in joined:
-            return _completed(1, commit_stdout, "commit exploded")
-        return spy(cmd, **kwargs)
-
-    monkeypatch.setattr(_mod.subprocess, "run", _commit_fail)
-    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
-    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
-    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
-
-    parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
-    rc = _mod._cmd_round(args)
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_FAIL
+    assert len(calls) == 1
+    # A `push_mode` regression here is silent and external-facing (this
+    # round owns its own commit -> CI-smoke -> push sequence, DR-301, and
+    # must never let `run_commit_pipeline` push on its own behalf).
+    assert calls[0][1].get("push_mode") is commit_pipeline.PUSH_MODE_NEVER
 
 
 # ---------------------------------------------------------------------------
@@ -1544,28 +1584,55 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
 
 
 def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
-    """Non-empty `declined_paths` is the second refusing condition
-    `_round_refusal_reason` names — `_cmd_round` returns FAIL for it at the
-    commit branch, before CI smoke or the predicate's own call site are ever
-    reached."""
-    commit_stdout = json.dumps(
-        {
-            "status": "partial",
-            "committed": True,
-            "sha": "abc123def456",
-            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
-        }
+    """Non-empty *material* `declined_paths` is the second refusing
+    condition `_round_refusal_reason` names — `_cmd_round` returns FAIL for
+    it at the commit branch, before CI smoke or the predicate's own call
+    site are ever reached.
+
+    Exercises `_partition_gitignored_declines`'s material-vs-gitignored
+    split in the same call: `stage.missing_caller_paths` names a genuinely
+    absent path (material -- refuses the round) and `stage.
+    ignored_caller_paths` names a separate, `.gitignore`-excluded one
+    (must NOT itself refuse). `_declined_paths_from_stage` derives both
+    entries' `reason` text itself — this fabricates only the stage's raw
+    path buckets, never a reason string, so the assertion below reuses the
+    REAL reason `_declined_paths_from_stage` produces rather than an
+    invented one `_partition_gitignored_declines` would never actually see."""
+    fake_result = _default_commit_pipeline_result(
+        stage=commit_pipeline.StageOutcome(
+            exit_code=2,
+            missing_caller_paths=["some/declined.md"],
+            ignored_caller_paths=["cache/ignored.pyc"],
+        ),
+        committed_sha="abc123def456",
     )
-    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, commit_stdout=commit_stdout)
+    calls = _install_commit_pipeline_stub(monkeypatch, result=fake_result)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_FAIL
+    assert len(calls) == 1
+    assert calls[0][1].get("push_mode") is commit_pipeline.PUSH_MODE_NEVER
 
+    material_reason = (
+        "not found in the worktree or index, and not attributable "
+        "to a deletion (never existed, or already removed by "
+        "something other than a tracked deletion)"
+    )
     assert _mod._round_refusal_reason(
         real_returncode=0,
-        declined_paths=[{"path": "some/declined.md", "reason": "outside allowlist"}],
+        declined_paths=[{"path": "some/declined.md", "reason": material_reason}],
         has_review_warnings=False,
         ci_exit=None,
     ) == "1 path(s) were declined during commit"
+    # A gitignored-only decline batch is partitioned away inside
+    # `_round_refusal_reason` itself and must NOT refuse on its own.
+    assert _mod._round_refusal_reason(
+        real_returncode=0,
+        declined_paths=[{"path": "cache/ignored.pyc", "reason": "excluded by .gitignore"}],
+        has_review_warnings=False,
+        ci_exit=None,
+    ) is None
 
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
     assert ci_calls == []
@@ -2068,10 +2135,18 @@ _DECLARED_LEG_BOUNDS = {
     "_GIT_PUSH_TIMEOUT_SECS",
     "_REGISTRY_CLI_TIMEOUT_SECS",
     "_ROUND_SCAN_LEG_TIMEOUT_SECS",
-    "_COMMIT_LEG_TIMEOUT_SECS",
     "_PUBLISH_LEG_TIMEOUT_SECS",
     "_EXTERNAL_CI_TIMEOUT_SECS",
 }
+#: `_COMMIT_LEG_TIMEOUT_SECS` (was 300.0) is retired, not merely renamed:
+#: chunk C6 (docs/plans/2026-08-25-the-dispatchable-committer-comes-back-
+#: as-an-envelope.md) re-points the commit leg at an in-process
+#: `commit_pipeline.run_commit_pipeline` call, which spawns no `subprocess.
+#: run` of its own and so carries no `_run`-style `timeout=` bound to
+#: declare here at all -- removed from the set outright rather than kept
+#: as a name with no live spawn behind it (which is exactly the kind of
+#: killed-op residue `killed-op names live on in string-keyed guards`
+#: warns against).
 
 
 def test_local_bounds_are_cost_plus_the_named_scheduling_term():
@@ -2668,6 +2743,7 @@ def test_default_gate_fires_declined_leaves_synced_but_uncommitted(tmp_path, mon
     to let an operator opt back out of)."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
 
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
     rc, out, spy, dest = _run_round(
         tmp_path, monkeypatch, gate_fires=True, yes=False,
     )
@@ -2677,7 +2753,6 @@ def test_default_gate_fires_declined_leaves_synced_but_uncommitted(tmp_path, mon
 
     publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
     assert len(publish_calls) == 1  # the sync already happened
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     assert commit_calls == []
 
 

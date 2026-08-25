@@ -2779,6 +2779,88 @@ def _cmd_discard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_send(args: argparse.Namespace) -> int:
+    """Handle: cross-repo-memo send <topic>
+
+    Bare forwarder onto claude-klabauter's `memo.send` op (rebuilt 2026-08-25) —
+    everything the delivery needs (`to`, `title`, `body`, `kind`, etc.) is
+    read by the op itself off the already-staged
+    `state/memo-outbox/<topic>.md` draft; this handler validates the topic
+    slug, resolves the sender repo root, and renders the op's result. There
+    is NO legacy one-shot flag form here (--to/--title/--body-file/etc.) —
+    draft-then-send is the only workflow (DR-210).
+
+    DR-210 is unconditional: if the claude-klabauter engine seam is unreachable, this
+    REFUSES via `legacy_send`'s fail-loud stub — it never falls back to
+    writing into the receiver's tree itself.
+
+    Spec backlink: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C3
+    """
+    topic = args.topic
+
+    if not _TOPIC_SLUG_RE.fullmatch(topic):
+        print(
+            f"cross-repo-memo send: invalid topic slug '{topic}'. "
+            f"Topic must match [a-z0-9][a-z0-9-]* (lowercase alphanum and dashes only).",
+            file=sys.stderr,
+        )
+        return 2
+
+    sender_root = _current_repo_root()
+    if sender_root is None:
+        guard_error = _guard_sender_identity_before_delivery()
+        print(guard_error or "cross-repo-memo send: cwd is not a git working tree.", file=sys.stderr)
+        return 2
+    _warn_if_unregistered_sender()
+
+    def legacy_send() -> None:
+        """Fail-loud legacy stub — DR-210: NOT a direct-write fallback.
+
+        A working direct-compute fallback here would silently defeat the
+        claude-klabauter-engine integrity cut; this stub only ever raises, so
+        State-1 (seam absent), State-2 transport failure, and State-2
+        op-refusal all converge on the same `except RuntimeError` handler
+        below.
+        """
+        raise RuntimeError(
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
+            "coordinator_core.invoke not importable) — there is no direct-write "
+            "fallback (DR-210). Install/configure the claude-klabauter engine to send "
+            "cross-repo memos."
+        )
+
+    try:
+        result = cc_invoke.route_mutation(
+            "memo.send", {"dry_run": False, "topic": topic}, sender_root, legacy_send
+        )
+    except RuntimeError as exc:
+        print(f"cross-repo-memo send: {exc}", file=sys.stderr)
+        _print_route_mutation_failure_reasons(exc)
+        return 1
+
+    acted = result.get("acted") if isinstance(result, dict) else None
+    if not (isinstance(result, dict) and result.get("exit_code") == 0 and acted):
+        print(
+            "cross-repo-memo send: claude-klabauter reported success but returned no "
+            "delivered memo (empty 'acted') — aborting.",
+            file=sys.stderr,
+        )
+        return 1
+
+    acted_item = acted[0] if isinstance(acted[0], dict) else {}
+    receiver_side_path = acted_item.get("id")
+    if receiver_side_path:
+        print(f"Receiver-side: {os.path.abspath(receiver_side_path)}")
+    if not acted_item.get("sender_committed", True):
+        print(
+            "cross-repo-memo send: delivery landed and committed in the "
+            "receiver's tree, but the sender-side receipt commit failed — "
+            "the sent/ copy and ledger row are staged on disk, uncommitted.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _emit_compose_stage_advisory(abs_path: str, *, fm: dict | None = None) -> None:
     """`compose`-stage premise-check advisory — reads the outbox buffer's
     current frontmatter and fires `_print_premise_check_advisory` at it.
@@ -2990,7 +3072,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 # Verbs that trigger subcommand dispatch (not legacy flag-only path).
-_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "discard"})
+_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "discard", "send"})
 
 # Verbs that plausibly name "close/action an inbound memo" intent — this tool
 # has no such verb (it only sends OUTBOUND memos), so these get a pointer at
@@ -3006,19 +3088,17 @@ _CLOSE_INTENT_VERBS: frozenset[str] = frozenset(
 def _build_legacy_parser() -> argparse.ArgumentParser:
     """Build the legacy flag-only parser.
 
-    memo.send was killed 2026-08-23 (PM ruling: a killed op dies outright,
-    no stub) — this parser used to carry the full legacy send flag set
-    (--to/--topic/--title/--body-file/--campaign-to/--kind/--summary/
-    --scoped-to-*/etc.), all of which fed the now-removed legacy send
-    fallthrough in `main()`. Only the two discovery-only legacy flags that
-    were never send-specific survive: --check-addressee and --list-receivers.
+    memo.send's one-shot flag set (--to/--topic/--title/--body-file/
+    --campaign-to/--kind/--summary/--scoped-to-*/etc.) does NOT come back
+    (DR-210: draft-then-send is the only workflow) — only the two
+    discovery-only legacy flags that were never send-specific survive:
+    --check-addressee and --list-receivers.
     """
     description = textwrap.dedent("""        cross-repo-memo legacy flag-only form.
 
-        Outbound memo delivery (send) has been removed (memo.send op killed
-        2026-08-23) — use the `draft`/`compose`/`list`/`discard` subcommands
-        for the surviving lifecycle. This legacy flag-only form now serves
-        only two discovery-only actions:
+        Use the `draft`/`compose`/`list`/`discard`/`send` subcommands for the
+        memo lifecycle. This legacy flag-only form serves only two
+        discovery-only actions:
 
           --check-addressee RECEIVER_EM_ID   resolve this repo's own EM
               identity and compare it against a receiver id
@@ -3070,11 +3150,14 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     after verb detection. This avoids duplicating argument schemas in two
     places while still giving argparse correct subcommand help text.
 
-    memo.send was killed 2026-08-23 (PM ruling: a killed op dies outright,
-    no stub) — the `send` verb/subparser is gone, and `for_help=True` no
-    longer registers a legacy one-shot flag set (that set — --to, --topic,
-    --title, --body-file, --summary, --dry-run, --scoped-to-*, etc. — existed
-    only to feed the now-removed legacy send path).
+    `send` is a subparser again (rebuilt 2026-08-25 alongside the rebuilt
+    `memo.send` op) — a bare forwarder taking only `topic`, since every
+    other field comes from the already-staged
+    `state/memo-outbox/<topic>.md` draft. `for_help=True` still does NOT
+    register a legacy one-shot flag set (that set — --to, --topic, --title,
+    --body-file, --summary, --dry-run, --scoped-to-*, etc. — fed the killed
+    legacy send path and does not come back; DR-210: draft-then-send is the
+    only workflow).
     """
     description = textwrap.dedent("""\
         cross-repo-memo — manage outbound cross-repo memo drafts between EM working trees.
@@ -3088,17 +3171,17 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
              list    Enumerate outbox drafts with age (>24h marked stale).
              discard <topic>
                      Remove an outbox draft without sending.
-
-        Outbound delivery (the former `send` verb / legacy one-shot flag form)
-        has been removed — memo.send was killed 2026-08-23, no replacement
-        built yet. `draft`/`compose`/`list`/`discard` still stage and manage
-        drafts in state/memo-outbox/; nothing here delivers one to a receiver.
+          3. send    <topic>
+                     Deliver the staged draft to its `to:` receiver and land
+                     the sender-side receipt. If the claude-klabauter engine is
+                     unreachable this REFUSES — there is no direct-write
+                     fallback (DR-210).
 
         Stale drafts (>24h) surface at /workstream-start and /workday-start.
         Never write memo bodies to %TEMP% or tasks/ paths — the CLI owns the buffer.
 
         LEGACY FLAG FORM (discovery-only now — see --check-addressee /
-        --list-receivers below; the former one-shot send flags are gone).
+        --list-receivers below; the one-shot send flags do not come back).
 
         Run `cross-repo-memo --list-receivers` to see valid --to targets.
     """)
@@ -3167,6 +3250,15 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
         help="Remove an outbox draft without sending (hard-errors on missing topic)",
     )
     discard_p.add_argument("topic", metavar="TOPIC", help="Topic slug")
+
+    # send subparser (handler is _cmd_send) — forwarder onto memo.send;
+    # every other field is read off the already-staged outbox draft, so
+    # `topic` is the only argument. No legacy one-shot flag form (DR-210).
+    send_p = subparsers.add_parser(
+        "send",
+        help="Deliver a staged draft (state/memo-outbox/<topic>.md) to its receiver",
+    )
+    send_p.add_argument("topic", metavar="TOPIC", help="Topic slug of the staged draft")
 
     return parser
 
@@ -3262,15 +3354,16 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns exit code (0 = success, non-zero = failure).
 
     Verb-detection truth table (spec: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C1):
-      argv[0] ∈ {draft, compose, list, discard}         → verb dispatch → subparser
+      argv[0] ∈ {draft, compose, list, discard, send}   → verb dispatch → subparser
       argv[0] == '--version'                           → self-check; exit 0/1/2 (see _cmd_version)
       argv[0] starts with '--'                         → legacy parser (--check-addressee /
-                                                           --list-receivers only — send removed)
+                                                           --list-receivers only — no one-shot send)
       absent / empty                                   → combined help; exit 0
 
-    `send` was a verb here until memo.send was killed 2026-08-23 (PM ruling:
-    a killed op dies outright, no stub) — outbound delivery has no CLI verb
-    or legacy flag-form entrypoint any more.
+    `send` is a verb again (restored 2026-08-25 as a bare `_cmd_send`
+    forwarder onto the rebuilt `memo.send` op) — but there is NO legacy
+    one-shot flag form alongside it: draft-then-send is the only workflow
+    (DR-210).
 
     The in-CLI PATH-unresolvable self-check retired 2026-07-25 (spec:
     `docs/plans/2026-07-25-posix-bareword-path-provisioning.md` C5): it could
@@ -3310,6 +3403,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_discard(args)
         elif verb == "compose":
             return _cmd_compose(args)
+        elif verb == "send":
+            return _cmd_send(args)
         else:
             # Should not reach here — argparse would have exited.
             print(f"cross-repo-memo: unknown verb {verb!r}", file=sys.stderr)
@@ -3332,8 +3427,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"cross-repo-memo: '{first}' is not a cross-repo-memo verb — "
                 f"this tool manages OUTBOUND memos (draft, compose, list, "
-                f"discard; outbound delivery/send has been removed). To "
-                f"close/action an INBOUND memo already "
+                f"discard, send). To close/action an INBOUND memo already "
                 f"sitting in your cross-repo/inbox/, use "
                 f"archive-stamp-cli resolve-memo <memo_path> instead:\n"
                 f"  archive-stamp-cli resolve-memo cross-repo/inbox/<memo-file>.md",
@@ -3342,7 +3436,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(
             f"cross-repo-memo: unknown subcommand '{first}'. "
-            f"Valid verbs: draft, compose, list, discard. "
+            f"Valid verbs: draft, compose, list, discard, send. "
             f"Run 'cross-repo-memo --help' for the legacy flag-only form.",
             file=sys.stderr,
         )
@@ -3516,16 +3610,14 @@ def main(argv: list[str] | None = None) -> int:
         print(_render_receiver_listing(candidates))
         return 0
 
-    # memo.send was killed 2026-08-23 (PM ruling: a killed op dies outright,
-    # no stub, no legacy fallback) — this used to fall through into the
-    # legacy --to/--topic/--title send path (including --campaign-to
-    # fan-out), and the `send` verb/subparser was removed alongside it.
-    # --check-addressee and --list-receivers above are the only legacy-flag-
-    # form actions still live; every other legacy flag on
-    # `_build_legacy_parser` was send-only and has been removed with it.
+    # The legacy one-shot send flag set (--to/--topic/--title/--body-file/
+    # --campaign-to/etc.) does not come back (DR-210) — --check-addressee
+    # and --list-receivers above are the only legacy-flag-form actions this
+    # parser recognises. Use the `send <topic>` subcommand to deliver a
+    # staged draft.
     print(
-        "cross-repo-memo: outbound memo delivery (send) has been removed "
-        "(memo.send op killed 2026-08-23, no replacement built yet) — "
+        "cross-repo-memo: no legacy one-shot send flags — use "
+        "`cross-repo-memo send <topic>` to deliver a staged draft. "
         "--check-addressee and --list-receivers are still supported here.",
         file=sys.stderr,
     )

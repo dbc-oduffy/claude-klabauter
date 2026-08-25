@@ -29,10 +29,15 @@ Covers:
     child does NOT archive (the forked_from child must still retain even in
     the presence of a succession child).
 
-Exercises `_is_terminal` through `archive_handoffs._handle_act_handoffs`
-(mode="already-terminal") — the real production D1 re-verify + git-mv +
-commit path, not a reimplementation of it — so a passing test proves the
-file actually moved, not merely that a helper returned a different tuple.
+Exercises the same DR-324-narrowed Check 3 (now `_scan_terminal`'s
+`check3_edge_kinds` gate) through `archive_terminal_handoffs._handler`
+(mode="already-terminal", dry_run:false) — the real production re-verify +
+git-mv + commit path (`archive_handoffs.py` was killed and rebuilt from
+scratch as `archive_terminal_handoffs.py`, 2026-08-23 PM ruling; this test
+was repointed at the successor rather than retired because the narrow
+succession-vs-forked_from exemption it pins is still live there) — so a
+passing test proves the file actually moved, not merely that a helper
+returned a different tuple.
 
 Git-free is not reachable here: `archive_and_commit` performs a real
 git-mv + commit, which needs a real object database to exhibit honestly.
@@ -138,16 +143,18 @@ def _seed_forked_from_child(worktree: Path, name: str, origin: str) -> Path:
     return path
 
 
-def _act(worktree: Path, dag_index: list[str], cid: str) -> dict:
-    from coordinator_core.ops.fleet import archive_handoffs
+def _act(worktree: Path, cid: str) -> dict:
+    from coordinator_core.ops.fleet import archive_terminal_handoffs
 
     common_dir = worktree / ".git"
-    return _run(archive_handoffs._handle_act_handoffs(
-        mode="already-terminal",
-        worktree=worktree,
-        dag_index=dag_index,
-        candidate_ids=[cid],
-        common_dir=common_dir,
+    return _run(archive_terminal_handoffs._handler(
+        {
+            "mode": "already-terminal",
+            "dry_run": False,
+            "candidate_ids": [cid],
+            "cap": 10,
+        },
+        repo_root=common_dir,
     ))
 
 
@@ -164,10 +171,9 @@ def test_continued_with_only_live_succession_child_archives(tmp_path: Path) -> N
         worktree, "2026-08-02-successor.md", predecessor_name
     )
 
-    dag_index = [str(predecessor_path.resolve()), str(successor_path.resolve())]
     cid = f"state/handoffs/{predecessor_name}"
 
-    result = _act(worktree, dag_index, cid)
+    result = _act(worktree, cid)
 
     assert result["failed"] == [], result
     assert result["skipped"] == [], result
@@ -192,15 +198,14 @@ def test_continued_with_only_live_forked_from_child_retains(tmp_path: Path) -> N
         worktree, "2026-08-02-spinoff.md", predecessor_name
     )
 
-    dag_index = [str(predecessor_path.resolve()), str(fork_path.resolve())]
     cid = f"state/handoffs/{predecessor_name}"
 
-    result = _act(worktree, dag_index, cid)
+    result = _act(worktree, cid)
 
     assert result["failed"] == [], result
     assert result["acted"] == [], result
     assert result["skipped"] == [
-        {"id": cid, "reason": "re-live: has live children: 1"}
+        {"id": cid, "reason": "terminality-drift: no longer classifies as terminal"}
     ], result
 
     assert predecessor_path.exists(), (
@@ -227,19 +232,14 @@ def test_continued_with_both_succession_and_fork_child_retains(tmp_path: Path) -
         worktree, "2026-08-03-spinoff.md", predecessor_name
     )
 
-    dag_index = [
-        str(predecessor_path.resolve()),
-        str(successor_path.resolve()),
-        str(fork_path.resolve()),
-    ]
     cid = f"state/handoffs/{predecessor_name}"
 
-    result = _act(worktree, dag_index, cid)
+    result = _act(worktree, cid)
 
     assert result["failed"] == [], result
     assert result["acted"] == [], result
     assert result["skipped"] == [
-        {"id": cid, "reason": "re-live: has live children: 1"}
+        {"id": cid, "reason": "terminality-drift: no longer classifies as terminal"}
     ], result
 
     assert predecessor_path.exists(), (

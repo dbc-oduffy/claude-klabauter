@@ -43,6 +43,7 @@ Negative-spec (hard-won):
 from __future__ import annotations
 
 import contextvars
+import ntpath
 import os
 import subprocess
 import tempfile
@@ -54,8 +55,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.commit_trailers import (
+    can_format_trailers_in_process,
     compute_missing_trailer_args,
+    format_trailers_in_process,
     read_trailer_value,
+    trailer_values_from_argv,
 )
 from coordinator_core.git.divergence import (
     DivergenceCheckFailed,
@@ -565,6 +569,20 @@ def _git(
 #: `coordinator_core.ops.fleet._common.EMPTY_TREE_SHA`; the two seams are
 #: independent commit paths and neither imports the other.
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _has_windows_drive(normalized: str) -> bool:
+    """True iff `normalized` (already `/`-normalized) carries a Windows
+    drive letter (`"C:/foo"`, `"C:foo"`) -- platform-independent by
+    construction. `ntpath.splitdrive` is used explicitly rather than
+    `os.path.splitdrive`/`Path(...).is_absolute()`: `os.path` resolves to
+    `posixpath` on a non-Windows host, whose `splitdrive` is a no-op, and a
+    `PosixPath("C:/foo").is_absolute()` is False -- either would let a
+    drive-letter path slip the parse-time containment guard on Linux while
+    catching it on Windows, exactly the platform-dependent gap this check
+    exists to close. `ntpath` itself is a pure-Python module present on
+    every platform, so this reads the same drive-letter shape everywhere."""
+    return ntpath.splitdrive(normalized)[0] != ""
 
 
 def _empty_private_index_refusal(
@@ -1521,6 +1539,41 @@ def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
         if line.startswith(prefix):
             return line[len(prefix):].strip()
     return None
+
+
+def _apply_trailers(msg_file, trailer_args: Sequence[str], root) -> Optional["GitResult"]:
+    """Append `trailer_args` to `msg_file` in place, spawning
+    `git interpret-trailers` ONLY when the message falls outside the shape
+    `commit_trailers.can_format_trailers_in_process` has been measured
+    byte-identical over.
+
+    Returns `None` on success and the failed `GitResult` otherwise, so the
+    three call sites keep their existing early-return shape.
+
+    This is C11's third non-write spawn. The peer plan's ratified anti-scope
+    forbids a hand-written replacement that GUESSES at trailer semantics and
+    names a byte-identity corpus as what legitimises one; that corpus is
+    `state/audits/2026-08-25-interpret-trailers-byte-identity-corpus.py`, and
+    the in-process side is identical over 4704/4704 in-envelope cases swept
+    across 20 fuzz seeds. Out-of-envelope messages still spawn git rather
+    than being guessed at -- which is the anti-scope satisfied rather than
+    routed around.
+    """
+    if not trailer_args:
+        return None
+
+    raw = Path(msg_file).read_bytes()
+    if can_format_trailers_in_process(raw):
+        Path(msg_file).write_bytes(
+            format_trailers_in_process(raw, trailer_values_from_argv(trailer_args))
+        )
+        return None
+
+    result = _git(
+        ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
+        cwd=root,
+    )
+    return None if result.ok else result
 
 
 class DeliverableIdAssertionConflictError(RuntimeError):
@@ -2792,13 +2845,9 @@ def _commit_scoped_private_index(
         if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
             trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
             trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-    if trailer_args:
-        interpret_result = _git(
-            ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
-            cwd=root,
-        )
-        if not interpret_result.ok:
-            return interpret_result
+    interpret_result = _apply_trailers(msg_file, trailer_args, root)
+    if interpret_result is not None:
+        return interpret_result
 
     # Fast path: rewrite HEAD's tree spine in process, build the commit
     # object in process, land it via a locked ref CAS -- zero further git
@@ -2817,6 +2866,7 @@ def _commit_scoped_private_index(
     fast_result = _commit_via_head_spine(
         root, assembled, old_head, msg_file,
         index_stat_identity=index_snapshot.stat_identity,
+        caller="_commit_scoped_private_index",
     )
     if fast_result is not None:
         if not fast_result.ok:
@@ -3486,18 +3536,13 @@ def commit_scoped(
         # ratified anti-scope one plan over (docs/plans/2026-08-21-a-commit-
         # stops-paying-for-thirty-processes.md, AC3/"Do not hand-write a
         # replacement for `git interpret-trailers` that guesses at trailer
-        # semantics") already declined exactly this replacement, unattempted,
-        # for the risk of malformed trailers without a byte-identity fixture
-        # corpus authored first. No such corpus exists for THIS call site
-        # either, so this call is left alone per C11's own "or leave this
-        # one alone and say so" clause -- not attempted here.
-        if trailer_args:
-            interpret_result = _git(
-                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
-                cwd=root,
-            )
-            if not interpret_result.ok:
-                return interpret_result
+        # semantics") named a byte-identity fixture corpus as the precondition
+        # for replacing it. That corpus now exists, so `_apply_trailers`
+        # serves this site in process too -- inside the measured envelope
+        # only, spawning git outside it.
+        interpret_result = _apply_trailers(msg_file, trailer_args, root)
+        if interpret_result is not None:
+            return interpret_result
 
         # `add_paths_pathspec_file()`/`commit_with_message_file_pathspec_
         # scoped()`, NOT `add_paths()`/`commit_with_message_file()` -- this
@@ -3923,6 +3968,55 @@ def _author_stamp() -> str:
     return f"{now} {sign}{offset_seconds // 3600:02d}{(offset_seconds % 3600) // 60:02d}"
 
 
+def _synthesize_absent_spine_dirs(
+    spine: Dict[str, Dict[str, Tuple[int, str]]],
+    assembled: Dict[str, Union[Tuple[int, str], object]],
+) -> Optional[Dict[str, Dict[str, Tuple[int, str]]]]:
+    """MUTATE `spine` in place, adding an EMPTY level for every directory
+    an `assembled` creation needs that HEAD's tree does not have -- so a
+    new file can be committed into a directory that does not exist yet.
+    Returns `spine`, or `None` when the gap cannot be filled safely.
+
+    `read_tree_spine` walks only as far as HEAD's tree actually goes: a
+    path under a directory absent from HEAD leaves that directory out of
+    the spine entirely, and `_rewrite_head_spine` then refuses (its own
+    "a changed path's parent directory is not present in `spine` at all").
+    Correct as a default -- for a MUTATION, an absent parent means the
+    caller's model of the tree is wrong. For a CREATION it is merely the
+    ordinary case of the first file in a new directory, which is why this
+    runs only under `_commit_via_head_spine`'s opt-in `create_missing_dirs`
+    and never for an existing caller.
+
+    Refuses (`None`) rather than synthesizing when the missing name is
+    occupied in HEAD by a NON-directory entry -- replacing a committed file
+    with a directory of the same name is a structural change no caller of
+    this helper has asked for, and filling it in silently would do exactly
+    that. Also refuses for an `_ABSENT` (deletion) entry: a deletion whose
+    parent directory does not exist is a contradiction, not a gap to fill.
+    """
+    for path, val in assembled.items():
+        parent = path.rpartition("/")[0]
+        if parent in spine:
+            continue
+        if val is _ABSENT:
+            return None
+        parts = parent.split("/")
+        for depth in range(len(parts) + 1):
+            level = "/".join(parts[:depth])
+            if level in spine:
+                continue
+            if depth == 0:
+                # read_tree_spine guarantees "" is always a spine key; if it
+                # isn't, refuse rather than invent a root.
+                return None
+            enclosing = "/".join(parts[: depth - 1])
+            existing = spine.get(enclosing, {}).get(parts[depth - 1])
+            if existing is not None and existing[0] != 0o40000:
+                return None
+            spine[level] = {}
+    return spine
+
+
 def _commit_via_head_spine(
     root: Path,
     assembled: Dict[str, Union[Tuple[int, str], object]],
@@ -3930,6 +4024,8 @@ def _commit_via_head_spine(
     msg_file: Union[str, Path],
     *,
     index_stat_identity: Optional[Any] = None,
+    create_missing_dirs: bool = False,
+    caller: str,
 ) -> Optional[GitResult]:
     """The shared "rewrite HEAD's tree spine -> build the commit object ->
     land it via a locked ref CAS" landing helper (C4 body: "one helper, two
@@ -3937,6 +4033,20 @@ def _commit_via_head_spine(
     already carry every trailer this commit needs (`interpret-trailers`,
     the caller's own spawn, has already run against it); this helper only
     reads its final bytes for the commit object's message body.
+
+    `create_missing_dirs` (default `False` -- every pre-existing caller is
+    byte-identical without it) fills in empty spine levels for a CREATION
+    under a directory absent from HEAD, which `read_tree_spine` leaves out
+    of the spine and `_rewrite_head_spine` therefore refuses. See
+    `_synthesize_absent_spine_dirs` for what it refuses to fill and why;
+    `commit_authored_new_file` is the caller that needs it (the first memo
+    into a peer repo whose `cross-repo/inbox/` does not exist yet).
+
+    `caller` -- the entrypoint's own name (e.g. `"commit_authored_content"`),
+    threaded into both diagnostic strings this helper can return (the empty-
+    tree refusal and the CAS-lost message below) so a caller reached through
+    any of this helper's three callers gets a correctly-attributed failure,
+    never one that misnames a different entrypoint.
 
     `assembled` -- `{path: (mode, sha) | _ABSENT}`, repo-relative,
     `/`-separated paths. `commit_authored_content` assembles exactly one
@@ -3973,6 +4083,11 @@ def _commit_via_head_spine(
     if spine is None:
         return None
 
+    if create_missing_dirs:
+        synthesized = _synthesize_absent_spine_dirs(spine, assembled)
+        if synthesized is None:
+            return None
+
     ref_target = _resolve_cas_ref_target(root)
     if ref_target is None:
         return None
@@ -4008,7 +4123,7 @@ def _commit_via_head_spine(
         return None
 
     empty_tree_refusal = _empty_private_index_refusal(
-        new_tree_sha, root=root, caller="commit_authored_content"
+        new_tree_sha, root=root, caller=caller
     )
     if empty_tree_refusal is not None:
         return empty_tree_refusal
@@ -4038,7 +4153,7 @@ def _commit_via_head_spine(
             returncode=1,
             stdout="",
             stderr=(
-                "commit_authored_content: compare-and-swap failed -- HEAD moved "
+                f"{caller}: compare-and-swap failed -- HEAD moved "
                 f"concurrently since {old_head} was captured; refusing to retry "
                 "silently (a retry needs a tree rebuilt against the new HEAD)."
             ),
@@ -4176,7 +4291,12 @@ def commit_authored_content(
 
     root = Path(cwd)
     normalized = path.replace("\\", "/")
-    if not normalized or normalized.startswith("/") or ".." in Path(normalized).parts:
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ".." in Path(normalized).parts
+        or _has_windows_drive(normalized)
+    ):
         return GitResult(
             returncode=-1,
             stdout="",
@@ -4270,13 +4390,9 @@ def commit_authored_content(
         if not message_already_has_deliverable_trailer:
             trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
-    if trailer_args:
-        interpret_result = _git(
-            ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
-            cwd=root,
-        )
-        if not interpret_result.ok:
-            return interpret_result
+    interpret_result = _apply_trailers(msg_file, trailer_args, root)
+    if interpret_result is not None:
+        return interpret_result
 
     # Fast path: rewrite HEAD's tree spine in process, build the commit
     # object in process, land it via a locked ref CAS -- zero further git
@@ -4286,6 +4402,7 @@ def commit_authored_content(
     # tree) -- is this call's own outcome, never re-tried on the ladder.
     fast_result = _commit_via_head_spine(
         root, {normalized: (mode_int, new_sha)}, old_head, msg_file,
+        caller="commit_authored_content",
     )
     if fast_result is not None:
         if not fast_result.ok:
@@ -4392,6 +4509,405 @@ def commit_authored_content(
         root, [normalized], new_commit_sha,
         committer_id_override=attributed_session_id,
     )
+
+    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
+
+
+#: Attributes files this module can read IN PROCESS to decide whether a
+#: `filter.*.clean` driver could apply to a path. Deliberately NOT the full
+#: set git consults -- `core.attributesFile` (a global path) is out of
+#: reach without a config walk this entrypoint's budget cannot afford; see
+#: `commit_authored_new_file`'s own clean-pipeline section for what that
+#: residual means and why it is a stated limitation rather than a silent one.
+_LOCAL_ATTRIBUTES_FILENAME = ".gitattributes"
+
+
+def _attributes_pattern_matches(pattern: str, rel_to_attrs_dir: str) -> bool:
+    """Does a gitattributes `pattern` match `rel_to_attrs_dir` (the target
+    path, relative to the directory the attributes file lives in)?
+
+    Deliberately OVER-matching where it is imprecise, never under-matching:
+    `fnmatch`'s `*` crosses `/` where git's single `*` does not, so this
+    can answer `True` where git would answer `False`. That error direction
+    is the safe one -- a false positive costs the caller a loud refusal it
+    can act on, a false negative costs a silently wrong blob in a
+    repository we do not own. The precise answer is `git check-attr`, a
+    process, and paying it on every delivery to hear "unspecified" for the
+    overwhelming majority is the trade this function exists to avoid.
+
+    Pattern semantics implemented (gitattributes(5)): a pattern with no
+    `/` matches the BASENAME at any depth; a pattern containing a `/` is
+    anchored to the attributes file's own directory, with a leading `/`
+    stripped; a pattern ending in `/` names a directory and so cannot match
+    the file being written.
+    """
+    from fnmatch import fnmatch
+
+    if not pattern or pattern.endswith("/"):
+        return False
+    if "/" not in pattern:
+        return fnmatch(rel_to_attrs_dir.rpartition("/")[2], pattern)
+    return fnmatch(rel_to_attrs_dir, pattern.lstrip("/"))
+
+
+def _clean_filter_may_apply(root: Path, normalized: str) -> Optional[str]:
+    """`None` when no repo-local attributes file routes `normalized`
+    through a `filter.*.clean` driver, else a diagnostic naming the file
+    and the pattern that does.
+
+    Zero spawns. Reads `.git/info/attributes` and every `.gitattributes`
+    from the repo root down to the path's own directory, and refuses only
+    on a `filter=` line whose PATTERN MATCHES this path
+    (`_attributes_pattern_matches`). Path-scoped, not repo-scoped, and the
+    distinction is not academic: a fleet swept on 2026-08-25 found four
+    peer repositories declaring LFS filters for `*.uasset`/`*.png`/
+    `*.exe`-shaped binaries and none for markdown. A repo-scoped refusal
+    would make every one of them undeliverable because it stores textures
+    in LFS.
+
+    A `[attr]` MACRO line carrying `filter=` refuses the path outright:
+    resolving which patterns then assign that macro is a second pass this
+    function does not implement, and guessing in the permissive direction
+    is the one error this function must not make. That refusal is
+    REPO-WIDE, not path-scoped -- one macro definition carrying `filter=`
+    anywhere in the attributes chain refuses every path through this
+    entrypoint, in tension with the path-scoped design goal above; a
+    deliberate safe-direction tradeoff, not a bug.
+
+    Why this check exists at all: `git_objects.write_object`'s own
+    Negative-spec forbids writing a path-attributed blob through it,
+    because it writes bytes verbatim while `git add` would run them
+    through the clean pipeline. `commit_authored_content` discharges that
+    by spending a `git hash-object -w --path=` spawn.
+    `commit_authored_new_file` has no spawn to spend, so it discharges the
+    same bound by REFUSING the cases it cannot reproduce.
+    """
+    parent = Path(normalized).parent
+    parts = [] if parent == Path(".") else list(parent.parts)
+
+    #: `(attributes file, the target path relative to that file's directory)`
+    #: -- `.git/info/attributes` patterns are rooted at the repo, the same
+    #: as a root `.gitattributes`.
+    candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
+    for depth in range(len(parts) + 1):
+        candidates.append(
+            (
+                root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME,
+                "/".join(normalized.split("/")[depth:]),
+            )
+        )
+
+    for candidate, rel_to_attrs_dir in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            code = line.split("#", 1)[0].strip()
+            if "filter=" not in code:
+                continue
+            if code.startswith("[attr]"):
+                return (
+                    f"{candidate} defines an `[attr]` macro carrying `filter=` "
+                    "-- macro expansion is not resolved here, so the path is "
+                    "refused rather than guessed"
+                )
+            pattern = code.split()[0]
+            if _attributes_pattern_matches(pattern, rel_to_attrs_dir):
+                return (
+                    f"{candidate} routes {pattern!r} through a `filter=` "
+                    "attribute, and that pattern matches this path, so a "
+                    "`filter.*.clean` driver may apply to it"
+                )
+    return None
+
+
+def commit_authored_new_file(
+    path: str,
+    content: str,
+    msg_file: Union[str, Path],
+    cwd: Union[str, Path],
+    *,
+    deliverable_id: Optional[str] = None,
+    attributed_session_id: Optional[str] = None,
+    record_ledger: bool = False,
+    refresh_shared_index: bool = True,
+) -> GitResult:
+    """Commit EXACTLY `content` at `path`, where `path` is ABSENT from HEAD
+    -- the creation sibling of `commit_authored_content`, which refuses an
+    absent path by construction ("built for in-place mutation of an
+    existing reserved-noun file, not for creating a new one"). Same
+    signature, same `GitResult` contract, opposite HEAD precondition.
+
+    **NO git spawn that runs a hook, and that is the contract, not an
+    optimization.** The caller this exists for writes into a SIBLING
+    repository. A spawn that reached that repo's `git commit` would run its
+    `pre-commit` gates against our write and fire its `post-commit`
+    auto-push -- the sole publisher in the production default -- as a side
+    effect of delivering correspondence, an external-facing action nobody
+    asked for. Every refusal below therefore returns a FAILING `GitResult`;
+    NONE of them falls through to the spawning ladder
+    `commit_authored_content` keeps, and this entrypoint never returns
+    `None`.
+
+    The commit itself lands at ZERO spawns on the FAST path. `git
+    update-index` (`refresh_shared_index`, below) is the one spawn the fast
+    path can issue -- but it is not a hard ceiling: `_head_entry_for` can
+    fall back to `_git_state_head_blobs` (spawns `git ls-tree`, when
+    `read_tree_spine` returns `None`) and `_resolve_commit_identity` can
+    fall back to `_commit_identity_via_git_var` (spawns `git var
+    GIT_COMMITTER_IDENT`, when no config-file identity resolves) -- either
+    can add one more spawn on the way to landing. Neither fallback runs a
+    hook, so the property above survives both intact: the bar is "nothing
+    of the destination repo's runs on our behalf", not a spawn count; a
+    spawn count is how the fast path is measured, not what the contract
+    means.
+
+    How the three spawns of the sibling entrypoint are retired:
+
+      - `git hash-object -w --path=` -> `git_objects.write_object` with a
+        `filter.*.clean` PRE-CHECK (see the clean-pipeline section below).
+      - `git interpret-trailers` -> NOT RUN. `msg_file` must arrive with
+        every trailer already final; its bytes become the commit message
+        body verbatim. `deliverable_id`, when given, is therefore
+        VALIDATED against those bytes, never injected into them -- an
+        injection needs the spawn this entrypoint does not have.
+      - `git update-index --add --cacheinfo` (the sibling's bound 6
+        shared-index refresh) -> RETAINED, and it is the one spawn. See the
+        shared-index section below for why it is not optional.
+
+    Clean pipeline -- the bound that shapes the blob write. `write_object`
+    writes bytes verbatim and its own Negative-spec forbids using it for a
+    path-attributed blob, precisely because `git add` would first run that
+    blob through `filter.*.clean`/`text`/`core.autocrlf`. This function
+    discharges that bound by refusing the cases it cannot reproduce rather
+    than writing a blob that differs from what git would have stored:
+
+      - `content` containing a CR byte is REFUSED. The clean direction
+        normalizes CRLF to LF under `text`/`core.autocrlf`; CR-free content
+        is a fixed point of that normalization, so excluding CR makes the
+        eol machinery provably a no-op instead of merely unlikely. (`eol=`
+        acts on the smudge/checkout direction only -- see
+        `_hash_object_stdin_bytes`, which pins that same correction.)
+      - a repo-local attributes file whose `filter=` PATTERN MATCHES this
+        path is REFUSED (`_clean_filter_may_apply`). Path-scoped, not
+        repo-scoped: a repository that keeps `*.uasset` or `*.png` in LFS
+        must stay deliverable for a markdown memo.
+
+    Residual, stated rather than hidden: a `filter.*.clean` routed by a
+    GLOBAL `core.attributesFile` is not detected -- reading it needs a
+    config walk this budget cannot afford. Swept across all 16 registered
+    peer repositories on 2026-08-25 (claude-klabauter-1c): not one sets
+    `core.attributesFile` or `core.eol`, so nothing on this fleet needs it
+    today. The caveat stays for the fleet member who adds one later; a
+    caller committing into a repo that uses one must not use this
+    entrypoint.
+
+    `core.autocrlf=true`, which most of this fleet DOES set, is not a
+    hazard here and must not be "handled": the clean direction normalizes
+    CRLF to LF, so for the LF content this entrypoint requires, a verbatim
+    blob and a filtered one are the same bytes. Code added to correct for
+    it would create the divergence it was meant to prevent.
+
+    `refresh_shared_index` (default `True`) -- `git update-index --add
+    --cacheinfo` for this one path after the commit lands, the sibling
+    entrypoint's bound 6. This defaults ON, and the default is the
+    load-bearing part. There is no in-process index WRITER in
+    `coordinator_core/git/` (`git_state.read_index` reads only), so without
+    the spawn the committed path is present in HEAD, absent from the shared
+    index, and present in the worktree -- which `git status` reports as, in
+    claude-klabauter-1c's own reproduction:
+
+        D  memo.md
+        ?? memo.md
+
+    A staged deletion of the file alongside an untracked copy of it. That
+    is not a cosmetic status quirk: the next person in that repository runs
+    a blanket `git add -A` or `git commit -a` and deletes the file we just
+    delivered, as their own commit, in their own history. Skipping the
+    refresh would write an armed defect into a tree we do not own. One
+    hookless ~10ms spawn buys it back, so it is bought.
+
+    Pass `False` ONLY when the caller has already refreshed that index
+    itself. `update-index` runs no hook, so this spawn does not weaken the
+    no-hooks contract above; a refresh failure is swallowed, never
+    converted into a failure of a commit that already landed (the sibling's
+    bound 6 reasoning, unchanged).
+
+    `record_ledger` (default `False`, the OPPOSITE of
+    `commit_authored_content`'s unconditional write) -- whether to append
+    the commit-ledger entry. `record_ledger_entry(repo_root=...)` writes
+    the ledger into whichever repo it is handed, so a cross-tree default of
+    `True` would deposit our bookkeeping in the destination's `state/`.
+    That is not merely unasked-for: DR-214's negative spec confines a memo
+    delivery to the receiver's `cross-repo/inbox/` file and nothing else,
+    so the ledger write would fall outside the carve-out the delivery is
+    sanctioned under. A caller committing into its OWN repo should pass
+    `True`.
+
+    Post-commit auto-push is NEVER replayed here -- unconditional, with no
+    flag to re-enable it, for the reason stated at the top.
+
+    Returns a `GitResult`; on success `stdout` carries the new commit SHA,
+    matching both sibling producers' contract.
+    """
+    if content is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr="commit_authored_new_file: content is None -- refusing to commit an absent write",
+        )
+
+    root = Path(cwd)
+    normalized = path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ".." in Path(normalized).parts
+        or _has_windows_drive(normalized)
+    ):
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"commit_authored_new_file: {path!r} is not a repo-relative, "
+                "in-worktree path -- refusing an absolute path or a `..` "
+                "traversal segment"
+            ),
+        )
+    target = root / normalized
+    try:
+        target.resolve().relative_to(root.resolve())  # fs-only: containment check, never stringified
+    except ValueError:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"commit_authored_new_file: {path!r} resolves outside the worktree rooted at {root}",
+        )
+    if target.is_dir():
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"commit_authored_new_file: {directory_pathspec_diagnostic(normalized)}",
+        )
+
+    if "\r" in content:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"commit_authored_new_file: {normalized!r} content carries a CR byte -- "
+                "this entrypoint writes the blob in process and cannot reproduce git's "
+                "clean-direction CRLF normalization; normalize to LF before calling"
+            ),
+        )
+    filter_diagnostic = _clean_filter_may_apply(root, normalized)
+    if filter_diagnostic is not None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"commit_authored_new_file: refusing {normalized!r} -- {filter_diagnostic}; "
+                "a zero-spawn blob write cannot run a clean filter, and writing the raw "
+                "bytes would store a blob `git add` would not have produced"
+            ),
+        )
+
+    old_head = _git_state_head_sha(root)
+    if old_head is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                "commit_authored_new_file: HEAD has no resolvable commit "
+                "(unborn branch or a symref with no loose ref and no "
+                "packed-refs entry) -- this entrypoint requires an existing "
+                "HEAD commit to parent the new commit onto"
+            ),
+        )
+
+    if _head_entry_for(root, normalized) is not None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                f"commit_authored_new_file: {normalized!r} already exists in HEAD "
+                f"({old_head}) -- this entrypoint CREATES a path absent from HEAD; "
+                "an in-place mutation of an existing file goes through "
+                "commit_authored_content"
+            ),
+        )
+
+    if deliverable_id:
+        # Bound: validated, never injected -- injection is
+        # `interpret-trailers`, the spawn this entrypoint does not have.
+        message_value = _trailer_value(
+            Path(msg_file).read_text(encoding="utf-8"), "Deliverable-Id:"
+        )
+        if message_value != deliverable_id:
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"commit_authored_new_file: msg_file carries Deliverable-Id "
+                    f"{message_value!r}, caller asserted {deliverable_id!r} -- this "
+                    "entrypoint validates the trailer it is given and never rewrites "
+                    "it; finalize msg_file before calling"
+                ),
+            )
+
+    new_sha = write_object(
+        resolve_git_common_dir(root), b"blob", content.encode("utf-8")
+    )
+
+    # A new path has no index entry and no HEAD tree entry, so the mode
+    # ladder `_assemble_commit_tree_input` implements lands on
+    # `_SUPPLIED_BLOB_MODE` by construction -- taken from that constant
+    # rather than restated, so the two cannot drift apart.
+    mode_int = int(_SUPPLIED_BLOB_MODE, 8)
+
+    landed = _commit_via_head_spine(
+        root, {normalized: (mode_int, new_sha)}, old_head, msg_file,
+        create_missing_dirs=True,
+        caller="commit_authored_new_file",
+    )
+    if landed is None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                "commit_authored_new_file: the in-process commit path declined a "
+                f"precondition for {normalized!r} (unreadable HEAD tree spine, an "
+                "unresolvable or peer-lock-held CAS ref, or no resolvable commit "
+                "identity) -- refusing rather than falling back to the spawning "
+                "ladder, which would run this repository's commit hooks"
+            ),
+        )
+    if not landed.ok:
+        return landed
+    new_commit_sha = landed.stdout.strip()
+
+    if refresh_shared_index:
+        # The one spawn, and a hookless one -- see this function's own
+        # `refresh_shared_index` section for the `D  path` / `?? path`
+        # end state it exists to prevent. Best-effort exactly like the
+        # sibling entrypoint's bound 6: the commit has already landed via
+        # the CAS, so a refresh failure must never be reported as this
+        # function's failure and send a caller into a duplicate commit.
+        _git(
+            ["update-index", "--add", "--cacheinfo", f"{_SUPPLIED_BLOB_MODE},{new_sha},{normalized}"],
+            cwd=root,
+        )
+
+    if record_ledger:
+        # Local import for the module-cycle reason `commit_authored_content`
+        # documents at its own call site.
+        from coordinator_core.contract.apply_base import record_ledger_entry
+
+        record_ledger_entry(
+            root, [normalized], new_commit_sha,
+            committer_id_override=attributed_session_id,
+        )
 
     return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
 

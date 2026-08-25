@@ -55,7 +55,27 @@ from typing import Optional
 
 import sys
 
-from coordinator_core.machine_resolver import registry_get
+
+def registry_get(key: str) -> Optional[str]:
+    """Deferred delegate to `coordinator_core.machine_resolver.registry_get`.
+
+    The delegated function is a TOML reader — an env-override probe, then
+    `registry.local.toml`, then `registry.toml`. Its own module additionally
+    houses `compute_machine` (`socket.gethostname`) and `compute_contributor`
+    (a git shell-out), so it pulls `socket` and `subprocess` at module scope.
+    Neither is on this module's path, and importing them here made the check
+    that decides WHETHER to pay the warm import cost pay one itself — the
+    defect class `ipc.py`'s own `is_warm_enabled()` comment names.
+
+    Negative-spec: this stays a module-level NAME, not a bare function-scope
+    import at the call site. `warm/tests/test_warm_settings.py` monkeypatches
+    `settings.registry_get` as a module attribute throughout; a call-site
+    import removes that seam and the stubs silently stop applying.
+    """
+    from coordinator_core.machine_resolver import registry_get as _registry_get
+
+    return _registry_get(key)
+
 
 __all__ = ["ENV_VAR", "REGISTRY_KEY", "is_warm_enabled"]
 

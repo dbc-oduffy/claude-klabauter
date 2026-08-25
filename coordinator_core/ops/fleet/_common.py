@@ -33,7 +33,16 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    # Type-checking only. `asyncio` is imported at FUNCTION scope by the two
+    # coroutines that actually use it, so a module-scope runtime import would
+    # put ~33ms of import cost on every importer of this module for a name
+    # used in one annotation. `_kill_orphaned_commit`'s `proc` parameter is a
+    # string annotation, so nothing evaluates it at runtime; without this
+    # block the annotation is simply unresolvable to a checker.
+    import asyncio
 
 from coordinator_core.dag import _read_meta, invalidate_git_history_cache
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args

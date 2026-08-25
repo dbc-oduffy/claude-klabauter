@@ -112,4 +112,12 @@ def test_this_repos_live_discovery_matches_the_eleven_known_brief_packages() -> 
         # resolves-free in test_phantom_resolves_id_sweep.py.
         "plan_assemble",
         "quick_wrap_assemble",
+        # Landed after those two and likewise unregistered, so this pin and
+        # `test_every_discovered_package_is_registered_or_allowlisted` were
+        # both red until 2026-08-25 -- surfaced by the ceremony-sweep-05
+        # audit, which enumerates `brief(`-defining packages for its own
+        # reasons and counted 15 against the 13 pinned here. Both now carry a
+        # real sweep provider, not an allowlist entry.
+        "roadmap_planning_assemble",
+        "sprint_planning_assemble",
     }

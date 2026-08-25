@@ -110,7 +110,7 @@ _GATE_SCOPE_DIRS: tuple[str, ...] = ("",)
 #: and `os.popen` can never carry `creationflags=` (no such parameter exists
 #: on either), so any reachable call is unconditionally bare -- flagged unless
 #: exempted, same as an unsuppressed `subprocess` call. Sourced from
-#: `coordinator_core.spawn_policy.spawn_names` (moved there 2026-08-21, DR-345
+#: `coordinator_core.spawn_policy.spawn_names` (moved there 2026-08-21, DR-357
 #: widening) so `nudge_windows_subprocess_popup.py`'s per-call-site AST path
 #: can import the identical table rather than re-deriving it -- see that
 #: module's own docstring. The `_SPAWN_NAMES_BY_MODULE` name is kept as the
@@ -700,7 +700,7 @@ def test_gate_ignores_an_unrelated_dot_run_call(tmp_path):
 #: `win_portability`'s "THE CATCH"), so each site needs a per-site
 #: capture-vs-passthrough call, not a sweep. The ratchet makes the population
 #: visible and stops it growing while that burn-down proceeds. Sizing and
-#: rationale: `docs/decisions/DR-345-console-popup-guard-fires-per-call-site-and-keeps-whole-file-scope.md`.
+#: rationale: `docs/decisions/DR-357-console-popup-guard-fires-per-call-site-and-keeps-whole-file-scope.md`.
 #: COVERAGE IS THE POINT: every source root holding `.py` files that the
 #: standing `coordinator_core` leg does not walk appears here, including the
 #: roots currently at ZERO. A zero entry is not filler -- it is what makes a

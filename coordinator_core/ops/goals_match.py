@@ -51,7 +51,7 @@ import yaml
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.match_core import rank_candidates
+from coordinator_core.ops.match_core import QuarantineLog, rank_candidates
 
 _LOG = logging.getLogger(__name__)
 
@@ -87,8 +87,15 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
     if not goals_dir.is_dir():
         return items
 
+    # One WARNING per scan, not per skipped file -- see `QuarantineLog`. Same
+    # collapse as `plan_match._collect_plans`, and for the same caller:
+    # `baton-assemble apply` enumerates both corpora on its d3 stamp path, and
+    # the combined per-file spam buried its own JSON verdict.
+    quarantine = QuarantineLog("goal.match_candidates", _LOG)
+
     for fpath in sorted(goals_dir.glob("*.yaml")):
         fname = fpath.name
+        quarantine.scanned()
         try:
             # Review: code-reviewer — normalise CRLF at read time so Windows-authored
             # goal files take the "---\n" frontmatter-extraction path correctly.
@@ -106,27 +113,21 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
                 fm_text = raw
             fm = yaml.safe_load(fm_text)
         except Exception as exc:  # noqa: BLE001 — parity with emit porter quarantine
-            _LOG.warning("goal.match_candidates: skipping %s — parse error: %s", fname, exc)
+            quarantine.skip(fname, "parse error", str(exc))
             continue
 
         if not isinstance(fm, dict):
-            _LOG.warning(
-                "goal.match_candidates: skipping %s — YAML did not produce a dict", fname
-            )
+            quarantine.skip(fname, "YAML did not produce a dict")
             continue
 
         id_val = fm.get("id")
         title_val = fm.get("title")
 
         if not isinstance(id_val, str) or not id_val:
-            _LOG.warning(
-                "goal.match_candidates: skipping %s — missing required field: id", fname
-            )
+            quarantine.skip(fname, "missing required field: id")
             continue
         if not isinstance(title_val, str) or not title_val:
-            _LOG.warning(
-                "goal.match_candidates: skipping %s — missing required field: title", fname
-            )
+            quarantine.skip(fname, "missing required field: title")
             continue
 
         # Only offer active goals in the nudge; achieved/abandoned are silently excluded.
@@ -135,9 +136,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
         # why no candidates are being suggested rather than silently returning [].
         status_val = fm.get("status")
         if status_val is None:
-            _LOG.warning(
-                "goal.match_candidates: skipping %s — missing required field: status", fname
-            )
+            quarantine.skip(fname, "missing required field: status")
             continue
         if status_val != "active":
             continue
@@ -166,6 +165,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
 
         items.append({"id": id_val, "title": title_val, "text": haystack})
 
+    quarantine.summarize()
     return items
 
 

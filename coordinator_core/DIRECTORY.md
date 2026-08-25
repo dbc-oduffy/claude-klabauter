@@ -158,11 +158,10 @@ Confirm→act (`dry_run:true`/`dry_run:false`) wire contract; git-mv terminal ar
 |---|---|---|
 | `_common.py` | — | Shared helpers for fleet.* ops |
 | `_findings_reap.py` | — | Shared polarity-agnostic scan/act core (`scan_findings`/`reap_findings`) consumed by both review-findings reap legs (DR-218) |
-| `archive_handoffs.py` | `fleet.archive_completed_handoffs` | Sweeps completed handoffs |
 | `archive_paper_trail.py` | `fleet.archive_paper_trail` | Archives a research-session paper-trail workdir into the caller's own `docs/research/archive/` tree, dry_run/act contract |
 | `archive_queue_entry.py` | `fleet.archive_queue_entry` | Single-entry git-mv of one closed `state/improvement-queue/*.yaml` entry into `archive/improvement-queue/YYYY-MM/`, dry_run/act contract |
 | `archive_release_accumulator.py` | `fleet.archive_release_accumulator` | git-mv's the most recent `state/week-changelog/*-pending-release.md` accumulator into `archive/release-notes/` under a tag-suffixed name, if one exists |
-| `archive_shipped_handoffs.py` | `fleet.archive_shipped_handoffs` | Deployment-axis handoff sweep |
+| `archive_terminal_handoffs.py` | `fleet.archive_completed_handoffs` | Cap-bounded sweep of terminal, childless, unclaimed handoffs (subsumes the former deployment-axis-only `archive_shipped_handoffs.py`, deleted C1b) |
 | `memo_send.py` | `memo.send` | MUTATING UDS op handler for cross-repo memo send |
 | `prune_bugs.py` | `fleet.prune_closed_bugs` | Prunes closed bug-backlog entries |
 | `reap_integrated_findings.py` | `fleet.reap_integrated_findings` | Reaps marker-present (integrated) review-findings sidecars from `state/review-trail/findings/`, no age gate — leg (a) of the DR-218 review-trail cleanup split; custom (non-two-phase) result shape |

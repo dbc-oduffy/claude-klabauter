@@ -129,7 +129,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
-    ("coordinator_core.ops.fleet.archive_handoffs", 'registers "fleet.archive_completed_handoffs"'),
+    ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
     ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
@@ -170,6 +170,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_check_addressee", 'registers "memo.check_addressee"'),
     ("coordinator_core.ops.fleet.memo_draft", 'registers "memo.draft" (C7 wiring)'),
     ("coordinator_core.ops.fleet.memo_compose", 'registers "memo.compose" (C7 wiring)'),
+    ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
     ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),
     (
@@ -259,7 +260,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "review.freeze_diff" (cross-repo/inbox/2026-07-23-claude-central-em-'
         "review-diff-freeze-op-wanted.md)",
     ),
-    ("coordinator_core.ops.fleet.archive_shipped_handoffs", 'registers "fleet.archive_shipped_handoffs"'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
@@ -558,6 +558,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.op_budget_breaches",
         'registers "op_census.breaches" (the budget-breach surface — DR-344-the-'
         "brightline-process-budget-for-claude-klabauter.md)",
+    ),
+    (
+        "coordinator_core.ops.warm_guard_evaluate",
+        'registers "warm_guard.evaluate" (the warm-side bash-guard chain — state/'
+        "handoffs/2026-08-23-the-warm-guard-op-gets-registered.md)",
     ),
 ]
 

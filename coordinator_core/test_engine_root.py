@@ -3,7 +3,10 @@ Tests for coordinator_core.engine_root — CLAUDE_KLABAUTER_ROOT resolver primit
 
 Covers all three resolution rungs (mirrors the bash oracle's own resolution
 chain, coordinator/lib/coordinator-claude-klabauter-root.sh):
-  1. CLAUDE_KLABAUTER_ROOT env var already set.
+  1. COORDINATOR_ENGINE_ROOT env var already set. (CLAUDE_KLABAUTER_ROOT was Rung 1 until
+     C14 closed the dual-read window; it now answers nothing and reaching for it
+     here would test the retirement, not the rung. The retirement itself is
+     covered by tests/test_engine_root_env_accessor.py.)
   1.5. <settings-home>/machine-local/.claude-klabauter-root pointer file.
   2. `machine-local get repos.claude_klabauter` CLI.
   3. Hard failure (RuntimeError) with remediation text.
@@ -20,13 +23,29 @@ import pytest
 from coordinator_core import engine_root as mr
 
 
+@pytest.fixture(autouse=True)
+def _clear_root_memo():
+    """`coordinator_engine_root`'s Rung 1.5/2 answer is memoized process-scope on
+    `_registry_mtime_pair`, and every test here points COORDINATOR_SETTINGS_HOME at
+    a tmp_path with no registry files — so they all share the one memo key that
+    tuple resolves to. Without this reset the first test to reach Rung 1.5 answers
+    for every later one, which made the fall-through case pass a stale pointer
+    value back instead of raising. Order-dependence, not a resolver defect: the
+    module ships `_reset_root_memo` as exactly this seam."""
+    mr._reset_root_memo()
+    yield
+    mr._reset_root_memo()
+
+
 def test_rung1_env_var_short_circuits(monkeypatch):
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/tmp/from-env")
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/tmp/from-env")
     assert mr.coordinator_engine_root() == "/tmp/from-env"
 
 
 def test_rung1_5_pointer_file_used_when_env_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     (settings_home / "machine-local" / ".claude-klabauter-root").write_text("  /tmp/from-pointer  \n")
@@ -36,6 +55,7 @@ def test_rung1_5_pointer_file_used_when_env_unset(monkeypatch, tmp_path):
 
 def test_rung1_5_falls_through_when_pointer_absent(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home-empty"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: None)
@@ -46,6 +66,7 @@ def test_rung1_5_falls_through_when_pointer_absent(monkeypatch, tmp_path):
 
 def test_rung1_5_falls_through_when_pointer_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     (settings_home / "machine-local" / ".claude-klabauter-root").write_text("   \n")
@@ -57,6 +78,7 @@ def test_rung1_5_falls_through_when_pointer_empty(monkeypatch, tmp_path):
 
 def test_rung2_machine_local_cli_used_when_pointer_absent(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: "/usr/bin/machine-local")
@@ -71,6 +93,7 @@ def test_rung2_machine_local_cli_used_when_pointer_absent(monkeypatch, tmp_path)
 
 def test_rung2_empty_registry_value_falls_to_error(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: "/usr/bin/machine-local")
@@ -85,6 +108,7 @@ def test_rung2_empty_registry_value_falls_to_error(monkeypatch, tmp_path):
 
 def test_rung2_nonzero_exit_falls_to_error(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: "/usr/bin/machine-local")
@@ -99,6 +123,7 @@ def test_rung2_nonzero_exit_falls_to_error(monkeypatch, tmp_path):
 
 def test_rung3_hard_error_when_machine_local_absent(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: None)
@@ -114,6 +139,7 @@ def test_rung2_timeout_falls_to_error(monkeypatch, tmp_path):
     call outright -- a timeout takes the same disposition as an exec failure and
     falls through to Rung 3's actionable error."""
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: "/usr/bin/machine-local")
@@ -133,5 +159,6 @@ def test_env_var_wins_over_pointer_file(monkeypatch, tmp_path):
     (settings_home / "machine-local").mkdir(parents=True)
     (settings_home / "machine-local" / ".claude-klabauter-root").write_text("/tmp/from-pointer")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/tmp/from-env-wins")
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/tmp/from-env-wins")
     assert mr.coordinator_engine_root() == "/tmp/from-env-wins"

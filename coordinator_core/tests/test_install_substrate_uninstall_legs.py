@@ -509,7 +509,12 @@ def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib=True):
     (setup_src / "hello.py").write_text("# stub percolated file\n", encoding="utf-8")
 
     claude_klabauter_root = tmp_path / "claude-klabauter-root"
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    # C14 closed the dual-read window: CLAUDE_KLABAUTER_ROOT no longer answers Rung 1, so
+    # pinning it here resolved nothing and fell through to this machine's real
+    # registry ladder. Deleted rather than left set, so an inherited value cannot
+    # re-emit the retired-name advisory into these tests' captured stderr.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     claude_klabauter_lib = claude_klabauter_root / "coordinator" / "lib"
     ch_bin = claude_klabauter_lib / "claude-home"
@@ -847,21 +852,26 @@ def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, mo
 
     claude_klabauter_root = tmp_path / "claude-klabauter-root"  # no coordinator/lib under it
     claude_klabauter_root.mkdir()
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    # C14 closed the dual-read window: CLAUDE_KLABAUTER_ROOT no longer answers Rung 1, so
+    # pinning it here resolved nothing and fell through to this machine's real
+    # registry ladder. Deleted rather than left set, so an inherited value cannot
+    # re-emit the retired-name advisory into these tests' captured stderr.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     assert substrate.run() == 1
 
 
 def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monkeypatch, capsys):
     """The `.cmd`-twin claude-klabauter-root repoint inside `_install_bin_resolvers`
-    (~3349) calls the real `coordinator_claude_klabauter_root_with_class()` a *second*
+    (~3349) calls the real `coordinator_engine_root_with_class()` a *second*
     time (the first is run()'s own dual-anchor precondition at ~2517) and
     converts a `RuntimeError` from it into `SubstrateFatalError`. `run()`'s
     try/finally around that call must convert it to the documented int-return
     contract (printed stderr + return 1), matching every other in-function
     `SubstrateFatalError` catch site — not leak as an uncaught exception to
     `run()`'s in-process callers (e.g. `bootstrap-substrate.py`). This drives
-    the genuine failure path — `coordinator_claude_klabauter_root_with_class` is the
+    the genuine failure path — `coordinator_engine_root_with_class` is the
     thing that actually fails in the field, not `_install_bin_resolvers`
     itself — so a later regression that swallows the error inside
     `_install_bin_resolvers` would still be caught here."""
@@ -888,7 +898,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
             return str(claude_klabauter_root), "live-working-tree"
         raise RuntimeError("install-substrate: repos.claude_klabauter unresolvable on second lookup")
 
-    monkeypatch.setattr(substrate, "coordinator_claude_klabauter_root_with_class", _fake_claude_klabauter_root_with_class)
+    monkeypatch.setattr(substrate, "coordinator_engine_root_with_class", _fake_claude_klabauter_root_with_class)
 
     # check_only=True now filecmp-gates every family file `_install_bin_resolvers`
     # installs BEFORE it ever reaches the second `coordinator_claude_klabauter_root()` call
@@ -898,7 +908,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
     # (the manifest's ml_family/ch_family/ml_explicit groups, C12) to clear
     # that gate as a no-op and let execution actually reach the second call —
     # the thing this test drives. NOTE: `_install_bin_resolvers` now resolves
-    # `coordinator_claude_klabauter_root_with_class()` (and loads the bin-templates
+    # `coordinator_engine_root_with_class()` (and loads the bin-templates
     # manifest off it) BEFORE these family loops even run, so with THIS test's fake
     # resolver the second call fails before reaching them regardless — this
     # pre-seeding is retained anyway so the fixture stays correct if that
@@ -935,7 +945,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
     monkeypatch.setattr(substrate, "settings_home", lambda: settings_home_dir)
 
     assert substrate.run(check_only=True) == 1
-    assert calls["n"] == 2, "sanity: fixture must exercise both coordinator_claude_klabauter_root_with_class call sites"
+    assert calls["n"] == 2, "sanity: fixture must exercise both coordinator_engine_root_with_class call sites"
     assert "unresolvable on second lookup" in capsys.readouterr().err
 
 
@@ -1046,7 +1056,7 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
     (resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py").write_text("stub\n", encoding="utf-8")
     # `_install_bin_resolvers` now loads the bin-templates manifest (C12) off
     # the resolved claude-klabauter root BEFORE anything else — this fixture's
-    # `coordinator_claude_klabauter_root_with_class` is faked to point at
+    # `coordinator_engine_root_with_class` is faked to point at
     # `fake_claude_klabauter_root`, so a real manifest file must exist there too, or
     # the load fails loud before this test's actual assertion (no
     # compat-mirror write) is ever reached. Copy the real manifest verbatim
@@ -1060,7 +1070,7 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
     shutil.copyfile(real_manifest, fake_lib_dir / "bin-templates-manifest.py")
 
     monkeypatch.setattr(
-        substrate, "coordinator_claude_klabauter_root_with_class",
+        substrate, "coordinator_engine_root_with_class",
         lambda: (str(fake_claude_klabauter_root), "live-working-tree"),
     )
 
@@ -1085,7 +1095,7 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
     installs new ones any more.
 
     Review: code-reviewer — Finding 3, 2026-07-24-codereview-sliceowns-zero-claude-klabauter
-    sidecar (option (a)): ``coordinator_claude_klabauter_root_with_class`` is pointed at a
+    sidecar (option (a)): ``coordinator_engine_root_with_class`` is pointed at a
     REAL fake claude-klabauter root with a nonempty ``coordinator/bin/`` dir (one on-disk CLI file),
     so ``_derive_agent_helper_names`` genuinely returns a nonempty
     ``derived_names`` set and the agent-helper-forwarder half of leg #7's sweep
@@ -1132,7 +1142,7 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "does-not-exist"))
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
     monkeypatch.setattr(
-        uninstall_legs, "coordinator_claude_klabauter_root_with_class",
+        uninstall_legs, "coordinator_engine_root_with_class",
         lambda: (str(fake_claude_klabauter_root), "live-working-tree"),
     )
 

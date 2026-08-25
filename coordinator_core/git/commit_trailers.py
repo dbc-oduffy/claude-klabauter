@@ -894,3 +894,307 @@ def compute_missing_trailer_args(
                 trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
     return trailer_args
+
+
+def trailer_values_from_argv(trailer_args: Sequence[str]) -> List[str]:
+    """Extract the `K: V` values from a flat `interpret-trailers` argv as
+    `compute_missing_trailer_args` returns it (`["--trailer", "K: V", ...]`).
+
+    Tolerates a trailing `--trailer` with no value rather than raising --
+    `_drop_trailer_arg` preserves pairing, but a caller assembling argv by
+    hand may not, and dropping an unpaired flag is the same thing git would
+    do with it (nothing).
+    """
+    values: List[str] = []
+    i = 0
+    while i < len(trailer_args):
+        if trailer_args[i] == "--trailer" and i + 1 < len(trailer_args):
+            values.append(trailer_args[i + 1])
+            i += 2
+        else:
+            i += 1
+    return values
+
+
+#: Prefixes git itself generates, from `trailer.c :: git_generated_prefixes`.
+#: Their presence is what lets a block hold non-trailer lines at all (Rule 5).
+_GIT_GENERATED_PREFIXES = ("Signed-off-by: ", "(cherry picked from commit ")
+
+#: git-interpret-trailers(1): a block that is not all-trailers needs "at least
+#: 25% trailers" alongside a git-generated one.
+_TRAILER_BLOCK_MIN_PERCENT = 25
+
+
+def _block_items(lines: List[str]) -> List[tuple]:
+    """Group a candidate trailer block's raw lines (endings kept) into items:
+    `(is_trailer, [raw_lines])`. A continuation line -- one opening with
+    whitespace -- belongs to the trailer above it rather than standing alone,
+    which is why a CRLF *inside* a folded value survives into git's output
+    while the item's own terminator does not."""
+    items: List[tuple] = []
+    for raw in lines:
+        bare = raw.rstrip("\r\n")
+        if bare.lstrip().startswith("#"):
+            # Rule 6 -- a comment INSIDE the block is invisible to the
+            # acceptance test and dropped from the output, but ONLY when the
+            # block is accepted; a rejected block is emitted verbatim and
+            # keeps it.
+            items.append(("c", [raw]))
+        elif _TRAILER_CONT_RE.match(bare) and items and items[-1][0] == "t":
+            items[-1][1].append(raw)
+        elif _TRAILER_LINE_RE.match(bare):
+            items.append(("t", [raw]))
+        else:
+            # A continuation whose trailer is separated from it by a comment
+            # has nothing to fold into, so it lands here as a NON-trailer --
+            # which is what makes `Co-Authored-By:` + `# c` + `  cont` a
+            # rejected block rather than an accepted one.
+            items.append(("n", [raw]))
+    return items
+
+
+def _block_is_trailers(items: List[tuple]) -> bool:
+    """git's acceptance rule for the last paragraph, DERIVED from real git
+    rather than read from `trailer.c` (no git source on this box) -- see
+    `state/audits/2026-08-25-interpret-trailers-trailer-block-rule.py`, which
+    re-derives it and is the thing to re-run if this is ever doubted.
+
+    All lines trailer-shaped, OR the block carries a git-generated trailer
+    AND is at least 25% trailer lines. The git-generated half is the part
+    that is easy to miss: `Co-Authored-By`, `Acked-by` and `Deliverable-Id`
+    do NOT unlock the proportional rule, only `Signed-off-by` (and the
+    cherry-pick marker) do."""
+    real = [(kind, raw) for kind, raw in items if kind != "c"]
+    if not real:
+        return False
+    if all(kind == "t" for kind, _ in real):
+        return True
+    if not any(
+        raw[0].startswith(_GIT_GENERATED_PREFIXES)
+        for kind, raw in real
+        if kind == "t"
+    ):
+        return False
+    # The ratio counts ITEMS, not lines: a trailer with folded continuation
+    # lines is one trailer, not several. Counting lines lets a single folded
+    # trailer buy its own acceptance.
+    trailers = sum(1 for kind, _ in real if kind == "t")
+    return trailers * 100 >= len(real) * _TRAILER_BLOCK_MIN_PERCENT
+
+
+def _render_block_item(kind: str, raw: List[str]) -> str:
+    """A trailer item is re-emitted with a `\\n` terminator (its folded
+    continuations keep their own endings verbatim); a non-trailer line is
+    passed through byte-for-byte; a comment is dropped."""
+    if kind == "c":
+        return ""
+    if kind != "t":
+        return "".join(raw)
+    return "".join(raw[:-1]) + raw[-1].rstrip("\r\n") + "\n"
+
+
+def can_format_trailers_in_process(message: bytes) -> bool:
+    """True iff `format_trailers_in_process` is VERIFIED byte-identical to
+    `git interpret-trailers` for `message`.
+
+    The verified envelope is: **no `#` comment line.** Line endings are NOT
+    part of it -- CRLF is admitted and verified. Measured over the
+    byte-identity corpus's fuzz generator across 20 seeds (8000 cases):
+    **5483/5483 identical inside this envelope, and every one of the 6
+    residual divergences outside it.** Both figures come from the same sweep;
+    this is a measured boundary, not a guessed conservative one.
+
+    CRLF IS DELIBERATELY ADMITTED, and getting that wrong is the trap. A
+    narrower "no CR either" envelope looks safer and buys NOTHING on Windows:
+    `Path.write_text` translates `\\n` to `\\r\\n` in text mode, so every
+    `msg_file` a Python caller writes on this box is already CRLF. The
+    census proved it -- the first wiring of this predicate rejected the
+    engine's own probe message and left the spawn in place. An envelope that
+    excludes the only shape the platform produces is not conservative, it is
+    inert.
+
+    Callers MUST spawn `git interpret-trailers` when this returns False. The
+    residual classes all involve a comment line interacting with peeling --
+    see `format_trailers_in_process`. Widening this predicate without first
+    widening the corpus sweep is exactly the "hand-written replacement that
+    guesses at trailer semantics" the ratified anti-scope forbids."""
+    return not any(line.lstrip().startswith(b"#") for line in message.split(b"\n"))
+
+
+def format_trailers_in_process(message: bytes, trailers: Sequence[str]) -> bytes:
+    """Append `trailers` to `message`, byte-identically to
+    `git interpret-trailers --no-divider --in-place --trailer <t> ...`.
+
+    ADD-ONLY, and the narrowness is the safety argument. This reproduces git
+    for the call shape the commit path actually issues -- every trailer is
+    known ABSENT from the message (`compute_missing_trailer_args` returns
+    only missing ones; `_check_deliverable_id_precedence` /
+    `_drop_trailer_arg` exist so no key ever needs replacing). It does NOT
+    implement `--if-exists`, `--if-missing`, `--where`, config-defined
+    trailer aliases, or the `--divider`/scissors handling. Widening the call
+    shape without widening the corpus below is how this becomes the
+    "hand-written replacement that guesses at trailer semantics" the ratified
+    anti-scope in `docs/plans/2026-08-21-a-commit-stops-paying-for-thirty-
+    processes.md` forbids.
+
+    *** ONLY CALL THIS BEHIND `can_format_trailers_in_process`. ***
+
+    Status as of 2026-08-25, over the byte-identity corpus's fuzz generator
+    swept across 20 seeds (8000 cases) plus the 25 named cases:
+
+      * 25/25 named, and 400/400 at the corpus's pinned `FUZZ_SEED`.
+      * 4704/4704 identical for messages with NO carriage return and NO `#`
+        comment line -- the envelope `can_format_trailers_in_process` gates
+        on, and the only shape the engine itself emits.
+      * 6 divergences in 3296, ALL outside that envelope.
+
+    THE PINNED SEED IS NOT ENOUGH, and that is worth more than the fix. An
+    earlier round reached 400/400 on seed 20260825 and looked finished; six
+    other seeds immediately produced ten failures, and fourteen more seeds
+    produced seven further ones in shapes no earlier seed generated. A single
+    pinned seed is a fixed case list wearing a fuzzer's clothes. Sweep seeds
+    before believing a green run.
+
+    The residual classes are all CRLF interacting with comment peeling: where
+    a peeled CRLF blank goes when the block is rewritten, and whether a
+    trailing CRLF comment is peeled or left in place. They are unreached by
+    the gated call path. Fix them against the corpus -- NEVER by editing the
+    corpus -- and re-sweep before widening the predicate.
+
+    The block-boundary algorithm is no longer derived: it is
+    `trailer.c :: find_trailer_block_start`, whose acceptance test is
+    `recognized_prefix && trailer_lines * 3 >= non_trailer_lines`, or
+    `trailer_lines && !non_trailer_lines`. `_block_is_trailers` implements the
+    algebraically identical 25% form. `state/audits/
+    2026-08-25-interpret-trailers-trailer-block-rule.py` re-derives it from
+    live git and is the thing to run if it is ever doubted.
+
+    ORACLE, not intuition: every rule here was read off real git output, not
+    reasoned about. `state/audits/2026-08-25-interpret-trailers-byte-identity-
+    corpus.py` is the differential -- 25 named message shapes plus a seeded
+    400-case fuzz, run against both sides, asserted byte-for-byte. The named
+    cases pass and the fuzz does not, which is the whole argument for having
+    both: hand-picked cases only cover shapes the author imagined.
+    Four of its rules are ones a careful implementer gets wrong by default:
+
+      1. Trailing `#` comment lines and trailing blank lines are PEELED off
+         the end, the trailers are appended, and the peeled lines are put
+         back AFTER them. Trailers do not go at end-of-file.
+      2. If the last remaining paragraph is trailer-shaped, the new trailers
+         join it with NO blank line; otherwise a blank line is inserted. A
+         paragraph that still contains the SUBJECT is never a trailer block,
+         which is why `subject\nDeliverable-Id: x\n` gets a blank line and a
+         second `Deliverable-Id:` rather than joining.
+      3. git writes `\n`, always -- and REWRITES an existing trailer block's
+         `\r\n` line endings to `\n` when it appends to that block. A CRLF
+         message therefore ends up with mixed endings. That is git's
+         behaviour, not a defect to normalise away.
+      4. Trailer values are right-stripped.
+
+    `message` and the return are BYTES, decoded with `surrogateescape`, so a
+    commit message that is not valid UTF-8 round-trips unchanged rather than
+    raising -- git does not care about the encoding and neither may this.
+    """
+    if not trailers:
+        return message
+
+    rendered = "".join(f"{value.rstrip()}\n" for value in trailers)
+    text = message.decode("utf-8", errors="surrogateescape")
+
+    if text == "":
+        return ("\n" + rendered).encode("utf-8", errors="surrogateescape")
+
+    if not text.endswith("\n"):
+        text += "\n"
+
+    lines = text.splitlines(keepends=True)
+
+    # Rule 1 -- peel the trailing comment/blank region. A blank line ending
+    # `\r\n` is NOT peeled: git leaves it in place as the separator and
+    # appends after it, where an LF blank is peeled and put back below the
+    # trailers. Same shape, different line ending, opposite placement.
+    cut = len(lines)
+    while cut > 0:
+        stripped = lines[cut - 1].strip()
+        if stripped == "" or stripped.startswith("#"):
+            cut -= 1
+        else:
+            break
+    head, suffix = lines[:cut], lines[cut:]
+
+    if not head:
+        # Rule 5 -- a message that is NOTHING but comments/blanks keeps that
+        # region FIRST and takes the trailers after it. Peeling it and then
+        # treating the remainder as empty put the trailers ABOVE the comment.
+        # With a comment present the split is after the last comment line; an
+        # all-blank region instead spends ONE blank as the separator and
+        # carries the rest below the trailers.
+        # A run of CRLF blanks is never split: it stays whole, ahead of the
+        # trailers. Otherwise one line becomes the message and the rest
+        # follows the trailers.
+        lead = 0
+        while (
+            lead < len(suffix)
+            and suffix[lead].strip() == ""
+            and suffix[lead].endswith("\r\n")
+        ):
+            lead += 1
+        keep = max(lead, 1)
+        before = "".join(suffix[:keep])
+        sep = "" if before.strip() == "" else "\n"
+        after = "".join(suffix[keep:])
+        return (before + sep + rendered + after).encode(
+            "utf-8", errors="surrogateescape"
+        )
+
+    # Locate the last paragraph of what remains.
+    para_start = len(head)
+    while para_start > 0 and head[para_start - 1].strip() != "":
+        para_start -= 1
+
+    items = _block_items(head[para_start:])
+    # Rule 2 -- a paragraph still holding the subject is never a trailer block.
+    joins_existing_block = para_start > 0 and bool(items) and _block_is_trailers(items)
+
+    if joins_existing_block:
+        # Rule 3 -- git re-emits each parsed TRAILER with a `\n` terminator
+        # while leaving non-trailer lines byte-verbatim, so a CRLF block ends
+        # up with per-line mixed endings rather than a uniformly rewritten one.
+        block = "".join(_render_block_item(kind, raw) for kind, raw in items)
+        body = "".join(head[:para_start]) + block + rendered
+        # Rule 7 -- rewriting the block CONSUMES a peeled CRLF blank, UNLESS
+        # a comment follows it, in which case that blank stays put and
+        # separates the trailers instead. An LF blank always returns below.
+        lead = 0
+        while (
+            lead < len(suffix)
+            and suffix[lead].strip() == ""
+            and suffix[lead].endswith("\r\n")
+        ):
+            lead += 1
+        if lead and any(raw.strip().startswith("#") for raw in suffix[lead:]):
+            body = (
+                "".join(head[:para_start])
+                + block
+                + "".join(suffix[:lead])
+                + rendered
+            )
+        tail = "".join(suffix[lead:])
+    else:
+        # Rejected: a peeled CRLF blank goes back where it was and serves as
+        # the separator, rather than being synthesised and re-appended.
+        lead = 0
+        while (
+            lead < len(suffix)
+            and suffix[lead].strip() == ""
+            and suffix[lead].endswith("\r\n")
+        ):
+            lead += 1
+        if lead:
+            body = "".join(head) + "".join(suffix[:lead]) + rendered
+            tail = "".join(suffix[lead:])
+        else:
+            body = "".join(head) + "\n" + rendered
+            tail = "".join(suffix)
+
+    return (body + tail).encode("utf-8", errors="surrogateescape")

@@ -58,9 +58,9 @@ Table below enumerates all 30 — count matches the live query above.
 | # | op | kind | params | evidence |
 |---|---|---|---|---|
 | 1 | `fleet.archive_actioned_memos` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/archive_actioned_memos.py` — fleet `{mode, dry_run, candidate_ids}` two-phase envelope; `dry_run:true` → T1 preview (enumerate only), `dry_run:false` → T3 act |
-| 2 | `fleet.archive_completed_handoffs` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/archive_handoffs.py` — same fleet two-phase envelope; `_handle_preview_handoffs` (dry_run:true) vs `_handle_act_handoffs` (dry_run:false) |
+| 2 | `fleet.archive_completed_handoffs` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/archive_terminal_handoffs.py` (rebuilt from scratch 2026-08-23, formerly `archive_handoffs.py`) — same fleet two-phase envelope; `_scan_terminal` (preview) vs `_handle_act` (dry_run:false) |
 | 3 | `fleet.archive_completed_plans` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/archive_plans.py` — module docstring: "(dry_run:true / dry_run:false) wire contract" |
-| 4 | `fleet.archive_shipped_handoffs` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/archive_shipped_handoffs.py` — `_scan_shipped` (preview) vs `_handle_act` (dry_run:false act path) |
+| 4 | ~~`fleet.archive_shipped_handoffs`~~ | — | — | **DELETED 2026-08-25 (C1b, docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md) — SUBSUMED into `fleet.archive_completed_handoffs`, not renamed.** Row kept so the slice's numbering stays stable against its own prose; the op no longer exists and needs no descriptor. |
 | 5 | `fleet.prune_closed_bugs` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/prune_bugs.py` — module docstring: "confirm→act (dry_run:true / dry_run:false)"; `dry_run:true → candidates[] of closed bugs; mutates nothing" |
 | 6 | `memo.send` | `dry_run_param` | `{toggle_key: "dry_run", no_write_value: true}` | `coordinator_core/ops/fleet/memo_send.py:297,303` — "Required params: dry_run (bool), topic (slug), to (str), title (str), body (str)"; validated as required bool |
 | 7 | `handoff.normalize` | `write_param` | `{toggle_key: "write", no_write_value: false}` | `coordinator_core/ops/handoff_normalize.py:336` — `write: bool = bool(params.get("write", False))`; docstring: "dry_run (bool) — True if this was a dry-run (write=False or write absent)"; explicitly NOT the fleet envelope |
@@ -92,7 +92,7 @@ Table below enumerates all 30 — count matches the live query above.
 
 | kind | count | ops |
 |---|---|---|
-| `dry_run_param` | 6 | `fleet.archive_actioned_memos`, `fleet.archive_completed_handoffs`, `fleet.archive_completed_plans`, `fleet.archive_shipped_handoffs`, `fleet.prune_closed_bugs`, `memo.send` |
+| `dry_run_param` | 5 | `fleet.archive_actioned_memos`, `fleet.archive_completed_handoffs`, `fleet.archive_completed_plans`, `fleet.prune_closed_bugs`, `memo.send` (row 4, `fleet.archive_shipped_handoffs`, DELETED — see table) |
 | `write_param` | 1 | `handoff.normalize` |
 | `temp_worktree` | 23 | all remaining ops (see table rows 8-30) |
 | `compute_only_noop` | 0 | none identified in the live 30; kind retained for schema completeness |

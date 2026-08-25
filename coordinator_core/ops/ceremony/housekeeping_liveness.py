@@ -102,9 +102,7 @@ KNOWN_CLASSES: tuple = (
 # ARCHIVE_SWEEPS has on-demand CLIs on disk today; every other known class maps to an empty
 # tuple and MUST render nothing (do not invent commands for classes with no CLI yet).
 REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
-    ARCHIVE_SWEEPS: (
-        "python3 coordinator/bin/sweep-shipped-handoffs.py",
-    ),
+    ARCHIVE_SWEEPS: (),
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: (),
     EOL_SWEEP: (),

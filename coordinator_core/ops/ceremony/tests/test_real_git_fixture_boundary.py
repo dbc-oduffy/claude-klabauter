@@ -42,12 +42,23 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # Extend this set deliberately when a further suite adds real-git coverage
 # -- see fixtures/real_git.py's module docstring for why that's a reviewed
 # crossing, not a convenience import.
+# The in-process-commit suites are the sixth through eighth, all from
+# docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md: each asserts a
+# property of git's OWN on-disk formats -- packfiles, packed-refs, the split
+# index, linked worktrees, the tree spine -- which is not a thing a mocked
+# git has to exhibit at all. test_commit_authored_new_file.py is the ninth,
+# and additionally installs real hooks into a real .git/hooks/ to prove that
+# NONE of them fires: a mocked git cannot fail that assertion, which is the
+# whole reason the assertion is worth making.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
+    "test_commit_authored_content_edges.py",
+    "test_commit_authored_new_file.py",
     "test_commit_scoped.py",
+    "test_commit_scoped_edges.py",
+    "test_commit_scoped_in_process.py",
     "test_commit_scoped_trailer_replay.py",
     "test_consumed_handoff_stamp.py",
     "test_post_commit_tail.py",
-    "test_wsc_tail_trailer_divergence.py",
 })
 
 _IMPORT_PATTERN = re.compile(

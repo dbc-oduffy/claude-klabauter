@@ -124,7 +124,6 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator/bin/claude-doe.py:389",
         "coordinator/bin/lib/git_hook_install.py:159",
         "coordinator/lib/percolate/resolve_target.py:215",
-        "coordinator/lib/percolate/targets.py:120",
         "coordinator/lib/resolve-coordinator-clone.py:223",
         "coordinator_core/engine_root.py:191",
         "coordinator_core/ops/gen_claude_doe_shim.py:414",
@@ -271,18 +270,22 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # the `check_machine_local_regeneratability.py` exception above.
 #
 # `coordinator/lib/percolate/targets.py:120` (`_machine_local_get_multi`,
-# gated by `_machine_local_has` + `is_executable(machine_local_bin)`) was NOT
-# converted: unlike `resolve_target.py`'s sibling, this pair carries no
-# rc-code contract of its own (failures are swallowed to `False`/`""`), so it
-# is plausibly convertible in principle -- but `coordinator/tests/
-# test_percolate_targets.py` fakes `machine-local` as a REAL subprocess-
-# invoked bash/`.cmd` stub across every tier (rc1/rc2/rc3, legacy fallback,
-# dedup) this key's read participates in, the same pre-C7b test shape C7b's
-# four sites moved off of (seed a registry FILE instead of faking the CLI).
-# Converting this site blind, without the matching C7b-style fixture
-# rewrite, would silently stop exercising that fixture for the SUPPLEMENT
-# tier -- left as a flagged, not-yet-converted site for a dedicated pass, not
-# folded into this dispatch's two-finding fix scope.
+# gated by `_machine_local_has` + `is_executable(machine_local_bin)`) was left
+# unconverted as of the census above, for the fixture-shape reason recorded
+# there. CONVERTED in the dedicated pass that census called for ("the round
+# goes warm and stops paying for it", 2026-08-25): step 2's `has`-then-`get`
+# pair was collapsed into one `_publish_targets_supplement` call routed
+# through `resolve_target._machine_local_get`'s shared `dump`-backed process-
+# lifetime cache -- the same cache step 1's `repo:`/`publish-mirror:`
+# resolution already populates, so a nine-row round's registry-resolution
+# spawn count dropped from 23 to ~5 in one process (measured,
+# `run_resolve_only_ab`-shaped harness against the disposable klabauter
+# clone). `coordinator/tests/test_percolate_targets.py`'s mock CLI was
+# rewritten alongside it (a `dump`-shaped stub replacing the `has`/`get`
+# pair, the C7b-style fixture rewrite this census flagged as the missing
+# precondition) so the SUPPLEMENT tier stays exercised, not silently
+# stopped. `subprocess.run([machine_local_bin, "get"/"has", ...])` no longer
+# appears in this file at all -- removed from `KNOWN_UNCONVERTED_SITES`.
 #
 # 2026-08-16 REPOS.* LADDER-LOSS FIX (parallel-review-integration, slice 2):
 # a reviewer found that `machine-local get repos.<slug>` is NOT a flat

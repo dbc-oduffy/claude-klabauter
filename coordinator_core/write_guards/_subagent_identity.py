@@ -102,7 +102,7 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     """Port of ``resolve_subagent_identity``, DoE coordinator-session.sh
     (DoE ``e34f2484``, 2026-07-22).
 
-    Three paths, in order:
+    Four paths, in order:
       (a) Bare hex ``^[a-f0-9]{12,}$`` -> unnamed agent fast path, returns
           ``agent_id`` unchanged; ``session_id`` is ignored.
       (b) Named teammate ``^a(.+)-[a-f0-9]{16}$`` -> requires a non-empty
@@ -110,6 +110,15 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
           ``session_id`` with >= 8 chars; on success returns
           ``cs_build_canonical_agent_id(name, session_id[:8])``. On a
           too-short/absent ``session_id``, returns ``""`` (fail-closed).
+      (d) Already-canonical ``<name>@session-<short>`` (``_TEAMMATE_CANONICAL_RE``)
+          -> rebuilt against the LIVE ``session_id`` via
+          ``normalize_teammate_agent_id`` rather than fail-closed to ``""``.
+          The harness stamps the embedded ``<short>`` once at team creation
+          and never refreshes it across ``/clear``, resume, compact, or fork,
+          so a verbatim id here would key a DIFFERENT ``.agents/<id>/``
+          directory than the one branch (b) above (and every other
+          bookkeeping writer) builds fresh from the live session. See
+          ``normalize_teammate_agent_id`` for the full mechanism.
       (c) Anything else -> ``""`` (fail-closed — unknown agent shape).
     """
     if _BARE_HEX_RE.match(agent_id):
@@ -122,6 +131,9 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
             return ""
         short = session_id[:8]
         return _cs_build_canonical_agent_id(name, short)
+
+    if _TEAMMATE_CANONICAL_RE.match(agent_id):
+        return normalize_teammate_agent_id(agent_id, session_id)
 
     return ""
 

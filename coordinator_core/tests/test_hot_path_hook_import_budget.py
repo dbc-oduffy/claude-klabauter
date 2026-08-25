@@ -404,6 +404,45 @@ _TARGETS: Sequence[_Target] = (
         # bash_guards_dispatch's multiplier.
         cpu_floor_ms=220.0,
     ),
+    _Target(
+        name="ops_detect_staged_rollback",
+        import_path="coordinator_core.ops.detect_staged_rollback",
+        # C3 of `docs/plans/2026-08-25-the-commit-gate-stops-importing-a-subsystem.md`
+        # (dispatch brief `state/dispatch-briefs/2026-08-25-the-commit-gate-stops-
+        # importing-a-subsystem/C3.md`). Distinct from `detect_staged_rollback_fired`
+        # above: that target fires the FULL post-`main`-guard CLI trampoline form
+        # (`coordinator/bin/detect-staged-rollback.py` + `_import_main()`, itself
+        # measuring 54 modules post-C2, well under its own 95-module ceiling written
+        # before this plan's cut); this target is a PLAIN `import
+        # coordinator_core.ops.detect_staged_rollback` of the op module itself -- the
+        # surface C2 actually repointed off `coordinator_core.bash_guards._helpers`.
+        # Measured 36 modules on this machine/Python version post-C2 (fresh-subprocess
+        # sys.modules before/after diff, idle box). Smaller absolute baseline needs
+        # relatively more margin than a flat percentage would give it (module
+        # docstring, same rationale as `write_guards_engine`'s and
+        # `detect_staged_rollback_fired`'s comments) -- ~17% / 6-module margin.
+        module_count_ceiling=42,
+        # Measured 0 `sys.path` growth on this machine at this baseline (a bare
+        # module import, no trampoline `sys.path.insert`). Small fixed margin, not a
+        # percentage of zero, matching `bash_guards_dispatch`'s convention.
+        sys_path_entry_ceiling=2,
+        # Names the two modules this plan's C2 chunk cut from this op's import graph
+        # (plan Problem section): `_helpers` was the eager re-export shim dragging in
+        # `subagent_sandbox.engine` transitively for one string constant. Listing both
+        # here means a regression that re-introduces either edge names itself instead
+        # of showing up only as a silent module-count drift.
+        heavy_modules_expected_absent=(
+            "coordinator_core.bash_guards._helpers",
+            "coordinator_core.subagent_sandbox.engine",
+        ),
+        # Idle min-of-3 CPU time measured 0.0-15.6ms on this machine (Windows
+        # scheduler-tick quantisation dominates a sample this light -- the same
+        # quantum `write_guards_engine`'s own comment names). ~9.6x headroom over the
+        # non-zero sample, matching `write_guards_engine`'s multiplier for the same
+        # reason: the smallest baselines in this file need the widest proportional
+        # floor since spawn noise is a larger fraction of the signal.
+        cpu_floor_ms=150.0,
+    ),
 )
 
 def _discover_query_bin_scripts() -> Sequence[Path]:
@@ -664,9 +703,11 @@ def test_hot_path_hook_import_budget_axes_are_complete() -> None:
     fails at construction time -- this test pins that property as a running,
     readable assertion rather than leaving it as an inspection-only fact of
     the dataclass shape (module docstring's RATCHET paragraph, AC10)."""
-    assert len(_TARGETS) >= 4, (
+    assert len(_TARGETS) >= 5, (
         f"expected at least the 3 original hook targets plus the AC9 "
-        f"detect-staged-rollback fired-form target; found {len(_TARGETS)}."
+        f"detect-staged-rollback fired-form target plus C3's plain "
+        f"coordinator_core.ops.detect_staged_rollback import target; "
+        f"found {len(_TARGETS)}."
     )
     for target in _TARGETS:
         assert isinstance(target.module_count_ceiling, int) and target.module_count_ceiling > 0, (
@@ -697,6 +738,13 @@ def test_hot_path_hook_import_budget_gate_catches_a_planted_regression() -> None
     raises AssertionError against the inflated count -- this is deliberately
     NOT a separate, weaker check: it is the production assertion logic,
     exercised against a known-bad input.
+
+    Covers C3's new `ops_detect_staged_rollback` row (and every other row)
+    without a dedicated per-target demonstration: `_assert_module_ceiling` is
+    the exact function `test_hot_path_hook_import_modules` calls for every
+    entry in `_TARGETS`, so proving it trips here proves it trips for any
+    row, C3's included -- a target-specific demonstration would exercise the
+    same shared logic a second time, not different logic.
     """
     target = _TARGETS_BY_NAME["write_guards_engine"]
     imported, _sys_path_growth = _imported_module_names(

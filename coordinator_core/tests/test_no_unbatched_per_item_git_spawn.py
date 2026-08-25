@@ -338,6 +338,44 @@ _SPAWN_API_NAMES: frozenset[str] = frozenset(
 #: AC4 -- coordinator/bin/ MUST be in scope; neither existing gate scans it.
 _GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin")
 
+#: What a GREEN run of this gate does and does not mean -- the published horizon.
+#:
+#: This collector is ONE-HOP by construction (see "SCOPE" above and the negative control
+#: `test_deep_tail_not_flagged`, which pins that silence as intended). A per-item spawn site more
+#: than one call hop from its driving loop is outside it, and carries no exemption, because the
+#: predicate never reaches it to file one against. The cost of that choice is measured, not
+#: theoretical: `session/scope.py :: compute_scope` spent 219-391ms over 35 git spawns through a
+#: four-hop chain this gate reads as clean, and it was found by hand measurement on a P1 record
+#: rather than by the gate whose job is finding it.
+#:
+#: So: green here means "no NEW one-hop per-item spawn site outside the frozen inventory". It
+#: does NOT mean "this tree has no per-item spawn sites". Anything citing this file as THE
+#: enforcement mechanism for the composition spawn-count budget is overclaiming, and
+#: `test_the_one_hop_horizon_is_published_where_this_gate_is_cited` holds the citers to saying so.
+#: Widening past one hop was declined on measurement (32% TP in the deep tail, no static
+#: discriminator separating true from false positives at any depth); a separate ADVISORY
+#: deeper-reachability collector is the open successor, never a quiet edit to this predicate.
+COVERAGE_HORIZON = (
+    "one-hop by construction: a per-item spawn more than one call hop from its loop is invisible "
+    "to this gate, by design and without an exemption. Green means no new one-hop site, never "
+    "that no per-item spawn sites exist."
+)
+
+#: Closed list of the doctrine surfaces that cite this gate as an enforcement mechanism. Each must
+#: name the horizon, so "the gate is green" cannot be read as blanket coverage anywhere it is
+#: cited. A new citer that omits the marker fails this gate; the fix is one qualifying clause in
+#: the citing doc, never an entry dropped from here.
+#:
+#: CLAUDE.md is the other live citer and is NOT here yet: it is PM-gated doctrine (the
+#: doctrine-surface guard blocks an EM edit), and its qualifying clause is queued as an ask rather
+#: than written unilaterally. Add it the moment that clause lands -- an unlisted citer is the same
+#: silent overclaim this register exists to stop.
+_HORIZON_CITERS: tuple[str, ...] = ("docs/wiki/cost-budgets-and-the-kill-disposition.md",)
+
+#: The marker every citer must carry. The shortest phrase that cannot be written by accident and
+#: cannot be satisfied by a passing mention of the filename.
+_HORIZON_MARKER = "one-hop"
+
 _RUNNER_KWARG_NAMES: frozenset[str] = frozenset(
     {"run", "runner", "git", "git_runner", "run_git", "spawn"}
 )
@@ -4224,6 +4262,38 @@ def test_no_new_amplification_sites_outside_known_inventory():
     assert not new_site_keys, "\n\n".join(_format_violation(site) for site in new_violations)
 
 
+def test_the_one_hop_horizon_is_published_where_this_gate_is_cited():
+    """The blind spot is PUBLISHED, not remembered -- the discharge chosen for
+    `state/bug-backlog/2026-08-25-the-amplification-gate-cannot-see-a-four-h-f955425bef7a.yaml`.
+
+    That row's requirement was that the repo know which per-item spawn sites its gate can and
+    cannot see. The one-hop horizon stays (widening it was declined on measurement, and the deeper
+    collector is a separate advisory instrument), so what had to change is the READING: every
+    doctrine surface citing this file as an enforcement mechanism must say that green here means
+    "no new one-hop site", not "no per-item spawn sites exist".
+
+    A prose fix alone decays -- the next edit of CLAUDE.md drops the qualifier and nothing
+    notices. This assertion is the artifact that stops it, and it is deliberately a completeness
+    pin over a CLOSED citer list rather than a repo-wide scan: a new doctrine surface citing the
+    gate is a human decision, and the register is where that decision gets recorded."""
+    missing: list[str] = []
+    for rel in _HORIZON_CITERS:
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            missing.append(f"{rel} -- listed citer does not exist")
+            continue
+        text = path.read_text(encoding="utf-8")
+        if _THIS_FILE.name not in text:
+            missing.append(f"{rel} -- no longer cites this gate; drop it from _HORIZON_CITERS")
+        elif _HORIZON_MARKER not in text:
+            missing.append(f"{rel} -- cites this gate without naming the {_HORIZON_MARKER} horizon")
+    assert not missing, (
+        "the gate's coverage horizon is not published where the gate is cited:\n"
+        + "\n".join(f"  {row}" for row in missing)
+        + f"\n\nhorizon: {COVERAGE_HORIZON}"
+    )
+
+
 def test_every_exemption_still_names_a_live_site(monkeypatch):
     """Self-invalidation for `_EXEMPT_SITES` -- the leg the sibling `_EXEMPT_SITES` in
     `test_no_hardcoded_paths.py` lacks and `_PRODUCTION_EXEMPT_SITES` in
@@ -4662,7 +4732,7 @@ def test_burn_down_known_preexisting_amplification_sites():
 def _format_violation(site: AmpSite) -> str:
     return (
         f"{site.path}:{site.lineno} ({site.enclosing}) -- route {site.route}: a per-item call "
-        f"to `{site.callee}` inside a qualifying loop reaches a git spawn directly. Batch it "
+        f"to `{site.callee}` inside a qualifying loop reaches a spawn directly. Batch it "
         f"into a single call outside the loop (see this plan's safe-primitive map)."
     )
 

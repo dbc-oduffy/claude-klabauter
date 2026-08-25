@@ -16,12 +16,17 @@ Pins the three facts the plan's C1 names:
   posted event's `env` would pass every other test here while deleting the boundary.
 
   AC1's forward-looking half -- AN ERROR ENVELOPE IS NEVER A VERDICT. `warm_guard.evaluate`
-  (`GUARD_OP_NAME`) is not registered yet (`state/handoffs/2026-08-23-the-warm-guard-op-
-  gets-registered.md`, still open), so METHOD_NOT_FOUND is the LIVE response `dispatch`
-  answers with today -- not a hypothetical. `hook_http.interpret_result` already makes the
-  "not a verdict" discrimination (its own contract tests cover it directly), but nothing
-  drove that through `do_POST` over a real socket before this test: a future edit that
-  "simplifies" the error path back into an allow would pass every other test in this file.
+  (`GUARD_OP_NAME`) IS registered now (`coordinator_core/ops/warm_guard_evaluate.py`,
+  landed: state/handoffs/2026-08-23-the-warm-guard-op-gets-registered.md) -- see
+  `coordinator_core/ops/tests/test_warm_guard_evaluate.py` for end-to-end coverage of the
+  real registered handler. Every test in THIS file still injects a fake `dispatch`, so
+  `_method_not_found_dispatch` below no longer reproduces today's live default; it pins a
+  regression instead -- if the registration is ever removed or the method name drifts,
+  `_serve_line` falls back to exactly this METHOD_NOT_FOUND envelope, and
+  `hook_http.interpret_result`'s "not a verdict" discrimination (its own contract tests
+  cover it directly) must still turn that into a loud refusal over a real socket, never a
+  silent allow. A future edit that "simplifies" the error path back into an allow would
+  pass every other test in this file.
 
 All tests bind a real `ThreadingHTTPServer` around `supervisor._make_handler`, mirroring
 `tests/test_http_listener.py`'s own harness -- the handler is driven exactly as a fired
@@ -33,14 +38,15 @@ from __future__ import annotations
 import json
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 from coordinator_core.warm import skew, supervisor
 
 
-def _post(port: int, event: dict, timeout: float = 5.0):
+def _post(port: int, event: dict, timeout: float = 5.0, path: Optional[str] = None):
     body = json.dumps(event).encode("utf-8")
     req = urllib.request.Request(
-        "http://127.0.0.1:%d%s" % (port, supervisor.HOOK_PATH),
+        "http://127.0.0.1:%d%s" % (port, path or supervisor.HOOK_PATH),
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -179,3 +185,85 @@ def test_non_object_result_never_reads_as_an_allow(tmp_path: Path):
     hso = body["hookSpecificOutput"]
     assert "permissionDecision" not in hso
     assert "did not run" in body["additionalContext"]
+
+
+def _echoing_dispatch(msg, *, session_id=None):
+    """Answers with the method it was asked for, plus injected content -- so one fake
+    can pin BOTH that the URL chose the op and that the op's output survives."""
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "result": {
+            "additionalContext": "routed to %s" % msg.get("method"),
+            "systemMessage": "op %s ran" % msg.get("method"),
+        },
+    }
+
+
+def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
+    """Two registrations on the SAME event must reach two different ops. This is the
+    property `hooks.json` forces: three SessionStart entries, one event name."""
+    httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
+    try:
+        _, boot = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/session.boot_sweep")
+        _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.session_heartbeat")
+    finally:
+        httpd.shutdown()
+    assert boot["additionalContext"] == "routed to session.boot_sweep"
+    assert track["additionalContext"] == "routed to hooks.session_heartbeat"
+
+
+def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
+    """The regression with no symptom -- 200 with the content silently dropped."""
+    httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
+    try:
+        status, body = _post(
+            port,
+            {"hook_event_name": "UserPromptExpansion", "prompt": "pickup a handoff"},
+            path="/hook/hooks.receiver_state_sensor",
+        )
+    finally:
+        httpd.shutdown()
+    assert status == 200
+    assert body["additionalContext"] == "routed to hooks.receiver_state_sensor"
+    assert body["systemMessage"] == "op hooks.receiver_state_sensor ran"
+    assert body["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
+
+
+def test_an_out_of_namespace_path_is_404_not_dispatched(tmp_path: Path):
+    """A rewritten registration must not be able to drive a mutating op through the
+    hook endpoint."""
+    import urllib.error
+
+    calls = []
+
+    def _recording_dispatch(msg, *, session_id=None):
+        calls.append(msg.get("method"))
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+    httpd, port = _bind_handler(tmp_path, dispatch=_recording_dispatch)
+    try:
+        try:
+            _post(port, {"hook_event_name": "PreToolUse"}, path="/hook/ceremony.scoped_git_commit")
+            raise AssertionError("out-of-namespace path was served")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+    finally:
+        httpd.shutdown()
+    assert calls == []
+
+
+def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
+    """Keeps the measured arms in budget-manifest.json quotable after routing landed."""
+    seen = []
+
+    def _recording_dispatch(msg, *, session_id=None):
+        seen.append(msg.get("method"))
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+    httpd, port = _bind_handler(tmp_path, dispatch=_recording_dispatch)
+    try:
+        _post(port, {"hook_event_name": "PreToolUse", "tool_name": "Bash"})
+    finally:
+        httpd.shutdown()
+    assert seen == [supervisor.GUARD_OP_NAME]

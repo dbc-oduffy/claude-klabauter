@@ -44,7 +44,7 @@ import yaml
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.match_core import rank_candidates
+from coordinator_core.ops.match_core import QuarantineLog, rank_candidates
 
 _LOG = logging.getLogger(__name__)
 
@@ -57,7 +57,9 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
     the plan's ``title`` lowercased — sufficient for a "which plan did you mean?" picker.
 
     Files with YAML parse errors, non-dict frontmatter, or missing ``title`` fields are
-    quarantined (skipped with a warning).  Files without ``plan_id`` frontmatter use the
+    quarantined -- accounted in ONE summary WARNING per scan, with the per-file
+    detail at DEBUG (``match_core.QuarantineLog``; see its docstring for the
+    stderr-flood incident that motivated the collapse).  Files without ``plan_id`` frontmatter use the
     filename stem as the id (graceful fallback — many plans predate the ``plan_id`` field).
 
     Returns ``[]`` when ``plans_dir`` is absent (graceful-absent, mirrors
@@ -75,8 +77,16 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
     if not plans_dir.is_dir():
         return items
 
+    # One WARNING per scan, not per skipped file -- see `QuarantineLog`. The
+    # ~100 plan sidecars living in docs/plans/ (*.review.md, *.prior-art-
+    # check.md, *.plan-coverage-check.md, *.node-map.md) are not plans and are
+    # skipped on every single enumeration; the per-file lines they produced
+    # buried `baton-assemble apply`'s own verdict in its callers' stderr.
+    quarantine = QuarantineLog("plan.match_candidates", _LOG)
+
     for fpath in sorted(plans_dir.glob("*.md")):
         fname = fpath.name
+        quarantine.scanned()
         try:
             raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
             # Extract only the frontmatter block (between first and second "---" line).
@@ -86,26 +96,20 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
             else:
                 # No frontmatter block — not a plan; generated indexes (e.g. INDEX.md)
                 # land in docs/plans/ as bare markdown and must not be YAML-parsed whole.
-                _LOG.warning(
-                    "plan.match_candidates: skipping %s — no YAML frontmatter block", fname
-                )
+                quarantine.skip(fname, "no YAML frontmatter block")
                 continue
             fm = yaml.safe_load(fm_text)
         except Exception as exc:  # noqa: BLE001 — parity with goals_match quarantine pattern
-            _LOG.warning("plan.match_candidates: skipping %s — parse error: %s", fname, exc)
+            quarantine.skip(fname, "parse error", str(exc))
             continue
 
         if not isinstance(fm, dict):
-            _LOG.warning(
-                "plan.match_candidates: skipping %s — YAML did not produce a dict", fname
-            )
+            quarantine.skip(fname, "YAML did not produce a dict")
             continue
 
         title_val = fm.get("title")
         if not isinstance(title_val, str) or not title_val:
-            _LOG.warning(
-                "plan.match_candidates: skipping %s — missing required field: title", fname
-            )
+            quarantine.skip(fname, "missing required field: title")
             continue
 
         # plan_id frontmatter is preferred; filename stem is the graceful fallback.
@@ -118,6 +122,7 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
 
         items.append({"id": plan_id_val, "title": title_val, "text": haystack})
 
+    quarantine.summarize()
     return items
 
 
