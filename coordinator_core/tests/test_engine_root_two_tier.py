@@ -84,7 +84,7 @@ def _normalize_root(root: str) -> str:
     """Normalize slash direction/case for path-EQUALITY comparison only.
 
     The wrapper's free rungs (Rung 1 `CLAUDE_KLABAUTER_ROOT` env var, Rung 1.5 the
-    `.claude-klabauter-root` pointer file) and the shim's own registry-key rung can
+    `.claude-klabauter-live-root` pointer file) and the shim's own registry-key rung can
     legitimately return the SAME path in different string forms (observed
     on this box: pointer file holds a forward-slash path, the registry's
     flat-quoted-key form holds a backslash path) — that is a pre-existing
@@ -547,7 +547,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 # (`coordinator_core.engine_root.coordinator_engine_root_with_class`) — the
 # `_short_circuit_fixture`/`_skew_fixture` cases above exercise the wrapper
 # too, but none of them pin a session root that the gate confirms is NOT a
-# working repo while `.claude-klabauter-root` is ALSO present, which is exactly the
+# working repo while `.claude-klabauter-live-root` is ALSO present, which is exactly the
 # defect's reproduction shape (see plan § Problem).
 #
 # Spec backlink: pln-arm-the-klabauter-dual-boot-th-f7169a
@@ -555,7 +555,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 
 @pytest.fixture
 def _dual_boot_fixture(tmp_path, monkeypatch):
-    """A synthetic registry with `.claude-klabauter-root` present (rung 1.5 pointer)
+    """A synthetic registry with `.claude-klabauter-live-root` present (rung 1.5 pointer)
     AND `repos.claude_klabauter` registered — the dual-boot shape. Session
     root is confirmed NOT a working repo, so the gate (once reached) picks
     the published engine. `write_registry` controls whether the session
@@ -566,7 +566,7 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
 
     live_dir = tmp_path / "live"
     live_dir.mkdir()
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_dir), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_dir), encoding="utf-8")
 
     published_dir = tmp_path / "published-klabauter"
     (published_dir / "coordinator_core").mkdir(parents=True)
@@ -624,7 +624,7 @@ def _dual_boot_fixture(tmp_path, monkeypatch):
 
 
 def test_dual_boot_published_wins_over_pointer_when_not_working_repo(_dual_boot_fixture):
-    """AC1: `.claude-klabauter-root` present + `repos.claude_klabauter` registered +
+    """AC1: `.claude-klabauter-live-root` present + `repos.claude_klabauter` registered +
     session root a CONFIRMED non-working repo -> the wrapper must match the
     shim's own answer, `(<published>, 'resolved-engine')`. RED before C1:
     today the wrapper returns the pointer's live tree instead, because rung
@@ -716,7 +716,7 @@ def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, m
 
     live_dir = tmp_path / "live"
     live_dir.mkdir()
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_dir), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_dir), encoding="utf-8")
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
@@ -747,7 +747,7 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     settings_home = tmp_path / "settings-home"
     settings_home_ml_dir = settings_home / "machine-local"
     settings_home_ml_dir.mkdir(parents=True)
-    # Deliberately no `.claude-klabauter-root` written here — if the fix under test
+    # Deliberately no `.claude-klabauter-live-root` written here — if the fix under test
     # regresses to `machine_local_dir()` (settings-home-derived, override-
     # blind), this rung would find nothing and fall through to Rung 2,
     # which has no registry entry either and would raise instead of
@@ -757,7 +757,7 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     override_ml_dir.mkdir()
     override_live_dir = tmp_path / "override-live"
     override_live_dir.mkdir()
-    (override_ml_dir / ".claude-klabauter-root").write_text(
+    (override_ml_dir / ".claude-klabauter-live-root").write_text(
         str(override_live_dir), encoding="utf-8"
     )
 
@@ -934,7 +934,7 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
     live_root = tmp_path / "only-live"
     _make_bin_dir_with_sentinel(live_root)
 
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
@@ -961,7 +961,7 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
 
 @pytest.fixture
 def _rung2_fixture(tmp_path, monkeypatch):
-    """No env override, no `.claude-klabauter-root` pointer, `machine-local` present
+    """No env override, no `.claude-klabauter-live-root` pointer, `machine-local` present
     on PATH — forces resolution all the way to Rung 2's subprocess call."""
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"

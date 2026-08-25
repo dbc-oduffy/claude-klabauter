@@ -542,7 +542,7 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     `_resolve_claude_klabauter_root()`'s pointer-file/registry ladder; settings-home
     is the sanctioned resolution point (PM ruling, 2026-07-29) for that
     fallback: its own Rung 1.5 already reads
-    `<settings-home>/machine-local/.claude-klabauter-root` ahead of any bash-spawning
+    `<settings-home>/machine-local/.claude-klabauter-live-root` ahead of any bash-spawning
     fallback, so this call routes through it. No
     absolute path is hardcoded in source; the value is resolved fresh on
     every call.

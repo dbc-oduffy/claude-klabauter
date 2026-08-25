@@ -37,10 +37,11 @@ Responsibilities:
       naming the interpreter(s) probed. Non-fatal; does not arm the guard (see C2 of
       docs/plans/2026-08-17-machine-first-install-surface.md).
   5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero) as best-effort.
-  6. Install claude-klabauter's OWN `.git/hooks/pre-commit` gate chain (staged-rollback
-     detector; see coordinator_core.ops.install_claude_klabauter_precommit_hook) as best-effort —
-     skipped in --register-only mode, and a clean no-op on any checkout that isn't
-     claude-klabauter itself (the op's own identity guard).
+  6. Install claude-klabauter's OWN `.git/hooks/pre-commit` gate chain — PERMANENTLY
+     A NO-OP as of 2026-08-25 ("the staged rollback gate dies without blocking a
+     commit"): the staged-rollback detector and its installer op are both deleted,
+     and claude-klabauter ends with no pre-commit hook by design. This step's function is
+     kept for a clean ADVISORY skip rather than removed; see its own docstring.
   (There is no `coordinator_whoami` provisioning step. The package is RETIRED —
      this chain used to pip-install it editable under the operator's
      `coordinator.python` general pin, and that step is deliberately absent, not
@@ -60,7 +61,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
-                            [--claude-klabauter-root <path>] [--coordinator-root <path>]
+                            [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
                             [--allow-venv-fallback] [--with-test-deps]
                             [--register-only] [--check] [--help]
 
@@ -235,7 +236,7 @@ Options:
   --i-am-agent                       Suppress interactive prompts (non-interactive agent dispatch)
   --skip-dep-check                   Skip dependency checking (pair with --accept-missing-deps-risk)
   --accept-missing-deps-risk         Accept hallucination risk from missing deps (pair with --skip-dep-check)
-  --claude-klabauter-root <path>               Explicit CLAUDE_KLABAUTER_ROOT override (default: CLAUDE_KLABAUTER_ROOT env -> repo-root)
+  --claude-klabauter-live-root <path>               Explicit CLAUDE_KLABAUTER_ROOT override (default: CLAUDE_KLABAUTER_ROOT env -> repo-root)
   --coordinator-root <path>          Explicit coordinator-claude root override (default: COORDINATOR_CLAUDE_ROOT env -> sibling-dir)
   --allow-venv-fallback               Explicit opt-in, break-glass only: on a machine-level
                                       dependency install failure that is NOT a PEP-668 refusal,
@@ -352,11 +353,11 @@ def parse_args(argv: list[str]) -> Args:
             args.check = True
         elif tok == "--help":
             args.help = True
-        elif tok == "--claude-klabauter-root":
+        elif tok == "--claude-klabauter-live-root":
             i += 1
             if i >= n or argv[i].startswith("--"):
                 got = argv[i] if i < n else ""
-                raise ArgError(f"ERROR: --claude-klabauter-root requires a path argument (got: '{got}')")
+                raise ArgError(f"ERROR: --claude-klabauter-live-root requires a path argument (got: '{got}')")
             args.claude_klabauter_root = argv[i]
         elif tok == "--coordinator-root":
             i += 1
@@ -1995,15 +1996,15 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
 
 
 def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, str]:
-    """Resolve CLAUDE_KLABAUTER_ROOT and describe the source used: --claude-klabauter-root flag
+    """Resolve CLAUDE_KLABAUTER_ROOT and describe the source used: --claude-klabauter-live-root flag
     -> CLAUDE_KLABAUTER_ROOT env -> repo-root auto-discovery. This resolution feeds
     BOTH dependency provisioning (which pyproject.toml / sys.path tree to
     read) and registration/verification — Review: code-reviewer 2026-07-21
-    Finding 7 (P2): --claude-klabauter-root previously redirected registration/
+    Finding 7 (P2): --claude-klabauter-live-root previously redirected registration/
     verification but was silently ignored by dependency provisioning, which
     always derived from the script's own on-disk location."""
     if args.claude_klabauter_root:
-        return Path(args.claude_klabauter_root), "--claude-klabauter-root flag"
+        return Path(args.claude_klabauter_root), "--claude-klabauter-live-root flag"
     # C23: this consulted the RETIRED name only, so it went dark when C14
     # stopped anything exporting it — an operator with only
     # COORDINATOR_ENGINE_ROOT set silently got git-root auto-discovery
@@ -2150,7 +2151,7 @@ def register_claude_klabauter_root(
     (flag -> env -> repo-root ladder), resolved once in `main` and shared with
     dependency provisioning. `repo_root` (the script's own on-disk location)
     is used for the coordinator-claude sibling-dir default probe AND as the
-    identity-resolution root — a `--claude-klabauter-root` override may point somewhere
+    identity-resolution root — a `--claude-klabauter-live-root` override may point somewhere
     with no sibling layout (or AGENTS.md/manifest) at all, but the actual
     on-disk checkout running this script still does.
 
@@ -2660,11 +2661,11 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
         print("FAIL: coordinator_core is not importable from CLAUDE_KLABAUTER_ROOT.", file=sys.stderr)
         print(f"  CLAUDE_KLABAUTER_ROOT: {claude_klabauter_root_resolved}", file=sys.stderr)
         print(f"  Interpreter: {engine_py}", file=sys.stderr)
-        print("  Remediation: python3 scripts/setup.py --claude-klabauter-root /path/to/claude-klabauter", file=sys.stderr)
+        print("  Remediation: python3 scripts/setup.py --claude-klabauter-live-root /path/to/claude-klabauter", file=sys.stderr)
         print("    1. Ensure claude-klabauter is fully cloned — coordinator_core/ must exist at:", file=sys.stderr)
         print(f"       {claude_klabauter_root_resolved}/coordinator_core/__init__.py", file=sys.stderr)
         print("    2. If CLAUDE_KLABAUTER_ROOT is wrong, re-run with the correct root:", file=sys.stderr)
-        print("       python3 scripts/setup.py --claude-klabauter-root /path/to/claude-klabauter", file=sys.stderr)
+        print("       python3 scripts/setup.py --claude-klabauter-live-root /path/to/claude-klabauter", file=sys.stderr)
         print(f"    3. If {' '.join(import_names)} are missing under {engine_py}, re-run this script —", file=sys.stderr)
         print("       dependency provisioning above should have installed them.", file=sys.stderr)
         sys.exit(1)
@@ -2903,24 +2904,24 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
 
 
 def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) -> None:
-    """Best-effort install-chain step: wires claude-klabauter's own
-    `.git/hooks/pre-commit` gate chain via the
+    """Best-effort install-chain step: PERMANENTLY A NO-OP as of 2026-08-25
+    ("the staged rollback gate dies without blocking a commit"). Used to wire
+    claude-klabauter's own `.git/hooks/pre-commit` gate chain via the
     `coordinator_core.ops.install_claude_klabauter_precommit_hook` op (through its
-    `coordinator/bin/install-claude-klabauter-precommit-hook.py` CLI trampoline).
-
-    Non-fatal by design, mirroring `run_health_probe`'s ADVISORY shape: a
-    hook-install failure must never abort the rest of setup — the op's own
-    identity guard already makes this a clean no-op skip on any checkout
-    that isn't claude-klabauter (relevant for a `--claude-klabauter-root` pointing
-    elsewhere), and the op itself is idempotent, so re-running setup never
-    duplicates gate blocks.
+    `coordinator/bin/install-claude-klabauter-precommit-hook.py` CLI trampoline) — both
+    are deleted, and claude-klabauter ends with no pre-commit hook installed by this
+    repo, by design, not by omission. Kept as a step (rather than removed
+    from the install chain) purely so a re-run of an older setup script
+    invocation, or a caller still referencing this function name, degrades
+    to a clean ADVISORY skip below instead of an AttributeError -- never
+    fatal, mirroring `run_health_probe`'s ADVISORY shape.
     """
     print()
     print("--- Install: pre-commit gate chain ---")
 
     cli = repo_root / "coordinator" / "bin" / "install-claude-klabauter-precommit-hook.py"
     if not cli.is_file():
-        print("[ADVISORY] coordinator/bin/install-claude-klabauter-precommit-hook.py not found — skipping pre-commit gate install.")
+        print("[ADVISORY] coordinator/bin/install-claude-klabauter-precommit-hook.py not found (gate deleted 2026-08-25) — skipping pre-commit gate install.")
         return
 
     proc = subprocess.run(
@@ -3814,7 +3815,7 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
     """Install-chain step: report whether `<settings-home>` is actually
     complete, not merely whether each of its individual population steps
     (bin-forwarder install, `.percolate-identity`, machine identity
-    registry, `.claude-klabauter-root` pointer, etc.) exited 0 earlier in this same
+    registry, `.claude-klabauter-live-root` pointer, etc.) exited 0 earlier in this same
     `main()` pass.
 
     docs/plans/2026-08-17-machine-first-install-surface.md § C5: population

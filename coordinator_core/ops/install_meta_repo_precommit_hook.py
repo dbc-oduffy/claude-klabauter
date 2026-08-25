@@ -38,14 +38,25 @@ behind one call, so there is exactly one place to invoke and it cannot be
 half-run. See `main_install_all()`'s own docstring for the reasoning.
 
 Gate registry (`_GATE_REGISTRY` below) is the single source of truth for
-which checks ship in the hook — see that registry for the current four
-gates (`detect-staged-rollback`, added 2026-07-29 — see "Exit-code clamping"
-below for why it forced this file's exit-code discipline to change first;
-`coordinator-precommit-exec-bit-check`, present at that time, was retired
-2026-07-29 — see "Orphaned regions" below for the already-installed-hook
-handling that retirement needed). Adding a gate is a registry entry, not a
-new code path: fresh-install, upgrade-append, and idempotency all derive
-from it generically.
+which checks ship in the hook. **COUNT THAT LIST; do not trust a number in
+this sentence.** It deliberately no longer states how many gates there are:
+the previous wording said "the current four gates" and went stale when
+`detect-staged-rollback` was deleted 2026-08-25 (DR-359), after which the
+registry held three. That stale four was then copied into an acceptance
+criterion and into a cross-repo memo, producing two wrong assertions that a
+prior-art check, a coverage check and an Opus review all passed over. Prose
+about a structure does not update when the structure does — see
+`state/lessons/2026-08-25-a-comment-describing-state-is-not-the-st-*.yaml`.
+
+Retirement history, which does not go stale:
+`coordinator-precommit-exec-bit-check` was retired 2026-07-29 — see
+"Orphaned regions" below for the already-installed-hook handling that
+retirement needed. `detect-staged-rollback` was added 2026-07-29 (see
+"Exit-code clamping" below for why it forced this file's exit-code
+discipline to change first) and DELETED 2026-08-25.
+
+Adding a gate is a registry entry, not a new code path: fresh-install,
+upgrade-append, and idempotency all derive from it generically.
 
 If a pre-commit hook already exists with content other than this gate chain
 (custom hooks, Git LFS prefix, etc.), the installer appends whatever gates
@@ -259,22 +270,18 @@ _GATE_REGISTRY: List[_Gate] = [
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_SETTINGS_TRACKING",
         version=2,
     ),
-    _Gate(
-        marker="detect-staged-rollback",
-        filename="detect-staged-rollback.py",
-        kind="python",
-        label="staged-rollback",
-        # 2026-08-21, PM ruling: the gate script's exact-blob rollback check
-        # (check 1) was KILLED -- see coordinator_core.ops.detect_staged_
-        # rollback's module docstring for the full ruling. The only check
-        # left in that script is the mass-deletion tripwire, so this entry's
-        # CANNOT-RUN override key repoints to that check's own key; the old
-        # STAGED_ROLLBACK key is dead (no code anywhere reads it any more)
-        # and must not be reintroduced by analogy for a future check.
-        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION",
-        version=2,
-    ),
 ]
+# 2026-08-25 -- `detect-staged-rollback` DROPPED out of this registry
+# entirely (not merely retired to a stale version), per peer session
+# doe-claude-33 / PM ruling on their side: "Drop the gate. Do NOT keep a
+# minimal op alive for us." This module installs `~/.claude`'s hook (Claude
+# Central / the meta-repo), NOT DoE-claude's own tree -- DoE-claude has no
+# pre-commit hook at all and never has, so this affects one of Claude
+# Central's gates only. Orphan-region removal (see "Orphaned regions" below)
+# means an already-installed hook's `detect-staged-rollback` region is
+# spliced out on the next install run against this registry -- this does not
+# fix an already-installed hook by itself (nothing in this repo can), it
+# makes the next regeneration correct.
 
 
 def _bin_dir() -> Path:
@@ -888,6 +895,42 @@ _POST_SYNC_GATE_REGISTRY: List[_Gate] = [
 _POST_SYNC_HOOK_FILENAMES = ("post-merge", "post-checkout")
 
 
+def _marker_is_installed(text: str, marker: str) -> bool:
+    """Is `marker` present as a REAL gate in `text`, rather than merely as a
+    substring somewhere in it?
+
+    2026-08-25 fix. Membership used to be a bare ``marker in existing_text``.
+    That is true for a marker mentioned in a COMMENT, which silently made the
+    gate un-installable forever: it fell out of `missing_gates` (never
+    appended) and out of `stale_gates` too (no locatable region, so
+    `_gate_is_stale` correctly declines to guess), leaving a registry entry
+    that could never reach the hook. Observed on `~/.claude`'s pre-commit,
+    whose header comment documents that a hand-written
+    `check-no-illegal-paths.sh` was removed — that sentence alone suppressed
+    the `check-no-illegal-paths` gate on every reinstall. Found by
+    `doe-claude-5a` after regenerating that hook, 2026-08-25.
+
+    Presence means either of:
+      - a locatable `# --- Gate: ... (<marker>) ---` region, or
+      - the marker on a line that is not a comment.
+
+    The second arm is what preserves the deliberate leave-it-alone behaviour
+    for a legacy or hand-authored hook that references the marker inside a
+    script PATH on a real command line (see `stale_gates`' own note): those
+    are still treated as present and are never clobbered. Only a
+    comment-only mention now counts as absent.
+    """
+    if _find_gate_region(text, marker) is not None:
+        return True
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if marker in line:
+            return True
+    return False
+
+
 def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gate]) -> int:
     """Shared install/append logic for a SINGLE named git hook
     (`.git/hooks/<hook_filename>`) against `gates` (in registry order).
@@ -923,7 +966,7 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
         current_markers = {g.marker for g in gates}
         existing_text, orphaned_gates = _remove_orphaned_gate_regions(existing_text, current_markers)
 
-    missing_gates = [g for g in gates if g.marker not in existing_text]
+    missing_gates = [g for g in gates if not _marker_is_installed(existing_text, g.marker)]
     # Present-but-stale: marker survived AND its region is locatable (a
     # `# --- Gate: ... ---` header this module itself would have emitted),
     # but that region's body no longer carries today's version stamp — see
@@ -940,7 +983,10 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
     # the engine clone wedges every commit and reinstalling reports "current"
     # while fixing nothing.
     stale_gates = [
-        g for g in gates if g.marker in existing_text and _gate_is_stale(existing_text, g, bin_dir)
+        g
+        for g in gates
+        if _marker_is_installed(existing_text, g.marker)
+        and _gate_is_stale(existing_text, g, bin_dir)
     ]
 
     if hook_exists and not missing_gates and not stale_gates and not orphaned_gates:

@@ -1829,7 +1829,7 @@ def main() -> None:
 
     # Review: code-reviewer — F1: schema guard for --queue-scope; only improvement-queue supports it.
     # --queue-scope central on debt-backlog or bug-backlog would silently redirect those entries
-    # into <claude-klabauter-root>/state/<schema>/ which is semantically wrong and undocumented.
+    # into <claude-klabauter-live-root>/state/<schema>/ which is semantically wrong and undocumented.
     # Review: code-reviewer — B-F2 (nit): cross-repo-commitment is deliberately excluded
     # too — it has no central/project distinction (always a sibling-owed watch-ledger
     # written to the current repo), not merely an oversight from the C3b addition.

@@ -16,7 +16,7 @@ Resolution chain (rung 1 renamed by C14; the rest unchanged from the bash oracle
   1. COORDINATOR_ENGINE_ROOT env var — if already set, return it unchanged. The
      retired CLAUDE_KLABAUTER_ROOT is read at this rung only to report itself as retired
      (see `coordinator_engine_root_env`); it never supplies a value.
-  1.5. <settings-home>/machine-local/.claude-klabauter-root pointer file — a cheap direct-file-read,
+  1.5. <settings-home>/machine-local/.claude-klabauter-live-root pointer file — a cheap direct-file-read,
        checked ahead of the expensive machine-local subprocess ladder so per-invoke
        resolution spawns zero subprocesses on Windows. Falls through to rung 2 if
        absent/empty.
@@ -173,7 +173,7 @@ def coordinator_engine_root() -> str:
     # Rung 1.5: cheap direct-file-read pointer, checked ahead of the expensive
     # machine-local subprocess ladder. Absence/emptiness is a normal fallback
     # state, not an error — falls through to Rung 2.
-    pointer_path = ml_dir / ".claude-klabauter-root"
+    pointer_path = ml_dir / ".claude-klabauter-live-root"
     try:
         with open(pointer_path, "r", encoding="utf-8") as f:
             val = f.read().strip()
@@ -432,11 +432,11 @@ def _reset_gate_memo() -> None:
 
 
 def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
-    """`(registry.toml mtime, registry.local.toml mtime, .claude-klabauter-root mtime)`,
+    """`(registry.toml mtime, registry.local.toml mtime, .claude-klabauter-live-root mtime)`,
     `-1.0` for a missing file — cheap staleness key for the gate memo below.
     Never raises.
 
-    Review: code-reviewer — the `.claude-klabauter-root` sentinel mtime is included
+    Review: code-reviewer — the `.claude-klabauter-live-root` sentinel mtime is included
     because the full-gate branch's `_resolve_claude_klabauter_root` falls back to
     reading that sentinel when the registry key is absent; omitting it meant
     a mid-process edit to the sentinel could not invalidate the memo. A
@@ -452,7 +452,7 @@ def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
     return (
         _mtime(ml_dir / "registry.toml"),
         _mtime(ml_dir / "registry.local.toml"),
-        _mtime(ml_dir / ".claude-klabauter-root"),
+        _mtime(ml_dir / ".claude-klabauter-live-root"),
     )
 
 
@@ -599,13 +599,13 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
          engine mirror key) is not registered at all, the gate's step 1/3
          (published-engine branches) can never fire — skip straight to the
          shim's own live-tree resolution (`_resolve_claude_klabauter_root`, which
-         itself reads the `.claude-klabauter-root` pointer as ITS OWN rung 2) rather
+         itself reads the `.claude-klabauter-live-root` pointer as ITS OWN rung 2) rather
          than paying for the full `_is_claude_klabauter_source_tree` session-root
          walk the gate would otherwise do first (2026-08-18, C4: this
          replaced the retired per-repo `_is_engine_working_repo` gate with
          a structural session-root-vs-live-root comparison; the short-circuit
          here is unaffected either way — it still skips the walk entirely).
-         THIS branch is where Rung 1.5's `.claude-klabauter-root` pointer fast path
+         THIS branch is where Rung 1.5's `.claude-klabauter-live-root` pointer fast path
          now lives — checked here, ahead of the full gate walk, so the
          single-tree box (no klabauter registered) keeps today's
          byte-identical zero-subprocess fast path (AC4). Note this still
@@ -619,7 +619,7 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
          the pointer previously pre-empted the gate on every installed
          machine, since the installer always writes it. This loses nothing
          on the dual-boot path: the shim's `_resolve_claude_klabauter_root` already
-         reads `.claude-klabauter-root` as its own rung inside the gate, so a working
+         reads `.claude-klabauter-live-root` as its own rung inside the gate, so a working
          repo still resolves via the pointer from inside step 3.
       3. Otherwise, run the full gate (`resolve_claude_klabauter_root_with_class()`),
          memoized module-scope on `(registry mtime pair, session root)` so
@@ -652,7 +652,7 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
 
     published_key = shim._registry_value(ml_dir, "repos.claude_klabauter")
     if not published_key:
-        # Rung 1.5 (`.claude-klabauter-root` pointer) fast path — see this function's
+        # Rung 1.5 (`.claude-klabauter-live-root` pointer) fast path — see this function's
         # own docstring, step 2. Only reachable here, on the
         # klabauter-absent single-tree box, so a dual-boot box never lets
         # the pointer pre-empt step 3's full gate.
@@ -661,7 +661,7 @@ def coordinator_engine_root_with_class() -> Tuple[str, str]:
         # directly — the latter does not honor `MACHINE_LOCAL_REGISTRY_DIR`,
         # so the two would disagree on the pointer file's location whenever
         # that override is set. Review: code-reviewer.
-        pointer_path = ml_dir / ".claude-klabauter-root"
+        pointer_path = ml_dir / ".claude-klabauter-live-root"
         try:
             with open(pointer_path, "r", encoding="utf-8") as f:
                 val = f.read().strip()

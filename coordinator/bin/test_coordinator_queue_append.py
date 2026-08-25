@@ -2126,7 +2126,7 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     mode (applies to any op OTHER than schema.describe/schema.validate — see below —
     i.e. in practice "queue.append", the op these routing tests actually exercise):
           "success" -> returns {out_path: <out_path>} in a JSON-RPC envelope.
-          "skipped" -> returns {skipped: true, reason: "test-claude-klabauter-root-unresolvable"}.
+          "skipped" -> returns {skipped: true, reason: "test-claude-klabauter-live-root-unresolvable"}.
           "capture" -> writes params+env to tmpdir/captured.json and returns success.
 
     Returns tmpdir (the CLAUDE_KLABAUTER_ROOT value that makes the fake seam present).
@@ -2225,7 +2225,7 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
             "import json, sys\n"
             "if __name__ == '__main__':\n"
             + _indent(schema_op_preamble)
-            + "    result = {'skipped': True, 'reason': 'test-claude-klabauter-root-unresolvable'}\n"
+            + "    result = {'skipped': True, 'reason': 'test-claude-klabauter-live-root-unresolvable'}\n"
             "    print(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}))\n"
             "    sys.exit(0)\n"
         )

@@ -535,7 +535,7 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
 
     ``coordinator_root`` and ``cwd`` are accepted for signature/call-site compatibility
     (the oracle's seam took both) but are not consulted: Rule 4's resolution depends only
-    on the claude-klabauter-root resolver, never on the coordinator/cwd it's invoked from.
+    on the claude-klabauter-live-root resolver, never on the coordinator/cwd it's invoked from.
 
     Review: code-reviewer (F2/F3) — the except-clause is ``Exception`` (not the narrower
     ``(RuntimeError, ImportError)``) so it actually matches this docstring's "falls back

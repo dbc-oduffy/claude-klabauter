@@ -103,6 +103,15 @@ _CLAUDE_KLABAUTER_ROOT_REMEDIATION = (
     "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
 
+# Back-compat alias, same shape as `cc_invoke._resolve_claude_klabauter_root`
+# (C17, docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md): a
+# published CLI puts this LIVE (untransformed) module on sys.path but imports
+# it under the TRANSFORMED name, since the published tree's own cc_invoke.py
+# re-exports `_CLAUDE_KLABAUTER_ROOT_REMEDIATION` as `_CLAUDE_KLABAUTER_ROOT_REMEDIATION`
+# post-transform. Exporting both spellings here closes that cross-tree seam
+# without touching the mirror.
+_CLAUDE_KLABAUTER_ROOT_REMEDIATION = _CLAUDE_KLABAUTER_ROOT_REMEDIATION
+
 # The engine-root module's own basename and entry-point name both carry the
 # repo token (`claude_klabauter_root.py` / `coordinator_claude_klabauter_root_with_class`), and the
 # publish transform rewrites that token throughout — so the mirror spells them
@@ -149,7 +158,7 @@ def _machine_local_get(key: str) -> str | None:
     Native Python replacement for the bash `machine-local` forwarder: invokes
     bin/_machine_local.py (the real reader) directly with the same interpreter
     that loaded this module — no shell, no bash. Mirrors
-    gen-claude-klabauter-root-pointer.py::_machine_local_get and
+    gen-claude-klabauter-live-root-pointer.py::_machine_local_get and
     coordinator_core.engine_root.coordinator_engine_root's own rung-2 lookup.
 
     Returns the resolved value, or None on any failure (missing impl, non-zero
@@ -398,7 +407,7 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
                 subprocess spawn (docs/plans/2026-07-14-claude-klabauter-windows-
                 portability.md § C1). `.claude-klabauter-root` is consulted
                 FIRST and wins outright (DR-326: all engine dispatch goes to the
-                published build); `.claude-klabauter-root` answers only on a box with no
+                published build); `.claude-klabauter-live-root` answers only on a box with no
                 published mirror installed. Both remain a DIRECT return, not a
                 delegation — see the "no longer gate-blind in the direction
                 that mattered" note below for why that is safe.
@@ -594,7 +603,7 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
     # bash subprocess on the per-invoke resolution hot path (fleet-wide
     # hook-latency fix). Plain file read only — never spawns a subprocess.
     # Writer follows reader: the install surface is expected to write
-    # <settings-home>/machine-local/.claude-klabauter-root; absence here is a normal
+    # <settings-home>/machine-local/.claude-klabauter-live-root; absence here is a normal
     # fallback state, not an error — falls through to the bash resolver below.
     #
     # Settings-home precedence mirrors _machine_local.py::_settings_home()
@@ -647,7 +656,7 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
     # fall-through to Rung 2. That was unreachable in the live tree only
     # because the published arm answers first; in the PUBLISHED MIRROR it is
     # reachable and live, because the publish transform's bare 'claude-klabauter' ->
-    # 'claude-klabauter' row rewrote the string literal ".claude-klabauter-root" too,
+    # 'claude-klabauter' row rewrote the string literal ".claude-klabauter-live-root" too,
     # leaving the mirror reading the same pointer file on both arms and unable
     # to fall back at all.
     #
@@ -659,7 +668,7 @@ def _resolve_engine_root(caller_file: str | None = None) -> str:
     # the-interpreter-floor.md § C3) -- `isfile(<root>/coordinator_core/
     # _engine_stamp)` strictly subsumes the prior `isdir` check there, so it
     # was dropped rather than added to.
-    _pointer_val = _read_pointer(".claude-klabauter-root")
+    _pointer_val = _read_pointer(".claude-klabauter-live-root")
     if _pointer_val and os.path.isdir(_pointer_val):
         return _pointer_val
 

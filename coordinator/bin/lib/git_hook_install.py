@@ -83,7 +83,8 @@ import subprocess
 import sys
 from typing import List, Optional
 from coordinator_core.win_portability import is_executable, no_console_creationflags
-from coordinator_core.py_probe_sh import python_probe_lines
+from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.py_probe_sh import baked_python_lines
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 
@@ -350,19 +351,93 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
 # resolves before the baked absolute path, not after it — see `_shim_body`'s
 # docstring), so a body generated under the old order must be recognized as
 # stale and regenerated, not certified current by substring match alone.
-_HOOK_GEN_STAMP = 4
+#
+# Bumped to 5 (2026-08-25): the interpreter rung changed shape. `_shim_body`
+# and `_append_block` now interpolate `py_probe_sh.baked_python_lines` (a
+# baked `sys.executable` plus an `[ -x ]` self-heal) instead of
+# `python_probe_lines` (a `$PATH`-walking `_py_resolve()` inside a command
+# substitution). That removes one SUBSHELL — one process — from every fire of
+# `prepare-commit-msg` and `post-commit`, on the non-engine commit path where
+# those hooks still run. A body generated under the walking probe must be
+# recognized as stale and regenerated; a substring match cannot tell the two
+# probe shapes apart, which is the gap this stamp exists to close.
+#
+# Bumped to 6 (2026-08-25, C1 of
+# docs/plans/2026-08-25-the-engine-commits-without-re-entering-itself.md):
+# `_shim_body` gained the optional `skip_env` sentinel-exit guard (post-commit
+# only, ahead of the interpreter probe) — an already-installed post-commit
+# hook from generation 5 has no sentinel line at all and must be recognized
+# as stale so the self-heal path picks up the guard, not certified current by
+# a stamp number that predates the guard's existence.
+#
+# Bumped to 7 (2026-08-25, C2 of the same plan): `ensure_prepare_commit_msg_
+# hook` now passes its OWN `skip_env` (`COORDINATOR_TRAILERS_ALREADY_
+# APPLIED`, distinct from post-commit's) -- an already-installed
+# prepare-commit-msg hook from generation 6 has no sentinel line at all and
+# must be recognized as stale for the same reason generation 5 was.
+_HOOK_GEN_STAMP = 8
 
 
 def _hook_gen_stamp_line() -> str:
     return f"# coordinator-hook-gen: {_HOOK_GEN_STAMP}"
 
 
-def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str = "") -> str:
+def _shim_body(
+    coord_bin: str,
+    script_name: str,
+    invoke_line: str,
+    bin_dir: str = "",
+    skip_env: Optional[str] = None,
+    skip_if_all_unset: tuple = (),
+) -> str:
     """Canonical fresh-install / self-heal shim body for a hook that runs one target.
+
+    `skip_if_all_unset` is `skip_env`'s OPPOSITE POLARITY and exists for the
+    no-session backstop: presence of the named vars means there IS work to do,
+    so the shim exits 0 when EVERY one of them is unset or empty. Same position
+    as `skip_env` -- ahead of any interpreter resolution, `$PATH` walk, command
+    substitution or subshell -- so it honours the same ordering invariant.
+
+    GENERATED, NEVER HAND-COPIED, and that distinction is the whole reason this
+    parameter is allowed to exist. `coordinator-prepare-commit-msg.py ::
+    _resolve_session_id` is already a hand-mirrored copy of
+    `coordinator_core.session.core.resolve_session_id`, and its docstring cites
+    a prior break-class defect caused by two copies of that ladder disagreeing.
+    A THIRD copy, hand-written into shell -- the one language that cannot import
+    the source of truth -- was proposed and correctly REFUSED by
+    claude-klabauter-59 on 2026-08-25. This is not that: the caller passes
+    `SESSION_ENV_PRECEDENCE` itself, so the emitted line is a projection of the
+    constant regenerated at every install, never a second statement of it. Only
+    MEMBERSHIP is projected, never the ladder's precedence logic, because a
+    presence test has no precedence to get wrong.
+
+    The residual risk is staleness, not divergence: an installed body predating
+    a ladder that later gains a tier. `test_session_gate_is_generated_from_the_ladder`
+    converts that from silent runtime drift into a red suite, which is the
+    artifact that discharges it -- the gen stamp alone would not, since
+    forgetting the stamp bump is the same forgetting.
+
+    BEHAVIOUR CHANGE, named because it is real: on a no-session commit the
+    Python entrypoint used to run `_warn_hyphen_range_subject` (a pure-string
+    chunk-id-subject advisory) BEFORE its own session gate. Exiting in shell
+    drops that advisory there. Accepted: only a coordinator session writes a
+    chunk-id subject, and such a session sets one of these vars by definition.
 
     `invoke_line` is the final line that runs the resolved target via "$_PY" —
     both hooks now `exec` synchronously at the shell level; any async self-detach
     (post-commit's coordinator-auto-push) is owned by the invoked Python, not the shim.
+
+    `skip_env`, when supplied, names an environment variable whose presence
+    (set AND non-empty) means the caller is publishing this commit itself —
+    the shim exits 0 immediately, AHEAD of `baked_python_lines`' interpreter
+    probe, so a sole-publisher commit pays zero interpreter-resolution cost.
+    Per-hook, not global: `ensure_post_commit_hook` is the only caller passing
+    this in this chunk (`COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH`, already
+    set on every engine sync/never commit by `git_native._sole_publisher_env`
+    — no new mechanism). Fail-open (the whole safety story): absent or empty,
+    the guard line is not even emitted, and the full body runs unchanged.
+    Never generalize this into a "skip all hooks" flag — that is the
+    hooksPath redirect wearing a disguise.
 
     The shell fallback chain (settings-home forwarder → baked SCRIPT →
     .doe-root pointer → engine-repo-bin candidate → marketplace) means
@@ -407,6 +482,19 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
         if claude_klabauter_cand
         else ""
     )
+    skip_guard = (
+        f'[ -n "${skip_env}" ] && exit 0\n' if skip_env else ""
+    )
+    # Concatenation, not a chain of -z tests: `[ -z "$A$B$C" ]` is true exactly
+    # when every one is unset-or-empty, in one test, with no precedence implied
+    # between them -- which is correct here because presence is the whole
+    # question. Order follows the constant only so the emitted line is stable
+    # across installs and diffable.
+    session_guard = (
+        '[ -z "' + "".join(f"${v}" for v in skip_if_all_unset) + '" ] && exit 0\n'
+        if skip_if_all_unset
+        else ""
+    )
     return (
         "#!/bin/sh\n"
         f"# coordinator {script_name} hook — installed by git_hook_install.\n"
@@ -418,7 +506,9 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
         "# Each SCRIPT rung probes the extensionless name, then <name>.py, so an\n"
         "# already-installed hook survives a bin/ rename without reinstalling.\n"
         f"{_hook_gen_stamp_line()}\n"
-        f"{python_probe_lines('_PY')}\n"
+        f"{skip_guard}"
+        f"{session_guard}"
+        f"{baked_python_lines('_PY')}\n"
         '[ -n "$_PY" ] || { echo "[coordinator] WARNING: hook installed but no '
         'python3/python/py interpreter found on PATH — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
@@ -487,7 +577,7 @@ def _append_block(
     start_marker, _end_marker = _append_markers(header)
     return (
         f"\n{start_marker}\n"
-        "{ " + python_probe_lines("_PY") + "\n"
+        "{ " + baked_python_lines("_PY") + "\n"
         f'_T="{settings_home_script}"; '
         f'[ -f "$_T" ] || _T="{coord_bin_sh}/{script_name}"; '
         f'[ -f "$_T" ] || _T="{coord_bin_sh}/{script_name}.py"; '
@@ -762,7 +852,13 @@ def ensure_post_commit_hook(
     script = "coordinator-auto-push"
     header = "coordinator auto-push (crash insurance)"
     invoke = 'exec "$_PY" "$SCRIPT" "$@"'
-    fresh = _shim_body(coord_bin, script, invoke, bin_dir=bin_dir)
+    fresh = _shim_body(
+        coord_bin,
+        script,
+        invoke,
+        bin_dir=bin_dir,
+        skip_env="COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH",
+    )
     _start_marker, end_marker = _append_markers(header)
     append = _append_block(
         coord_bin,
@@ -803,7 +899,26 @@ def ensure_prepare_commit_msg_hook(
     script = "coordinator-prepare-commit-msg"
     header = "coordinator Session-Id trailer injection"
     invoke = 'exec "$_PY" "$SCRIPT" "$@"'
-    fresh = _shim_body(coord_bin, script, invoke, bin_dir=bin_dir)
+    # C2 (docs/dispatch-briefs/2026-08-25-the-engine-commits-without-re-
+    # entering-itself/C2.md): a DIFFERENT `skip_env` value from
+    # `ensure_post_commit_hook`'s `COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_
+    # PUSH` (AC11 pins the emitted body carries no reference to that other
+    # var) -- set ONLY by `git_native._trailer_sentinel_env()`, ONLY
+    # immediately after `_apply_trailers` returns with no error on
+    # `commit_scoped`'s agree branch. See that function's own docstring for
+    # why nowhere else may set it.
+    fresh = _shim_body(
+        coord_bin,
+        script,
+        invoke,
+        bin_dir=bin_dir,
+        skip_env="COORDINATOR_TRAILERS_ALREADY_APPLIED",
+        # The no-session backstop. NOT passed by `ensure_post_commit_hook`:
+        # auto-push is the SOLE PUBLISHER on a non-engine commit and must run
+        # precisely when no session exists, so the same gate there would
+        # silently stop pushing the commits most in need of it.
+        skip_if_all_unset=SESSION_ENV_PRECEDENCE,
+    )
     _start_marker, end_marker = _append_markers(header)
     append = _append_block(
         coord_bin,

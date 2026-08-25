@@ -2652,9 +2652,12 @@ def test_push_with_retry_declines_non_work_branch(tmp_path, monkeypatch):
     # a known non-work/* name so this test does not depend on box config.
     _git(["branch", "-m", "main"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -2683,9 +2686,12 @@ def test_push_with_retry_branch_policy_decline_prints_gate_message_to_stderr(tmp
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["branch", "-m", "main"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
     )
@@ -2713,9 +2719,12 @@ def test_push_with_retry_unresolvable_branch_declines_not_pushes(tmp_path, monke
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
     push_calls = []
     monkeypatch.setattr(
@@ -2743,9 +2752,12 @@ def test_push_with_retry_unresolvable_branch_prints_its_own_decline_line(tmp_pat
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
@@ -2777,9 +2789,12 @@ def test_push_with_retry_work_branch_still_pushes(tmp_path, monkeypatch, capsys)
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -2866,9 +2881,12 @@ def test_push_with_retry_literal_main_override_pushes(tmp_path, monkeypatch, cap
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["branch", "-m", "main"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -2903,9 +2921,12 @@ def test_push_with_retry_default_declines_non_work_branch_unchanged(tmp_path, mo
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["branch", "-m", "release/1.0"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -2932,9 +2953,12 @@ def test_push_with_retry_override_exercised_skips_gate_and_prints(tmp_path, monk
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["branch", "-m", "release/1.0"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -2970,9 +2994,12 @@ def test_push_with_retry_override_on_work_branch_prints_nothing(tmp_path, monkey
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
     )
@@ -3079,9 +3106,12 @@ def test_push_with_retry_gh013_fails_loud_without_fetch_or_rebase(tmp_path, monk
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     gh013_stderr = (
         "remote: error: GH013: Repository rule violations found.\n"
         "! [remote rejected] work/x -> work/x (push declined due to repository rule violations)\n"
@@ -3135,9 +3165,12 @@ def test_push_with_retry_subprocess_timeout_reports_unconfirmed_not_failed(tmp_p
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     timeout_stderr = "git push: timed out after 120s (Command '['git', 'push']' timed out after 120 seconds)"
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: GitResult(returncode=-1, stdout="", stderr=timeout_stderr)
@@ -4087,19 +4120,18 @@ def test_push_with_retry_landed_push_reports_count_and_range(tmp_path):
     assert outcome.pushed_count == 1
 
 
-def test_push_with_retry_first_push_no_upstream_reports_unknown_not_zero(tmp_path, monkeypatch):
+def test_push_with_retry_first_push_no_upstream_reports_unknown_not_zero(tmp_path):
     """A first push with no resolvable upstream tracking ref must still
     land, but report the count/range as the documented explicit-unknown
-    sentinel -- never omitted, never zero. `rev_parse_upstream` is
-    monkeypatched to the real "no upstream configured" failure shape
-    (`git`'s own bare `git push` requires `-u`/an already-tracked branch to
-    land at all -- production's `git_native.push()` never passes `-u`, so a
-    genuine from-scratch first push is exercised at the `rev_parse_upstream`
-    boundary here rather than by omitting `-u` from a real push, which
-    would fail for an unrelated reason)."""
-    from coordinator_core.ops.ceremony import git_native
-    from coordinator_core.ops.ceremony.git_native import GitResult
+    sentinel -- never omitted, never zero.
 
+    The unresolvable upstream is produced on disk rather than faked at a
+    call boundary: AC4b removed the `rev_parse_upstream` spawn this test
+    used to monkeypatch, so it now deletes the remote-tracking ref itself.
+    That is the real first-push shape the sentinel exists for -- an upstream
+    the branch config names but whose ref does not exist locally yet -- and
+    `-u` stays because production's `git_native.push()` never passes it, so
+    a bare `git push` would otherwise fail for an unrelated reason."""
     bare = _init_bare_remote(tmp_path)
     repo = _init_repo(tmp_path)
     _git(["checkout", "-q", "-b", "work/x"], repo)
@@ -4108,12 +4140,20 @@ def test_push_with_retry_first_push_no_upstream_reports_unknown_not_zero(tmp_pat
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["push", "-q", "-u", "origin", "work/x"], repo)
-
-    monkeypatch.setattr(
-        git_native,
-        "rev_parse_upstream",
-        lambda *a, **kw: GitResult(returncode=128, stdout="", stderr="fatal: no upstream configured"),
-    )
+    # The branch keeps its configured upstream; only the tracking REF goes,
+    # loose and packed alike, so the sha read that decides the range finds
+    # nothing to read.
+    _git(["update-ref", "-d", "refs/remotes/origin/work/x"], repo)
+    packed = repo / ".git" / "packed-refs"
+    if packed.exists():
+        packed.write_text(
+            "".join(
+                line
+                for line in packed.read_text(encoding="utf-8").splitlines(keepends=True)
+                if "refs/remotes/origin/work/x" not in line
+            ),
+            encoding="utf-8",
+        )
 
     outcome = commit_pipeline_mod.push_with_retry(repo)
 
@@ -4135,9 +4175,12 @@ def test_push_with_retry_decline_issues_no_rev_parse_call(tmp_path, monkeypatch)
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["branch", "-m", "main"], repo)
 
-    monkeypatch.setattr(
-        git_native, "remote", lambda *a, **kw: GitResult(returncode=0, stdout="origin\n", stderr="")
-    )
+    # A remote is configured for real, in `.git/config`, rather than faked at
+    # a `git remote` spawn: AC4b removed that spawn, and `push_with_retry`
+    # now reads the `[remote "..."]` section directly. Patching a call the
+    # production path no longer makes would leave these tests short-
+    # circuiting on the no-remote skip and never reaching the gate below.
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
     rev_parse_upstream_calls = []
     monkeypatch.setattr(
         git_native,
@@ -4421,8 +4464,12 @@ def test_pipeline_op_scope_gate_clean_registry_edit_commits(tmp_path):
 class TestCondenseGitDiagnostic:
     """Regression guard for the 2026-08-10 incident: four consecutive
     `scoped-git-commit` refusals reported nothing but CRLF line-ending
-    warnings, hiding the `detect-staged-rollback` pre-commit BLOCK that was
+    warnings, hiding the then-installed pre-commit hook's own BLOCK that was
     the real cause. Head-truncating git's output is what lost the diagnosis.
+    Fixture blobs below use a generic gate name, not the specific hook from
+    the incident -- that gate (`detect_staged_rollback`) is deleted
+    2026-08-25, "the staged rollback gate dies without blocking a commit";
+    this logic is generic to any pre-commit hook's BLOCKED verdict.
     """
 
     def test_advisory_lines_are_dropped_when_a_real_diagnosis_exists(self):
@@ -4447,10 +4494,10 @@ class TestCondenseGitDiagnostic:
 
     def test_oversized_output_keeps_the_tail_where_the_verdict_lands(self):
         body = "\n".join(f"  offending path {i}" for i in range(400))
-        blob = f"detect-staged-rollback: BLOCKED\n{body}\npre-commit: BLOCKED -- gate [staged-rollback]"
+        blob = f"example-gate: BLOCKED\n{body}\npre-commit: BLOCKED -- gate [example-gate]"
         condensed = condense_git_diagnostic(blob, limit=200)
         assert condensed.startswith("...(truncated) ")
-        assert condensed.endswith("pre-commit: BLOCKED -- gate [staged-rollback]")
+        assert condensed.endswith("pre-commit: BLOCKED -- gate [example-gate]")
 
     def test_a_pre_commit_block_survives_a_large_crlf_warning_preamble(self):
         preamble = "\n".join(
@@ -4458,8 +4505,8 @@ class TestCondenseGitDiagnostic:
             "LF will be replaced by CRLF the next time Git touches it"
             for i in range(20)
         )
-        blob = f"{preamble}\ndetect-staged-rollback: BLOCKED -- 20 staged path(s)"
-        assert condense_git_diagnostic(blob) == "detect-staged-rollback: BLOCKED -- 20 staged path(s)"
+        blob = f"{preamble}\nexample-gate: BLOCKED -- 20 staged path(s)"
+        assert condense_git_diagnostic(blob) == "example-gate: BLOCKED -- 20 staged path(s)"
 
 
 def test_make_pipeline_result_covers_every_field():
@@ -5402,3 +5449,66 @@ def test_commit_still_reports_failure_when_nothing_landed(tmp_path, monkeypatch)
     assert _rev_parse_head(repo) == head_before
     assert outcome.landed is False
     assert outcome.committed_sha is None
+
+
+def test_missing_worktree_root_raises_instead_of_reporting_n_missing_paths(tmp_path):
+    """Regression pin for the bug filed 2026-08-25 by claude-klabauter-em
+    (`state/bug-backlog/2026-08-25-a-bad-worktree-root-reports-as-n-missing-
+    768a39de52b3.yaml`).
+
+    Handed a `worktree_root` that does not exist, `explicit_stage` used to
+    return `exit_code=0` with every requested path tagged `missing:<path>`
+    and `staged_paths=[]` -- a ROOT problem misreported as a PATHSPEC
+    problem. A dispatched `git-commit-agent` reading that concluded the
+    sanctioned route was unreachable and fell back to a bare `git commit`,
+    which silently skips `deletion_block_gate`, `dirty_tree_gate`,
+    `carry_gate` and `op_scope_coverage_gate`. Three commits landed on that
+    ungated leg in one session and all three were correct, so nothing
+    announced itself.
+
+    What must never regress: the failure names the ROOT, and no path is
+    classified at all.
+    """
+    absent = tmp_path / "no-such-worktree"
+    assert not absent.exists()
+
+    with pytest.raises(commit_pipeline_mod.WorktreeRootMissing) as excinfo:
+        commit_pipeline_mod.explicit_stage(
+            absent, ["a.py", "b.py"], caller_paths={"a.py", "b.py"}
+        )
+
+    message = str(excinfo.value)
+    assert "worktree_root does not exist" in message
+    assert "missing:" not in message
+    assert "a.py" not in message and "b.py" not in message
+
+
+def test_missing_worktree_root_is_rejected_at_pipeline_entry_too(tmp_path):
+    """The same check on `run_commit_pipeline`, which is the entry point
+    dispatched committers actually call -- guarding only `explicit_stage`
+    would leave the reported path reaching the root-dependent legs above it.
+    """
+    absent = tmp_path / "no-such-worktree"
+
+    with pytest.raises(commit_pipeline_mod.WorktreeRootMissing):
+        commit_pipeline_mod.run_commit_pipeline(
+            absent,
+            session_id="sess-root-check",
+            subject="never runs",
+            stage_paths=["a.py"],
+            push_mode="never",
+        )
+
+
+def test_msys_path_form_is_rejected_not_normalised(tmp_path):
+    """NEGATIVE SPEC. The observed cause was the MSYS form `/X/claude-klabauter`,
+    which bash, git and PowerShell's `Test-Path` all accept and Python's
+    `pathlib` does not. The fix must REJECT it, never silently normalise it
+    into a drive-letter path -- normalising puts the engine in the business
+    of guessing host spellings and leaves the next unaccepted dialect
+    failing the same silent way. The message must say which form to pass.
+    """
+    with pytest.raises(commit_pipeline_mod.WorktreeRootMissing) as excinfo:
+        commit_pipeline_mod.explicit_stage("/X/no-such-drive-path", ["a.py"])
+
+    assert "MSYS" in str(excinfo.value)

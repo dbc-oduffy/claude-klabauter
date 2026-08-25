@@ -84,8 +84,8 @@ id = "claude-klabauter.root.pointer"
 cluster = "registry"
 weight = "cheap"
 interactivity = "assert"
-fix = "none (run the install-time pointer writer gen-claude-klabauter-root-pointer.py to populate the pointer file)"
-symptom_keywords = ["claude-klabauter-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py"]
+fix = "none (run the install-time pointer writer gen-claude-klabauter-live-root-pointer.py to populate the pointer file)"
+symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-live-root-pointer.py"]
 # triage=true: file-read-only presence/content check (no subprocess, no network) is
 # cheap enough for every bare invocation, and surfaces the dominant Windows per-invoke
 # latency cause (bash-fallback engine-root resolution) as early as possible.
@@ -93,7 +93,7 @@ triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
 required = false
 severity_if_fail = "degraded"
-remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-root with the resolved CLAUDE_KLABAUTER_ROOT path"
+remediation = "Run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-live-root with the resolved CLAUDE_KLABAUTER_ROOT path"
 
 # claude-klabauter.root.channels_reconciled -- do the several places this box writes a
 # root down AGREE, and does each name a path that is actually here? Distinct
@@ -103,7 +103,7 @@ remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-po
 # the comparison neither resolver performs. Built from two same-day incidents
 # (2026-08-22): a correct repos.claude_klabauter coexisting silently with a
 # foreign-platform .claude-klabauter-root until every settings-home bin/ live
-# op failed, and two claude-klabauter-root ladders that disagree by construction.
+# op failed, and two claude-klabauter-live-root ladders that disagree by construction.
 # Consumes the shared oracle coordinator_core.root_channel_reconcile, whose own
 # CLI is the runnable remediation. weight = "cheap": file reads and registry
 # TOML reads only, no subprocess.
@@ -224,7 +224,7 @@ remediation = "Install tree_sitter and tree_sitter_pwsh under the named interpre
 # (~/.coordinator-claude-settings) actually populated?" Population was
 # emergent before C5 (docs/plans/2026-08-17-machine-first-install-surface.md):
 # bin/ forwarders, .percolate-identity, the machine-local registry, and the
-# .claude-klabauter-root pointer each landed via their own step with no single
+# .claude-klabauter-live-root pointer each landed via their own step with no single
 # verified statement of completeness. Shares its check
 # (coordinator_core.install.settings_home_report) with scripts/setup.py's
 # own "Install: settings-home completeness" report line -- one oracle, not
@@ -239,7 +239,7 @@ cluster = "install"
 weight = "cheap"
 interactivity = "assert"
 fix = "none (re-run scripts/setup.py from claude-klabauter -- its settings-home completeness step re-lands missing members)"
-symptom_keywords = ["settings-home incomplete", "coordinator-claude-settings missing", "bin forwarder missing", "percolate-identity missing", "claude-klabauter-root pointer missing", "settings home not populated"]
+symptom_keywords = ["settings-home incomplete", "coordinator-claude-settings missing", "bin forwarder missing", "percolate-identity missing", "claude-klabauter-live-root pointer missing", "settings home not populated"]
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_settings_home_complete"
 required = false
@@ -369,7 +369,7 @@ id = "claude-klabauter.invoke.latency"
 cluster = "dispatch"
 weight = "standard"
 interactivity = "assert"
-fix = "none (ensure the claude-klabauter-root pointer is present so per-invoke resolution avoids the bash-fallback subprocess; see claude-klabauter.root.pointer)"
+fix = "none (ensure the claude-klabauter-live-root pointer is present so per-invoke resolution avoids the bash-fallback subprocess; see claude-klabauter.root.pointer)"
 symptom_keywords = ["invoke round-trip slow", "per-invoke latency over budget", "bash-fallback subprocess hang", "hook budget exceeded", "Windows per-invoke latency", "invoke timeout"]
 # triage=true: a single bounded (5 s timeout) subprocess round-trip is cheap enough
 # for the bare-invocation triage set and surfaces the dominant Windows per-invoke
@@ -378,7 +378,7 @@ triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_invoke_latency"
 required = false
 severity_if_fail = "degraded"
-remediation = "Ensure the claude-klabauter-root pointer is present (see claude-klabauter.root.pointer probe) so per-invoke resolution avoids the bash-fallback subprocess; see docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
+remediation = "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer probe) so per-invoke resolution avoids the bash-fallback subprocess; see docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
 
 # ---------------------------------------------------------------------------
 # Cluster: install — draft-staleness nudge (strategic.generate consumer seam)
