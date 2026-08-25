@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/atlas-doc.schema.json",
+  "x-schema-name": "atlas-doc",
+  "x-schema-version": "1.0.0",
+  "applies_to": "docs/architecture/*.md",
+  "description": "Architecture atlas top-level document — one of the four atlas index files (file-index, connectivity-matrix, systems-index, cross-system-map). Produced by /architecture-survey full bootstrap passes. Carries a single survey clock (last_mapped) keyed on the full re-bootstrap run date; does NOT carry last_attested (the targeted-audit two-clock split applies only to per-system docs, not top-level atlas files). Spec backlink: coordinator/docs/wiki/canonical-artifact-shapes.md § Atlas documents.",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "last_mapped": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of the last full atlas re-bootstrap that wrote this file (YYYY-MM-DD). Survey clock — updated only by full /architecture-survey passes, never by targeted audits."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Description of the run mode that produced this atlas file (e.g. 'full re-bootstrap (run 2026-06-18-22h16)'). Free-form; for observability only."
+    }
+  }
+}

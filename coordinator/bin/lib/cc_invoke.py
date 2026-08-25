@@ -115,41 +115,16 @@ class StructuralPinError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Lazy op registration — armed ONCE here, at the shared trampoline seam, so
-# every in-process trampoline (all 135 route through _resolve_claude_klabauter_root
-# before `from coordinator_core.ops.<name> import main`) has it set before
-# coordinator_core.ops is ever imported, killing the ~108ms eager op-module
-# load on the cold-trampoline path. Module-top imports above this line are
-# stdlib-only (importlib.util, json, os, subprocess, sys, tempfile, typing) —
-# no coordinator_core import sits above this line; every coordinator_core
-# import in this module is function-local.
+# Lazy op registration is unconditional as of 2026-08-22 (the
+# import-path-costs-nothing sprint): coordinator_core.ops never eagerly
+# imports its op modules at package-init time, so this seam no longer needs
+# to arm anything before `from coordinator_core.ops.<name> import main` — the
+# ~108ms eager op-module load this used to kill on the cold-trampoline path
+# simply no longer happens by default. Formerly armed `sys._coordinator_core_
+# lazy_ops` here (via the now-retired two-channel flag); see
+# coordinator_core/ops/__init__.py.
 # Spec backlink: DoE-claude:pln-decouple-coordinator-s-own-bin-42d50a § C8
-#
-# WHY A `sys` ATTRIBUTE AND NOT `os.environ` (2026-07-28). This used to be
-# `os.environ.setdefault(_LAZY_OPS_ENV_KEY, "1")` — a PROCESS-environment
-# mutation performed as an import side effect, which every subprocess a caller
-# spawned afterwards inherited by default (subprocess.run/Popen with no
-# explicit `env=` copies the live os.environ). That was correct for the
-# caller's OWN in-process op import — the whole point of arming it — and wrong
-# for every OTHER child the caller spawned: 59 test modules in this tree assert
-# the op registry at import time, so a spawned pytest run saw a skipped
-# eager-import and failed collection on a green tree (commit 5943ec01 patched
-# one such site by hand; `child_env()` below generalised the strip). The
-# variable was only ever needed as an in-process signal, so it now travels on
-# `sys`, which no child inherits by any mechanism. Nothing but this process can
-# observe it, which is exactly the scope the flag always wanted.
-# Scoping study: docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md § 6 (c).
-#
-# The conditional preserves the old `setdefault` semantics at this seam: an
-# operator who exported COORDINATOR_CORE_LAZY_OPS keeps ownership of the
-# decision in both directions. `coordinator_core/ops/__init__.py` reads the
-# environment variable first for the same reason.
 # ---------------------------------------------------------------------------
-_LAZY_OPS_ENV_KEY = "COORDINATOR_CORE_LAZY_OPS"
-_LAZY_OPS_SYS_ATTR = "_coordinator_core_lazy_ops"
-_LAZY_OPS_INJECTED_BY_THIS_MODULE = _LAZY_OPS_ENV_KEY not in os.environ
-if _LAZY_OPS_INJECTED_BY_THIS_MODULE:
-    setattr(sys, _LAZY_OPS_SYS_ATTR, True)
 
 
 def _no_console_kw(claude_klabauter_root: str) -> dict:
@@ -215,26 +190,17 @@ def child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
     """Return an env dict safe to pass as `env=` to a spawned child that is
     NOT itself a coordinator_core.invoke dispatch.
 
-    BELT-AND-BRACES since 2026-07-28, no longer load-bearing. This module no
-    longer writes COORDINATOR_CORE_LAZY_OPS into `os.environ` (see the channel
-    note above), so a child can only inherit the variable when an operator
-    exported it — and an operator's explicit choice is precisely what this
-    function has always refused to strip. It is kept rather than deleted
-    because the environment variable remains a supported operator override, so
-    a copy-of-os.environ still has a defined, documented contract here.
-
-    Historically: a plain `os.environ` copy carried the flag into the child
-    whenever THIS module was the one that set it, silently making the child's
-    own `import coordinator_core.ops` skip eager registration. This returns a
-    copy with the key removed in exactly that case; an operator who set the
-    variable themselves always keeps their own value, in this process and
-    every child of it.
+    No longer strips COORDINATOR_CORE_LAZY_OPS: this module never writes it
+    into `os.environ` (lazy op registration is unconditional now — see
+    coordinator_core/ops/__init__.py), so the only way a child inherits the
+    key is an operator's own export, which this function has always left
+    alone.
 
     `overrides`, if given, is applied on top (last-write-wins) after the
-    strip — for a caller that wants to add its own env vars to the same
-    spawn without a second dict-merge step.
+    settings-home propagation below — for a caller that wants to add its own
+    env vars to the same spawn without a second dict-merge step.
 
-    Callers that DO want the flag to reach the child (nested
+    Callers that DO want a var to reach the child (nested
     coordinator_core.invoke dispatch) should not use this — see
     `_build_subprocess_env`, which builds that env explicitly instead.
 
@@ -245,8 +211,6 @@ def child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
     subprocess), and they should hit rung 0 instead of re-resolving via CLI.
     """
     env = _settings_home_env(dict(os.environ))
-    if _LAZY_OPS_INJECTED_BY_THIS_MODULE:
-        env.pop(_LAZY_OPS_ENV_KEY, None)
     if overrides:
         env.update(overrides)
     return env

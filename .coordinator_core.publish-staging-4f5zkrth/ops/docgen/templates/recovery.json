@@ -1,0 +1,47 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "recovery",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "value", "key": "branch", "field": "branch", "quote": true},
+      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "predecessor: null  # crashed commit SHA or null — NOT a predecessor handoff path"},
+      {"kind": "literal", "line": "kind: recovery"},
+      {"kind": "literal", "line": "deployment_state: ready_to_fire  # crash reconstruction clears the gate; ready_to_fire forbids gate_dependency"},
+      {"kind": "literal", "line": "category: infra"},
+      {"kind": "value", "key": "summary", "field": "placeholder_summary", "quote": true},
+      {"kind": "literal", "line": "pickup_ready: true"},
+      {"kind": "present_as_null", "key": "recovers_session", "field": "recovers_session", "quote": true, "suffix": "  # session-id of the crashed session being reconstructed"},
+      {"kind": "literal", "line": "additional_predecessors: []  # schema-sanctioned fan-in mechanism for multi-handoff recovery reconstructions"},
+      {"kind": "present_as_null", "key": "deliverable_id", "field": "deliverable_id", "quote": true},
+      {"kind": "present_as_null", "key": "initiative", "field": "initiative", "quote": true, "suffix": "  # FK to state/initiatives/<id>.yaml; null when no named initiative"},
+      {"kind": "optional_omit", "key": "handoff_id", "field": "handoff_id", "quote": true}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## Recovery Context",
+      "",
+      "<!-- Replace with what crashed, when, and what was lost. -->",
+      "",
+      "## What Was Accomplished (by the crashed session, before it died)",
+      "",
+      "<!-- Replace with what the crashed session built, fixed, or shipped before it died. -->",
+      "",
+      "## In-Progress Work",
+      "",
+      "<!-- Replace with any partially-written work recovered from the crashed session. -->",
+      "<!-- Usually \"nothing partially written\" — state that explicitly if true. -->",
+      "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      ""
+    ]}
+  ]
+}

@@ -634,17 +634,19 @@ def main() -> int:
         _emit(rc_ubt, "tier-u-refused")
         return 5
 
-    # Strip COORDINATOR_CORE_LAZY_OPS before spawning: cc_invoke's module-top
-    # `os.environ.setdefault(...)` (see coordinator/bin/lib/cc_invoke.py) mutates
-    # THIS process's environment as a side effect of the earlier
-    # `from cc_invoke import resolve_colocated_claude_klabauter_root` import above. Left
-    # in place, that flag would leak into the fast-test subprocess and — for a
-    # coordinator_core pytest suite that asserts the ops registry at collection
-    # time — make eager op-import skip, breaking collection on a green tree.
-    # Copy-and-pop, never mutate os.environ in place (that's the exact defect
-    # class being fixed here).
+    # `import-path-costs-nothing` sprint (C8): this used to strip
+    # COORDINATOR_CORE_LAZY_OPS before spawning, defending against cc_invoke's
+    # former module-top `os.environ.setdefault(...)` (see
+    # coordinator/bin/lib/cc_invoke.py) mutating THIS process's environment as
+    # a side effect of the earlier `from cc_invoke import
+    # resolve_colocated_claude_klabauter_root` import above. cc_invoke.py no longer
+    # writes that var at all, and lazy op registration is unconditional now
+    # (nothing reads it either — see coordinator_core/ops/__init__.py), so an
+    # inherited value would have zero effect on the fast-test subprocess's
+    # own collection. `.copy()` is kept: the fast-test subprocess still gets
+    # its own env object rather than sharing this process's, for the usual
+    # reason a spawn shouldn't hand a child a live-mutable dict.
     _ft_env = os.environ.copy()
-    _ft_env.pop("COORDINATOR_CORE_LAZY_OPS", None)
 
     owner = mutex_owner("suite-mutex")
     with suite_mutex.held(owner, "workday-complete-step1", timeout=MUTEX_WAIT_SECS) as acquired:

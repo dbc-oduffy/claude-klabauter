@@ -19,7 +19,8 @@ itself, which `run()` must catch and turn into exit code 1, never printing
 the refusal payload as if it were a success and returning 0.
 
 `resolve_claude_klabauter_root_or_exit(cli_name)` -- the third module-level helper,
-extracted from `query-file-attribution.py` and `query-routine-signals.py`'s
+extracted from the retired `query-file-attribution.py` (deleted 2026-08-23) and
+`query-routine-signals.py`'s
 hand-copied CLAUDE_KLABAUTER_ROOT-resolution sub-recipe -- returns the resolved root
 and puts it on `sys.path` on success; returns 1 and prints a diagnostic
 naming both `cli_name` and the underlying error on a `RuntimeError` from

@@ -1,0 +1,32 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "review-findings",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "agent_type: review-findings"},
+      {"kind": "value", "key": "spawned_at", "field": "spawned_at", "quote": false},
+      {"kind": "value", "key": "lead_session_id", "field": "lead_session_id", "quote": false},
+      {"kind": "literal", "line": "divergence:"},
+      {"kind": "literal", "line": "  diverged: false"},
+      {"kind": "literal", "line": "commits: []"},
+      {"kind": "literal", "line": "dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter"}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "# Code Review: Slice {slice_id} -- {scope}",
+      "",
+      "Reviewer: code-reviewer",
+      "Scope: {scope}",
+      "Diff range: PLACEHOLDER",
+      "",
+      "## Findings",
+      "",
+      "<!-- FINDINGS -->",
+      ""
+    ]}
+  ]
+}

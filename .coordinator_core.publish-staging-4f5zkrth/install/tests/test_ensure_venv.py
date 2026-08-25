@@ -1,0 +1,1763 @@
+"""Tests for coordinator_core.install.ensure_venv -- Port B native venv-ensure.
+
+Covers AC B1-B9: health-check parity (both-imports), cross-platform VENV_PY,
+ready/rebuilt/would-rebuild/would-write status parity, build-lock contention
+contract (POSIX flock AND Windows msvcrt branches -- coverage M1), pin
+idempotence + doubled-pin self-heal, CLAUDE_HOME /.claude-suffix fail-loud,
+pip network-vs-generic failure classification, WHOAMI_PKG seam, and the
+trusted-root-guard fail-loud precondition.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.install import ensure_venv as ev
+from coordinator_core.install import junction
+from coordinator_core.install.write_surface import ShapedClause, StaticClause, validate
+from coordinator_core.trusted_root_guard import UntrustedRootError
+
+
+def _make_exe(path: Path) -> None:
+    """Create a file at *path* that ``win_portability.is_executable`` treats
+    as launchable on the current OS.
+
+    POSIX: the exec mode bits are the whole story. Windows: an
+    extensionless path (which is what every caller here passes, mirroring
+    the real ``venv_python_path`` shape on POSIX) is only launchable via a
+    PATHEXT-suffixed sibling (see ``is_executable``'s own docstring) — so a
+    plain shebang file with chmod bits set is inert there and silently
+    fails the health check regardless of the mocked ``subprocess.run``.
+    Writing a ``.exe`` sibling makes the fixture executable on both.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if os.name == "nt":
+        path.with_name(path.name + ".exe").write_bytes(b"")
+
+
+def _trusted_plugin_root(tmp_path: Path, monkeypatch) -> Path:
+    """A plugin_root under $CLAUDE_HOME/.claude/... passes the trust guard."""
+    claude_home = tmp_path / "home"
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    monkeypatch.delenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", raising=False)
+    plugin_root = claude_home / ".claude" / "plugin"
+    plugin_root.mkdir(parents=True)
+    return plugin_root
+
+
+# ---------------------------------------------------------------------------
+# venv_python_path -- cross-platform VENV_PY (AC B2)
+# ---------------------------------------------------------------------------
+
+
+def test_venv_python_path_posix(monkeypatch):
+    monkeypatch.delenv("OSTYPE", raising=False)
+    monkeypatch.delenv("OS", raising=False)
+    venv_dir = Path("/tmp/x/.coordinator-venv")
+    assert ev.venv_python_path(venv_dir) == venv_dir / "bin" / "python"
+
+
+def test_venv_python_path_windows_via_ostype(monkeypatch):
+    monkeypatch.setenv("OSTYPE", "msys")
+    venv_dir = Path("/tmp/x/.coordinator-venv")
+    assert ev.venv_python_path(venv_dir) == venv_dir / "Scripts" / "python.exe"
+
+
+def test_venv_python_path_windows_via_os(monkeypatch):
+    monkeypatch.delenv("OSTYPE", raising=False)
+    monkeypatch.setenv("OS", "Windows_NT")
+    venv_dir = Path("/tmp/x/.coordinator-venv")
+    assert ev.venv_python_path(venv_dir) == venv_dir / "Scripts" / "python.exe"
+
+
+# ---------------------------------------------------------------------------
+# _venv_healthy -- both-imports parity (AC B2)
+# ---------------------------------------------------------------------------
+
+
+def test_venv_healthy_requires_executable(tmp_path):
+    venv_py = tmp_path / "bin" / "python"
+    assert ev._venv_healthy(venv_py) is False
+
+
+def test_venv_healthy_true_when_both_imports_succeed(tmp_path, monkeypatch):
+    venv_py = tmp_path / "bin" / "python"
+    _make_exe(venv_py)
+
+    def fake_run(argv, **kwargs):
+        assert argv[0] == str(venv_py)
+        assert "import coordinator_whoami; import pydantic" in argv[2]
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    assert ev._venv_healthy(venv_py) is True
+
+
+def test_venv_healthy_false_when_import_fails(tmp_path, monkeypatch):
+    venv_py = tmp_path / "bin" / "python"
+    _make_exe(venv_py)
+    monkeypatch.setattr(
+        ev.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1)
+    )
+    assert ev._venv_healthy(venv_py) is False
+
+
+def test_venv_healthy_false_on_timeout(tmp_path, monkeypatch):
+    venv_py = tmp_path / "bin" / "python"
+    _make_exe(venv_py)
+
+    def raise_timeout(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=30)
+
+    monkeypatch.setattr(ev.subprocess, "run", raise_timeout)
+    assert ev._venv_healthy(venv_py) is False
+
+
+def test_venv_healthy_probes_psutil_alongside_whoami_and_pydantic(tmp_path, monkeypatch):
+    """AC B2 widened probe: the health-check import list must include psutil,
+    not just coordinator_whoami/pydantic -- regression guard for the oracle/
+    dep-set lockstep (_VENV_IMPORT_PROBES/_VENV_PIP_DEPS)."""
+    venv_py = tmp_path / "bin" / "python"
+    _make_exe(venv_py)
+
+    def fake_run(argv, **kwargs):
+        assert "import psutil" in argv[2]
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    assert ev._venv_healthy(venv_py) is True
+
+
+def test_venv_healthy_false_when_whoami_and_pydantic_ok_but_psutil_missing(tmp_path, monkeypatch):
+    """The critical regression guard: a venv with coordinator_whoami and
+    pydantic importable but NOT psutil must be judged UNHEALTHY -- otherwise
+    every pre-existing psutil-less venv passes the fast path forever and the
+    added pip dep (change 1) is a no-op."""
+    venv_py = tmp_path / "bin" / "python"
+    _make_exe(venv_py)
+
+    def fake_run(argv, **kwargs):
+        probe = argv[2]
+        if "psutil" in probe:
+            return subprocess.CompletedProcess(argv, 1, stderr="ModuleNotFoundError: psutil")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    assert ev._venv_healthy(venv_py) is False
+
+
+# ---------------------------------------------------------------------------
+# _resolve_ml_cli -- delegates to _shared.resolve_machine_local_cli
+#
+# Contract: returns an ARGV LIST, not a Path. The Path form handed subprocess an
+# extension-less shebang script, which is unexecutable on Windows (WinError 193)
+# and broke the documented install. Resolution order is now _shared's:
+#   1. templates/bin/_machine_local.py via sys.executable  (no shebang exec)
+#   2. bin/machine-local shim
+#   3. machine-local on PATH
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_ml_cli_prefers_python_impl(tmp_path, monkeypatch):
+    """Convention B wins over the shim — this is the Windows-safe path."""
+    plugin_root = tmp_path / "plugin"
+    py_impl = plugin_root / "templates" / "bin" / "_machine_local.py"
+    py_impl.parent.mkdir(parents=True)
+    py_impl.write_text("# impl")
+    _make_exe(plugin_root / "bin" / "machine-local")
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/should/not/be/used")
+    assert ev._resolve_ml_cli(plugin_root) == [sys.executable, str(py_impl)]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX: the bare shim is directly executable")
+def test_resolve_ml_cli_bin_relative_first(tmp_path, monkeypatch):
+    plugin_root = tmp_path / "plugin"
+    ml = plugin_root / "bin" / "machine-local"
+    _make_exe(ml)
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/should/not/be/used")
+    assert ev._resolve_ml_cli(plugin_root) == [str(ml)]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows shim-rung shape")
+def test_resolve_ml_cli_windows_prefers_cmd_never_bare_shim(tmp_path, monkeypatch):
+    """On Windows the bare extension-less shim must never be returned.
+
+    CreateProcess cannot exec it (WinError 193) — the same defect the py_impl
+    rung avoids, which used to survive on this fallback path.
+    """
+    plugin_root = tmp_path / "plugin"
+    ml = plugin_root / "bin" / "machine-local"
+    _make_exe(ml)
+    monkeypatch.setattr(ev.shutil, "which", lambda name: None)
+
+    # Bare shim only -> must NOT be selected; falls through (here: to None).
+    assert ev._resolve_ml_cli(plugin_root) != [str(ml)]
+
+    # .cmd sibling present -> selected.
+    ml_cmd = ml.with_suffix(".cmd")
+    ml_cmd.write_text("@echo off\n")
+    assert ev._resolve_ml_cli(plugin_root) == [str(ml_cmd)]
+
+
+def test_resolve_ml_cli_falls_back_to_path(tmp_path, monkeypatch):
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/local/bin/machine-local")
+    assert ev._resolve_ml_cli(plugin_root) == ["/usr/local/bin/machine-local"]
+
+
+def test_resolve_ml_cli_none_when_absent(tmp_path, monkeypatch):
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    monkeypatch.setattr(ev.shutil, "which", lambda name: None)
+    assert ev._resolve_ml_cli(plugin_root) is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_whoami_pkg -- WHOAMI_PKG seam (AC B8)
+# ---------------------------------------------------------------------------
+
+
+def test_whoami_pkg_falls_back_to_plugin_root_when_no_ml_cli(tmp_path):
+    plugin_root = tmp_path / "plugin"
+    assert ev._resolve_whoami_pkg(plugin_root, None) == plugin_root / "whoami"
+
+
+def test_whoami_pkg_uses_registry_seam_when_valid_dir(tmp_path, monkeypatch):
+    plugin_root = tmp_path / "plugin"
+    seam_dir = tmp_path / "seam-whoami"
+    seam_dir.mkdir()
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: str(seam_dir))
+    assert ev._resolve_whoami_pkg(plugin_root, ml_cli) == seam_dir
+
+
+def test_whoami_pkg_warns_and_falls_back_on_stale_seam(tmp_path, monkeypatch, capsys):
+    plugin_root = tmp_path / "plugin"
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: str(tmp_path / "does-not-exist"))
+
+    result = ev._resolve_whoami_pkg(plugin_root, ml_cli)
+    assert result == plugin_root / "whoami"
+    assert "is not a directory" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# _set_pin -- idempotence + doubled-pin self-heal (AC B5)
+# ---------------------------------------------------------------------------
+
+
+def test_set_pin_warns_when_ml_cli_absent(capsys, tmp_path):
+    ev._set_pin(None, tmp_path / "venv" / "bin" / "python")
+    err = capsys.readouterr().err
+    assert "machine-local CLI not found" in err
+
+
+def _fake_ml(registry, calls):
+    def _get(cli, key):
+        return registry.get(key, "")
+
+    def _set(cli, key, value):
+        registry[key] = value
+        calls.append((key, value))
+
+    return _get, _set
+
+
+def test_set_pin_skips_write_when_already_correct(tmp_path, monkeypatch):
+    """AC3: whoami key is written unconditionally even when the general pin
+    already names venv_py and its own write is skipped."""
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {"coordinator.python": str(venv_py)}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._set_pin(ml_cli, venv_py)
+    assert calls == [("coordinator.whoami_python", str(venv_py))]
+
+
+def test_set_pin_writes_when_stale(tmp_path, monkeypatch):
+    """AC2: a general pin naming venv_py's own stale/non-existent prior
+    value (fails `-c 'import sys'` validation) is overwritten."""
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {"coordinator.python": "/old/path"}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._set_pin(ml_cli, venv_py)
+    assert calls == [
+        ("coordinator.whoami_python", str(venv_py)),
+        ("coordinator.python", str(venv_py)),
+    ]
+
+
+def test_set_pin_self_heals_doubled_claude_pin(tmp_path, monkeypatch, capsys):
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {"coordinator.python": "/x/.claude/.claude/.coordinator-venv/bin/python"}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._set_pin(ml_cli, venv_py)
+    assert "self-healing doubled venv pin" in capsys.readouterr().err
+    assert registry["coordinator.python"] == str(venv_py)
+
+
+def test_set_pin_leaves_healthy_unrelated_general_pin_untouched(tmp_path, monkeypatch, capsys):
+    """AC1: a healthy interpreter naming anything else survives byte-
+    identical; AC6: the operator gets a retained-value-and-remedy advisory
+    naming coordinator_whoami and COORDINATOR_PYTHON."""
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    unrelated = sys.executable  # a real, healthy interpreter on this box
+    registry = {"coordinator.python": unrelated}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._set_pin(ml_cli, venv_py)
+    assert calls == [("coordinator.whoami_python", str(venv_py))]
+    assert registry["coordinator.python"] == unrelated
+    err = capsys.readouterr().err
+    assert unrelated in err
+    assert "coordinator_whoami" in err
+    assert "COORDINATOR_PYTHON" in err
+
+
+def test_should_write_general_pin_true_when_empty(tmp_path):
+    assert ev._should_write_general_pin("", tmp_path / "venv_py") is True
+
+
+def test_should_write_general_pin_true_when_equal(tmp_path):
+    venv_py = tmp_path / "venv_py"
+    assert ev._should_write_general_pin(str(venv_py), venv_py) is True
+
+
+def test_should_write_general_pin_true_when_doubled_marker(tmp_path):
+    assert (
+        ev._should_write_general_pin(
+            "/x/.claude/.claude/.coordinator-venv/bin/python", tmp_path / "venv_py"
+        )
+        is True
+    )
+
+
+def test_should_write_general_pin_true_when_validation_fails(tmp_path):
+    assert ev._should_write_general_pin("/does/not/exist", tmp_path / "venv_py") is True
+
+
+def test_should_write_general_pin_true_when_validation_times_out(tmp_path, monkeypatch):
+    """The TimeoutExpired leg of _validate_general_pin -- a hung validation
+    probe must read as invalid, not raise (Review: coordinator:code-reviewer,
+    ff5e2a42, finding 2)."""
+
+    def raise_timeout(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=15)
+
+    monkeypatch.setattr(ev.subprocess, "run", raise_timeout)
+    assert ev._should_write_general_pin("/some/interpreter", tmp_path / "venv_py") is True
+
+
+def test_should_write_general_pin_false_when_healthy_unrelated(tmp_path):
+    assert ev._should_write_general_pin(sys.executable, tmp_path / "venv_py") is False
+
+
+# ---------------------------------------------------------------------------
+# _clear_dangling_pin -- non-dangling-pin guarantee
+# ---------------------------------------------------------------------------
+
+
+def test_clear_dangling_pin_noop_when_ml_cli_absent(tmp_path):
+    ev._clear_dangling_pin(None, tmp_path / "venv" / "bin" / "python")  # must not raise
+
+
+def test_clear_dangling_pin_clears_both_keys_when_both_match(tmp_path, monkeypatch, capsys):
+    """AC5: both keys are cleared, independently, when each names the
+    destroyed venv_py."""
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {
+        "coordinator.python": str(venv_py),
+        "coordinator.whoami_python": str(venv_py),
+    }
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._clear_dangling_pin(ml_cli, venv_py)
+    assert set(calls) == {
+        ("coordinator.python", ""),
+        ("coordinator.whoami_python", ""),
+    }
+    err = capsys.readouterr().err
+    assert "clearing dangling coordinator.python pin" in err
+    assert "clearing dangling coordinator.whoami_python pin" in err
+
+
+def test_clear_dangling_pin_leaves_unrelated_pin_alone(tmp_path, monkeypatch):
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {
+        "coordinator.python": "/unrelated/python",
+        "coordinator.whoami_python": "/unrelated/python",
+    }
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._clear_dangling_pin(ml_cli, venv_py)
+    assert calls == []
+
+
+def test_clear_dangling_pin_clears_only_whoami_when_general_pin_is_unrelated(
+    tmp_path, monkeypatch
+):
+    """AC5: an operator-set general pin unrelated to venv_py must survive
+    even though the (unconditionally-written) whoami pin is dangling --
+    the two keys' clear decisions are independent."""
+    ml_cli = tmp_path / "machine-local"
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    registry = {
+        "coordinator.python": "/operators/own/python",
+        "coordinator.whoami_python": str(venv_py),
+    }
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    ev._clear_dangling_pin(ml_cli, venv_py)
+    assert calls == [("coordinator.whoami_python", "")]
+    assert registry["coordinator.python"] == "/operators/own/python"
+
+
+# ---------------------------------------------------------------------------
+# _install_deps -- network-vs-generic classification (AC B6)
+# ---------------------------------------------------------------------------
+
+
+def test_install_deps_success_no_raise(tmp_path, monkeypatch):
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    whoami_pkg = tmp_path / "whoami"
+
+    def fake_run(argv, **kwargs):
+        assert argv[:4] == [str(venv_py), "-m", "pip", "install"]
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._install_deps(venv_py, whoami_pkg)  # must not raise
+
+
+def test_install_deps_pip_argv_includes_psutil(tmp_path, monkeypatch):
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    whoami_pkg = tmp_path / "whoami"
+    captured = []
+
+    def fake_run(argv, **kwargs):
+        captured.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._install_deps(venv_py, whoami_pkg)
+    assert "psutil>=5.9" in captured[0]
+
+
+def test_install_deps_network_failure_classified(tmp_path, monkeypatch, capsys):
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    whoami_pkg = tmp_path / "whoami"
+    monkeypatch.setattr(
+        ev.subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr="Temporary failure in name resolution"
+        ),
+    )
+    with pytest.raises(ev.EnsureVenvError):
+        ev._install_deps(venv_py, whoami_pkg)
+    assert "could not reach PyPI" in capsys.readouterr().err
+
+
+def test_install_deps_generic_failure_classified(tmp_path, monkeypatch, capsys):
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    whoami_pkg = tmp_path / "whoami"
+    monkeypatch.setattr(
+        ev.subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr="ERROR: no matching distribution"
+        ),
+    )
+    with pytest.raises(ev.EnsureVenvError):
+        ev._install_deps(venv_py, whoami_pkg)
+    assert "pip install failed" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# ensure_coordinator_venv -- orchestration + status parity (AC B3)
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_root_guard_fail_loud(tmp_path, monkeypatch):
+    """AC B9: an untrusted plugin_root aborts before any mutation."""
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", raising=False)
+    untrusted_root = tmp_path / "somewhere" / "else"
+    untrusted_root.mkdir(parents=True)
+    settings_home_path = tmp_path / "settings-home"
+
+    with pytest.raises(UntrustedRootError):
+        ev.ensure_coordinator_venv(untrusted_root, settings_home_path)
+    assert not settings_home_path.exists()
+
+
+def test_claude_home_doubled_suffix_fails_loud(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    with pytest.raises(ev.EnsureVenvError, match="ends in '/.claude'"):
+        ev.ensure_coordinator_venv(
+            plugin_root,
+            settings_home_path,
+            claude_home=str(tmp_path / "foo" / ".claude"),
+        )
+
+
+def test_check_mode_ready_when_healthy_and_pinned(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: None)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=True)
+    assert status == "ready"
+    assert not settings_home_path.exists()  # check mode mutates nothing
+
+
+def test_check_mode_would_write_when_healthy_but_unpinned(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: "/stale/path")
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=True)
+    assert status == "would-write"
+
+
+def test_check_mode_would_write_when_whoami_pin_unset(tmp_path, monkeypatch):
+    """AC4: the shared predicate's whoami leg — a healthy, unrelated general
+    pin is fine, but the whoami key has never been written, so a real run
+    would write it."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    registry = {"coordinator.python": sys.executable}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=True)
+    assert status == "would-write"
+
+
+def test_check_mode_ready_when_whoami_pinned_and_general_pin_healthy_unrelated(
+    tmp_path, monkeypatch
+):
+    """AC4 negative: check_only reports "ready", not "would-write", when
+    neither key's write would actually fire -- a real run would leave both
+    exactly as-is."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    registry = {
+        "coordinator.python": sys.executable,
+        "coordinator.whoami_python": str(venv_py),
+    }
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=True)
+    assert status == "ready"
+
+
+def test_check_mode_would_rebuild_when_unhealthy(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=True)
+    assert status == "would-rebuild"
+    assert not settings_home_path.exists()
+
+
+def test_mutate_mode_fast_path_ready(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    pins = []
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: pins.append(py))
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert pins  # pin attempted on fast path too
+    assert not settings_home_path.exists()  # nothing built
+
+
+def test_mutate_mode_rebuilds_when_unhealthy(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+
+    healthy_calls = {"n": 0}
+
+    def fake_healthy(py):
+        healthy_calls["n"] += 1
+        # False for the live venv_dir (fast-path check, post-lock
+        # re-check); True for the freshly-built `.gen-*` tree, satisfying
+        # the pre-swap health probe so this test still exercises the
+        # successful-rebuild leg.
+        return ".gen-" in py.parent.parent.name
+
+    monkeypatch.setattr(ev, "_venv_healthy", fake_healthy)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+
+    created = []
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: created.append(dst) or dst.mkdir(parents=True))
+
+    installed = []
+    monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: installed.append((py, pkg)))
+
+    pins = []
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: pins.append(py))
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "rebuilt"
+    # AC: the replacement is built at a fresh sibling, never venv_dir
+    # directly -- the live tree is only ever touched by the atomic swap
+    # (`_swap_in_new_venv`), which lands the finished build AT venv_dir.
+    assert len(created) == 1
+    assert created[0] != venv_dir
+    assert created[0].parent == venv_dir.parent
+    assert created[0].name.startswith(f"{venv_dir.name}.gen-")
+    assert venv_dir.is_dir()
+    assert installed
+    assert pins
+
+
+def test_mutate_mode_fast_path_leaves_healthy_unrelated_pin_and_writes_whoami(
+    tmp_path, monkeypatch
+):
+    """AC1 + AC3 end-to-end, healthy-fast-path leg: the real `_set_pin` (not
+    mocked) leaves an operator's healthy, unrelated general pin
+    byte-identical and writes the whoami key unconditionally."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    registry = {"coordinator.python": sys.executable}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert registry["coordinator.python"] == sys.executable
+    assert registry["coordinator.whoami_python"] == str(venv_py)
+
+
+def test_mutate_mode_post_lock_recheck_leaves_healthy_unrelated_pin(tmp_path, monkeypatch):
+    """AC1 end-to-end, post-lock-recheck leg: unhealthy on the first probe
+    (so the build lock is taken), healthy again once acquired (a peer
+    finished building meanwhile) -- the operator's pin still survives."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    ml_cli = tmp_path / "machine-local"
+
+    healthy_calls = {"n": 0}
+
+    def fake_healthy(py):
+        healthy_calls["n"] += 1
+        return healthy_calls["n"] >= 2
+
+    monkeypatch.setattr(ev, "_venv_healthy", fake_healthy)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    registry = {"coordinator.python": sys.executable}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert registry["coordinator.python"] == sys.executable
+    assert registry["coordinator.whoami_python"] == str(venv_py)
+
+
+def test_mutate_mode_post_rebuild_leg_leaves_healthy_unrelated_pin(tmp_path, monkeypatch):
+    """AC1 end-to-end, post-rebuild leg: a real rebuild succeeds and the
+    operator's healthy, unrelated general pin still survives untouched."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    ml_cli = tmp_path / "machine-local"
+
+    monkeypatch.setattr(
+        ev, "_venv_healthy", lambda py: ".gen-" in py.parent.parent.name
+    )
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+    monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: None)
+    registry = {"coordinator.python": sys.executable}
+    calls = []
+    get, set_ = _fake_ml(registry, calls)
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "rebuilt"
+    assert registry["coordinator.python"] == sys.executable
+    assert registry["coordinator.whoami_python"] == str(venv_py)
+
+
+def test_mutate_mode_removes_partial_venv_on_install_failure(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert not venv_dir.exists()
+
+
+def test_mutate_mode_failed_install_clears_dangling_pin_when_opted_in(tmp_path, monkeypatch):
+    """A pre-existing coordinator.python pin pointing at the (now-destroyed)
+    venv is cleared, not left dangling, when the caller opts in via
+    clear_pin_on_failure=True -- resolve_python_bin treats a found-but-broken
+    pin as a hard failure and never falls through to OS-detect, so a stale
+    pin here would turn one failed rebuild into every subsequent coordinator
+    invocation hard-failing. substrate.py's C10a-3 call site opts into this
+    (fatal-with-fallback disposition); see
+    test_mutate_mode_failed_install_leaves_pin_untouched_by_default for the
+    (now-default) opposite case an advisory caller gets without opting in."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    # Registry currently pins the venv we're about to destroy.
+    registry = {"coordinator.python": str(venv_py)}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+
+    def fake_set(cli, key, value):
+        registry[key] = value
+
+    monkeypatch.setattr(ev, "_ml_set", fake_set)
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(
+            plugin_root, settings_home_path, check_only=False, clear_pin_on_failure=True,
+        )
+
+    assert not venv_dir.exists()
+    assert registry["coordinator.python"] == ""
+
+
+def test_mutate_mode_failed_install_leaves_pin_untouched_by_default(tmp_path, monkeypatch):
+    """DEFAULT behavior (no clear_pin_on_failure passed): a failed rebuild
+    must NOT blank an existing coordinator.python pin, even one that names
+    the just-destroyed venv. Regression guard for the 2026-07-28
+    install-dogfood friction log's F7 "second-order damage" -- an ADVISORY
+    phase (maximalist.py Step 6) degrading persisted registry state on
+    failure. Disposition-laden mutation belongs to an opted-in caller (see
+    the clear_pin_on_failure=True sibling test), never the shared mechanic's
+    default."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    # Registry currently pins the venv we're about to destroy -- a "good"
+    # pin from the caller's point of view up until this failure.
+    registry = {"coordinator.python": str(venv_py)}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+
+    def fake_set(cli, key, value):
+        registry[key] = value
+
+    monkeypatch.setattr(ev, "_ml_set", fake_set)
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+
+    assert not venv_dir.exists()  # the venv itself is still cleaned up
+    assert registry["coordinator.python"] == str(venv_py)  # but the pin survives
+
+
+def test_mutate_mode_failed_install_leaves_unrelated_pin_untouched(tmp_path, monkeypatch):
+    """A pin pointing somewhere OTHER than the venv we just tried (and failed)
+    to build is left alone -- clearing is scoped to the dangling case."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    registry = {"coordinator.python": "/some/other/interpreter"}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+    calls = []
+    monkeypatch.setattr(ev, "_ml_set", lambda cli, key, value: calls.append(value))
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+
+    assert calls == []
+    assert registry["coordinator.python"] == "/some/other/interpreter"
+
+
+def test_mutate_mode_fails_loud_when_no_base_python(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: None)
+
+    with pytest.raises(ev.EnsureVenvError, match="no python3 or python found"):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+
+
+# ---------------------------------------------------------------------------
+# Build-lock contention contract (AC B4, coverage M1) -- POSIX flock branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fcntl.flock branch")
+def test_lock_contention_fails_loud_posix(tmp_path, monkeypatch):
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    settings_home_path.mkdir(parents=True)
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+
+    lock_path = settings_home_path / ".coordinator-venv.lock"
+    import fcntl
+
+    holder_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(holder_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(ev.EnsureVenvContention):
+            ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    finally:
+        fcntl.flock(holder_fd, fcntl.LOCK_UN)
+        os.close(holder_fd)
+
+
+def test_lock_contention_is_immediate_no_polling(tmp_path, monkeypatch):
+    """NB-immediate-fail: contention raises on the FIRST try, no backoff loop."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_plat_try_lock", lambda fd: False)
+
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(ev.EnsureVenvContention):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    elapsed = time.monotonic() - start
+    assert elapsed < 1.0  # no poll-with-backoff
+
+
+def test_lock_released_only_when_acquired_by_this_call(tmp_path, monkeypatch):
+    """When contention is hit, this call never releases a lock it doesn't hold."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_plat_try_lock", lambda fd: False)
+    unlock_calls = []
+    monkeypatch.setattr(ev, "_plat_unlock", lambda fd: unlock_calls.append(fd))
+
+    with pytest.raises(ev.EnsureVenvContention):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert unlock_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Build-lock contention contract -- Windows msvcrt branch (Patrik F0, M1)
+# ---------------------------------------------------------------------------
+
+
+def test_lock_contention_msvcrt_branch(tmp_path, monkeypatch):
+    """Exercises locked_write._plat_try_lock's Windows msvcrt backend even
+    on a POSIX test host, by forcing _FCNTL_AVAILABLE False and stubbing
+    msvcrt (which is unimportable on non-Windows) into sys.modules.
+
+    Also stubs a Windows-shaped ``errno`` module (MSVCRT's errno.h defines
+    EDEADLOCK=36 as an EDEADLK alias; macOS/BSD's errno module does not
+    carry that attribute at all -- using the real host errno module here
+    would AttributeError on the tuple literal in `_plat_try_lock`'s except
+    clause for a reason that has nothing to do with the Windows behavior
+    under test).
+    """
+    import types
+
+    from coordinator_core import locked_write as lw
+
+    monkeypatch.setattr(lw, "_FCNTL_AVAILABLE", False)
+
+    calls = {"locking": 0}
+
+    class _FakeMsvcrt(types.ModuleType):
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def locking(self, fd, mode, nbytes):
+            calls["locking"] += 1
+            if mode == self.LK_NBLCK:
+                raise OSError(13, "Permission denied")  # EACCES -- contention
+            return None
+
+    fake_msvcrt = _FakeMsvcrt("msvcrt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    fake_errno = types.ModuleType("errno")
+    fake_errno.EACCES = 13
+    fake_errno.EDEADLOCK = 36
+    monkeypatch.setitem(sys.modules, "errno", fake_errno)
+
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+
+    with pytest.raises(ev.EnsureVenvContention):
+        ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert calls["locking"] >= 1
+
+
+def test_lock_msvcrt_branch_acquires_and_releases_on_success(tmp_path, monkeypatch):
+    """Windows msvcrt backend: successful acquire + release path (fast-path
+    ready after re-check under lock -- exercises _plat_unlock's msvcrt arm)."""
+    import types
+
+    from coordinator_core import locked_write as lw
+
+    monkeypatch.setattr(lw, "_FCNTL_AVAILABLE", False)
+
+    calls = {"locking": 0, "unlocking": 0}
+
+    class _FakeMsvcrt(types.ModuleType):
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        def locking(self, fd, mode, nbytes):
+            if mode == self.LK_NBLCK:
+                calls["locking"] += 1
+            elif mode == self.LK_UNLCK:
+                calls["unlocking"] += 1
+            return None
+
+    fake_msvcrt = _FakeMsvcrt("msvcrt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    # Unhealthy pre-lock, healthy once "under lock" (another session finished
+    # building while we waited) -- exercises the re-check-after-acquire path.
+    healthy_sequence = iter([False, True])
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: next(healthy_sequence))
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert calls["locking"] == 1
+    assert calls["unlocking"] == 1
+
+
+class TestWriteSurfaceDeclaration:
+    """AC coverage for ensure_venv.WRITE_SURFACE (spec:
+    docs/plans/2026-08-06-writer-declared-write-surface-manifest.md, chunk
+    C3f). Two distinct kinds of machine touch: the venv TREE (SHAPED) and
+    the interpreter PIN KEY (STATIC write + STATIC delete)."""
+
+    def test_declaration_is_valid(self) -> None:
+        assert validate(ev.WRITE_SURFACE) == ()
+
+    def test_declaration_names_the_writer_and_module(self) -> None:
+        assert ev.WRITE_SURFACE.writer_id == "ensure-venv"
+        assert ev.WRITE_SURFACE.source_module == "coordinator_core.install.ensure_venv"
+
+    def test_surface_is_seven_clauses(self) -> None:
+        """venv tree, general-pin write/delete, whoami-pin write/delete
+        (AC7 — the additive split), build-lock sidecar, and the general-pin
+        interpreter's site-packages (the one surface outside anything this
+        installer owns)."""
+        assert len(ev.WRITE_SURFACE.clauses) == 7
+
+    def test_build_lock_sidecar_is_declared(self) -> None:
+        """The `.lock` file outlives the run — `O_CREAT` with no unlink — so it
+        is a durable surface, not an in-run temp file out of the manifest's
+        remit. Omitted on first authoring because the dispatch brief named only
+        the tree and the pin key."""
+        paths = [
+            entry.path
+            for clause in ev.WRITE_SURFACE.clauses
+            if isinstance(clause, StaticClause)
+            for entry in clause.entries
+            if entry.kind == "file-path"
+        ]
+        assert any(p and p.endswith(".coordinator-venv.lock") for p in paths)
+
+    def test_venv_tree_clause_is_shaped_not_enumerated(self) -> None:
+        clause = ev.WRITE_SURFACE.clauses[0]
+        assert isinstance(clause, ShapedClause)
+        assert clause.entry_template.kind == "file-path"
+        assert ".coordinator-venv" in clause.entry_template.path
+        assert "<settings-home>" in clause.entry_template.path
+
+    def test_pin_write_clause_uses_shared_pin_key_constant(self) -> None:
+        clause = ev.WRITE_SURFACE.clauses[1]
+        assert isinstance(clause, StaticClause)
+        assert clause.effect == "write"
+        assert len(clause.entries) == 1
+        entry = clause.entries[0]
+        assert entry.kind == "machine-local-key"
+        assert entry.key == ev._PIN_KEY
+
+    def test_pin_delete_clause_is_declared_as_delete_not_write(self) -> None:
+        clause = ev.WRITE_SURFACE.clauses[2]
+        assert isinstance(clause, StaticClause)
+        assert clause.effect == "delete"
+        assert len(clause.entries) == 1
+        entry = clause.entries[0]
+        assert entry.kind == "machine-local-key"
+        assert entry.key == ev._PIN_KEY
+        assert entry.effect == "delete"
+
+    def test_write_and_delete_clauses_reference_the_same_key(self) -> None:
+        write_key = ev.WRITE_SURFACE.clauses[1].entries[0].key
+        delete_key = ev.WRITE_SURFACE.clauses[2].entries[0].key
+        assert write_key == delete_key == "coordinator.python"
+
+    def test_set_pin_and_clear_dangling_pin_use_the_same_constant(self) -> None:
+        """`_set_pin`/`_clear_dangling_pin` and the declaration all read
+        `_PIN_KEY` rather than restating the literal -- guards against the
+        constant drifting from what the functions actually write."""
+        assert ev._PIN_KEY == "coordinator.python"
+
+    def test_whoami_pin_write_clause_uses_shared_constant(self) -> None:
+        """AC7: `coordinator.whoami_python` gets its own write clause,
+        declared against `_WHOAMI_PIN_KEY` (not a restated literal)."""
+        clause = ev.WRITE_SURFACE.clauses[3]
+        assert isinstance(clause, StaticClause)
+        assert clause.effect == "write"
+        assert len(clause.entries) == 1
+        entry = clause.entries[0]
+        assert entry.kind == "machine-local-key"
+        assert entry.key == ev._WHOAMI_PIN_KEY == "coordinator.whoami_python"
+
+    def test_whoami_pin_delete_clause_is_declared_as_delete(self) -> None:
+        clause = ev.WRITE_SURFACE.clauses[4]
+        assert isinstance(clause, StaticClause)
+        assert clause.effect == "delete"
+        assert len(clause.entries) == 1
+        entry = clause.entries[0]
+        assert entry.kind == "machine-local-key"
+        assert entry.key == ev._WHOAMI_PIN_KEY
+        assert entry.effect == "delete"
+
+    def test_whoami_write_and_delete_clauses_reference_the_same_key(self) -> None:
+        write_key = ev.WRITE_SURFACE.clauses[3].entries[0].key
+        delete_key = ev.WRITE_SURFACE.clauses[4].entries[0].key
+        assert write_key == delete_key == "coordinator.whoami_python"
+
+    def test_general_pin_sitepackages_clause_is_shaped_and_write_only(self) -> None:
+        """AC5: the one surface outside anything this installer owns is
+        declared -- SHAPED, because the target is discovered from the registry
+        at run time and no literal path can be enumerated."""
+        clause = ev.WRITE_SURFACE.clauses[6]
+        assert isinstance(clause, ShapedClause)
+        assert "_ensure_whoami_under_general_pin" in clause.discovered_by
+        assert clause.entry_template.kind == "file-path"
+
+    def test_general_pin_sitepackages_has_no_delete_clause(self) -> None:
+        """Deliberately unlike the pin keys' write/delete pairs: removing a
+        package from an operator's own interpreter is not a failure-path
+        cleanup this writer may perform, so no delete clause may appear."""
+        delete_paths = [
+            entry.path
+            for clause in ev.WRITE_SURFACE.clauses
+            for entry in getattr(clause, "entries", ())
+            if getattr(entry, "effect", None) == "delete"
+        ]
+        assert not any(p and "site-packages" in p for p in delete_paths)
+
+
+# ---------------------------------------------------------------------------
+# _whoami_importable_under / _ensure_whoami_under_general_pin --
+# the general-pin install leg (source memo: doe-claude-em,
+# "general pin is self-sufficient here, fresh install is not")
+# ---------------------------------------------------------------------------
+
+
+def _no_subprocess(monkeypatch):
+    """Fail loudly if any guard leg reaches a subprocess -- the guards exist
+    precisely so a no-op run costs no process spawns on a shared, heavily
+    loaded box."""
+
+    def _boom(*a, **k):  # pragma: no cover - the assertion is the point
+        raise AssertionError(f"unexpected subprocess: {a!r}")
+
+    monkeypatch.setattr(ev.subprocess, "run", _boom)
+
+
+def test_general_pin_install_skipped_without_ml_cli(tmp_path, monkeypatch):
+    """AC3: no CLI means no registry to read -- `_set_pin` already advised."""
+    _no_subprocess(monkeypatch)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: None)
+    ev._ensure_whoami_under_general_pin(
+        tmp_path / "plugin", tmp_path / "venv" / "bin" / "python", "ready"
+    )
+
+
+@pytest.mark.parametrize("pin_value", ["", None])
+def test_general_pin_install_skipped_when_pin_unset(tmp_path, monkeypatch, pin_value):
+    """AC3: an unset general pin means `pyresolve` falls through to OS-detect;
+    there is no named interpreter to install into."""
+    _no_subprocess(monkeypatch)
+    registry = {} if pin_value is None else {"coordinator.python": pin_value}
+    get, set_ = _fake_ml(registry, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    ev._ensure_whoami_under_general_pin(
+        tmp_path / "plugin", tmp_path / "venv" / "bin" / "python", "ready"
+    )
+
+
+def test_general_pin_install_skipped_when_pin_is_the_venv(tmp_path, monkeypatch):
+    """AC3: the venv leg already installed whoami there."""
+    _no_subprocess(monkeypatch)
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    get, set_ = _fake_ml({"coordinator.python": str(venv_py)}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    ev._ensure_whoami_under_general_pin(tmp_path / "plugin", venv_py, "ready")
+
+
+def test_general_pin_install_skipped_when_pin_path_missing(tmp_path, monkeypatch):
+    """AC3: a dangling general pin is `_clear_dangling_pin`/`pyresolve`'s
+    fail-loud contract -- not repaired here by installing into a path that
+    is not there."""
+    _no_subprocess(monkeypatch)
+    get, set_ = _fake_ml({"coordinator.python": str(tmp_path / "gone" / "python")}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    ev._ensure_whoami_under_general_pin(
+        tmp_path / "plugin", tmp_path / "venv" / "bin" / "python", "ready"
+    )
+
+
+def test_general_pin_install_skipped_when_already_importable(tmp_path, monkeypatch):
+    """AC3: P-5's question already answers green under this interpreter."""
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+    get, set_ = _fake_ml({"coordinator.python": str(general)}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        assert argv[1] == "-c", "probe must run before any pip invocation"
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._ensure_whoami_under_general_pin(
+        tmp_path / "plugin", tmp_path / "venv" / "bin" / "python", "ready"
+    )
+    assert len(seen) == 1, "a green probe must not be followed by an install"
+
+
+def test_general_pin_probe_asks_p5s_question_not_the_venv_oracle(tmp_path, monkeypatch):
+    """The probe is `coordinator_whoami` ALONE. Reusing `_VENV_IMPORT_PROBES`
+    would reinstall over a general pin already green for P-5 merely because
+    it lacks a dep P-5 never asks about."""
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    assert ev._whoami_importable_under("/some/python") is True
+    assert captured["argv"][2] == "import coordinator_whoami"
+    assert "pydantic" not in captured["argv"][2]
+    assert "psutil" not in captured["argv"][2]
+
+
+def test_general_pin_install_runs_editable_pip_under_the_pin(tmp_path, monkeypatch, capsys):
+    """AC1: the whole point -- an editable install under the interpreter
+    `probe_p5` actually resolves."""
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+    whoami_pkg = tmp_path / "whoami"
+    plugin_root = tmp_path / "plugin"
+    get, set_ = _fake_ml({"coordinator.python": str(general)}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    monkeypatch.setattr(ev, "_resolve_whoami_pkg", lambda root, cli, **kw: whoami_pkg)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1] == "-c":
+            return subprocess.CompletedProcess(argv, 1)  # not importable yet
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._ensure_whoami_under_general_pin(
+        plugin_root, tmp_path / "venv" / "bin" / "python", "ready"
+    )
+    assert calls[-1] == [
+        str(general),
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        f"{whoami_pkg}/",
+    ]
+    assert "installed coordinator_whoami" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "nonzero",
+        OSError("no pip"),
+        subprocess.TimeoutExpired(cmd="pip", timeout=600),
+    ],
+)
+def test_general_pin_install_failure_degrades_to_advisory(
+    tmp_path, monkeypatch, capsys, failure
+):
+    """AC2: PEP-668, pip absent, permission denied, network, timeout -- every
+    one degrades to exactly the advisory the operator got before, naming the
+    manual command. The helper never raises."""
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+    whoami_pkg = tmp_path / "whoami"
+    plugin_root = tmp_path / "plugin"
+    get, set_ = _fake_ml({"coordinator.python": str(general)}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    monkeypatch.setattr(ev, "_resolve_whoami_pkg", lambda root, cli, **kw: whoami_pkg)
+
+    def fake_run(argv, **kwargs):
+        if argv[1] == "-c":
+            return subprocess.CompletedProcess(argv, 1)
+        if failure == "nonzero":
+            return subprocess.CompletedProcess(
+                argv, 1, stdout="", stderr="error: externally-managed-environment"
+            )
+        raise failure
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._ensure_whoami_under_general_pin(
+        plugin_root, tmp_path / "venv" / "bin" / "python", "ready"
+    )
+    err = capsys.readouterr().err
+    assert "P-5 will read red" in err
+    assert f"{general} -m pip install -e {whoami_pkg}/" in err
+
+
+def test_general_pin_install_survives_an_unexpected_error(tmp_path, monkeypatch, capsys):
+    """AC2 backstop: even a failure in the registry read -- not an
+    anticipated pip failure mode -- must not escape into the wrapper's
+    return path."""
+
+    def boom(*a, **k):
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    monkeypatch.setattr(ev, "_ml_get", boom)
+    ev._ensure_whoami_under_general_pin(
+        tmp_path / "plugin", tmp_path / "venv" / "bin" / "python", "ready"
+    )
+    assert "could not install coordinator_whoami" in capsys.readouterr().err
+
+
+def test_general_pin_resolve_ml_cli_error_never_escapes_ensure_coordinator_venv(
+    tmp_path, monkeypatch, capsys
+):
+    """Finding 1's gap, closed: `_resolve_ml_cli` and `_resolve_whoami_pkg`
+    now run INSIDE `_ensure_whoami_under_general_pin`'s own try/except, not
+    as call-site arguments in the wrapper -- an `OSError` from either must
+    degrade to the stderr advisory, never propagate out of
+    `ensure_coordinator_venv` (Review: coordinator:code-reviewer,
+    whoami-general-pin-review, finding 1)."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+
+    # The impl's own top-level `_resolve_ml_cli(plugin_root)` call (unrelated
+    # to this finding) must keep succeeding -- only the general-pin leg's
+    # resolution, the SECOND call, is the one under test here.
+    calls = {"n": 0}
+
+    def flaky_resolve_ml_cli(root):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ["ml"]
+        raise OSError("boom")
+
+    monkeypatch.setattr(ev, "_resolve_ml_cli", flaky_resolve_ml_cli)
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert calls["n"] == 2
+    assert "could not install coordinator_whoami" in capsys.readouterr().err
+
+
+def test_general_pin_resolve_whoami_pkg_error_never_escapes_ensure_coordinator_venv(
+    tmp_path, monkeypatch, capsys
+):
+    """Same contract as above, the OTHER resolution: `_resolve_whoami_pkg`
+    raising must also degrade rather than propagate out of
+    `ensure_coordinator_venv`."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: str(tmp_path))
+    monkeypatch.setattr(ev, "_whoami_importable_under", lambda general: False)
+    monkeypatch.setattr(
+        ev,
+        "_resolve_whoami_pkg",
+        lambda root, cli, **kw: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert "could not install coordinator_whoami" in capsys.readouterr().err
+
+
+def test_general_pin_leg_warns_on_stale_seam_on_ready_run(tmp_path, monkeypatch, capsys):
+    """Finding 2: on the fast "ready" path the impl never resolves
+    `whoami_pkg` at all, so the general-pin leg's resolution is the SOLE
+    resolution this run and must warn about a stale `coordinator.whoami_src`
+    seam rather than suppress it."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: True)
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    registry = {
+        "coordinator.python": str(general),
+        "coordinator.whoami_src": str(tmp_path / "does-not-exist"),
+    }
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+    monkeypatch.setattr(ev, "_whoami_importable_under", lambda g: False)
+    monkeypatch.setattr(
+        ev.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0)
+    )
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "ready"
+    assert "is not a directory" in capsys.readouterr().err
+
+
+def test_general_pin_leg_does_not_double_warn_on_rebuilt_run(tmp_path, monkeypatch, capsys):
+    """Finding 2 negative: on a "rebuilt" run the impl's own rebuild leg has
+    already resolved `whoami_pkg` loud and warned about the stale seam once
+    -- the general-pin leg's second resolution must stay quiet rather than
+    warn a second time about the same seam."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+
+    monkeypatch.setattr(
+        ev, "_venv_healthy", lambda py: ".gen-" in py.parent.parent.name
+    )
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+    monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: None)
+    monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    registry = {
+        "coordinator.python": str(general),
+        "coordinator.whoami_src": str(tmp_path / "does-not-exist"),
+    }
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+    monkeypatch.setattr(ev, "_whoami_importable_under", lambda g: False)
+    monkeypatch.setattr(
+        ev.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0)
+    )
+
+    status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+    assert status == "rebuilt"
+    err = capsys.readouterr().err
+    assert err.count("is not a directory") == 1
+
+
+def test_general_pin_install_uses_no_console_creationflags(tmp_path, monkeypatch):
+    """AC6: Windows-first -- neither the probe nor the install may flash a
+    console window on the commit/session hot path. Uses a sentinel
+    creationflags dict rather than the real (platform-dependent)
+    `no_console_creationflags()` so the assertion is meaningful on every
+    platform -- POSIX's real implementation returns `{}`, which made the
+    prior form of this test vacuous there (Review: coordinator:code-reviewer,
+    whoami-general-pin-review, finding 3)."""
+    general = tmp_path / "other" / "python"
+    _make_exe(general)
+    plugin_root = tmp_path / "plugin"
+    get, set_ = _fake_ml({"coordinator.python": str(general)}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ["ml"])
+    monkeypatch.setattr(ev, "_resolve_whoami_pkg", lambda root, cli, **kw: tmp_path / "w")
+
+    sentinel = {"creationflags": 0xDEADBEEF}
+    monkeypatch.setattr(ev, "no_console_creationflags", lambda: sentinel)
+
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append({k: kwargs.get(k) for k in sentinel})
+        return subprocess.CompletedProcess(argv, 1 if argv[1] == "-c" else 0, stderr="")
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    ev._ensure_whoami_under_general_pin(
+        plugin_root, tmp_path / "venv" / "bin" / "python", "ready"
+    )
+    assert len(seen) == 2, "both the probe and the install must be covered"
+    assert all(call == sentinel for call in seen)
+
+
+def test_resolve_whoami_pkg_can_suppress_the_stale_seam_warning(tmp_path, monkeypatch, capsys):
+    """One stale seam is one warning: the wrapper resolves a second time for
+    the general-pin leg, and the same seam warned about twice reads as two
+    distinct problems."""
+    plugin_root = tmp_path / "plugin"
+    get, set_ = _fake_ml({"coordinator.whoami_src": str(tmp_path / "not-a-dir")}, [])
+    monkeypatch.setattr(ev, "_ml_get", get)
+    monkeypatch.setattr(ev, "_ml_set", set_)
+
+    loud = ev._resolve_whoami_pkg(plugin_root, ["ml"])
+    assert "is not a directory" in capsys.readouterr().err
+
+    quiet = ev._resolve_whoami_pkg(plugin_root, ["ml"], warn_on_stale_seam=False)
+    assert capsys.readouterr().err == ""
+    assert loud == quiet == plugin_root / "whoami"
+
+
+# ---------------------------------------------------------------------------
+# Rebuild-vs-live-reader safety: swap-not-rmtree
+# (docs/plans -- shared .coordinator-venv destroyed under live readers)
+# ---------------------------------------------------------------------------
+
+
+def test_swap_in_new_venv_defers_reclaim_when_old_tree_delete_fails(tmp_path, monkeypatch):
+    """Windows-shaped failure mode: rmtree-ing the vacated old GENERATION can
+    raise (sharing violation while a reader still has a handle open inside
+    it). The junction retarget itself must still land -- reclamation of the
+    old generation is deferred, not fatal."""
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    (old_gen / "bin" / "python").write_text("old")
+    junction.create_junction(venv_dir, old_gen)
+
+    build_dir = ev._build_dir_for(venv_dir)
+    (build_dir / "bin").mkdir(parents=True)
+    (build_dir / "bin" / "python").write_text("new")
+
+    def fail_rmtree(path, *a, **kw):
+        raise OSError(32, "sharing violation")  # WinError-shaped
+
+    monkeypatch.setattr(ev.shutil, "rmtree", fail_rmtree)
+
+    ev._swap_in_new_venv(venv_dir, build_dir)  # must not raise
+
+    assert (venv_dir / "bin" / "python").read_text() == "new"
+    # The vacated generation is left in place under its OWN `.gen-*` name --
+    # there is no rename-to-`.stale-*` step any more, since the swap never
+    # touches the old generation's directory entry at all.
+    assert old_gen.exists()
+    assert (old_gen / "bin" / "python").read_text() == "old"
+
+
+def test_swap_in_new_venv_refuses_a_pre_junction_real_directory_and_names_the_remedy(tmp_path):
+    """A real pre-junction venv_dir is refused loudly, with the way out named.
+
+    REPLACES two tests retired 2026-08-20:
+    ``test_swap_in_new_venv_does_not_delete_tree_a_reader_still_has_open`` and
+    ``test_mutate_mode_rebuild_swap_survives_a_reader_holding_the_old_tree_open``.
+    They were the oracle for the RENAME-SWAP design and asserted that a rebuild
+    survives a reader holding the old tree open. That guarantee still holds and
+    is still asserted -- by
+    ``test_swap_in_new_venv_survives_reader_via_junction_retarget``, which
+    PASSES, where the rename-swap design could never pass it on Windows.
+
+    What the retired pair additionally required was converting a real,
+    non-empty, actively-open directory into a junction IN PLACE. Measured
+    2026-08-20 on a real Windows host: `os.rename` of the tree raises WinError 5
+    while a handle is open inside it, and `_winapi.CreateJunction` raises
+    WinError 183 when the link path is occupied -- so there is no stdlib route,
+    and bounded retry cannot help because the reader's handle is held for the
+    whole call. `fleet_env` solves the equivalent bootstrap with a dedicated
+    cutover chunk plus a runnable fallback script; this module, being break-glass
+    with no live caller and no venv on disk anywhere, refuses instead.
+
+    That refusal is this test's subject: it must FAIL, not silently do something
+    partial, and it must tell the operator what to do next.
+    """
+    venv_dir = tmp_path / ".coordinator-venv"
+    (venv_dir / "Lib").mkdir(parents=True)
+    (venv_dir / "Lib" / "held.py").write_text("x = 1\n", encoding="utf-8")
+    build_dir = tmp_path / ".coordinator-venv.gen-1-abcdef12"
+    build_dir.mkdir()
+
+    with pytest.raises(ev.EnsureVenvError) as excinfo:
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+    message = str(excinfo.value)
+    assert "neither absent nor a junction" in message
+    assert "Remove" in message and str(venv_dir) in message, (
+        "the refusal must name the remedy, not just the diagnosis"
+    )
+
+    assert venv_dir.is_dir(), "a refusal must not have mutated the tree"
+    assert (venv_dir / "Lib" / "held.py").is_file()
+    assert build_dir.is_dir()
+
+
+def test_swap_in_new_venv_survives_reader_via_junction_retarget(tmp_path):
+    """The steady-state guarantee: once venv_dir is ALREADY a junction, a
+    reader with an open fd against the currently-published generation
+    survives a real swap -- the swap never touches that generation's
+    directory entry, only the junction pointing at it.
+
+    This is the assertion the two retired rename-swap oracles carried, and
+    it PASSES here where their design could never pass it on Windows. What
+    they additionally demanded -- converting a real, actively-open directory
+    into a junction in place -- has no stdlib route, and is covered instead
+    as a specified refusal by
+    ``test_swap_in_new_venv_refuses_a_pre_junction_real_directory_and_names_the_remedy``.
+    """
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    old_marker = old_gen / "bin" / "python"
+    old_marker.write_text("old-interpreter")
+    junction.create_junction(venv_dir, old_gen)
+
+    reader_fd = open(venv_dir / "bin" / "python", "r")
+    try:
+        build_dir = ev._build_dir_for(venv_dir)
+        (build_dir / "bin").mkdir(parents=True)
+        (build_dir / "bin" / "python").write_text("new-interpreter")
+
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+        # The reader's already-open fd still reads the OLD content.
+        reader_fd.seek(0)
+        assert reader_fd.read() == "old-interpreter"
+    finally:
+        reader_fd.close()
+
+    # A fresh read through venv_dir resolves to the NEW generation -- the
+    # published target itself is build_dir, never renamed into venv_dir.
+    assert (venv_dir / "bin" / "python").read_text() == "new-interpreter"
+    assert build_dir.exists()
+    assert junction.is_junction(venv_dir)
+    assert junction.junction_target(venv_dir).resolve() == build_dir.resolve()
+    # The vacated old generation's reclaim was attempted WHILE the reader's
+    # handle was still open (inside the swap call above) and deferred, per
+    # the Windows sharing-violation path -- it is left in place under its
+    # own original name, exactly the shape _sweep_orphaned_swap_dirs
+    # reclaims on the next rebuild.
+    assert old_gen.exists()
+    assert (old_gen / "bin" / "python").read_text() == "old-interpreter"
+
+
+def test_swap_in_new_venv_restores_previous_junction_on_create_failure(tmp_path, monkeypatch):
+    """AC5-equivalent restore guard: if create_junction raises AFTER
+    remove_junction already succeeded, venv_dir must re-point at the
+    PREVIOUS generation rather than being left absent."""
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_gen = ev._build_dir_for(venv_dir)
+    (old_gen / "bin").mkdir(parents=True)
+    (old_gen / "bin" / "python").write_text("old")
+    junction.create_junction(venv_dir, old_gen)
+
+    build_dir = ev._build_dir_for(venv_dir)
+    (build_dir / "bin").mkdir(parents=True)
+    (build_dir / "bin" / "python").write_text("new")
+
+    real_create_junction = junction.create_junction
+    calls = {"n": 0}
+
+    def flaky_create_junction(link, target):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated create_junction failure")
+        real_create_junction(link, target)
+
+    monkeypatch.setattr(ev.junction, "create_junction", flaky_create_junction)
+
+    with pytest.raises(OSError):
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+    # Restored to the PREVIOUS generation, never left absent.
+    assert junction.is_junction(venv_dir)
+    assert (venv_dir / "bin" / "python").read_text() == "old"
+
+
+def test_sweep_orphaned_swap_dirs_reclaims_leftover_build_and_stale_siblings(tmp_path):
+    venv_dir = tmp_path / ".coordinator-venv"
+    venv_dir.mkdir()
+    leftover_build = tmp_path / ".coordinator-venv.build-1234-deadbeef"
+    leftover_build.mkdir()
+    leftover_stale = tmp_path / ".coordinator-venv.stale-1234-deadbeef"
+    leftover_stale.mkdir()
+    unrelated = tmp_path / ".coordinator-venv-backup"
+    unrelated.mkdir()
+
+    ev._sweep_orphaned_swap_dirs(venv_dir)
+
+    assert not leftover_build.exists()
+    assert not leftover_stale.exists()
+    assert venv_dir.exists()
+    assert unrelated.exists()  # not our prefix -- must survive the sweep
+
+
+def test_mutate_mode_failed_rebuild_leaves_preexisting_tree_untouched_and_pin_unclearable(
+    tmp_path, monkeypatch
+):
+    """A failed rebuild no longer destroys whatever was already at venv_dir
+    (the old rmtree-before-build behavior) -- so a pin naming that
+    still-present path is not "dangling" even with clear_pin_on_failure=True,
+    since venv_dir did not resolve to nothing this run."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "bin" / "python").write_text("still-here")
+
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    registry = {"coordinator.python": str(venv_py)}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+    monkeypatch.setattr(ev, "_ml_set", lambda cli, key, value: registry.__setitem__(key, value))
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(
+            plugin_root, settings_home_path, check_only=False, clear_pin_on_failure=True,
+        )
+
+    # The pre-existing tree survives byte-identical -- only the never-
+    # published build sibling was cleaned up.
+    assert (venv_dir / "bin" / "python").read_text() == "still-here"
+    assert registry["coordinator.python"] == str(venv_py)  # not cleared -- still resolves
+    assert not list(settings_home_path.glob(".coordinator-venv.gen-*"))

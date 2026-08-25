@@ -359,7 +359,7 @@ def test_dead_registry_rung_flags_home_spelling_too() -> None:
 
 def test_hardcoded_plugin_exec_path_flagged() -> None:
     hits = detect_in_text(
-        'run "~/.claude/plugins/coordinator-claude/coordinator/bin/foo"\n',  # abs-path-ok: synthetic test fixture
+        'run "~/.claude/plugins/coordinator/bin/foo"\n',  # abs-path-ok: synthetic test fixture
         filename="setup.sh",
     )
     assert any(f.rule == "dead-registry-rung" for f in hits)
@@ -696,7 +696,7 @@ def test_dead_registry_rung_json_description_field_not_flagged() -> None:
     """A JSON `"description"` field narrating the dead rung is documentary,
     same reasoning as the YAML case -- JSON strings never need continuation
     tracking since a raw newline can't appear inside one."""
-    text = '{\n  "description": "True when ~/.claude/plugins/coordinator-claude/coordinator/CLAUDE.md exists."\n}\n'  # abs-path-ok: synthetic test fixture
+    text = '{\n  "description": "True when ~/.claude/plugins/coordinator/CLAUDE.md exists."\n}\n'  # abs-path-ok: synthetic test fixture
     hits = detect_in_text(text, filename="schema.json")
     assert "dead-registry-rung" not in _rules(hits)
 

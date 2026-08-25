@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/completion-entry.schema.json",
+  "x-schema-name": "completion-entry",
+  "x-schema-version": "1.4.0",
+  "x-bump-class": "enum-value-additive",
+  "x-bump-note": "1.3.0 -> 1.4.0 widens `chain_loe.tshirt` with `XXL`, appended at the end, and RETRACTS the NEGATIVE SPEC in the 1.2.0 -> 1.3.0 note below that said this field must never be widened. Read that retraction before following the prior note: it is wrong, and its reasoning is the instructive part. It argued `XXL` is a ROUTING size and therefore never a level-of-effort a completed session or chain reports. That does not survive reading the ladder it describes. `coordinator/config/loe-thresholds.yaml` is the SSOT for t-shirt LoE (project-makima `coordinator_core/loe_thresholds.py` mirrors it as `_TIER_ORDER`/`DEFAULT_THRESHOLDS`), and before this change it topped out at `XL` — so `chain_loe.tshirt`, which `session_ledger.aggregate_chain_loe` RECOMPUTES from summed dispatches/tokens rather than reading per-session rows, did not merely decline to express `XXL`, it SATURATED: a chain that just crossed 50 dispatches and a chain at 400 both reported `XL`. The prior note justified that saturation by declaring it intentional. The altitudes are the reverse of what it claimed: `chain_loe` is a summed aggregate and is exactly where a sixth notch carries information, while `loe.tshirt` — one session — is where it is near-unreachable. So the notch had gone into the field that cannot use it and been kept out of the field that can. Landed with the matching `XXL` row in `loe-thresholds.yaml` (agent_dispatches 90, opus_dispatches 12, em_tokens 2000000 — continuing the curve's ~1.8x growth, no evidentiary basis beyond that, and negotiable), and with the 'never valid as a completed-work LoE' prose struck from this schema's `loe.tshirt` description and from `sizing-object.schema.json`'s `estimate.tshirt` description, both of which the widened ladder makes FALSE. What is NOT retracted: `estimate.tshirt`'s 'one enum, two altitudes' binding, which is why `XXL` had to be in `loe.tshirt` in the first place and is unaffected. Any-criterion/highest-tier-first semantics mean a new TOP row can never reclassify anything downward — every session that scored `XL` still meets `XL`. LANDING ORDER INVERTS from the two cross-repo bumps that preceded it, deliberately: this side lands FIRST. The schema is the PERMISSIVE side (a value the engine never emits is inert), the engine is the PRODUCER (a value the schema forbids fails validation inside a real completion-entry, at a ceremony boundary). Classified `enum-value-additive`: one value appended to one existing enum, no field added or removed, every document valid under 1.3.0 still validates. Order load-bearing for the same shape-hash reason the prior note gives. DR-097 push-side duty: ATTACHES (makima vendors this schema) and is DISCHARGED by state/memo-outbox/sent/widen-the-loe-ladder-to-xxl.md, delivered project-makima@3c64810c1 — their legs are `_TIER_ORDER`, `DEFAULT_THRESHOLDS`, and the re-vendor; until those land their vendored copy is at 1.3.0 and the version-parity gate is in its different-versions branch by design, not by drift. Spec backlink: pln-retire-the-split-xl-exit-and-d-d7b86b § C8. ---- PRIOR NOTE (1.2.0 -> 1.3.0), whose closing NEGATIVE SPEC is superseded per the paragraph above: 1.2.0 -> 1.3.0 widens the `loe.tshirt` anyOf enum arm with ONE new value, `XXL`, appended at the end. It rides the sizing ladder's sixth notch: `sizing-object.schema.json`'s `estimate.tshirt` description binds the two enums as the same scale \"reused verbatim\", so widening that one without this one would make that description false the moment it landed. Bilaterally agreed before either side implemented (state/memo-outbox/sent/xxl-notch-four-answers.md § 3; project-makima vendored the matching shape first at project-makima@d2ea184c0, and the inbound cross-repo/inbox/2026-08-07-project-makima-em-xxl-notch-landed.md is the landing signal this side re-vendors against). Classified `enum-value-additive`: no field added or removed, no existing value's semantics changed, every document valid under 1.2.0 still validates. DR-097 push-side duty: DISCHARGED — makima vendors this schema (dropped from DOE_ONLY_SCHEMAS in coordinator/tests/test_vendored_schema_version_parity.py on 2026-08-06) and vendored this exact shape ahead of this commit. NEGATIVE SPEC, deliberate and engine-matched: `chain_loe.tshirt` is NOT widened. `XXL` is a ROUTING size — it names an ask that cannot be first-drafted in one window, which is a sizing-lobby altitude fact, not a level-of-effort a completed session or a completed chain reports. `loe.tshirt` carries it only because the two altitudes share one enum by construction; a chain roll-up has no such binding. Order is load-bearing: the value is APPENDED, never re-sorted — `coordinator/tests/_schema_shape.py`'s `_semantic_shape_hash` treats `enum` as an instance-data position and hashes list order verbatim, so a set-equal but re-ordered array reds EQUAL_VERSION_SHAPE_DRIFT against the vendored copy. Spec backlink: pln-retire-the-split-xl-exit-and-d-d7b86b § C8. ---- PRIOR NOTE (1.1.0 -> 1.2.0) relabeled x-bump-class from nested-field-additive to top-level-array-additive — late_commits is a plain top-level array, not a field nested inside another compound structure; taxonomy-only correction, no shape change (review finding). Prior bump 1.0.0 -> 1.1.0 added optional late_commits: — commits discovered after release, attributed for coverage-accounting; commits: remains the as-released record.",
+  "applies_to": "archive/completed/*/*.md",
+  "description": "Per-entry completion log record. Each file in archive/completed/YYYY-MM/ carries this frontmatter, authored by /workstream-complete Step 2.6 and queryable via bin/query-completions. Spec backlink: pln-completion-log-phase1-foundationa-77903d § Cross-phase frontmatter schema.",
+  "type": "object",
+  "required": [
+    "title",
+    "created",
+    "nature"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "One-line past-tense description of work shipped. Authored by the EM at /workstream-complete time."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of /workstream-complete authoring (YYYY-MM-DD). Written by /workstream-complete Step 2.6."
+    },
+    "nature": {
+      "enum": [
+        "roadmap",
+        "bugfix",
+        "tech-debt",
+        "infra"
+      ],
+      "description": "PM-confirmed work category. roadmap=new capability; bugfix=defect correction; tech-debt=internal cleanup; infra=tooling/CI/schema/ceremony. No 'other' slot by design."
+    },
+    "chain": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Plan-md path | handoff-md path | workstream slug | null. Null for standalone single-session work. Used by /workday-complete for clustering."
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commit SHAs landing this work. May be empty if /workstream-complete runs before commit (uncommon but permitted)."
+    },
+    "status": {
+      "enum": [
+        "pending-release",
+        "released"
+      ],
+      "description": "Lifecycle state for release tracking. Default is pending-release on write; /merge-to-main flips to released."
+    },
+    "late_commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commit SHAs discovered after release, attributed for coverage-accounting only. commits: remains the as-released record — status: released freezes commits: as a closed historical record, so a late-discovered commit is NEVER folded into it. Written only via reconcile-completion-commits.py --allow-released (which forces the underlying completion.reconcile_commits op to dry_run and folds the delta into this separate list client-side, never touching commits:). Absent on entries with no late-discovered commits. Spec backlink: pln-push-side-write-discipline-for-05c30d § C4 pending-release escape hatch."
+    },
+    "released_in": {
+      "type": "string",
+      "description": "Version tag (e.g. v2.1.0) set by /merge-to-main on release cut."
+    },
+    "released_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of release cut (YYYY-MM-DD), set by /merge-to-main."
+    },
+    "released_sha": {
+      "type": "string",
+      "description": "Merge commit SHA on main, set by /merge-to-main."
+    },
+    "chain_terminal": {
+      "type": "boolean",
+      "description": "Phase 2 field. true if this entry is the chain-terminal aggregation entry; false/absent on mid-chain ledger entries."
+    },
+    "loe": {
+      "type": "object",
+      "properties": {
+        "agent_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Total agent dispatches for this session. null when not captured (Phase 1 entries)."
+        },
+        "opus_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Opus-model dispatches for this session. null when not captured."
+        },
+        "em_tokens": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "EM token consumption for this session. null when not captured."
+        },
+        "tshirt": {
+          "anyOf": [
+            {
+              "enum": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL",
+                "XXL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "T-shirt size estimate for this session's work effort. Same scale as sizing-object.schema.json's estimate.tshirt (XS=1, S=2, M=4, L=8, XL=16) — one enum, two altitudes. `XXL` is a real, computable notch on this ladder (coordinator/config/loe-thresholds.yaml), not vocabulary borrowed from the routing altitude: it is simply near-unreachable for ONE session, where crossing 90 dispatches or 2M tokens is rare. The field where it is ordinary is `chain_loe.tshirt`, which sums a whole predecessor chain."
+        }
+      },
+      "description": "Level-of-effort metrics for this session. Phase 1 entries may omit entirely or have null sub-fields. DR-118 nested-object validation: each sub-field is type-checked."
+    },
+    "chain_loe": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Count of distinct sessions in the predecessor chain."
+        },
+        "agent_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of agent_dispatches across the chain (deduped by session_id)."
+        },
+        "opus_dispatches": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of opus_dispatches across the chain."
+        },
+        "em_tokens": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SUM of em_tokens across the chain. null if any contributor is null."
+        },
+        "tshirt": {
+          "anyOf": [
+            {
+              "enum": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL",
+                "XXL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "T-shirt size recomputed from summed numbers via the threshold table in coordinator/config/loe-thresholds.yaml — never authored, and never read back from a Session Ledger row. `XXL` is reachable HERE in a way it is not for a single session: a chain's summed dispatches/tokens routinely cross the top bound, and before the ladder carried a sixth notch this field saturated, reporting `XL` for a chain that just crossed 50 dispatches and for one at 400 alike."
+        }
+      },
+      "description": "Chain-aggregate LoE metrics. Set by /workstream-complete on chain-terminal entries (chain_terminal: true) when opened via /pickup. Populated by bin/aggregate-chain-loe.py."
+    },
+    "chain_sessions_with_ledger": {
+      "type": "string",
+      "description": "'N of M' annotation: number of predecessor handoffs that carried a Session Ledger block out of total predecessors walked."
+    },
+    "chain_span_days": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Number of days spanned by the predecessor chain. null when chain has only one session or no datable predecessor."
+    },
+    "chain_starting_handoff": {
+      "type": "string",
+      "description": "Path to the chain-root handoff (the predecessor with predecessor: null/none). Forensic anchor for walking the chain."
+    },
+    "chain_walk_terminated_early": {
+      "type": "string",
+      "description": "Set ONLY when chain walk terminated abnormally. Values: 'lineage-cycle' (genuine back-edge from the walk-handoff-dag primitive's gray/black DFS; benign diamond convergence is NOT flagged) or 'missing-link'. chain_loe sum is a PARTIAL aggregate when set."
+    },
+    "narrative": {
+      "type": "string",
+      "description": "Phase 1: optional Sonnet-authored cluster summary generated by /workday-complete for chains with >= 2 entries on the same day."
+    },
+    "narrative_in": {
+      "type": "string",
+      "description": "Path to the chain lead entry that carries the narrative for this day's cluster."
+    },
+    "nature_inferred": {
+      "type": "boolean",
+      "description": "true when nature was AUTO-INFERed by the Sonnet dispatch in /workstream-complete Step 3; false/absent when declared by the EM via COMPLETION_NATURE env var."
+    },
+    "authored_by": {
+      "type": "string",
+      "description": "Session ID of the authoring EM ($em_sid), for forensic tracing only."
+    },
+    "workstream": {
+      "type": "string",
+      "description": "Free-form slug grouping cross-chain related work. Used by /workweek-complete editorial bucketing."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Durable deliverable join key inherited from the plan/handoff chain this completion records. Enables the board to link completion entries back to the deliverable spine. Null for pre-backfill entries or standalone single-session work. Spec backlink: project-makima:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1"
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml) inherited from the deliverable spine. Nullable. Spec backlink: project-makima:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2"
+    },
+    "completion_id": {
+      "type": "string",
+      "pattern": "^cmp-[a-z0-9-]+-[0-9a-f]{6}$",
+      "description": "Durable stable ID for this completion entry, path-independent (survives archival/rename). Minted via coordinator-doc-new's _mint_artifact_id(prefix=\"cmp\", slug) at scaffold time — cmp-<slug>-<6hex>. OPTIONAL, pure additive property — this schema is standalone with no CROSS_FIELD_RULES entry (unlike the handoff family), so completion_id carries no cross-field rule wiring. No migration for pre-existing entries. Spec backlink: pln-lifecycle-vocab-c2-durable-cro-991bd4 § C1"
+    }
+  }
+}

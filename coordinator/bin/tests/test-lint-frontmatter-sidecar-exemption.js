@@ -25,14 +25,14 @@ const { isSidecarFile } = require('../lint-frontmatter.js');
 
 describe('isSidecarFile — exempted sidecar shapes', () => {
   const exemptedPaths = [
-    'docs/plans/x.md.the Staff Engineer-review.md',
-    'docs/plans/x.the Director of Engineering-review.md',
-    'docs/plans/x.the Front-End Reviewer-review.md',
-    'docs/plans/x.md.the Staff Engineer-delta-review.md',
+    'docs/plans/x.md.patrik-review.md',
+    'docs/plans/x.zoli-review.md',
+    'docs/plans/x.pali-review.md',
+    'docs/plans/x.md.patrik-delta-review.md',
     'docs/plans/x.review.md',
     'docs/plans/x.code-review-C-dashboard.md',
     'docs/plans/x.code-review-sliceA.md',
-    'docs/plans/x.review-the Staff Engineer.md',
+    'docs/plans/x.review-patrik.md',
     'docs/plans/x.prior-art-check.md',
   ];
 

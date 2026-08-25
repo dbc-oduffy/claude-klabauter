@@ -29,15 +29,18 @@ from __future__ import annotations
 
 import os
 
-import coordinator_core.ipc as _ipc
-import coordinator_core.ops  # noqa: F401 — imported for its eager registration side effect
+import coordinator_core.ops  # noqa: F401 — kept so an import failure surfaces here, NOT for a registration side effect (lazy-only since 2026-08-22: this import registers nothing)
+from coordinator_core.ops._registry_map import resolves
 
-# Detection half: assert what the import above just guaranteed, so a future
-# regression surfaces as one legible error naming the cause instead of a
-# collection abort inside an unrelated-looking test module.
+# Detection half: prove what the import above now guarantees regardless of
+# eager or lazy mode — not "the registry populated eagerly" but "the map
+# this conftest's own comment used to justify is intact and every op is
+# dispatchable" — so a future regression surfaces as one legible error
+# naming the cause instead of a collection abort inside an unrelated-looking
+# test module.
 if os.environ.get("COORDINATOR_CORE_LAZY_OPS") != "1":
-    assert _ipc._REGISTRY, (
-        "op registry empty after the repo-root conftest imported "
-        "coordinator_core.ops — something armed sys._coordinator_core_lazy_ops "
-        "before this conftest ran."
+    assert resolves("ping"), (
+        "op registry is not dispatchable after the repo-root conftest imported "
+        "coordinator_core.ops — the representative op key 'ping' does not "
+        "resolve via OP_MODULE_MAP or coordinator_core.ipc._REGISTRY."
     )

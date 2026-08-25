@@ -228,22 +228,119 @@ SELF_EXEMPT_PATHS = {
 STAGED_DIRS = ["coordinator_core", "bin", "docs"]
 
 
+# A persona slug living inside a WIRE LITERAL -- a quoted string in which the
+# slug is one `[-._/]`-delimited segment (`".patrik-review.md"`,
+# `"patrik-review"`, `"foo.review-zoli.md"`) or is the whole literal
+# (`("patrik", "eng-director")`). These are VALUES, not prose: a schema enum
+# member, a sidecar-filename constant, a reviewer-priority tuple. The publish
+# transform deliberately holds them unrewritten -- rewriting a slug inside one
+# yields a literal carrying spaces that no longer equals what its consumers
+# compare against, so an install running this mirror rejects the very records
+# the upstream tree emits. Held there, permitted here: the two must agree, or
+# the fix upstream simply relocates the breakage into this gate.
+#
+# CASE-SENSITIVE and lowercase-only, which is what keeps this narrow: the
+# capitalised DISPLAY form is a persona name and stays banned everywhere,
+# quoted or not. The shoulders use the slug charset, never `[^"]*` -- a quoted
+# PROSE sentence mentioning a name has a space on its shoulder and is still a
+# finding. Parity twin upstream:
+# coordinator_core/percolate/substitute.py::_FUNCTIONAL_HOLD_LINE_PATTERNS.
+_WIRE_LITERAL_SLUGS = ("patrik", "fru", "pali", "zoli", "camelia", "yk")
+WIRE_LITERAL_RE = re.compile(
+    r"""['"](?:[\w./-]*[-._/])?(?:"""
+    + "|".join(_WIRE_LITERAL_SLUGS)
+    + r""")(?:[-._][\w./-]*)?['"]"""
+)
+
+
 def permitted_spans(text: str, path: str) -> list[tuple[int, int]]:
     spans = [m.span(1) for m in HANDLE_URL_RE.finditer(text)]
     spans += [m.span(1) for m in HANDLE_SLUG_RE.finditer(text)]
     spans += [m.span() for m in HANDLE_MENTION_RE.finditer(text)]
+    spans += [m.span() for m in WIRE_LITERAL_RE.finditer(text)]
     if is_attribution_surface(path):
         spans += [m.span() for m in PERSONAL_NAME_RE.finditer(text)]
         spans += [m.span() for m in SURNAME_RE.finditer(text)]
     return spans
 
 
+def _prefilter_for(pattern: re.Pattern[str]) -> re.Pattern[str]:
+    """Derive a cheap superset gate for PATTERN by stripping its leading ``_LEAD``.
+
+    ``_LEAD`` is a zero-width lookbehind assertion, and deleting an assertion
+    can only enlarge a match set: the residual matches everything the
+    original did plus whatever the assertion rejected. Removing it also
+    removes the two-branch lookbehind evaluated at every character offset,
+    which is what made the full match a 2.6MB/s regex walk. The residual
+    keeps the same match spans (the lookbehind is zero-width, so its removal
+    does not shift positions) so it is only ever used as a boolean gate, never
+    to substitute for the real match objects.
+
+    FAIL CLOSED: a pattern that does not start with ``_LEAD`` becomes its own
+    prefilter -- no speedup, but never a narrower gate than the real pattern.
+    """
+    body = pattern.pattern
+    if body.startswith(_LEAD):
+        body = body[len(_LEAD):]
+    return re.compile(body, pattern.flags)
+
+
+_PREFILTERS: list[re.Pattern[str]] = [_prefilter_for(pattern) for _, pattern in BANNED]
+
+
+def _union_prefilter() -> "re.Pattern[str] | None":
+    """One alternation over every entry in ``_PREFILTERS``, used as a single
+    first gate so a line carrying no banned token costs ONE scan instead of
+    fifteen. The union matches whenever any individual prefilter would, so a
+    non-match proves no full pattern can match either.
+
+    Case-sensitivity is per-entry and load-bearing (``Sid``/``Fru``/``YK`` are
+    matched case-sensitively so ordinary lowercase identifiers are not false
+    positives), and an alternation carries one flag set for the whole pattern.
+    Each branch therefore gets its own inline scope -- ``(?i:...)`` for an
+    ``IGNORECASE`` entry, ``(?:...)`` otherwise -- which preserves each entry's
+    own case rule exactly.
+
+    FAIL OPEN TO THE SLOW PATH, never to a narrower gate: an entry carrying any
+    flag this cannot express inline returns ``None``, and ``findings_in`` then
+    runs the fifteen individual prefilters as before. A wrong union would
+    silently suppress a real leak, so it is built only when every branch is
+    expressible.
+    """
+    branches = []
+    for pattern in _PREFILTERS:
+        flags = pattern.flags & ~(re.UNICODE | re.IGNORECASE)
+        if flags:
+            return None
+        scope = "?i:" if pattern.flags & re.IGNORECASE else "?:"
+        branches.append(f"({scope}{pattern.pattern})")
+    return re.compile("|".join(branches))
+
+
+_ANY_BANNED_PREFILTER: "re.Pattern[str] | None" = _union_prefilter()
+
+
 def findings_in(text: str, path: str) -> list[tuple[str, str]]:
-    """Return [(label, matched_text)] for every banned token not inside a permitted span."""
-    allowed = permitted_spans(text, path)
+    """Return [(label, matched_text)] for every banned token not inside a permitted span.
+
+    ``permitted_spans`` is computed LAZILY, on the first ban match only. It runs
+    three to five ``finditer`` passes of its own, and a span can only ever
+    suppress a match that exists -- so on the overwhelming majority of lines,
+    which carry no ban match at all, its result was built and discarded. That
+    made it the dominant residual once ``_PREFILTERS`` removed the leading-
+    lookbehind walk. Deferring it is invisible to the result: the same spans are
+    computed from the same ``(text, path)`` whenever any match needs deciding.
+    """
+    if _ANY_BANNED_PREFILTER is not None and not _ANY_BANNED_PREFILTER.search(text):
+        return []
     found: list[tuple[str, str]] = []
-    for label, pattern in BANNED:
+    allowed: list[tuple[int, int]] | None = None
+    for (label, pattern), prefilter in zip(BANNED, _PREFILTERS):
+        if not prefilter.search(text):
+            continue
         for match in pattern.finditer(text):
+            if allowed is None:
+                allowed = permitted_spans(text, path)
             start, end = match.span()
             if any(a <= start and end <= b for a, b in allowed):
                 continue

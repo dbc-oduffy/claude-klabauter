@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "min_gating_sample_count": 5,
+  "_phase0_baseline": {
+    "measured_at": "2026-07-10",
+    "code_sha": "1e17a6b85b27cc4e3d237102e540b5e6cebd0e85",
+    "run_id": "e918170a-909a-4291-90ed-4e668a4d6e40",
+    "sample_count": 40,
+    "cold_start_floor_ms": 57.11,
+    "floor_cov": 0.0155,
+    "gating_statistic": "min",
+    "doc": "PHASE-0-MEASUREMENTS.md",
+    "note": "COMPUTE_ONLY default + overrides are honest budgets set from real distributions (AC6). MUTATING default remains provisional (unmeasured in wave-1 per AC7).",
+    "provenance": "Frozen point-in-time stamp, not a value any code resolves. The live runtime source is coordinator_core/benchmarks/floor.py's measure_floor, persisted by baseline_store.append to the gitignored coordinator_core/benchmarks/baselines/baseline.jsonl.",
+    "remeasurement_tracking": "state/improvement-queue/2026-07-28-benchmarks-budget-manifest-json-cold-sta-1473f67923ab.yaml",
+    "retention": "Retained deliberately: this block is the only committed carrier of this run's run_id/code_sha (baseline.jsonl is gitignored) and is cited by name in plans and audits. Do not delete as dead weight."
+  },
+  "defaults": {
+    "COMPUTE_ONLY": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "MUTATING": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_provisional": true
+    }
+  },
+  "overrides": {
+    "ceremony.session_instructions": {
+      "target_ms": 86,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "deliverable.rollup": {
+      "target_ms": 98,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.tree": {
+      "target_ms": 105,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: whole-repo git ls-files walk + per-tracked-file read for loc count (~600+ tracked files in this repo) legitimately exceeds the 70ms COMPUTE_ONLY default; target set from measured min (~105ms, 2026-07-12 gate run). See PHASE-0-MEASUREMENTS.md 'AC8 cartography overrides' addendum."
+    },
+    "cartography.file_index": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.churn": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.symbols": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.edges": {
+      "target_ms": 89,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: AST-heavy member (per-file ast.parse import/call-graph extraction across a multi-file `files` param) legitimately exceeds the 70ms COMPUTE_ONLY default, per this op's plan-anticipated 'AST-heavy members (symbols, edges) that legitimately exceed the manifest default' carve-out. target set from measured min (~89ms over a 40-file sample, 2026-07-12 gate run). See PHASE-0-MEASUREMENTS.md 'AC8 cartography overrides' addendum."
+    },
+    "cartography.stack": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "cartography.count_references": {
+      "target_ms": 106,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: builds a full cartography.edges import/call-graph over a 40-file sample and then scans every edge for module_name matches \u2014 legitimately exceeds the 70ms COMPUTE_ONLY default (84ms band); target set from measured min (~106ms over two 8-sample runs, min=105.70/134.13ms, 2026-08-06 gate run) via coordinator_core.benchmarks.timer.time_invocation against this repo's coordinator_core/ tree."
+    },
+    "cartography.chunk_table": {
+      "target_ms": 74,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: whole-repo git ls-files walk + per-file language/artifact filter + prefix-match bucketing, compute-only call (emit=false) \u2014 legitimately exceeds the 70ms COMPUTE_ONLY default; target set from measured min (~73.5ms over an 8-sample run, 2026-08-06, single system boundary over coordinator_core/) via coordinator_core.benchmarks.timer.time_invocation against this repo."
+    },
+    "cartography.op_edges": {
+      "target_ms": 89,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "AC8 justified override: same AST-heavy member class as cartography.edges (per-file ast.parse walk across a multi-file `files` param, three call-site scans per file instead of two) \u2014 legitimately exceeds the 70ms COMPUTE_ONLY default; target set to match cartography.edges' own measured min (~89ms over a 40-file sample, 2026-07-12 gate run) pending this op's own dedicated gate run."
+    },
+    "memo.triage": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      }
+    },
+    "ceremony.scoped_git_commit": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "green_path": 13,
+        "refusal_path_unanswerable": 0,
+        "directory_pathspec_expansion": 14,
+        "push_raced_path": 16,
+        "op_total_green_path": 20,
+        "op_total_directory_pathspec_expansion": 21,
+        "op_total_push_raced_path": 23,
+        "pending_drain_superseded": 19,
+        "op_total_pending_drain_superseded": 34,
+        "deferred_diverged_detach": 9,
+        "op_total_deferred_diverged_detach": 18
+      },
+      "_rationale": "C5 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-spawning-git.md), re-baselined DOWNWARD 2026-08-21 by DIRECT MEASUREMENT against `test_commit_e2e_spawn_budget.py`'s own five fixtures (deterministic across two independent full-suite runs, zero lock-retries observed on any shape), superseding the entry immediately below without ever having shipped green: that entry's 'seam keys unchanged, only op_total moves by 1' premise was written from C2-C4's PLANNED shape, not measured against the LANDED code (f89a4fb31, 69f92af34), and this re-baseline is the actual measurement, run against the manifest before this edit landed (every measured figure failed the shipped assertion at seam AND at op_total). The SEAM keys move DOWN by 5 on four of the five shapes and by 3 on the fifth: green_path 19->14, directory_pathspec_expansion 20->15, push_raced_path 22->17, pending_drain_superseded 25->20 (all -5), deferred_diverged_detach 20->17 (-3, one shape short of the other four's 5 because it takes `_commit_scoped_private_index`'s hookless branch, which does not reach `dirty_tree_gate`/`deletion_block_gate`/`commit_gates` the same way the agree-branch shapes do). CORRECTED BY THE EM 2026-08-21, SAME DAY, BEFORE THIS ENTRY EVER SHIPPED AS TRUTH: this -5 is NOT a -5 of real processes and must not be read as one. It is the measured fall in seam-VISIBLE calls, and most of it is RE-ROUTING, not removal. C2-C4's re-pointed reads reach the process boundary through `coordinator_core/git/git_state.py::head_blobs` -> `coordinator_core/git/run.py::run_git`, which calls `subprocess.run` directly and never goes through the `git_native._git` name the seam counter wraps. So those spawns LEFT THE COUNTED SEAM AND KEPT SPAWNING. The op_total keys are the honest instrument here (they substitute the `subprocess.run` module attribute AND `Popen`), and they are what a reader should quote -- `commit_gates` binds `_git` by direct import at module load (per this chunk's own dispatch brief), so ITS spawns were never on the seam either way, but the other four sites plainly were, and removing their per-invocation reads removed that many seam calls. The OP_TOTAL keys move by a SMALLER, DIFFERENT amount on three shapes and by a THIRD, still-different amount on the fourth -- op_total_green_path/op_total_directory_pathspec_expansion fall by only 1 (21->20, 22->21) each, op_total_push_raced_path/op_total_pending_drain_superseded fall by 3 (26->23, 37->34), and op_total_deferred_diverged_detach does not move at all (25->25). ATTRIBUTION OF WHY THE OP_TOTAL DELTA IS SMALLER THAN THE SEAM DELTA IS NOW RESOLVED -- it was recorded as an OPEN QUESTION by C5 and answered by the EM the same day, by running the gate that exists for exactly this. `coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py` went RED on this change and named the site by line: `[ceremony.scoped_git_commit] coordinator_core/git/run.py:370 enclosing='run_git' argv0='git'` -- a spawn site reachable from this op's budgeted entrypoint and invisible to its seam counter. That IS the mechanism. C5's candidate (b) ('a second, offsetting spawn was added to the op_total-visible bypass surface in the same window C2-C4 removed seam spawns') was correct in shape; the offsetting spawns are the retained `ls-tree` HEAD reads themselves, now routed through `run_git` instead of `_git`. Candidate (a) (a `diverging_paths` regression) is WITHDRAWN and should not be chased. THE NUMBER THAT MATTERS, stated so no later reader has to re-derive it: on the green path this workstream removed ONE process end-to-end (op_total 21->20), not five. The plan's AC1 -- '17 reads -> 2-3 read spawns' -- is NOT MET by C1-C5 as decomposed, and nothing in this manifest should be read as evidence that it was. The structural reason is worth carrying forward: `head_blobs` retains one spawn PER CALL, so re-pointing another guard onto it ADDS a process while removing an index read. Index-vs-HEAD questions are genuinely free (`read_index` is an in-process parse, measured 24.1ms over this repo's 31,520-entry index and byte-exact against `git ls-files -s`); every HEAD-TREE question still costs a process. A future chunk that re-points more guards at `head_blobs` will move the seam figure down and the op_total figure UP. The `refusal_path_unanswerable=0` key is untouched -- that path short-circuits `_handler` before any spawn, seam or bypass, and this measurement pass did not exercise it (unchanged from every prior baseline). Deliberately NOT chased further under this chunk's own anti-scope: `dirty_tree_gate`'s worktree axis and EOL-phantom filter, `deletion_block_gate`'s `--find-renames` name-status call, and `_reject_stale_index_paths`' worktree-vs-HEAD probe -- named in this chunk's dispatch brief as the three spawns KEPT deliberately by C2-C4, not defects. Prior entry follows, retained as provenance though its 'seam unchanged' claim is now known wrong.  Re-baselined UPWARD 2026-08-21 (opro-03 follow-up, stack-recording-`subprocess.run`-wrapper origin diff against this fixture, four independent measurements per shape): green_path 16->19, directory_pathspec_expansion 17->20, push_raced_path 19->22, pending_drain_superseded 22->25, and every op_total_ key by +1 (NOT +3 -- WHY the op_total delta is smaller than the seam delta is NOT established by the evidence in hand. The two new seam calls are net-new spawns added by the two 2026-08-20 commits named below, so they cannot have been 'previously counted' as anything, op_total included -- and by construction op_total is a superset of the seam (see `_op_total_rationale` below), so three confirmed new seam-routed spawns should raise op_total by at least 3, not 1, on a pure count basis. The nondeterminism note below establishes only that THIS DAY'S op_total measurement fluctuated between budgeted+3 (once, uninstrumented) and budgeted+1 (a dozen times, after `run_with_lock_retry` retries are attributed and subtracted) -- that resolves a within-day measurement artifact, not the gap between this baseline and the prior 2026-08-19, pre-retry-subtraction one. Whether that gap is a genuine spawn-accounting difference or an artifact of comparing an uncorrected old baseline against a corrected new one has not been re-measured under matched methodology, and is an OPEN QUESTION, not a resolved one). Two commits landed on THIS branch between the 2026-08-19 baseline below and today, each adding an UNCONDITIONAL `git_native._git`-routed spawn to every `commit_scoped()`/`_handler()` invocation, regardless of shape: (1) `323aafaf8` ('ceremony: commit_scoped observes mode, so a mode delta can actually land', 2026-08-20 09:40) added `_mode_delta_paths_chunked()`, one `git diff --cached --raw` call (DR-151 mode-preservation fix, `commit_scoped`'s own docstring: 'same chunked seam, no new per-path spawn' -- true per-path, but +1 per invocation regardless of path count). (2) `82dc080eb` ('fix(break-class): ... refuse a stale-index commit', 2026-08-20 18:32) added `scoped_git_commit._reject_stale_index_paths()`, two batched calls (`git diff --name-only HEAD` and `git diff --cached --name-only HEAD`, both regardless of path count) guarding the `state/bug-backlog/2026-08-19-shared-git-index-holds-stale-pre-head-sn-b5b83e42e275.yaml` stale-index-revert bug (falsified before landing per that commit's own message). Neither commit updated this file's spawn_count_budget in the same commit -- this module carries `pytest.mark.cadence`, so the fast tier never ran the assertion that would have caught it, the exact failure class this file's own text already warned about (see 're-baselined 2026-08-18' paragraph below). Both additions are legitimate, deliberate, evidenced break-class fixes, not bugs -- the fix here is to correct the stale figure, not to revert either commit. RESOLVED NONDETERMINISM (found during this re-baseline, mechanism CONFIRMED, disposition implemented in test code -- not a manifest-number question at all in the end). The OP_TOTAL (not seam) figure was observed at budgeted+3 exactly once, in the first measurement pass of the day (before any of this re-baseline's instrumentation existed), uniformly across all four shapes simultaneously; roughly a dozen measurements since (single pytest re-runs plus an 8x same-fixture loop run inside ONE interpreter, fresh tmp repo per iteration) landed on budgeted+1 every time, with zero variance -- see FALSIFICATION METHOD below. The seam figure was rock-stable at the values above across EVERY run, including the +3 one. TWO HYPOTHESES CHECKED, ONE CONFIRMED. (1) `coordinator_core/git/ls_files.py::_tracked_files_cached`, a process-lifetime `lru_cache`-wrapped `subprocess.run` spawn keyed on `(repo_root, pathspec)` -- REFUTED: grepped every import of `coordinator_core.git.ls_files`/`ls_files_bytes` repo-wide; only `ops/eol/census.py` and a test file import it, neither reachable from `ceremony.scoped_git_commit`'s `_handler`. A real, legitimate module, simply not on this op's path. (2) `coordinator_core/git_lock_retry.py::run_with_lock_retry`, wired into `git_native.py::_git()`'s `_invoke` closure (`result = _invoke() if not capture else run_with_lock_retry(_invoke)`, the exact call-site every origin trace pointed at) -- CONFIRMED as the mechanism: it retries the SAME `_invoke()` (a real second, third, ... `subprocess.run`) up to `DEFAULT_MAX_ATTEMPTS=8` times on genuine `.git/index.lock` contention (this repo is a deliberately shared working tree by design, per that module's own docstring -- a real, production-observed hazard even against an isolated `tmp_path` repo, e.g. Windows Defender's real-time scan on a freshly-written `.git` object/lock file). Because the retry happens INSIDE `_invoke`, the SEAM counter (which wraps only the outer `_git()` call once) cannot see it while the global `subprocess.run` counter can -- this is EXACTLY why the seam figure stayed rock-stable while op_total moved, resolving what an earlier pass here mis-scoped as a bypass-side-only phenomenon and wrongly suspected `session/scope.py::_git_run`/claim-release cost on. That claim-release suspicion is WITHDRAWN, explicitly, so nobody chases it: the confirmed mechanism is `run_with_lock_retry`, not ambient claim-count state. FALSIFICATION METHOD (recorded so it is not re-walked): a standalone script ran the green_path shape 8x back-to-back in ONE interpreter process, a fresh `tmp_path`-equivalent repo per iteration, under a stack-recording `subprocess.run` wrapper; origin multisets were diffed pairwise across all 8 iterations (iteration 0 vs each of 1-7, and each consecutive pair). Result: byte-identical call SHAPE and COUNT every time (total=22 all 8x; only expected per-run noise -- tmp paths, commit shas -- differed). This ruled out any first-call/warm-up/order-dependent mechanism keyed on something constant across iterations (a real-repo-root-keyed cache would show iteration 0 differing from 1-7; it did not) -- which is what sent the search to `git_lock_retry` instead. DISPOSITION (ratified, implemented): NOT a documented tolerance and NOT an accepted-outlier shrug -- this gate's own operational definition of 'counted' forbids a bound, a range, or a `<=` (module docstring, 'THIS GATE'S OPERATIONAL DEFINITION OF COUNTED'): a new spawn must FAIL something, not fit under something. Instead, `test_commit_e2e_spawn_budget.py::_count_op_spawns_both_ways` now wraps `git_native.run_with_lock_retry` (the NAME `_git()` calls, patched only in `git_native`'s own namespace -- `git_lock_retry.py` itself is never touched, since it is a real resilience mechanism for a real hazard and the test adapts to it, not the reverse) and MEASURES each attempt beyond the first per `_git()` call as an attributed `retries_fired` count, asserted bounded by `DEFAULT_MAX_ATTEMPTS`. `_assert_op_total` then asserts EXACT equality of `n_all - retries_fired` against the budgeted figure below -- still exact equality, against the op's actual spawn count with a measured, attributed, non-op-path event subtracted, never a fudge factor. A genuinely new spawn is never mistaken for a retry (it was never observed inside `run_with_lock_retry`) and still fails the assertion. Nonzero `retries_fired` prints loudly rather than being silently absorbed. STANDING NOTE for whoever next reads this file: `op_total_*` counts retries by construction, so EVERY `op_total_*` key in this manifest (not only these four) is contention-inflated on a shared tree whenever `run_with_lock_retry` fires -- named here once so it is not rediscovered from scratch on a different op. C8 (2026-08-11-claim-release-and-the-gate-that-cannot-clear.md), A8/A10: Re-baselined DOWNWARD 2026-08-19 (commit-gate spawn dedup): green_path 17->16, directory_pathspec_expansion 18->17, push_raced_path 20->19, pending_drain_superseded 23->22, and every op_total_ key by 2. The delta is `commit_gates.deletion_block_gate` no longer issuing Assertion-2's two reads (`git diff --cached --name-only` and the whole-HEAD `git ls-tree -r HEAD --name-only` walk) when the composed message carries no Kept (Step 2.67) claim -- nothing else in that function consumes either set, so on a Kept-less message they were computed and discarded. Only ONE of the two is visible to the seam counter: `commit_gates` binds `_git` by direct import at module load, so its `ls-tree` call has never routed through the `git_native._git` name the counter wraps, which is why the seam keys move by 1 and the op_total keys by 2. This is a REDUCTION, not a bound fitted to an unreduced set -- the skipped reads are skipped only when their sole consumer would iterate an empty claim list, and a Kept-bearing message still pays both. Measured on the live tree the same day: the gate's own cost falls from 3 spawns to 1 on the Kept-less path. Superseded figures and their provenance follow.  end-to-end git-SUBPROCESS-SPAWN COUNT (not latency -- a timing figure is noise on this repo's 50-70-concurrent-session box, see CLAUDE.md load norm) for the whole `_handler`/`run_commit_pipeline` staging+commit+push pipeline, measured via `git_native._git` -- this op's sole native-git choke point (git_native.py's own docstring). Enforced by `test_commit_e2e_spawn_budget.py`. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape; this op is NOT in `op_fixtures.COMPUTE_ONLY_FIXTURES` (it is MUTATING, not swept automatically), so the ms figure is inert/advisory -- `spawn_count_budget` is the actually-enforced invariant. Re-baselined 2026-08-18: green_path 12->17, directory_pathspec_expansion 13->18. The +5 is identical on both keys and contains no probe call: `git_native`'s agree-branch CAS reads its index/HEAD blob pair twice by construction (`_index_blobs`/`_head_blobs` at capture, then `_agree_branch_cas_refusal`'s re-read immediately before the agree branch's own `git add`, which is what makes it a compare-and-swap rather than a single observation), and `interpret-trailers --no-divider --in-place` stamps the message. Four CAS reads plus one trailer stamp. All of it landed after the 2026-08-11 figure below without moving this budget, and this module carries `pytest.mark.cadence` so the fast tier never ran the assertion that would have caught it. Re-baselined rather than reduced because every one of the five is doing named, correctness-bearing work -- this is not a bound fitted to an unreduced spawn set, which stays forbidden. Superseded figures, retained as the provenance of the delta: measured 2026-08-11 on this repo: green_path=12 (rename-diff status probe x2, ls-files --deleted, check-ignore stdin probe, add x2, diff --cached --name-only, --no-optional-locks status, rev-parse HEAD, commit, post-commit Commit-Token log search, remote); refusal_path_unanswerable=0 (an UNANSWERABLE path -- e.g. unverified caller identity conflicting with a live claimant -- short-circuits `_handler` before any staging spawn); directory_pathspec_expansion=13 (green_path's 12 plus the one extra pathspec-scoped `git status --porcelain -- <dir>` `_expand_directory_pathspecs` issues before the rest of the pipeline runs). push_raced_path=20, added by opro-01 C-09 as probe_bearing_path=24 and lowered to its post-C-02 figure under COORDINATOR-RESOLUTIONS.md Resolution 2 (measured 2026-08-18): the push-raced/push-failed path -- the only path `_remote_sha_state`'s remote-confirmation probe is reachable on, and the one the probe's cost actually lands on. `green_path` was deliberately NOT raised to absorb any of this: that figure's fixture configures no remote and no upstream, so the probe was unreachable there and budgeting for spawns the green path cannot make would have been C-12's forbidden move. Its separate 12->17 re-baseline above is unrelated drift, not this. The 24 comprises the staging/commit leg plus a push-remote census, a failing `push`, and the probe's own 4 (`rev-parse --abbrev-ref @{u}` once, `merge-base --is-ancestor` x3 across the retry loop), the latter four invisible to this counter until C-09 routed them through `git_native._git`. C-01/C-02 then removed the probe outright (one publisher per commit makes this op's own push status authoritative, so there is nothing left to corroborate against the remote): 24 -> 20 spawns and 1.0s -> 0s of hot-path `time.sleep`, measured 2026-08-18 on the same fixture. The key is renamed accordingly -- the path is still the push-raced one, it simply no longer bears a probe. `test_commit_e2e_spawn_budget.py` asserts both the count and that the path sleeps zero, since a spawn count cannot express a sleep and the sleep was half of what this shed. A8's pre-amendment '+1' referred to the CONJUNCTION-path delta inside `_check_claim_conflicts` alone (C5's own lazy call, see test_commit_gate_budget.py), not this op-level figure -- see that test module and this chunk's run-report sidecar for the reconciliation. `pending_drain_superseded`=23, opro-03 C6, measured 2026-08-19: a SEPARATE `git_native._git` shape from the other three -- this fixture's own commit lands on a clean `work/main` (the ordinary green-path staging/commit/push leg, unrelated to the number below), while a SECOND, synthetic branch `work/pending` is engineered non-fast-forward-superseded against origin and named by a planted `coordinator-auto-push-pending.json` record so `_drain_pending_push_after_sync` -> `auto_push.drain_pending_push` -> `run_push_with_retry(..., _skip_hold=True)` fires after the op's own push succeeds. None of `auto_push`'s own git calls (`push_once`, `_is_ancestor`, the fetch inside `_is_superseded`) route through `git_native._git` -- see the sibling `op_total_pending_drain_superseded` key for why they are counted at all -- so this seam figure is simply this fixture's own green-path-shaped commit cost on `work/main` (staging/commit/push, same shape as `green_path`'s own 17, plus this fixture's own six extra native-git calls the drain's bookkeeping and the extra branch add on top).  AMENDED SAME DAY (2026-08-21) after the wave-4 regression fixes landed on top of the C5 re-baseline above: every SEAM figure falls by exactly one more (green_path 14->13, directory_pathspec_expansion 15->14, push_raced_path 17->16, pending_drain_superseded 20->19, deferred_diverged_detach 17->16), and EVERY op_total figure is UNCHANGED (all five `_assert_op_total` exact-equality assertions passed against the figures above while the seam assertions failed). The change was `dirty_tree_gate` swapping `status_porcelain()` for `_status_porcelain_unquoted()` -- `git status --porcelain -z` -- to fix a real regression where C-quoted paths (spaces, non-ASCII) missed the `read_index`/`head_blobs` lookups and were falsely reported unattributable. WHY THE SEAM FALLS BY ONE WHILE op_total DOES NOT IS **NOT ESTABLISHED** AND IS DELIBERATELY LEFT OPEN rather than given a plausible mechanism this pass did not verify -- the same discipline this entry criticises the superseded text for abandoning. Both the old and new readers route through `git_native._git`, so a seam call genuinely disappearing SHOULD show up in op_total too. One candidate was checked and REFUTED: the wave-4 gitlink fix (head_blobs admitting obj_type=='commit') changes only which entries are kept from ONE `ls-tree` call's output and adds no spawn, so it cannot be the offset. Resolving this needs a spawn-by-spawn origin trace of the green path's current op_total of 20, which no pass has yet run. Until it is run, quote op_total (20, unmoved) as this workstream's honest end-to-end figure and do NOT read the seam column's cumulative 19->13 as six processes removed.",
+      "_op_total_rationale": "opro-03 C6, measured 2026-08-19 on this repo. TWO LAYERS OF KEY, deliberately, and they must not be collapsed. The bare shape keys (green_path/directory_pathspec_expansion/push_raced_path/pending_drain_superseded) count the `git_native._git` NATIVE-GIT seam, via a function-OBJECT substitution in test_commit_e2e_spawn_budget.py -- mechanism-robust but ROUTING-NARROW: a spawn that reaches the process boundary without going through `_git()` is invisible to them by construction. The op does exactly that in three measured places reachable from `_handler` (`session/scope.py::_git_run` via claim release, `hooks/auto_push.py::_run_git` via `run_commit_pipeline` -> `_drain_pending_push_after_sync`, and `git/divergence.py::_run_git`), so those legs could grow without bound and the seam figures would never move. The op_total_* keys close that: counted by substituting the `subprocess.run` MODULE ATTRIBUTE, scoped to the op invocation only (a test-scoped counter would be mostly fixture -- 28/29/37 per test versus these op-only figures). Deltas over the seam figures are +6/+6/+8 and that GAP IS THE POINT: it is the uncounted-bypass surface enumerated by coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py. Shrinking it by routing a bypass through the counted seam is progress; shrinking it by editing these numbers is the failure this plan's anti-scope names. No spawn was added by any of this -- each key makes existing spawns countable. op_total for refusal_path_unanswerable is deliberately absent: that path short-circuits before any spawn, so its seam figure of 0 is already a whole-op 0. The counter's own hole is mechanism, not routing (it sees `subprocess.run`, not `Popen`/`os.posix_spawn`/`asyncio.create_subprocess_exec`); that precondition is enforced per-site by that gate's `test_legitimized_site_mechanism_pins_hold`. `op_total_pending_drain_superseded`=39, measured 2026-08-19: the pending_drain_superseded shape's own 23 `git_native._git` calls PLUS 16 more `subprocess.run` calls the seam cannot see -- the fixture's own scratch-clone/direct-URL setup calls are excluded (the counter is scoped to the `_handler` invocation only, `_count_op_spawns_both_ways`'s own docstring), so the +16 is entirely inside the invocation: `auto_push.drain_pending_push`'s read of the pending record, `_branch_resolves_locally`, `run_push_with_retry`'s own `rev-parse` reads (local_sha, old_remote_sha for the cockpit-touched check), `push_once`'s own rejected push (site 1), `_is_superseded`'s fetch plus `_is_ancestor`'s `merge-base --is-ancestor` (site 2), and `_invoke_cockpit_publish`'s own child process (site 3, the DoE publish script) -- this is exactly the three previously-`_UNCOUNTED_MEASURED_UNREACHED`-then-`_LEGITIMIZED_SITES` sites this fixture exists to discharge, none of it routed through `git_native._git` by construction (`auto_push` is a hook with callers outside this pipeline; rerouting it was rejected for the same reason the other three op_total deltas were). `deferred_diverged_detach`=20 seam / `op_total_deferred_diverged_detach`=26, opro-03 follow-up, measured 2026-08-21 (corrected same day -- an initial 28 recorded from a single early run did not reproduce across three subsequent independent runs, all reading 26; 26 is the figure carried here): the LAST reachable-and-uncounted site `test_no_uncounted_spawn_on_budgeted_path.py` flagged after C6 -- `auto_push._detach_and_run`'s Windows respawn `subprocess.Popen`, reached via `commit_scoped`'s private-index (diverged-path) branch's own `_replay_post_commit_auto_push` call (`git_native.py`, fires only when `suppress_post_commit_auto_push` is False, i.e. the default `push_mode='deferred'`, never on the `sync`/`never` shapes the other four fixtures use). This site spawns via `Popen`, not `run`, so the pre-existing `subprocess.run`-only op_total counter could never see it regardless of reachability; `_count_op_spawns_both_ways` was widened to also count `Popen`, scoped to the one recognized auto-push-respawn argv shape so it never intercepts `subprocess.run`'s own internal `Popen` calls (see that function's own docstring). `test_no_uncounted_spawn_on_budgeted_path.py`'s `_GLOBAL_SUBPROCESS_SPAWN` is the mechanism pin admitting this counter shape. This shape's own seam figure (20) already includes the two 2026-08-20 additions (`323aafaf8`/`82dc080eb`, see the sibling `_rationale` field) since it was measured after both landed -- it is a SEPARATE shape from the other four (a diverged path, not the agree branch), not a re-baseline of any of them.",
+      "_c6_ratchet_rationale": "C6 (docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md), measured against this repo after C8a/C8b's in-process rewire of `_commit_scoped_private_index` landed on this branch (the private-index ladder's `read-tree`/`add`/per-path `update-index --cacheinfo`/`write-tree`/`commit-tree`/`update-ref` sequence is replaced by `read_tree_spine`+`write_object`+locked `cas_ref`, all in process, retaining only `interpret-trailers` on the `git_native._git` seam plus, when the commit carries a worktree-sourced path, one `hash-object -w --stdin-paths`). ONLY `deferred_diverged_detach` moved -- it is the one fixture among this file's five that reaches `_commit_scoped_private_index` at all; `green_path`/`directory_pathspec_expansion`/`push_raced_path`/`pending_drain_superseded` all commit through the AGREE branch (`_agree_branch_cas_refusal` plus a plain `git add`/`git commit`), which C8a/C8b does not touch (C8b's own anti-scope names `_agree_branch_cas_refusal` explicitly out of scope), and none of their figures changed. `deferred_diverged_detach`: seam 16->9, op_total 25->18, reproduced deterministically across 4 independent runs (1 via `pytest`, 3 via a standalone repro script; `retries_fired=0` on every run, `result['committed'] is True` and `push_state` unaffected on every run -- the oracle passed, per this chunk's own instruction that a refusal path must never be the source of a lowered figure). `test_no_uncounted_spawn_on_budgeted_path.py` was run before trusting this figure (14/15 passed; the one failure, `memo.send`'s `_resolve_committed_sha`, is a concurrent sibling chunk's own open surface -- coordinator_core/ops/fleet/memo_send.py is outside this chunk's writes: and unrelated to `ceremony.scoped_git_commit`). This is the fixture's own committer-plus-replay total, not the isolated CAS AC1/AC13 name (dirty_tree_gate/deletion_block_gate/state-read/auto_push-replay spawns are included, per this test file's own scope), so it is not itself an AC13 pin -- AC13 is C9's to assert against `_commit_scoped_private_index` directly. The `add`/`commit`/`read-tree`/`write-tree`/`commit-tree`/`update-ref` argv sequence this shape's ladder used to emit no longer appears on the seam at all for a staged (no worktree-sourced content) diverged commit; `test_commit_e2e_spawn_budget.py`'s `_assert_argv_shape` now asserts the shapes that DO still fire (`read-tree`, `write-tree`, `commit-tree`, `update-ref`, `interpret-trailers` for this shape -- present because C8a/C8b's own tree/commit writes route through `write_object`+`cas_ref`, not a bare git spawn, so an assertion naming those subcommands would itself be wrong for the new mechanism; the assertion instead pins the subcommands genuinely still on the seam) alongside the retained exact-count checks, per this chunk's own instruction to assert argv rather than trust a bare integer.",
+      "_c10_cold_end_to_end_rationale": "C10 (this dispatch, state/dispatch-briefs/2026-08-22-a-commit-is-one-spawn-not-eleven/C10.md), measured 2026-08-23 against `git_native.commit_scoped()` directly (git_native.py:2959) -- NOT through the `ceremony.scoped_git_commit` OP HANDLER, which still calls the separate, unrewired `run_commit_pipeline` (`scoped_git_commit.py`'s own body, confirmed by grep -- `git_native.commit_scoped` is the C8a/C8b/C9 rebuild target but is not yet wired as this op's `_handler`). The 2026-08-23 baseline probe (`state/audits/2026-08-23-scoped-git-commit-cold-baseline-probe.py`, commit `47609183a`) already measured the OP-HANDLER path's own cold cost (1,174.5ms/41 processes by control) and explicitly deferred the POST-REBUILD number to this plan -- this entry is that number, for the rebuilt COMMITTER function, not the still-unrewired op. REGIME: bare interpreter with the lazy op-registration channel armed (`sys._coordinator_core_lazy_ops = True`, matching `invoke/__main__.py`/`cc_invoke.py`), confirming C7's 'fourth regime' hypothesis in `state/audits/2026-08-22-the-commit-path-cannot-reach-400ms-cold-because-of-the-ops-package.md` -- a fresh `import coordinator_core.ops.ceremony.git_native` under this regime measured 85.9-99.6ms process time (n=3, k=8), consistent with that audit's own 101.6ms LAZY figure for the same import, not the 475.3ms EAGER figure nor a sibling op's 15.6ms engine-cold/359.4ms bare-interpreter pair -- this op has no warm-engine-served production path today (it is SUSPENDED), so 'not warm' here means exactly this regime, not engine-cold. METHOD: same CONTROL-vs-ARM delta discipline as the pre-existing baseline probe (a scratch repo build is unavoidable per-invocation scaffolding cost, subtracted rather than counted), extended to a 25-path (>=20, AC13/AC16) diverged pathspec, `batched_process_time_ms`, n=3 x k=6, fresh interpreter per sample, real box load, reproduced via `test_commit_scoped_edges.py::test_commit_scoped_cold_end_to_end_budget`. MEASURED (default `suppress_post_commit_auto_push=False`, i.e. the real `push_mode='deferred'` production default): isolated op cost 492.2-549.5ms process time, 10 spawns -- OVER the 400ms cold bar. ATTRIBUTED, not shrugged: a `git_native._git` seam spy on the same scenario shows only TWO native-git-seam spawns (one batched `--no-optional-locks status --porcelain=v2 -z --no-renames -- <25 paths>` divergence probe, one `interpret-trailers`) -- the residue is `hooks/auto_push.py`'s own post-commit replay check, which `git_native.py`'s own docstring says 'fires only when suppress_post_commit_auto_push is False', and which routes through `auto_push.py::_run_git`, OUTSIDE the `git_native._git` seam -- the exact uncounted bypass surface this manifest's `pending_drain_superseded`/`deferred_diverged_detach` entries already name, not a new one. CONFIRMED by toggling the flag: `suppress_post_commit_auto_push=True` drops isolated cost to 281.2ms / 6 spawns -- UNDER the 400ms bar. DISPOSITION: the committer's OWN cost (net of scaffolding: ~90-100ms lazy import + ~281ms of its own git/in-process work for 25 paths) is within budget; the auto-push replay check's ~210-270ms/4-spawn residue is a separate, already-documented bypass-surface cost this chunk's writes scope does not authorize fixing (and `op_budget_suspension.py` is explicitly out of scope for this chunk). Flagged for whichever chunk reinstates the op or wires `commit_scoped` into `scoped_git_commit`'s own `_handler` -- not fixed here."
+    },
+    "changelog.cited_in_range_count": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "n_tokens": 1,
+        "no_tokens": 0
+      },
+      "_rationale": "2026-08-15 fleet spawn census re-verification (state/audits/2026-08-15-fleet-census-reverification-at-head.md \u00a7 'Rows surviving intact and unguarded'): `_cited_in_range_count` spawned one `git rev-parse --verify` per unique hex-looking token found via regex over a free-text changelog body -- unbounded by construction, no memo, no timeout. Fix: `_batch_resolve_commits` resolves the whole token set in ONE `git cat-file --batch-check` process (stdin-fed, `timeout=_SUBPROCESS_TIMEOUT`), each token queried as `{tok}^{commit}` to match the prior per-token `rev-parse --verify -q {tok}^{commit}` peel byte-for-byte -- the set of tokens classified as resolving to a commit is unchanged, only the spawn shape is. `target_ms`/`tolerance` satisfy `budget.py._validated_budget`'s required override shape only; `spawn_count_budget` is the enforced invariant, guarded by `coordinator_core/ops/test_changelog_cited_in_range_spawn_bound.py`. `n_tokens=1`: any nonzero number of distinct tokens costs exactly one subprocess (was N before the fix). `no_tokens=0`: an empty token set short-circuits before spawning at all."
+    },
+    "percolate.functional_identifier_output_drift_in_tree": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "no_dest_publish_time": 0,
+        "with_dest_publish_time_n_files": 1
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-census-reverification-at-head.md row 7): `find_functional_identifier_output_drift_in_tree` (coordinator_core/percolate/store.py) ran `_git_commit_epoch_time` -- one `git log -1 --format=%ct` spawn -- per candidate file whenever a caller supplied `dest_publish_time`, unbounded by construction. This op's sole non-test caller, `publish.py`'s `dispatch_end_of_run_functional_identifier_output_drift_check`, never supplies `dest_publish_time` (its own docstring: 'that branch forks one git log per file ... and is what killed two prior measurement attempts on this machine's shared, heavily-loaded tree'), so the branch is currently reachable only from tests -- `no_dest_publish_time=0` documents the production caller's actual (unchanged, already-zero) spawn count. Fix: `_git_commit_epoch_times_batch` resolves the whole candidate-file set in ONE `git log --format=%x00%ct --name-only -- <paths...>` spawn (newest-commit-first, first occurrence per path wins, matching `git log -1 --format=%ct -- path` semantics exactly) instead of one spawn per file, for any FUTURE caller that does supply `dest_publish_time` -- the set of drift triples returned is unchanged, only the spawn shape is. `target_ms`/`tolerance` satisfy `budget.py._validated_budget`'s required override shape only; `spawn_count_budget` is the enforced invariant, guarded by `coordinator_core/percolate/tests/test_functional_identifier_output_drift_spawn_budget.py`. `with_dest_publish_time_n_files=1`: any nonzero number of candidate files costs exactly one subprocess (was N before the fix) once `dest_publish_time` is supplied."
+    },
+    "bin.coordinator_harvest_deferrals_dedup_scan_root_resolution": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "resolution_calls_for_5_candidate_rows": 2,
+        "directory_scan_calls_for_5_candidate_rows": 1
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-composed-op-spawn-census.md row 13 / state/audits/2026-08-15-fleet-census-reverification-at-head.md): `coordinator-harvest-deferrals.py::_harvest`'s per-row loop calls `_candidate_search_dirs(row)` for every candidate, which in turn calls `_repo_root()` (a `git rev-parse --show-toplevel` subprocess spawn), `_resolved_doe_root()`, and `_resolved_makima_root()` (each capable of its own machine-local-registry/marketplace-cache subprocess spawn) FRESH per row -- 3 resolution calls x N rows for an answer invariant for the whole process's lifetime. The per-row WRITE dispatch itself (`_run_queue_append`/`_run_lesson_promote`, already timeout-bounded at `_SUBPROCESS_TIMEOUT_SECS`, and since the 2026-08-15 staff review also catches `subprocess.TimeoutExpired` and degrades it to a per-row failure) is deliberately left one-spawn-per-row -- each row's write stays isolated via the `_run_*` helpers' return-False contract, not a `try` inside `_harvest()` itself, so one row's failure or hang never blocks another's. Fix (root resolution): memoize the three resolution calls (`_repo_root_cache`/`_resolved_doe_root_cache`/`_resolved_makima_root_cache`, first-call-wins, mirroring the pre-existing `_CLI_CMD_CACHE` pattern). Fix (directory scan, 2026-08-15 staff review Defect 2 -- the expensive half of the per-row work an earlier pass left unhoisted): `_already_harvested` re-globbed AND re-read EVERY `*.yaml` file in up to four directories (`state/improvement-queue`, `state/lessons-outbox`, in both makima and DoE) ONCE PER CANDIDATE ROW -- `_derive_proposed_action`'s own docstring measures those corpora at 605/493 entries, i.e. O(rows x ~1100 full file reads) for a key set invariant across the loop. `_collect_evidence_lines(search_dirs)` now does that glob+read ONCE, before the loop, returning the flat list of `evidence:`-prefixed lines; `_already_harvested(key, evidence_lines)` is then an O(1)-per-row substring membership check against that pre-collected list, preserving the exact prior match semantics (line must start with `evidence:`, key checked via substring). `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- this key is not a real op, `spawn_count_budget` is the enforced invariant. Enforced by `coordinator/bin/tests/test_harvest_deferrals_dedup_scan_memoized.py` (`resolution_calls_for_5_candidate_rows=2` -- exactly one SPAWN each from `_resolved_doe_root()`/`_resolved_makima_root()` regardless of candidate-row count, fixture: 5 rows, versus 15 pre-fix; lowered from 3 to 2 on 2026-08-17 because eacbba04a routed `_repo_root()` through `coordinator_core.git.repo_root.show_toplevel`, which walks for the ordinary case and spawns only when the walk finds no `.git` entry -- the budget counts spawns, so that third call is no longer one. Memoization of all three is unchanged and still asserted; do NOT raise this back to 3 to make a regression pass) and `coordinator/bin/tests/test_harvest_deferrals_evidence_scan_hoisted.py` (`directory_scan_calls_for_5_candidate_rows=1` -- `_collect_evidence_lines`/the underlying `glob.glob`+file-read pass runs exactly once per `_harvest()` invocation regardless of candidate-row count, versus once per row pre-fix; asserts the CALL COUNT of the scan, not wall-clock)."
+    },
+    "bin.workday_complete_close_backfill_dispatch_rows": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "2026-08-15 audit (state/audits/2026-08-15-fleet-composed-op-spawn-census.md row 14): `workday-complete-close.py::cmd_backfill_dispatch_rows` dispatches ONE full composed step9-ceremony subprocess (`_dispatch_step9_row`) per gap date, up to the 14-day lookback -- deliberately left one-spawn-per-gap-date: each row's exit code is tracked independently and the loop's own contract ('one bad day should not abandon the rest of the backfill') requires row N's failure to never block row N+1's dispatch, so batching into a single invocation is NOT equivalent and was rejected. `_dispatch_step9_row`'s previously-unbounded `subprocess.run` now carries `timeout=_STEP9_ROW_DISPATCH_TIMEOUT_SECS` (120s), with a `TimeoutExpired` caught and converted to a per-row failure (rc=1) rather than crashing the whole loop, preserving per-row isolation under a timeout the same as under a subprocess failure. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- this key is not a real op. 2026-08-15 staff review: a prior `spawn_count_budget.spawns_per_gap_date=1` was removed here -- it was N==N (true by definition for any one-spawn-per-row implementation, bounds nothing) and its docstring wording actively forbade the correct duplicate-date dedup fix (workday-complete-close.py::cmd_backfill_dispatch_rows now skips a re-seen date rather than re-dispatching it), which would have made a 3-row input with one duplicate cost 2 spawns and broken that tautological assertion. The real invariants (timeout present on every row dispatch; a duplicated date dispatches once, not twice; one row's timeout does not abort the rest) are behavioural, not spawn-count-shaped, and are enforced directly by `coordinator/bin/tests/test_workday_complete_backfill_dispatch_timeout.py` without a manifest budget."
+    },
+    "bin.reap_integrated_review_findings.tracked_untracked_split": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_reap_call": 1
+      },
+      "_rationale": "2026-08-15 lower-confidence sweep candidate (state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Lower confidence, fan-out unit unconfirmed'): reap-integrated-review-findings.py::_reap_integrated_legacy spawned one 'git ls-files --error-unmatch -- <path>' per marker-bearing findings sidecar in `to_reap` to split it into tracked/untracked buckets before git rm/commit. Fix: ONE 'git ls-files -z -- <all rel paths>' call; git's own output (forward-slash, tracked-only) set-membership-checked against each candidate's relpath (normalized off os.sep for Windows) replaces the per-path --error-unmatch probe. target_ms/tolerance are carried only to satisfy budget.py._validated_budget's required override shape -- this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator/tests/test_reap_integrated_review_findings_spawn_budget.py: per_reap_call=1 -- exactly one 'git ls-files' subprocess regardless of how many marker-bearing sidecars are present."
+    },
+    "bin.workday_complete_step2_5_dirty_tree.classify_main_pass": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_classify_call": 2
+      },
+      "_rationale": "2026-08-15 lower-confidence sweep candidate (state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Lower confidence, fan-out unit unconfirmed'): workday_complete_step2_5_dirty_tree.py::_classify_main_pass spawned one 'git diff --quiet -- <path>' (EOL-PHANTOM probe) and one 'git ls-files --stage -- <path>' (SUBMODULE probe) per dirty status line, up to 2N spawns for N dirty paths. Fix: _batch_diff_has_content/_batch_submodule_paths each issue ONE '-z' batched git call over the whole status-line set ('git diff --name-only -z --' and 'git ls-files --stage -z --' respectively) before the classification loop runs; the loop itself is unchanged, just consulting the two precomputed membership sets instead of spawning per path. target_ms/tolerance are carried only to satisfy budget.py._validated_budget's required override shape -- this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator_core/ops/test_workday_complete_step2_5_dirty_tree_spawn_budget.py: per_classify_call=2 -- exactly the two batched git subprocesses regardless of dirty-path count (fixture: several paths across EOL/submodule/other branches)."
+    },
+    "execute_plan_assemble.dispatch_ledger_delivered": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "no_committed_rows": 0,
+        "n_committed_rows": 2
+      },
+      "_rationale": "2026-08-15 fleet-composed-op-spawn census row 18 (state/audits/2026-08-15-fleet-composed-op-spawn-census.md, reverified in state/audits/2026-08-15-fleet-census-reverification-at-head.md 'Rows surviving intact and unguarded'): close_out_and_stamp.py::_dispatch_ledger_delivered spawned one 'git cat-file -e <sha>' plus one 'git merge-base --is-ancestor <sha> HEAD' per Dispatch Ledger row citing a committed sha -- a 20-chunk plan was 40 spawns. This is the legacy pre-spine Dispatch Ledger fallback (reached only when a plan has no '## Tasks' spine); a plan with a task-spine never reaches it. Fix: _batch_git_cat_file_check (one 'git cat-file --batch-check', stdin-fed with every distinct cited sha) and _rev_list_ancestor_shas (one 'git rev-list HEAD', membership test replaces per-sha 'merge-base --is-ancestor') -- TWO spawns total for the whole table, regardless of row count, versus 2N before. The returned (is_shipped, missing_chunk_ids, error) verdict is unchanged -- only the spawn shape is. Also added: this module's shared _run_git now carries _GIT_TIMEOUT_SECS=20.0 (previously unbounded). target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; this key is not a real op, spawn_count_budget is the enforced invariant. Enforced by coordinator_core/execute_plan_assemble/tests/test_dispatch_ledger_delivered_spawn_budget.py: no_committed_rows=0 (a table with zero 'committed <sha>'-shaped rows never spawns git at all); n_committed_rows=2 -- exactly the two batched subprocesses for a multi-row fixture citing several distinct shas."
+    },
+    "ceremony.wsc_tail": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "op_total_normal_pass": 34
+      },
+      "_rationale": "34, reproduced across two independent runs 2026-08-21 against test_wsc_tail_spawn_budget.py's own fixture -- the figure the shipped assertion actually measures. C3 recorded 37 the same day from a standalone repro script (not shipped); the plan's origin figure was also '~37 per close'. ATTRIBUTION OF THE -3 IS OPEN and must not be restated as settled: it is a REDUCTION, so banking it only makes the ratchet stricter, and an unbanked reduction is itself a ratchet failure. Leading candidate is a1e5dd970 (15:36, wsc-tail review-trail records folded into the ceremony commit's pathspec), which touched wsc_tail.py after C3 measured; the alternative is a harness difference between C3's script and this fixture. Neither established. C4 (docs/plans/2026-08-21-the-census-that-cannot-miss-an-op.md), migrated from a test-local pin (test_wsc_tail_spawn_budget.py's own `_WSC_TAIL_OP_TOTAL_CEILING`, deleted in the same change) into this manifest, ratcheted by test_spawn_count_budget_ratchet.py the same way ceremony.scoped_git_commit is. First measured 2026-08-21 (C3, dlv-every-op-knows-what-it-spawns-f4bbf6): a fresh single-file commit on `main` through the full `ceremony.wsc_tail` handler (deferred-push mode, `_spawn_deferred_push_skip_loud` monkeypatched off), counted via the whole-op `subprocess.run` MODULE-ATTRIBUTE substitution (the same `all_n`/op_total shape `test_commit_e2e_spawn_budget.py::_count_op_spawns_both_ways` uses) -- routing-agnostic, since `ceremony.wsc_tail` composes `ceremony.scoped_git_commit`'s `run_commit_pipeline` in-process plus its own pre/post-commit tail steps (trailer derivation, sentinel read/write, stamp+ship, origin-stub close, receipt emit), several of which spawn `git` directly rather than through the pipeline -- exactly the reach a seam-scoped counter would miss. 37 matches this plan's own origin figure ('~37 spawns per close') exactly, the first time that number is a real measurement rather than an inherited approximation. `target_ms`/`tolerance` are carried only to satisfy `budget.py._validated_budget`'s required override shape -- `ceremony.wsc_tail` is not in `op_fixtures.COMPUTE_ONLY_FIXTURES` (it is MUTATING, not swept automatically), so the ms figure is inert/advisory; `spawn_count_budget` is the actually-enforced invariant. Enforced end-to-end by `coordinator_core/ops/ceremony/tests/test_wsc_tail_spawn_budget.py::test_wsc_tail_op_total_spawn_count_matches_pin`, exact-equality by design -- a spawn-count budget's whole point is that it does not drift quietly."
+    },
+    "ops.discover_working_repos": {
+      "target_ms": 120,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "per_call": 1,
+        "machine_local_cli_elimination_calls": 0,
+        "op_total_tier_a_non_empty": 3,
+        "op_total_tier_b_fallback": 3,
+        "op_total_all_empty": 0
+      },
+      "_spawn_count_rationale": "Two LAYERS of key, deliberately. The op_total_* keys are the OP: main() end-to-end, nothing stubbed, measured 2026-08-19 (opro-03 C6) at 3 / 3 / 0 for the Tier-A-non-empty, Tier-B-fallback and all-tiers-empty shapes. Three because _sort_unique shells to sort -u once per NON-EMPTY call and main() reaches it three times -- _tier_a's tail, _tier_a5's tail, and main's own merge tail; the all-empty shape is 0 because _sort_unique early-returns on an empty list without spawning. That shell-out is a SANCTIONED carve-out (test_no_bash_dependency.py names it, for byte-parity with the bash oracle), so it is counted, not removed; reducing it is a carve-out decision, not a budget one. The other two keys are SUB-PATHS and must not be read as the op total: per_call=1 is _tier_a5 alone, and machine_local_cli_elimination_calls=0 isolates _merged_flat_registry's elimination of the per-key machine-local CLI spawns, legitimately stubbing _sort_unique to do so. History worth keeping: per_call was 0 until 2026-08-19 because the asserting test monkeypatched out _sort_unique -- the one function on that path that spawns -- immediately before counting, so the figure was true of a stubbed op and false of this one. The op total went unmeasured for longer still because _tier_a reads Path.home()/.claude/projects and the pre-existing COORDINATOR_TIER_A_FS_ROOT seam covers only the existence probe; COORDINATOR_TIER_A_PROJECTS_DIR was added to make a hermetic main() count possible at all. No spawn was ever added by any of this -- each raise made an existing spawn countable. Trace: state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md.",
+      "_rationale": "2026-08-15 staff review of the fleet spawn sweep (state/audits/2026-08-15-fleet-census-reverification-at-head.md). discover_working_repos.py::_tier_a5 spawned one machine-local keys subprocess plus one machine-local get <key> per repos.* key, and ::_publish_mirror_keys independently repeated the whole pattern for publish.mirrors.*.path -- measured live at ~24 interpreter spawns per main() call (19 repos keys + 4 mirror paths), each with a 10s timeout, on a box CLAUDE.md sizes at 50-70 concurrent LLM sessions. This was not merely slow: it contradicted the standing negative spec in coordinator_core/machine_resolver.py, which forbids shelling out to that CLI, and the 2026-08-05 PM directive on de-bashing spawn amplification that it records. It was also LESS CORRECT than a direct read -- registry_get's docstring notes the CLI lives under a resettable bin directory, so the CLI working is not proof of reset-survival, while a direct file read is. Fix: _merged_flat_registry merges registry.local.toml over registry.toml via machine_resolver.load_flat_registry_file/registry_dir (direct tomllib), zero subprocesses. Concern-layer parity was verified rather than assumed: _machine_local.py::_flatten_nested documents these keys as root-namespace-only and actively drops concern-name collisions, so a flat two-file read cannot miss a repo. target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant, guarded by coordinator_core/ops/test_discover_working_repos_spawn_budget.py. per_call=0 is a real ceiling, not a per-item ratio -- any key count costs zero subprocesses, so a regression to the CLI fails at 1."
+    }
+  },
+  "_catering_relay_baseline": {
+    "measured_at": "2026-08-21",
+    "code_sha": "e5d5283a351bfafdc0c661a95b9363ba765d23e0",
+    "run_id": "023762df-d4a5-406e-897d-97903677849a",
+    "sample_count": 30,
+    "starting_point": {
+      "import_cpu_p50_ms": 390.6,
+      "compose_cpu_p50_ms": 15.6,
+      "total_wall_p50_ms": 744.6,
+      "total_wall_p90_ms": 1321.2,
+      "spawns_per_fire": 1
+    },
+    "real_relay": {
+      "n": 30,
+      "import_cpu_ms": {
+        "p50": 0.0,
+        "p90": 15.625,
+        "max": 15.625
+      },
+      "compose_cpu_ms": {
+        "p50": 375.0,
+        "p90": 406.25,
+        "max": 421.875
+      },
+      "total_process_ms": {
+        "p50": 453.125,
+        "p90": 484.375,
+        "max": 515.625
+      },
+      "total_wall_ms": {
+        "p50": 586.183,
+        "p90": 870.921,
+        "max": 1046.433
+      },
+      "spawn_count": {
+        "p50": 0.0,
+        "p90": 0.0,
+        "max": 0.0
+      }
+    },
+    "control_relay": {
+      "n": 30,
+      "import_cpu_ms": {
+        "p50": 15.625,
+        "p90": 15.625,
+        "max": 15.625
+      },
+      "compose_cpu_ms": {
+        "p50": 46.875,
+        "p90": 62.5,
+        "max": 78.125
+      },
+      "total_process_ms": {
+        "p50": 109.375,
+        "p90": 126.563,
+        "max": 140.625
+      },
+      "total_wall_ms": {
+        "p50": 202.08,
+        "p90": 227.079,
+        "max": 487.294
+      },
+      "spawn_count": {
+        "p50": 0.0,
+        "p90": 0.0,
+        "max": 0.0
+      }
+    },
+    "spawn_attribution": [],
+    "doc": "docs/plans/2026-08-21-catering-costs-what-the-work-costs.md",
+    "note": "C2/C3-era baseline for AC2/AC3, measured at the relay boundary (both ops through one ipc.dispatch_ops_from_hook), cold interpreter per sample, real payload shape. control_relay isolates the floor cost of dispatch_ops_from_hook itself (a stubbed no-op op registered outside the hooks package's eager import graph) from what catering's two ops add on top. SUPERSEDED as AC2/AC3 evidence: commit d728c37cb ('C6 stop-check') re-ran this harness post-fix and reported different, authoritative numbers in its own commit message (process p50 484.4 / p90 515.6 / max 531.3, AC2 NOT MET) but did not overwrite this block with them -- real_relay below still holds the earlier, superseded measurement. Cite d728c37cb and 65bbe1323's commit messages for post-fix AC2/AC3 evidence, not this block.",
+    "provenance": "Frozen point-in-time stamp, not a value any code resolves. Re-run coordinator_core.benchmarks.catering_path_bench for a fresh measurement -- as of 2026-08-23 that harness refuses to run on this box (_verify_spawn_count_derivation aborts). d728c37cb re-ran this harness post-fix and recorded its own (higher, AC2-failing) figures in its commit message, but did not write them into this JSON block; the real_relay numbers here predate that re-run."
+  }
+}

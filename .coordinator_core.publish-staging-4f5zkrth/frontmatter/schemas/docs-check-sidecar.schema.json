@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/docs-check-sidecar.schema.json",
+  "x-schema-name": "docs-check-sidecar",
+  "x-schema-version": "1.1.0",
+  "applies_to": "state/plan-sidecars/*.docs-check.md",
+  "description": "Docs-checker sidecar — validates external API claims in a plan and records verdicts. Plan-side (pre-review pre-flight) home is the plan-derivable state/plan-sidecars/<plan-stem>.docs-check.md (moved out of docs/plans/ by docs/plans/2026-07-24-g2-plan-pipeline-sidecar-contract.md C11/D0). The code-review-side dispatch (no plan artifact to derive a stem from, D4) instead uses the session-keyed state/subagent-share/<session>/<provision_key>.md home, covered by the universal run-report superset schema, not this applies_to glob.",
+  "type": "object",
+  "required": ["artifact"],
+  "properties": {
+    "artifact": {
+      "type": "string",
+      "description": "Repo-relative path to the plan/doc this sidecar checked."
+    },
+    "checker": {
+      "type": "string",
+      "description": "Agent identifier that ran the check (e.g. docs-checker)."
+    },
+    "claims_checked": {
+      "type": "number",
+      "description": "Total number of API/factual claims evaluated."
+    },
+    "verified": {
+      "type": "number",
+      "description": "Claims confirmed correct by an authoritative source."
+    },
+    "unverified": {
+      "type": "number",
+      "description": "Claims that could not be confirmed (source unavailable, not enough evidence)."
+    },
+    "incorrect": {
+      "type": "number",
+      "description": "Claims found to be wrong; auto-fixed or flagged for human correction."
+    },
+    "auto_fixed": {
+      "type": "number",
+      "description": "Claims that were silently corrected inline by the checker."
+    },
+    "verification_source": {
+      "type": "string",
+      "description": "Primary source used for verification (e.g. Context7, training-knowledge-aug2025)."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the sidecar was authored (YYYY-MM-DD)."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle state of the sidecar (e.g. reviewed, implemented). Not enumerated — legacy values vary."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for the sidecar."
+    }
+  }
+}

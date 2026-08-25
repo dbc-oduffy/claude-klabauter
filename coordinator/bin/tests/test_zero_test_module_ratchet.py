@@ -43,10 +43,13 @@ by COLLECTING any module that imports coordinator/bin/lib/cc_invoke.py, since
 that module sets the flag process-wide at import. Under it,
 `import coordinator_core.ops` skips eager registration and the two import
 guards fire correctly. Whole-tree collection in a clean environment was green
-throughout. The fix is the `COORDINATOR_CORE_LAZY_OPS` entry in
+throughout. The fix at the time was a `COORDINATOR_CORE_LAZY_OPS` entry in
 `_NESTED_PYTEST_ENV_SCRUB` below; the lesson is that this guard's own
 subprocess environment is part of its oracle, and an inherited variable is an
-outer-run artifact exactly like PYTEST_ADDOPTS.
+outer-run artifact exactly like PYTEST_ADDOPTS. The flag itself, and that
+entry, are since retired (op registration is lazy, unconditionally, and
+nothing writes the var) — the incident is kept here as the reason THIS
+file's own subprocess environment must never be assumed clean.
 
 So the undeterminable-set branch below is not a false positive to be tuned
 away; it fired correctly on its first tier run. The race-tolerance in
@@ -285,26 +288,12 @@ doing.
     one-shot invocation it is a worker of a parallel run it is not part
     of, changing how any conftest or plugin that branches on worker
     identity behaves.
-  * `COORDINATOR_CORE_LAZY_OPS` makes `import coordinator_core.ops` skip
-    its eager per-module import list, so only ops reached by a targeted
-    lazy import ever register. ~50 test modules assert the op registry at
-    import time, so a collection process that inherits it fails collection
-    outright. It is NOT an outer-run choice: `coordinator/bin/lib/cc_invoke.py`
-    sets it process-wide as an import side effect, so merely COLLECTING any
-    test module that imports cc_invoke arms it for every child this process
-    later spawns (see that module's 2026-07-26 leak note and `child_env()`,
-    the same fix applied at two spawn sites in coordinator/bin/). Stripped
-    unconditionally rather than only when cc_invoke injected it, because a
-    pytest process is never a `coordinator_core.invoke` dispatch process —
-    lazy ops is incompatible with collecting this suite under any
-    provenance, an operator's own export included.
 """
 _NESTED_PYTEST_ENV_SCRUB = (
     "PYTEST_ADDOPTS",
     "PYTEST_XDIST_WORKER",
     "PYTEST_XDIST_WORKER_COUNT",
     "PYTEST_XDIST_TESTRUNUID",
-    "COORDINATOR_CORE_LAZY_OPS",
 )
 
 
@@ -467,62 +456,6 @@ def test_every_test_module_contributes_at_least_one_node() -> None:
             f"contribute at least one collected node "
             f"({len(_ZERO_NODE_EXEMPT)} documented exemption(s) applied)"
         )
-
-
-# One representative module rather than the whole tree: its import-time
-# `assert "queue.append" in _REGISTRY` is the exact guard a leaked
-# COORDINATOR_CORE_LAZY_OPS trips, and collecting one file costs ~1s where
-# the whole tree costs ~7s. Pinned by path deliberately — if it moves or its
-# import guard is deleted, this regression net must fail loudly and be
-# re-pointed, not quietly stop proving anything.
-_LAZY_OPS_CANARY_MODULE = "coordinator_core/ops/tests/test_queue_parity.py"
-
-
-@pytest.mark.allow_environ_leak
-def test_nested_collect_survives_a_leaked_lazy_ops_flag(monkeypatch) -> None:
-    """A nested collect must not inherit COORDINATOR_CORE_LAZY_OPS.
-
-    Regression for the 2026-07-28 defect this guard misdiagnosed as an
-    import-order bug in coordinator_core/ops/ (see the module docstring's
-    FIRST REAL CATCH). Importing coordinator/bin/lib/cc_invoke.py sets the
-    flag process-wide, so any outer run that merely COLLECTS a cc_invoke
-    consumer armed it for every child spawned afterwards — and under it,
-    `import coordinator_core.ops` skips eager registration, so the canary
-    module's import-time registry assertion fails and `--collect-only`
-    exits 2 on a green tree.
-
-    Asserts through a real subprocess rather than on the returned dict:
-    a dict-shape assertion would still pass if a future spawn site stopped
-    routing through `_nested_pytest_env`.
-    """
-    canary = os.path.join(_REPO_ROOT, *_LAZY_OPS_CANARY_MODULE.split("/"))
-    assert os.path.isfile(canary), (
-        f"canary module {_LAZY_OPS_CANARY_MODULE} is gone — re-point "
-        "_LAZY_OPS_CANARY_MODULE at another module that asserts the op "
-        "registry at import time, or this test proves nothing."
-    )
-
-    monkeypatch.setenv("COORDINATOR_CORE_LAZY_OPS", "1")
-
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q",
-         "-p", "no:cacheprovider", canary],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=_nested_pytest_env(),
-        **no_console_creationflags(),
-    )
-
-    assert proc.returncode == 0, (
-        "nested `--collect-only` exited "
-        f"{proc.returncode} with COORDINATOR_CORE_LAZY_OPS=1 in the parent "
-        "environment — _nested_pytest_env is leaking the flag into the "
-        "child, which skips eager op registration and breaks collection of "
-        "every module that asserts the op registry at import time.\n"
-        f"stdout tail:\n{_tail(proc.stdout)}\nstderr tail:\n{_tail(proc.stderr)}"
-    )
 
 
 def test_exemption_entries_are_live_and_individually_justified() -> None:

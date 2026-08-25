@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/research-synthesis.schema.json",
+  "x-schema-name": "research-synthesis",
+  "x-schema-version": "1.0.0",
+  "applies_to": "docs/research/*.md",
+  "kinds": [
+    "research-synthesis"
+  ],
+  "description": "Run-level deep-research synthesis record; frontmatter index over a PROTECTED expressive prose body.",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for this research synthesis document."
+    },
+    "question": {
+      "type": "string",
+      "description": "The research question this synthesis addresses."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Fleet-canonical temporal key (YYYY-MM-DD); enables --since/--older-than filtering in query-records per D4. Records lacking `created` are excluded by temporal filters."
+    },
+    "pipeline": {
+      "type": "string",
+      "enum": ["web", "repo", "structured", "notebooklm"],
+      "description": "Deep-research pipeline variant used to produce this synthesis."
+    },
+    "source_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of sources consulted during the research run."
+    },
+    "topic_facets": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of topic facets or sub-themes covered by this synthesis."
+    },
+    "coverage_score": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Coverage score on a 1-5 scale, sourced from the gap-report produced during the research run."
+    },
+    "confidence_summary": {
+      "type": "string",
+      "description": "Producer-computed aggregate confidence label for the synthesis. OPTIONAL/derived — prefer `--type research-claim --where confidence=HIGH` for confidence-filtered queries rather than filtering on this field."
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Emission-parity fixtures are hashed BYTE-EXACTLY (content_hash.sha256 in the handoffs
+# section, compared against a frozen golden). A checkout under `core.autocrlf=true` — the
+# Windows default — rewrites these LF-committed files to CRLF, changing every hash and
+# failing test_emit_parity::test_full_parity with no code defect anywhere.
+#
+# `-text` disables end-of-line conversion in BOTH directions, so the working-tree bytes are
+# the committed bytes on every OS and every git config. Do not relax this to `text eol=lf`
+# without checking: that still normalizes on the way IN, which is fine, but leaves a
+# `core.autocrlf=true` clone's existing files needing a renormalize pass.
+* -text

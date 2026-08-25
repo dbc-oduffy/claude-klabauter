@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/handoff-archived.schema.json",
+  "x-schema-name": "handoff-archived",
+  "x-schema-version": "2.7.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "2.6.0 -> 2.7.0 (nested-field-additive) declares the archived twin of `governing_plan` landing on handoff.schema.json 8.6.0 -> 8.7.0 in this same commit (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md § C5/C6, R5) -- see that file's note for the full rationale. Declared here, not enforced, on the same reasoning already established below: the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it. PRIOR: 2.5.0 -> 2.6.0 (nested-field-additive) declares the archived twin of `reconcile_disposition` / `reconcile_disposition_reason` landing on handoff.schema.json 8.0.0 -> 8.1.0 in this same commit — see that file's note for the full adoption rationale (ask 4 of cross-repo/inbox/2026-08-14-project-makima-em-reviewed-range-pattern-and-direction-blind-parity-gate.md). Declared here, not enforced, on the same reasoning already established for producer/reaped_from_session below: the archival path carries frontmatter through wholesale, so a live record carrying either key archives carrying it. PRIOR: 2.4.0 -> 2.5.0 (producer-axis) declares the archived twin of the `producer` object landing on handoff.schema.json 7.0.0 -> 7.1.0 in this same commit (typed_command + op_identity, D5/D6/D9) — see that file's note for the full rationale and DR-097 discharge statement. Classified nested-field-additive on the same grounds: a new optional top-level object, no domain narrowed, no archived document invalidated. Declared here, not enforced (neither sub-field is required on this permissive sibling), because the archival path carries frontmatter through wholesale — same reasoning as the reaped-from-session-declaration bump below. PRIOR: 2.3.0 -> 2.4.0 (reaped-from-session-declaration) declares the optional top-level string `reaped_from_session`, the archived twin of the same declaration landing on handoff.schema.json 6.0.0 -> 6.1.0 in this same commit \u2014 see that file's note for the full rationale and the sender's memo. Classified nested-field-additive on the same grounds: a new optional top-level scalar, no domain narrowed, no archived document invalidated. Declared here even though project-makima-em explicitly asserted nothing about this file, because the two questions are not the same one: they were right to revert a BACKFILL that wrote the key onto archived records (that asserts a conclusion about an archived document), and declaring the key asserts no such conclusion \u2014 the archival path carries frontmatter through wholesale, so a live carrier archives carrying it, and leaving it undeclared here rebuilds the undeclared-on-disk state one archival sweep later. Sits beside the claim vocabulary (consumed_by/consumed_at/claimed_by/claimed_at) this schema already declares. PRIOR: 2.2.0 -> 2.3.0 (baton-kind-vocabulary-one-axis-per-field C10) WIDENED the `kind` enum to admit the new D1 target names (`roadmap-baton`, `goal-seed`, `roadmap-seed`) landing on the live handoff.schema.json's own C10 narrow, retaining every retired name (`spinoff-roadmap`, `spinoff-goal`, `spinoff-roadmap-creator`) alongside them rather than swapping \u2014 this schema's whole reason for being more permissive than the live schema is that the archived corpus permanently retains historical kind values, exactly as it already does for `spike-result` and for `consumed`/`superseded` on `status` above. Classified nested-field-additive (widening an existing field's enum domain, never rejects a previously-valid document) \u2014 not major, since narrowing is the semantics-changed case that classification exists for, and this bump is the strict inverse of that. 2.1.0 -> 2.2.0 declared the optional `shipped_in_kind` discriminant (DR-096, closed enum ship-commit|successor|scope-derived|no-commit, parity with handoff.schema.json), with NO cross-field enforcement \u2014 unlike the live schema this record is purely additive since archived batons are grandfathered per DR-096 \u00a7 Census, never migrated. Prior bump 2.0.0 -> 2.1.0 added the optional top-level `disposed_successors` array (reverse-pointing lineage edges, parity with handoff.schema.json). DR-097 trigger-(A) notice DISCHARGED 2026-08-12: delivered to project-makima-em at their 9b495331c (cross-repo/inbox/2026-08-12-doe-claude-em-dr-097-notice-producer-bump-on-both-handoff-schemas.md), stating the bump CLASS nested-field-additive per DR-097:86-90, not merely that a bump occurred.",
+  "applies_to": "archive/handoffs/**/*.md",
+  "description": "Archived handoff \u2014 relaxed-schema sibling of handoff for already-consumed handoffs archived by /pickup. deployment_state and gate_dependency are not required; cross-field rules from handoff do not apply. Spec backlink: pln-roadmap-skill-and-handoff-lifecyc-114164 \u00a7 Phase 1b",
+  "type": "object",
+  "required": [
+    "title",
+    "created",
+    "branch",
+    "status",
+    "predecessor"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for the handoff."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the handoff was authored (YYYY-MM-DD)."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Git branch this handoff was created on."
+    },
+    "status": {
+      "enum": [
+        "open",
+        "claimed",
+        "consumed",
+        "superseded"
+      ],
+      "description": "'superseded' is retired (2026-06-26) but retained here for archived/legacy/sibling read-tolerance \u2014 the archived corpus (archive/handoffs/) still holds records written under the retired vocabulary and this schema must keep reading them. (Retracted 2026-07-22: no emit path validates against this schema pre-coerce \u2014 DoE's emit-cockpit-snapshot.py is a fail-loud stub with no validation body, and makima's records-query emit path reads handoffs without schema validation, coercing old\u2192new vocabulary afterwards in Python. Do not re-derive an emit-narrowing constraint from this description.) DR-084 P4 narrow removed 'active'/'consumed' from this enum on the verified premise of a clean DoE corpus. Restored 2026-07-27: this schema is the fleet-shared reader validator for sibling repos' archived corpora too, and project-makima's archive/handoffs/ holds 11 records written under the retired 'consumed' vocabulary \u2014 'consumed' is restored here on exactly the read-tolerance grounds that retain 'superseded' above. 'active' remains retired \u2014 no record in any surveyed corpus carries it; restore it only on corpus evidence. The live handoff.schema.json keeps its narrow ['open','claimed'] and is unaffected by this restoration."
+    },
+    "predecessor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Predecessor handoff path, or null for spinoffs. Key must be present (string-or-null: D9)."
+    },
+    "consumed_by": {
+      "type": "string",
+      "description": "Session id of the consuming /pickup invocation; sourced from $CLAUDE_CODE_SESSION_ID."
+    },
+    "consumed_at": {
+      "type": "string",
+      "description": "Timestamp when the handoff was consumed. Permissive: archive corpus mixes legacy bare-date and current date-time (reader-tolerate)."
+    },
+    "claimed_by": {
+      "type": "string",
+      "description": "Session id of the claiming /pickup invocation (DR-084 successor of consumed_by; new-vocabulary records use this). Sourced from $CLAUDE_CODE_SESSION_ID with .current-session-id fallback. Cross-field rule (claimed + claimed_at \u21d2 claimed_by required) lands at P4."
+    },
+    "claimed_at": {
+      "type": "string",
+      "description": "Timestamp when the handoff was claimed (ISO 8601 date-time; DR-084 successor of consumed_at). Stamped by the claim transition for race-forensics precision."
+    },
+    "reaped_from_session": {
+      "type": "string",
+      "description": "Session id of the DEAD holder whose claim a crash-orphan reaper released before this record archived \u2014 see handoff.schema.json's twin for the full write-site semantics. Declared here because the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it; declaring it is not a claim that the reaped work completed, only that the strip happened while the record was live."
+    },
+    "shipped_in": {
+      "type": "string",
+      "description": "DR-096: names the ship commit \u2014 the caller-supplied commit SHA at which this baton was declared shipped (DR-096 meaning 2), or a plan path / the substantively-shipped-no-commit token on legacy archived records. See shipped_in_kind for the discriminant tagging which of the four DR-096 write-time shapes produced this value (declared here, not enforced \u2014 this archived schema's cross-field rules from handoff do not apply)."
+    },
+    "shipped_in_kind": {
+      "enum": [
+        "ship-commit",
+        "successor",
+        "scope-derived",
+        "no-commit"
+      ],
+      "description": "Archived-handoff sibling of the live handoff.shipped_in_kind discriminant \u2014 see that field's description for the four values' meanings. Not required here (this object enforces no cross-field rules), backfilled where known; absent on records archived before the discriminant existed."
+    },
+    "continued_into": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Successor pointer for deployment_state=continued \u2014 handoff_id (hnd-<slug>-<6hex>) preferred, state/handoffs/... path fallback (pre-existing successors carry no handoff_id; no backfill). The tooth that keeps 'continued' from becoming liveness-guess abandonment: an automated writer that cannot name the successor cannot stamp continued. Required-when-continued (per the P4 narrow)."
+    },
+    "disposed_successors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Lineage-preservation edges written by distill.apply_disposal (C14) BEFORE a successor handoff is deleted: each entry is a successor's continued-into value (handoff_id preferred, path fallback \u2014 same shape as continued_into) for a successor that continued this record's work and was later disposed by /distill. Multi-valued (unlike continued_into, single-valued and deployment_state=continued-gated) because a parent can accumulate multiple disposed successors across separate /distill runs; each entry is append-only and never overwritten. Distinct from continued_into: this field is NOT deployment_state-conditional and is NOT itself the successor pointer for this record's own lifecycle \u2014 it is a reverse-pointing lineage record of OTHER records that pointed at this one and have since been deleted. Declared here as well as in handoff.schema.json because archival is exactly when the field earns its keep: the disposed successor is gone, and the archived parent is the only surviving record of the edge."
+    },
+    "closed_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "cancelled",
+            "displaced",
+            "stale"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Deliberate-stop subtype for deployment_state=closed (human/session only, never automated \u2014 DR-084). cancelled = deliberate stop; displaced = replaced with NO lineage edge (with an edge it's continued, not closed); stale = overtaken by events. Deliberately NO crashed/orphaned value: a successor-less dead-holder has no automated terminal \u2014 it surfaces for adjudication. Required-when-closed (per the P4 narrow)."
+    },
+    "session_goal": {
+      "type": "string",
+      "description": "Session goal from the handoff."
+    },
+    "machine": {
+      "type": "string",
+      "description": "Machine identifier where the session ran."
+    },
+    "kind": {
+      "enum": [
+        "session-handoff",
+        "spinoff",
+        "spinoff-roadmap",
+        "spinoff-goal",
+        "spinoff-roadmap-creator",
+        "recovery",
+        "spike-result",
+        "roadmap-baton",
+        "goal-seed",
+        "roadmap-seed"
+      ],
+      "description": "Kind of handoff. Synced to the live handoff.schema.json enum (sister fork kinds spinoff-goal/spinoff-roadmap-creator; spike-result per DEC-3a) \u2014 archived records may carry any live kind, so this sibling schema must not drift narrower than the source. WIDENED, never narrowed (baton-kind-vocabulary-one-axis-per-field C10): the live schema's C10 bump RETIRED spinoff-roadmap/spinoff-goal/spinoff-roadmap-creator in favor of roadmap-baton/goal-seed/roadmap-seed, but this archived sibling ADDS the new names alongside the old ones rather than swapping \u2014 the archived corpus permanently retains every historical kind value a record was ever written under, exactly as this schema already does for the retired 'consumed'/'superseded' status values and the retired 'spike-result' kind above. Narrowing this enum would invalidate already-archived records written under the pre-C10 vocabulary."
+    },
+    "authoring_session": {
+      "type": "string",
+      "description": "Session id that authored this handoff. On kind: session-handoff, coordinator-doc-new's scaffolder stamps this machine-generated at scaffold time (omitted, not PLACEHOLDER, when no session id is resolvable) -- coordinator_core.baton_assemble's cross-authorship adoption predicate (_adopt_prior_attempt_scaffold_path) gates adoption of a prior attempt's scaffold on this field matching the resuming run's own session id."
+    },
+    "workstream": {
+      "type": "string",
+      "description": "Workstream identifier."
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Archived-handoff sibling of the live handoff.schema.json's `producer` (D5, D6) — declared here, not enforced (this archived schema's cross-field rules from the live handoff do not apply), because the archival path carries frontmatter through wholesale: a live record carrying the key archives carrying it, and leaving it undeclared here would rebuild the undeclared-on-disk state one archival sweep later, exactly the reasoning `reaped_from_session` above already established for this file. Unlike the live schema, neither sub-field is required here — an archived record written before this bump has no `producer` key at all, and this schema's whole reason for being more permissive than the live schema is grandfathering exactly that kind of pre-existing record. `typed_command` and `op_identity` vocabulary is the SAME single declaration at handoff.schema.json's `x-producer-typed-command` annotation — not restated here, following this file's own kind/status precedent of pointing back at the live schema rather than duplicating an enum. Present-as-null (D9) governs a record written under this bump's vocabulary; it is not retroactively imposed on records archived before `producer` existed. Spec backlink: pln-producer-axis-on-the-baton-con-b68971 \u00a7 C1, D5, D6, D9.",
+      "properties": {
+        "typed_command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "One of the 48 members declared once at handoff.schema.json's `x-producer-typed-command`, or null — see the live schema's `producer.typed_command` for the full read-side contract."
+        },
+        "op_identity": {
+          "enum": [
+            "machine-minted",
+            "hand-authored"
+          ],
+          "description": "Machine-vs-human axis, resolved at the creation seam — see the live schema's `producer.op_identity` for the full write-site semantics."
+        }
+      }
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of in-scope workstream items."
+    },
+    "pickup_ready": {
+      "type": "boolean",
+      "description": "Positive pickup-authorized signal; preserved verbatim from the active schema on archival."
+    },
+    "deployment_state": {
+      "enum": [
+        "awaiting_gate",
+        "ready_to_fire",
+        "in_flight",
+        "shipped",
+        "continued",
+        "closed"
+      ],
+      "description": "Deployment state at time of archival. DR-084 P4 narrow: 'abandoned' is retired; 'continued' and 'closed' are its replacements."
+    },
+    "gate_dependency": {
+      "type": "string",
+      "description": "Gate dependency condition (only relevant when deployment_state=awaiting_gate)."
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of handoff IDs this handoff blocks."
+    },
+    "blocked_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of handoff IDs that block this handoff."
+    },
+    "roadmap_id": {
+      "type": "string",
+      "description": "Roadmap identifier for spinoff-roadmap kind handoffs."
+    },
+    "reconcile_disposition": {
+      "type": "string",
+      "description": "Operator-recorded disposition clearing a D1 'severed-observer' conservation violation -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_FIELD` constant. See the live handoff.schema.json's twin for the full read-side contract. Declared here so an already-archived handoff carrying this field validates; not enforced (this archived schema's cross-field rules from the live handoff do not apply)."
+    },
+    "reconcile_disposition_reason": {
+      "type": "string",
+      "description": "Free-text justification paired with reconcile_disposition -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_REASON_FIELD` constant. See the live handoff.schema.json's twin for the full read-side contract."
+    },
+    "reviewed_at_workstream_complete": {
+      "type": "string",
+      "description": "Review marker: '<sha-range> <reviewer> <YYYY-MM-DD>'. Written by /workstream-complete and /handoff after running coordinator:review-code. Absent on spinoff-kind handoffs."
+    },
+    "provision_eta": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional advisory ETA for a downstream install-leg's provisioning step (e.g. indexing the operator's own project) \u2014 free-text estimate, not a gate. Seen on install-leg spinoff batons (e.g. archive/handoffs/install-project-rag.md, archive/handoffs/install-project-rag-ue-addon.md). Backfilled into the schema at C6 GAP3 (was previously undeclared but permissively valid \u2014 no additionalProperties: false on this schema)."
+    },
+    "handoff_id": {
+      "type": "string",
+      "description": "Durable stable ID for this handoff/spinoff record, path-independent (survives archival move/rename). OPTIONAL \u2014 pre-existing handoffs authored before this field was introduced carry no handoff_id and are NOT backfilled. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator)."
+    },
+    "predecessor_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "ID-companion for predecessor (C2, add-not-swap) \u2014 the predecessor's handoff_id, resolved and stamped at author time from the SAME predecessor the path field names. Null when the predecessor has no handoff_id or predecessor is none/null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case \u2014 a plain 'type: string' declaration would reject the documented null value."
+    },
+    "governing_plan": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Archived twin of handoff.schema.json's `governing_plan` (R5, docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md § C5/C6) -- repo-relative POSIX path to the plan this baton executed, or null. Declared here, not enforced (the live schema's writer-side conflict check does not apply to an already-archived record): the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it."
+    },
+    "origin_handoff_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "ID-companion for origin_handoff (C2, add-not-swap) \u2014 the originating baton's handoff_id, resolved and stamped at author time from the SAME baton origin_handoff names. Null when the originating baton has no handoff_id or origin_handoff is null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case \u2014 a plain 'type: string' declaration would reject the documented null value."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "deployment_state": {
+            "const": "closed"
+          }
+        },
+        "required": [
+          "deployment_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "closed_reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deployment_state": {
+            "const": "continued"
+          }
+        },
+        "required": [
+          "deployment_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "continued_into"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "claimed"
+          }
+        },
+        "required": [
+          "status",
+          "claimed_at"
+        ]
+      },
+      "then": {
+        "required": [
+          "claimed_by"
+        ]
+      }
+    }
+  ]
+}

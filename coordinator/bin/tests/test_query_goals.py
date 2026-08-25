@@ -70,7 +70,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_goals, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.goals.collect",
             return_value=(_SAMPLE_RECORDS, []),
@@ -115,7 +115,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_goals, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.goals.collect",
             side_effect=RuntimeError("boom"),
@@ -136,7 +136,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_goals, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.goals.collect",
             side_effect=GoalsStateRootUnreadable("/some/root: Permission denied"),

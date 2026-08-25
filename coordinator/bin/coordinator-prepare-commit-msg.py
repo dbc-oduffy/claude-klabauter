@@ -104,21 +104,12 @@ Behaviour:
      re-mirrored, from ``coordinator_core.git.commit_trailers`` — C2's
      REQUIRED INTERFACE, its sole two new exports. Verified live at C4 time:
      importing them triggers ZERO ``coordinator_core.ops`` module imports
-     (that package's own eager ~161-module sweep never fires), so this
-     import is as cheap on the hot commit-hook path as the pre-existing
-     claimed-plan import in step 4b below. Lazily imported the same way, via
-     ``_ensure_claude_klabauter_on_syspath()`` / ``cc_invoke.require_colocated_engine_on_path``
-     (self-location-first, wrapping ``resolve_colocated_claude_klabauter_root``).
-     ORDERING DEPENDENCY (reviewer finding, 2026-08-10): the "zero
-     ``coordinator_core.ops`` imports" property holds only because
-     ``_ensure_claude_klabauter_on_syspath()`` imports ``cc_invoke`` first, and
-     ``cc_invoke``'s own module-import sets ``sys._coordinator_core_lazy_ops``
-     as a side effect before this tier's lazy ``commit_trailers`` import ever
-     runs. Reordering this ladder to reach step 3b before
-     ``_ensure_claude_klabauter_on_syspath()`` has run, or a future caller of
-     ``resolve_deliverable_id_from_scope_match`` that skips that bootstrap,
-     silently reintroduces the eager ~161-module sweep on the commit hot
-     path — nothing here catches that regression, so preserve the ordering.
+     (op registration is lazy, unconditionally, so the eager ~161-module
+     sweep never fires), so this import is as cheap on the hot commit-hook
+     path as the pre-existing claimed-plan import in step 4b below. Lazily
+     imported the same way, via ``_ensure_claude_klabauter_on_syspath()`` /
+     ``cc_invoke.require_colocated_engine_on_path`` (self-location-first,
+     wrapping ``resolve_colocated_claude_klabauter_root``).
      Mirrored-pair maintenance note (module docstring, above): this tier is
      the ONE exception to "hand-mirrored, changed in both by hand" — C2's
      scope-match tier and ambiguity predicate are IMPORTED here verbatim, so

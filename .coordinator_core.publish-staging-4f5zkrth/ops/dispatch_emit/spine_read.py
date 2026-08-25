@@ -1,0 +1,564 @@
+"""
+coordinator_core.ops.dispatch_emit.spine_read — plan file -> normalized emitter rows.
+
+Purpose: the single spine-reading entry point for the dispatch-emit pipeline
+(docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C1).
+Every downstream chunk (wave derivation, pathspec derivation, script
+emission, op registration) consumes ``read_spine``'s ``EmitterRow`` list —
+none of them re-parses a plan file.
+
+Reuse, do not re-parse: locating and YAML-loading the `` ```yaml plan-tasks ``
+fenced block is entirely delegated to
+``coordinator_core.ops.plan_tasks_render.load_rows``, which itself wraps
+``coordinator_core.frontmatter.body_blocks.locate_fenced_block``. This
+module adds exactly two things load_rows does not do: the UNDECLARED-vs-
+empty-list distinction on ``writes`` (AC2), and depends_on referent
+resolution against the row-id set (AC6). It has no fenced-block or YAML
+parsing code of its own.
+
+Four fail-loud behaviours, three AC-bearing and one closing a gap the ACs
+didn't name:
+
+  1. AC2 — a row with no ``writes:`` key, or a present-but-empty value
+     (``writes:`` with nothing after it, or ``writes: null``), gets the
+     ``UNDECLARED`` sentinel — never ``None`` and never ``[]``.
+     ``writes: []`` (declared empty) stays an empty list, a structurally
+     different value from UNDECLARED so a wave-builder cannot conflate
+     "writes nothing" with "unknown, treat as colliding with everything"
+     (see the plan's Anti-scope: absent writes: must never be read as an
+     empty set).
+  2. AC6 — every ``depends_on[].chunk`` referent is resolved against the
+     spine's row ``id`` set at read time. A dangling referent — a
+     well-formed ``{chunk: ..., gate_kind: ...}`` edge whose ``chunk``
+     names no row in this spine — raises ``DanglingDependencyError``
+     naming both the row holding the edge and the unresolvable id. A
+     MALFORMED edge (not an object, or an object with no ``chunk`` key —
+     a bare string, a bare scalar, or a dict missing the key) is a
+     DIFFERENT failure and raises ``MalformedDependencyEdgeError``
+     instead, naming the offending edge value itself and the required
+     shape: the edge was never looked at closely enough to know what
+     chunk id it meant, so it must never be reported as chunk ``None``.
+     Before this edge value ever reaches either check,
+     ``schema_validate.check_plan_tasks_source`` runs as a preflight; when
+     the FIRST schema-shape error it finds for this spine is under
+     ``depends_on``, that error's own field/reason (e.g. an out-of-enum
+     ``gate_kind``, or the exact same expected-object-got-str diagnosis)
+     is what gets raised, in ``MalformedDependencyEdgeError``'s voice —
+     the shipped validator's diagnosis, not a hand-rolled one. This
+     referent is asserted in schema prose (plan-tasks.schema.json's
+     ``depends_on`` description) but was enforced by no code anywhere in
+     the fleet before this module.
+  3. A scalar ``writes:``/``reads:``/``depends_on:`` value (e.g.
+     ``writes: some/path.py`` instead of a one-item list) raises
+     ``InvalidFieldTypeError`` naming the row and the value, rather than
+     being silently coerced to a one-item list — left uncoerced, a bare
+     string iterates into single characters downstream and silently
+     corrupts any overlap comparison.
+  4. A missing/non-string ``id``, or an ``id`` that duplicates another
+     row's, raises ``InvalidRowIdError`` naming the offending row/id. Not
+     an AC in the source plan, but the same failure class as points 2 and
+     3 above: downstream, ``wave_map._predecessors`` keys its predecessor
+     dict by ``id``, so a duplicate silently collapses two rows' edges
+     into one dict entry and corrupts the wave order without raising.
+     Enforced once here rather than in every id-keyed consumer.
+
+A fifth behaviour, not one of the four fail-loud ones above but load-bearing:
+``read_spine`` excludes non-dispatchable rows (closed ``disposition``
+values, ``deferred: true``, and an uncleared ``external_gate`` entry that
+blocks execution) from its returned list entirely, per DoE-claude's
+``skills/execute-plan/SKILL.md`` § Chunk-SET derivation. A row already
+shipped (``disposition: coded``), explicitly deferred, or still waiting on
+a cross-repo blocker must never reach the dispatch-emit pipeline and re-run
+(or first-run) as a live ``coordinator:executor`` call. An
+``external_gate`` entry excludes its row only when it is BOTH uncleared (no
+explicit ``cleared: true`` — see ``_has_uncleared_execution_gate``) AND its
+``blocks`` resolves to ``execution`` — the default when ``blocks`` is
+absent, per plan-tasks.schema.json. ``blocks: ac-closure`` never excludes the row: that
+gate holds only a named acceptance criterion open, not the row's execution,
+and conflating the two stalls an executable chunk. ``depends_on`` referent
+resolution (AC6) still runs against the FULL row-id set, before this
+filter — a live row legitimately depends on a shipped/gated row, and that
+edge is satisfied, not dangling. Once filtering happens, any surviving
+row's ``depends_on`` edge pointing at a filtered-out row is stripped (the
+edge is satisfied; leaving it would either crash
+``wave_map._predecessors`` or wrongly delay the wave). An edge that
+resolves to nothing at all is still a hard ``DanglingDependencyError`` —
+filtering never softens that check.
+
+Negative-spec:
+  - Does NOT validate rows against the full plan-tasks schema (required
+    fields, disposition cross-field rules, etc.) — that is
+    ``schema_validate.py``'s surface. This module reads tolerantly for
+    every field except the two AC-bearing ones it fails loudly on, plus
+    the closed-disposition/deferred exclusion described above — a value
+    filter, not a cross-field validation rule.
+  - The ``check_plan_tasks_source`` preflight (point 2 above) does NOT
+    change that: it is consulted, but only its verdict on ``depends_on``
+    is ever acted on, and only when at least one raw row declares
+    ``depends_on`` at all — a spine with none never pays the full
+    schema+cross-field validation cost. ``check_plan_tasks_source``
+    returns at most ONE error — the first row-order failure anywhere in
+    the spine — so a row missing ``change_kind`` (say) ahead of the
+    malformed edge in file order suppresses the depends_on diagnosis for
+    that read entirely and this module falls back to its own message;
+    that gap is inherent to the shared door's single-error contract, not
+    something this module papers over with a second pass. The
+    2026-08-06 ruling that a schema-shape violation WARNS, never BLOCKS,
+    at write time (``write_guards/validate_frontmatter_schema_deny.py``)
+    is UNCHANGED by this — that policy governs the write guard, not the
+    emitter, and the emitter already fails loud on a malformed edge
+    regardless; the preflight only improves which message it fails loud
+    WITH.
+  - Does NOT derive waves, pathspecs, or script text — those are C2/C3/C4.
+  - Does NOT special-case ``gate_kind`` or any depends_on field beyond
+    ``chunk`` — resolving the referent is this module's whole job here.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+from coordinator_core.ops.plan_tasks_render import load_rows
+
+
+class _Undeclared:
+    """Sentinel type for an absent (or present-but-empty) ``writes:`` field (AC2).
+
+    A distinct type, not ``None``. This class defines no ``__bool__`` or
+    ``__len__``, so ``UNDECLARED`` is TRUTHY — a loose ``if not row.writes``
+    check is False for ``UNDECLARED`` and True for ``[]``. The two are NOT
+    interchangeable under truthiness: a caller that needs to tell "unknown"
+    apart from "declared empty" MUST use ``is UNDECLARED`` (identity). A
+    caller that blindly truthiness-tests does NOT get correct behaviour
+    either way — it silently reads UNDECLARED as "has writes."
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - repr aid only
+        return "UNDECLARED"
+
+
+UNDECLARED = _Undeclared()
+
+# Every closed `disposition` value per coordinator_core/frontmatter/schemas/
+# plan-tasks.schema.json — `open` (and an absent disposition, which the
+# schema defaults to `open`) is the only dispatchable state. Named once here
+# so the filter site never re-spells the literals.
+NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
+
+# The schema's COMPLETE enum -- the closed values plus `open`. Named
+# separately because the two sets answer different questions, and conflating
+# them is what let an unrecognized value dispatch: membership in
+# NON_DISPATCHABLE_DISPOSITIONS answers "is this row done", while membership
+# here answers "is this a disposition at all".
+KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
+
+# external_gate literals per coordinator_core/frontmatter/schemas/
+# plan-tasks.schema.json (external-cross-repo-gate, 1.8.0). Named once here
+# so _has_uncleared_execution_gate never re-spells them.
+_GATE_BLOCKS_AC_CLOSURE = "ac-closure"
+_GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
+_GATE_CLEARED_KEY = "cleared"
+
+
+def _has_uncleared_execution_gate(raw: dict) -> bool:
+    """True if `raw`'s ``external_gate`` carries an entry that is both
+    uncleared (no explicit ``cleared: true``) and blocks ``execution`` (the
+    default when ``blocks`` is absent or None).
+
+    ``blocks: ac-closure`` entries never count here — that gate holds only
+    a named acceptance criterion open, not the row's execution.
+
+    A gate is cleared ONLY by an explicit ``cleared: true`` — the ONE
+    clearing path. ``closure_evidence`` is purely descriptive: it names how
+    a gate was or will be verified, and never by itself clears anything,
+    however truthy its content, and a ``cleared: false`` (or any value other
+    than the literal ``true``) leaves the gate exactly as uncleared as no
+    ``cleared`` key at all. A ``closure_evidence`` is typically authored at
+    plan-writing time, before the evidence has arrived, so its natural
+    content is a description of what is still being AWAITED — treating its
+    mere presence as clearing therefore self-cleared the exact gates it was
+    meant to describe. This is the retired half of the joint two-repo bump
+    (see the schema's own x-bump-note: 1.9.0 landed only the additive
+    ``cleared: false`` override as a first step; presence-as-cleared was
+    deferred pending this widening, matched on the same schedule against
+    DoE-claude's ``_uncleared_execution_gate``).
+
+    Before ``cleared`` was read at all, an author who wrote a status note
+    into ``closure_evidence`` and wanted to say "not actually discharged"
+    had no way to say so — the schema promised a ``cleared: false`` override
+    the reader did not yet implement, and any truthy ``closure_evidence``
+    silently disarmed the gate regardless. Found against sat-06 C4, a row
+    that writes into a sibling repo's tree, where the disarm would have
+    scheduled a cross-tree write on a DR that is still `status: proposed`.
+    ``cleared: false`` has been honoured since that fix, and this bump
+    subsumes it: both now fall out of the single ``cleared is True`` check.
+
+    Tolerant of malformed shapes, matching this module's read posture for
+    every field but its four fail-loud ones: a non-list ``external_gate``,
+    or a non-dict entry within it, is skipped rather than raised on. A
+    well-formed uncleared-execution entry elsewhere in the same (partially
+    malformed) list still excludes the row — malformed neighbors never mask
+    a real gate.
+    """
+    external_gate = raw.get("external_gate")
+    if not isinstance(external_gate, list):
+        return False
+    for entry in external_gate:
+        if not isinstance(entry, dict):
+            continue
+        # `cleared: true` is the ONLY clearing path; only the literal True
+        # counts, so a malformed or absent value never clears the gate no
+        # matter what `closure_evidence` says.
+        if entry.get(_GATE_CLEARED_KEY) is True:
+            continue
+        # Fail closed: only the literal ac-closure spares a row. An absent,
+        # None, or unrecognized `blocks` resolves to execution, so a typo
+        # cannot silently disarm the gate.
+        if entry.get("blocks") != _GATE_BLOCKS_AC_CLOSURE:
+            return True
+    return False
+
+
+class SpineReadError(ValueError):
+    """Raised when the plan's `` ```yaml plan-tasks `` block cannot be read.
+
+    Covers every non-LOCATED outcome from ``load_rows`` (ABSENT, MALFORMED)
+    — this module does not attempt to emit against a spine it could not
+    locate or parse.
+    """
+
+
+class UnknownDispositionError(SpineReadError):
+    """Raised when a row's ``disposition`` is not a value the schema defines.
+
+    The exclusion filter tests membership in
+    ``NON_DISPATCHABLE_DISPOSITIONS``, so before this check every
+    unrecognized value read as dispatchable by falling through it. That is a
+    fail-OPEN on exactly the authoring mistake a reconciliation pass invites:
+    an operator marking finished rows reaches for a plausible word (`done`,
+    `complete`, `shipped`), the schema rejects it, but nothing on the emit
+    path validates and the row dispatches anyway. Observed outcome
+    (project-rag-ue-addon, 2026-08-20): a wave map covering already-executed
+    chunks -- a well-intentioned reconciliation landing in the same place as
+    no reconciliation at all, and worse than a stale-but-honest `open`
+    because its author believes it was handled.
+
+    Refusing is deliberate, over treating an unknown value as
+    non-dispatchable. Silently excluding fails CLOSED -- safe for this run,
+    but it drops real work with no signal, and an author who typoed one row
+    would get a quietly narrower wave instead of a correction. The refusal
+    names the row, the value, and the legal set, so the fix is readable off
+    the error rather than out of the schema.
+    """
+
+
+class DanglingDependencyError(SpineReadError):
+    """Raised when a ``depends_on[].chunk`` referent has no matching row id (AC6).
+
+    Reserved for a WELL-FORMED edge (an object carrying a ``chunk`` key)
+    whose value genuinely resolves to nothing in this spine's row-id set.
+    A malformed edge — not an object, or an object with no ``chunk`` key
+    at all — is never routed here; see ``MalformedDependencyEdgeError``.
+
+    Extends ``SpineReadError`` (not bare ``ValueError``) so a caller that
+    catches ``SpineReadError`` around ``read_spine`` — e.g.
+    ``plan_assemble.predicates.composition_graph``'s ``chunk_overlap`` and
+    ``path_rename_or_move``, which degrade to ``undetermined(...)`` on any
+    unreadable spine — degrades gracefully on a dangling edge exactly as it
+    already does on an absent/malformed spine block, instead of raising
+    uncaught. A dangling referent is still a real authoring defect (AC6
+    keeps raising it), but it is a spine-content defect the same class as
+    every other one this module fails loud on, not a reason to crash a
+    predicate that has no way to fix the plan file it is reading.
+    """
+
+
+class MalformedDependencyEdgeError(SpineReadError):
+    """Raised when a ``depends_on`` entry is not an object with a ``chunk``
+    key — a bare string, a bare scalar, or a dict missing the key.
+
+    Distinct from ``DanglingDependencyError``: that error means a real
+    chunk id was named and did not resolve; this one means the edge was
+    never shaped well enough to name a chunk id in the first place, so
+    reporting it as an unresolvable chunk ``None`` would blame the wrong
+    layer. Names the offending edge value and the required shape:
+    ``{chunk: <row id>, gate_kind: <kind>[, note: ...]}``.
+
+    When ``schema_validate.check_plan_tasks_source``'s preflight finds the
+    spine's first row-order schema error under ``depends_on``, this error
+    carries THAT message instead of a hand-rolled one — the shipped
+    validator's diagnosis is more precise (e.g. it names an out-of-enum
+    ``gate_kind`` this module does not itself check) and is preferred
+    whenever it is available for the failure at hand.
+    """
+
+
+class InvalidFieldTypeError(SpineReadError):
+    """Raised when ``writes:``/``reads:``/``depends_on:`` is declared as a
+    non-list value (scalar or other container), instead of a list.
+
+    ``writes: some/path.py`` (a bare string) is not coerced to
+    ``["some/path.py"]`` — coercion is the tempting fix and the wrong one: a
+    spine that declares a scalar is a spine whose author does not know the
+    field is a list, and guessing for them hides that. Left uncaught, a
+    scalar string iterates into single characters downstream (a str is
+    itself an iterable of its own characters), silently corrupting any
+    overlap comparison built on it.
+    """
+
+
+class InvalidRowIdError(SpineReadError):
+    """Raised when a spine row's ``id`` is missing, non-string, or a
+    duplicate of another row's ``id`` in the same spine.
+
+    Review: coordinator:code-reviewer (wsc-A, ecb99d36) — ``wave_map.
+    _predecessors`` keys its predecessor dict by ``id``; a duplicate or
+    missing id silently collapses two rows into one dict entry rather than
+    raising, corrupting the predecessor graph and producing a wrong wave
+    order with no error at all. ``spine_read`` is where every other
+    row-shape guarantee (AC2 UNDECLARED, AC6 dangling depends_on, scalar
+    writes:/reads:) is already established and enforced once for every
+    downstream consumer, so id presence/uniqueness belongs here rather than
+    as an ad hoc check duplicated in ``wave_map`` (and any future consumer
+    of ``read_spine``'s output).
+    """
+
+
+class EmitterRow(NamedTuple):
+    """One normalized task-spine row for the dispatch-emit pipeline."""
+
+    id: str
+    title: str
+    surface: str
+    writes: object  # list[str], or the UNDECLARED sentinel
+    reads: list
+    depends_on: list
+
+
+def read_spine(plan_path) -> list[EmitterRow]:
+    """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    Raises ``SpineReadError`` if the spine block is absent or malformed,
+    ``InvalidRowIdError`` if any row's ``id`` is missing/non-string or
+    duplicates another row's id, ``MalformedDependencyEdgeError`` if any
+    ``depends_on`` entry is not an object with a ``chunk`` key,
+    ``DanglingDependencyError`` if a well-formed ``depends_on[].chunk``
+    does not resolve against the spine's row-id set (AC6), and
+    ``InvalidFieldTypeError`` if ``writes:``/``reads:``/``depends_on:`` is
+    declared as a non-list value rather than a list.
+    ``writes`` is UNDECLARED (AC2) on any row that omits the key or
+    declares it present-but-empty; ``reads`` and ``depends_on`` both
+    default to ``[]`` when omitted (neither carries an undeclared-vs-empty
+    distinction per the schema — only ``writes`` does, per
+    plan-tasks.schema.json).
+
+    Rows whose ``disposition`` is closed (see
+    ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, or
+    which carry an uncleared ``external_gate`` entry blocking ``execution``
+    (see ``_has_uncleared_execution_gate``) are excluded from the returned
+    list — they are not dispatchable. An ``external_gate`` entry with
+    ``blocks: ac-closure`` does NOT exclude its row — that row executes
+    normally; only a named acceptance criterion stays open. depends_on
+    referent resolution runs against the full row-id set before this
+    exclusion, so an edge onto an excluded row never dangles.
+
+    The two exclusion reasons are NOT interchangeable past that point. A
+    closed disposition or ``deferred: true`` row's work is done, so a live
+    row's edge onto it is satisfied — that edge is stripped from the
+    surviving row's ``depends_on`` and the surviving row is otherwise
+    unaffected. An uncleared execution-blocking gate is the opposite: the
+    gated row's work has NOT run, so a live row's edge onto it is not
+    satisfied — that row, and every row transitively depending on it, is
+    itself excluded rather than edge-stripped. A row excluded for both
+    reasons (closed disposition AND its own uncleared gate) resolves as
+    satisfied: its work shipped, so the stale gate is bookkeeping, not a
+    live blocker.
+
+    (Review: staff-eng, Finding 12) The same stop-at-satisfied rule also
+    governs the PASS-THROUGH case: a satisfied row's own predecessor may
+    itself be gated (excluded, not satisfied), but propagation deliberately
+    stops at the satisfied row rather than laundering that block onto the
+    satisfied row's own dependents — its work has demonstrably already run,
+    so a stale upstream gate is not their blocker either.
+    """
+    with open(plan_path, encoding="utf-8") as handle:
+        source = handle.read()
+
+    result = load_rows(source)
+    if result.status is not LocateStatus.LOCATED:
+        raise SpineReadError(
+            f"plan {plan_path!r} task-spine block is {result.status.name}, not LOCATED"
+        )
+
+    raw_rows = result.rows
+
+    # depends_on schema-shape preflight: `check_plan_tasks_source` returns
+    # at most the FIRST row-order schema error in the whole spine (its own
+    # documented contract), so this only fires when THAT error happens to
+    # be under `depends_on` — a row with some other shape problem ahead of
+    # it in file order suppresses this and falls through to the tolerant
+    # checks below, unchanged. When it does fire, it is strictly a better
+    # diagnosis than anything this module derives on its own (module
+    # docstring point 2): the shipped validator, not a coercion artefact.
+    # Skipped entirely when no row declares depends_on at all — the most
+    # common spine shape — since there is then no depends_on-shape error
+    # for the full schema+cross-field validator to find, and running it
+    # anyway would spend that cost on every emit for no possible payoff.
+    if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
+        schema_error = check_plan_tasks_source(source)
+        if schema_error is not None and schema_error["field"].startswith("depends_on"):
+            raise MalformedDependencyEdgeError(
+                f"plan {plan_path!r} spine field {schema_error['field']}: "
+                f"{schema_error['error']} ({schema_error['hint']})"
+            )
+
+    # id presence/uniqueness (finding: coordinator:code-reviewer wsc-A,
+    # ecb99d36, P1). Validated once here, up front, so every downstream
+    # consumer (wave_map's predecessor-dict-keyed-by-id foremost among them)
+    # inherits a guarantee rather than re-deriving it.
+    seen_ids: set[str] = set()
+    for raw in raw_rows:
+        row_id = raw.get("id")
+        if not isinstance(row_id, str) or not row_id:
+            raise InvalidRowIdError(f"row {raw!r} has a missing or non-string id")
+        if row_id in seen_ids:
+            raise InvalidRowIdError(f"duplicate row id {row_id!r} in spine")
+        seen_ids.add(row_id)
+
+    row_ids = seen_ids
+
+    rows: list[EmitterRow] = []
+    for raw in raw_rows:
+        row_id = raw.get("id")
+        writes = raw.get("writes")
+        if writes is None:
+            # Absent key AND present-but-empty value (`writes:` with no
+            # scalar/list, or `writes: null`) both collapse to UNDECLARED —
+            # AC2 admits exactly two states, never a third (see module
+            # docstring point 1).
+            writes = UNDECLARED
+        elif not isinstance(writes, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares writes: as {writes!r}, not a list"
+            )
+        reads = raw.get("reads")
+        if reads is None:
+            reads = []
+        elif not isinstance(reads, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares reads: as {reads!r}, not a list"
+            )
+        depends_on = raw.get("depends_on")
+        if depends_on is None:
+            depends_on = []
+        elif not isinstance(depends_on, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares depends_on: as {depends_on!r}, not a list"
+            )
+
+        for edge in depends_on:
+            if not isinstance(edge, dict) or "chunk" not in edge:
+                # The edge was never shaped well enough to name a chunk id
+                # at all — never coerce this into DanglingDependencyError
+                # with a fabricated `None` (module docstring point 2).
+                raise MalformedDependencyEdgeError(
+                    f"row {row_id!r} depends_on entry {edge!r} is not an "
+                    "object with a chunk key; depends_on entries must be "
+                    "shaped {chunk: <row id>, gate_kind: <kind>[, note: ...]}"
+                )
+            chunk = edge["chunk"]
+            if chunk not in row_ids:
+                raise DanglingDependencyError(
+                    f"row {row_id!r} depends_on unresolvable chunk {chunk!r}"
+                )
+
+        rows.append(
+            EmitterRow(
+                id=row_id,
+                title=raw.get("title", ""),
+                surface=raw.get("surface", ""),
+                writes=writes,
+                reads=reads,
+                depends_on=depends_on,
+            )
+        )
+
+    # Non-dispatchable exclusion, split into two sets by whether the
+    # exclusion reason means the row's work is DONE (satisfied) or NOT YET
+    # RUN (blocked) -- see the docstring for why those are not
+    # interchangeable. Computed after depends_on referent resolution
+    # against the full row-id set above, so an edge onto either set never
+    # dangles.
+    satisfied_ids: set[str] = set()
+    blocked_ids: set[str] = set()
+    for raw in raw_rows:
+        disposition = raw.get("disposition")
+        deferred = raw.get("deferred", False)
+        # An absent disposition is `open` per the schema default and is the
+        # ordinary shape -- only a PRESENT, unrecognized value refuses.
+        if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
+            raise UnknownDispositionError(
+                f"row {raw.get('id')!r} has disposition {disposition!r}, which is "
+                "not a value plan-tasks.schema.json defines: refusing rather than "
+                "treating it as dispatchable (legal values: "
+                f"{', '.join(sorted(KNOWN_DISPOSITIONS))}). A row that shipped in "
+                "a commit is 'coded'."
+            )
+        # raw.get("id") cannot be None here: the id presence/uniqueness
+        # loop above already required every raw["id"] to be a non-empty
+        # string before this loop runs. Keep the two loops in that
+        # order -- reordering them reintroduces a possible None into
+        # these sets with no signal.
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
+            # Checked ahead of the gate below by construction (elif): a row
+            # excluded for both reasons resolves as satisfied, not blocked
+            # (docstring point above) -- its work shipped, so a stale gate
+            # on a done row is bookkeeping, not a live blocker.
+            satisfied_ids.add(raw.get("id"))
+        elif _has_uncleared_execution_gate(raw):
+            blocked_ids.add(raw.get("id"))
+
+    # Transitive closure over depends_on: a row depending, directly or
+    # through any chain, on a blocked row has not had its own predecessor
+    # run either, so it is equally blocked -- promoting it into a wave
+    # would dispatch it against work that does not exist yet. Propagation
+    # stops at a satisfied row: that row's edge onto the blocked row is
+    # stripped below exactly like any other satisfied edge, so nothing
+    # blocked leaks through a row whose own work already shipped.
+    dependents: dict[str, list[str]] = {}
+    for row in rows:
+        for edge in row.depends_on:
+            if not isinstance(edge, dict):
+                continue
+            chunk = edge.get("chunk")
+            # A malformed edge with no `chunk` cannot name a predecessor, so
+            # it can neither carry nor block propagation -- skip rather than
+            # bucketing every such edge under a single None key.
+            if isinstance(chunk, str) and chunk:
+                dependents.setdefault(chunk, []).append(row.id)
+
+    frontier = list(blocked_ids)
+    while frontier:
+        current = frontier.pop()
+        for dependent_id in dependents.get(current, ()):
+            if dependent_id in satisfied_ids or dependent_id in blocked_ids:
+                continue
+            blocked_ids.add(dependent_id)
+            frontier.append(dependent_id)
+
+    excluded_ids = satisfied_ids | blocked_ids
+    dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
+    for i, row in enumerate(dispatchable_rows):
+        if not row.depends_on:
+            continue
+        stripped = [
+            edge
+            for edge in row.depends_on
+            if not (isinstance(edge, dict) and edge.get("chunk") in satisfied_ids)
+        ]
+        if len(stripped) != len(row.depends_on):
+            dispatchable_rows[i] = row._replace(depends_on=stripped)
+
+    return dispatchable_rows

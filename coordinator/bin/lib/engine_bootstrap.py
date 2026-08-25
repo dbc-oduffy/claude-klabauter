@@ -44,9 +44,8 @@ Negative-spec:
     - Does NOT import coordinator_core, or anything from it, at module top —
       that is the whole point of the split (this module LOCATES coordinator_core,
       so it cannot need it already importable to run).
-    - Does NOT duplicate `child_env`, `_settings_home_env`, or the
-      `COORDINATOR_CORE_LAZY_OPS` sys-attribute channel — those stay owned by
-      cc_invoke.py (used far beyond this resolver) and are reached here, when
+    - Does NOT duplicate `child_env` or `_settings_home_env` — those stay
+      owned by cc_invoke.py (used far beyond this resolver) and are reached here, when
       genuinely needed (the registry-subprocess rung only), via a function-local
       `import cc_invoke`, safe because that rung only fires after a caller has
       already triggered this module's import path, by which point cc_invoke
@@ -172,8 +171,8 @@ def _machine_local_get(key: str) -> str | None:
     an unrelated behavior change).
 
     `env=` for the spawn is built via a function-local `import cc_invoke` —
-    `child_env()` (settings-home propagation, `COORDINATOR_CORE_LAZY_OPS`
-    stripping) stays owned by cc_invoke.py (used far beyond this resolver);
+    `child_env()` (settings-home propagation) stays owned by cc_invoke.py
+    (used far beyond this resolver);
     this is the one rung of the ladder that genuinely needs it, and by the
     time this rung fires cc_invoke has always already started importing this
     module, so the lazy import is never a fresh 27-module tax paid twice.

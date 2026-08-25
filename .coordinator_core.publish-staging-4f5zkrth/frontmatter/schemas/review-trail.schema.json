@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/review-trail.schema.json",
+  "x-schema-name": "review-trail",
+  "x-schema-version": "2.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "2.0.0 -> 2.1.0 declares the optional `reviewer_attestation` object — the attestation that admitted a record whose reviewer is not the writing session. Requested by project-makima-em (cross-repo/inbox/2026-08-18-project-makima-em-review-trail-attestation-key.md), whose DR-156 consuming seam closes the chain-terminal refusal four repos hit on 2026-08-18: a session that genuinely reviewed its predecessors' commits can record that review and have it credited. Sender's proposed shape ADOPTED VERBATIM — one object key rather than three flat scalars, key order reviewer_session_id/sidecar/shas, plus the optional `binding` classifier their C2b already writes — so their re-vendor is a pin move, not a rework. The resolved SHA set is persisted on the record rather than pointed at, and that is the load-bearing half: a record carrying only a session id forces the read side to glob state/subagent-share/<sid>/*.md and union every reviewed_range it finds, which is a per-session store consulted by both writer and reader — the chain-ancestry waiver system rebuilt under a new name, killed by K-005 on 2026-08-16 (1,889 of 1,893 waivers with a null em_disposition, auto-issuing ~126/day). It would also credit the union of every reviewer a session dispatched, on any record that session wrote. Persisting at write time is DR-245's bar — one derivation, in one process, at one HEAD — and it keeps admissions countable, which is the only reason K-005's kill was decidable at all. `additionalProperties: false` on the nested object mirrors the producer's own unrecognized-key refusal; `shas` items take the hex-SHA anchor its sibling `sha_range` endpoints already enforce, for the same reason — a symbolic ref re-resolves against a later HEAD. Classified nested-field-additive per schema-version-gate.md § Bump-class extension key: a new OPTIONAL top-level key on the existing review-trail entity, narrowing no declared domain — `required` is unchanged and the schema has no top-level `additionalProperties: false`, so every extant record keeps validating and an absent key reproduces today's bytes exactly. NEGATIVE SPEC: no gate-behaviour change rides along — this schema declares the persistence shape only. Admission policy stays entirely on the producing side: the sidecar must trace to a dispatch the writing session actually made, and the attested range must sit inside that dispatching slice's own frozen-diff range. Ancestry membership is NOT an admission basis and this key does not make it one. STATED RESIDUAL, carried rather than papered over: DR-156 Condition 3 requires a `reviewed_range` written by the reviewing subagent only, never by the EM, and no mechanism enforces that today — an EM-pre-created sidecar under a real dispatch still passes. The key is ruled on with that gap open and named. PRIOR: 1.3.0 -> 2.0.0 closes `sha_range` from a bare unconstrained string to the hex-SHA-anchored range pattern its two sibling schemas already enforce (`^[0-9a-f]{4,64}(?:\\^|~[0-9]+)?\\.{2,3}[0-9a-f]{4,64}$`, run-report.schema.json and review-findings.schema.json, plus both mirrored copies in artifact-shape-contract.schema.json). Measured over all 1575 extant state/review-trail/*.json records: 1565 already satisfy the pattern; the 10 that do not (8 literal-HEAD spans, one bare sha, one comma-separated sha list, all July-era) no longer validate under 2.0.0. project-makima's coordinator_core/coverage.py already drops any record carrying a literal-HEAD sha_range before classification — its own comment names this \"the read-side half of the sha_range [defence]\" (coverage.py:2284) — because a literal-HEAD range re-resolves against whatever HEAD is later at read time (coverage.py:157-159), which is exactly the false-coverage failure the foreign-session guard exists to prevent. This bump is the missing write-side half of that same defence, not a new policy. Classified `major` per this schema's own house vocabulary, per the 1.1.0 -> 1.2.0 `scope_kind` precedent below: a value NARROWING, from unconstrained to closed, is the more restrictive direction, and a document valid under 1.3.0 with a non-conforming sha_range no longer validates under 2.0.0. NEGATIVE SPEC: no gate-behaviour change rides along — coverage.py's read-side rejection of literal-HEAD records is unchanged by this bump; this schema change only closes the write-side gap that let such a record be written as \"valid\" in the first place. 1.2.0 -> 1.3.0 declares the optional `execution_basis` scalar — the basis a review's verdict rests on: \"executed\" (the reviewer ran something) or \"read-only\" (the verdict rests on reading only). Requested by project-makima-em (cross-repo/inbox/2026-08-11-project-makima-em-review-trail-execution-basis-field.md), whose `chain_partition_verdict_discharged` discharges a mandatory review scale against records carrying no execution information, so a reviewer that ran nothing and one that ran the suite discharge identically across 1804 state/review-trail/ records. The producing half is already live on this side (2cb87e464): `coordinator:code-reviewer`'s return line carries `executed: <yes|no>` and every review-findings sidecar fills a `## Execution capability` section — that fact was emitted on every dispatch and thrown away at the trail boundary for want of a field. Sender's proposed shape adopted verbatim, including two enum values rather than three: absence already carries \"unknown\", so an explicit third value would be a state needing byte-distinction from absence for no named consumer. Classified nested-field-additive, NOT major, per schema-version-gate.md § Bump-class extension key: a new OPTIONAL top-level scalar on the existing review-trail entity, narrowing no declared domain — `required` is unchanged and the schema has no `additionalProperties: false`, so every one of the existing records keeps validating. Canonical-first rather than vendored-ahead-pin: the two copies were converged at bump time (this SSOT's 1.2.0 at 840491558109540f7416e6f09c78148f336873ec, makima's vendored byte-pin at the same SHA), and the ahead-pin registry — for which review-trail is itself the worked example, from 2026-08-10 — documents its empty state as the healthy one. The DR-097 push-side notification duty attaches to a vendored-schema bump of any class and is discharged by the reply memo to project-makima-em, who re-vendor via bin/makima-revendor-schema.py and move their pin. NEGATIVE SPEC: no gate-behaviour change rides along — an unexecuted review keeps discharging, and whether that ever changes is a PM decision the sender deliberately left open pending measurement. PRIOR: 1.1.0 -> 1.2.0 closes `scope_kind` from a bare unconstrained string to an explicit enum: [\"diff\", \"plan\", \"integration\"] — the exact set both consumer copies of `_credit_from_kind_partition` (coordinator_core/coverage.py, coordinator_core/ops/review_coverage_core.py) actually handle. This change originated on the vendored copy in project-makima (commit 55cbf4ede) and never reached this SSOT until now: before the bump the schema admitted ANY string — its own description even named \"chunk\" as an example — while the consumer asserted on a closed set, so one hand-authored record with an out-of-set scope_kind (observed: \"chunk\", \"inline-dispatch\") took down the whole coverage gate with an AssertionError before it ever reached a VERDICT line. Classified `major` per this schema's own house vocabulary (a value NARROWING, from unconstrained to closed, is the more restrictive direction — a document valid under 1.1.0 with e.g. scope_kind:\"chunk\" no longer validates under 1.2.0). Fixed the misleading description at the same time — it cited \"chunk\" as an example scope_kind despite no consumer ever crediting it. \"chunk\" is NOT added as a fourth enum value at this bump: whether it should ever be creditable is a policy call outside this fix's scope. 1.0.0 -> 1.1.0 added the optional `reviewed_paths` array — the path set a scope_kind:diff review actually covered, so a record attests coverage instead of implying it from its sha_range time window.",
+  "applies_to": "state/review-trail/*.json",
+  "match_mode": "whole-document-yaml",
+  "description": "Review-trail record — one JSON document per code-review event, written under state/review-trail/*.json (whole-document match; the record IS the whole JSON file, not frontmatter). The 8 original fields are all required; `reviewed_paths` (present only on scope_kind:diff records), `execution_basis`, and `reviewer_attestation` are optional.",
+  "type": "object",
+  "required": ["sha_range", "reviewer", "scope", "scope_kind", "verdict", "diff_loc", "session_id", "workstream"],
+  "properties": {
+    "sha_range": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{4,64}(?:\\^|~[0-9]+)?\\.{2,3}[0-9a-f]{4,64}$",
+      "description": "Git commit SHA range covered by this review (e.g. 'abc1234..def5678'). Hex-SHA-anchored range only — full or abbreviated hex SHAs on both endpoints (4-64 hex chars), joined by `..` or `...`, with an optional trailing `^` or `~<N>` (N a positive integer, no bare `~`) on the LEFT endpoint only. A symbolic ref (`HEAD`, a branch, a tag) is NOT a legal endpoint — it re-resolves differently on every read, silently growing to swallow every commit landed after the record was written."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Identifier of the reviewer (agent persona or worker) that produced this review."
+    },
+    "scope": {
+      "type": "string",
+      "description": "Description or path set identifying what was reviewed."
+    },
+    "scope_kind": {
+      "type": "string",
+      "enum": ["diff", "plan", "integration"],
+      "description": "Category of the reviewed scope. \"diff\" credits its resolved SHAs unconditionally; \"plan\" credits only the subset independently classified as planning-artifact commits; \"integration\" is a recognized shape that is always skipped (never credited). No other value is accepted — the closed set both live consumer copies of _credit_from_kind_partition (coordinator_core/coverage.py, coordinator_core/ops/review_coverage_core.py) actually handle."
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Review outcome verdict."
+    },
+    "diff_loc": {
+      "type": "number",
+      "description": "Lines of diff covered by this review."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier of the session that produced this review record."
+    },
+    "workstream": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Workstream identifier associated with this review, or null when not attributed to a specific workstream."
+    },
+    "reviewed_paths": {
+      "anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+      "description": "Optional set of paths this record's review actually covered (e.g. from freeze-review-diff.py --paths), or null when not supplied. Present only on scope_kind:diff records; omitted on plan/integration records. Exists because sha_range is a time window, not a path set: on a shared branch a record written as <my-first-commit>^..HEAD silently confers coverage on every concurrent peer session's commit inside the window. The write-side refusal guard is the enforcement; this key is the honest attestation."
+    },
+    "reviewer_attestation": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": ["reviewer_session_id", "sidecar", "shas"],
+          "additionalProperties": false,
+          "properties": {
+            "reviewer_session_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Session id of the reviewer whose attestation admitted this record — the dispatched subagent that produced the cited sidecar, NOT the session that wrote this record."
+            },
+            "sidecar": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to the review sidecar carrying the attestation, e.g. 'state/subagent-share/<reviewer_session_id>/<name>.md'. A citation, not the evidence: the SHA set it resolved to is persisted in `shas` at write time and is never re-derived from this path at read time."
+            },
+            "shas": {
+              "type": "array",
+              "items": {"type": "string", "pattern": "^[0-9a-f]{4,64}$"},
+              "description": "The SHA set this attestation actually admitted, resolved and frozen at write time. Full or abbreviated hex SHAs (4-64 hex chars); a symbolic ref is not a legal element, for the same reason it is not a legal `sha_range` endpoint. Persisted rather than pointed at: recovering it by globbing the reviewer session's sidecars and unioning their `reviewed_range`s would rebuild a per-session store consulted by both writer and reader, and would credit the union of every reviewer the session dispatched on every record it wrote."
+            },
+            "binding": {
+              "type": "string",
+              "enum": ["verified", "asserted"],
+              "description": "Optional classifier for how the cited `sidecar` was bound to this session's own dispatch. \"verified\" — the sidecar path was independently recomputed from the writing session's resolved session_id plus the provision key implied by the citation's basename, and the recomputation landed on the exact cited path. \"asserted\" — no such recomputation was possible (a nonce-suffixed sidecar, the shape a hand-dispatched agent gets), so admission rests solely on the dispatch-ledger proof. Absence means the classification was not made and is never equivalent to \"asserted\"."
+            }
+          }
+        },
+        {"type": "null"}
+      ],
+      "description": "Optional attestation that admitted this record when its review was performed by a dispatched reviewer rather than by the writing session, or null when not supplied. Absent on every record whose reviewer is the writing session itself; absence carries no claim. Exists because a chain-terminal session that genuinely reviewed its predecessors' commits otherwise has no shape in which to record that review and have it credited. NEGATIVE SPEC: this key is the persistence shape, not the admission policy — it confers no credit by its presence, and ancestry membership is not an admission basis. The producing side owns the bounds: the cited sidecar must trace to a dispatch the writing session actually made, and the attested range must sit inside that dispatching slice's own frozen-diff range."
+    },
+    "execution_basis": {
+      "anyOf": [{"type": "string", "enum": ["executed", "read-only"]}, {"type": "null"}],
+      "description": "Optional basis on which this review's verdict rests: \"executed\" — the reviewer ran something (tests, a probe, the CLI under review); \"read-only\" — the verdict rests on reading only. Omitted when not determined; absence means unknown and is never equivalent to \"read-only\"."
+    }
+  }
+}

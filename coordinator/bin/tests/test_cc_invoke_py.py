@@ -1738,115 +1738,54 @@ class TestCcInvokeCompositeOpTimeout(unittest.TestCase):
 
 
 class TestChildEnvLeakGuard(unittest.TestCase):
-    """Regression for the COORDINATOR_CORE_LAZY_OPS leak, in both of its fixes.
+    """Regression for `child_env()`'s actual current contract, post-retirement
+    of the COORDINATOR_CORE_LAZY_OPS leak-defence apparatus.
 
-    cc_invoke.py needs lazy op registration armed before its 135 in-process
-    trampolines do `from coordinator_core.ops.<name> import main`. Until
-    2026-07-28 it armed that by writing the flag into `os.environ` at import
-    time, which every child spawned without an explicit `env=` then inherited —
-    silently making that child's own `import coordinator_core.ops` skip eager
-    registration, and failing collection outright for the 59 test modules that
-    assert the registry at import time (commit 5943ec01 patched one such spawn
-    site by hand; `child_env()` generalised the strip).
+    Until 2026-07-28, cc_invoke.py armed lazy op registration by writing the
+    flag into `os.environ` at import time, which every child spawned without
+    an explicit `env=` then inherited — silently making that child's own
+    `import coordinator_core.ops` skip eager registration, and failing
+    collection outright for the 59 test modules that assert the registry at
+    import time (commit 5943ec01 patched one such spawn site by hand;
+    `child_env()` generalised the strip). 2026-07-28 moved the in-process
+    channel to `sys._coordinator_core_lazy_ops`, closing the leak
+    structurally. As of the `import-path-costs-nothing` sprint (C6), lazy op
+    registration is unconditional — nothing reads either channel any more —
+    and nothing in this tree writes `COORDINATOR_CORE_LAZY_OPS` into
+    `os.environ` at all, so `child_env()` no longer has a leak to guard
+    against and no longer strips anything (see its own docstring).
 
-    2026-07-28 moved the in-process channel to `sys._coordinator_core_lazy_ops`
-    (scoping study `docs/research/2026-07-28-lazy-ops-import-side-effect-scope.md`
-    § 6 (c)): a `sys` attribute is inherited by nothing, so the leak is
-    structurally impossible rather than stripped per spawn site. `os.environ` is
-    no longer written at all, and the environment variable survives purely as the
-    OPERATOR override, read from outside the process.
-
-    `child_env()` is kept as belt-and-braces — an operator can still legitimately
-    export the variable — so its own three properties are asserted below
-    alongside the two that pin the new channel.
+    What remains worth pinning: importing cc_invoke.py is still a pure,
+    side-effect-free operation on `os.environ` (regression floor for any
+    future arming attempt), and `child_env()` still passes an operator's own
+    env values through unmodified — it is a settings-home-propagating
+    passthrough, not a scrub, and must never start stripping a caller-set
+    value again.
     """
-
-    @staticmethod
-    def _clean_parent_env() -> dict:
-        """A copy of this TEST process's own env with COORDINATOR_CORE_LAZY_OPS
-        removed. Spawning a "fresh trampoline" child under an ambient value —
-        an operator's export, or a peer test's leftover — would make that child
-        think an operator set the flag, and would mask the very mutation the
-        first case here asserts is absent. Stripping isolates the scenario under
-        test: a genuinely fresh process importing cc_invoke.py for the first
-        time, with no operator override in play."""
-        env = os.environ.copy()
-        env.pop("COORDINATOR_CORE_LAZY_OPS", None)
-        return env
 
     def test_import_does_not_mutate_os_environ(self) -> None:
         """Importing cc_invoke.py must leave os.environ untouched.
 
-        This is the whole fix: what os.environ never gains, no child can
-        inherit — via subprocess, os.execv, or any other path, patched or not."""
-        proc = subprocess.run(
-            [sys.executable, "-c",
-             f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); import cc_invoke; "
-             "import os; print(os.environ.get('COORDINATOR_CORE_LAZY_OPS'))"],
-            capture_output=True, text=True, timeout=15, env=self._clean_parent_env(),
-            **no_console_creationflags(),
-        )
-        self.assertEqual(proc.stdout.strip(), "None", proc.stderr)
-
-    def test_in_process_trampoline_still_gets_lazy_behaviour(self) -> None:
-        """A trampoline that imports cc_invoke.py and then coordinator_core.ops
-        must still SKIP eager op registration — the ~108ms/invocation the flag
-        exists for. Asserted as the observable behaviour (an empty registry),
-        not as the value of whichever channel currently carries it."""
+        Nothing in this module writes to `os.environ` at import time, for
+        COORDINATOR_CORE_LAZY_OPS or anything else — asserted here as the
+        regression floor for any future arming attempt."""
         proc = subprocess.run(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); "
-             f"sys.path.insert(0, {str(_REPO_ROOT)!r}); import cc_invoke; "
-             "import coordinator_core.ops; import coordinator_core.ipc as ipc; "
-             "print(len(ipc._REGISTRY))"],
-            capture_output=True, text=True, timeout=60, env=self._clean_parent_env(),
+             "import os; before = dict(os.environ); import cc_invoke; "
+             "print(dict(os.environ) == before)"],
+            capture_output=True, text=True, timeout=15, env=os.environ.copy(),
             **no_console_creationflags(),
         )
-        self.assertEqual(proc.stdout.strip(), "0", proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "True", proc.stderr)
 
-    def test_plain_spawn_after_import_does_not_leak_the_flag(self) -> None:
-        """A child spawned with NO explicit `env=` after the parent imported
-        cc_invoke.py must not see the flag. This is the leak itself, asserted
-        without routing through child_env() — the spawn site's cooperation is
-        exactly what used to be required and is no longer."""
-        script = (
-            f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); import cc_invoke; "
-            "import subprocess; "
-            "r = subprocess.run([sys.executable, '-c', "
-            "'import os; print(os.environ.get(\"COORDINATOR_CORE_LAZY_OPS\"))'], "
-            "capture_output=True, text=True); "
-            "print(r.stdout.strip())"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=15, env=self._clean_parent_env(),
-            **no_console_creationflags(),
-        )
-        self.assertEqual(proc.stdout.strip(), "None", proc.stderr)
-
-    def test_spawned_child_does_not_inherit_lazy_ops_via_child_env(self) -> None:
-        """A grandchild spawned with env=cc_invoke.child_env() must NOT see
-        COORDINATOR_CORE_LAZY_OPS, even though the parent process (which imported
-        cc_invoke.py) has it set in its own os.environ."""
-        script = (
-            f"import sys; sys.path.insert(0, {str(_LIB_DIR)!r}); import cc_invoke; "
-            "import subprocess; "
-            "r = subprocess.run([sys.executable, '-c', "
-            "'import os; print(os.environ.get(\"COORDINATOR_CORE_LAZY_OPS\"))'], "
-            "env=cc_invoke.child_env(), capture_output=True, text=True); "
-            "print(r.stdout.strip())"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=15, env=self._clean_parent_env(),
-        )
-        self.assertEqual(proc.stdout.strip(), "None", proc.stderr)
-
-    def test_operator_explicit_setting_is_never_stripped(self) -> None:
-        """An operator who set COORDINATOR_CORE_LAZY_OPS themselves (before
-        cc_invoke.py is ever imported) keeps their own value in every child —
-        child_env() must only strip the value THIS module injected via
-        setdefault, never an operator's explicit choice."""
+    def test_child_env_passes_through_operator_value_unmodified(self) -> None:
+        """`child_env()` is a passthrough, not a scrub: a value the caller's
+        own os.environ already carries reaches the child unchanged. Uses
+        COORDINATOR_CORE_LAZY_OPS as the probe variable purely as the
+        historical regression anchor for this exact leak-guard class — the
+        assertion is about `child_env()`'s general non-stripping contract,
+        not about that variable's own (now-inert) meaning."""
         env = os.environ.copy()
         env["COORDINATOR_CORE_LAZY_OPS"] = "0"
         script = (

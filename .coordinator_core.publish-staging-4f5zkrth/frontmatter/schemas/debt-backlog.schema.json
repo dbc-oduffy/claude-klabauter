@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/debt-backlog.schema.json",
+  "x-schema-name": "debt-backlog",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/debt-backlog/*.yaml",
+  "match_mode": "whole-document-yaml",
+  "description": "Debt-backlog record — a queued structural/technical-debt entry, one YAML file per entry under state/debt-backlog/<date>-<slug>.yaml (whole-document YAML; no prose markdown body). additionalProperties-posture: open — unknown fields in debt-backlog records are tolerated (not rejected). This preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
+  "type": "object",
+  "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here, consistent with the handoff/goal schemas. A misspelled field will silently pass. This is intentional for forward-compatibility and matches the existing permissive pattern in other coordinator schemas.",
+  "required": ["created", "title", "body", "status", "source", "risk", "proposed_action"],
+  "properties": {
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this debt-backlog entry was authored (YYYY-MM-DD)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short business-legible title for this debt entry."
+    },
+    "body": {
+      "type": "string",
+      "description": "Prose description of the debt — what it is and why it matters."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "closed", "deferred"],
+      "description": "Lifecycle status. open=unresolved; closed=resolved (git mv to archive/debt-backlog/<YYYY-MM>/ on closure); deferred=explicitly deprioritized."
+    },
+    "source": {
+      "type": "string",
+      "description": "Where this debt entry originated (e.g. a review finding, an audit, a session observation)."
+    },
+    "risk": {
+      "type": "string",
+      "description": "Prose statement of the risk this debt poses if left unaddressed."
+    },
+    "proposed_action": {
+      "type": "string",
+      "description": "Prose statement of the recommended remediation."
+    },
+    "from_repo": {
+      "type": "string",
+      "description": "Originating repo, when the debt entry was raised cross-repo."
+    },
+    "surface": {
+      "type": "string",
+      "description": "The code/doc surface this debt entry concerns."
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this debt entry was closed (YYYY-MM-DD). Present only once status transitions to closed."
+    },
+    "closed_by": {
+      "type": "string",
+      "description": "Session or agent identifier that closed this entry."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form classification tags for filtering/triage."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Supporting evidence for the debt claim (file:line, log excerpt, link)."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3"],
+      "description": "Priority severity of the debt entry, P0 highest."
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to state/initiatives/<id>.yaml; nullable — absent≡null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
+    },
+    "system": {
+      "type": "object",
+      "description": "Provenance/system-tracking sub-object.",
+      "properties": {
+        "created_by_session": {
+          "type": "string",
+          "description": "Session identifier that authored this entry."
+        },
+        "created_by_agent": {
+          "type": "string",
+          "description": "Agent type that authored this entry."
+        },
+        "linked_sessions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Session identifiers linked to this entry's history."
+        },
+        "linked_commits": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Commit SHAs linked to this entry's history."
+        },
+        "provenance_completeness": {
+          "type": "string",
+          "enum": ["complete", "unknown"],
+          "description": "Whether the provenance chain (session/agent/commits) is fully recorded or unknown."
+        }
+      }
+    }
+  }
+}

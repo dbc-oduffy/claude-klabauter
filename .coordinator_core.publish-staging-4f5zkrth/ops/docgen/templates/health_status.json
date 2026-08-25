@@ -1,0 +1,38 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "health-status",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "literal", "line": "schema: health-status"},
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "status: active  # LIFECYCLE axis: active | archived"},
+      {"kind": "literal", "line": "health: HEALTHY  # POSTURE axis: HEALTHY | WATCH | ACTION | CRITICAL"},
+      {"kind": "literal", "line": "owner: coordinator-claude"},
+      {"kind": "literal", "line": "summary: \"PLACEHOLDER — replace with one-line health narrative after grading\""}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "# {title}",
+      "",
+      "<!-- Fill health: posture and summary: narrative from the day's findings. -->",
+      "<!-- Then add the body sections below. -->",
+      "",
+      "## Systems Graded",
+      "",
+      "<!-- Table: | System | Grade | Health | Notes | -->",
+      "",
+      "## Findings Summary",
+      "",
+      "<!-- Counts: total / P0 / P1 / P2 applied / deferred. -->",
+      "",
+      "## Action Items for Next Session",
+      "",
+      "<!-- List any P0/P1 items that need attention next session. -->",
+      ""
+    ]}
+  ]
+}

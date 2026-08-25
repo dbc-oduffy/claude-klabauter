@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/strategic-self-description.schema.json",
+  "x-schema-name": "strategic-self-description",
+  "x-schema-version": "1.3.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.2.0 -> 1.3.0 added optional depends_on[].strength (enum hard|soft) via a new $defs.dependencyEdge shape.",
+  "applies_to": "state/strategic/self-description.yaml",
+  "description": "Per-repo strategic self-description: a repo's authored declaration of what it strategically IS — mission, lifecycle phase, positioning, call-to-action. New artifact class under the Fleet Producer Contract (docs/wiki/state-placement-law.md § Fleet Producer Contract): per-repo emitted, harvested read-side, never consolidated into a fleet-wide file. Spec: docs/plans/2026-07-11-strategic-self-description-standard.md § C1. Fields are built from the abstract need each serves (proposal §2), not any single consumer's shipped type shape — see the plan's Anti-scope § no-renamed-PerProjectStrategic.",
+  "type": "object",
+  "required": [
+    "repo_identity",
+    "lifecycle",
+    "vision",
+    "version_highlights",
+    "competitors",
+    "call_to_action",
+    "hero_asset"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "repo_identity": {
+      "allOf": [{ "$ref": "#/$defs/repoIdentityTuple" }],
+      "unevaluatedProperties": false
+    },
+    "lifecycle": {
+      "type": "string",
+      "enum": [
+        "prototype",
+        "vertical-slice",
+        "alpha",
+        "shipped",
+        "live-ops",
+        "sunset"
+      ],
+      "description": "DoE-defined canonical lifecycle enum (DEC-3) — a richer ordered set than any single consumer's binary need. Consumers PROJECT/COLLAPSE this into their own layer (e.g. a consumer mapping it to a shipped|pre-launch config field); the generic-superset-to-consumer-subset mapping direction is a documented contract property, not ad-hoc per-consumer choice."
+    },
+    "vision": {
+      "type": "object",
+      "description": "One-paragraph statement of what this repo strategically is / is for.",
+      "required": ["value", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "string" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "version_highlights": {
+      "type": "array",
+      "description": "Ordered notable-release/milestone entries, most relevant first. May be empty for a repo with no dated highlights yet.",
+      "items": {
+        "type": "object",
+        "required": ["label", "date", "bullets", "provenance"],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Short milestone/version label, e.g. a version tag or named release."
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "Date the highlighted milestone landed (YYYY-MM-DD)."
+          },
+          "bullets": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Notable points for this milestone."
+          },
+          "provenance": { "$ref": "#/$defs/provenance" }
+        }
+      }
+    },
+    "competitors": {
+      "type": "array",
+      "description": "Comparable/adjacent projects or products and this repo's relationship to each. May be empty.",
+      "items": {
+        "type": "object",
+        "required": ["name", "relationship", "note", "provenance"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "relationship": {
+            "type": "string",
+            "enum": ["competitor", "peer", "aspirational-target", "complement", "prior-art", "superseded-by", "supersedes"],
+            "description": "How this repo positions itself relative to the named project. This is the DoE-canonical superset; consumers project/collapse it into their own subset (e.g. a competitive-stance triple), exactly as the lifecycle enum (DEC-3) is consumer-projected — the generic-superset→consumer-subset mapping direction is a documented contract property, not a per-consumer choice."
+          },
+          "note": {
+            "type": ["string", "null"],
+            "description": "Optional free-text elaboration. Present-as-null when absent, per the schema's nullable-field convention — never an omitted key."
+          },
+          "provenance": { "$ref": "#/$defs/provenance" }
+        }
+      }
+    },
+    "call_to_action": {
+      "description": "SECURITY BOUNDARY (DEC-5). A closed, kind-discriminated union — each branch pins its own required payload shape and formats. additionalProperties:false on every branch and on the envelope; kind is a closed enum. Supports validate-or-degrade: a consumer that validates against this schema is handed either a fully-conformant payload for the given kind or a hard validation failure — never a schema-legal-but-semantically-malformed payload (the validate-then-trust anti-pattern this shape forecloses).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "label", "payload"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "url" },
+            "label": { "type": "string", "minLength": 1 },
+            "payload": {
+              "type": "object",
+              "required": ["uri"],
+              "additionalProperties": false,
+              "properties": {
+                "uri": { "type": "string", "format": "uri" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "label", "payload"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "claude-session" },
+            "label": { "type": "string", "minLength": 1 },
+            "payload": {
+              "type": "object",
+              "required": ["cwd", "args"],
+              "additionalProperties": false,
+              "properties": {
+                "cwd": { "type": "string", "minLength": 1 },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "label"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "none" },
+            "label": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "hero_asset": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "Optional hero image/screenshot URI. Present-as-null when absent — this key MUST be present in every instance with value null, never omitted (D9 read-contract requirement: absence-of-value must be a typed, pattern-matchable null, not a missing key)."
+    },
+    "maturity_axis": {
+      "type": ["string", "null"],
+      "description": "OPTIONAL, consumer-set-only field (DEC-4, PM-ratified include-both). A consumer-defined maturity dimension label this repo is scored on by that consumer. DoE schema does not interpret its value; absence-allowed and costs non-consuming repos nothing."
+    },
+    "depends_on": {
+      "type": "array",
+      "description": "OPTIONAL, consumer-set-only field (DEC-4). Repo-identity references this repo depends on, for consumers computing blast-radius / retirement-impact queries (e.g. 'what breaks if we retire repo Y'). Absence-allowed.",
+      "items": { "$ref": "#/$defs/dependencyEdge" }
+    }
+  },
+  "$defs": {
+    "provenance": {
+      "type": "string",
+      "enum": ["curated", "generated", "asserted"],
+      "description": "Per-field provenance marker (DEC-2) — a THREE-value marker, never a binary. curated = human-authored editorial judgment; generated = machine-derived draft, not yet human-ratified; asserted = human-typed factual claim with no editorial judgment and no observable signal (e.g. a version label that can silently drift). Collapsing to curated|generated is a named anti-pattern — see plan § Anti-scope."
+    },
+    "repoIdentityTuple": {
+      "type": "object",
+      "description": "Canonical join key for a repo, matching the Fleet Producer Contract's existing emission join key (owner, repo) — docs/wiki/emission-conformance-contract.md § Producer Contract — Repo Identity and coordinator_root_path. coordinator_root_path is carried alongside as a non-key, nullable, machine-local member of this tuple, not part of the join key itself. Does NOT mint a competing single-field slug primitive; consumers join on the (owner, repo) pair they already resolve for other emission. Shared by both `repo_identity` (this artifact's own identity) and `depends_on[]` (identities of OTHER repos this one depends on) — a single $defs shape so the two representations of 'a repo's join-key tuple' cannot drift apart (code-reviewer Finding 6). Intentionally NOT self-closing (`additionalProperties` omitted here, not `false`) — draft 2020-12's `additionalProperties:false` does not compose through `allOf`/`$ref`, so closedness is declared at each use site instead (`repo_identity` and `dependencyEdge` below, both via `allOf` + sibling `unevaluatedProperties:false`), so this shape stays extensible (e.g. `dependencyEdge`'s `strength` member, v1.3.0) without losing closed-shape validation anywhere it's used. `unevaluatedProperties` is implemented via draft-2020-12 annotation propagation in `bin/lib/schema.js`'s `validateJsonSchemaNode` (tracking which properties each `allOf`/`$ref`/`anyOf`/`oneOf` subschema successfully evaluated), so a stray or misspelled key in `repo_identity`/`dependencyEdge` is rejected without falsely rejecting legitimately-composed keys.",
+      "required": ["owner", "repo", "coordinator_root_path"],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\s/].*$",
+          "description": "Validated string (D11 parity with the fleet's owner/MachineSlug convention), not a closed enum. Rejects empty values and values with a leading whitespace or `/` character. Admits local/<basename> repos with no git remote."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo name, second member of the Fleet Producer Contract join-key tuple."
+        },
+        "coordinator_root_path": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "A machine-local location hint for the emitting clone, which MAY be null; NOT a member of the join key — consumers key on (owner, repo). The key itself is always present, carried present-as-null when there is no meaningful value."
+        }
+      }
+    },
+    "dependencyEdge": {
+      "description": "A single `depends_on[]` entry: a repoIdentityTuple plus an OPTIONAL `strength` member (v1.3.0, cross-repo-memo Defect 1). Added so blast-radius / retirement-impact consumers can discriminate a hard runtime dependency from a weak/install-surface coupling instead of every declared edge rendering with equal weight. `strength` is optional and absence-allowed — pre-1.3.0 instances (bare identity tuples, or an empty `depends_on: []`) remain valid; a repo populating `depends_on[]` is expected to set `strength` on each edge going forward, not required to backfill retroactively.",
+      "allOf": [{ "$ref": "#/$defs/repoIdentityTuple" }],
+      "properties": {
+        "strength": {
+          "type": "string",
+          "enum": ["hard", "soft"],
+          "description": "Dependency criticality for blast-radius queries. `hard` = this repo fails to build/run/ship without the named repo (e.g. a runtime plugin registration, a lockstep-tested schema dependency). `soft` = coupling exists (shared install surface, historical lineage, an inbound-consumer relationship) but this repo would still function without it. Closed two-value enum per DEC-4's precedent (small closed enums over free text) — omit rather than guess when genuinely ambiguous."
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

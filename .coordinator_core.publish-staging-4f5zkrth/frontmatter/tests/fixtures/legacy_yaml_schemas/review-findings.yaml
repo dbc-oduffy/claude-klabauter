@@ -1,0 +1,32 @@
+schema: review-findings
+applies_to: "state/review-trail/findings/*.md"
+# match_mode: no-frontmatter — this record is intentionally a bare prose artifact
+# with no YAML frontmatter block (see the scaffolder's negative-spec in
+# coordinator-doc-new's _scaffold_review_findings docstring). Tells
+# validate-frontmatter-schema.js to skip its "missing frontmatter" warn/deny
+# path for files matched to this schema, instead of universally requiring a
+# --- block on every schema-matched path. See bin/lib/schema.js match_mode
+# dispatch and validate-frontmatter-schema.js's schema.match_mode handling.
+match_mode: no-frontmatter
+# Path formula: state/review-trail/findings/YYYY-MM-DD-codereview-slice<ID>-<SLUG>.md
+#   <ID>   = --slice arg (alphanumeric + dashes, e.g. "Z", "A", "2a")
+#   <SLUG> = sanitized --scope arg (comma-separated paths lowercased + non-alnum -> dash)
+# Example: --slice Z --scope tests/x.py
+#       -> state/review-trail/findings/2026-06-30-codereview-sliceZ-tests-x-py.md
+#
+# Sole producer: coordinator-doc-new --type review-findings --slice <id> --scope <comma-paths>
+# Registering this schema fires SCHEMAED-DOC-GENERATE-OBLIGATION; the scaffolder is the
+# sole production path. Do NOT write to state/review-trail/findings/ by hand.
+#
+# The FINDINGS sentinel (<!-- FINDINGS -->) is the anchor the reviewer replaces via a
+# single Edit. A surviving sentinel after review indicates a no-op or an aborted write.
+#
+# Distinct from state/review-trail/*.json (JSON trail records). This schema
+# governs the markdown findings body only.
+description: >
+  Pre-scaffolded code-reviewer self-persist findings sidecar. Each file is scoped to one
+  code-reviewer dispatch (one review slice). The reviewer scaffolds its own sidecar here,
+  replaces the FINDINGS sentinel with its full findings body via a single Edit, then returns
+  a path pointer to the EM. The EM never absorbs the findings body into its own context.
+  Kept in a dedicated findings/ subdir to preserve the json-only state/review-trail/ root.
+  Spec backlink: cross-repo/inbox/2026-07-01-reviewer-selfpersist-confinement-redirect.md

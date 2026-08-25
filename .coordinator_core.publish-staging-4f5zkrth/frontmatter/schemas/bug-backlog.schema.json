@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/bug-backlog.schema.json",
+  "x-schema-name": "bug-backlog",
+  "x-schema-version": "1.0.0",
+  "applies_to": "state/bug-backlog/*.yaml",
+  "match_mode": "whole-document-yaml",
+  "description": "Bug-backlog record — one file per bug under state/bug-backlog/<date>-<slug>.yaml. additionalProperties-posture: open — unknown fields in bug-backlog records are tolerated (not rejected). This preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
+  "type": "object",
+  "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here. Unknown fields in bug-backlog records are tolerated (not rejected), preserving forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
+  "required": ["created", "title", "body", "status", "surface", "severity"],
+  "properties": {
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this bug record was authored (YYYY-MM-DD)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short human-readable title for the bug."
+    },
+    "body": {
+      "type": "string",
+      "description": "Prose description of the bug."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "closed", "deferred", "wontfix"],
+      "description": "Bug lifecycle status."
+    },
+    "surface": {
+      "type": "string",
+      "description": "The surface/subsystem where the bug manifests."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3"],
+      "description": "Priority/severity tier."
+    },
+    "from_repo": {
+      "type": "string",
+      "description": "Originating repo, when the bug was reported cross-repo."
+    },
+    "proposed_action": {
+      "type": "string",
+      "description": "Proposed fix or remediation action."
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this bug record was closed (YYYY-MM-DD)."
+    },
+    "closed_by": {
+      "type": "string",
+      "description": "Identifier of the session/agent/person that closed this bug."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form tags for categorization."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Evidence supporting the bug report (log excerpt, reference, etc.)."
+    },
+    "repro_steps": {
+      "type": "string",
+      "description": "Steps to reproduce the bug."
+    },
+    "environment": {
+      "type": "string",
+      "description": "Environment in which the bug was observed."
+    },
+    "why_blocked": {
+      "type": "string",
+      "description": "Explanation of why this bug is currently blocked, when status=deferred."
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to state/initiatives/<id>.yaml; nullable — absent equiv null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
+    },
+    "system": {
+      "type": "object",
+      "description": "Nested provenance/system metadata sub-object. All sub-fields are optional (no nested required array).",
+      "properties": {
+        "created_by_session": {
+          "type": "string",
+          "description": "Session identifier that created this bug record."
+        },
+        "created_by_agent": {
+          "type": "string",
+          "description": "Agent identifier that created this bug record."
+        },
+        "linked_sessions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Session identifiers linked to this bug's history."
+        },
+        "linked_commits": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Commit SHAs linked to this bug's history."
+        },
+        "provenance_completeness": {
+          "type": "string",
+          "enum": ["complete", "unknown"],
+          "description": "Whether the provenance metadata for this record is known-complete or unknown."
+        }
+      }
+    }
+  }
+}

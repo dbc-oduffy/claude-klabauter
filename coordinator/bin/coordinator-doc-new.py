@@ -162,11 +162,9 @@ def _ensure_engine_on_path() -> str | None:
 
     Called once at import time and again from each engine-touching seam below,
     so a published/vendored copy that only resolves through a later rung still
-    gets the path in place on the arm that needs it. The import-time call also
-    arms lazy ops-package loading (cc_invoke sets
-    ``sys._coordinator_core_lazy_ops`` as a module-level side effect) before any
-    ``coordinator_core.ops`` touch, which the handoff arm depends on for its
-    import budget.
+    gets the path in place on the arm that needs it. ``coordinator_core.ops``
+    registers ops lazily, unconditionally, so the handoff arm's import budget
+    needs no priming for that.
 
     Best-effort: returns None when every rung misses, matching this file's
     graceful-skip convention for un-migrated installs (see
@@ -5781,13 +5779,10 @@ def main() -> None:
             # initiative`) rather than re-deriving the plan/predecessor
             # precedence here.
             #
-            # Lazy mode is already armed: `_ensure_engine_on_path`'s cc_invoke
-            # import runs at module import time, so `sys._coordinator_core_
-            # lazy_ops` is set well before any coordinator_core.ops touch on
-            # this arm — which runs on EVERY direct handoff scaffold with no
-            # explicit/env id, and would otherwise pay the ops package's full
-            # eager-compile tax on every such invocation. See
-            # coordinator_core/ops/__init__.py's lazy-mode docstring.
+            # `coordinator_core.ops` registers ops lazily, unconditionally, so
+            # this arm -- which runs on EVERY direct handoff scaffold with no
+            # explicit/env id -- never pays the ops package's eager-compile
+            # tax. See coordinator_core/ops/__init__.py's lazy-mode docstring.
             _ensure_engine_on_path()
             from coordinator_core.session.claimed_plan import (
                 resolve_claimed_plan_path as _resolve_claimed_plan_path,

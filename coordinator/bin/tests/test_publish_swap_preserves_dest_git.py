@@ -396,17 +396,37 @@ def test_arm_f_git_rehome_failure_reports_content_change_honestly(tmp_path, monk
 
     fixed_bytes = b"published payload bytes\n"
 
-    def fake_post_rsync(engine_ctx, store_path, sync_target, effective_source_dir, visited_sink=None):
+    # Signature mirrors `dispatch_percolate_post_rsync`'s real one INCLUDING its
+    # keyword-only marker, so a future parameter added there fails this fake loudly
+    # instead of being absorbed by a `**k` catch-all. Returns the real 2-tuple
+    # shape `(rename_manifest, changed_files)`; the caller unpacks it.
+    def fake_post_rsync(
+        engine_ctx,
+        store_path,
+        sync_target,
+        effective_source_dir,
+        *,
+        visited_sink=None,
+        sync_changed_paths=None,
+    ):
         staged_path = sync_target.dest_dir / "widget.py"
         staged_path.write_bytes(fixed_bytes)
         if visited_sink is not None:
             visited_sink.add(staged_path)
-        return None
+        return None, None
 
     monkeypatch.setattr(publish, "dispatch_percolate_post_rsync", fake_post_rsync)
     monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
     monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
+    # `dispatch_preswap_function_gate` runs the real seed-module probe against the
+    # staging tree. These arms build a minimal one-file fixture, so the probe
+    # legitimately resolves an empty seed set and refuses the row -- which would
+    # make every assertion below test the gate rather than the swap. The gate has
+    # its own direct coverage in `test_publish_preswap_payload_gate.py`, including
+    # the mis-rooted-probe refusal; stubbing it here narrows these arms to the
+    # staging/swap lifecycle they are named for.
+    monkeypatch.setattr(publish, "dispatch_preswap_function_gate", lambda *a, **k: True)
 
     # Would have trapped the trailing .git rehome (old site 3) — kept to
     # prove it is never called for this shape anymore, not to induce a
@@ -607,11 +627,22 @@ def test_arm_i_successful_row_leaves_no_staging_dir_via_process_target(tmp_path,
     monkeypatch.setattr(
         publish,
         "dispatch_percolate_post_rsync",
-        lambda engine_ctx, store_path, sync_target, effective_source_dir, visited_sink=None: None,
+        # Explicit signature, not `*a, **k` -- see `fake_post_rsync` above for why.
+        # Returns the real `(rename_manifest, changed_files)` 2-tuple.
+        lambda engine_ctx, store_path, sync_target, effective_source_dir, *,
+        visited_sink=None, sync_changed_paths=None: (None, None),
     )
     monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
     monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
+    # `dispatch_preswap_function_gate` runs the real seed-module probe against the
+    # staging tree. These arms build a minimal one-file fixture, so the probe
+    # legitimately resolves an empty seed set and refuses the row -- which would
+    # make every assertion below test the gate rather than the swap. The gate has
+    # its own direct coverage in `test_publish_preswap_payload_gate.py`, including
+    # the mis-rooted-probe refusal; stubbing it here narrows these arms to the
+    # staging/swap lifecycle they are named for.
+    monkeypatch.setattr(publish, "dispatch_preswap_function_gate", lambda *a, **k: True)
 
     totals = publish.RunTotals()
     out = io.StringIO()

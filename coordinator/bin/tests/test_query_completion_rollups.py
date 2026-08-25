@@ -102,7 +102,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_completion_rollups, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.rollups.collect",
             return_value=(_DAY_WEEK_RECORDS, []),
@@ -134,7 +134,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_completion_rollups, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.rollups.collect",
             side_effect=RuntimeError("boom"),

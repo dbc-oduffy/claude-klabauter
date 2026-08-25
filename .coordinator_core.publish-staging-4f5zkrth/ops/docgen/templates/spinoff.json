@@ -1,0 +1,58 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "spinoff",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "value", "key": "branch", "field": "branch", "quote": true},
+      {"kind": "literal", "line": "status: open"},
+      {"kind": "literal", "line": "predecessor: none"},
+      {"kind": "literal", "line": "kind: spinoff"},
+      {"kind": "literal", "line": "deployment_state: ready_to_fire"},
+      {"kind": "literal", "line": "category: infra"},
+      {"kind": "value", "key": "summary", "field": "placeholder_summary", "quote": true},
+      {"kind": "literal", "line": "pickup_ready: true"},
+      {"kind": "literal", "line": "authoring_session: PLACEHOLDER"},
+      {"kind": "literal", "line": "workstream: PLACEHOLDER"},
+      {"kind": "present_as_null", "key": "deliverable_id", "field": "deliverable_id", "quote": true},
+      {"kind": "present_as_null", "key": "initiative", "field": "initiative", "quote": true, "suffix": "  # FK to state/initiatives/<id>.yaml; null when no named initiative"},
+      {"kind": "optional_omit", "key": "handoff_id", "field": "handoff_id", "quote": true}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## What this covers",
+      "",
+      "<!-- One paragraph: origin context, what surface is in play, who's affected. -->",
+      "",
+      "## Reference materials (read first)",
+      "",
+      "<!-- List file paths the picking-up EM will need, each with a one-line annotation. -->",
+      "",
+      "## Specification",
+      "",
+      "<!-- The actual work spec. Be concrete enough that a context-less EM can act. -->",
+      "",
+      "## Acceptance criteria",
+      "",
+      "<!-- Checklist the picking-up EM gates completion against. -->",
+      "",
+      "## Recommended next steps for the picking-up EM",
+      "",
+      "<!-- 3-7 numbered steps, each verifiable. -->",
+      "",
+      "## Anti-scope",
+      "",
+      "<!-- Failure modes a context-less EM might hit. Negative scope. -->",
+      "",
+      "## Session Ledger",
+      "",
+      "<!-- Phase 2 LoE accumulator. Each session appends one line. -->",
+      "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <one-line summary> -->",
+      ""
+    ]}
+  ]
+}

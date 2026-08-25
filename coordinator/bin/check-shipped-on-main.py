@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
 check-shipped-on-main.py — CLI trampoline over claude-klabauter
-coordinator_core.ops.emit.envelope.main (the `check-shipped-on-main.py` port).
+coordinator_core.ops.emit.resolvers.main (the `check-shipped-on-main.py` port).
 
 Verify that one or more commits are reachable from origin/main (i.e., actually
 shipped). Thin wrapper around `git merge-base --is-ancestor` providing a
@@ -22,7 +22,7 @@ Exit codes:
 
 Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.2
 Port of: git merge-base ancestor-check logic ported to
-  coordinator_core/ops/emit/envelope.py (_sha_on_origin_main et al., reused
+  coordinator_core/ops/emit/resolvers.py (_sha_on_origin_main et al., reused
   from the pre-existing `_stamp_shipped_sha` amortised-fetch helpers); the CLI
   entry point (`main(argv)`) was added to that module by this port.
 
@@ -50,7 +50,7 @@ def _import_main():
     deliberately NOT used here.
     """
     claude_klabauter_root = require_dispatch_engine_on_path()
-    from coordinator_core.ops.emit.envelope import main as _op_main
+    from coordinator_core.ops.emit.resolvers import main as _op_main
 
     return _op_main
 
@@ -63,7 +63,7 @@ def main() -> None:
         sys.exit(2)
     except ImportError as exc:
         print(
-            f"check-shipped-on-main: coordinator_core.ops.emit.envelope not importable: {exc}",
+            f"check-shipped-on-main: coordinator_core.ops.emit.resolvers not importable: {exc}",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -89,7 +89,9 @@ def resolve_repo_root_or_exit() -> str | int:
 def resolve_claude_klabauter_root_or_exit(cli_name: str) -> str | int:
     """Resolve the engine root via the checked ladder and put it on sys.path.
 
-    Extracted from `query-file-attribution.py::_resolve_repo_name_or_exit`
+    Extracted from `query-file-attribution.py::_resolve_repo_name_or_exit` (that CLI was
+    retired 2026-08-23 with the file-attribution capability; this helper outlived it and is
+    used by the surviving query-* CLIs)
     and `query-routine-signals.py::_resolve_claude_klabauter_root` -- both hand-rolled
     this identical sub-recipe. `cli_name` is stamped into the failure
     diagnostic so a consumer reading stderr can tell which CLI failed;

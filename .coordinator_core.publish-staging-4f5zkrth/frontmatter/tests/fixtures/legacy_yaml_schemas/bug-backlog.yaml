@@ -1,0 +1,41 @@
+# additionalProperties-posture: open
+# Unknown fields in bug-backlog records are tolerated (not rejected). This preserves
+# forward-compatibility as new optional fields are added without invalidating existing
+# records. Decision: keep open; tighten only if strict-mode corpus conformance
+# enforcement is required at a future governance stage.
+schema: bug-backlog
+applies_to: "state/bug-backlog/*.yaml"
+match_mode: whole-document-yaml
+required:
+  created: iso-date
+  title: string
+  body: string
+  status:
+    type: enum
+    values: [open, closed, deferred, wontfix]
+  surface: string
+  severity:
+    type: enum
+    values: [P0, P1, P2, P3]
+optional:
+  from_repo: string
+  proposed_action: string
+  closed_at: iso-date
+  closed_by: string
+  tags: list-of-string
+  evidence: string
+  repro_steps: string
+  environment: string
+  why_blocked: string
+  # initiative: FK to state/initiatives/<id>.yaml; nullable — absent≡null.
+  # Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C0
+  initiative:
+    type: string-or-null
+  system:
+    created_by_session: string
+    created_by_agent: string
+    linked_sessions: list-of-string
+    linked_commits: list-of-string
+    provenance_completeness:
+      type: enum
+      values: [complete, unknown]

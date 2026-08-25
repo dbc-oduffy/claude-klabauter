@@ -40,7 +40,7 @@ validation, never silently ignored in favour of one over the other.
 Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C2
 Spec backlink: pln-three-query-trampolines-and-th-309bf9 § C5 (owner-qualified repo slug)
 Spec backlink: pln-attribution-paths-become-porta-92395a § C1 (portable path identity)
-Replaces:      plugins/coordinator-claude/coordinator/bin/query-file-attribution.mjs
+Replaces:      plugins/coordinator/bin/query-file-attribution.mjs
 
 `repo` (the row's emitting-session repo) and `file_path_repo` (a path's owning
 repo, `in-tree` or `sibling-repo`) are both stamped via the canonical producer
@@ -478,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
             '  query-file-attribution.py --session abc-123\n'
             '\n'
             '  # Which sessions touched a specific file?\n'
-            '  query-file-attribution.py --file plugins/coordinator-claude/coordinator/bin/derive-file-attribution.py\n'
+            '  query-file-attribution.py --file plugins/coordinator/bin/derive-file-attribution.py\n'
             '\n'
             '  # Use a test fixture directory\n'
             '  query-file-attribution.py --transcript-dir /path/to/fixtures --session test-session-0001'

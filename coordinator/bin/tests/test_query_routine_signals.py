@@ -87,7 +87,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_routine_signals, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.routine_signals.collect",
             return_value=(_SIX_SIGNALS, []),
@@ -122,7 +122,7 @@ class TestMain(unittest.TestCase):
         ), mock.patch.object(
             query_routine_signals, "resolve_claude_klabauter_root_or_exit", return_value=os.getcwd()
         ), mock.patch(
-            "coordinator_core.ops.emit.envelope.resolve_context", return_value="fake-ctx"
+            "coordinator_core.ops.emit.resolvers.resolve_context", return_value="fake-ctx"
         ), mock.patch(
             "coordinator_core.ops.emit.sections.routine_signals.collect",
             side_effect=RuntimeError("boom"),

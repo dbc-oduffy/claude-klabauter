@@ -93,7 +93,7 @@ _REMEDIATION = (
     "  Remediate (choose one):\n"
     "    machine-local set repos.claude_klabauter /path/to/claude-klabauter\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
-    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
 
 #: Rung-3 remediation text for the timeout arm — distinguishable from `_REMEDIATION`
@@ -108,7 +108,7 @@ _TIMEOUT_REMEDIATION = (
     f"{_RUNG2_TIMEOUT_SECS}s.\n"
     "  This is a hung/slow read, not a missing registry entry — re-run once the machine's "
     "load has settled.\n"
-    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c"
+    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c"
 )
 
 

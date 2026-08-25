@@ -421,7 +421,7 @@
       ]
     },
     {
-      "file": "docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md.the Director of Engineering-review.md",
+      "file": "docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md.zoli-review.md",
       "schema": "plan",
       "ok": false,
       "errors": [
@@ -460,7 +460,7 @@
       ]
     },
     {
-      "file": "docs/plans/2026-06-26-cs-claim-plan-execution-lock.md.the Staff Engineer-review.md",
+      "file": "docs/plans/2026-06-26-cs-claim-plan-execution-lock.md.patrik-review.md",
       "schema": "plan",
       "ok": false,
       "errors": [
@@ -472,7 +472,7 @@
       ]
     },
     {
-      "file": "docs/plans/2026-06-26-datetime-handling-coherence.the Staff Engineer-review.md",
+      "file": "docs/plans/2026-06-26-datetime-handling-coherence.patrik-review.md",
       "schema": "plan",
       "ok": false,
       "errors": [
@@ -499,7 +499,7 @@
       ]
     },
     {
-      "file": "docs/plans/2026-06-26-retire-superseded-handoff-status.the Staff Engineer-review.md",
+      "file": "docs/plans/2026-06-26-retire-superseded-handoff-status.patrik-review.md",
       "schema": "plan",
       "ok": false,
       "errors": [
@@ -538,7 +538,7 @@
       ]
     },
     {
-      "file": "docs/plans/2026-06-27-post-summary-completion-loop-closure.md.the Staff Engineer-review.md",
+      "file": "docs/plans/2026-06-27-post-summary-completion-loop-closure.md.patrik-review.md",
       "schema": "plan",
       "ok": false,
       "errors": [
