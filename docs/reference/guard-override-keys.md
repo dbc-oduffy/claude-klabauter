@@ -358,17 +358,25 @@ own reading, since none of those route through `operator_override_note`.
 pre-commit-gate-registry overrides named just below remain intentionally
 excluded from BOTH tables, for the reasons stated in this section.
 
-Also out of this scope by the same boundary: `coordinator_core.ops.detect_staged_rollback`'s
-`COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` (2026-08-10) — a pre-commit-
-gate-registry override (`coordinator_core.ops.install_claude_klabauter_precommit_hook
-._GATE_REGISTRY`), the same class as `publish.py`'s `COORDINATOR_OVERRIDE_DIRTY_TREE`
-above, self-documented in `detect_staged_rollback.py`'s own module docstring and
-`--help` output rather than routed through `operator_override_note`.
-`COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` (pre-existing) named the
-now-dead check-1 exact-blob rollback detector, KILLED 2026-08-21 (PM ruling,
-see `detect_staged_rollback.py`'s own module docstring) — it is no longer
-read anywhere in this repo's non-test Python and is listed as dead in the
-"Excluded from the table above" section below, not here.
+Also out of this scope by the same boundary: `COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION`
+and `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` — both named a pre-commit-gate-registry
+override read by `coordinator_core.ops.detect_staged_rollback` and the registry
+(`coordinator_core.ops.install_claude_klabauter_precommit_hook._GATE_REGISTRY`) it hung off, KILLED
+2026-08-21/2026-08-25 (PM ruling — the staged-rollback gate and its installer are both
+deleted; claude-klabauter ends with no pre-commit hook installed by this repo). Neither var is read
+anywhere in this repo's non-test Python and both are listed as dead in the "Excluded from
+the table above" section below, not here.
+
+Cold-path remediation for a clone that already has a registry-banner-carrying hook installed
+from before this deletion: that hook's gate script(s) are now gone from disk, so it hard-blocks
+every commit until removed. This fires at commit time, before any Claude Code session exists,
+so the remediation names a runnable script, never a slash command
+(`coordinator/tests/test_cold_path_remediation_is_runnable.py`'s rule). Run
+`python3 coordinator/bin/remove-claude-klabauter-precommit-hook.py` (Windows:
+`coordinator\bin\remove-claude-klabauter-precommit-hook.cmd`) from the repo root to
+remove a stale registry-banner-carrying hook cleanly — it refuses to touch
+any hook that does not carry the banner it stamps, so it is always safe to
+run. See that script's own module docstring for the full contract.
 
 `schema_validate.py` is the third consumer, and joined for a reason rather
 than by drift: `_cf_spinoff_roadmap_requires_graph` is a cross-field rule
@@ -485,13 +493,15 @@ Excluded from the table above (found by the sweep, deliberately not rostered):
   ruling 2026-08-06). No `os.environ` read site for it exists anywhere in
   this repo's non-test Python — it is dead, not merely undocumented.
 - `COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION` — already covered by the
-  "Also out of this scope" paragraph above (a pre-commit-gate-registry
-  override, self-documented via `--help`, not routed through
-  `operator_override_note`).
+  "Also out of this scope" paragraph above. `coordinator_core/ops/detect_staged_rollback.py`,
+  the module that read it, is deleted (2026-08-25, PM ruling — the staged-rollback gate
+  and its installer are both retired, claude-klabauter ends with no pre-commit hook). No
+  `os.environ` read site for it exists anywhere in this repo's non-test Python — it is
+  dead, not merely undocumented, same class as `COORDINATOR_OVERRIDE_CARRY_GATE` above.
 - `COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK` — named only in the
-  now-KILLED check-1 exact-blob rollback detector in
-  `coordinator_core/ops/detect_staged_rollback.py` (deleted 2026-08-21, PM
-  ruling — see that module's own docstring). No `os.environ` read site for
+  now-KILLED check-1 exact-blob rollback detector that lived in the same deleted
+  `coordinator_core/ops/detect_staged_rollback.py` (check-1 itself KILLED 2026-08-21, the
+  whole module deleted 2026-08-25, both PM rulings). No `os.environ` read site for
   it exists anywhere in this repo's non-test Python — it is dead, not
   merely undocumented, same class as `COORDINATOR_OVERRIDE_CARRY_GATE` above.
 - `COORDINATOR_OVERRIDE_DIRTY_TREE` — already covered by the same paragraph.
@@ -627,3 +637,4 @@ registry; it does not harden any of the three mechanisms.
 | `.coordinator-bash-guards-disarmed` | `coordinator_core/bash_guards/_blanket_disarm.py` (`MARKER_BASENAME`); creation protected by `coordinator_core/bash_guards/block_disarm_marker_sentinel_creation.py` | The blanket-disarm marker itself — see § "Human-only affordances" route 2 above for its full `Scope:`/`Bands:` content contract. Machine-scoped (resolved under the settings home, not a repo root), and this is the one basename in this table already described narratively elsewhere in this doc; it is rostered here by literal basename so registry-derived enumeration finds it. |
 | `.coordinator-dev-repo` | `coordinator_core/bash_guards/block_dev_repo_sentinel_removal.py` (Bash-leg, advisory since the 2026-08-06 guard-class census) and `coordinator_core/write_guards/block_dev_repo_sentinel_write.py` (Write/Edit leg); consumed by `coordinator_core/claude_md_budget.py` (`DEV_REPO_SENTINEL`) and `coordinator_core/resolve_coordinator_clone.py`; written at install time by `coordinator_core/install/maximalist.py` | Repo-root discriminant: its mere presence tells the dev doctrine repo apart from an OSS install. Not a bypass token — removing or relocating it silently breaks that discriminant fleet-wide, which is why the two guards above exist. |
 | `.coordinator-hooks-disabled` | `coordinator_core/ops/session/guard_settings_integrity.py` (`_KILL_SWITCH_MARKER_NAME`, owns the marker's own `Since:`/`Expires:`/`Reason:` content format); consumed by `coordinator_core/write_guards/guard_settings_json_write.py` (`_HOOKS_DISABLED_MARKER`) and detected by `coordinator_core/ops/doctor.py` | A machine-wide kill-switch: its presence (armed, per its own parsed content) suppresses hook-delivered guard enforcement outright — the widest-blast-radius marker in this table, which is why `guard_settings_integrity.py` parses and validates its content rather than treating bare presence as sufficient. |
+| `.last-sweep` | `coordinator_core/bash_guards/_advisory_dedupe.py` (`_LAST_SWEEP_SENTINEL`), under `<gitdir>/advisory-dedupe/` | A dedicated throttle sentinel `_maybe_sweep_stale_session_dirs` writes and reads itself — nothing else ever touches it. Decouples "when did the stale-session-dir sweep last run" from the `advisory-dedupe/` root directory's own mtime, which sibling `mark_advised` traffic bumps continuously under this repo's 50-70-concurrent-session load norm and so cannot serve as the throttle clock. |

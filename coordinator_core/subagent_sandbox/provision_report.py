@@ -77,7 +77,17 @@ from coordinator_core.subagent_sandbox.engine import (
 
 #: Whitelist for a single path SEGMENT (label or session_id) -- everything
 #: outside this set is dropped, never escaped/encoded.
-_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._-]")
+#:
+#: ``@`` is admitted so the EM-side canonical agent id
+#: ``<name>@session-<short8>`` survives sanitization UNCHANGED. Both
+#: derived-key call sites (here and ``dispatch/provision.py``, which imports
+#: this function) gate on ``_sanitize_segment(agent_id) == agent_id``; with
+#: ``@`` dropped the canonical form silently failed that equality and fell
+#: through to the random-nonce path, discarding the stable collision-proof
+#: key for exactly the named-dispatch population the key exists to serve.
+#: ``@`` is neither a directory separator nor a component of ``.``/``..``,
+#: so admitting it widens no traversal surface.
+_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
 
 #: Sanitized segments that must still be rejected even though the
 #: whitelist above preserves dots -- a bare '..' (or '.') survives the

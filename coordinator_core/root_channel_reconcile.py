@@ -24,7 +24,7 @@ THE DEFECT SHAPE, three times in one day:
      hands out a root the other refuses, and an operator was handed an
      unrunnable remediation path out of it.
      Filed: `state/bug-backlog/2026-08-22-published-mirror-resolves-as-
-     claude-klabauter-root-but-is-never-trusted.yaml`.
+     claude-klabauter-live-root-but-is-never-trusted.yaml`.
 
   3. 2026-08-22, same day again. `require_dispatch_engine_on_path()`
      resolves the published mirror, so a script running FROM the live tree
@@ -132,7 +132,7 @@ _ROOTS: Tuple[_RootSpec, ...] = (
         purpose="the live claude-klabauter working tree (source, never a dispatch target)",
         channels=(
             _ChannelSpec("registry", "repos.claude_klabauter"),
-            _ChannelSpec("pointer", ".claude-klabauter-root"),
+            _ChannelSpec("pointer", ".claude-klabauter-live-root"),
             _ChannelSpec("registry", "engine.working_repos.claude_klabauter"),
         ),
     ),

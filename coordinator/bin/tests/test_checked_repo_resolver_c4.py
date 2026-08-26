@@ -9,11 +9,16 @@ C4's own module -- no other chunk in this plan writes to this file (each
 chunk names its own test module; see the plan's "Dispatch shape" note).
 
 Scope: the five near-verbatim copies this chunk repointed --
-  - emit-cockpit-snapshot.py (WRITER)
   - coordinator-tasks-mirror.py (WRITER)
   - coordinator-write-review-trail.py (WRITER)
   - verify-orientation-cache-sync.py (READER -- reclassified post-C8: no
     write path exists in this trampoline or the op it dispatches into)
+
+`emit-cockpit-snapshot.py` (WRITER)'s coverage was removed 2026-08-25 along with the CLI
+itself, which `c4912d73f` deleted as part of the emission-publish leg (kill ledger K-056).
+That cut carries no recorded authority and its disposition is OPEN, so this class is removed
+rather than rewritten: if K-056 is triaged as collateral and the CLI comes back, restore this
+class with it. The evidence for that triage lives in K-056, not here.
 
 `reconcile-completion-commits.py` (WRITER)'s coverage was removed 2026-08-23
 along with `completion.reconcile_commits`, the op it dispatched, and the
@@ -194,29 +199,6 @@ class _RepoIdentityHarness(unittest.TestCase):
         self._wire_sid_env(None)
         os.chdir(str(repo_root))
         return repo_root
-
-
-class TestEmitCockpitSnapshot(_RepoIdentityHarness):
-    def test_mismatch_refuses_before_route_mutation(self):
-        tmp_path = self._mkdtemp()
-        self._setup_mismatch(tmp_path, "sess-emit-mm", 7001)
-        mod = _load_module("emit-cockpit-snapshot.py")
-
-        called = {"n": 0}
-        self._setattr(mod.cc_invoke, "route_mutation", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
-
-        with self.assertRaises(SystemExit) as ctx:
-            mod._resolve_repo_root()
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(called["n"], 0, "route_mutation must never be reached on MISMATCH")
-
-    def test_unresolved_never_refuses(self):
-        tmp_path = self._mkdtemp()
-        repo_root = self._setup_unresolved(tmp_path)
-        mod = _load_module("emit-cockpit-snapshot.py")
-
-        root = mod._resolve_repo_root()
-        self.assertEqual(root, str(repo_root.resolve()))
 
 
 class TestCoordinatorTasksMirror(_RepoIdentityHarness):

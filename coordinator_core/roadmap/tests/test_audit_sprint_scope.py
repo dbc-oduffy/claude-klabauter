@@ -451,11 +451,13 @@ def test_whole_roadmap_arm_unaffected_by_sprint_scoped_addition(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.spawns_process
 def test_main_sprint_flag_requires_value() -> None:
     exit_code = main(["some-run-id", "--sprint"])
     assert exit_code == 2
 
 
+@pytest.mark.spawns_process
 def test_main_rejects_unexpected_extra_argument() -> None:
     exit_code = main(["some-run-id", "--bogus"])
     assert exit_code == 2

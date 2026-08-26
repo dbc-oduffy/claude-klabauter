@@ -49,10 +49,8 @@ Negative-spec (hard-won):
           invariant (OpClass in coordinator_core/authz/classification.py; DR-208), and any
           disk write from an advisory hook handler is a violation.
 
-      BOOKKEEPING ops (5, pcore-08 + receiver-state-sensor) — MAY write under
+      BOOKKEEPING ops (4, pcore-08 + receiver-state-sensor) — MAY write under
       .git/coordinator-sessions/ only:
-        - track_touched_files:     writes .git/coordinator-sessions/<sid>/touched.txt
-                                   and .git/coordinator-sessions/.agents/<aid>/touched.txt
         - session_heartbeat:       writes last_activity field in
                                    .git/coordinator-sessions/<sid>/meta.json
         - agent_completion_log:    appends to .git/coordinator-sessions/logs/agent-audit.jsonl
@@ -2402,18 +2400,35 @@ async def dispatch_message(msg: dict) -> dict:
     # grows a raising branch, the completion row's `sid` degrades silently
     # wherever that raise wasn't already caught upstream of this function.
     sid = None
+    # C1 (2026-08-25-reconcile-open-comes-back-under-the-bar): resolved once
+    # here, in the entry block, and reused for both the started and complete
+    # rows -- same coupling as `sid` above and for the same reason (see that
+    # field's Review comment): `dispatch_message` is the SOLE dispatch
+    # chokepoint (this function's own docstring), so its one call site cannot
+    # tell a CLI invocation from a direct-import dispatch from a warm-server
+    # pool worker without walking the stack. Doing that walk twice (once per
+    # row) would double the cost for no different answer within one
+    # invocation -- the caller of THIS dispatch does not change between the
+    # started and complete rows of the same corr_id.
+    caller = None
     try:
-        from coordinator_core.telemetry.op_latency import new_correlation_id, record_op_started
+        from coordinator_core.telemetry.op_latency import (
+            caller_module,
+            new_correlation_id,
+            record_op_started,
+        )
         from coordinator_core.session.core import resolve_session_id
 
         corr_id = new_correlation_id()
         sid = resolve_session_id() or None
+        caller = caller_module()
         record_op_started(
             op=method if isinstance(method, str) else "<unknown>",
             t_start=t_start,
             corr_id=corr_id,
             repo_root=telemetry_repo_root,
             sid=sid,
+            caller=caller,
         )
     except Exception:
         _log().debug(
@@ -2444,6 +2459,7 @@ async def dispatch_message(msg: dict) -> dict:
                 repo_root=telemetry_repo_root,
                 sid=sid,
                 corr_id=corr_id,
+                caller=caller,
             )
         except Exception:
             _log().debug(
@@ -2485,6 +2501,65 @@ MEASUREMENT_SCOPE_PROCESS_WIDE = "process_wide"
 _MEASUREMENT_SCOPES = frozenset({MEASUREMENT_SCOPE_PER_OP_PROCESS, MEASUREMENT_SCOPE_PROCESS_WIDE})
 
 
+def _telemetry_sid() -> Optional[str]:
+    """Session id for a process-time row, or None.
+
+    Every `process_time`-kind row in the sink carried `sid: null` until
+    2026-08-25 -- 2,108 of 2,108 for `hooks.track_touched_files` alone -- because
+    the four `record_op_process_time` call sites never passed one, while the
+    wall-clock `started`/`complete` rows beside them did. A CPU sample that
+    cannot be joined to a session cannot be ranked within one, so the sink could
+    not answer "what does fire #1 of a session cost" in process time at all, and
+    an audit needing that had to fall back to wall clock.
+
+    `resolve_session_id` is a ContextVar read plus up to three env reads with no
+    I/O and no spawn, so this is free on the hot path. Never raises: a telemetry
+    row with a null sid is strictly better than a broken dispatch.
+    """
+    try:
+        from coordinator_core.session.core import resolve_session_id
+
+        return resolve_session_id() or None
+    except Exception:
+        return None
+
+
+def _spawn_count_or_none() -> Optional[int]:
+    """Process-local spawn count, or ``None`` if the counter is unavailable.
+
+    Function-local AND `try/except`-wrapped, like this module's two other
+    `coordinator_core.telemetry` imports and for the same reason: `ipc.py` carries
+    a documented negative spec that telemetry never appears in its top-level
+    import closure (pinned by
+    `coordinator/tests/test_publish_payload_import_closure.py::test_ipc_telemetry_negative_spec_holds_under_new_discriminator`),
+    because the publish payload must not drag telemetry into every consumer.
+
+    Returns ``None`` rather than ``0`` on failure. Zero is the substantive claim
+    that an op spawned nothing; absence is "not counted here". Collapsing the two
+    is how an unmeasured op comes to read as a cheap one.
+    """
+    try:
+        from coordinator_core.telemetry.spawn_counter import spawn_count
+
+        return spawn_count()
+    except Exception:
+        return None
+
+
+def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
+    """Spawns between two readings, or ``None`` if either end is unavailable.
+
+    Returns a plain ``int``, trusting -- without re-asserting -- that
+    `spawn_counter`'s own negative spec holds ("not reset between ops,
+    ever"). If that global were ever reset mid-measurement this could return
+    a negative delta; not a bug given that contract holds today, but this
+    function depends on it rather than defending against its violation.
+    """
+    if start is None or end is None:
+        return None
+    return end - start
+
+
 def record_op_process_time(
     *,
     op: str,
@@ -2495,6 +2570,7 @@ def record_op_process_time(
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
     corr_id: Optional[str] = None,
+    spawns: Optional[int] = None,
 ) -> None:
     """Append one durable process-time sample, alongside (never replacing) the
     wall-clock `elapsed_ms` row `dispatch_message` already records.
@@ -2537,6 +2613,13 @@ def record_op_process_time(
             "kind": "process_time",
             "corr_id": corr_id,
         }
+        # The brightline's second axis, omitted rather than zero-filled when the
+        # caller did not measure it: a missing `spawns` key means "not counted
+        # here", while `0` is the substantive claim that this op spawned nothing.
+        # A reader that cannot tell those apart re-runs the 2026-08-23 sweep's
+        # own mistake of reading an absent figure as a measured one.
+        if spawns is not None:
+            entry["spawns"] = spawns
         _write_entry(entry, repo_root)
     except Exception:
         _log().debug(
@@ -2632,6 +2715,7 @@ def dispatch_from_hook(
     # site is deliberately NOT).
     t_start = _time.time()
     process_start = _time.process_time()
+    spawn_start = _spawn_count_or_none()
     try:
         response = asyncio.run(dispatch_message(envelope))
     finally:
@@ -2644,6 +2728,8 @@ def dispatch_from_hook(
             source_path="one_shot_cli",
             t_start=t_start,
             repo_root=request_repo,
+            sid=_telemetry_sid(),
+            spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
         )
     return _unwrap_hook_response(op_name, response)
 
@@ -2748,6 +2834,7 @@ def dispatch_ops_from_hook(
             # where `WORKER_POOL_SIZE` threads share a clock.
             t_start = _time.time()
             process_start = _time.process_time()
+            spawn_start = _spawn_count_or_none()
             try:
                 response = await dispatch_message(envelope)
             finally:
@@ -2757,9 +2844,11 @@ def dispatch_ops_from_hook(
                     measurement_scope=MEASUREMENT_SCOPE_PER_OP_PROCESS,
                     source_path="hook_batch",
                     t_start=t_start,
+                    sid=_telemetry_sid(),
                     repo_root=(
                         resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
                     ),
+                    spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
                 )
             try:
                 results.append(_unwrap_hook_response(op_name, response))

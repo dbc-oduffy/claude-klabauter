@@ -21,7 +21,8 @@ test_claude_klabauter_doctor_warm_probes.py does (`_FakeProc` / `_make_fake_psut
 so no test spawns a real process or opens a real named pipe.
 
 Covered:
-  AC8 — a stale token is reported (DEGRADED) without a connect attempt:
+  AC8 — a stale token is reported (INFO / step-zero `warn` — the state drains
+        itself, so it is not a `fail`) without a connect attempt:
         `_warm_check_pipe_reachable` and `election.elect` are both asserted
         never called.
   Bug fix — a resident server whose engine root DIFFERS from `claude_klabauter_root`
@@ -29,7 +30,7 @@ Covered:
         read `claude_klabauter_root`'s breadcrumb regardless of which engine root the
         resident server actually ran from).
   Multiple resident servers — ANY stale server's token makes the overall
-        verdict DEGRADED (naming every stale pid); absent any stale token,
+        verdict the stale arm (naming every stale pid); absent any stale token,
         ANY cannot-tell server keeps the verdict from being a false PASS.
   Re-run of test_selector_default_returns_every_manifest_probe (AC6) lives
   in coordinator_core/tests/test_claude_klabauter_doctor_probe_selectors.py, not
@@ -216,10 +217,21 @@ class TestWarmGenerationProbe:
         assert result.required is True
         assert result.data["servers"][0]["breadcrumb_pipe_token"] == current_token
 
-    def test_stale_token_is_degraded(
+    def test_stale_token_is_a_self_resolving_warn(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC8 — a stale token is reported DEGRADED without a connect attempt."""
+        """AC8 — a stale token is reported without a connect attempt, as a
+        self-resolving observation rather than a fault.
+
+        Classification pin. The stale arm's own remediation says the state
+        "drains on its own ... no direct action is named here", and step-zero
+        `fail` means the checked condition is NOT satisfied with a remediation
+        the reader can run. A state nobody acts on is `warn`, not `fail` —
+        otherwise a healthy box mid-generation-swap prints a fault in the
+        installer's verification block
+        (docs/problems/2026-08-26-what-a-reinstall-on-the-mac-actually-hits.md
+        § 7). Guard: bin/tests/test_probe_status_classification.py.
+        """
         mod = _require_module()
 
         from coordinator_core.warm import skew
@@ -246,8 +258,11 @@ class TestWarmGenerationProbe:
         result = mod._run_probe_warm_generation(tmp_path)
 
         assert _is_parseable_probe_result(result)
-        assert result.status == mod._DEGRADED, (
-            f"AC8: a stale breadcrumb token must be reported DEGRADED, got {result.status!r}"
+        assert result.status == mod._INFO, (
+            f"AC8: a stale breadcrumb token must be reported, got {result.status!r}"
+        )
+        assert mod._sz_status(result) == mod._SZ_WARN, (
+            "a self-resolving state must not render with the same `fail` token as a real fault"
         )
         assert result.required is False, (
             "the stale arm names no action and must not gate setup.py's exit 94"
@@ -342,11 +357,11 @@ class TestWarmGenerationProbe:
         assert result.data["servers"][0]["engine_root"] == str(other_engine_root.resolve())
         assert result.data["servers"][0]["breadcrumb_pipe_token"] == current_token
 
-    def test_multiple_resident_servers_any_stale_makes_degraded(
+    def test_multiple_resident_servers_any_stale_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Multiple resident servers is a real case: one current + one stale
-        must produce DEGRADED naming the stale pid, not a PASS that hides it."""
+        must name the stale pid, not a PASS that hides it."""
         mod = _require_module()
 
         from coordinator_core.warm import skew
@@ -382,7 +397,8 @@ class TestWarmGenerationProbe:
         result = mod._run_probe_warm_generation(tmp_path)
 
         assert _is_parseable_probe_result(result)
-        assert result.status == mod._DEGRADED
+        assert result.status == mod._INFO
+        assert mod._sz_status(result) == mod._SZ_WARN
         assert result.data["stale_pids"] == [907]
         assert len(result.data["servers"]) == 2
 
@@ -400,7 +416,7 @@ class TestWarmGenerationProbe:
 
         stale = mod._ProbeResult(
             probe=mod._WARM_GENERATION_PROBE,
-            status=mod._DEGRADED,
+            status=mod._INFO,
             detail="1 resident warm server process(es) have a stale generation token.",
             remediation=(
                 "A stale generation drains on its own via warm.idle's superseded-"
@@ -410,13 +426,14 @@ class TestWarmGenerationProbe:
         )
 
         assert mod._sz_severity(stale) == mod._SZ_ADVISORY
+        assert mod._sz_status(stale) == mod._SZ_WARN
         assert mod.emit_step_zero([stale]) == 0
 
     def test_psutil_never_reaches_election_elect_module_wide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No connect and no election, even on the PASS path — not just the
-        DEGRADED path AC8 pins."""
+        stale path AC8 pins."""
         mod = _require_module()
 
         from coordinator_core.warm import election, skew

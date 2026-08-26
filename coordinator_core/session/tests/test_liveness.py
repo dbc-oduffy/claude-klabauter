@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -62,7 +63,7 @@ from coordinator_core.session import core, liveness, scope
 from coordinator_core.session import harness_registry
 from coordinator_core.session import holder_evidence as holder_evidence_mod
 
-# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# MOST tests in this file build their repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
 # `core.git_root()` and liveness's session-hub resolution -- reads real git
 # state that no mock stands in for. `tmp_path` is function-scoped and tests
@@ -71,6 +72,33 @@ from coordinator_core.session import holder_evidence as holder_evidence_mod
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
 # route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
 # Rule 2.
+#
+# NOT every test, and the exception is load-bearing. `TestLiveSessionIdsCorpus`
+# and the Q20 golden-diff path read the REAL on-disk registry
+# (`.git/coordinator-sessions/`) on purpose -- see that class's own comment.
+# This comment previously claimed the `_make_repo(tmp_path)` isolation held for
+# every test in the file, contradicting that class's stated intent one screen
+# below. The isolation was documented rather than enforced, and the contradiction
+# is what let the following go unnoticed:
+#
+#   A hub-reading test is not isolated from the ~24 peer sessions mutating the
+#   same hub, so it cannot distinguish its own writes from a peer's. Six
+#   identical runs of this file on a fixed tree produced 2, 4, 4, 4, 5, 4
+#   failures -- five distinct outcomes, nothing changed between them. Inside
+#   that noise `test_every_non_uuid_real_child_is_denylisted_or_a_file` was red
+#   6/6 on a REAL defect (fixture dirs enumerated as phantom sessions), and the
+#   flake is why it read as noise for as long as it did.
+#
+# CONSEQUENCE, and it binds anything citing this file: a green run of
+# test_liveness.py is not evidence. An AC or gate resting on this module must
+# name WHICH tests it means. "test_liveness.py passes" is an unsupported claim
+# for the hub-reading tests no matter how many times it is observed.
+#
+# The fix for the hub-reading tests is a fixture hub, which is test-architecture
+# work with its own scope, filed at
+# state/bug-backlog/2026-08-26-test-fixtures-reached-the-live-session-h-a36a3bf35bc0.yaml.
+# It is deliberately NOT attempted here: correcting a false comment is cheap and
+# honest, and rewriting four tests' isolation model mid-execution is not.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -2305,6 +2333,63 @@ class TestHarnessRegistryLiveSessionIdsParity:
 
 
 # ---------------------------------------------------------------------------
+# newest_record_mtime — THE single shared recency-policy implementation
+# (AC6, C5, docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
+# repointing-its-writers.md). Every filename-keyed mtime probe this chunk
+# repoints (session_abandoned below, shape.py, stable_pid_watch.py, core.py)
+# and C3's fifth probe (dispatch_checks.py :: _rm_peer_claim_of) import and
+# assert against THIS function.
+# ---------------------------------------------------------------------------
+
+
+class TestNewestRecordMtime:
+    def test_missing_dir_returns_none(self, tmp_path):
+        assert liveness.newest_record_mtime(str(tmp_path / "no-such-dir")) is None
+
+    def test_empty_dir_returns_none(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        assert liveness.newest_record_mtime(str(d)) is None
+
+    def test_ac6b_commit_ledger_shaped_dir_with_no_files_yields_no_refresh(
+        self, tmp_path
+    ):
+        # AC6b: a directory holding only `.commit-ledger`-shaped content (no
+        # eligible top-level regular file) must yield no liveness refresh --
+        # not silently manufacture a recency signal for a non-session dir.
+        d = tmp_path / ".commit-ledger"
+        d.mkdir()
+        assert liveness.newest_record_mtime(str(d)) is None
+
+    def test_em_session_id_txt_alone_returns_none(self, tmp_path):
+        d = tmp_path / "s1"
+        d.mkdir()
+        (d / "em-session-id.txt").write_text("some-sid\n", encoding="utf-8")
+        assert liveness.newest_record_mtime(str(d)) is None
+
+    def test_returns_newest_of_multiple_files(self, tmp_path):
+        d = tmp_path / "s1"
+        d.mkdir()
+        (d / "older.txt").write_text("x", encoding="utf-8")
+        _touch(d / "older.txt", _STALE_EPOCH)
+        (d / "newer.txt").write_text("x", encoding="utf-8")
+        newer_epoch = _STALE_EPOCH + 1000
+        _touch(d / "newer.txt", newer_epoch)
+        assert liveness.newest_record_mtime(str(d)) == newer_epoch
+
+    def test_em_session_id_txt_excluded_even_when_newest(self, tmp_path):
+        # The ownership backpointer is written once and never refreshed --
+        # it must never be the value newest_record_mtime returns, even when
+        # it happens to have the freshest mtime on disk.
+        d = tmp_path / "s1"
+        d.mkdir()
+        (d / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(d / "touched.txt", _STALE_EPOCH)
+        (d / "em-session-id.txt").write_text("some-sid\n", encoding="utf-8")
+        assert liveness.newest_record_mtime(str(d)) == _STALE_EPOCH
+
+
+# ---------------------------------------------------------------------------
 # session_abandoned — additive predicate (C2, docs/plans/2026-08-19-
 # abandonment-is-its-own-verdict.md). NEVER a liveness verdict; NEVER a DEAD
 # arm. Signal set + threshold per docs/research/2026-08-19-abandonment-
@@ -2342,13 +2427,68 @@ class TestSessionAbandoned:
         assert liveness.session_abandoned("s-fresh", cwd=str(repo)) is False
 
     def test_two_stale_independent_signals_is_abandoned(self, tmp_path):
+        # C5, AC6: `dir_record` (`newest_record_mtime`) now folds in
+        # meta.json's OWN file mtime alongside any record file it finds, so
+        # this fixture backdates meta.json's mtime to match its (already
+        # stale) `last_activity` field content -- realistic (both are
+        # written together in production) and necessary so meta.json's
+        # write-time mtime doesn't itself read as the freshest file in the
+        # dir and mask the genuinely stale `touched.txt` signal below.
         repo = _make_repo(tmp_path)
         sdir = _write_session(
             repo, "s-two-stale", {"pid": "1", "last_activity": _STALE}
         )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
         (sdir / "touched.txt").write_text("x", encoding="utf-8")
         _touch(sdir / "touched.txt", _STALE_EPOCH)
         assert liveness.session_abandoned("s-two-stale", cwd=str(repo)) is True
+
+    def test_two_stale_independent_signals_new_dialect_alone_is_abandoned(
+        self, tmp_path
+    ):
+        # AC6 widening: a record file under a DIFFERENT name (not
+        # `touched.txt`) still feeds `dir_record` -- the newest-file-in-dir
+        # policy, not a re-derived literal, so a future record rename can
+        # only DEFER this signal, never DISABLE it.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-two-stale-new", {"pid": "1", "last_activity": _STALE}
+        )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
+        (sdir / "touch-record.jsonl").write_text("x", encoding="utf-8")
+        _touch(sdir / "touch-record.jsonl", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-two-stale-new", cwd=str(repo)) is True
+
+    def test_two_stale_independent_signals_both_dialects_is_abandoned(
+        self, tmp_path
+    ):
+        # "Each dialect alone and both together" (C5 brief): both the old
+        # and a new-dialect record file present, both stale -- still
+        # abandoned, same as either alone.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-two-stale-both", {"pid": "1", "last_activity": _STALE}
+        )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        (sdir / "touch-record.jsonl").write_text("x", encoding="utf-8")
+        _touch(sdir / "touch-record.jsonl", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-two-stale-both", cwd=str(repo)) is True
+
+    def test_fresh_new_dialect_record_alone_is_not_abandoned(self, tmp_path):
+        # Mirrors test_stale_last_activity_but_fresh_touched_txt_is_not_
+        # abandoned, but for a record file under the new dialect's name --
+        # the primary freshest-signal gate must recognise it exactly like
+        # `touched.txt`.
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-mixed-new", {"pid": "1", "last_activity": _STALE}
+        )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
+        (sdir / "touch-record.jsonl").write_text("x", encoding="utf-8")
+        # freshly-written file -> fresh mtime (now), no _touch() backdate.
+        assert liveness.session_abandoned("s-mixed-new", cwd=str(repo)) is False
 
     def test_stale_last_activity_but_fresh_touched_txt_is_not_abandoned(self, tmp_path):
         # The primary gate (freshest-of-signals) fires before the >= 2 floor
@@ -2362,10 +2502,14 @@ class TestSessionAbandoned:
         assert liveness.session_abandoned("s-mixed", cwd=str(repo)) is False
 
     def test_stale_last_activity_and_stale_dispatched_agents_is_abandoned(self, tmp_path):
+        # See test_two_stale_independent_signals_is_abandoned's comment on
+        # why meta.json's own mtime must be backdated alongside its
+        # (already stale) `last_activity` field content.
         repo = _make_repo(tmp_path)
         sdir = _write_session(
             repo, "s-dispatch-stale", {"pid": "1", "last_activity": _STALE}
         )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
         (sdir / "dispatched-agents.txt").write_text("x", encoding="utf-8")
         _touch(sdir / "dispatched-agents.txt", _STALE_EPOCH)
         assert liveness.session_abandoned("s-dispatch-stale", cwd=str(repo)) is True
@@ -2425,6 +2569,7 @@ class TestSessionAbandoned:
         sdir = _write_session(
             repo, "s-lever", {"pid": "1", "last_activity": _STALE}
         )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
         (sdir / "touched.txt").write_text("x", encoding="utf-8")
         _touch(sdir / "touched.txt", _STALE_EPOCH)
         before = liveness.session_abandoned("s-lever", cwd=str(repo))
@@ -2507,31 +2652,69 @@ class TestAC1CharacterizationUnchanged:
         assert before["session_live"]["m-rich"] is False
         assert before["session_live"]["no-such-session"] is False
 
-    def test_live_corpus_unchanged_by_session_abandoned(self):
-        # Golden-diff against the REAL on-disk corpus (Q20 pattern, see
+    def test_live_corpus_unchanged_by_session_abandoned(self, tmp_path):
+        # Golden-diff against REAL corpus SHAPES (Q20 pattern, see
         # TestLiveSessionIdsCorpus above): the four functions must produce
         # byte-for-byte identical output whether or not session_abandoned is
         # called on the same sids in between.
-        base = Path(core.git_root() or ".", ".git", "coordinator-sessions")
-        if not base.is_dir():
+        #
+        # WHY THIS COPIES THE CORPUS INSTEAD OF READING IT IN PLACE. This test
+        # asserts a NEGATIVE — that calling `session_abandoned` mutates nothing
+        # the other four functions read — by diffing two snapshots. Taken
+        # against the live hub on a box running dozens of concurrent sessions,
+        # peers write `meta.json`/`touched.txt` and sessions die BETWEEN the two
+        # snapshots, so `before != after` for reasons that have nothing to do
+        # with the call under test. The comparison cannot isolate its own
+        # variable. Measured before this change: six identical runs of this
+        # module produced FIVE distinct outcomes, and this test failed 2/6 with
+        # nothing in the tree changing.
+        #
+        # A moving red is worse than a stable one — it trains readers to
+        # discount the file, which is how a genuine 6/6 red here
+        # (`test_every_non_uuid_real_child_is_denylisted_or_a_file`, reporting
+        # seven phantom sessions in the live hub) went unread.
+        #
+        # The intent — exercise real record SHAPES, not synthetic ones — is
+        # preserved: this copies live session dirs into a private fixture hub
+        # and diffs against that. What is given up is only concurrency with
+        # peers, which was never the property under test.
+        real = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        if not real.is_dir():
             pytest.skip("no real .git/coordinator-sessions/ registry on this box")
-        sids = [p.name for p in base.iterdir() if p.is_dir()][:50]
 
-        before = {
-            "session_live": {sid: liveness.session_live(sid) for sid in sids},
-            "live_session_ids": liveness.live_session_ids(),
-            "live_session_verdicts": liveness.live_session_verdicts(),
-            "session_verdict": {sid: liveness.session_verdict(sid) for sid in sids},
+        repo = _make_repo(tmp_path)
+        hub = Path(repo) / ".git" / "coordinator-sessions"
+        hub.mkdir(parents=True, exist_ok=True)
+        sids = []
+        for p in sorted(real.iterdir()):
+            if len(sids) >= 50:
+                break
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            try:
+                shutil.copytree(p, hub / p.name)
+            except OSError:
+                # A peer can delete or rewrite a dir mid-copy; skipping it is
+                # correct — this test needs real SHAPES, not any specific sid.
+                continue
+            sids.append(p.name)
+        if not sids:
+            pytest.skip("no copyable session dirs in the real registry")
+
+        snap = lambda: {  # noqa: E731 — two identical captures, read as one unit
+            "session_live": {sid: liveness.session_live(sid, cwd=str(repo)) for sid in sids},
+            "live_session_ids": liveness.live_session_ids(cwd=str(repo)),
+            "live_session_verdicts": liveness.live_session_verdicts(cwd=str(repo)),
+            "session_verdict": {
+                sid: liveness.session_verdict(sid, cwd=str(repo)) for sid in sids
+            },
         }
+
+        before = snap()
 
         for sid in sids:
-            liveness.session_abandoned(sid)
+            liveness.session_abandoned(sid, cwd=str(repo))
 
-        after = {
-            "session_live": {sid: liveness.session_live(sid) for sid in sids},
-            "live_session_ids": liveness.live_session_ids(),
-            "live_session_verdicts": liveness.live_session_verdicts(),
-            "session_verdict": {sid: liveness.session_verdict(sid) for sid in sids},
-        }
+        after = snap()
 
         assert before == after

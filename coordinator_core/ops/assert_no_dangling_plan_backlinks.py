@@ -162,7 +162,7 @@ from coordinator_core.ops.spec_backlink_resolve import (
     resolve_path_with_index as _resolve_path_with_index,
 )
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 
 # Generator-provenance declaration (generator_provenance.py). The --fix path
 # rewrites whichever tracked .md file anywhere in the repo still carries a
@@ -241,7 +241,7 @@ def _git_tracked_md_files(root: str) -> Optional[List[str]]:
         proc = subprocess.run(
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"],
             cwd=root, capture_output=True, timeout=30,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

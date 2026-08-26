@@ -3,6 +3,15 @@ suite for `directives_commit_tail._committed_paths_for_sids`, the sole
 peer-attribution entry point production calls (via `resolve_known_
 concurrent_paths`).
 
+Also carries C5's AC5 pin (docs/plans/2026-08-25-the-close-ceremony-
+rebuilt-from-the-requirement.md, C5, DR-358 `d-release-plan-claim` ruling)
+for `run_close_commit_and_release_claims` — the wave-1 pathspec
+(`docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-the-requirement.
+workflow.mjs`) lists this exact file for C5's test, alongside
+`directives_commit_tail.py` itself; see the `TestRunCloseCommitAndRelease
+Claims*` section below for that pin, kept in this module rather than a new
+file per the declared `writes:` scope.
+
 Spec backlink: docs/plans/2026-08-10-commit-event-5s-cap-and-the-silent-
 tail.md, chunk C1. Originally authored against `docs/plans/2026-08-07-n-
 plus-one-git-spawn-class-and-amplification-gate.md`'s C18 ("`_peer_committed_
@@ -32,11 +41,16 @@ Run: python3 -m pytest coordinator_core/workstream_complete/test_directives_comm
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.session import claims as _session_claims
+from coordinator_core.session import core as _session_core_mod
 from coordinator_core.workstream_complete import directives_commit_tail
 
 # Declared, not excused: this file spawns a real process (git/python) because
@@ -313,3 +327,172 @@ def test_git_failure_on_touched_paths_walk_raises_not_empty(repo, monkeypatch):
 
     with pytest.raises(directives_commit_tail.PeerAttributionUnavailable):
         _peer_committed_paths(root, sid, monkeypatch, since_before)
+
+
+# ---------------------------------------------------------------------------
+# AC5 (C5, docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-the-
+# requirement.md) — `run_close_commit_and_release_claims` releases the
+# GOVERNING-PLAN ARTIFACT claim (`cs_release_artifact`, "plan" class), a
+# different mechanism entirely from this file's own `_committed_paths_for_
+# sids` PATH-attribution machinery above and from hard constraint 4's
+# per-path `release_committed_claims` (see `directives_commit_tail.py`'s
+# own module docstring for the two-mechanism split). This is a
+# STATE-OBSERVATION test, not a call-observation one — `cs_release_artifact`
+# is documented "always best-effort, always returns (never raises)", so a
+# spy asserting the call happened would pass on a release that silently did
+# nothing (staff-eng review, finding 2). Asserts the claim path exists with
+# this session as holder BEFORE close and is absent AFTER it.
+#
+# Real repo, hooks live throughout (hard constraint 2, `state/audits/2026-
+# 08-25-close-ceremony-floor-probe.md`'s own recipe): a `git init` scratch
+# fixture carries no hooks, and the whole point of routing this rebuilt
+# close step through `run_commit_pipeline` (never `git_native.commit_scoped`
+# directly — hard constraint 6) is that the gated route the hooks live in is
+# what the ceremony actually runs in production. This suite clones THIS
+# repo's own checkout (`--depth 1`, resolved via `git rev-parse
+# --show-toplevel`, never hand-typed) and copies `.git/hooks/{pre-commit,
+# prepare-commit-msg,post-commit}` verbatim into the fixture before driving
+# a real close through it.
+# ---------------------------------------------------------------------------
+
+
+def _this_repo_toplevel() -> Path:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(Path(__file__).resolve().parent),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(proc.stdout.strip())
+
+
+@pytest.fixture
+def hooks_live_repo(tmp_path, monkeypatch):
+    """A real, throwaway clone of THIS repo's own checkout, with THIS
+    repo's own `.git/hooks/{pre-commit,prepare-commit-msg,post-commit}`
+    copied in verbatim — see this section's own header comment for why a
+    `git init` scratch fixture (no hooks) does not stand in for this test.
+
+    `-c core.longpaths=true` is explicit and load-bearing, not decorative:
+    the suite-wide autouse `HOME`/`USERPROFILE` quarantine (`coordinator_core/
+    conftest.py`) points git at a fresh profile with no global gitconfig,
+    so a real machine's `core.longpaths=true` (needed for this repo's own
+    longest tracked paths under a Windows `MAX_PATH` checkout) is silently
+    lost under test — `git clone` here fails `fatal: unable to checkout
+    working tree` without this flag, even though the identical command
+    succeeds outside pytest where the real profile's gitconfig applies.
+    Latent-bug carve-out (§ Core Behavior 4): the failure is in this new
+    fixture's own environment, not a change to any other file.
+
+    `COORDINATOR_ENGINE_ROOT` is pinned to THIS repo's own checkout (`src`,
+    never the throwaway clone `dest`) for the same reason: any pre-commit
+    hook actually installed in `src`'s `.git/hooks/` (this fixture copies
+    whatever is there, skipping any hook that isn't installed -- see the loop
+    below; historically that meant the now-deleted `detect-staged-rollback`
+    gate, claude-klabauter ends with no pre-commit hook as of 2026-08-25) resolves the
+    claude-klabauter engine root via `coordinator/bin/lib/cc_invoke.py`'s registry
+    ladder, which has nothing to resolve a freshly-cloned, unregistered
+    `dest` against and fails closed (`engine-root resolution failed`)
+    without an explicit rung-1 override. `dest` runs the identical
+    `coordinator_core` code either way (it is a clone of `src`), so pointing
+    any such gate's own import at `src` changes nothing about which code
+    executes."""
+    src = _this_repo_toplevel()
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(src))
+    dest = tmp_path / "hooks-live-repo"
+    subprocess.run(
+        ["git", "-c", "core.longpaths=true", "clone", "--depth", "1", str(src), str(dest)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _git("config", "user.email", "t@example.com", cwd=dest)
+    _git("config", "user.name", "t", cwd=dest)
+    for hook_name in ("pre-commit", "prepare-commit-msg", "post-commit"):
+        src_hook = src / ".git" / "hooks" / hook_name
+        if not src_hook.is_file():
+            continue
+        dest_hook = dest / ".git" / "hooks" / hook_name
+        shutil.copy2(src_hook, dest_hook)
+        dest_hook.chmod(0o755)
+    return dest
+
+
+def test_run_close_commit_and_release_claims_releases_governing_plan_claim(
+    hooks_live_repo, monkeypatch
+):
+    root = hooks_live_repo
+    sid = "c5-claim-release-test-session"
+    slug = "c5-claim-release-test-plan"
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+    _session_core_mod.init(sid, cwd=str(root))
+    assert _session_claims.claim_plan(slug, cwd=str(root)) is True
+
+    common_dir = git_common_dir(root)
+    claim_dir = common_dir / "coordinator-sessions" / "plan-claims" / slug
+
+    # BEFORE close: the claim exists, held by this session.
+    assert claim_dir.is_dir()
+    assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == sid
+
+    rel = "c5-claim-release-fixture.txt"
+    (root / rel).write_text("close ceremony claim-release fixture\n", encoding="utf-8")
+
+    result = directives_commit_tail.run_close_commit_and_release_claims(
+        root,
+        session_id=sid,
+        subject="C5 claim-release fixture commit",
+        stage_paths=[rel],
+        caller_paths={rel},
+        governing_plan_slug=slug,
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.committed_sha is not None
+
+    # AFTER close: the governing-plan claim is gone.
+    assert not claim_dir.exists()
+
+
+def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
+    hooks_live_repo, monkeypatch
+):
+    """DR-358's failure-path ruling: release fires unconditionally, whether
+    the wrapped commit step succeeded or failed — a claim held by a session
+    that failed to commit is exactly as abandoned as one held by a session
+    that committed cleanly. Forces `run_close_commit` to RAISE (mirrors the
+    "or raises outright" branch `run_close_commit_and_release_claims`'s own
+    docstring names — a `finally`, not an `if result.ok:` branch, is what
+    this pins) by monkeypatching `run_commit_pipeline` itself, and asserts
+    the claim is released and the exception still propagates unmodified."""
+    root = hooks_live_repo
+    sid = "c5-claim-release-failure-test-session"
+    slug = "c5-claim-release-failure-test-plan"
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+    _session_core_mod.init(sid, cwd=str(root))
+    assert _session_claims.claim_plan(slug, cwd=str(root)) is True
+
+    common_dir = git_common_dir(root)
+    claim_dir = common_dir / "coordinator-sessions" / "plan-claims" / slug
+    assert claim_dir.is_dir()
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("simulated commit-step failure")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.commit_pipeline.run_commit_pipeline", _raise
+    )
+
+    with pytest.raises(RuntimeError, match="simulated commit-step failure"):
+        directives_commit_tail.run_close_commit_and_release_claims(
+            root,
+            session_id=sid,
+            subject="C5 claim-release failure fixture",
+            stage_paths=["irrelevant.txt"],
+            governing_plan_slug=slug,
+        )
+
+    assert not claim_dir.exists()

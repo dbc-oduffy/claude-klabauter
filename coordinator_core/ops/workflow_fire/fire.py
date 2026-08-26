@@ -440,7 +440,7 @@ def _acquire_cap_lock(registry_dir: Path) -> Path:
     deadline = time.time() + _CAP_LOCK_ACQUIRE_TIMEOUT_S
     while True:
         try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             os.close(fd)
             return lock_path
         except FileExistsError:

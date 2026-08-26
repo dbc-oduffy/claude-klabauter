@@ -484,7 +484,7 @@ except FileNotFoundError as _e:
         f"coordinator_registry: manifest not found at {_MANIFEST_PATH!r}, and no "
         "DOE_ROOT/REPO_DOE_CLAUDE-resolvable candidate located one either. "
         "This is an install-integrity failure — ensure the coordinator plugin is "
-        "fully installed, or set DOE_ROOT to the DoE-claude repo root."
+        "fully installed, or set DOE_ROOT to the schemas-hosting repo's root."
     ) from _e
 except json.JSONDecodeError as _e:
     raise ValueError(

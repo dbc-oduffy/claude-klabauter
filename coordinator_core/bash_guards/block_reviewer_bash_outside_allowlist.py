@@ -2918,11 +2918,11 @@ _EXECUTOR_SCAFFOLDER_STANZA = (
 )
 
 _EXECUTOR_ACCEPTED_FORMS_STANZA = (
-    "Accepted invocation forms (the dispatching EM resolves <claude-klabauter-root> from the",
+    "Accepted invocation forms (the dispatching EM resolves <claude-klabauter-live-root> from the",
     "machine-local registry key repos.claude_klabauter and injects the literal",
     "absolute path into the dispatch prompt -- a confined agent cannot resolve it):",
-    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
-    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
+    "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
+    "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
 )
 
 _EXECUTOR_CLOSING_STANZA = (
@@ -2948,8 +2948,8 @@ _DEFAULT_SCAFFOLDER_STANZA = (
 #: the two indented forms are self-explanatory ready-to-run alternatives and
 #: sit in the same exempted cue window as the scaffolder/Tier-A lines above.
 _DEFAULT_ACCEPTED_FORMS_STANZA = (
-    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
-    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
+    "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
+    "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
 )
 
 #: (Message-size discipline, 2026-08-03) No closing stanza for the default

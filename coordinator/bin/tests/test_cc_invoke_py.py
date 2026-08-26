@@ -338,7 +338,7 @@ class TestRouteState1Remediation(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("test.op", msg)
         self.assertIn("COORDINATOR_ENGINE_ROOT environment variable", msg)
-        self.assertIn(".claude-klabauter-root pointer file", msg)
+        self.assertIn(".claude-klabauter-live-root pointer file", msg)
         self.assertIn("repos.claude_klabauter", msg)
         self.assertIn("git clone https://github.com/dbc-oduffy/claude-klabauter", msg)
         # The original legacy_fn exception is chained, not silently discarded.
@@ -2144,7 +2144,7 @@ class RequireEngineVariantsTest(unittest.TestCase):
         """Pin COORDINATOR_SETTINGS_HOME to a tmp dir with no pointer file, and
         neutralize CLAUDE_HOME/CLAUDE_KLABAUTER_ROOT — required per the brief's Part 1
         Hermeticity note: _resolve_claude_klabauter_root reads COORDINATOR_SETTINGS_HOME /
-        CLAUDE_HOME (for the .claude-klabauter-root pointer) and the machine-local
+        CLAUDE_HOME (for the .claude-klabauter-live-root pointer) and the machine-local
         repos.claude_klabauter registry, not just CLAUDE_KLABAUTER_ROOT.
 
         CLAUDE_HOME/CLAUDE_CONFIG_DIR are PINNED to an empty tmp subdir, not

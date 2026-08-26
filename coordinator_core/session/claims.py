@@ -101,6 +101,7 @@ from coordinator_core.session import liveness
 from coordinator_core.session import path_dialect
 from coordinator_core.session import scope
 from coordinator_core.session import shape
+from coordinator_core.session import touch_record
 
 
 # ---------------------------------------------------------------------------
@@ -2513,27 +2514,35 @@ def my_agent_touched(
         in-flight files.
 
     FAIL-OPEN: never raises (except the required-arg guard) — attribution is
-    advisory and never blocks the caller. Empty back-pointer / missing
-    ``touched.txt`` / unreadable file are all soft-skipped. Returns ``[]`` when
-    not in a git repo or the ``.agents`` dir is absent, AND (degraded, still
-    ``[]``, but with a logged stderr warning) when ``.agents`` exists but
-    cannot be listed (e.g. permission-denied) — the sub-agent enumeration
-    uses ``os.scandir()``, not ``Path.glob("*/")``, precisely so an
-    unreadable dir raises ``OSError`` instead of silently reading as
-    "genuinely zero sub-agent dirs" (the spec here is an AUTHORIZED BLANKET
-    CAPTURE; a silently-missed dir is a completeness bug).
+    advisory and never blocks the caller. Empty back-pointer / a degraded
+    seam read (missing/unreadable ``touched.txt`` OR ``touch-record.jsonl``
+    family) are all soft-skipped. Returns ``[]`` when not in a git repo or
+    the ``.agents`` dir is absent, AND (degraded, still ``[]``, but with a
+    logged stderr warning) when ``.agents`` exists but cannot be listed
+    (e.g. permission-denied) — the sub-agent enumeration uses
+    ``os.scandir()``, not ``Path.glob("*/")``, precisely so an unreadable
+    dir raises ``OSError`` instead of silently reading as "genuinely zero
+    sub-agent dirs" (the spec here is an AUTHORIZED BLANKET CAPTURE; a
+    silently-missed dir is a completeness bug).
 
     ``session_id`` is REQUIRED — empty raises ValueError.
 
     RETURNS PATHS, NEVER RAW JOURNAL LINES. Each back-pointed agent dir's
-    ``touched.txt`` is a ``T``/``R`` event journal
-    (``scope.format_touch_event``), so its lines go through
-    ``scope.project_self_scope`` — the same projection ``compute_scope``
-    Step 1 and ``_release_from_touched_file`` use — before they leave this
-    function. Projection is PER AGENT DIR because
-    ``release_committed_claims`` appends each agent's ``R`` events into that
-    agent's own file; a path whose last event there is ``R`` is released and
-    is excluded. Legacy bare-path lines still parse as ``T`` and survive.
+    claim record is read through the shared union seam
+    (``scope._read_touch_record_as_legacy_lines``, C1/C0 —
+    docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+    its-writers.md), which folds a sibling ``touched.txt`` (old dialect,
+    a ``T``/``R`` event journal via ``scope.format_touch_event``) together
+    with any ``touch-record.jsonl`` family (new dialect) into ONE ordered
+    line set before it goes through ``scope.project_self_scope`` — the same
+    projection ``compute_scope`` Step 1 and ``_release_from_touched_file``
+    use — before it leaves this function. Projection is PER AGENT DIR
+    because ``release_committed_claims`` appends each agent's ``R`` events
+    into that agent's own file; a path whose last event there is ``R`` is
+    released and is excluded. Legacy bare-path lines still parse as ``T``
+    and survive. An agent dir holding ONLY the new-dialect record (no
+    ``touched.txt`` on disk at all) is now seen too, where the pre-C1 direct
+    ``touched.txt`` read silently skipped it.
 
     Negative-spec: do NOT revert to appending raw lines. Every caller treats
     these as paths — ``safe_commit_offer._resolve_agent_touched_candidates``
@@ -2585,29 +2594,41 @@ def my_agent_touched(
         )
         return out
 
+    # Same syscall-shape collapse as `session/scope.py ::
+    # release_committed_claims`' own agent walk, for the same reason and with
+    # the same measurement behind it: `entry.is_dir()` answers from the dirent
+    # `scandir` already returned, and the open's `OSError` is the same soft-skip
+    # the `is_file()` probe bought. This loop is O(agent dirs on disk) and that
+    # population is neither bounded nor small.
     for entry in agent_entries:
-        agent_dir = Path(entry.path)
-        if not agent_dir.is_dir():
-            continue
-        backptr = agent_dir / "em-session-id.txt"
-        if not backptr.is_file():
-            continue
         try:
-            first = backptr.read_text(encoding="utf-8").splitlines()
+            if not entry.is_dir():
+                continue
         except OSError:
-            first = []
-        em_sid = first[0] if first else ""
+            continue
+        agent_dir = Path(entry.path)
+        try:
+            with open(
+                os.path.join(entry.path, "em-session-id.txt"), "r", encoding="utf-8"
+            ) as fh:
+                em_sid = fh.readline().strip()
+        except OSError:
+            em_sid = ""
         if not em_sid:
             continue  # malformed back-pointer; soft-skip
         if em_sid not in candidates:
             continue
-        agent_touched = agent_dir / "touched.txt"
-        if not agent_touched.is_file():
-            continue
-        try:
-            lines = agent_touched.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue  # unreadable touched.txt — soft-skip per the FAIL-OPEN contract above
+        # C1: read through the shared union seam
+        # (`scope._read_touch_record_as_legacy_lines`) rather than parsing
+        # this agent dir's `touched.txt` directly — the seam folds in any
+        # sibling `touch-record.jsonl` family too, so an agent dir holding
+        # ONLY the new-dialect record (no `touched.txt` at all) is still
+        # seen, not silently skipped as it would be by an `is_file()` gate
+        # on the legacy filename alone.
+        sink_path = agent_dir / scope._TOUCH_RECORD_FILENAME
+        lines, degraded = scope._read_touch_record_as_legacy_lines(sink_path)
+        if degraded:
+            continue  # soft-skip per the FAIL-OPEN contract above
         for fpath in sorted(scope.project_self_scope(lines)):
             if fpath:
                 out.append(fpath)
@@ -2617,8 +2638,27 @@ def my_agent_touched(
 def self_claim(path: str, cwd: Optional[str] = None) -> bool:
     """Port of ``cs_self_claim <path>`` (726-758).
 
-    Record ``path`` in the current session's ``touched.txt`` (best-effort
-    attribution for tools that edit files outside the Edit/Write hook path).
+    Record ``path`` in the current session's ``touch-record.jsonl`` (C6,
+    docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+    its-writers.md — the writer flip, part one) — best-effort attribution
+    for tools that edit files outside the Edit/Write hook path (the named
+    example: ``coordinator_core.text.refresh_queries.process_file``).
+
+    Both branches below (fast-path env-sid, and the no-env-var single-live-
+    session fallback) are SESSION-KEYED: neither ever writes an agent dir.
+    The agent-keyed append belongs to C7 alone (do not add one here). Both
+    append through ``touch_record.append_event`` — the SAME single append
+    mechanism ``scope.touch()`` was flipped to in C4 (see that function's
+    own docstring) — never a hand-rolled second writer. The prior writer,
+    ``atomic_dedup_append`` (still the writer for the CLI-authored
+    ``claim-path`` seam, out of this chunk's scope), is NOT called by this
+    function any more.
+
+    Do NOT delete the union-read (``scope._read_touch_record_as_legacy_
+    lines`` and friends) on the strength of this flip: ``track_touched_
+    files :: _handler`` (the PreToolUse hook path) still emits the OLD
+    ``touched.txt`` dialect until C7 lands, and the union stays live until
+    C8 retires it for good.
 
     Normalization: ``path`` is run through
     ``coordinator_core.session.scope.normalize_touch_path`` before either
@@ -2677,7 +2717,13 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
         if not Path(sdir).is_dir():
             return True  # session dir gone — nothing to claim against
         try:
-            atomic_dedup_append(str(Path(sdir) / "touched.txt"), entry)
+            touch_record.append_event(
+                os.path.join(sdir, scope._TOUCH_RECORD_FILENAME),
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=entry,
+            )
         except (OSError, ValueError) as exc:
             # fail-open — self-claim attribution is advisory and must never
             # block the caller; surface the failure for debugging.
@@ -2711,7 +2757,13 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
     if not sdir:
         return True
     try:
-        atomic_dedup_append(str(Path(sdir) / "touched.txt"), entry)
+        touch_record.append_event(
+            os.path.join(sdir, scope._TOUCH_RECORD_FILENAME),
+            session_id=sid,
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path=entry,
+        )
     except (OSError, ValueError) as exc:
         # fail-open — self-claim attribution is advisory and must never
         # block the caller; surface the failure for debugging.

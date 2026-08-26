@@ -1,9 +1,11 @@
 """
 coordinator_core.ops.ceremony.tail_ops -- reused tail-op wiring + small cs_* native ports.
 
-Purpose: in-process (no bash/node spawn) wiring of ceremony tail ops -- both
-``coverage.gate`` and ``review_trail.write``'s in-process wiring were since removed
-(see this module's own residue comments below) -- plus native Python ports of the two remaining
+Purpose: in-process (no bash/node spawn) wiring of ceremony tail ops -- ``coverage.gate``'s
+in-process wiring was since removed (see this module's own residue comment below);
+``review_trail.write`` was readmitted from suspension (PM ruling 2026-08-23) and is
+registered in ``coordinator_core/ops/__init__.py``, but this module still wires none of
+its own call sites against it (see the residue comment below) -- plus native Python ports of the two remaining
 ``cs_*`` bash functions the OLD ``wsc_commit.py`` shelled out to via ``_run_cs_function``
 (``bash -c "source coordinator-session.sh && <fn>"``): ``cs_archive`` and
 ``cs_release_artifact``. Also carries ``refresh_roadmap_callout`` -- the disposable STEP_2_75
@@ -23,32 +25,34 @@ rather than importing each op module's private handler function -- a future op-m
 that drops the public registration surfaces cleanly as a ``None`` return, not an
 ``AttributeError`` at a private import site.
 
-Archive-sweeps are DETACHED, not in-process (C2, 2026-07-23 plan
-``docs/plans/2026-07-23-wsc-tail-slim-down.md``). ``fleet.archive_completed_plans``,
-``fleet.archive_completed_handoffs``, and ``fleet.archive_actioned_memos`` used to be wired
-here as blocking two-phase calls (``archive_completed_plans`` / ``archive_completed_handoffs``
-/ ``sweep_actioned_memos``, now REMOVED -- 2769ms median of the ~3.3s ceremony, per the
-plan's Baseline table); an execute-time occasion re-verification found the "these already run
-elsewhere" duplication claim only partly true (no other occasion covers terminal plans or
-actioned memos within a session, and a long session between SessionStarts would archive
-nothing at all -- see plan § Execution Notes "Occasion map re-verified"). ``fire_archive_
-sweeps_detached`` replaced the three blocking calls with detached CLI fires, preserving the
-whole budget win (detached ⇒ ~0ms blocking) while keeping every archival class occasioned at
-every WSC pass. Accepted latency, stated honestly: archival now completes shortly AFTER the
-ceremony returns, not within it -- the detached child races the parent's own exit, not its
-commit. ``fleet.archive_completed_plans`` (and its ``sweep-terminal-plans.py`` CLI fire) was
-killed and rebuilt from scratch 2026-08-23 (PM ruling) -- its detached fire is gone from
-``_ARCHIVE_SWEEP_SCRIPTS`` until a rebuilt op re-earns a call site here.
-
-``fleet.archive_actioned_memos`` (and its ``sweep-actioned-memos.py`` CLI fire) was killed
-outright the same day (PM ruling, no replacement op) -- the memo family has no detached fire
-here any more; only the shipped-handoffs sweep remains in ``_ARCHIVE_SWEEP_SCRIPTS``.
+Archive-sweeps were DETACHED, not in-process, from C2 (2026-07-23 plan
+``docs/plans/2026-07-23-wsc-tail-slim-down.md``) through 2026-08-25. ``fleet.
+archive_completed_plans``, ``fleet.archive_completed_handoffs``, and ``fleet.
+archive_actioned_memos`` used to be wired here as blocking two-phase calls
+(``archive_completed_plans`` / ``archive_completed_handoffs`` / ``sweep_actioned_memos``,
+now REMOVED -- 2769ms median of the ~3.3s ceremony, per the plan's Baseline table); an
+execute-time occasion re-verification found the "these already run elsewhere" duplication
+claim only partly true (no other occasion covers terminal plans or actioned memos within a
+session, and a long session between SessionStarts would archive nothing at all -- see plan
+§ Execution Notes "Occasion map re-verified"). C2's ``fire_archive_sweeps_detached``
+replaced the three blocking calls with detached CLI fires -- itself DELETED by C4
+(docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4), whose spike
+found the detached-child-races-the-parent shape traded a budget win for a second-writer
+hazard (state/lessons/2026-07-23-universal-detaching-work-off-a-blocking-7183aecd6a29.yaml)
+with no net cost advantage over folding the archival move into the ceremony's own commit.
+The terminal-handoff sweep's live call site is now
+``commit_pipeline.run_commit_pipeline``'s ``_run_in_plane_archive_sweep`` -- in-process,
+zero additional git spawns, zero additional commits (see that module). This module wires
+no call site for it any more; ``fleet.archive_completed_plans`` and ``fleet.
+archive_actioned_memos`` remain without any occasioned call site here (the former killed
+and rebuilt from scratch 2026-08-23, the latter killed outright the same day, both PM
+rulings, neither yet re-earning one).
 
 C5 (2026-07-23 wsc-tail-slim-down): ``refresh_roadmap_callout`` below was being dropped from
 ``wsc_tail.py``'s BLOCKING pre-commit tail and fired as a DETACHED CLI spawn instead, via
-``fire_tracker_and_roadmap_detached`` (mirrors ``fire_archive_sweeps_detached``'s C2 shape
-exactly). This function was never wired into ``wsc_tail.py`` (unreached dead code, historically
-flagged as OPEN RESIDUE) and its tracker-CLI leg was removed 2026-08-14 (``docs/plans/
+``fire_tracker_and_roadmap_detached``. This function was never wired into ``wsc_tail.py``
+(unreached dead code, historically flagged as OPEN RESIDUE) and its tracker-CLI leg was
+removed 2026-08-14 (``docs/plans/
 2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md`` § C2 residue sweep) --
 it now fires the ``refresh-roadmap-callout.py`` CLI only. Its name is kept as-is; renaming it is
 outside this residue-sweep's scope.
@@ -88,22 +92,22 @@ Negative-spec:
     - ``review_trail.write``'s in-process wiring (formerly this module's
       ``write_review_trail`` / ``write_review_trail_many`` / ``review_trail_
       metadata_complete``) was removed 2026-08-23 (PM ruling, kill review_
-      trail.write) along with the op itself. The cross-repo SEQUENTIAL
-      PREDECESSOR contract this entry used to protect (DoE's chain-end
-      ``review-coverage-gate.py``, SKILL.md:28, requiring ``VERDICT=COVERED``
-      before its own Step 3) is UNCOORDINATED by this removal -- flagged to
-      the EM, not resolved here; a rebuilt op must re-examine that contract
-      before this module (or any successor) re-wires a write path against it.
-    - ``fire_archive_sweeps_detached`` does NOT fire the composite ``coordinator/bin/
-      sweep-boot.py`` -- that composite also runs the unintegrated-findings reap (a tracked
-      ``git rm``), a destructive sweep out of scope for a call fired on every WSC pass
-      (plan § C2). It fires the per-class CLIs directly instead.
-    - ``fire_archive_sweeps_detached`` does NOT stamp the shared ``archive_sweeps``
-      housekeeping-liveness key -- a detached parent has no visibility into whether the
-      spawned child actually succeeded, so each per-class CLI stamps its OWN success
-      (mirrors ``sweep-boot.py``'s ``_stamp_archive_sweeps_liveness``; multiple producers
-      stamping the same key is additive-safe by the key's own last-writer-wins contract,
-      see ``housekeeping_liveness.stamp_liveness``).
+      trail.write) and remains removed here even though the 2026-08-23 PM
+      ruling later readmitted the op itself from suspension --
+      ``coordinator_core/ops/review_trail_write.py`` is registered again
+      (``coordinator_core/ops/__init__.py``), it was never deleted outright.
+      This module still performs no call against it; a rebuild of this
+      wiring is a separate decision from the op's own readmission. The
+      cross-repo SEQUENTIAL PREDECESSOR contract this entry used to protect
+      (DoE's chain-end ``review-coverage-gate.py``, SKILL.md:28, requiring
+      ``VERDICT=COVERED`` before its own Step 3) is UNCOORDINATED by this
+      module's continued non-wiring -- flagged to the EM, not resolved here;
+      re-wiring a call site here must re-examine that contract first.
+    - This module does NOT wire a terminal-handoff archival call site any more --
+      ``fire_archive_sweeps_detached`` and ``_ARCHIVE_SWEEP_SCRIPTS`` were DELETED (C4,
+      docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4); a
+      repo-wide grep for either name returns no live caller. The replacement in-plane
+      call site lives in ``commit_pipeline.py``, not here.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C6
 Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C2
@@ -149,9 +153,11 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 # "# noqa: F401 -- trigger registration" idiom used at every call site
 # in the OLD wsc_commit.py). The three fleet archive ops (archive_plans/archive_handoffs/
 # archive_actioned_memos) are NOT imported here for registration any more (C2) -- nothing in
-# this module calls them in-process; the detached CLIs spawned by
-# `fire_archive_sweeps_detached` register them in their OWN freshly-spawned process via
-# `coordinator_core/ops/__init__.py`'s central registration list instead.
+# this module calls them in-process. The terminal-handoff sweep's live call site
+# (`commit_pipeline.py`'s `_run_in_plane_archive_sweep`, C4) imports
+# `archive_terminal_handoffs.plan_sweep`/`.apply_sweep` directly rather than through this
+# module's registry-handler resolution -- it composes those two pure functions, never the
+# registered `fleet.archive_completed_handoffs` op handler itself.
 #
 # coverage.gate (coordinator_core.ops.coverage_gate) is deliberately NOT
 # pre-imported here any more (K-001, state/kill-ledger.md): the close path no
@@ -161,21 +167,18 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 # (coordinator/bin/wsc-coverage-gate-runner.py), which imports and registers
 # it in its own process.
 #
-# review_trail_write (coordinator_core.ops.review_trail_write) is likewise no
-# longer pre-imported here -- the op it registered, review_trail.write, was
-# deleted outright (PM ruling 2026-08-23, kill review_trail.write); see the
+# review_trail_write (coordinator_core.ops.review_trail_write) is likewise not
+# pre-imported here -- its in-process wiring was removed 2026-08-23 (PM ruling,
+# kill review_trail.write) and this module still performs no call against it.
+# The op itself was later readmitted from suspension by the 2026-08-23 PM
+# ruling and IS registered (coordinator_core/ops/__init__.py registers
+# "review_trail.write") -- it was never deleted outright; see the
 # "review_trail.write" residue comment below for what this module used to
-# wire against it.
+# wire against it and why re-wiring is a separate decision from readmission.
 
 _LOG = logging.getLogger(__name__)
 
 TailResult = Dict[str, Any]
-
-# Results-dict label for the single detached-fire entry (C2) that replaced the three
-# retired blocking OP_ARCHIVE_PLANS / OP_ARCHIVE_HANDOFFS / OP_ARCHIVE_MEMOS wrappers --
-# see `fire_archive_sweeps_detached` and the module docstring's "Archive-sweeps are
-# DETACHED" section.
-OP_ARCHIVE_SWEEPS_DETACHED = "archive_sweeps:detached_fire"
 
 # Native-port op labels (not JSON-RPC op keys -- these never go through get_op_handler).
 OP_CS_ARCHIVE = "cs_archive"
@@ -279,62 +282,13 @@ async def _run_fleet_op_by_key(op_key: str, op_label: str, common_dir: Path) -> 
     return await run_fleet_op_two_phase(handler, op_label, common_dir)
 
 
-# The per-class on-demand CLIs `fire_archive_sweeps_detached` fires, relative to
-# ``<worktree_root>/coordinator/bin/``. Deliberately mirrors
-# `housekeeping_liveness.REMEDY_COMMANDS[ARCHIVE_SWEEPS]` (same scripts) -- NOT the
-# composite `sweep-boot.py` (module docstring negative-spec; plan § C2 anti-scope).
-#
-# ``sweep-terminal-handoffs.py`` re-earns this seam (C4, 2026-08-25 plan
-# ``docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md``) --
-# see that CLI's own module docstring. It is a thin two-phase caller over the
-# rebuilt ``fleet.archive_completed_handoffs`` op (cap-bounded, single-flight
-# locked); this tuple now has exactly ONE member again, so the two-member
-# ``.git/index.lock`` hazard this module's docstring records for the
-# ORIGINAL one-member loop does not apply in a different sense than before --
-# see that CLI's own module docstring "Index-lock disposition" note for why
-# a bounded retry lives at the op's own git add/commit pair
-# (``coordinator_core.ops.fleet._common.archive_and_commit`` /
-# ``_update_index_with_retry``) rather than here.
-_ARCHIVE_SWEEP_SCRIPTS: tuple = ("sweep-terminal-handoffs.py",)
-
-
-def fire_archive_sweeps_detached(worktree_root: Path) -> TailResult:
-    """Fire the per-class archive-sweep CLIs detached (C2) -- the replacement for the
-    retired blocking calls (``archive_completed_handoffs`` / ``sweep_actioned_memos``,
-    both removed). The other two former members of ``_ARCHIVE_SWEEP_SCRIPTS`` are also
-    gone: ``archive_completed_plans`` was killed and rebuilt from scratch 2026-08-23
-    (its ``sweep-terminal-plans.py`` fire is gone until a rebuilt op re-earns a call
-    site here); ``fleet.archive_actioned_memos`` was killed outright the same day (PM
-    ruling) with no replacement op yet, so its ``sweep-actioned-memos.py`` fire is gone
-    too.
-
-    Each CLI is spawned via `detached_spawn.spawn_detached` (fire-and-forget, effectively
-    0ms blocking) with ``str(worktree_root)`` as its positional ``repo_root`` arg -- the
-    same shape a human invokes it with directly (``python3 coordinator/bin/sweep-X.py``).
-    The spawned child resolves its own params, runs its own two-phase fleet-op dance,
-    self-commits its own archival mutation, and stamps the shared ``archive_sweeps``
-    housekeeping-liveness key on its OWN success path -- this function does NOT stamp
-    liveness itself (see module docstring negative-spec: a detached parent has no
-    visibility into whether the spawned child actually succeeded).
-
-    Returns a `TailResult` recording only the SPAWN attempt outcome (whether `Popen`
-    itself was invoked without raising), NOT the eventual archival outcome -- that is
-    invisible to this (synchronous, non-blocking) caller by construction. A spawn
-    failure is recorded both here (``failed``) and in the shared housekeeping-failures
-    log by `spawn_detached` itself (the parent-side "could not even start you" record).
-    """
-    result: TailResult = _empty_result()
-    bin_dir = Path(worktree_root, "coordinator", "bin")
-    repo_root_str = str(worktree_root)
-    for script_name in _ARCHIVE_SWEEP_SCRIPTS:
-        script_path = str(bin_dir / script_name)
-        if spawn_detached(repo_root_str, script_path, [repo_root_str]):
-            result["acted"].append(f"detached_fire:{script_name}")
-        else:
-            result["failed"].append(f"detached_fire:{script_name}: spawn_detached returned False")
-    return result
-
-
+# fire_archive_sweeps_detached and _ARCHIVE_SWEEP_SCRIPTS were DELETED here (C4,
+# docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4) -- the
+# detached on-disk-script archival shape they implemented is replaced by an in-plane
+# fold-in of plan_sweep/apply_sweep's own moved src/dst paths into the ceremony's own
+# commit_paths (`commit_pipeline.run_commit_pipeline`'s `_run_in_plane_archive_sweep`),
+# never a spawned child racing the parent's own commit. See that module for the live
+# call site; this module registers no call site of its own for it any more.
 # ---------------------------------------------------------------------------
 # refresh-roadmap-callout -- disposable sibling render
 # (STEP_2_75, C9 wiring-gap fix, 2026-07-22 -- see wsc_tail.py module docstring)
@@ -514,9 +468,10 @@ def fire_tracker_and_roadmap_detached(
     """Fire the per-roadmap callout refresh DETACHED (C5) -- the intended replacement
     for the retired BLOCKING in-process `refresh_roadmap_callout` call above (kept for
     the CURRENT wsc_tail.py call site until its own C5 edit repoints STEP_2_75 onto
-    this function -- see module docstring). Mirrors `fire_archive_sweeps_detached`'s
-    shape exactly (C2 precedent) -- same `spawn_detached` seam, same "record the SPAWN
-    attempt only" result contract, no second spawn mechanism invented.
+    this function -- see module docstring). Mirrored the now-deleted
+    `fire_archive_sweeps_detached`'s shape exactly (C2 precedent) -- same `spawn_detached`
+    seam, same "record the SPAWN attempt only" result contract, no second spawn mechanism
+    invented.
 
     Its former handoff-tracker render leg was removed 2026-08-14 along with the
     renderer it fired (`docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-
@@ -548,8 +503,8 @@ def fire_tracker_and_roadmap_detached(
     negative-spec below).
 
     Returns a `TailResult` recording only the SPAWN attempt outcome, never the
-    eventual render/rewrite/commit outcome -- identical contract to
-    `fire_archive_sweeps_detached` (see that function's own docstring).
+    eventual render/rewrite/commit outcome -- the same contract the now-deleted
+    `fire_archive_sweeps_detached` carried.
 
     Negative-spec:
         - Does NOT commit the CLI's output -- see "ARTIFACT-DISPOSITION RESIDUE"
@@ -559,11 +514,11 @@ def fire_tracker_and_roadmap_detached(
           `refresh_roadmap_callout` call site is dropped.
         - Does NOT decide WHEN (relative to the ceremony's own commit) this function
           is called -- that is the caller's (`wsc_tail.py`'s) sequencing call. It MUST
-          be called strictly AFTER the ceremony's own commit has landed, mirroring
-          `fire_archive_sweeps_detached`'s own post-commit call site (gated on
-          `committed_sha is not None`) -- calling it pre-commit reopens the exact
-          `.git/index.lock` contention / mid-write dirty-file hazard C2 already hit
-          once (module docstring "C2 correction").
+          be called strictly AFTER the ceremony's own commit has landed, mirroring the
+          post-commit call-site gating (`committed_sha is not None`) the now-deleted
+          `fire_archive_sweeps_detached` used to have -- calling it pre-commit reopens
+          the exact `.git/index.lock` contention / mid-write dirty-file hazard C2
+          already hit once (module docstring "C2 correction").
         - Does NOT invent a second spawn mechanism, failures-log format, or liveness
           store -- reuses `detached_spawn.spawn_detached` verbatim (C5 remit).
     """
@@ -597,12 +552,14 @@ def fire_tracker_and_roadmap_detached(
 # ---------------------------------------------------------------------------
 # review_trail.write's in-process wiring (review_trail_metadata_complete,
 # write_review_trail, write_review_trail_many) was removed here (PM ruling
-# 2026-08-23, kill review_trail.write): the op itself
-# (coordinator_core/ops/review_trail_write.py) was deleted, kill-means-kill,
-# no successor built yet. This module registers no top-level JSON-RPC op of
-# its own and performed no direct write for review-trail -- every write site
-# lived in the deleted op module, so nothing here needed a replacement write
-# path, only removal of the dead call.
+# 2026-08-23, kill review_trail.write). The op module itself
+# (coordinator_core/ops/review_trail_write.py) was NOT deleted outright --
+# the same 2026-08-23 PM ruling later readmitted it from SUSPENSION, and it
+# is registered again (coordinator_core/ops/__init__.py registers
+# "review_trail.write"). This module registers no top-level JSON-RPC op of
+# its own and still performs no direct write for review-trail -- every write
+# site lived in this now-live op module, so re-wiring a call here (if ever
+# wanted) is a fresh decision, not a restoration of deleted code.
 # ---------------------------------------------------------------------------
 
 

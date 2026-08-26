@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,8 +39,27 @@ def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
     return str(bindir)
 
 
+def _sh() -> str:
+    """Absolute path to a POSIX `sh`, or skip the calling test.
+
+    NEGATIVE SPEC: never the literal `/bin/sh`. Windows is first-class for this
+    suite and has no such path -- git ships `sh` under its own usr/bin -- so a
+    hard-coded invocation dies with WinError 2 before the emitted hook body
+    under test is ever read, failing identically whatever the code under test
+    does. The emitted bodies' own `#!/bin/sh` shebangs are unaffected: git
+    resolves those through its bundled shell, and every call site here invokes
+    the interpreter explicitly rather than relying on the shebang.
+    """
+    sh = shutil.which("sh")
+    if not sh:
+        import pytest
+
+        pytest.skip("no POSIX sh resolvable on PATH in this environment")
+    return sh
+
+
 def _sh_path(name: str) -> str:
-    result = subprocess.run(["/bin/sh", "-c", f"command -v {name}"], capture_output=True, text=True)
+    result = subprocess.run([_sh(), "-c", f"command -v {name}"], capture_output=True, text=True)
     path = result.stdout.strip()
     if not path:
         import pytest
@@ -49,7 +70,23 @@ def _sh_path(name: str) -> str:
 
 def _no_python_path(tmp_path: Path) -> str:
     """A PATH with sh reachable but no python3/python/py binary resolvable."""
-    return _make_tool_bindir(tmp_path, {"sh": "/bin/sh"})
+    return _make_tool_bindir(tmp_path, {"sh": _sh()})
+
+
+_UNRESOLVABLE_BAKED_PY = "/nonexistent/coordinator-test/python"
+
+
+def _with_unresolvable_interpreter(body: str) -> str:
+    """Point the baked `_PY=` rung at a path that cannot exist.
+
+    Sanitizing PATH alone stopped being enough at 304a1bc30: `_shim_body` now
+    bakes an ABSOLUTE `sys.executable` and only falls back to the `$PATH` walk
+    when `[ -x "$_PY" ]` fails, so a body under a python-free PATH still finds
+    the real interpreter and runs the hook for real. Both rungs have to miss
+    for the WARNING branch these tests pin to be reachable at all -- this
+    handles the baked one, `_no_python_path` handles the walk.
+    """
+    return re.sub(r'^(_PY=")[^"]*(")$', r"\1" + _UNRESOLVABLE_BAKED_PY + r"\2", body, flags=re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -67,11 +104,11 @@ def test_shim_body_missing_interpreter_message_present_in_source():
 def test_shim_body_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     hook = tmp_path / "post-commit"
-    hook.write_text(body, encoding="utf-8")
+    hook.write_text(_with_unresolvable_interpreter(body), encoding="utf-8")
 
     env = dict(os.environ)
     env["PATH"] = _no_python_path(tmp_path)
-    result = subprocess.run(["/bin/sh", str(hook)], capture_output=True, text=True, env=env)
+    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0  # never fail-closed
     assert "WARNING" in result.stderr
@@ -97,14 +134,43 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # git_hook_install.py being bumped alongside it. The failure message says
 # what to do, not merely that a checksum moved: bump the stamp, then update
 # _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
+#
+# THE BAKED INTERPRETER PATH IS NORMALIZED OUT BEFORE HASHING (2026-08-25, gen
+# 5). `_shim_body` now interpolates `py_probe_sh.baked_python_lines`, which
+# embeds THIS machine's `sys.executable`. That literal is machine state, not
+# body SHAPE: hashing it would make this test pass only on the box that last
+# updated the constant and fail on every other one — including the fleet floor
+# (a MacBook), where the path is not even the same shape. `_normalize_baked_py`
+# replaces the assigned value with a fixed placeholder so the checksum still
+# goes red for a new/dropped/reordered rung — the thing this test exists to
+# catch — and stays green across machines. It deliberately does NOT elide the
+# whole line: the `_PY="..."` assignment and its `[ -x ]` self-heal sibling are
+# rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "ecf573666bb45bd5fe465b60a5a9b991e00adcff1e7dfc274e466bf8ba9ad669"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "8bf19d485fe4e5905f75419fb8527b657a629a562ba71550efe3d26ddde49209"
+
+_BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
+
+
+def _normalize_baked_py(body: str) -> str:
+    """Replace the machine-specific baked interpreter path with a placeholder.
+
+    Keeps the assignment line itself in the hashed text — only its VALUE is
+    normalized — so a dropped or reordered interpreter rung still moves the
+    checksum.
+    """
+    return re.sub(
+        r'^(_PY=")[^"]*(")$',
+        r"\1" + _BAKED_PY_PLACEHOLDER + r"\2",
+        body,
+        flags=re.M,
+    )
 
 
 def test_hook_gen_stamp_bump_is_required_for_shape_changes():
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
-    checksum = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    checksum = hashlib.sha256(_normalize_baked_py(body).encode("utf-8")).hexdigest()
     assert checksum == _EXPECTED_BODY_SHAPE_CHECKSUM, (
         f"_shim_body's emitted body shape changed (new checksum {checksum}) without a "
         "matching bump of _HOOK_GEN_STAMP in coordinator/bin/lib/git_hook_install.py. "
@@ -115,6 +181,64 @@ def test_hook_gen_stamp_bump_is_required_for_shape_changes():
     # otherwise this checksum could go stale silently alongside a _shim_body
     # that stopped emitting the stamp at all.
     assert ghi._hook_gen_stamp_line() in body
+
+
+def test_interpreter_rung_costs_no_unconditional_subshell():
+    """The emitted hook must not spend a process resolving its interpreter.
+
+    `prepare-commit-msg` and `post-commit` fire on every NON-ENGINE commit —
+    the backstop path that survives both the staged-rollback gate's deletion
+    and the engine-side commit collapse. Until 2026-08-25 both bodies opened
+    with `_PY="$(_py_resolve)"`, a command substitution (a subshell, i.e. a
+    process) wrapping a `$PATH` walk, paid unconditionally on every fire.
+    `baked_python_lines` replaces it with an assignment plus an `[ -x ]` test.
+
+    Asserted as a SPAWN COUNT, never a duration: the per-hook delta is about
+    one scheduler quantum on this box, and DR-344 makes a process-time figure
+    inside the quantum a non-result.
+
+    The `.doe-root` rung's own `$(cat ...)` is deliberately NOT counted — it
+    sits behind `[ -f "$SCRIPT" ] ||` and never runs on a box whose earlier
+    SCRIPT rungs resolve. Counting it would credit this fix with removing a
+    process that was already conditional, and overstating a saving is the
+    recurring defect on this surface.
+    """
+    for script_name, invoke in (
+        ("coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"'),
+        ("coordinator-prepare-commit-msg", 'exec "$_PY" "$SCRIPT" "$@"'),
+    ):
+        body = _shim_body("/fake/coord/bin", script_name, invoke)
+
+        # The walk MUST still be present — it is the recovery rung for a stale
+        # bake, and these hooks fail OPEN, so losing it is a silent-off mode
+        # rather than a loud failure. See baked_python_lines' docstring.
+        assert "_py_resolve() {" in body, (
+            f"{script_name}: the $PATH-walk fallback was removed — a stale "
+            "baked path would now silently disable this fail-open hook"
+        )
+        assert '[ -x "$_PY" ] || _PY="$(_py_resolve)"' in body, (
+            f"{script_name}: the bake no longer falls back to the walk"
+        )
+
+        unconditional = [
+            line
+            for line in body.split("\n")
+            if "$(" in line
+            and not line.lstrip().startswith("[ -f")
+            and "||" not in line.split("$(")[0]
+        ]
+        assert not unconditional, (
+            f"{script_name}: the interpreter rung must cost no unconditional "
+            f"subshell; found {unconditional}"
+        )
+
+        # The walk's own subshell is allowed, but ONLY behind the `[ -x ]`
+        # guard — i.e. paid when the bake is dead, never on the happy path.
+        walk_uses = [line for line in body.split("\n") if "$(_py_resolve)" in line]
+        assert len(walk_uses) == 1, f"{script_name}: expected one guarded walk use, got {walk_uses}"
+        assert walk_uses[0].lstrip().startswith("[ -x "), (
+            f"{script_name}: the walk is invoked unconditionally: {walk_uses[0]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +264,14 @@ def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
         '"$_PY" "$_T" "$@"',
     )
     hook = tmp_path / "post-commit"
-    hook.write_text("#!/bin/sh\n" + block + " || true\n", encoding="utf-8")
+    hook.write_text(
+        _with_unresolvable_interpreter("#!/bin/sh\n" + block + " || true\n"),
+        encoding="utf-8",
+    )
 
     env = dict(os.environ)
     env["PATH"] = _no_python_path(tmp_path)
-    result = subprocess.run(["/bin/sh", str(hook)], capture_output=True, text=True, env=env)
+    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0  # append blocks never disturb the parent hook's exit status
     assert "WARNING" in result.stderr
@@ -238,3 +365,85 @@ def test_container_registry_keys_are_not_heal_targets(monkeypatch):
         "guards the premise: fleet_root is excluded because it WOULD warn, "
         "not because it happens to classify cleanly"
     )
+
+# ---------------------------------------------------------------------------
+# The no-session gate is GENERATED from the ladder, never hand-copied.
+# ---------------------------------------------------------------------------
+
+def test_session_gate_is_generated_from_the_ladder():
+    """The emitted no-session gate must name exactly SESSION_ENV_PRECEDENCE.
+
+    This is the artifact that makes `skip_if_all_unset` safe to exist. The
+    danger it guards is NOT divergence at authoring time -- the caller passes
+    the constant, so the emitted line cannot disagree the day it is written.
+    It is STALENESS: the ladder gains or loses a tier later, and an installed
+    hook keeps testing the old set. That drift is silent and fails in the worst
+    direction (a commit that should be stamped exits early with no Session-Id),
+    which is exactly why a third hand-written copy of this ladder was refused.
+
+    A gen-stamp bump does not cover it: forgetting the bump and forgetting the
+    gate are the same forgetting. This test fails on the ladder change itself,
+    before anything is installed anywhere.
+    """
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+        skip_if_all_unset=SESSION_ENV_PRECEDENCE,
+    )
+    gate = [ln for ln in body.splitlines() if ln.startswith('[ -z "')]
+    assert len(gate) == 1, f"expected exactly one no-session gate, got {gate}"
+    expected = '[ -z "' + "".join(f"${v}" for v in SESSION_ENV_PRECEDENCE) + '" ] && exit 0'
+    assert gate[0] == expected, (
+        f"the emitted no-session gate {gate[0]!r} no longer matches "
+        f"SESSION_ENV_PRECEDENCE {tuple(SESSION_ENV_PRECEDENCE)!r}. The ladder moved. "
+        "Fix: nothing in this test -- re-emit the hooks (the gate is generated), bump "
+        "_HOOK_GEN_STAMP, and reinstall, or installed hooks keep testing the old tier set."
+    )
+
+
+def test_session_gate_resolves_before_any_interpreter_resolution():
+    """Ordering invariant, owned by claude-klabauter-59 and stated
+    mechanism-independently: as the emitted body executes, the sentinel guards
+    resolve before ANY interpreter resolution is attempted -- including a $PATH
+    walk, command substitution, or subshell. A gate that sits below the probe
+    has already paid the cost it exists to avoid.
+    """
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+        skip_env="COORDINATOR_TRAILERS_ALREADY_APPLIED",
+        skip_if_all_unset=SESSION_ENV_PRECEDENCE,
+    )
+    lines = body.splitlines()
+    gate_at = max(i for i, ln in enumerate(lines) if ln.startswith("[ -n \"$COORDINATOR_TRAILERS") or ln.startswith('[ -z "'))
+    first_interp = min(
+        i for i, ln in enumerate(lines) if ln.startswith("_py_resolve()") or ln.startswith('_PY=')
+    )
+    assert gate_at < first_interp, (
+        f"a guard at line {gate_at + 1} sits at or below the first interpreter rung at "
+        f"line {first_interp + 1} -- the ordering invariant is broken"
+    )
+
+
+def test_post_commit_never_carries_the_no_session_gate():
+    """auto-push is the SOLE PUBLISHER on a non-engine commit.
+
+    A no-session commit is precisely when nothing else will push it, so gating
+    post-commit on session presence would silently stop pushing the commits most
+    in need of it -- fail-closed on publication, wearing the costume of an
+    optimisation. Negative spec, pinned: only prepare-commit-msg may carry it.
+    """
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-auto-push",
+        'exec "$_PY" "$SCRIPT" "$@"',
+        skip_env="COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH",
+    )
+    assert not [ln for ln in body.splitlines() if ln.startswith('[ -z "')]
+    assert "CLAUDE_SESSION_ID" not in body

@@ -99,8 +99,14 @@ def test_eight_klabauter_rows_present():
     per-row audit below (this file + the dispatch report) is stale and must
     be re-walked, not silently trusted."""
     rows = _load_klabauter_rows()
-    assert len(rows) == 8, (
-        f"expected 8 publish-mirror:claude_klabauter rows, found {len(rows)}: "
+    # Re-audited 2026-08-26: `claude-klabauter-coordinator-lib` was added
+    # alongside the pre-existing `claude-klabauter-lib` row (same source,
+    # `coordinator/lib`, mirrored to a second destination path,
+    # `coordinator/lib`, rather than the legacy flat `lib`) — an additional
+    # allowlisted row, same fail-closed mechanism, not a state/-carrying
+    # change. 8 -> 9.
+    assert len(rows) == 9, (
+        f"expected 9 publish-mirror:claude_klabauter rows, found {len(rows)}: "
         f"{[r[0] for r in rows]} — re-audit this file's row-by-row rationale"
     )
 
@@ -131,9 +137,9 @@ def test_no_klabauter_allowlist_admits_state():
             f"this would carry claude-klabauter's working substrate into the mirror"
         )
 
-    assert checked_allowlisted == 7, (
-        f"expected 7 of the 8 claude_klabauter rows to declare an allowlist "
-        f"(the 8th, claude-klabauter-publish-repo-toplevel, deliberately has "
+    assert checked_allowlisted == 8, (
+        f"expected 8 of the 9 claude_klabauter rows to declare an allowlist "
+        f"(the 9th, claude-klabauter-publish-repo-toplevel, deliberately has "
         f"none), found {checked_allowlisted} — row shape has drifted, re-audit"
     )
 

@@ -5,7 +5,7 @@ coordinator_core.ops.session_hierarchy_derive.
 Derives the session/workstream hierarchy projection from handoff frontmatter
 lineage (a consumed handoff's ``consumed_by`` IS the harness session_id of the
 consuming session) and writes a full-rebuild, atomic, per-machine shard to
-``<claude-klabauter-root>/state/session-hierarchy.<machine-slug>.json``.
+``<claude-klabauter-live-root>/state/session-hierarchy.<machine-slug>.json``.
 
 This op always targets claude-klabauter's OWN checkout (post-migration, handoffs live
 there) — it does NOT read/write anything under this repo's tree, regardless

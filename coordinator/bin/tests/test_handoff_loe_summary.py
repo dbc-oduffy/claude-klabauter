@@ -215,7 +215,7 @@ def test_include_children_flag_forwarded(tmp_path):
     ), mock.patch.object(
         _mod, "_utc_now_iso", return_value="2026-07-23T00:00:00Z"
     ), mock.patch.object(
-        _mod, "_resolve_claude_klabauter_root", return_value=str(tmp_path / "fake-claude-klabauter-root")
+        _mod, "_resolve_claude_klabauter_root", return_value=str(tmp_path / "fake-claude-klabauter-live-root")
     ), mock.patch.object(
         _mod, "_format_oneline_row", return_value=None
     ):

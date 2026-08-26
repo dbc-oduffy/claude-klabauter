@@ -70,6 +70,8 @@ docs/wiki/machine-load-norm.md.
 
 from __future__ import annotations
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 import argparse
 import json
 import os
@@ -304,18 +306,25 @@ class LevelResult:
     state_at_wave_start: List[dict]
     aborted: bool
     abort_reason: Optional[str]
+    first_invalid_reason: Optional[str] = None
 
     def summary(self) -> dict:
         if not self.samples_ms:
+            # A level that took zero valid samples is a failed measurement, not a
+            # measurement of zero. Without the reason here the caller reads
+            # `aborted: false` with no numbers and no cause -- indistinguishable
+            # from an instrument that ran clean.
             return {
                 "level": self.level,
                 "n": 0,
                 "invalid_count": self.invalid_count,
                 "aborted": self.aborted,
                 "abort_reason": self.abort_reason,
+                "first_invalid_reason": self.first_invalid_reason,
+                "no_valid_samples": True,
             }
         sorted_samples = sorted(self.samples_ms)
-        return {
+        summary = {
             "level": self.level,
             "n": len(sorted_samples),
             "min": sorted_samples[0],
@@ -331,6 +340,16 @@ class LevelResult:
             "abort_reason": self.abort_reason,
             "machine_state_at_waves": self.state_at_wave_start,
         }
+        # A partly-invalid level still owes its reason. `first_invalid_reason`
+        # is captured whenever ANY sample invalidates, but until now it only
+        # reached the summary on the all-invalid branch -- so "8 valid, 2
+        # invalid" surfaced a bare count with the cause dropped, and a reader
+        # comparing p50s across levels had no way to see that two children
+        # died. Emitted here only when something actually invalidated, so a
+        # clean level's summary is unchanged.
+        if self.invalid_count and self.first_invalid_reason is not None:
+            summary["first_invalid_reason"] = self.first_invalid_reason
+        return summary
 
 
 def run_probe(
@@ -363,6 +382,7 @@ def run_probe(
     and returns whatever has completed so far (see module docstring's
     Ctrl-C / teardown note for the child-process-lifetime caveat).
     """
+    declare_benchmark_origin()
     levels = list(DEFAULT_LEVELS) if levels is None else list(levels)
 
     refuse_if_not_compute_only(op)
@@ -394,6 +414,7 @@ def run_probe(
             level_started = time.monotonic()
             samples: List[float] = []
             invalid_count = 0
+            first_invalid_reason: Optional[str] = None
             wave_states: List[dict] = [state.to_dict()]
             level_aborted = False
             level_abort_reason: Optional[str] = None
@@ -425,14 +446,17 @@ def run_probe(
                     for fut in futures:
                         try:
                             samples.append(fut.result())
-                        except BenchmarkSampleInvalid:
+                        except BenchmarkSampleInvalid as exc:
                             invalid_count += 1
+                            if first_invalid_reason is None:
+                                first_invalid_reason = str(exc)
 
             level_results.append(
                 LevelResult(
                     level=level,
                     samples_ms=samples,
                     invalid_count=invalid_count,
+                    first_invalid_reason=first_invalid_reason,
                     state_at_wave_start=wave_states,
                     aborted=level_aborted,
                     abort_reason=level_abort_reason,

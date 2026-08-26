@@ -1368,7 +1368,7 @@ def test_ac10_cli_end_to_end_exit_code_sanity(tmp_path):
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        env={**os.environ, "CLAUDE_KLABAUTER_ROOT": str(repo_root)},
+        env={**os.environ, "COORDINATOR_ENGINE_ROOT": str(repo_root)},
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 

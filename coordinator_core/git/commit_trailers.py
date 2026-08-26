@@ -1017,7 +1017,40 @@ def can_format_trailers_in_process(message: bytes) -> bool:
     residual classes all involve a comment line interacting with peeling --
     see `format_trailers_in_process`. Widening this predicate without first
     widening the corpus sweep is exactly the "hand-written replacement that
-    guesses at trailer semantics" the ratified anti-scope forbids."""
+    guesses at trailer semantics" the ratified anti-scope forbids.
+
+    DECIDED 2026-08-25 -- DO NOT WIDEN THIS, and here is the measurement so
+    the question stops being reopened. The standing residual (10 known
+    out-of-envelope divergences, all comment-line shapes) was carried as an
+    open cost/benefit call: closing them widens the envelope and drops the
+    fallback spawn. Measured against production rather than argued: over the
+    last 2000 commit messages in this repo, exactly **1** carries a `#` line
+    and would fall back -- a markdown `## The op` heading inside an
+    EM-authored body. That is 0.05%, i.e. one extra git spawn per ~2000
+    commits.
+
+    So the trade is: reproduce git's comment-line-plus-peeling semantics --
+    the single hardest corner of trailer handling and the precise hazard the
+    ratified anti-scope names -- to save one spawn in two thousand. Not worth
+    it. The fallback is correct BY CONSTRUCTION (it runs real git), which is
+    exactly what a rarely-taken path should be. Reopen this only if the
+    fallback rate is re-measured materially higher, and quote the new figure
+    when you do.
+
+    RE-DERIVATION TRAP: `git log -2000 --grep=...` is NOT this check. `-n`
+    caps OUTPUT after `--grep` filtering, so it draws matches from the whole
+    history (~25k commits here), not the last 2000 -- it returns 24, not 1,
+    because it samples a different, much larger population. The real check
+    reads the last 2000 messages (`git log -2000 --format=%B%x00`) and tests
+    each with this function's own predicate, `line.lstrip().startswith(b"#")`.
+
+    This is a proxy, not the exact population: it samples LANDED history, not
+    the not-yet-committed message `_apply_trailers` actually hands this
+    predicate. The two are typically near-identical (messages are authored
+    once, close to verbatim) but could diverge. This kind of ratified
+    cost/benefit call would conventionally live in a `docs/decisions/DR-*.md`
+    per this repo's convention; it stays inline here for locality to the
+    function it gates -- a deliberate tradeoff, not an oversight."""
     return not any(line.lstrip().startswith(b"#") for line in message.split(b"\n"))
 
 
@@ -1162,9 +1195,12 @@ def format_trailers_in_process(message: bytes, trailers: Sequence[str]) -> bytes
         # up with per-line mixed endings rather than a uniformly rewritten one.
         block = "".join(_render_block_item(kind, raw) for kind, raw in items)
         body = "".join(head[:para_start]) + block + rendered
-        # Rule 7 -- rewriting the block CONSUMES a peeled CRLF blank, UNLESS
-        # a comment follows it, in which case that blank stays put and
-        # separates the trailers instead. An LF blank always returns below.
+        # Rule 7 -- a peeled CRLF blank is CONSUMED by the rewrite only when
+        # the block's last item is a trailer (the rewrite reaches that line
+        # and re-terminates it). If the block ends on a non-trailer line --
+        # admitted by the proportional rule under a sign-off -- or a comment
+        # follows, the blank stays put and separates the trailers instead.
+        # An LF blank always returns below them.
         lead = 0
         while (
             lead < len(suffix)
@@ -1172,7 +1208,11 @@ def format_trailers_in_process(message: bytes, trailers: Sequence[str]) -> bytes
             and suffix[lead].endswith("\r\n")
         ):
             lead += 1
-        if lead and any(raw.strip().startswith("#") for raw in suffix[lead:]):
+        _ends_on_trailer = bool(items) and items[-1][0] == "t"
+        if lead and (
+            not _ends_on_trailer
+            or any(raw.strip().startswith("#") for raw in suffix[lead:])
+        ):
             body = (
                 "".join(head[:para_start])
                 + block

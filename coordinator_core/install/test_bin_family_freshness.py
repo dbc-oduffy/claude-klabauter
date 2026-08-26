@@ -69,10 +69,14 @@ def test_every_static_family_member_is_byte_identical_to_its_source(monkeypatch,
     for f in _RM_FAMILY_FILES:
         src_by_name[f] = _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / f
 
-    # coordinator_claude_klabauter_root() Rung 1 short-circuits on CLAUDE_KLABAUTER_ROOT being
-    # set — this repo checkout IS the claude-klabauter root, so this is a same-repo
-    # self-reference, not a cross-repo dependency.
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    # coordinator_claude_klabauter_root() Rung 1 short-circuits on COORDINATOR_ENGINE_ROOT
+    # being set — this repo checkout IS the claude-klabauter root, so this is a
+    # same-repo self-reference, not a cross-repo dependency. C14 retired the
+    # CLAUDE_KLABAUTER_ROOT name from Rung 1; it is deleted rather than left alone so an
+    # inherited ancestor-process value cannot reintroduce the retired-name
+    # advisory.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,

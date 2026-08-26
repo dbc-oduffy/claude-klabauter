@@ -308,15 +308,21 @@ class TestGeneratorStalenessProbe:
 
 
 class TestCoverageHonesty:
-    """`detail` must state how many swept entries were actually COMPARED.
+    """`detail` must report a ratio a reader can act on.
 
-    The live population is dominated by verdicts with no single write target
-    (WRITE_TARGET_UNRESOLVED, MUTATES_DECLARED) — measured 2026-08-22: 4 of 99
-    entries compared. A `detail` line counting the swept population as
-    "checked" claims coverage the probe does not have.
+    The denominator is DECLARED PAIRS, never the swept population. Census of
+    the live corpus, 2026-08-26 (`docs/problems/
+    2026-08-26-what-a-reinstall-on-the-mac-actually-hits.md` § 6): of 100 swept
+    entries only 8 are declared pairs; 89 are outside the staleness contract by
+    construction (34 declared corpus mutators whose output set is
+    data-dependent, 54 writers whose destination is a caller-supplied parameter
+    that does not exist at parse time, 1 environmental INDETERMINATE) and no
+    fix to any of them could raise the ratio. A ratio over the sweep therefore
+    reported `4/100` for a population that is really 4 of 8 compared — a
+    coverage gap of 96 that does not exist.
     """
 
-    def test_pass_detail_reports_compared_not_swept(
+    def test_pass_detail_reports_pairs_not_swept_population(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mod = _require_module()
@@ -329,8 +335,9 @@ class TestCoverageHonesty:
         result = mod._run_probe_generator_output_staleness(_REPO_ROOT)
 
         assert result.status == mod._PASS
-        assert "coverage 1/10 compared" in result.detail
-        assert "9 corpus mutator (no staleness contract)" in result.detail
+        assert "coverage 1/1 declared pairs compared" in result.detail
+        assert "9 outside the staleness contract (9 declared corpus mutator)" in result.detail
+        assert "1/10" not in result.detail
 
     def test_gap_detail_carries_the_split(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _require_module()
@@ -346,8 +353,8 @@ class TestCoverageHonesty:
 
         assert result.status == mod._INFO
         assert result.skipped is True
-        assert "coverage 1/2 compared" in result.detail
-        assert "1 write target unresolved" in result.detail
+        assert "coverage 1/1 declared pairs compared" in result.detail
+        assert "write target not statically resolvable" in result.detail
 
     def test_stale_detail_carries_the_same_split(
         self, monkeypatch: pytest.MonkeyPatch
@@ -364,11 +371,18 @@ class TestCoverageHonesty:
         result = mod._run_probe_generator_output_staleness(_REPO_ROOT)
 
         assert result.status == mod._DEGRADED
-        assert "coverage 1/2 compared" in result.detail
-        assert "1 corpus mutator (no staleness contract)" in result.detail
+        assert "coverage 1/1 declared pairs compared" in result.detail
+        assert "1 outside the staleness contract (1 declared corpus mutator)" in result.detail
 
-    def test_coverage_counts_only_compared_verdicts(self) -> None:
-        """UNSTAMPED and INDETERMINATE are swept, never compared."""
+    def test_unstamped_joins_the_denominator_undeclared_does_not(self) -> None:
+        """The two coverage gaps are not the same gap and do not share a remedy.
+
+        UNSTAMPED is a declared pair whose artifact carries no readable stamp:
+        the pair exists, so it belongs in the ratio and closing it raises the
+        ratio. UNDECLARED is a module with no pair at all — its remedy is a
+        `GENERATES`/`MUTATES` block, and counting it as an uncompared pair
+        names the wrong fix.
+        """
         mod = _require_module()
         data = {
             "a": {"verdict": "FRESH"},
@@ -380,16 +394,62 @@ class TestCoverageHonesty:
 
         line = mod._generator_staleness_coverage(data)
 
-        assert line.startswith("coverage 2/5 compared;")
-        assert "1 no readable stamp" in line
-        assert "1 indeterminate" in line
-        assert "1 undeclared" in line
+        assert line.startswith("coverage 2/3 declared pairs compared;")
+        assert "1 unstamped" in line
+        assert "1 module(s) owe a declaration" in line
+        assert "1 outside the staleness contract (1 indeterminate)" in line
+
+    def test_exempt_entries_are_counted_and_reasoned_never_dropped(self) -> None:
+        """Excluded from the ratio is not excluded from the report."""
+        mod = _require_module()
+        data = {f"m{i}": {"verdict": "MUTATES_DECLARED"} for i in range(34)}
+        data.update({f"w{i}": {"verdict": "WRITE_TARGET_UNRESOLVED"} for i in range(54)})
+
+        line = mod._generator_staleness_coverage(data)
+
+        assert line.startswith("coverage: no declared pair carried a comparison")
+        assert (
+            "88 outside the staleness contract "
+            "(34 declared corpus mutator, 54 write target not statically resolvable)"
+        ) in line
+
+    def test_live_census_shape_reports_four_of_eight_not_four_of_a_hundred(self) -> None:
+        """Regression pin for the reported defect, at the census's own numbers."""
+        mod = _require_module()
+        data: dict = {}
+        for verdict, count in (
+            ("STALE", 1),
+            ("FRESH", 3),
+            ("UNSTAMPED", 4),
+            ("UNDECLARED", 3),
+            ("MUTATES_DECLARED", 34),
+            ("WRITE_TARGET_UNRESOLVED", 54),
+            ("INDETERMINATE", 1),
+        ):
+            for i in range(count):
+                data[f"{verdict}-{i}"] = {"verdict": verdict}
+        assert len(data) == 100
+
+        line = mod._generator_staleness_coverage(data)
+
+        assert line.startswith("coverage 4/8 declared pairs compared;")
+        assert "4/100" not in line
+        assert "89 outside the staleness contract" in line
+
+    def test_unrecognised_verdict_is_surfaced_and_stays_out_of_the_ratio(self) -> None:
+        mod = _require_module()
+        data = {"a": {"verdict": "FRESH"}, "b": {"verdict": "WAT"}}
+
+        line = mod._generator_staleness_coverage(data)
+
+        assert line.startswith("coverage 1/1 declared pairs compared;")
+        assert "1 unrecognised ('WAT')" in line
 
     def test_coverage_line_omits_absent_categories(self) -> None:
         mod = _require_module()
 
         assert mod._generator_staleness_coverage({"a": {"verdict": "FRESH"}}) == (
-            "coverage 1/1 compared"
+            "coverage 1/1 declared pairs compared"
         )
 
 

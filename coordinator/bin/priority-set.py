@@ -190,6 +190,16 @@ def main(argv: list[str]) -> int:
     # be pure nag against DR-277's own "reserve deny() for cases where no
     # correct rewrite exists"). `cwd_repo_root` is still resolved below --
     # it is the spawn cwd for the cc_invoke child, not a write-location check.
+    # The verdict is deliberately UNUSED. C18 (state/dispatch-briefs/
+    # 2026-08-20-a-refusal-cannot-exit-zero/C18.md, DR-277 EM decision D5)
+    # removed this door's cwd identity gate outright rather than demoting it to a
+    # warning: `priority.set` is scope="none" (coordinator_core/ops/priority_set.py)
+    # and resolves its ledger write centrally via `coordinator_state_root(central=True)`,
+    # never from `cwd_repo_root` -- so a MISMATCH here has nothing to advise on and
+    # refusing would block a write that was never going to the wrong tree. Do not
+    # reintroduce a MISMATCH branch: `tests/test_priority_set_no_cwd_gate.py` pins
+    # its absence. The `cwd_repo_root is None` refusal below is unrelated to
+    # identity ("nowhere to spawn from") and stays.
     cwd_repo_root, _verdict = resolve_checked_repo_root(explicit_root=None)
     if cwd_repo_root is None:
         # No git root resolved from cwd at all -- "nowhere to spawn from".

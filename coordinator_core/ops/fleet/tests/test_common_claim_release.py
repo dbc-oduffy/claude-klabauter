@@ -78,11 +78,26 @@ def _own_sid(monkeypatch, sid: str) -> None:
 
 
 def _released_paths(repo: Path, sid: str) -> set:
-    touched = _sdir(repo, sid) / "touched.txt"
-    if not touched.exists():
+    """Release (``R``) events for THIS session, read off the live sink.
+
+    Reads ``touch-record.jsonl``, not ``touched.txt``. Both `scope.touch` and
+    `release_committed_claims`' session-side arm write the record file since the
+    C4 writer flip; `touched.txt` survives only as the AGENT-side dialect, which
+    no assertion in this module exercises. Pointed at the legacy name, this helper
+    returned an empty set for a release that had in fact happened — and an empty
+    set is indistinguishable from "nothing was released", so both tests below read
+    as a live claim-release defect in `archive_and_commit`. They were stale
+    fixtures: same class as the two `91e7b9b07` migrated, simply not yet reached.
+
+    Kept reading the file directly rather than through a higher-level offer helper,
+    per this module's own docstring — the point is to assert on what actually
+    landed on disk.
+    """
+    record = _sdir(repo, sid) / session_scope._TOUCH_RECORD_FILENAME
+    if not record.exists():
         return set()
     released = set()
-    for line in touched.read_text(encoding="utf-8").splitlines():
+    for line in record.read_text(encoding="utf-8").splitlines():
         verb, _ts, path = session_scope.parse_touch_event(line)
         if verb == "R":
             released.add(path)

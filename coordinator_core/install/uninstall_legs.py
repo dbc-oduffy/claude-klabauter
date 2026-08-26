@@ -38,7 +38,7 @@ from typing import Callable, List, Optional, Sequence
 
 from dataclasses import dataclass, field
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops import configure_git
 from coordinator_core.install import junction
 
@@ -416,7 +416,7 @@ def _git_config_unset_scoped(scope: Sequence[str], key: str) -> int:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return 1

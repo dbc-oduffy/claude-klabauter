@@ -3,8 +3,8 @@ coordinator_core.hooks.track_touched_files — PostToolUse bookkeeping hook op.
 
 Purpose: Records the file path modified by the current Edit/Write/MultiEdit/NotebookEdit
 tool call into two append-only T-event logs:
-  - per-session:  .git/coordinator-sessions/<session_id>/touched.txt
-  - per-agent:    .git/coordinator-sessions/.agents/<agent_id>/touched.txt
+  - per-session:  .git/coordinator-sessions/<session_id>/touch-record.jsonl
+  - per-agent:    .git/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
@@ -55,15 +55,18 @@ Negative-spec:
     Do NOT resolve that id by reading os.environ directly (see the back-pointer
     note above) — this op is warm-servable and the server's env names its spawner.
 
-This writer emits ``T``-verb events (``scope.format_touch_event``) into the shared
-append-only ``touched.txt`` log — the same event dialect ``session/scope.py::touch``
-and ``session/claims.py::atomic_dedup_append`` already write, so the claim/release
-projection (``_last_verb_map``) reads one dialect across all three writers instead of
-mis-reading a bare-line legacy record from this one.
+C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-its-
+writers.md): this writer emits ``T``-verb events via ``touch_record.append_event``
+(``session/touch_record.py::encode_line``) into the same self-describing
+``touch-record.jsonl`` sink ``session/scope.py::touch`` (C4) and self_claim's
+``atomic_dedup_append`` (C6) already write, so the one read seam
+(``touch_record.project_live_claims``) resolves every path via one dialect across
+all three writers, never a mixed record.
 
 Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C1
 Spec backlink: pln-release-a-peer-session-s-path--d04deb § C7
 Spec backlink: pln-track-touched-files-emits-t-ev-0befc7 § C1
+Spec backlink: pln-the-legacy-touched-txt-record-44ce48 § C7
 """
 
 from __future__ import annotations
@@ -80,25 +83,37 @@ from coordinator_core.ipc import register_op
 
 # Generator-provenance declaration (generator_provenance.py). Per this
 # module's own "Write confinement (hard)" clause above: writes ONLY under
-# .git/coordinator-sessions/ (touched.txt session/agent logs) -- never
+# .git/coordinator-sessions/ (touch-record.jsonl session/agent logs) -- never
 # state/, archive/, or any tracked repo path.
 GENERATES = []
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
-from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
-from coordinator_core.session.scope import format_touch_event, normalize_touch_path
+from coordinator_core.session import touch_record
+from coordinator_core.session.scope import normalize_touch_path
+
+# C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+# its-writers.md): the SAME filename session/scope.py's `touch()` (C4) and
+# `self_claim` (C6) already write, so every writer of a session- or
+# agent-keyed claim lands in ONE dialect, ONE file, per sink --
+# `touch_record.project_live_claims` is the one seam that reads all three.
+# Mirrors `session/scope.py`'s own (module-private) `_TOUCH_RECORD_FILENAME`
+# literal; not re-imported because that name is private to that module and
+# this hook owns its own copy of the literal it must match.
+_TOUCH_RECORD_FILENAME = "touch-record.jsonl"
 
 # ---------------------------------------------------------------------------
 # D6 — per-target-file asyncio.Lock registry.
 #
 # The engine is a per-repo singleton shared by concurrent sessions. Two sessions
 # returning simultaneously can invoke this op concurrently — both dispatch
-# asyncio.to_thread() tasks that touch the same touched.txt. Process-isolation
-# (which serialises the source bash hook's concurrent O_APPEND writes) is absent
-# in-engine. An asyncio.Lock per target file serialises the read-check-then-append
-# cycle, converting the TOCTOU window from "tolerated duplicate" (bash) to "hard
-# disallowed" (in-engine).
+# asyncio.to_thread() tasks that touch the same touch-record.jsonl sink. Process-
+# isolation (which serialises the source bash hook's concurrent O_APPEND writes) is
+# absent in-engine. An asyncio.Lock per target file serialises concurrent
+# in-engine invocations targeting the same sink (C7: no longer a read-check-then-
+# append cycle — touch_record.append_event's single atomic append needs no
+# application-level lock of its own; this lock predates that flip and is kept
+# unchanged — see the block comment above `_append_touch_record`).
 #
 # Lazily created on first access; accessed ONLY from the event loop (async handler),
 # so no cross-thread contention on the dict itself.
@@ -231,81 +246,146 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Atomic append (blocking — call via to_thread WHILE holding the per-file
-# asyncio.Lock).
-#
-# Port of: cs_atomic_dedup_append from coordinator-session.sh (DoE e34f2484,
-# 2026-07-22), made EVENT-AWARE (plan docs/plans/2026-08-03-track-touched-
-# files-emits-t-events.md § C1, matching the EM-ratified precedent already
-# landed for session/claims.py::atomic_dedup_append). The dedup fast-exit that
-# enforced "exactly one line per path" is RETIRED — append-only last-event-wins
-# is the invariant now, so duplicate T-events for the same path are expected,
-# not a bug; the projection resolves the path via its LAST recorded event, not
-# via line uniqueness.
-#
-# Silent-failure contract: all errors are swallowed — this is a bookkeeping hook;
-# it MUST NOT block or error-propagate to the tool call.
+# C7 (the writer flip, part two): both appends below now route through
+# ``touch_record.append_event`` -> ``atomic_append.append_line`` -- the same
+# single-write-syscall primitive session/scope.py::touch (C4) and self_claim
+# (C6) already use. No read-modify-write, no `locked_rmw`: that primitive's
+# own negative-spec (touch_record.py module docstring) forbids `locked_rmw`
+# on this append path -- the serialisation it bought was never cross-session,
+# only within one session's own file, and atomic_append already gives O(1)
+# cross-process safety without it (POSIX real O_APPEND kernel atomicity;
+# Windows FILE_APPEND_DATA via CreateFileW -- see atomic_append.py's own
+# negative-spec for the live-reproduced data-loss bug that backs this). The
+# per-file asyncio.Lock (D6, ``_get_lock``/``_FILE_LOCKS`` above) is KEPT
+# unchanged around each call: it still serialises concurrent in-engine
+# invocations targeting the same sink, and removing it is out of this
+# chunk's scope (external coverage in
+# coordinator_core/tests/test_hooks_bookkeeping.py drives it directly).
 # ---------------------------------------------------------------------------
-def _append(target_file: str, entry: str) -> None:
-    """Unconditionally append entry to target_file (blocking).
 
-    Caller MUST hold the per-file asyncio.Lock (D6) before dispatching this via
-    asyncio.to_thread() — the lock serialises concurrent appends in-engine.
 
-    ``entry`` is expected to already be a formatted event line
-    (``scope.format_touch_event(...)``), not a bare path.
+def _append_touch_record(
+    sink: str, session_id: str, agent_id: "str | None", path: str
+) -> None:
+    """Encode and append one ``T`` event to ``sink`` (blocking) via
+    ``touch_record.append_event``.
+
+    Caller MUST hold the per-file asyncio.Lock (D6) before dispatching this
+    via ``asyncio.to_thread()`` — the lock still serialises concurrent
+    in-engine invocations targeting the same sink (see the block comment
+    above).
+
+    Silent-failure contract, as everywhere else in this module:
+    ``touch_record.LineTooLong`` (an absurdly long path) and
+    ``touch_record.OutOfWorktreePath`` (AC3 — ``encode_line``'s own
+    spawn-free containment check, reachable here now that
+    ``normalize_touch_path`` is no longer the only thing holding the
+    invariant) are both swallowed; a bookkeeping hook must never block or
+    error-propagate to the tool call.
     """
     try:
-        with open(target_file, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(entry + "\n")
+        touch_record.append_event(
+            sink,
+            session_id=session_id,
+            agent_id=agent_id,
+            verb=touch_record.VERB_TOUCH,
+            path=path,
+        )
+    except (touch_record.LineTooLong, touch_record.OutOfWorktreePath):
+        pass
     except Exception:
         # Silent-failure: never raise from a bookkeeping hook.
         pass
 
 
-# ---------------------------------------------------------------------------
-# Cross-process locked append (blocking — call via to_thread WHILE holding
-# the per-file asyncio.Lock).
-#
-# Wraps locked_rmw (flock-backed) alongside the per-file asyncio.Lock (D6) to add
-# cross-process write serialisation. The asyncio.Lock (caller-held) prevents
-# intra-process re-entrancy on the same target before the flock reaches the OS.
-# Falls back to _append when locked_rmw is unavailable (non-POSIX, non-git
-# working directory) so that tests and non-git environments degrade gracefully.
-#
-# This writer keeps the flock even after the dedup retirement — it is the only
-# one of the three touched.txt writers with cross-process locking, and that
-# remains the better side to be on; only the dedup logic goes, not safe-append.
-# ---------------------------------------------------------------------------
-def _append_locked(target_file: str, entry: str, repo_root_path: Path) -> None:
-    """Unconditionally append entry to target_file via locked_rmw; fall back to
-    _append on failure.
+def _ensure_session_record_sync(
+    session_dir: str, session_id: str, sessions_base: str, worktree_root: str
+) -> None:
+    """Create the session directory and, ONCE per session, its ``meta.json``
+    liveness record — a precondition ``_append_touch_record`` no longer
+    depends on for itself (``touch_record.append_event`` creates its own
+    sink's parent directory — see the block comment above), plus the
+    registry entry that makes the claim this record is about visible to
+    peers.
 
-    Caller MUST hold the per-file asyncio.Lock (D6) before dispatching this via
-    asyncio.to_thread() — the lock prevents intra-process re-entrancy on the same
-    target before the flock reaches the OS.
+    Two jobs in one thread hop on purpose (C9's hop budget): the ``makedirs``
+    is still this hook's ONLY mkdir, kept for cheap belt-and-suspenders
+    defense even though C7 made it provably redundant on both halves of this
+    call — ``session.core.init`` (called below when ``meta.json`` is absent)
+    does its own ``sdir.mkdir(parents=True, exist_ok=True)``, and
+    ``touch_record.append_event`` (the append half, back in ``_handler``)
+    creates its own sink's parent directory on every call. See
+    ``tests/test_track_touched_files_fresh_dir.py`` for the isolated proof
+    of both self-creations; that module no longer treats this ``makedirs``
+    as a guarded precondition. The ``isfile`` below is the whole
+    steady-state cost of the record half — one stat per Edit/Write, one
+    ``init`` per session lifetime.
 
-    When locked_rmw succeeds (POSIX + valid git working directory), the read-modify-
-    write is serialised across processes. When it raises (non-POSIX, git unavailable,
-    LockTimeout), the fallback _append provides intra-process-only serialisation
-    (same guarantee as the original path).
+    WHY THIS IS NOT THE BOOTSTRAP C1 REMOVED. C1 stripped session bootstrap
+    from this hook on the premise that liveness stamping "belongs at the
+    claiming ceremony ... which already performs the identical ``ensure_meta``
+    write". That premise holds for every claim a *ceremony* makes and fails for
+    the claim an *edit* makes: appending a ``T`` event IS claim acquisition,
+    and a session that only ever edits through Write/Edit runs no ceremony and
+    no CLI, so it holds claims while absent from the registry
+    (``session/liveness.py`` keys liveness on ``meta.json``; with none,
+    ``bash_guards/dispatch_checks.py::_rm_peer_claim_of`` cannot see the holder
+    at all and degrades to its 30-minute mtime backstop). Sibling writer
+    ``session/scope.py::touch`` already carries the identical absence-guarded
+    fail-safe (defect A, 2026-07-24); this is that fail-safe on the other
+    writer of the same record, not a reinstated ``_bootstrap_session``.
 
-    Silent-failure contract: all errors in both paths are swallowed.
+    Cost, measured on this box (2026-08-26, ``time.process_time``, psutil
+    resident so Guard-1 really ran). **ZERO spawns in BOTH the resolving and
+    the pre-resolved shape** — that is the number that matters, because it is
+    what keeps C1's guard green on its own terms rather than by exemption, and
+    it is the first thing a reader re-deriving this will want. Latency, for
+    completeness: 0.39ms per resolving ``init`` (k=40), the pre-resolved call
+    below under this box's 15.625ms tick at k=30 (independently re-measured by
+    claude-klabauter-c2); through ``_handler``, 5.73ms first fire against 2.60ms
+    steady state (k=30). Paid once per session lifetime.
+
+    The ~36ms figure this hook's own closing note and C1 both argued from
+    priced a per-call ``last_activity`` read-modify-write, i.e. a refresh
+    cadence, which this deliberately is NOT. A "~41ms / 3 spawns" figure for
+    ``init`` circulated briefly in the originating bug report; it was a cold
+    fresh-process measurement restated as a property of the function, and its
+    author has retracted it. Do not re-cite it.
+
+    Negative-spec:
+        - Guard on ABSENCE of ``meta.json``, never on staleness. This is
+          record CREATION; it must never become a per-tool-call heartbeat —
+          that is the distinction ``session/scope.py::touch``'s docstring
+          pins, and DoE's ``session-heartbeat.py`` was retired over.
+        - Do NOT route this through ``core.ensure_meta``: its re-stamp arm
+          reads and parses ``meta.json`` on the PRESENT path, i.e. on every
+          Edit/Write, which is the per-call cost this hook must not pay.
+        - Write confinement: the hub and worktree root are handed to
+          ``core.init`` PRE-RESOLVED, from the same ``_common_dir`` this
+          handler already resolved ``session_dir`` from — ``init`` never
+          re-derives either, so it cannot land the record in a tree this call
+          did not resolve, and this handler stays at ZERO ``core.git_root``
+          calls (``tests/test_track_touched_files_normalize.py``
+          ``TestHandlerZeroSpawnFastArmAtCaller``). That guard is correct and
+          must not be exempted; the seam on ``init`` is what keeps it green.
+        - Silent-failure contract, as everywhere else in this module. The
+          detection surface for a record that never appeared already exists:
+          ``session/stable_pid_watch.py`` (widened off the single
+          ``touched.txt`` literal, C5) counts a T-record-carrying dir with
+          no ``meta.json`` as a ``no_meta_json`` miss.
     """
-    def mutate(old_text: str) -> str:
-        if old_text and not old_text.endswith("\n"):
-            return old_text + "\n" + entry + "\n"
-        return old_text + entry + "\n"
-
+    os.makedirs(session_dir, exist_ok=True)
+    if os.path.isfile(os.path.join(session_dir, "meta.json")):
+        return
     try:
-        locked_rmw(Path(target_file), mutate, repo_root=repo_root_path, missing_ok=True)
-    except (LockTimeout, MutateAbort):
-        pass  # lock timeout or clean abort — silent-failure for bookkeeping
+        # Imported directly from session.core (never through the ops package)
+        # for the same import-graph reason the back-pointer resolver below is —
+        # see tests/test_track_touched_files_no_ops_import.py.
+        from coordinator_core.session.core import init as _session_init
+
+        _session_init(session_id, sessions_base=sessions_base, root=worktree_root)
     except Exception:
-        # locked_rmw unavailable (non-POSIX, non-git dir, RuntimeError from git_common_dir).
-        # Fall back to in-process append. Cross-process protection absent on this path;
-        # the asyncio.Lock held by the caller serialises concurrent invocations in-process.
-        _append(target_file, entry)
+        pass  # silent-failure contract; stable_pid_watch counts the miss
 
 
 @register_op("hooks.track_touched_files")
@@ -313,8 +393,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse bookkeeping op: append T-events for touched file paths into per-session records.
 
     Records file_path (normalized to repo-relative) into:
-      - .git/coordinator-sessions/<session_id>/touched.txt  (session-keyed, always)
-      - .git/coordinator-sessions/.agents/<agent_id>/touched.txt  (agent-keyed, subagent only)
+      - .git/coordinator-sessions/<session_id>/touch-record.jsonl  (session-keyed, always)
+      - .git/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl  (agent-keyed, subagent only)
 
     Defense-in-depth: exits early on non-edit tool names — the hooks.json matcher
     already restricts to Write|Edit|MultiEdit|NotebookEdit; the check here is a
@@ -388,22 +468,30 @@ async def _handler(params: dict, repo_root=None) -> dict:
         # git_root already IS git_common_dir; do not re-append ".git" here.
         _sessions_base = Path(git_root) / "coordinator-sessions"
     session_dir = str(_sessions_base / session_id)
-    touched_file = os.path.join(session_dir, "touched.txt")
+    touch_record_sink = os.path.join(session_dir, _TOUCH_RECORD_FILENAME)
 
-    # --- Session dir precondition for the append below ---
-    # This mkdir is the append's own precondition, not liveness bookkeeping.
-    # locked_rmw (locked_write.py :: locked_rmw) creates the target's parent
-    # directory itself before it mkstemps, so on the primary _append_locked
-    # path this mkdir is redundant with that self-creation. It is load-bearing
-    # only on the fallback: _append opens "a", which does not create parents,
-    # and locked_rmw falls back to _append when it is unavailable or raises for
-    # an unrelated reason (no POSIX locking, a non-git fixture, a lock-backend
-    # failure). Without this mkdir, a session whose first tool call is an Edit
-    # hits that fallback and raises FileNotFoundError into the module's
-    # silent-failure contract, losing the T event with NO signal. This is the
-    # ONLY mkdir on the session-keyed path; do not drop it
-    # (docs/plans/2026-08-22-track-touched-files-pays-only-for-the-append.md § C1).
-    await asyncio.to_thread(os.makedirs, session_dir, exist_ok=True)
+    # --- Session dir + liveness record for the append below ---
+    # C7: _ensure_session_record_sync's own ``makedirs`` is this hook's ONLY
+    # mkdir, kept as cheap belt-and-suspenders defense, but is no longer a
+    # guarded precondition for either half of this call --
+    # ``session.core.init`` (meta.json half) and ``touch_record.append_event``
+    # (append half, below) both self-create their own target's parent
+    # directory now. See that function's own docstring and
+    # ``tests/test_track_touched_files_fresh_dir.py`` for the isolated proof.
+    #
+    # _worktree_root is resolved HERE rather than at its former site below
+    # (immediately before normalize_touch_path) because the record half needs
+    # it too -- core.init resolves the session hub from a worktree root, and a
+    # second resolution would be the same answer computed twice. Its
+    # normalize_touch_path contract is unchanged; see the note at that call.
+    _worktree_root = str(main_worktree_root(_common_dir)) if _common_dir else git_root
+    await asyncio.to_thread(
+        _ensure_session_record_sync,
+        session_dir,
+        session_id,
+        str(_sessions_base),
+        _worktree_root,
+    )
 
     # --- Normalize file_path to repo-relative (mirrors sh:130-147) ---
     # normalize_touch_path's ``cwd`` MUST be the worktree root, NOT git_common_dir
@@ -419,31 +507,36 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # `git_common_dir` on an already-common-dir cwd is idempotent — this branch
     # only fires for non-git test fixtures, where `git_root` already IS the
     # worktree root. Untested; see TestHandlerRuntimeErrorFallbackNonGitFixture.
-    _worktree_root = str(main_worktree_root(_common_dir)) if _common_dir else git_root
     file_path_norm = await asyncio.to_thread(
         normalize_touch_path, file_path, _worktree_root, root=_worktree_root
     )
     if not file_path_norm:
         return no_advisory()
 
-    # --- Session-keyed append (D6: asyncio.Lock + locked_rmw cross-process layer) ---
-    _repo_root_path = Path(str(_effective_root))
-    session_lock = _get_lock(touched_file)
+    # --- Session-keyed append (D6: asyncio.Lock; C7: touch_record.append_event,
+    # no locked_rmw -- see the block comment above _ensure_session_record_sync
+    # for why the cross-process serialisation moved to atomic_append itself) ---
+    session_lock = _get_lock(touch_record_sink)
     async with session_lock:
         await asyncio.to_thread(
-            _append_locked, touched_file, format_touch_event("T", file_path_norm), _repo_root_path
+            _append_touch_record,
+            touch_record_sink,
+            session_id,
+            None,
+            file_path_norm,
         )
 
     # --- Agent-keyed append (only for subagent fires — mirrors sh:200-223) ---
     # Issue A + C10: resolve raw agent_id to the canonical EM-side id, then write
-    # .agents/<canonical-id>/touched.txt — what coordinator-safe-commit unions into
-    # commit scope via cs_compute_scope. Empty resolver result → skip (zero-overhead
-    # path for top-level EM writes that carry no agent_id).
+    # .agents/<canonical-id>/touch-record.jsonl — what coordinator-safe-commit
+    # unions into commit scope via cs_compute_scope (through
+    # touch_record.project_live_claims, C7). Empty resolver result → skip
+    # (zero-overhead path for top-level EM writes that carry no agent_id).
     if raw_agent_id:
         canonical_agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
         if canonical_agent_id:
             agent_dir = str(_sessions_base / ".agents" / canonical_agent_id)
-            agent_touched = os.path.join(agent_dir, "touched.txt")
+            agent_touch_record_sink = os.path.join(agent_dir, _TOUCH_RECORD_FILENAME)
 
             # Ensure agent dir exists (mirrors sh:220)
             await asyncio.to_thread(
@@ -557,13 +650,22 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     session_id,
                 )
 
-            # D6: asyncio.Lock + locked_rmw cross-process layer — separate lock from session lock
-            agent_lock = _get_lock(agent_touched)
+            # D6: asyncio.Lock (C7: touch_record.append_event, no locked_rmw)
+            # — separate lock from the session lock
+            agent_lock = _get_lock(agent_touch_record_sink)
             async with agent_lock:
                 await asyncio.to_thread(
-                    _append_locked, agent_touched, format_touch_event("T", file_path_norm), _repo_root_path
+                    _append_touch_record,
+                    agent_touch_record_sink,
+                    session_id,
+                    canonical_agent_id,
+                    file_path_norm,
                 )
 
     # Note: meta.json last_activity is NOT updated here (costs ~36ms on Windows;
     # matches sh:225-226). Activity is updated by cs_touch at commit time.
+    # The record's CREATION is a different question and IS this hook's job --
+    # see _ensure_session_record_sync above. Creation once per session, on
+    # absence; refresh never. Do not read this note as an argument against the
+    # former: it prices a per-call read-modify-write, not a one-time create.
     return no_advisory()

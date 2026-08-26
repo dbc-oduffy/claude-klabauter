@@ -90,6 +90,23 @@ _RUN_GIT_HELPER_NAMES = {"_run_git"}
 _GIT_NATIVE_UNDERSCORE_GIT = {"_git"}
 _COMMIT_SCOPED_NAMES = {"commit_scoped"}
 
+#: The FIFTH mechanism (2026-08-26). DR-211's plumbing rewrite moved fleet
+#: archival off `git commit` onto `git write-tree` + `git commit-tree` +
+#: `git update-ref`. Those sites still call `create_subprocess_exec`, so the
+#: callee-name filter kept matching them -- but the argv carries the literal
+#: `"commit-tree"`, and the mechanism tag below keyed on an EXACT `"commit"`
+#: constant, which `"commit-tree"` is not. Two live commit paths
+#: (`_common.py::archive_and_commit`, `::rm_and_commit`) therefore fell out of
+#: the tripwire entirely while reading as covered.
+#:
+#: Tagged as its own mechanism rather than folded into the asyncio bucket
+#: because it IS a different shape: it moves the ref directly and fires no
+#: hooks, which is the whole reason the release-coverage question for it is
+#: still open (see the DELIBERATELY RETAINED note in the allowlist below --
+#: that decision stays the plumbing rewrite's to make; this constant only
+#: restores the enumerator's ability to SEE the sites).
+_COMMIT_TREE_PLUMBING_CONSTANTS = {"commit-tree"}
+
 _ALL_TRACKED_CALLEE_NAMES = (
     _ASYNCIO_EXEC_NAMES
     | _RUN_GIT_HELPER_NAMES
@@ -173,7 +190,10 @@ class _EnclosingFunctionTracker(ast.NodeVisitor):
         if name in _ALL_TRACKED_CALLEE_NAMES:
             if name in _COMMIT_SCOPED_NAMES:
                 self.found.append((self.stack[-1], "commit_scoped", node))
-            elif "commit" in set(_string_constants(node)):
+                self.generic_visit(node)
+                return
+            constants = set(_string_constants(node))
+            if "commit" in constants:
                 if name in _ASYNCIO_EXEC_NAMES:
                     mechanism = "asyncio_create_subprocess_exec"
                 elif name in _RUN_GIT_HELPER_NAMES:
@@ -181,6 +201,11 @@ class _EnclosingFunctionTracker(ast.NodeVisitor):
                 else:
                     mechanism = "git_native._git"
                 self.found.append((self.stack[-1], mechanism, node))
+            elif constants & _COMMIT_TREE_PLUMBING_CONSTANTS:
+                # Checked AFTER the exact-`"commit"` branch so a site carrying
+                # both spellings keeps its original tag rather than being
+                # silently reclassified by the new one.
+                self.found.append((self.stack[-1], "commit_tree_plumbing", node))
         self.generic_visit(node)
 
 
@@ -277,6 +302,21 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     # coverage decision for the plumbing shape, which is the plumbing rewrite's
     # premise to answer, not this allowlist's. Delete these rows only alongside
     # that decision.
+    # Surfaced 2026-08-26 by the fifth tracked mechanism, not newly written:
+    # both are `commit-tree`/`update-ref` landings that the exact-`"commit"`
+    # constant match never saw, so they sat outside the tripwire exactly as
+    # the two `_common.py` rows below did. Listed with the SAME disposition as
+    # those, and for the same reason: the site is now accounted for, while
+    # whether a plumbing landing needs release coverage stays the DR-211
+    # rewrite's question to answer. `confirmed: False` is that open state.
+    "ops/ceremony/git_native.py::_commit_scoped_private_index": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/ceremony/git_native.py::commit_authored_content": {
+        "reason": "release",
+        "confirmed": False,
+    },
     "ops/fleet/_common.py::archive_and_commit": {
         "reason": "release",
         "confirmed": False,
@@ -362,6 +402,38 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # Found by the enumerator, not in the brief's seed list. `_memo_send`'s
+    # own commit_scoped call here is the SENDER-side receipt commit into the
+    # calling session's own worktree (sent/ + ledger row) -- distinct from
+    # `_commit_delivered_memo`'s RECEIVER-repo commit discussed in this
+    # module's header docstring correction note. A same-tree commit against
+    # this session's own claims, so "release" pending confirmation like the
+    # other unconfirmed commit_scoped sites above.
+    "ops/fleet/memo_send.py::_memo_send": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # Found by the enumerator, not in the brief's seed list. Commits a
+    # boot-time handoff relocation batch (`state/handoffs` -> `archive/
+    # handoffs`) into the calling session's own worktree -- a real
+    # coordinator op route, "release" pending classification like the other
+    # unconfirmed sites above.
+    "ops/session/boot_backstop.py::_commit_relocations": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # Found by the enumerator, not in the brief's seed list. `percolate`'s
+    # smack-round commit lands into `context.dest_repo_root` -- a mirrored
+    # DESTINATION repo the percolate tool writes into, not the calling
+    # session's own worktree, so no session claims exist there to release
+    # (same shape as `benchmarks/op_fixtures.py::materialize_fixture_repo`
+    # above).
+    "percolate/round.py::step_commit": {
+        "reason": "ineligible: commits into percolate's mirrored destination "
+        "repo (context.dest_repo_root), not the calling session's own "
+        "worktree -- no session claims exist there to release",
+        "confirmed": True,
+    },
 }
 
 
@@ -414,8 +486,15 @@ def test_enumerator_catches_all_four_mechanisms():
     for rel, func_name, mechanism in _iter_tracked_calls():
         by_mechanism.setdefault(mechanism, []).append(f"{rel}::{func_name}")
 
+    # `asyncio_create_subprocess_exec` is deliberately NOT in this set as of
+    # 2026-08-26: DR-211's plumbing rewrite moved every asyncio site off plain
+    # `git commit` onto `commit-tree`/`update-ref`, so that bucket is
+    # legitimately empty and asserting it non-empty pins a shape the tree no
+    # longer has. `commit_tree_plumbing` is where those sites went, and is
+    # asserted in its place -- the count stays four and the enumerator now
+    # covers strictly more than it did, not less.
     expected_mechanisms = {
-        "asyncio_create_subprocess_exec",
+        "commit_tree_plumbing",
         "_run_git_helper",
         "git_native._git",
         "commit_scoped",

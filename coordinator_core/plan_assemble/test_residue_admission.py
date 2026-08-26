@@ -191,6 +191,13 @@ def test_next_move_three_arms_ac4(
     assert "Render segments[] in order." in sized_result["next_move"]
 
     # execution
+    # DR-346 (2026-08-21, PM-ratified) retired the corpus walk that used to
+    # resolve `origin_plan_id` by search -- `governing_plan` (a repo-relative
+    # FK, resolved by the same root-confined stat `sizing_object` uses, never
+    # a search) is now the only field that admits `execution`. A citation
+    # via `origin_plan_id` alone, with no `governing_plan` stamped, reads
+    # `unsized` (`UNSIZED_UNSTAMPED_NEXT_MOVE_PREFIX`) -- that stranding arm
+    # is not this test's concern.
     plan_ref = tmp_path / "docs" / "plans" / "2026-08-20-a.md"
     plan_ref.parent.mkdir(parents=True)
     plan_ref.write_text(
@@ -199,12 +206,12 @@ def test_next_move_three_arms_ac4(
     )
     execution_plan = tmp_path / "execution.md"
     execution_plan.write_text(
-        "---\ntitle: fixture\norigin_plan_id: pln-a-123456\n---\n\n# fixture\n",
+        "---\ntitle: fixture\ngoverning_plan: docs/plans/2026-08-20-a.md\n---\n\n# fixture\n",
         encoding="utf-8",
     )
     execution_result = brief(explicit_route="plan", plan_path=execution_plan)
     assert "not re-litigated" in execution_result["next_move"]
-    assert "pln-a-123456" in execution_result["next_move"]
+    assert "docs/plans/2026-08-20-a.md" in execution_result["next_move"]
     assert "Render segments[] in order." in execution_result["next_move"]
 
 

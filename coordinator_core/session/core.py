@@ -33,14 +33,12 @@ import functools
 import json
 import os
 import re
-import subprocess
 import tempfile
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Mapping, Optional
 
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 
 # Deferred-import accessor (hot-path import diet round 2 — docs/plans/
@@ -1258,7 +1256,14 @@ def _resolve_claude_pid_from_env() -> "tuple[Optional[tuple[int, float]], str]":
 # ---------------------------------------------------------------------------
 
 
-def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
+def init(
+    session_id: str,
+    goal: str = "",
+    cwd: Optional[str] = None,
+    *,
+    sessions_base: Optional[str] = None,
+    root: Optional[str] = None,
+) -> bool:
     """Port of ``cs_init <session_id> [goal]``.
 
     Create the session directory and write initial files. Idempotent: if
@@ -1272,12 +1277,42 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
     bash ``cs_init "$SESSION_ID"``) — this function is therefore a NEW
     native op, not a repoint of an already-existing dual-path.
 
+    ``sessions_base`` / ``root`` (keyword-only) are a PRE-RESOLVED seam for a
+    caller that is already holding both answers, so ``init`` does not pay to
+    rediscover them. Both default to None, which reproduces the resolving
+    behaviour byte-for-byte -- no existing caller changes.
+
+    The seam exists because ``init``'s two resolutions are the whole reason a
+    hot-path caller could not afford to call it. ``hooks/track_touched_files``
+    resolves the session hub and the worktree root itself before it appends a
+    ``T`` event, and a ``T`` event IS a claim: that caller must be able to
+    create the session's liveness record without re-deriving what it just
+    resolved, or the record never gets written and a session holding claims
+    stays invisible to ``liveness.live_session_ids``. Its handler is pinned at
+    ZERO ``core.git_root`` calls by
+    ``hooks/tests/test_track_touched_files_normalize.py``
+    (``TestHandlerZeroSpawnFastArmAtCaller``), a guard defending
+    docs/plans/2026-08-22-track-touched-files-pays-only-for-the-append.md § C1.
+    This seam is what lets that guard stay green on its own terms instead of
+    by exemption.
+
+    Negative-spec:
+        - ``sessions_base`` is the session HUB (``<git-common-dir>/coordinator-
+          sessions``), NOT a session directory. Passing the latter nests the
+          record one level deep and hides it from every reader.
+        - ``root`` is a WORKTREE root, the same contract ``git_root`` returns —
+          it is handed to ``git.git_state`` for ``head_at_start``/``branch``.
+        - Neither is validated against the other, by design: this is a seam for
+          a caller that ALREADY resolved both from one common dir, not a
+          general-purpose relocation knob. A caller that has not resolved them
+          passes neither and gets the resolving path.
+
     Returns True on success, False on failure (not in a git repo, etc.).
     """
     if not session_id:
         raise ValueError("session_id required")
 
-    base = sessions_dir(cwd)
+    base = sessions_base if sessions_base else sessions_dir(cwd)
     if not base:
         return False
     sdir = Path(base) / session_id
@@ -1287,46 +1322,50 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
     if not started_at.is_file():
         started_at.write_text(now_iso(), encoding="utf-8", newline="\n")
 
+    # Both bookkeeping fields below (`head_at_start`, `branch`) are read from
+    # `.git/HEAD` in-process rather than from two `git rev-parse` spawns.
+    # DR-344: git justifies itself PER USE and process creation is the cost,
+    # not the query -- these two answers are a file read. Measured on this box
+    # (2026-08-25, job-object process time, k=20 x n=5): the spawning shape cost
+    # +41.41ms / +3 spawns marginal in the dir-present/meta-absent shape and
+    # +71.88ms / +6 spawns cold, on a function whose own docstring says it fires
+    # on EVERY session start.
+    #   -> docs/research/spike-verdicts/2026-08-25-does-the-first-fire-really-pay-core-init.md
+    # Imported lazily, INSIDE init(), on purpose: `git_state` pulls in
+    # `git_objects` (zlib/hashlib) which this module otherwise never needs, and
+    # `core` is on the import-budget hot path. The only caller that pays this
+    # import is the one that was about to pay two process creations.
+    from coordinator_core.git import git_state as _git_state
+
+    root = root if root else git_root(cwd)
+
     head_at_start = sdir / "head_at_start"
     if not head_at_start.is_file():
-        try:
-            head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                cwd=cwd,
-                # House value -- 2026-08-05 hot-path hardening pass.
-                # Fail-open, joining the pre-existing OSError leg: a
-                # timed-out probe degrades to the same "unknown" this
-                # bookkeeping field already tolerates on any other
-                # resolution failure.
-                timeout=2.0,
-                **no_console_creationflags(),
-            )
-            head_sha = head.stdout.strip() if head.returncode == 0 else "unknown"
-        except (OSError, subprocess.TimeoutExpired):
-            head_sha = "unknown"
-        head_at_start.write_text(head_sha or "unknown", encoding="utf-8", newline="\n")
+        # Fail-open to "unknown", exactly as the spawning form did on a
+        # non-zero rc, an OSError, or a timeout: an unborn branch (HEAD names
+        # a ref with no commit yet) reads None here and lands on the same
+        # "unknown" `git rev-parse HEAD`'s own non-zero exit produced.
+        head_sha = (_git_state.head_sha(root) if root else None) or "unknown"
+        head_at_start.write_text(head_sha, encoding="utf-8", newline="\n")
 
-    touched = sdir / "touched.txt"
-    if not touched.is_file():
-        touched.touch()
+    # A `touched.txt` placeholder used to be created here so a freshly-
+    # created session dir always carried SOME record file for the recency
+    # probes to key on. Removed 2026-08-25 (C5, docs/plans/2026-08-25-the-
+    # legacy-touch-record-is-retired-by-repointing-its-writers.md § AC6):
+    # `started_at` (above) and `head_at_start` (below) are already written
+    # unconditionally on every dir creation, so they already discharge that
+    # role for `liveness.newest_record_mtime`'s scan -- creating a file named
+    # for the retired dialect was redundant for this writer's own dirs, not
+    # load-bearing. NOT a swap onto a new literal (AC6's own "widen, do not
+    # swap"): this writer simply stops minting the retired name; a dir
+    # written ONLY by `hooks.track_touched_files` (never touching this
+    # function) still carries its own record file independently.
 
-    try:
-        branch_proc = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            # House value -- 2026-08-05 hot-path hardening pass. Fail-open,
-            # joining the pre-existing OSError leg (see head_sha above).
-            timeout=2.0,
-            **no_console_creationflags(),
-        )
-        branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else "unknown"
-    except (OSError, subprocess.TimeoutExpired):
-        branch = "unknown"
-    branch = branch or "unknown"
+    # UNCONDITIONAL on every call, including the idempotent refresh of an
+    # already-initialised session -- so this was the one spawn `init()` could
+    # never skip, whatever the directory state. That is why guarding the call
+    # site is not a substitute for making the call cheap.
+    branch = (_git_state.head_branch(root) if root else None) or "unknown"
 
     now = now_iso()
     pid = os.getpid()

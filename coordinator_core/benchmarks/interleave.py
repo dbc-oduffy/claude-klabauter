@@ -54,6 +54,8 @@ Spec backlink: docs/plans/2026-08-16-a-process-per-predicate.md, chunk C1.
 
 from __future__ import annotations
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 import random
 import subprocess
 import sys
@@ -114,6 +116,7 @@ def run_interleaved(
     can appear except by chance in an individual round's shuffle output
     bordering the next round's.
     """
+    declare_benchmark_origin()
     if len(primitives) < 2:
         raise ValueError(
             f"run_interleaved: need >=2 primitives to interleave, got {len(primitives)!r} "

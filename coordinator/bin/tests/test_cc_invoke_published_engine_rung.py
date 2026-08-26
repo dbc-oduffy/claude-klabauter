@@ -15,7 +15,7 @@ delegation target switched from the classless `coordinator_claude_klabauter_root
 published-engine-vs-live-working-tree gate for free, with zero new
 resolution logic.
 
-Rungs 1 (COORDINATOR_ENGINE_ROOT env), 1.5 (`.claude-klabauter-root` pointer file), and 3
+Rungs 1 (COORDINATOR_ENGINE_ROOT env), 1.5 (`.claude-klabauter-live-root` pointer file), and 3
 (self-location from `__file__`) remain gate-BLIND by design — they return
 before the oracle is ever reached, and none of them may gain a NEW
 subprocess as part of this chunk. Rung 1.5 is the exact defect commit
@@ -198,7 +198,7 @@ class TestNoNewSpawnOnEarlyRungs(unittest.TestCase):
             settings_home = Path(tmp) / "settings-home"
             ml_dir = settings_home / "machine-local"
             ml_dir.mkdir(parents=True)
-            (ml_dir / ".claude-klabauter-root").write_text("/from/pointer\n", encoding="utf-8")
+            (ml_dir / ".claude-klabauter-live-root").write_text("/from/pointer\n", encoding="utf-8")
 
             with (
                 _no_env_claude_klabauter_root(),
@@ -366,13 +366,13 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
     live working tree.
 
     Regression guard for a measured defect, not a hypothetical. Before this,
-    Rung 1.5 returned `.claude-klabauter-root` unconditionally, so on a dual-boot box
+    Rung 1.5 returned `.claude-klabauter-live-root` unconditionally, so on a dual-boot box
     `cc_invoke` answered the live working tree from EVERY caller location --
     including ones where the DR-132 gate itself would have said
     `claude-klabauter`. Every engine invocation therefore ran a tree whose warm
     generation token rotates on any commit by any of 50-70 concurrent sessions.
 
-    These tests pin the rung ORDER. Restoring `.claude-klabauter-root` ahead of
+    These tests pin the rung ORDER. Restoring `.claude-klabauter-live-root` ahead of
     `.claude-klabauter-root` reintroduces the moving target.
     """
 
@@ -384,7 +384,7 @@ class TestDR326PublishedPointerWinsAtRung1_5(unittest.TestCase):
         if published is not None:
             (ml_dir / ".claude-klabauter-root").write_text(published + chr(10), encoding="utf-8")
         if live is not None:
-            (ml_dir / ".claude-klabauter-root").write_text(live + chr(10), encoding="utf-8")
+            (ml_dir / ".claude-klabauter-live-root").write_text(live + chr(10), encoding="utf-8")
         return settings_home
 
     def _resolve_with(self, settings_home: Path) -> tuple[str, unittest.mock.MagicMock]:

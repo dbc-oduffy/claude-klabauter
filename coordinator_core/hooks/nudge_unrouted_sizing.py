@@ -372,7 +372,11 @@ from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     last_assistant_text as _last_assistant_text,
 )
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.session.scope import parse_touch_event
+from coordinator_core.session.scope import (
+    _TOUCH_RECORD_FILENAME,
+    _read_touch_record_as_legacy_lines,
+    parse_touch_event,
+)
 
 # `asyncio`, `yaml`, and `subagent_arrival_check._handler` are imported LAZILY
 # (inside the functions that need them) rather than at module load — see F2:
@@ -789,20 +793,32 @@ def _session_touched_lines(session_id: str, repo_root: str) -> list[str]:
     expect to see, and is a no-op on today's all-bare-legacy-line corpus
     (no writer emits event-shaped lines yet — this chunk lands before P2).
 
-    Shared by BOTH seams (sizing->room and plan->execute-plan) so `touched.txt` is read
-    once per turn-end rather than once per seam — `_session_touched_sizing_files` and
-    `_session_touched_plan_files` are thin path-regex filters over this same read.
+    Shared by BOTH seams (sizing->room and plan->execute-plan) so the touch record is
+    read once per turn-end rather than once per seam — `_session_touched_sizing_files`
+    and `_session_touched_plan_files` are thin path-regex filters over this same read.
+
+    C2 — reads through `session.scope._read_touch_record_as_legacy_lines`, the C0
+    seam, rather than parsing `touched.txt` directly: the seam unions the
+    `touch-record.jsonl` family with a sibling `touched.txt` (legacy first, so a
+    later jsonl event still wins the last-verb-wins fold below), returning
+    old-dialect `'<verb> <ts> <path>'` lines this reader already knows how to parse
+    via `parse_touch_event`. A degraded read (an unreadable/malformed family member)
+    is treated the same as the prior bare OSError catch — silence ([]) — matching
+    this reader's own long-standing fail-toward-availability posture: a missed
+    nudge costs one un-nudged turn, never a false fire.
     """
     try:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
         return []
-    touched_file = common_dir / "coordinator-sessions" / session_id / "touched.txt"
+    sink_path = common_dir / "coordinator-sessions" / session_id / _TOUCH_RECORD_FILENAME
     try:
-        with open(touched_file, "r", encoding="utf-8", errors="replace") as fh:
-            return [parse_touch_event(ln.rstrip("\n").rstrip("\r"))[2] for ln in fh]
-    except OSError:
+        lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
+    except Exception:
         return []
+    if degraded:
+        return []
+    return [parse_touch_event(ln)[2] for ln in lines]
 
 
 def _session_touched_sizing_files(session_id: str, repo_root: str) -> list[str]:

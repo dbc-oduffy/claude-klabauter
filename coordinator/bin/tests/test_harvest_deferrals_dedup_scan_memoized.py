@@ -100,7 +100,10 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
     """5 candidate rows must cost exactly the manifest's
     `resolution_calls_for_5_candidate_rows` total REAL `subprocess.run`
     SPAWNS reachable from the three underlying resolution primitives
-    (`_repo_root`/`doe_root`/`_claude_klabauter_root`), not 5x that count.
+    (`_repo_root`/`doe_root`/`_claude_klabauter_root`), not 5x that count. Only
+    `_claude_klabauter_root()` still spawns in the steady state (see the trailing
+    comment block below) — `resolution_calls_for_5_candidate_rows` is 1,
+    not 3 or 2.
 
     Calls the REAL `doe_root()`/`_claude_klabauter_root()` (no substitution) with
     every resolver env override cleared — the steady state on an installed
@@ -142,10 +145,13 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
     # `_repo_root()` spawns ZERO times since eacbba04a routed it through
     # `coordinator_core.git.repo_root.show_toplevel`, which walks for the
     # ordinary case and spawns only when the walk finds no `.git` entry — this
-    # fixture runs inside a real repo, so the walk always answers. Measured
-    # live (opro-03 C-08): the real `doe_root()`/`_claude_klabauter_root()` each make
-    # exactly one `subprocess.run` call (a `machine-local get <key>` spawn,
-    # memoized after the first row) — no `git rev-parse` invocation appears
-    # in `call_count["cmds"]` at all, confirming the walk answered without
+    # fixture runs inside a real repo, so the walk always answers.
+    # `doe_root()` also spawns ZERO times in the steady state: its rung 2
+    # (`repos.doe_claude`) is now an in-process read via `machine_local_impl_
+    # resolve.registry_get()`, CLI spawn retained only as a fallback rung.
+    # Only `_claude_klabauter_root()` still makes a real `subprocess.run` call (a
+    # `machine-local get repos.claude_klabauter` spawn, memoized after the
+    # first row) — no `git rev-parse` invocation appears in
+    # `call_count["cmds"]` at all, confirming the walk answered without
     # falling back to a spawn.
     assert not any(cmd[:2] == ["git", "rev-parse"] for cmd in call_count["cmds"] if cmd)

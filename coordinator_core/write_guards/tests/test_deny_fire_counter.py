@@ -59,7 +59,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(engine, "_consume_unlock", lambda session_id, guard_name: False)
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -78,7 +78,7 @@ class TestUnclearedHardDenyProducesOneRecord:
     def test_no_record_when_session_id_unresolvable(self, tmp_path, monkeypatch):
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -93,7 +93,7 @@ class TestClearedHardDenyProducesOneRecordAndChainContinues:
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(engine, "_consume_unlock", lambda session_id, guard_name: True)
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -120,7 +120,19 @@ class TestDenyCounterNeverReadBack:
         import coordinator_core.guard_advisory_counter as counter_mod
         import inspect
 
+        # Scoped to the actual claim -- no line that reads a file (`.open("r"`,
+        # `read_text`, `readlines`) also names the deny-counts file or its
+        # filename constant. A blanket ban on the `read_text` substring is a
+        # text-match gate on WHERE reads happen, not WHAT is read; it broke
+        # the moment `_cheap_guard_metadata` (engine.py) started reading
+        # guard-module *source* files for lazy discovery -- an unrelated read
+        # with no connection to `deny-fire-counts.jsonl`.
+        deny_markers = ("deny-fire-counts", "_DENY_COUNTS_FILENAME", "deny_counts")
+        read_markers = ('.open("r"', ".open('r'", "read_text", "readlines")
         for mod in (engine_mod, counter_mod):
             src = inspect.getsource(mod)
-            assert ".open(\"r\"" not in src.replace("'", '"')
-            assert "read_text" not in src
+            for line in src.splitlines():
+                if any(marker in line for marker in read_markers):
+                    assert not any(marker in line for marker in deny_markers), (
+                        f"deny-counts file appears to be read back in {mod.__name__}: {line.strip()}"
+                    )

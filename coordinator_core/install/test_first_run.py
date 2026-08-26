@@ -322,7 +322,7 @@ def test_run_post_toolchain_never_calls_ensure_venv(tmp_path, monkeypatch):
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setattr(
         fr, "_seed_machine_local_registry", lambda *a, **k: None
     )
@@ -355,7 +355,7 @@ def test_run_post_toolchain_platform_localize_nonzero_fails(tmp_path, monkeypatc
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     fake_substrate = mock.MagicMock()
@@ -382,7 +382,7 @@ def test_run_post_toolchain_platform_localize_import_error_fails(tmp_path, monke
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     fake_substrate = mock.MagicMock()
@@ -416,7 +416,7 @@ def test_run_post_toolchain_install_substrate_import_error(tmp_path, monkeypatch
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     monkeypatch.delitem(sys.modules, "coordinator_core.install.substrate", raising=False)
 
@@ -449,7 +449,7 @@ def test_run_post_toolchain_success_runs_all_steps_in_order(tmp_path, monkeypatc
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     fake_substrate = mock.MagicMock()
@@ -499,7 +499,7 @@ def test_run_post_toolchain_preflight_calls_setup_chain_walker_in_process(tmp_pa
     claude_klabauter_root = tmp_path / "claude-klabauter"
     coordinator_tree_root = claude_klabauter_root / "coordinator"
     coordinator_tree_root.mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     fake_substrate = mock.MagicMock()
@@ -543,7 +543,7 @@ def test_run_post_toolchain_preflight_failure_is_non_fatal(tmp_path, monkeypatch
     (plugin_root / "scripts").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(fr, "_seed_machine_local_registry", lambda *a, **k: None)
     fake_substrate = mock.MagicMock()
@@ -603,7 +603,7 @@ def test_seed_registry_confirm_gate_skip_declines(monkeypatch, tmp_path, capsys)
     discovery/registration never attempted."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "n")
@@ -633,7 +633,7 @@ def test_seed_registry_happy_path_writes_expected_entries(monkeypatch, tmp_path,
     entries, byte-parity with `_derive_repo_key`."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     registry_dir = tmp_path / "registry"
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
@@ -666,7 +666,7 @@ def test_seed_registry_happy_path_writes_expected_entries(monkeypatch, tmp_path,
 def test_seed_registry_no_repos_discovered_prints_manual_hint(monkeypatch, tmp_path, capsys):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", lambda argv: 0)
@@ -684,7 +684,7 @@ def test_seed_registry_discover_failure_warns(monkeypatch, tmp_path, capsys):
     disposition this replaces."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _raising_discover(argv):
@@ -705,7 +705,7 @@ def test_seed_registry_write_failure_warns_and_continues(monkeypatch, tmp_path, 
     registry write problem (module docstring's warn-and-continue posture)."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
@@ -776,7 +776,7 @@ def _resolved(journal_mod):
 def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_env):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
@@ -800,7 +800,7 @@ def test_journal_omits_failed_registration_from_written_entries(monkeypatch, tmp
     genuinely-succeeded registration is journaled."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):
@@ -830,7 +830,7 @@ def test_journal_omits_failed_registration_from_written_entries(monkeypatch, tmp
 def test_journal_empty_entries_on_no_repos_discovered(monkeypatch, tmp_path, _journal_env):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", lambda argv: 0)
@@ -845,7 +845,7 @@ def test_journal_empty_entries_on_no_repos_discovered(monkeypatch, tmp_path, _jo
 def test_journal_empty_entries_on_declined_confirm(monkeypatch, tmp_path, _journal_env):
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -885,7 +885,7 @@ def test_journal_omits_entry_when_mutation_disabled(monkeypatch, tmp_path, _jour
     refused, leaving it UNREPORTED for this run."""
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
 
     def _fake_discover(argv):

@@ -37,6 +37,10 @@ WHAT THIS MODULE OWNS, per the Director of Engineering's enumeration (C11's chun
       (`docs/research/warm-engine-premise/c10-http-probe.md`, Q3); this
       module is what makes "unreachable" an ACTIONABLE, checked state on
       the claude-klabauter side rather than an assumption.
+    - skew self-eviction -- C9 (AC18/AC19): `main()`'s skew-only watchdog
+      thread (`_ServerContext._skew_watchdog_loop`) retires a listener
+      whose `engine_token` a publish has rotated past, without waiting for
+      a caller to contact it -- see `_ServerContext`'s own docstring.
 
 WHAT THIS MODULE MUST NOT REIMPLEMENT -- every one of these already exists,
 mirroring `warm.server`'s own negative-spec section for the pipe transport:
@@ -75,6 +79,8 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -143,6 +149,16 @@ HEALTH_CHECK_TIMEOUT_SECS = 2.0
 # debounce window that could drift from the pipe transport's.
 SPAWN_DEBOUNCE_SECS = breadcrumb.SPAWN_DEBOUNCE_SECS
 
+# C9 (AC18/AC19): how often the skew watchdog re-checks its own boot token
+# against a live `skew.compute_client_token` read. Same value and framing as
+# `warm.server._IDLE_WATCHDOG_POLL_SECS` -- both ask "has this generation
+# been superseded" on their own thread, independent of request traffic; this
+# transport takes the identical number rather than inventing a second one.
+# NOT an idle-demotion poll (module docstring negative-spec still holds: no
+# idle watchdog here) -- this thread checks exactly one thing, staleness,
+# and never reads served-count or seconds-idle.
+_SKEW_WATCHDOG_POLL_SECS = 5.0
+
 # `spawn_detached` respawns by the resolved interpreter path against this
 # file itself (mirrors `warm.client.SERVER_ENTRY_SCRIPT` / `warm.server`'s
 # own `if __name__ == "__main__":` entry).
@@ -160,6 +176,23 @@ def discovery_path(engine_root: Optional[Path] = None) -> Path:
     """`<svc dir>/warm-http.json` for `engine_root` -- `breadcrumb.svc_dir`
     reused as a pure per-clone/per-user directory resolver, never mutated."""
     return breadcrumb.svc_dir(engine_root) / DISCOVERY_FILENAME
+
+
+# The atomic-replace primitive now lives in `locked_write.replace_with_retry`,
+# lifted there once this site had paid for it: the Windows sharing-violation
+# window is a SHAPE of bug -- any atomic publish whose readers take no lock has
+# it -- and `locked_rmw` had the identical unguarded `os.replace`, on the hook
+# path, via `hooks/track_touched_files.py`. Reusing it rather than keeping a
+# second copy here is the whole point; the two sites differ only in what they do
+# when the budget expires, which is the boolean the helper returns.
+# The reader's budget is far smaller than the writer's: it sits on the hook
+# path, so a contended read must resolve in single-digit milliseconds or give up
+# and let the caller fall open. The window it covers is one rename, not one
+# write.
+_READ_RETRY_BUDGET_SECS = 0.05
+_READ_RETRY_SLEEP_SECS = 0.001
+
+_replace_with_retry = locked_write.replace_with_retry
 
 
 def write_discovery(
@@ -194,27 +227,129 @@ def write_discovery(
     path = discovery_path(engine_root)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    # ATOMIC REPLACE, NOT TRUNCATE-THEN-WRITE. The lock below serialises
+    # WRITERS; it does nothing for the reader, because `read_discovery` takes
+    # no lock at all and must not -- it sits on the hook path, where a lock
+    # acquisition is exactly the cost this transport exists to remove.
+    #
+    # `path.write_text` truncates first, so a lock-free reader landing inside
+    # that window sees an empty or partial file, fails to parse, and gets
+    # `None` -- which every consumer correctly reads as "no listener". The
+    # listener is up the whole time.
+    #
+    # MEASURED, not theorised (doe-claude-5a's sink, 2026-08-25, n=445): two
+    # isolated `no_listener` samples at 19:57:00.560Z and 19:58:00.562Z with
+    # `probe_latency_ms` of **0.037 and 0.031 ms** against 116-167ms for
+    # healthy neighbours -- thirty-odd MICROSECONDS, three orders of magnitude
+    # short of one round trip, so nothing was dialled and no timeout was hit.
+    # Both coincide with an `engine_token` rotation (`9331f66301a0bfe8` ->
+    # `c529e3ea2af27a5f`), i.e. a publish rewriting this record, while OS
+    # process-table evidence shows the listener pid ran continuously across
+    # both. The record went away, never the process.
+    #
+    # mkstemp in the TARGET'S OWN DIRECTORY so `os.replace` is a same-volume
+    # rename and therefore atomic on both Windows and POSIX; a temp file
+    # elsewhere degrades to a copy and reopens the window it closes.
     with locked_write.held_lock(path, holder_label="warm.supervisor"):
-        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8", newline="\n")
+        payload = json.dumps(record, ensure_ascii=False)
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".discovery-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            if not _replace_with_retry(tmp_path, str(path)):
+                # Contended past the budget. The in-place fallback is a TRUNCATING write --
+                # the very shape the atomic replace above exists to avoid -- so it is taken
+                # ONLY when there is no record to damage.
+                #
+                # CORRECTED 2026-08-25, on evidence. The original wrote in place
+                # unconditionally, reasoning that record availability outranks single-write
+                # atomicity. That holds when the destination is ABSENT and INVERTS when it is
+                # PRESENT, because the two failure modes are not equally loud:
+                #   - a STALE record names a listener whose `engine_sha` no longer matches, so
+                #     `_serve_line` answers ENGINE_SKEW: LOUD, and it evicts, so the next fire
+                #     boots a current listener.
+                #   - a TORN record reads as `None`, which every consumer correctly reads as
+                #     "no listener": SILENT, and on the hook path that is a guard that did not
+                #     run and said nothing.
+                # Trading a loud stale read for a silent absent one is the wrong way round.
+                # The observed events are `engine_token` rotations -- rewrites of a record
+                # that ALREADY EXISTS -- which is exactly where the old fallback did harm.
+                # Two post-`dcf4f83a1` events 36 minutes apart (2026-08-25T21:22:00.639Z and
+                # T21:58:30.667Z, both k=1, surfaced by doe-claude-ec and -5a off the
+                # committed sink) are a RATE, not stragglers.
+                #
+                # Skipping this rotation is safe: the record on disk stays readable and the
+                # next rotation retries. `exists()` races a concurrent writer benignly --
+                # losing that race skips one publish rather than tearing a record.
+                if not path.exists():
+                    path.write_text(payload, encoding="utf-8", newline="\n")
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
     """Read and parse the discovery record, or return None if absent,
     unreadable, or not a well-formed JSON object -- never raises, mirrors
     `breadcrumb.read_breadcrumb`'s HINT contract: every consumer must treat
-    `None` as "no information," not an error."""
+    `None` as "no information," not an error.
+
+    RETRIES ONLY ON FAILURE, so the happy path pays NOTHING -- this function is
+    on the hook path and the whole point of the transport is what it does not
+    spend. A first read that parses returns immediately, exactly as before.
+
+    Why a retry exists at all: `write_discovery` now swaps the record in with
+    `os.replace`, which closes the torn-read window but hands the reader a
+    different, much narrower one -- on Windows an open racing a rename loses
+    with a sharing violation (`PermissionError`), and a `None` from that is
+    indistinguishable to every caller from "there is no listener". The record
+    is rewritten on each engine-token rotation (five in one 213-minute
+    observation window), and the incident this whole path was hardened for was
+    exactly a reader seeing no record while the listener process ran
+    continuously.
+
+    A missing file is NOT retried: `FileNotFoundError` means no listener has
+    ever published here, which is a real answer available immediately, and
+    spinning on it would put the retry cost on the genuinely-cold path where it
+    buys nothing. Only a contended read and a torn parse are retried.
+    """
     path = discovery_path(engine_root)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        record = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(record, dict):
-        return None
-    return record
+    deadline: Optional[float] = None
+    while True:
+        retryable = False
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError:
+            retryable = True
+            text = ""
+        if not retryable:
+            try:
+                record = json.loads(text)
+            except json.JSONDecodeError:
+                retryable = True
+                record = None
+            if not retryable:
+                return record if isinstance(record, dict) else None
+
+        # Fail OPEN once the budget is spent -- a caller that cannot read the
+        # record must be told "no information", never made to wait or raise.
+        now = time.monotonic()
+        if deadline is None:
+            deadline = now + _READ_RETRY_BUDGET_SECS
+        elif now >= deadline:
+            return None
+        time.sleep(_READ_RETRY_SLEEP_SECS)
 
 
 def unlink_discovery(engine_root: Optional[Path] = None) -> None:
@@ -329,6 +464,44 @@ def supervisor_pipe_name(
     return election.pipe_name(f"http.{token}", engine_clone=root, user_sid=user_sid)
 
 
+def _record_is_skewed(record: dict, root: Path) -> bool:
+    """True when a discovery record advertises an `engine_sha` that is not the
+    one this clone would compute now -- i.e. the engine was republished under a
+    listener that is still running and still answering `GET /health`.
+
+    WHY `ensure_listener` MUST NOT HAND SUCH A LISTENER OUT. `discovery_is_live`
+    and `check_health` both PASS for a skewed listener: the process is alive and
+    `/health` returns 200, because health never traverses `_serve_line` and so
+    never reaches the version check. The fire then POSTs it, `_serve_line`
+    answers ENGINE_SKEW (-32002), and the guard DOES NOT RUN -- observed
+    2026-08-25 against a listener 7h04m stale, and again on a registered
+    `type: "http"` hook twenty minutes later, both times with the model told
+    only that the guard "errored out".
+
+    Returning True here sends the caller down its ordinary cold path instead,
+    where the guard RUNS. That is the whole of the fix: a skew costs a warm hit,
+    never a skipped guard. The stale listener is left to `evict_on_skew`, which
+    retires it on the first contact from any current-token caller.
+
+    Negative-spec: this is NOT the publish-side eviction that the front-door
+    plan's C9 owns. Nothing here restarts a listener or shortens its life; it
+    only stops a stale one being reported as usable. C9 still has a job -- the
+    orphaned listener holds its port until something contacts it -- and this
+    change makes that job a tidy-up rather than a correctness gate.
+
+    Never raises: an unreadable stamp or a record with no `engine_sha` returns
+    False, preserving the pre-existing behaviour for anything it cannot judge
+    rather than declining a listener on a failure to establish skew.
+    """
+    advertised = record.get("engine_sha")
+    if not advertised:
+        return False
+    try:
+        return skew.compute_client_token(root) != advertised
+    except Exception:  # noqa: BLE001 -- fail-open parity: cannot establish is not skewed
+        return False
+
+
 def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] = None) -> Optional[str]:
     """The autostart + health-check + port-discovery + fail-open entry
     point AC10b names: returns a live listener's base URL, or `None` if
@@ -371,7 +544,7 @@ def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] 
         return None
     try:
         record = read_discovery(root)
-        if record is not None and discovery_is_live(record):
+        if record is not None and discovery_is_live(record) and not _record_is_skewed(record, root):
             url = listener_url(record)
             if url is not None and check_health(url):
                 return url
@@ -416,9 +589,44 @@ class _ServerContext:
     """Boot-scoped supervisor state: the in-flight counter every request
     handler shares, and the shutdown wiring `warm.lifecycle` needs. Mirrors
     `warm.server._ServerContext`'s shape at the scale this module actually
-    needs (no idle watchdog, no skew eviction -- those are pipe-transport
-    concerns this row does not extend to http; a follow-up chunk's job if
-    ever asked for).
+    needs. CORRECTED 2026-08-25 -- the two clauses this docstring used to
+    join were not both true, and a sibling repo's published retraction rests
+    on telling them apart.
+
+    NO IDLE WATCHDOG -- still true, and load-bearing. This module never
+    imports `warm.idle` and `main` runs `serve_forever()` until killed:
+    nothing in this process demotes the listener for idleness. (A `/hook`
+    POST DOES reach `idle.mark_invocation`, since `_serve_line` takes it as
+    a default argument and `serve_kwargs` below does not override it -- but
+    the marks are inert here, because no watchdog reads them. `GET /health`
+    never traverses `_serve_line` at all.) So an availability dip on this
+    transport is never explained by idle demotion.
+
+    NO SKEW EVICTION -- FALSE as previously written, and measured false.
+    This class does not IMPLEMENT eviction, but it wires it: `serve_kwargs`
+    hands `_serve_line` this context's `close_listener` and `drain`, which
+    are precisely the two callables `skew.evict_on_skew` takes, and every
+    `/hook` POST routes through `_serve_line`. A fresh-token request against
+    a stale listener therefore evicts it -- observed 2026-08-25 against a
+    listener 7h04m stale, retired on first contact. Eviction is INHERITED
+    from `_serve_line`, not absent.
+
+    C9 (AC18/AC19) CLOSES THE REMAINING GAP: `ensure_listener` is reached
+    only from the cold hook path (`entry_seam`, `server`), never from
+    publish, so with no traffic a stale listener used to drift indefinitely
+    while `GET /health` answered 200 -- measured live 2026-08-25, 7h04m
+    stale. `main()` now starts a SECOND, skew-only watchdog thread
+    (`_skew_watchdog_loop` / `_skew_watchdog_tick` / `_token_is_stale`,
+    mirroring `warm.server._ServerContext`'s own idle-watchdog SHAPE at the
+    scale this transport needs) that polls `skew.compute_client_token`
+    against this context's own `engine_token` every
+    `_SKEW_WATCHDOG_POLL_SECS` and calls `self.stop()` (the same
+    `lifecycle.begin_shutdown` wiring below) the first time they disagree --
+    turning "held until something contacts it" into "held for at most one
+    poll interval past the publish that rotated the stamp." This is NOT the
+    idle-demotion watchdog `warm.server` runs: it reads no served-count, no
+    seconds-idle, and fires on staleness alone -- the module docstring's "no
+    idle watchdog" bullet still holds for THIS transport in the idle sense.
     """
 
     def __init__(
@@ -440,6 +648,7 @@ class _ServerContext:
         # it can drive a chosen verdict without running the full guard chain.
         self.dispatch = dispatch
         self.engine_token = self._compute_engine_token()
+        self._skew_watchdog_stop = threading.Event()
 
     def _compute_engine_token(self) -> Optional[str]:
         """This transport's own trust proof, SELF-STAMPED rather than read off a
@@ -472,6 +681,7 @@ class _ServerContext:
             pass
 
     def ctx_shutdown(self) -> None:
+        self._skew_watchdog_stop.set()
         unlink_discovery(self.engine_root)
 
     def stop(self) -> None:
@@ -480,6 +690,48 @@ class _ServerContext:
             in_flight_count=self.in_flight,
             ctx_shutdown=self.ctx_shutdown,
         )
+
+    def _token_is_stale(self) -> bool:
+        """C9 (AC18/AC19): has a publish rotated the engine stamp underneath
+        this listener since it booted? Compares this context's own
+        `engine_token` (self-stamped once at construction, see
+        `_compute_engine_token`) against a LIVE `skew.compute_client_token`
+        read -- mirrors `warm.server._ServerContext._token_is_stale`'s exact
+        comparison, at this transport's own boot-token field.
+
+        Never raises: this runs on the skew-watchdog thread every poll, and
+        a transient stat failure (a stamp file mid-rewrite, an unresolvable
+        `engine_root`) must not kill the watchdog. Any failure to establish
+        the live token, or a `None` boot token (an unstamped root at
+        construction -- `_compute_engine_token`'s own fail-open), reads as
+        NOT stale: the safe default is "wait for the next poll," never a
+        false eviction of a healthy listener.
+        """
+        if self.engine_token is None:
+            return False
+        try:
+            return skew.compute_client_token(self.engine_root) != self.engine_token
+        except Exception:  # noqa: BLE001 -- fail-open parity: a read failure is not a verdict
+            return False
+
+    def _skew_watchdog_tick(self) -> None:
+        """One watchdog poll: self-evict via `stop()` (this class's own
+        `lifecycle.begin_shutdown` wiring, shared with every other trigger's
+        single-shot guard) the first time `_token_is_stale()` is True. A
+        no-op otherwise."""
+        if self._token_is_stale():
+            self.stop()
+
+    def _skew_watchdog_loop(self) -> None:
+        """Runs on its OWN thread, independent of the accept loop -- so a
+        stale listener is retired even while it takes NO `/hook` traffic at
+        all (the exact gap C9 closes; see this class's docstring).
+        `Event.wait` both sleeps and gives `ctx_shutdown` a way to end this
+        thread promptly once some OTHER trigger has already won the
+        shutdown guard, mirroring `warm.server._ServerContext.
+        _idle_watchdog_loop`'s identical use of its own stop event."""
+        while not self._skew_watchdog_stop.wait(_SKEW_WATCHDOG_POLL_SECS):
+            self._skew_watchdog_tick()
 
 
 def _make_handler(ctx: "_ServerContext"):
@@ -568,6 +820,27 @@ def _make_handler(ctx: "_ServerContext"):
                 #             -> warm.server._serve_line
                 #             -> http_listener._collect_response
                 #             -> hook_http.interpret_result
+                # THE CALLER'S ENVIRONMENT ARRIVES IN HEADERS, NOT IN THE BODY, and this
+                # is where it is put back onto the event so `payload_from_event` finds it
+                # where its contract says to look. The harness posts no `env` key under any
+                # spelling -- measured, not assumed -- so without this the override boundary
+                # is dead on this transport and reports "caller set no overrides" forever.
+                header_env, disarm_reason = hook_http.env_from_headers(self.headers)
+                if disarm_reason is not None:
+                    # A DECLARED-BUT-VETOED CHANNEL IS AN UNRUN GUARD, NOT A CLEAN ONE. The
+                    # veto empties overrides silently and the guard would read that as "no
+                    # override requested" -- the permissive direction. Refusing to answer is
+                    # this plan's anti-scope as code, the same call `unreachable_response`
+                    # already makes for a dead engine.
+                    self._respond_json(
+                        hook_http.unreachable_response(
+                            event_name or "PreToolUse", disarm_reason
+                        )
+                    )
+                    return
+                if header_env:
+                    event = {**event, "env": header_env}
+
                 request_frame = hook_http.build_request(event, op_name)
                 request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
@@ -676,6 +949,13 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-http-supervisor] failed to write discovery record: {exc!r}", file=__import__("sys").stderr)
+
+    # C9 (AC18/AC19): the skew-only watchdog, on its own thread, independent
+    # of the accept loop -- see `_ServerContext`'s own docstring for why this
+    # is not the idle watchdog `warm.server` runs. Started after the
+    # discovery write so a poll landing before the first write sees this
+    # context's own `engine_token`, never a torn boot sequence.
+    threading.Thread(target=ctx._skew_watchdog_loop, daemon=True, name="warm-http-skew-watchdog").start()
 
     try:
         httpd.serve_forever()

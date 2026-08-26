@@ -193,6 +193,7 @@ from typing import Any, Callable, NamedTuple, Optional
 
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.telemetry import op_latency
+from coordinator_core.telemetry import spawn_counter as _spawn_counter
 from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
 from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
@@ -426,6 +427,36 @@ def _parse_frame(raw_line: bytes) -> dict:
     return msg
 
 
+def _spawn_count_or_none() -> Optional[int]:
+    """Process-local spawn count, or ``None`` on any failure.
+
+    Mirrors `coordinator_core.ipc._spawn_count_or_none`'s shape (try/except,
+    `None`-not-`0` on failure) for the two `warm/server.py` telemetry sites
+    below. `spawn_counter.spawn_count()` is documented never to raise, but
+    that safety lives in `spawn_counter.py`'s own contract, not here -- wrap
+    for defense-in-depth so a future violation of that contract costs one
+    telemetry row, never a dispatch.
+    """
+    try:
+        return _spawn_counter.spawn_count()
+    except Exception:
+        return None
+
+
+def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
+    """Spawns between two readings, or ``None`` if either end is unavailable.
+
+    Mirrors `coordinator_core.ipc._spawn_delta`. Trusts, without re-asserting,
+    that `spawn_counter`'s own negative spec holds ("not reset between ops,
+    ever") -- if that global were ever reset mid-measurement this could
+    return a negative delta; not a bug given that contract, but a dependency
+    this function does not defend on its own.
+    """
+    if start is None or end is None:
+        return None
+    return end - start
+
+
 def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     """Invoke the existing engine core for one already-parsed JSON-RPC
     request -- the SOLE process-level dispatch chokepoint
@@ -486,9 +517,15 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     # runs alone in its own process) -- recorded under
     # MEASUREMENT_SCOPE_PROCESS_WIDE so no consumer can mistake it for a
     # per-op figure. See `coordinator_core.ipc.record_op_process_time`'s own
-    # docstring for the full rationale.
+    # docstring for the full rationale. The spawn-count delta below is
+    # equally process-wide for the same reason -- `spawn_counter` is one
+    # process-global counter, so a sibling thread's spawns during this same
+    # window land inside this thread's delta too; a reader must apply this
+    # row's own `measurement_scope` to `spawns` exactly as it does to
+    # `process_ms`.
     _t_start = _time.time()
     _process_start = _time.process_time()
+    _spawn_start = _spawn_count_or_none()
     try:
         with per_request_state(session_id=session_id, diagnostics=diagnostics):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -504,6 +541,8 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
             source_path="accept_thread",
             t_start=_t_start,
             repo_root=_repo_root,
+            sid=session_id or None,
+            spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
         )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
@@ -592,6 +631,7 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     # whose accept-process threads share one interpreter and one clock.
     _t_start = _time.time()
     _process_start = _time.process_time()
+    _spawn_start = _spawn_count_or_none()
     try:
         with per_request_state(session_id=session_id, diagnostics=diagnostics):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -607,6 +647,8 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
             source_path="pool_worker",
             t_start=_t_start,
             repo_root=_repo_root,
+            sid=session_id or None,
+            spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
         )
 
     # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:

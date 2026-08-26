@@ -1212,8 +1212,150 @@ def _warn_placeholder_id_skipped(field: str, doc_type: str) -> None:
     )
 
 
-def _mint_deliverable_id_from_title(title: str, doc_type: str) -> str | None:
-    """Title-derived deliverable_id mint, refusing on a placeholder title.
+# Set once from `--new-chain` in main(); read by _resolve_session_chain_deliverable_id.
+# A module-level switch rather than a parameter because the mint-from-title fallback is
+# reached from five call sites across three arms, none of which otherwise carry an
+# authoring-intent flag — threading one through all of them would widen five signatures
+# to express a single process-wide fact the CLI resolves once, at parse time.
+_NEW_CHAIN_REQUESTED = False
+
+
+def _resolve_session_held_handoff_path(repo_root: str | None) -> str | None:
+    """Absolute path of the handoff THIS session holds a claim on, or None.
+
+    Reuses `baton_assemble._resolve_held_handoff_for_session` — the ONE
+    resolver from the durable claim ledger to a baton path (see its own
+    docstring's "this is the ONE place" contract) — rather than re-deriving
+    the claim-store lookup here. That resolver returns the LIVE-directory
+    string even for a handoff since swept to `archive/handoffs/`, so the
+    swept case is handed to `resolve_swept_baton._find_first_match`, the
+    same shared archive walk `_resolve_qualified_path_or_raise` and
+    `/pickup` use — never a second hand-rolled archive-dir list here.
+
+    Returns None — never raises — on every ambiguity or absence: no claim,
+    a `degraded` set (the resolver could not distinguish two held claims, so
+    no single chain is named and guessing one would be the very silent
+    mis-join this tier exists to prevent), the resolver's own loud
+    `ValueError`, or a repo root that will not resolve.
+    """
+    if not repo_root:
+        return None
+    try:
+        _ensure_engine_on_path()
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        # Cheap pre-gate before the expensive import: `coordinator_core.
+        # baton_assemble` costs ~95ms to import, `coordinator_core.session`
+        # ~47ms, and the overwhelmingly common case is a session holding no
+        # handoff claim at all. Ask the ledger the yes/no question with the
+        # cheaper module first and pay for the resolver only on a hit —
+        # the resolver imports this same module anyway, so the hit path
+        # pays nothing extra for the gate.
+        from coordinator_core.session import claims as _claims  # noqa: PLC0415
+        from coordinator_core.session import core as _session_core  # noqa: PLC0415
+
+        _sid = _session_core.resolve_session_id(repo_root)
+        if not _sid:
+            return None
+        if not any(
+            _class == "handoff-claims"
+            for _class, _basename in _claims.list_claims_by_session(_sid, repo_root)
+        ):
+            return None
+
+        from coordinator_core.baton_assemble import (  # noqa: PLC0415
+            _resolve_held_handoff_for_session,
+        )
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            _primary, _additional, _degraded = _resolve_held_handoff_for_session(
+                _Path(repo_root), allow_standalone=True
+            )
+    except Exception:  # noqa: BLE001 -- discovery is best-effort; never blocks scaffolding
+        return None
+    if not _primary or _degraded:
+        return None
+    _live = os.path.join(repo_root, _primary.replace("/", os.sep))
+    if os.path.isfile(_live):
+        return _live
+    try:
+        from coordinator_core.ops.resolve_swept_baton import (  # noqa: PLC0415
+            _find_first_match,
+        )
+
+        _swept = _find_first_match(_Path(repo_root), os.path.basename(_primary))
+    except Exception:  # noqa: BLE001 -- discovery is best-effort; never blocks scaffolding
+        return None
+    return str(_swept) if _swept else None
+
+
+def _resolve_session_chain_deliverable_id(
+    doc_type: str, repo_root: str | None
+) -> str | None:
+    """Session-chain discovery — the id of the chain this session is already
+    authoring into, or None.
+
+    The gap this closes: every other rung answers "was an id HANDED to me"
+    (flag, env, cited sizing, explicit predecessor edge). None asks whether
+    the chain already HAS one, so two artifacts of one deliverable authored
+    under two titles with no id passed mint two different ids off two title
+    slugs — silently, each scaffolder doing the locally-normal thing — and
+    the split only surfaces at a deliverable-level rollup, by which time it
+    is in shared history and unrepairable in place (2026-08-25 bug record
+    `deliverable-id-minted-from-title-not-discovered`, two independent
+    chains).
+
+    Three doc types are exempt by ruling, not by convenience:
+      spinoff — a `kind: spinoff` baton mints its own id (PM, 2026-08-05;
+                `baton_assemble.resolve_lineage` owns that branch).
+      roadmap-baton — its identity is its `stub_id`, not a discovered chain
+                (D1); the stub path above already mints from it.
+      plan — plan authoring ALREADY asks this question, one tier earlier and
+                with a stricter answer. `deliverable_carry.resolve_session_
+                state_parent_deliverable_id` reads the very same session-held
+                artifact and REJECTS it unless its `kind` is a roadmap stub,
+                because holding a claim is not evidence a plan descends from
+                it (pln-deliverable-id-fork-remediatio-894e26 § C2 AC4b: a
+                false merge joins two unrelated works under one id and, unlike
+                a fork, nothing can ever detect it — nothing diverges). Left
+                unexempt, this tier reads that same rejected file and carries
+                its id anyway, silently reversing the decision the tier before
+                it just logged as "falling through to mint-from-slug". Two
+                tiers must not answer the same question about the same file
+                two ways; for `plan` the kind-gated one is authoritative.
+    `--new-chain` is the author's own exemption for the remaining types:
+    deliberately rooting a NEW deliverable while a claim on another chain is
+    still held.
+
+    Never raises: every failure mode degrades to None and mint-from-title,
+    exactly the behaviour that stood before this tier existed.
+    """
+    if _NEW_CHAIN_REQUESTED or doc_type in {"spinoff", "roadmap-baton", "plan"}:
+        return None
+    _chain_path = _resolve_session_held_handoff_path(repo_root)
+    if not _chain_path:
+        return None
+    try:
+        _ensure_engine_on_path()
+        from coordinator_core.ops.deliverable_carry import (  # noqa: PLC0415
+            resolve_session_chain_deliverable_id,
+        )
+        from coordinator_core.ops.read_frontmatter_field import (  # noqa: PLC0415
+            read_frontmatter_field as _read_frontmatter_field,
+        )
+
+        return resolve_session_chain_deliverable_id(
+            _read_frontmatter_field, _chain_path
+        )
+    except Exception:  # noqa: BLE001 -- discovery is best-effort; never blocks scaffolding
+        return None
+
+
+def _mint_deliverable_id_from_title(
+    title: str, doc_type: str, repo_root: str | None = None
+) -> str | None:
+    """Discover the session's chain id, else mint from the title, refusing on
+    a placeholder title.
 
     Wraps the slug-basis _mint_deliverable_id call so the placeholder guard lives in
     ONE place rather than being re-inlined at each of its four call sites. Carry-path
@@ -1221,8 +1363,22 @@ def _mint_deliverable_id_from_title(title: str, doc_type: str) -> str | None:
     from a caller-supplied id or a real stub_id, never from the title, so the
     placeholder failure mode cannot reach them.
 
+    Discovery runs AHEAD of the placeholder refusal on purpose: a discovered id is
+    not title-derived, so a placeholder title is no reason to withhold it — the
+    refusal exists to stop a placeholder becoming durable, and carrying the chain's
+    real id does the opposite.
+
+    ``repo_root`` is the discovery scope; omitting it (the default, kept for the
+    unit call sites that pass a title alone) disables discovery and preserves the
+    pre-2026-08-25 mint-from-title behaviour exactly.
+
     See _is_placeholder_title for why refusal beats minting a placeholder-derived id.
     """
+    _chain_dlv = _resolve_session_chain_deliverable_id(doc_type, repo_root)
+    if _chain_dlv:
+        return _mint_deliverable_id(
+            deliverable_id=_chain_dlv, carry_source="session-chain discovery"
+        )
     if _is_placeholder_title(title):
         _warn_placeholder_id_skipped("deliverable_id", doc_type)
         return None
@@ -1320,7 +1476,7 @@ def _resolve_explicit_predecessor_edge_tier(
     Spec backlink: docs/plans/2026-08-14-baton-closes-when-its-plan-ships.md § C1/C2, AC1/AC3/AC4/AC5/AC9
     """
     if not predecessor_relpath:
-        return _mint_deliverable_id_from_title(title, doc_type)
+        return _mint_deliverable_id_from_title(title, doc_type, repo_root)
 
     _ensure_engine_on_path()
     from coordinator_core.ops.deliverable_carry import (  # noqa: PLC0415
@@ -1339,7 +1495,7 @@ def _resolve_explicit_predecessor_edge_tier(
                     _read_frontmatter_field, predecessor_relpath
                 )
         except (DroppedDeliverableJoinError, DivergentDeliverableIdError) as _nr_carry_exc:
-            _fallback = _mint_deliverable_id_from_title(title, doc_type)
+            _fallback = _mint_deliverable_id_from_title(title, doc_type, repo_root)
             _write_deliverable_carry_degradation(
                 repo_root, doc_type, _nr_carry_exc, _fallback, title,
                 predecessor_path=predecessor_relpath,
@@ -1359,7 +1515,7 @@ def _resolve_explicit_predecessor_edge_tier(
             deliverable_id=_edge_dlv, carry_source="explicit predecessor edge"
         )
     _warn_predecessor_spine_not_inherited(predecessor_relpath)
-    return _mint_deliverable_id_from_title(title, doc_type)
+    return _mint_deliverable_id_from_title(title, doc_type, repo_root)
 
 
 def _warn_predecessor_spine_not_inherited(predecessor_relpath: str) -> None:
@@ -3058,7 +3214,7 @@ def _scaffold_memo(title: str, to: str, topic: str, from_id: str) -> str:
     """
     placeholder_body = (
         "<!-- Replace with the memo body. -->\n"
-        "<!-- Send when ready: cross-repo-memo --to {to} --topic {topic} --body-file <this-file> -->\n".format(
+        "<!-- Send when ready: cross-repo-memo send {topic}   (drafted to {to}) -->\n".format(
             to=to, topic=topic
         )
     )
@@ -4966,6 +5122,22 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--new-chain",
+        dest="new_chain",
+        action="store_true",
+        help=(
+            "Root a NEW deliverable, suppressing session-chain discovery. With no "
+            "--deliverable-id and no other carry rung, the scaffolder joins the chain "
+            "of the handoff this session holds a claim on, so two artifacts of one "
+            "deliverable stop minting two ids off two title slugs. Pass this when the "
+            "artifact genuinely starts its own chain while a claim on another is still "
+            "held. Inert for spinoff and roadmap-baton, which mint their own identity "
+            "either way. "
+            "Spec: state/bug-backlog/2026-08-25-deliverable-id-minted-from-title-not-"
+            "discovered-d2b445e3e44a.yaml"
+        ),
+    )
+    parser.add_argument(
         "--initiative",
         dest="initiative",
         default=None,
@@ -5651,6 +5823,11 @@ def main() -> None:
     if doc_type == "plan":
         plan_author = _resolve_plan_author()
 
+    # `--new-chain` is an authoring INTENT, resolved once here rather than threaded
+    # through the five mint-from-title call sites below (see _NEW_CHAIN_REQUESTED).
+    global _NEW_CHAIN_REQUESTED
+    _NEW_CHAIN_REQUESTED = bool(getattr(args, "new_chain", False))
+
     # Resolve deliverable-spine fields (handoff, spinoff, roadmap-baton, plan) — C3b.
     # Session context inheritance: DELIVERABLE_ID env var is the mechanism by which the
     # skill layer (e.g. /handoff, /plan) propagates the parent deliverable_id so downstream
@@ -5697,8 +5874,13 @@ def main() -> None:
             if _sr_stub:
                 _resolved_deliverable_id = _mint_deliverable_id(stub_id=_sr_stub)
             else:
-                # no stub_id yet (PLACEHOLDER) — mint from slug
-                _resolved_deliverable_id = _mint_deliverable_id_from_title(title, doc_type)
+                # no stub_id yet (PLACEHOLDER) — mint from slug. Session-chain
+                # discovery is inert here by doc_type (see
+                # _resolve_session_chain_deliverable_id): a roadmap baton's
+                # identity is its stub_id, never a chain it was authored beside.
+                _resolved_deliverable_id = _mint_deliverable_id_from_title(
+                    title, doc_type, _current_repo_root()
+                )
         elif doc_type == "plan":
             # Session-state parent tier (2026-08-01 deliverable-id-fork-remediation
             # C1/AC1) — reachable for `plan` only, ordered after explicit/env carry
@@ -5852,7 +6034,9 @@ def main() -> None:
                 # no-carry — the exact defect this arm exists to prevent,
                 # reintroduced by masking it. Do not widen this to
                 # `except Exception` in a future tidying pass.
-                _resolved_deliverable_id = _mint_deliverable_id_from_title(title, doc_type)
+                _resolved_deliverable_id = _mint_deliverable_id_from_title(
+                    title, doc_type, _hnd_repo_root
+                )
                 _hnd_carried_initiative = None
                 _write_deliverable_carry_degradation(
                     _hnd_repo_root, doc_type, _hnd_carry_exc,
@@ -5864,9 +6048,23 @@ def main() -> None:
             # AC9 — sizing-object is the earliest artifact in the
             # deliverable chain (sizing-object.schema.json's own
             # `deliverable_id` description; DR-207 DD#1) and never takes a
-            # carry via any rung — mint, or explicit/env id (already
-            # resolved above this elif chain), only.
-            _resolved_deliverable_id = _mint_deliverable_id_from_title(title, doc_type)
+            # DESCENT carry — no parent rung (session-state stub, cited
+            # sizing, predecessor edge) is admissible here; mint, or
+            # explicit/env id (already resolved above this elif chain).
+            #
+            # Session-chain discovery inside `_mint_deliverable_id_from_title`
+            # is NOT such a rung and is deliberately live here (2026-08-25 bug
+            # record `deliverable-id-minted-from-title-not-discovered`): it
+            # asks co-membership, not descent — "is this session already
+            # authoring a chain" — and it was precisely a sizing scaffolded
+            # beside a live chain that minted the second id that record was
+            # filed for. AC9's "earliest artifact" premise holds only when the
+            # sizing IS the chain root; when it demonstrably is not, minting a
+            # fresh id manufactures a fork rather than defending a root.
+            # `--new-chain` is how an author asserts the root case explicitly.
+            _resolved_deliverable_id = _mint_deliverable_id_from_title(
+                title, doc_type, _current_repo_root()
+            )
         else:
             # AC2/AC9 fallthrough — the carry cascade is the DEFAULT for
             # every OTHER spine-bearing doc_type. Today that is `spinoff`,

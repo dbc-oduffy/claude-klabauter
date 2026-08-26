@@ -2,13 +2,15 @@
 constants, extracted to a leaf module with no imports of its own.
 
 Split out of ``_helpers.py`` (2026-08-25, "the commit gate stops importing a
-subsystem") so a caller needing only these two constants -- e.g.
-``coordinator_core.ops.detect_staged_rollback``, which sits on the commit
-pre-commit hook path -- does not have to import ``_helpers.py`` and, through
-it, the wider ``bash_guards``/``subagent_sandbox`` import graph. This module
-holds ONLY the two constants below, verbatim from ``_helpers.py``, and
-imports nothing itself so importing it can never pull in anything beyond the
-Python standard library.
+subsystem") so a caller needing only these two constants -- originally
+``coordinator_core.ops.detect_staged_rollback``, which sat on the commit
+pre-commit hook path -- would not have to import ``_helpers.py`` and, through
+it, the wider ``bash_guards``/``subagent_sandbox`` import graph. That caller
+is gone (deleted 2026-08-25, "the staged rollback gate dies without blocking
+a commit"; claude-klabauter ends with no pre-commit hook), but the leaf split still
+stands: this module holds ONLY the two constants below, verbatim from
+``_helpers.py``, and imports nothing itself so importing it can never pull in
+anything beyond the Python standard library.
 
 ``_helpers.py`` imports both names FROM this leaf and re-exports them --
 every existing importer of ``_helpers.OVERRIDE_KEYS_DOC``/

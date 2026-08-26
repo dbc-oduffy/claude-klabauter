@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -399,11 +400,27 @@ def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
     # neither resolves here (the fake returns an empty stdout), so no third
     # `set` is armed. Asserting the whole call list rather than just the two
     # writes is deliberate — it is what would catch an unexpected extra spawn.
+    # The final two calls are `provision_stamped_engine`'s best-effort
+    # engine-build bootstrap (docs/plans/2026-08-19-an-engine-root-is-a-
+    # stamped-build.md C1): no klabauter checkout was discovered above, so
+    # register_claude_klabauter_root's own AUTHORITATIVE call site stamps a fresh,
+    # empty engine-build git tree under the (quarantined) settings home --
+    # `git init` followed by an empty allow-empty commit, never a real
+    # publish round (no coordinator/bin/publish.py exists in this fixture,
+    # which is why the WARNING appears on stderr instead of a third call).
+    engine_build_dir = str(
+        Path(os.environ["USERPROFILE"])
+        / ".coordinator-claude-settings"
+        / "engine-build"
+        / "claude-klabauter"
+    )
     assert calls == [
         ["machine-local", "get", "repos.claude_klabauter"],
         ["machine-local", "get", "publish.mirrors.claude_klabauter.path"],
         ["machine-local", "set", "repos.claude_klabauter", str(repo_root)],
         ["machine-local", "set", "engine.working_repos.claude_klabauter", str(repo_root)],
+        ["git", "init", engine_build_dir],
+        ["git", "-C", engine_build_dir, "commit", "--allow-empty", "-m", "engine-build: init"],
     ]
     out = capsys.readouterr().out
     assert f"PASS [registration] repos.claude_klabauter = {repo_root}" in out

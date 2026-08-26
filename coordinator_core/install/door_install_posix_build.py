@@ -28,7 +28,12 @@ from `scripts/setup.py`, the coldest surface in the repo -- no Claude Code
 session exists yet, so a slash command names a remedy the operator cannot
 invoke (CLAUDE.md § Runtime conventions,
 `coordinator/tests/test_cold_path_remediation_is_runnable.py`). The advisory
-below is a `python3 <path>` command line the operator can paste directly.
+below is a `python3 -m <module>` command line the operator can paste
+directly. **The module route, never a file path** -- `build_posix.py` does
+`from .build import write_sidecar`, so `python3 <abs path>/build_posix.py`
+dies on `ImportError: attempted relative import with no known parent
+package` before reaching its own argparse. Naming a remedy that cannot run
+is the same defect as naming a slash command, one layer down.
 """
 
 from __future__ import annotations
@@ -91,14 +96,24 @@ def build_or_advise(
         )
 
     if not has_posix_compiler(compiler):
-        build_posix_script = Path(build_posix.__file__).resolve()
+        # The remediation names the MODULE route, never the file path.
+        # `build_posix.py` does `from .build import write_sidecar`, so
+        # `python3 <abs path to build_posix.py> <root>` -- what this advisory
+        # used to emit -- dies on `ImportError: attempted relative import with
+        # no known parent package` before it reaches its own argparse. The
+        # module's own usage string already declares `python3 -m
+        # coordinator_core.warm.door.build_posix`; the advisory now agrees with
+        # it. A cold-path remediation that does not run is the failure mode the
+        # runnable-remediation rule exists to prevent (CLAUDE.md § Runtime
+        # conventions), and it is worse than naming nothing, because the
+        # operator burns a cycle on a command that cannot work.
         engine_root_str = str(Path(engine_root).resolve())
         advisory = (
             "[door-install] no C compiler found on PATH (checked clang, cc, gcc) -- "
             "the native warm-engine door is optional on POSIX; install continues "
             "without it. Install a compiler (e.g. `xcode-select --install` on "
-            f"macOS) and build it later with: python3 {build_posix_script} "
-            f"{engine_root_str}"
+            "macOS) and build it later with: python3 -m "
+            f"{build_posix.__name__} {engine_root_str}"
         )
         return PosixDoorBuildResult(built=False, output=None, advisory=advisory)
 

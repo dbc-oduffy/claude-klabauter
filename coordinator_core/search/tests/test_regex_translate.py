@@ -84,9 +84,23 @@ def _write_corpus(tmp_path: Path) -> Path:
 
 
 def _real_grep_lines(pattern: str, dialect: str, path: Path) -> set:
+    """Run the real grep as the differential oracle.
+
+    The pattern goes in through ``-f <file>``, never as an argv word, and that is
+    load-bearing on Windows rather than a style choice. ``subprocess`` has no argv
+    array to hand a native process: it joins the list into ONE command line, and
+    the MSYS runtime behind Git-for-Windows' ``grep.exe`` re-splits and
+    glob/brace-expands it. ``a{2,3}c`` arrived as two words, grep read ``a3c`` as
+    a filename, and the oracle failed with ``rc=2`` on the exact metacharacter
+    cases this test exists to cover -- so the harness, not the translator, was
+    what the assertion was measuring. ``-f`` is byte-exact and expansion-proof:
+    the pattern never passes through a command line at all.
+    """
     flag = {"basic": [], "extended": ["-E"], "fixed": ["-F"]}[dialect]
+    pattern_file = path.parent / "pattern.txt"
+    pattern_file.write_bytes(pattern.encode("utf-8") + b"\n")
     proc = subprocess.run(
-        ["grep"] + flag + ["-n", "--", pattern, str(path)],
+        ["grep"] + flag + ["-n", "-f", str(pattern_file), "--", str(path)],
         capture_output=True,
         timeout=5,
     )

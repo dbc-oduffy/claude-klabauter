@@ -70,6 +70,9 @@ def _base_draft_params(**overrides) -> dict:
         "topic": "some-topic",
         "to": "example-retrieval-repo-em",
         "title": "A draft memo",
+        # `kind` is required by memo.draft (it matches memo.send's own gate);
+        # a params dict without it never reaches the behaviour under test.
+        "kind": "fyi",
     }
     params.update(overrides)
     return params

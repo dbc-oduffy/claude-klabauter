@@ -549,6 +549,38 @@ _ALLOWLIST: dict[str, str] = {
         "`coordinator_core/install/write_surface.py`'s own note that a new "
         "kind is never invented locally without updating that tuple."
     ),
+    "door_install.py": (
+        "KNOWN GAP: genuinely write-reaching, genuinely undeclared. "
+        "`install_door()` copies the prebuilt door exe (and its provenance "
+        "sidecar) to a caller-supplied `bin_dst`, or falls back to "
+        "`door_build.build()` writing there directly, then "
+        "`_remove_shadowing_forwarder_siblings` unlinks any `.ps1`/`.cmd` "
+        "siblings at that same destination. Same `file-path`-shaped, "
+        "caller-supplied-destination clause as "
+        "`clone_sibling_repo.WRITE_SURFACE`'s own template. Authoring "
+        "writer `WRITE_SURFACE` declarations is out of this dispatch's "
+        "scope — reported to the dispatching EM instead."
+    ),
+    "door_uninstall.py": (
+        "KNOWN GAP: genuinely write-reaching, genuinely undeclared. "
+        "`uninstall_door()` unlinks the door exe, its provenance sidecar, "
+        "and its build sidecar at a caller-supplied `bin_dst`, then "
+        "re-emits a fallback forwarder there via "
+        "`_reemit_fallback_forwarder` -- `door_install.py`'s exact "
+        "counterpart, same clause shape. Authoring writer `WRITE_SURFACE` "
+        "declarations is out of this dispatch's scope — reported to the "
+        "dispatching EM instead."
+    ),
+    "door_route_signal.py": (
+        "KNOWN GAP: genuinely write-reaching, genuinely undeclared. The "
+        "flagged `subprocess.run` spawns the installed door binary itself "
+        "with a real op to observe which route (`WARM_SERVER`/`IN_PROCESS`) "
+        "answered it -- unlike this file's read-only-probe siblings above, "
+        "the spawned door can itself dispatch a real op with real side "
+        "effects, so this is a genuine indirect write surface, not a false "
+        "positive. Authoring writer `WRITE_SURFACE` declarations is out of "
+        "this dispatch's scope — reported to the dispatching EM instead."
+    ),
 }
 
 

@@ -269,7 +269,7 @@ def test_cas_ref_refuses_when_lock_already_held(tmp_path: Path) -> None:
 
     lock_path = gitdir / "refs" / "heads" / "main.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     os.close(fd)
     try:
         ok = cas_ref(gitdir, "refs/heads/main", real_sha, "2" * 40)

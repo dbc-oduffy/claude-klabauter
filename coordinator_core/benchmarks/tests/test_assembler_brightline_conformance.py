@@ -21,7 +21,25 @@ exists yet." This module is the structural proof of that claim, run at
 build time so a regression that prematurely wires one of these two
 assemblers up is caught here, not in DoE's tree after C12 publishes.
 
+NARROWED 2026-08-25, after this pin and ceremony-sweep-05's package-registration
+guard landed the same day pulling opposite ways. That guard requires every
+`brief()`-defining package to have a phantom-sweep provider; this one read any
+mention of an assembler's name, in any `.py` under `coordinator_core/`, as a
+caller. A `brief()`-defining assembler could satisfy one or the other, never both.
+
+Neither invariant lost, because they were never opposed on substance. "Inert on
+landing" means no caller that INVOKES the assembler as part of the system's own
+work before C12 publishes. A pytest-only harness reading the shape of `brief()`'s
+output is not one, and could not make the op live if it tried -- which
+`test_neither_assembler_is_a_registered_ipc_op` asserts directly and independently.
+So the sweep now skips test files and the named harness, and `test_the_sweep_still
+_catches_a_production_caller` proves it did not go blind in the process.
+
 Negative-spec:
+    - Do NOT widen the exemptions further without the same argument. A file is
+      exempt only if it cannot invoke the assembler as production work; "it is
+      inconvenient that this is red" is not that argument, and a NON-test module
+      that calls `brief()` is exactly what this module exists to catch.
     - Do NOT re-assert AC2/AC3/AC4 (module-scope-import / process-time /
       spawn-count) here -- C10's and C11's own test files already own and
       gate those against the real CLI; this module owns the disjoint,
@@ -72,27 +90,74 @@ _EXEMPT_DIR_MARKERS = (
 # This test module itself names both assemblers (docstring, constants) to
 # assert their absence elsewhere -- naming them here is the check, not a
 # call to them, so this file is exempt from its own sweep.
-_EXEMPT_FILES = (os.path.abspath(__file__),)
+_EXEMPT_FILES = (
+    os.path.abspath(__file__),
+    # ceremony_common's phantom-sweep harness. It calls each `brief()`-defining
+    # package's `brief()` to introspect the directive/judgment-point shapes it
+    # emits; ceremony-sweep-05's package-registration guards
+    # (`test_every_discovered_package_is_registered_or_allowlisted`) require
+    # EVERY such package to have a provider, so a `brief()`-defining package
+    # landing in-tree cannot satisfy both that guard and a sweep that treats any
+    # mention as a caller.
+    #
+    # The two guards read as opposed and are not: the property this module was
+    # written to protect (module docstring) is that landing an assembler wires up
+    # no caller that would INVOKE it as part of the system's own work before
+    # C12 publishes. A test harness reading its output shape is not that -- it
+    # runs only under pytest, reaches no production path, and cannot make the op
+    # live. `test_neither_assembler_is_a_registered_ipc_op` below is the assertion
+    # that actually carries "not live", and it is untouched and still green.
+    #
+    # Narrowed rather than deleted, per the recurring failure this repo keeps
+    # paying for: the pin was on WHERE the name appears, not on WHAT would make
+    # the assembler live.
+    os.path.abspath(
+        os.path.join(_CORE_ROOT, "ceremony_common", "_phantom_sweep_providers.py")
+    ),
+)
+
+
+def _is_test_file(fname: str) -> bool:
+    """A test file naming an assembler is asserting about it, not calling it as
+    part of the system's own work -- and a test that DID prematurely wire one up
+    still could not make it live, which is what
+    `test_neither_assembler_is_a_registered_ipc_op` proves directly."""
+    return (
+        fname.startswith("test_")
+        or fname.endswith("_test.py")
+        or fname == "conftest.py"
+    )
+
+
+def _is_swept(path: str, rel: str, fname: str) -> bool:
+    """Whether one file is in the sweep's scope. Split out from the walk so the
+    planted-violation test can exercise the same predicate the sweep uses,
+    rather than a re-spelling of it that could drift green."""
+    if not fname.endswith(".py") or _is_test_file(fname):
+        return False
+    if os.path.abspath(path) in _EXEMPT_FILES:
+        return False
+    return not any(marker in rel for marker in _EXEMPT_DIR_MARKERS)
+
+
+def _names_an_assembler(content: str) -> list[str]:
+    return [name for name in _ASSEMBLER_NAMES if name in content]
 
 
 def _iter_in_tree_python_files():
     """Every .py file under coordinator_core/, excluding each assembler's
-    own directory (its own definition, never a caller of itself), this
+    own directory (its own definition, never a caller of itself), test files
+    and the named phantom-sweep harness (module docstring, NARROWED), this
     test module itself, and __pycache__ (compiled artifacts, not
     source)."""
     for root, _dirs, files in os.walk(_CORE_ROOT):
         if "__pycache__" in root:
             continue
         for fname in files:
-            if not fname.endswith(".py"):
-                continue
             path = os.path.join(root, fname)
-            if os.path.abspath(path) in _EXEMPT_FILES:
-                continue
             rel = os.path.relpath(path, _ENGINE_ROOT)
-            if any(marker in rel for marker in _EXEMPT_DIR_MARKERS):
-                continue
-            yield path, rel
+            if _is_swept(path, rel, fname):
+                yield path, rel
 
 
 class TestInertOnLanding(unittest.TestCase):
@@ -102,6 +167,30 @@ class TestInertOnLanding(unittest.TestCase):
     so a regression that prematurely calls one is caught at build time,
     before C12's publish step, not after."""
 
+    def test_the_sweep_still_catches_a_production_caller(self):
+        """The narrowing is worthless if it went blind. A plain module under
+        `coordinator_core/` that imports an assembler is still in scope and still
+        reads as an offender; the phantom-sweep harness and a test file are not."""
+        production = os.path.join(_CORE_ROOT, "ops", "some_new_op.py")
+        self.assertTrue(
+            _is_swept(production, os.path.relpath(production, _ENGINE_ROOT), "some_new_op.py")
+        )
+        self.assertEqual(
+            _names_an_assembler(
+                "from coordinator_core import roadmap_planning_assemble as rpa\n"
+            ),
+            ["roadmap_planning_assemble"],
+        )
+
+        harness = os.path.join(_CORE_ROOT, "ceremony_common", "_phantom_sweep_providers.py")
+        self.assertFalse(
+            _is_swept(harness, os.path.relpath(harness, _ENGINE_ROOT), "_phantom_sweep_providers.py")
+        )
+        a_test = os.path.join(_CORE_ROOT, "ops", "test_something.py")
+        self.assertFalse(
+            _is_swept(a_test, os.path.relpath(a_test, _ENGINE_ROOT), "test_something.py")
+        )
+
     def test_no_in_tree_caller_references_either_assembler(self):
         offenders = []
         for path, rel in _iter_in_tree_python_files():
@@ -109,9 +198,8 @@ class TestInertOnLanding(unittest.TestCase):
                 content = open(path, encoding="utf-8").read()
             except (OSError, UnicodeDecodeError):
                 continue
-            for name in _ASSEMBLER_NAMES:
-                if name in content:
-                    offenders.append((rel, name))
+            for name in _names_an_assembler(content):
+                offenders.append((rel, name))
         self.assertEqual(
             offenders,
             [],

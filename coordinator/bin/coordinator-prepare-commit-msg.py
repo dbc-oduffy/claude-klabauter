@@ -44,10 +44,13 @@ Behaviour:
      defect this closes (2026-08-04 cross-repo memo, example-market-data-repo-em
      -> claude-klabauter-em, defect 2) and why it wins over every tier below.
      Fails SOFT on the hot path: staged-set derivation errors (not a repo,
-     git unavailable, timeout, empty stage) and a genuinely divergent
-     multi-artifact commit (``DivergentDeliverableIdError``) both degrade to
-     "tier 0 has nothing to say" — noted on stderr for the divergent case —
-     rather than blocking or erroring the commit. Gated (2026-08-07, DR-207)
+     git unavailable, timeout, empty stage) and a multi-artifact commit
+     whose artifacts name different deliverables both degrade to "tier 0 has
+     nothing to say", silently, rather than blocking or erroring the commit.
+     DR-328 retired ``DivergentDeliverableIdError`` as a commit gate — two
+     deliverables in one commit is ordinary, not ambiguous — so the second
+     case is an omit here and in the engine twin alike, with no stderr note
+     in either. Gated (2026-08-07, DR-207)
      on ``coordinator_core.claim_state.resolve_claim_state``: a staged
      artifact claimed by a DIFFERENT live session is excluded from tier 0's
      consideration (falls through to the session-keyed tiers below) rather
@@ -56,10 +59,11 @@ Behaviour:
      memo-write-through defect this closes. This mirrors
      ``coordinator_core.git.commit_trailers.compute_missing_trailer_args``'s
      own tier 0 for a caller (``git commit-tree`` et al.) that hooks never
-     fire for; that sibling is CLI-facing and propagates the same divergence
-     uncaught by design — this hook may not, since a failed hook still lets
-     the underlying ``git commit`` land with a wrong/no trailer rather than
-     blocking, and blocking would be strictly worse than that.
+     fire for; post-DR-328 that sibling omits on divergence exactly as this
+     copy does, and neither raises. This hook could not have kept a raising
+     posture in any case: a failed hook still lets the underlying ``git
+     commit`` land with a wrong/no trailer rather than blocking, and
+     blocking would be strictly worse than that.
   4. Deliverable-Id (session-keyed fallback, reached only when tier 0 above
      yields nothing): read
      ``<git-dir>/coordinator-sessions/<sid>/session-shape.json``
@@ -758,13 +762,18 @@ def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" 
     ``_resolve_deliverable_id_from_claimed_plan``). Never fabricates a
     value; every lookup in the cascade is omit-rather-than-guess.
 
-    Tier 0's ``DivergentDeliverableIdError`` (and any other failure raised
-    resolving it) is caught HERE, not left to propagate to ``main()`` — this
-    hook's hot-path fail-soft contract (module docstring, step 3a) means a
-    genuinely ambiguous or errored artifact lookup degrades to "tier 0 has
-    nothing to say" and falls through to the session-keyed tiers below,
-    never blocks or errors the commit. The ambiguous case is noted on
-    stderr so the divergence is visible without aborting anything.
+    Any failure raised resolving tier 0 is caught HERE, not left to
+    propagate to ``main()`` — this hook's hot-path fail-soft contract
+    (module docstring, step 3a) means an errored artifact lookup degrades to
+    "tier 0 has nothing to say" and falls through to the session-keyed tiers
+    below, never blocks or errors the commit.
+
+    A DIVERGENT pathspec no longer reaches that arm and is not noted on
+    stderr: DR-328 retired ``DivergentDeliverableIdError`` as a commit gate
+    on the ruling that two deliverables in one commit "is not a divergence
+    at all — it is ordinary", so tier 0 returns "" for it exactly as it does
+    for an empty stage. Guarded by
+    ``test_tier0_divergent_staged_artifacts_falls_back_soft_and_silent``.
     """
     if paths:
         try:
@@ -774,7 +783,7 @@ def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" 
         except Exception as exc:
             sys.stderr.write(
                 "coordinator-prepare-commit-msg: tier-0 artifact deliverable-id "
-                f"resolution ambiguous or failed ({exc}); falling back to "
+                f"resolution failed ({exc}); falling back to "
                 "session-keyed resolution.\n"
             )
             deliverable_id = ""

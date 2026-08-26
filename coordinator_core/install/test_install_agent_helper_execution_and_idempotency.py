@@ -74,7 +74,7 @@ def _run_install(tmp_path: Path, monkeypatch, bin_dst: Path) -> None:
     for f, _exec_bit in _CH_FAMILY_FILES:
         _write(ch_bin / f, f"ch-source-content::{f}\n")
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
@@ -103,7 +103,7 @@ def test_sample_forwarders_execute_and_resolve_their_real_target(tmp_path, monke
     # A written forwarder's runtime resolution ladder (_resolve_claude_klabauter.py,
     # exec'd BY the forwarder as a fresh subprocess) is independent of this
     # install pass's CLAUDE_KLABAUTER_ROOT env-var shortcut -- it consults the
-    # settings-home machine-local registry / `.claude-klabauter-root` sentinel, per its
+    # settings-home machine-local registry / `.claude-klabauter-live-root` sentinel, per its
     # own module docstring's Rung 1/Rung 2. On a genuinely fresh machine
     # neither exists, and every forwarder rc=1s with "cannot resolve
     # claude-klabauter" -- an unstated prereq this test surfaces by supplying
@@ -112,7 +112,7 @@ def test_sample_forwarders_execute_and_resolve_their_real_target(tmp_path, monke
     settings_home = Path(os.environ["HOME"])
     ml_dir = settings_home / ".coordinator-claude-settings" / "machine-local"
     ml_dir.mkdir(parents=True, exist_ok=True)
-    (ml_dir / ".claude-klabauter-root").write_text(str(_REPO_ROOT) + "\n", encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(_REPO_ROOT) + "\n", encoding="utf-8")
 
     target_map = _derive_agent_helper_target_map(_AGENT_BIN)
     for name in _SAMPLE_INSTALLED_NAMES:

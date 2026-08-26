@@ -22,8 +22,8 @@ DERIVED (never observed-then-blessed), close that hole:
      `shlex.quote` nesting) and a recursive `/bin/sh "$0" $((n-1))` script
      sidesteps it entirely while keeping the count exactly `n`.
   2. `python -> git --version`, the oracle at 2.0. Derived, not measured
-     independently: `test_detect_staged_rollback_spawn_budget.py`'s own
-     Windows decomposition of a suppressed git spawn is
+     independently: the now-deleted `test_detect_staged_rollback_spawn_
+     budget.py`'s own Windows decomposition of a suppressed git spawn was
      `1 interpreter + 1 git + 1 conhost` -- `conhost.exe` is a Windows-only
      console allocation with no Darwin analogue (this module's own
      docstring never mentions one; Darwin's `_darwin_one_invocation` has no
@@ -250,7 +250,7 @@ def test_nested_shell_chain_count_is_exactly_prime_nineteen(chain_script):
 
 def test_python_to_git_oracle_count_is_exactly_two(git_binary):
     """DERIVED, not observed-then-blessed: `1 interpreter + 1 git` (2.0),
-    against the Windows decomposition in
+    against the Windows decomposition in the now-deleted
     `test_detect_staged_rollback_spawn_budget.py`
     (1 interpreter + 1 git + 1 conhost) minus the conhost term, which has
     no Darwin analogue -- `_darwin_one_invocation` performs no console

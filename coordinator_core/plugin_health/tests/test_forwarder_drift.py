@@ -289,7 +289,7 @@ def test_unresolvable_claude_klabauter_root_is_a_clean_skip(tmp_path: Path, two_
     def _raise():
         raise RuntimeError("repos.claude_klabauter is not set")
 
-    monkeypatch.setattr(fd, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(fd, "coordinator_engine_root", _raise)
 
     result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin)
 
@@ -301,13 +301,13 @@ def test_unresolvable_claude_klabauter_root_is_a_clean_skip(tmp_path: Path, two_
 
 
 def test_agent_bin_directory_missing_is_also_a_skip(tmp_path: Path, two_bin_dirs, monkeypatch):
-    """coordinator_claude_klabauter_root() resolves, but the coordinator/bin/ subpath
+    """coordinator_engine_root() resolves, but the coordinator/bin/ subpath
     itself doesn't exist (e.g. a partial/mis-pointed checkout) — same clean
     skip, not a crash."""
     settings_bin, compat_bin = two_bin_dirs
     nonexistent_root = tmp_path / "not-a-real-claude-klabauter-checkout"
 
-    monkeypatch.setattr(fd, "coordinator_claude_klabauter_root", lambda: str(nonexistent_root))
+    monkeypatch.setattr(fd, "coordinator_engine_root", lambda: str(nonexistent_root))
 
     result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin)
 
@@ -412,7 +412,7 @@ def test_cited_missing_field_is_empty_on_skip(tmp_path: Path, two_bin_dirs, monk
     def _raise():
         raise RuntimeError("repos.claude_klabauter is not set")
 
-    monkeypatch.setattr(fd, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(fd, "coordinator_engine_root", _raise)
 
     result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin)
 

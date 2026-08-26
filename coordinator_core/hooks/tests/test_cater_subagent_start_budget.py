@@ -268,6 +268,8 @@ def _no_role_append(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-config"))
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compose_catering_process_time_within_ac6_ceiling(
     git_repo: Path,
 ) -> None:

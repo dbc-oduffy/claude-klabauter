@@ -198,6 +198,14 @@ _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _EXEMPT_SITES: set[str] = {
     "coordinator_core/pyresolve.py::_pyorg_search",
     "coordinator_core/lifecycle.py::global_sentinel_dir",
+    # explicit -> REPO_DOE_CLAUDE env -> sibling-dir fallback (mirrors
+    # doe_drift's resolution ladder); the sibling probe is the last rung,
+    # never the sole source of truth. 2026-08-25.
+    "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py::resolve_doe_clone",
+    # POSIX `sh` discovery ladder (shutil.which -> /bin/sh existence probe ->
+    # git-for-windows sibling layout); `/bin/sh` names a real, portable
+    # convention path, not a repo-local hardcode. 2026-08-25.
+    "coordinator_core/testing/sh_interpreter.py::_resolve_sh_interpreter",
 }
 
 

@@ -43,7 +43,6 @@ the names so its existing callers keep working unchanged.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -173,40 +172,21 @@ def _parse_spine_rows(
     return rows, None
 
 
-#: Sized against the machine load norm (50-70 concurrent LLM sessions, this
-#: repo's own CLAUDE.md): every `git` call in this module is single-object
-#: plumbing work, so a breach here is a wedged process, not a slow one --
-#: same rationale `check-install-divergence.py`'s own `_GIT_TIMEOUT_SECS`
-#: records. Absence was previously load-bearing-but-unbounded (this
-#: module's own fan-out site, `_dispatch_ledger_delivered`, had none) --
-#: see `state/audits/2026-08-15-fleet-composed-op-spawn-census.md` row 18.
-_GIT_TIMEOUT_SECS = 20.0
+def _run_git(args: list[str], cwd: Path):
+    """Runs one `git` subprocess, never raising -- every failure (a timeout
+    included) degrades to a non-zero-returncode `GitResult`, the SAME "never
+    raises, every failure degrades to a skip/false" posture every reader of
+    this function's result already assumes throughout this module (e.g.
+    `_dispatch_ledger_delivered`'s own docstring).
 
+    Routed through `coordinator_core.git.run.run_git`: every call here is
+    single-object plumbing (`rev-parse`, `rev-list`, `merge-base
+    --is-ancestor`), so it sits inside that seam's `LOCAL_PLUMBING_BUDGET_SECS`
+    without narrowing -- the module-private 20s dial this replaced was never
+    measured against that work (G7)."""
+    from coordinator_core.git.run import run_git
 
-def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Runs one `git` subprocess, never raising -- a timeout degrades to a
-    synthetic non-zero-returncode result (never `subprocess.TimeoutExpired`
-    escaping), the SAME "never raises, every failure degrades to a skip/
-    false" posture every reader of this function's result already assumes
-    throughout this module (e.g. `_dispatch_ledger_delivered`'s own
-    docstring)."""
-    try:
-        return subprocess.run(
-            ["git", *args],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_GIT_TIMEOUT_SECS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            args=["git", *args],
-            returncode=1,
-            stdout="",
-            stderr=f"git command timed out after {_GIT_TIMEOUT_SECS:g}s",
-        )
+    return run_git(args, cwd=str(cwd))
 
 
 _OPEN = "open"

@@ -289,8 +289,8 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # truth audit, likely FALSE) claim about its python3-subprocess rewrite, and the manifest
     # is keyed `<guard>::<marker>` specifically so one guard's true claim can never make an
     # unrelated guard's same-worded claim grade LIVE by prose coincidence.
-    # `python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py ...` --
-    # the `<claude-klabauter-root>` placeholder makes this a template, not a directly
+    # `python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py ...` --
+    # the `<claude-klabauter-live-root>` placeholder makes this a template, not a directly
     # invocable path, AND it is a `python3 <script.py>` invocation (no -c/
     # -m flag), a form `_probe_python_dash_c` does not attempt to run --
     # honestly UNVERIFIABLE rather than guessed at in either direction.

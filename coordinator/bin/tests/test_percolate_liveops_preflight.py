@@ -8,9 +8,11 @@ this machine's real live peer list, never requires CLAUDE_KLABAUTER_ROOT to reso
 never spawns `git rev-parse`.
 
 Pins:
-  - AC: a live session in a registered `engine.working_repos.*` repo is
-    reported "unaffected" and does not count toward the verdict's N.
-  - AC: a live session in a repo NOT in `engine.working_repos.*` is
+  - AC: a live session in the repo that resolves as the engine's own source
+    tree (C4, 2026-08-18 — `_resolve_claude_klabauter_source_root`, not
+    `engine.working_repos.*`) is reported "unaffected" and does not count
+    toward the verdict's N.
+  - AC: a live session in a repo that is NOT the resolved source tree is
     reported "AFFECTED" and counts toward the verdict's N.
   - AC: two registry aliases naming the SAME on-disk path are censused
     once, not twice (no double-counted verdict).
@@ -100,12 +102,33 @@ def _patch_import_modules(monkeypatch, liveness, peer_roster, machine_resolver):
     monkeypatch.setattr(_cli, "_import_modules", lambda: (liveness, peer_roster, machine_resolver))
 
 
-def _run(monkeypatch, capsys, *, cwd, tracked_registry, live_ids_by_cwd, lines_by_cwd=None, rows_by_cwd=None):
+def _run(
+    monkeypatch,
+    capsys,
+    *,
+    cwd,
+    tracked_registry,
+    live_ids_by_cwd,
+    lines_by_cwd=None,
+    rows_by_cwd=None,
+    source_tree_path=None,
+):
     monkeypatch.chdir(cwd)
     liveness = _StubLiveness(live_ids_by_cwd, lines_by_cwd)
     peer_roster = _StubPeerRoster(rows_by_cwd)
     machine_resolver = _StubMachineResolver(tracked=tracked_registry)
     _patch_import_modules(monkeypatch, liveness, peer_roster, machine_resolver)
+    if source_tree_path is not None:
+        # C4 (2026-08-18) retired `engine.working_repos.*` as the
+        # affected/unaffected discriminant in favor of a structural
+        # "is this repo the engine's own resolved source tree" check
+        # (`_resolve_claude_klabauter_source_root`, imported by the CLI module under
+        # test). A fixture that wants a repo to read as unaffected must
+        # stand in for that resolver directly rather than populating the
+        # (now inert) `engine.working_repos.*` registry key.
+        monkeypatch.setattr(
+            _cli, "_resolve_claude_klabauter_source_root", lambda _ml_dir: source_tree_path
+        )
     rc = _cli.main(["run"])
     out = capsys.readouterr().out
     return rc, out
@@ -116,7 +139,6 @@ def test_working_repo_session_reported_unaffected_and_excluded_from_verdict(tmp_
     repo.mkdir()
     registry = {
         "repos.working_one": str(repo),
-        "engine.working_repos.working_one": str(repo),
     }
     rc, out = _run(
         monkeypatch,
@@ -124,6 +146,7 @@ def test_working_repo_session_reported_unaffected_and_excluded_from_verdict(tmp_
         cwd=tmp_path,
         tracked_registry=registry,
         live_ids_by_cwd={str(repo): ["sid-working"]},
+        source_tree_path=str(repo),
     )
     assert rc == 0
     assert "unaffected" in out
@@ -190,7 +213,6 @@ def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, 
     registry = {
         "repos.alias_a": str(repo),
         "repos.alias_b": str(repo),
-        "engine.working_repos.alias_a": str(repo),
     }
     rc, out = _run(
         monkeypatch,
@@ -198,6 +220,7 @@ def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, 
         cwd=tmp_path,
         tracked_registry=registry,
         live_ids_by_cwd={str(repo): ["sid-aliased"]},
+        source_tree_path=str(repo),
     )
     assert rc == 0
     # A double-counted census would report this session twice under two
@@ -242,7 +265,6 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
     registry = {
         "repos.alias_case": cased,
         "repos.alias_trailing": trailing,
-        "engine.working_repos.alias_case": canonical,
     }
     rc, out = _run(
         monkeypatch,
@@ -250,6 +272,7 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
         cwd=tmp_path,
         tracked_registry=registry,
         live_ids_by_cwd={cased: ["sid-case-variant"]},
+        source_tree_path=canonical,
     )
     assert rc == 0
     assert out.count("sid-case-variant") == 1
@@ -257,24 +280,26 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
 
 
 def test_zero_affected_case_reads_as_a_normal_unremarkable_line(tmp_path, monkeypatch, capsys):
-    """AC (negative spec): "affects 0 of N" on an all-engine-working box is
-    a correct, ordinary output — not a special-cased or broken-looking one."""
-    repo_a = tmp_path / "working-a"
-    repo_b = tmp_path / "working-b"
-    repo_a.mkdir()
-    repo_b.mkdir()
+    """AC (negative spec): "affects 0 of N" is a correct, ordinary output —
+    not a special-cased or broken-looking one — including with N > 1.
+
+    Under C4 (2026-08-18) exactly ONE repo can structurally resolve as the
+    engine's own source tree, so "all engine-working" is now expressed as
+    multiple LIVE SESSIONS in that one repo, not multiple working repos —
+    the multi-repo "everything happens to be engine-working today" shape
+    this test predates is no longer reachable by construction."""
+    repo = tmp_path / "working-repo"
+    repo.mkdir()
     registry = {
-        "repos.a": str(repo_a),
-        "repos.b": str(repo_b),
-        "engine.working_repos.a": str(repo_a),
-        "engine.working_repos.b": str(repo_b),
+        "repos.working_repo": str(repo),
     }
     rc, out = _run(
         monkeypatch,
         capsys,
         cwd=tmp_path,
         tracked_registry=registry,
-        live_ids_by_cwd={str(repo_a): ["sid-a"], str(repo_b): ["sid-b"]},
+        live_ids_by_cwd={str(repo): ["sid-a", "sid-b"]},
+        source_tree_path=str(repo),
     )
     assert rc == 0
     assert "verdict: affects 0 of 2 live sessions." in out

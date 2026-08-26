@@ -99,13 +99,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 from coordinator_core.bash_guards._helpers import operator_override_note
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -386,7 +384,8 @@ def build_memo_routing_offer_payload_advisory(resolved_recipient_em_id: Optional
         f"This memo's `to:` field ({recipient_hint}) does not match the repo you "
         "are writing into. Cross-repo memos must land in the RECIPIENT'S repo, "
         "not the sender's. Use the CLI to route it correctly:\n\n"
-        f"  cross-repo-memo --to {recipient_hint} --topic <slug> --title \"...\" < body.md\n\n"
+        f"  cross-repo-memo draft <slug> --to {recipient_hint} --title \"...\"\n"
+        "  cross-repo-memo send <slug>\n\n"
         f"The CLI writes one dirty file into {recipient_hint}'s cross-repo/inbox/ "
         "directory so it surfaces in their git status. Hand-rolling to the wrong "
         "repo means the recipient will never find the memo."
@@ -406,7 +405,8 @@ def build_memo_offer_payload_advisory() -> Optional[dict]:
         "This looks like a cross-repo memo being hand-rolled to a "
         "non-canonical location. Use the CLI instead so it lands in the "
         "receiver's cross-repo/inbox/ surface:\n\n"
-        "  cross-repo-memo --to <receiver-repo-name> --topic <slug>\n\n"
+        "  cross-repo-memo draft <slug> --to <receiver-repo-name> --title \"...\"\n"
+        "  cross-repo-memo send <slug>\n\n"
         "The CLI writes one dirty file into the receiver's cross-repo/inbox/ "
         "directory (status: open), leaves it uncommitted so it surfaces in "
         "their git status, and prints the path for you to hand the PM for "
@@ -956,21 +956,14 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
         token and _HEX_TOKEN_RE.match(re.split(r"[\^~]", token, maxsplit=1)[0])
     ):
         return token
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", token],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["rev-parse", "--verify", "--quiet", token], cwd=str(cwd))
+    if proc.timed_out:
         raise ValueError(
-            f"could not resolve ref {token!r} to a concrete SHA ({exc}) — "
-            "refusing to persist an unresolvable/symbolic ref"
-        ) from exc
+            f"could not resolve ref {token!r} to a concrete SHA (git rev-parse "
+            "timed out) — refusing to persist an unresolvable/symbolic ref"
+        )
     out = proc.stdout.strip()
     if proc.returncode != 0 or not out:
         raise ValueError(

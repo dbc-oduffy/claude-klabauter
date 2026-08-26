@@ -44,14 +44,12 @@ chunk C1 (AC2 -- "the census reads bytes end to end").
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple, Union
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 __all__ = ["tracked_files_bytes"]
 
@@ -85,30 +83,22 @@ def _tracked_files_bytes_cached(repo_root: str, pathspec: str) -> Tuple[bytes, .
 
 
 def _tracked_files_bytes_uncached(repo_root: str, pathspec: str) -> Tuple[bytes, ...]:
-    git_bin = shutil.which("git")
-    if git_bin is None:
+    # `binary=True` is the whole reason this module can share the seam at all:
+    # `GitResult.stdout` decodes with `errors="replace"`, which substitutes
+    # U+FFFD on exactly the non-UTF-8 path bytes this module exists to
+    # preserve. `stdout_bytes` is what git wrote.
+    result = run_git(["-C", repo_root, "ls-files", "-z", "--", pathspec], binary=True)
+    if not result.ok:
+        # An absent git and a timeout come back as returncode 127/-1 rather
+        # than an exception, so the degrade cases this module has always
+        # treated alike still reach the same empty tuple. Only a real
+        # non-zero exit is worth a line on stderr.
+        if not result.timed_out and result.returncode != 127:
+            print(
+                f"git.ls_files_bytes: git -C {repo_root} ls-files -- {pathspec!r} exited "
+                f"{result.returncode} (treating as not-a-repo / no matches): "
+                f"{result.stderr.strip()}",
+                file=sys.stderr,
+            )
         return ()
-    try:
-        proc = subprocess.run(
-            [git_bin, "-C", repo_root, "ls-files", "-z", "--", pathspec],
-            capture_output=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ()
-    if proc.returncode != 0:
-        stderr = proc.stderr
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        print(
-            f"git.ls_files_bytes: git -C {repo_root} ls-files -- {pathspec!r} exited "
-            f"{proc.returncode} (treating as not-a-repo / no matches): "
-            f"{(stderr or '').strip()}",
-            file=sys.stderr,
-        )
-        return ()
-    raw = proc.stdout
-    raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
-    return tuple(entry for entry in raw_bytes.split(b"\x00") if entry)
+    return tuple(entry for entry in result.stdout_bytes.split(b"\x00") if entry)

@@ -1,0 +1,293 @@
+# Ported from DoE-claude `state/audits/2026-07-20-stale-record-triage.md` (97 lines),
+# "## Group C — auto-reconcile surfaced records" (the `gate_eval` and `commit_reality`
+# sub-tables only). Purpose: coordinator_core/reconcile has no in-repo record of the
+# per-record verdicts a 2026-07-20 read-only triage agent reached against the daily
+# `handoff.reconcile_open` surfaced-record list, so AC7/AC10/AC11
+# (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md, claude-klabauter)
+# could only be checked by re-reading a sibling repo mid-chunk. This fixture makes the
+# false-positive rate measurable here instead.
+#
+# Carries BOTH polarities deliberately (per that chunk's own body text): true positives
+# (`is_false_positive: false`) as well as false ones, so a detector fix that suppresses
+# ALL output would fail an AC11-style check against `true_positive` rows, not silently
+# pass by having nothing left to compare.
+#
+# Negative-spec: this file is a static port of one dated audit's human judgement calls,
+# not a live query against either repo -- it does not update itself when DoE re-triages,
+# and it is not itself a detector (see test_surfaced_false_positive_rate.py, which reads
+# this file but never calls into gate_eval.py or commit_reality.py).
+#
+# KNOWN DISCREPANCY (leave for C6/C7/PM, not silently resolved here): the plan text
+# (AC7/AC10) calls this "the audit's 25-row oracle" and states DoE measured "15 of 25"
+# surfaced rows per day as false positives. The audit's own Group C tables, read literally
+# and with the grouped rows (engine-migration x3, roadmap-sat-02..07 x6) expanded to one
+# oracle row per underlying record, enumerate 24 records total, of which 11 carry
+# explicit false-positive language ("DETECTOR BUG", "attribution spurious", a stale
+# FLIP-TO-IMPLEMENTED verdict, or "NO ACTION -- read-model lag"). This file ports exactly
+# those 24 records and tags exactly those 11 as false positives -- it does not fabricate a
+# 25th record or re-tag a record to force the arithmetic to 25/15, since neither this
+# audit document nor this chunk's brief specifies what a 25th record or a 4th untagged
+# false positive would be.
+source: "DoE-claude state/audits/2026-07-20-stale-record-triage.md"
+source_section: "Group C -- auto-reconcile surfaced records"
+audit_date: "2026-07-20"
+plan_headline_total_rows: 25
+plan_headline_false_positives: 15
+ported_total_rows: 24
+ported_false_positives: 11
+rows:
+  # --- gate_eval sub-table ---
+  - id: "2026-06-30_021546_12e715f3"
+    detector: gate_eval
+    subject: "signed-commit enforcement (prose gate, no checkable witness)"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      Gate genuinely closed and now overdue (deferred to "July 2026"). Witness:
+      gh api repos/<owner>/<repo>/branches/main/protection
+      --jq .required_signatures.enabled == true
+
+  - id: "2026-07-04_125734_f3a5324e"
+    detector: gate_eval
+    subject: "claude-klabauter doctrine excision"
+    audit_verdict: FLIP-TO-IMPLEMENTED
+    is_false_positive: true
+    evidence: >
+      Gate already satisfied; prose is self-contradictory ("DONE" and "NOT
+      arrived" in one string) and cites a stale macOS path. Scope formally
+      ruled at dfe91627. Witness:
+      test $(ls claude-klabauter:skills | wc -l) -le 2 && test -d coordinator/skills
+
+  - id: "2026-07-06_210200_strang-10-inject-anchor-archive-carveout"
+    detector: gate_eval
+    subject: "strang-10 inject-anchor archive carve-out"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      Genuinely closed. DR-216:71-76 requires a separate archive-mutation
+      carve-out DR; highest DR on disk is DR-220, none exists. Witness: a
+      ratified docs/decisions/DR-22x-*archive*carve*.md
+
+  - id: "2026-07-08_151948_afec14f4"
+    detector: gate_eval
+    subject: "afec14f4 gate (re-vendor + MA1/MA2)"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    evidence: >
+      Gate already opened -- re-vendor fired (dcf2fbba), MA1/MA2 landed.
+      Residual: ops/reachability.py + ops/deliverable_id_resolve.py absent.
+      Flip awaiting_gate -> ready_to_fire, pick up MA3-MA5.
+
+  - id: "2026-07-10-engine-migration-bin-lib-bulk-port"
+    detector: gate_eval
+    subject: "engine-migration: bin-lib-bulk-port"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      spinoff-roadmap-creator seeds gated on a PM /roadmap-planning fire -- a
+      sequencing call by construction, not a defect. Witness: existence of
+      state/roadmap/<roadmap_id>/
+
+  - id: "2026-07-10-engine-migration-high-traffic-strangle"
+    detector: gate_eval
+    subject: "engine-migration: high-traffic-strangle"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      spinoff-roadmap-creator seeds gated on a PM /roadmap-planning fire -- a
+      sequencing call by construction, not a defect. Witness: existence of
+      state/roadmap/<roadmap_id>/
+
+  - id: "2026-07-10-engine-migration-hooks-and-sessionstart-residual"
+    detector: gate_eval
+    subject: "engine-migration: hooks-and-sessionstart-residual"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      spinoff-roadmap-creator seeds gated on a PM /roadmap-planning fire -- a
+      sequencing call by construction, not a defect. Witness: existence of
+      state/roadmap/<roadmap_id>/
+
+  - id: "2026-07-10_141606_roadmap-qsub-03"
+    detector: gate_eval
+    subject: "roadmap-qsub-03"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    evidence: >
+      Dangling edge: blocked_by names qsub-01, which has no open handoff.
+      Resolve qsub-01 (shipped or dropped), then re-point or drop the ref.
+
+  - id: "2026-07-17_160001_roadmap-sat-02"
+    detector: gate_eval
+    subject: "roadmap-sat-02 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  - id: "2026-07-17_160002_roadmap-sat-03"
+    detector: gate_eval
+    subject: "roadmap-sat-03 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  - id: "2026-07-17_160003_roadmap-sat-04"
+    detector: gate_eval
+    subject: "roadmap-sat-04 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  - id: "2026-07-17_160004_roadmap-sat-05"
+    detector: gate_eval
+    subject: "roadmap-sat-05 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  - id: "2026-07-17_160005_roadmap-sat-06"
+    detector: gate_eval
+    subject: "roadmap-sat-06 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  - id: "2026-07-17_160006_roadmap-sat-07"
+    detector: gate_eval
+    subject: "roadmap-sat-07 (blocks/blocked_by asymmetry)"
+    audit_verdict: DETECTOR-BUG
+    is_false_positive: true
+    detector_bug: asymmetry_detector_bare_stub_id
+    evidence: >
+      The sat graph is perfectly symmetric on inspection. The asymmetry
+      detector resolves blocks/blocked_by by handoff_id/path while these
+      stubs store bare stub_ids (e.g. "sat-03"), so nothing resolves. File
+      one bug, not six edits.
+
+  # --- commit_reality sub-table ---
+  - id: "2026-07-02-audit-and-sequence-coordinator-ceremonies"
+    detector: commit_reality
+    subject: "audit-and-sequence-coordinator-ceremonies"
+    audit_verdict: NEEDS-PM
+    is_false_positive: false
+    evidence: >
+      Correctly no-match; baton itself says it "requires its own /shape with
+      the PM before planning".
+
+  - id: "2026-07-06_210000_strang-10-family-C-orientation-renderers"
+    detector: commit_reality
+    subject: "strang-10 family-C orientation renderers"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    detector_bug: ambiguous_attribution_scope_breadth
+    evidence: >
+      Attribution spurious -- 3476caf9 is a test-registration fix, not a
+      renderer strangle. Renderers still live in DoE (bin/render-handoff-
+      tracker.js, render-posture-overlay.sh, ...). Residual work is real even
+      though the attributed commit is not.
+
+  - id: "2026-07-06_210100_strang-10-family-D-deliverable-spine"
+    detector: commit_reality
+    subject: "strang-10 family-D deliverable spine"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    evidence: >
+      Half landed (ops/backfill_deliverable_spine.py, ops/deliverable_rollup.py,
+      contract/cockpit_schema/entities/deliverable_spine.py); residual is the
+      artifact_contract.emit half. Narrow the stub, do not close it.
+
+  - id: "2026-07-08_010048_538049e1"
+    detector: commit_reality
+    subject: "538049e1 attribution"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    detector_bug: ambiguous_attribution_scope_breadth
+    evidence: >
+      Attribution spurious -- 85fa04be is an initiative-FK sweep. Nothing
+      named backlog_opened/opened_closed exists in coordinator_core/. Residual
+      work is real even though the attributed commit is not.
+
+  - id: "2026-07-10_141605_roadmap-qsub-02"
+    detector: commit_reality
+    subject: "roadmap-qsub-02"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    detector_bug: ambiguous_attribution_scope_breadth
+    evidence: >
+      Attribution spurious. Decisive: claude-klabauter has no .github/workflows/ and no
+      .pre-commit-config.yaml -- 2 of the stub's 3 scope paths.
+
+  - id: "2026-07-12_123218_workflow-skeleton-stamper"
+    detector: commit_reality
+    subject: "workflow-skeleton-stamper"
+    audit_verdict: FLIP-TO-IMPLEMENTED
+    is_false_positive: true
+    evidence: >
+      Both halves shipped -- claude-klabauter ops/workflow_{validate,scaffold}.py +
+      _workflow_{contract,patterns}.py + 3 test files; DoE
+      bin/coordinator-doc-new:84-85 delegates the workflow type.
+
+  - id: "2026-07-15_082943_spike-result-coverage-gate-graph-walk"
+    detector: commit_reality
+    subject: "spike-result-coverage-gate-graph-walk"
+    audit_verdict: FLIP-TO-IMPLEMENTED
+    is_false_positive: true
+    evidence: >
+      Spike VIABLE and impl landed: coordinator_core/coverage.py:490
+      build_reviewed_set(..., graph_range=...), :216-222 _build_parent_map,
+      bug-fix 34deecb5.
+
+  - id: "2026-07-15_150901_auto-push-windows-spike-and-doe-cutover"
+    detector: commit_reality
+    subject: "auto-push-windows-spike-and-doe-cutover"
+    audit_verdict: NO-ACTION
+    is_false_positive: true
+    evidence: >
+      Record already terminal on disk (status: consumed, shipped_in:
+      e8b423b1, consumed 2026-07-20T10:18:33Z); the finding is a stale
+      read-model snapshot, not residual work.
+
+  - id: "2026-07-16-execute-wsc-pure-python-tail-rebuild"
+    detector: commit_reality
+    subject: "execute-wsc-pure-python-tail-rebuild"
+    audit_verdict: FLIP-TO-IMPLEMENTED
+    is_false_positive: true
+    evidence: >
+      "Absent on disk" is wrong -- ops/ceremony/wsc_{tail,commit,resolve}.py
+      all exist with parity tests; the checker searched for a path named
+      after the plan slug.
+
+  - id: "2026-07-20_103000_spike-result-windows-ssh-agent-auto-push"
+    detector: commit_reality
+    subject: "spike-result-windows-ssh-agent-auto-push"
+    audit_verdict: EXECUTE
+    is_false_positive: false
+    evidence: >
+      Correctly no-match (created today; a decision artifact, not a
+      deliverable). Its gated_route names the work: Windows happy-path
+      verification, then the DoE cutover memo.

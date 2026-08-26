@@ -86,11 +86,19 @@ def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
         # Both roots pinned explicitly. Otherwise the sibling-resolution layer reports
         # BROKEN under pytest (the machine-local registry is not reachable there) and every
         # assertion about the hook layer ends up hostage to an unrelated one.
+        #
+        # COORDINATOR_ENGINE_ROOT, not CLAUDE_KLABAUTER_ROOT. C14 (`fb1421af2`) stopped `engine_root`
+        # honouring the old name -- it is read now only to emit the "no longer honoured"
+        # advisory -- so the pin above silently stopped landing and the hostage situation
+        # this comment describes came back, as four reds that read as unrelated. This file
+        # is the same population as
+        # state/bug-backlog/2026-08-25-fixture-env-dicts-still-pin-the-retired-claude-klabauter-live-root,
+        # missed by that sweep because a fixture WRITES the var and never reads it.
         env=dict(
             os.environ,
             REPO_DOE_CLAUDE=str(doe_root),
             REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
-            CLAUDE_KLABAUTER_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
+            COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
         ),
     )
 
@@ -339,6 +347,193 @@ def test_legacy_form_strips_quotes_from_a_path_containing_spaces(monkeypatch):
     argv = doctor._hook_argv(hook)
 
     assert doctor._extract_script_path(argv) == native
+
+
+@pytest.mark.parametrize(
+    "interpreter",
+    [
+        "<drive>:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\python3.EXE",
+        "<drive>:/Users/u/AppData/Local/Programs/Python/Python313/python.exe",
+        "/usr/bin/python3",
+        "python3",
+    ],
+    ids=["windows-backslash-EXE", "windows-forward-exe", "posix-absolute", "bare"],
+)
+def test_an_absolute_interpreter_path_is_understood(interpreter):
+    """A registration is recognised by the interpreter's BASENAME, not by the
+    whole argv[0] token.
+
+    Observed 2026-08-26 on a healthy box: a live example-game-repo hook registered as
+    `<...>\\Python313\\python3.EXE <script>.py` — firing on every tool call —
+    was reported `broken: command shape not understood`, because the gate
+    compared argv[0] against the bare names only. Windows is first-class here
+    and an absolute interpreter path is its ORDINARY shape, so the bare-name
+    case is the exception, not the rule.
+
+    The cost of getting this wrong is not one wrong line: a checker that calls
+    a working registration broken is the finding a reader learns to scroll
+    past, and the true finding then arrives into an audience that has stopped
+    reading it.
+    """
+    from coordinator_core.ops import doctor
+
+    script = "/plugins/x/hooks/scripts/nudge.py"
+    assert doctor._extract_script_path([interpreter, script]) == script
+
+
+def test_an_http_hook_is_not_a_broken_command(doe_root: Path):
+    """A `type: "http"` registration has no script path BY CONSTRUCTION, so the
+    command layer has nothing to say about it and must stay quiet.
+
+    Observed 2026-08-26: the live PreToolUse fan-in is an http entry pointing at
+    the warm engine, and this layer reported it `broken: command shape not
+    understood` — the warm entrypoint, working, called broken on a healthy box.
+    The layer still SAYS it audited nothing rather than returning a bare `ok`;
+    "nothing to check" and "everything checks out" must not print the same.
+    """
+    from coordinator_core.ops import doctor
+
+    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "http",
+                                    "url": "http://127.0.0.1:47623/hook",
+                                    "timeout": 15,
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status, findings, present = doctor._check_one_hooks_doc(
+        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+    )
+
+    assert present is True
+    assert status == "ok", [f.message for f in findings]
+    assert not [f for f in findings if f.severity == "broken"]
+    assert any("non-command" in f.message for f in findings), [f.message for f in findings]
+
+
+def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
+    """The `continue` that skips a non-command entry lives mid-loop, right
+    next to the `total`/`bare` counters — the exact shape that silently
+    swallows a sibling finding if a future edit reorders those counters. A
+    matcher block carrying one `type: "http"` entry AND one genuinely broken
+    `command` entry must still report `broken` with the broken finding
+    present; the http entry must not short-circuit or miscount its sibling.
+
+    Review: coordinator:code-reviewer Finding 4.
+    """
+    from coordinator_core.ops import doctor
+
+    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "http",
+                                    "url": "http://127.0.0.1:47623/hook",
+                                    "timeout": 15,
+                                },
+                                {
+                                    "type": "command",
+                                    "command": "python3 /plugins/x/hooks/scripts/missing.py",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status, findings, present = doctor._check_one_hooks_doc(
+        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+    )
+
+    assert present is True
+    assert status == "broken", [f.message for f in findings]
+    broken = [f for f in findings if f.severity == "broken"]
+    assert broken, [f.message for f in findings]
+    assert any("missing on disk" in f.message for f in broken), [f.message for f in findings]
+
+
+def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(doe_root: Path):
+    """The `total == 0` branch, hit with a broken finding already sitting in
+    `findings` and no counted command registrations at all. A doc whose ONLY
+    entry is a `command`-shaped hook with a misspelled `type` (e.g.
+    `"Command"`) never increments `total` — it falls into the unrecognized-type
+    branch above the `total` counter — so this is the one case that reaches
+    `total == 0` carrying a `broken` finding with zero non-command entries
+    either. Must still report `broken`, never the bare `ok` the `total == 0`
+    early-return would otherwise take.
+
+    Review: coordinator:code-reviewer coverage-gap finding (test_doctor.py).
+    """
+    from coordinator_core.ops import doctor
+
+    hooks_dir = doe_root / "coordinator" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "Command",
+                                    "command": "python3 /plugins/x/hooks/scripts/nudge.py",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status, findings, present = doctor._check_one_hooks_doc(
+        hooks_dir / "hooks.json", str(doe_root), "hooks.json"
+    )
+
+    assert present is True
+    assert status == "broken", [f.message for f in findings]
+    broken = [f for f in findings if f.severity == "broken"]
+    assert broken, [f.message for f in findings]
+    assert any("unrecognized hook type" in f.message for f in broken), [f.message for f in findings]
+
+
+def test_a_non_python_interpreter_is_still_not_understood():
+    """Negative half, so the basename match does not become "accept anything":
+    only python/python3 reduce to a script path. A node or sh registration is
+    genuinely a shape this layer does not read, and must keep saying so."""
+    from coordinator_core.ops import doctor
+
+    assert doctor._extract_script_path(["/usr/bin/node", "hook.py"]) is None
+    assert doctor._extract_script_path(["<drive>:\\tools\\pythonish.exe", "hook.py"]) is None
 
 
 def test_reports_rather_than_raises_on_an_unreadable_hooks_document(doe_root: Path):

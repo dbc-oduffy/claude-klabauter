@@ -121,10 +121,10 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
           ``normalize_teammate_agent_id`` for the full mechanism.
       (c) Anything else -> ``""`` (fail-closed — unknown agent shape).
     """
-    if _BARE_HEX_RE.match(agent_id):
+    if _BARE_HEX_RE.fullmatch(agent_id):
         return agent_id
 
-    named = _NAMED_TEAMMATE_RE.match(agent_id)
+    named = _NAMED_TEAMMATE_RE.fullmatch(agent_id)
     if named:
         name = named.group(1)
         if len(session_id) < 8:
@@ -132,7 +132,7 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
         short = session_id[:8]
         return _cs_build_canonical_agent_id(name, short)
 
-    if _TEAMMATE_CANONICAL_RE.match(agent_id):
+    if _TEAMMATE_CANONICAL_RE.fullmatch(agent_id):
         return normalize_teammate_agent_id(agent_id, session_id)
 
     return ""

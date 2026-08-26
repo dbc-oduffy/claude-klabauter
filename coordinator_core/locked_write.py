@@ -558,6 +558,61 @@ def _acquire_flock(fd: int, timeout: float) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+# Windows refuses `os.replace` with WinError 5 (ERROR_ACCESS_DENIED) while ANY
+# other handle is open on the destination -- including a plain reader that took
+# no lock. The exclusive lock below excludes other WRITERS and does nothing
+# about readers, so every atomic-publish site in this repo has a window where a
+# concurrent read turns a successful write into a raised PermissionError.
+#
+# Not theoretical on this box: `hooks/track_touched_files.py` and
+# `hooks/track_dispatched_agents.py` write through `locked_rmw` on the hook
+# path, firing on every tool call across 50-70 concurrent sessions.
+#
+# Retrying past the reader's (very short) handle lifetime costs nothing on the
+# uncontended path -- the first `os.replace` wins and returns.
+#
+# Provenance: found and paid for three passes deep in `warm/supervisor.py`'s
+# discovery-record publish (2026-08-25), then lifted here rather than left as a
+# one-site fix, because the bug is a SHAPE -- any atomic publish whose readers
+# take no lock has it -- and a second hand-rolled copy would drift from this one.
+REPLACE_RETRY_BUDGET_SECS = 0.25
+REPLACE_RETRY_SLEEP_SECS = 0.002
+
+
+def replace_with_retry(
+    tmp_path: str,
+    target: str,
+    *,
+    budget_secs: float = REPLACE_RETRY_BUDGET_SECS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """`os.replace` with a bounded retry on the Windows sharing-violation path.
+
+    Returns True if the replace won, False if the budget expired. NEVER raises
+    `PermissionError` -- the caller decides what losing means, because the right
+    answer genuinely differs by site:
+
+      - A general read-modify-write (`locked_rmw`) must FAIL, since it returns
+        `new_text` to a caller who will then believe it is on disk.
+      - A published availability record (`warm.supervisor.write_discovery`) must
+        FALL BACK to an in-place write, because raising there leaves the clone
+        with no record at all -- strictly worse than one torn read.
+
+    Any other `OSError` propagates unchanged: a cross-device link error or a
+    vanished temp file is a real fault, not contention, and retrying it would
+    turn a loud failure into a slow one.
+    """
+    deadline = time.monotonic() + budget_secs
+    while True:
+        try:
+            os.replace(tmp_path, target)
+            return True
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                return False
+            sleep(REPLACE_RETRY_SLEEP_SECS)
+
+
 def locked_rmw(
     target: Path,
     mutate: Callable[[str], str],
@@ -671,7 +726,17 @@ def locked_rmw(
                     os.write(tmp_fd, new_text.encode("utf-8"))
                 finally:
                     os.close(tmp_fd)
-                os.replace(tmp_path, str(target_path))
+                if not replace_with_retry(tmp_path, str(target_path)):
+                    # Contended past the budget. RAISE rather than fall back to
+                    # a non-atomic write: this function returns `new_text` to a
+                    # caller who will believe it reached disk, and a torn write
+                    # here corrupts an arbitrary caller's file rather than one
+                    # well-understood record.
+                    raise OSError(
+                        "locked_rmw: could not atomically replace %s within %.3fs -- "
+                        "another process held the destination open for the whole "
+                        "window" % (target_path, REPLACE_RETRY_BUDGET_SECS)
+                    )
                 tmp_path = None  # claimed; don't unlink in finally
             finally:
                 if tmp_path is not None:

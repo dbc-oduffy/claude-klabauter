@@ -150,6 +150,15 @@ class TestNegative:
         for key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT"):
             env.pop(key, None)
         env["HOME"] = str(tmp_path / "no-doe-root-home")
+        # `Path.home()` (the fallback every rung in this resolution chain
+        # ultimately bottoms out at via `_home_dir`/`settings_home`) reads
+        # USERPROFILE on Windows and ignores HOME entirely -- without this,
+        # the real dev box's own USERPROFILE survives `os.environ.clear()`+
+        # `update(env)` in `_run_main` and rung 3 (registry live_path) or the
+        # legacy `.doe-root` rung resolves against the REAL machine's home,
+        # letting resolution silently succeed instead of exercising the
+        # unresolvable path this test targets.
+        env["USERPROFILE"] = str(tmp_path / "no-doe-root-home")
         (tmp_path / "no-doe-root-home" / ".claude").mkdir(parents=True)
 
         rc, out, err = _run_main([], env)

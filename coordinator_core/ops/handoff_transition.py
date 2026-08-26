@@ -242,6 +242,7 @@ import sys
 import asyncio
 import datetime
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
@@ -527,13 +528,14 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
     every verb's own `deployment_state` stamp carries zero enum-narrowing
     risk (C6 dispatch brief).
 
-    Reads the full live+archived handoff corpus via `handoff_reconcile.
-    _collect_all_handoffs_for_gate_index` — the ONE shared walker for that
-    corpus (see that function's own docstring) — imported function-locally
-    to avoid the import cycle `handoff_reconcile` already has with this
-    module (it imports `_handoff_transition_handler` from here at its own
-    top level; see `_read_gate_evidence_resolved`'s docstring for the same
-    cycle already documented at this file's other `handoff_reconcile` seam).
+    Reads the full live+archived handoff corpus via `handoff_corpus.
+    _collect_all_handoffs_for_gate_index` (C2a-extracted out of
+    `handoff_reconcile.py`) — the ONE shared walker for that corpus (see
+    that function's own docstring) — imported function-locally to avoid
+    the import cycle `handoff_reconcile` already has with this module (it
+    imports `_handoff_transition_handler` from here at its own top level;
+    see `_read_gate_evidence_resolved`'s docstring for the same cycle
+    already documented at this file's other `handoff_reconcile` seam).
 
     Overrides `deployment_state` (replace — every caller of this helper has
     already stamped one) and `pickup_ready` (replace-if-present, insert-if-
@@ -541,7 +543,7 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
     insert-if-absent precedent for this field) ONLY when the verdict is
     non-None. Returns `fm` unchanged on a `(None, None)` verdict.
     """
-    from coordinator_core.ops.handoff_reconcile import (
+    from coordinator_core.reconcile.handoff_corpus import (
         _collect_all_handoffs_for_gate_index,
     )
 
@@ -1398,33 +1400,37 @@ def _close(
 # ---------------------------------------------------------------------------
 
 
-def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Optional[dict]:
-    """Scan docs/plans/*.md for the plan carrying this deliverable_id, when that
-    plan is stamped status: implemented.
+def build_implemented_plan_index(worktree: Path) -> dict:
+    """One scan of docs/plans/*.md returning ``{deliverable_id: {"path", "title"}}``
+    for every plan stamped ``status: implemented``.
 
-    Belt-and-braces completeness check for `_unclaim` (docs/plans/2026-08-04-
-    terminal-state-propagation-join-keys.md § C7): under R1, a handoff whose
-    governing plan reaches `implemented` should already have been advanced by
-    `deliverable.cascade_terminal`'s stamp-time cascade (§ C6) before anyone
-    drops it — this is the check that catches a cascade that did not fire, not
-    the primary fix.
+    The single join between a handoff's ``deliverable_id`` and the plan that
+    governs it — ``_find_implemented_governing_plan`` below is a lookup over
+    this index and owns no scan of its own, so the reaper
+    (``coordinator/bin/reap-orphaned-in-flight-handoffs.py``) and the
+    ``_unclaim`` refusal cannot drift apart on what "governed by an
+    implemented plan" means.
 
-    Join key: `deliverable_id`, exact-string match.
+    Exists as a separate entry point because the two callers have opposite
+    shapes: ``_unclaim`` resolves ONE handoff per process, where a scan per
+    call is free, while the reaper resolves one per orphan in a single
+    process — measured at 406ms of process time for 16 orphans against a
+    533-plan corpus when each lookup rescanned, against a 500ms end-to-end
+    budget for the whole run. Deliberately NOT memoized at module scope: the
+    warm engine is a long-lived process and a cached index would answer from
+    a corpus that has since moved on.
 
-    Read-only — never writes, never raises. Returns {"path": <str>, "title":
-    <str>} for the first matching implemented plan found, or None when
-    deliverable_id is empty, docs/plans/ is absent/unreadable, or no plan
-    carrying this deliverable_id is stamped implemented.
+    First-match-wins on a duplicated deliverable_id, matching the sorted-order
+    early return this replaced. Read-only, never raises.
     """
-    if not deliverable_id:
-        return None
+    index: dict = {}
     plans_dir = worktree / "docs" / "plans"
     if not plans_dir.is_dir():
-        return None
+        return index
     try:
         entries = sorted(plans_dir.iterdir())
     except OSError:
-        return None
+        return index
     for path in entries:
         if path.suffix != ".md" or not path.is_file():
             continue
@@ -1435,16 +1441,43 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
         if not fm:
             continue
         plan_did = fm.get("deliverable_id")
-        if not isinstance(plan_did, str) or plan_did.strip() != deliverable_id:
+        if not isinstance(plan_did, str) or not plan_did.strip():
             continue
         if fm.get("status") != "implemented":
             continue
         title = fm.get("title")
-        return {
-            "path": str(path),
-            "title": title if isinstance(title, str) and title.strip() else path.name,
-        }
-    return None
+        index.setdefault(
+            plan_did.strip(),
+            {
+                "path": str(path),
+                "title": title if isinstance(title, str) and title.strip() else path.name,
+            },
+        )
+    return index
+
+
+def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Optional[dict]:
+    """The plan carrying this deliverable_id, when that plan is stamped
+    status: implemented.
+
+    Belt-and-braces completeness check for `_unclaim` (docs/plans/2026-08-04-
+    terminal-state-propagation-join-keys.md § C7): under R1, a handoff whose
+    governing plan reaches `implemented` should already have been advanced by
+    `deliverable.cascade_terminal`'s stamp-time cascade (§ C6) before anyone
+    drops it — this is the check that catches a cascade that did not fire, not
+    the primary fix.
+
+    Join key: `deliverable_id`, exact-string match, resolved through
+    `build_implemented_plan_index` above — this function owns no scan.
+
+    Read-only — never writes, never raises. Returns {"path": <str>, "title":
+    <str>} for the first matching implemented plan found, or None when
+    deliverable_id is empty, docs/plans/ is absent/unreadable, or no plan
+    carrying this deliverable_id is stamped implemented.
+    """
+    if not deliverable_id:
+        return None
+    return build_implemented_plan_index(worktree).get(deliverable_id)
 
 
 def _unclaim_session_ledger_notice(body_text: str, session_id: Optional[str]) -> Optional[str]:
@@ -1892,6 +1925,56 @@ def _deadline_elapsed(ref: Any, at: str) -> bool:
     return deadline_date <= at_date
 
 
+#: C7 (docs/plans/2026-08-25-reconcile-open-rebuilt-from-what-its-sev.md § C7):
+#: `_read_gate_evidence_resolved` pays one LIVE sibling-repo I/O `resolve_leg`
+#: call per I/O-kind leg, per `awaiting_gate` handoff, on every automatic
+#: sweep -- unbounded and unmemoized, per the module's own STEADY-STATE COST
+#: note (handoff_reconcile.py). Distinct handoffs frequently declare the
+#: SAME leg (same kind/repo/ref -- e.g. many handoffs all gating on the same
+#: sibling file existing), so a sweep over N handoffs re-pays I/O for
+#: identical legs N times. This cache memoizes `resolve_leg` results keyed by
+#: the exact request identity, TTL-bounded so a single sweep (all its
+#: `_read_gate_evidence_resolved` calls happen within a few seconds of each
+#: other) hits the cache for repeat legs while a LATER sweep, run minutes or
+#: hours on, still re-resolves live rather than serving stale sibling state --
+#: `gate_evidence` is a machine-authored claim about live sibling-repo facts,
+#: never a value it is safe to memoize indefinitely. Size-capped (crude:
+#: whole-cache clear on overflow) so a long-lived daemon process does not grow
+#: this dict unboundedly across many sweeps over a wide leg vocabulary.
+_GATE_EVIDENCE_LEG_CACHE_TTL_S = 5.0
+_GATE_EVIDENCE_LEG_CACHE_MAX_ENTRIES = 2048
+_gate_evidence_leg_cache: Dict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = {}
+
+
+def _gate_evidence_leg_cache_key(request: Dict[str, Any]) -> Tuple[Any, ...]:
+    """Exact-identity cache key for one `sibling_fact.resolve_leg` request.
+
+    `leg_id` is deliberately excluded: two legs on two different handoffs
+    with different `leg_id`s but the same (kind, repo, ref-derived fields)
+    observe the same underlying sibling-repo fact and must hit the same
+    cache entry. Sorted-items form so key shape survives request dicts
+    built with different key ordering.
+    """
+    return tuple(sorted((k, v) for k, v in request.items() if k != "leg_id"))
+
+
+def _gate_evidence_leg_cache_get(key: Tuple[Any, ...]) -> Optional[Dict[str, Any]]:
+    entry = _gate_evidence_leg_cache.get(key)
+    if entry is None:
+        return None
+    stamped_at, observation = entry
+    if time.monotonic() - stamped_at > _GATE_EVIDENCE_LEG_CACHE_TTL_S:
+        _gate_evidence_leg_cache.pop(key, None)
+        return None
+    return observation
+
+
+def _gate_evidence_leg_cache_put(key: Tuple[Any, ...], observation: Dict[str, Any]) -> None:
+    if len(_gate_evidence_leg_cache) >= _GATE_EVIDENCE_LEG_CACHE_MAX_ENTRIES:
+        _gate_evidence_leg_cache.clear()
+    _gate_evidence_leg_cache[key] = (time.monotonic(), observation)
+
+
 def _reresolve_gate_evidence_leg(leg: Dict[str, Any], at: str) -> Dict[str, Any]:
     """Re-resolve ONE on-disk gate_evidence leg LIVE, returning a copy merged
     with the observation gate_eval._evaluate_gate_evidence_leg expects
@@ -1917,7 +2000,12 @@ def _reresolve_gate_evidence_leg(leg: Dict[str, Any], at: str) -> Dict[str, Any]
         return leg
 
     if kind in _SIBLING_FACT_KIND_FOR_ON_DISK_KIND:
-        observation = resolve_leg(_sibling_fact_leg_for(leg))
+        request = _sibling_fact_leg_for(leg)
+        cache_key = _gate_evidence_leg_cache_key(request)
+        observation = _gate_evidence_leg_cache_get(cache_key)
+        if observation is None:
+            observation = resolve_leg(request)
+            _gate_evidence_leg_cache_put(cache_key, observation)
         leg["read_ok"] = observation["read_ok"]
         leg["observed"] = observation["observed"]
         leg["error"] = observation["error"]
@@ -3262,15 +3350,20 @@ def _record_disposition(
     never one alone — `handoff_reconcile._has_recorded_disposition` (D1)
     requires a non-empty PAIR to discharge a conservation violation, so a
     writer able to leave one field set would mint a permanent violation. Both
-    constants are imported (locally, see below) from `handoff_reconcile`
-    rather than retyped, so the read side and this write side cannot drift
-    apart on spelling.
+    constants are imported (locally, see below) from
+    `coordinator_core.reconcile.handoff_corpus` (C2a-extracted out of
+    `handoff_reconcile`) rather than retyped, so the read side and this write
+    side cannot drift apart on spelling.
 
     Local import, not module-level: `handoff_reconcile` already imports from
     THIS module at load time (`_blocker_clears_gate`, `_validate_fm`, etc.),
-    so a module-level import here would be circular. Mirrors the existing
-    local-import precedent inside the `supersede` verb branch below (`from
-    coordinator_core.archival import claimed_or_shipped_at_path`).
+    so a module-level import of anything re-exported through
+    `handoff_reconcile` would risk circularity; kept function-local here even
+    though `handoff_corpus` itself does not import this module, for
+    consistency with the other `handoff_reconcile`-cycle-avoiding local
+    import above. Mirrors the existing local-import precedent inside the
+    `supersede` verb branch below (`from coordinator_core.archival import
+    claimed_or_shipped_at_path`).
 
     Both fields are schema-declared as independent optional strings with no
     cross-field coupling and no enum (handoff.schema.json 8.1.0) — this write
@@ -3288,7 +3381,7 @@ def _record_disposition(
     Routes the read-modify-write through locked_rmw for cross-process
     serialisation. `MutateAbort` inside the mutate closure means no write.
     """
-    from coordinator_core.ops.handoff_reconcile import (
+    from coordinator_core.reconcile.handoff_corpus import (
         _DISPOSITION_FIELD,
         _DISPOSITION_REASON_FIELD,
     )

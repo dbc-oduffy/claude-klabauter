@@ -26,6 +26,11 @@ Negative-spec:
     - Does NOT re-assert the ceremony ratchet's own properties. Those live in
       `test_ceremony_budget_ratchet.py` and duplicating them here would let the two
       drift while both stayed green.
+    - Does NOT prove the lane's carve-out reaches a live op at either suspension
+      door. It did, against `ceremony.scoped_git_commit`, until K-045/K-046
+      (`state/kill-ledger.md`, 2026-08-23) deleted that op and its non-lane control
+      (`ceremony.wsc_tail`) outright — see the comment above
+      `test_lane_op_inside_a_round_gets_the_lane_budget` below.
 
 Spec backlink: docs/decisions/DR-350-the-publish-lane-is-not-the-close-ceremony.md
 """
@@ -122,53 +127,33 @@ def test_lane_op_outside_a_round_still_resolves_at_the_ceremony_budget():
     )
 
 
-def test_lane_op_outside_a_round_is_still_refused_at_dispatch():
-    ipc.allow_unstamped_dispatch()
-    response = asyncio.run(ipc.dispatch_message({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "ceremony.scoped_git_commit",
-        "_origin_worktree": ".",
-        "params": {},
-    }))
-    error = response.get("error")
-    assert error is not None and error["code"] == ipc.OP_SUSPENDED_ERROR
+# Four tests formerly lived here, exercising the two suspension doors
+# (`ipc.dispatch_message` and `ipc.get_op_handler`) against a real registered op —
+# `test_lane_op_outside_a_round_is_still_refused_at_dispatch`,
+# `test_lane_op_outside_a_round_is_still_refused_in_process`,
+# `test_lane_op_inside_a_round_is_not_refused_in_process`, and
+# `test_a_non_lane_suspended_op_inside_a_round_is_still_refused`. They proved the
+# lane's carve-out actually reached both doors for `ceremony.scoped_git_commit` (its
+# one roster member) and left `ceremony.wsc_tail` (a control, non-lane suspended op)
+# refused throughout. Both ops are gone — K-045 and K-046 in `state/kill-ledger.md`
+# deleted `ceremony.scoped_git_commit` and `ceremony.wsc_tail` outright, including their
+# `op_budget_suspension.SUSPENDED_OPS` rows, on 2026-08-23 (`c07062c99`); neither op
+# resolves to a handler any more, registered or suspended, so a call to either now
+# reads as `-32601 Method not found` regardless of lane state, and there is nothing
+# left in the roster to assert a door's behaviour against. `PUBLISH_LANE_OPS` names
+# exactly one op and it was the one that died; nothing live took its place. See
+# `git show 55ed9d3c6:coordinator_core/tests/test_publish_lane_budget.py` for the
+# four bodies. The module-level tests above still cover the lane's own logic
+# (roster/budget ratchets, `is_active`, `budget_for`, the envelope doors) without
+# needing a live op; the ratchet-completeness gap this leaves is that the lane
+# mechanism has no real op left to prove its integration against until K-045's
+# rebuild lands, at which point these tests should be reinstated against the new op.
 
-
-def test_lane_op_outside_a_round_is_still_refused_in_process():
-    with pytest.raises(op_budget_suspension.OpSuspendedError):
-        ipc.get_op_handler("ceremony.scoped_git_commit")
-
-
-# ---------------------------------------------------------------------------
-# ON inside a round — and only for what the list names
-# ---------------------------------------------------------------------------
 
 def test_lane_op_inside_a_round_gets_the_lane_budget(in_lane):
     assert ipc._timeout_for("ceremony.scoped_git_commit") == (
         publish_lane.PUBLISH_LANE_BUDGET_SECS
     )
-
-
-def test_lane_op_inside_a_round_is_not_refused_in_process(in_lane):
-    """The in-process door reads the environment because it IS the caller's process."""
-    assert ipc.get_op_handler("ceremony.scoped_git_commit") is not None
-
-
-def test_a_non_lane_ceremony_op_inside_a_round_is_still_clamped(in_lane):
-    """The lane is per-op, not per-process. A round does not widen everything it does."""
-    for op in ("ceremony.wsc_tail", "ceremony.wsc_commit"):
-        assert ipc._timeout_for(op) <= ipc.CEREMONY_BUDGET_SECS, (
-            f"{op} was widened by a publish-lane declaration despite not being in "
-            f"PUBLISH_LANE_OPS. The lane is a closed list; a round that widens every "
-            f"op it touches is the blanket lift this design exists to avoid."
-        )
-
-
-def test_a_non_lane_suspended_op_inside_a_round_is_still_refused(in_lane):
-    """Same point at the other door: being in a round is not a general reinstatement."""
-    with pytest.raises(op_budget_suspension.OpSuspendedError):
-        ipc.get_op_handler("ceremony.wsc_tail")
 
 
 # ---------------------------------------------------------------------------

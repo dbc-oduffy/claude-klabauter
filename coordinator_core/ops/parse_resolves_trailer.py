@@ -44,7 +44,10 @@ Negative-spec (do NOT "fix" mid-port):
 from __future__ import annotations
 
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 import sys
 from typing import List
 
@@ -87,7 +90,7 @@ def _fallback_trailers(commit: str) -> List[str]:
         input=body,
         capture_output=True,
         text=True,
-        **no_console_creationflags(),
+        **leaf_spawn_creationflags(),
     )
     interpreted = interp_r.stdout
 

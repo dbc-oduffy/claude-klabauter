@@ -301,20 +301,22 @@ class TestAC13MicroBenchmark:
 
 
 class TestEnvelopeCallPathUnchangedByPersistedTier:
-    """Pin (op_census C1, PM Ruling 3-C / hard constraint 8): resolvers.py's
-    existing `cache.compute_stamp` content-hash call path must stay pure
-    in-memory, unchanged semantics and cost, after cache.py grows the
-    persisted `read_disk_revalidated` tier. resolvers.py never calls
-    `read_disk_revalidated` and never touches an on-disk index — only
-    `compute_stamp` (no caching at all) and `_REVALIDATED_CACHE` (via
-    `read_revalidated`, unused by resolvers.py today) exist on its path.
+    """Pin (op_census C1, PM Ruling 3-C / hard constraint 8): resolvers.py must
+    never regress to the persisted `read_disk_revalidated` tier cache.py grew.
+
+    `envelope.py` was renamed to `resolvers.py` (5321fbb91), and its writer
+    half -- including the `cache.compute_stamp` content-hash call this pin
+    originally tracked -- was removed outright (23364cf38, "remove the writer
+    half of envelope.py, and the tests that held it up"). resolvers.py today
+    makes zero `cache.*` calls, which trivially satisfies the property: the
+    persisted tier stays opt-in and unused by this module.
     """
 
     def test_envelope_uses_compute_stamp_not_disk_revalidated(self):
         import ast
-        from coordinator_core.ops.emit import envelope as envelope_mod
+        from coordinator_core.ops.emit import resolvers as resolvers_mod
 
-        source = Path(envelope_mod.__file__).read_text(encoding="utf-8")
+        source = Path(resolvers_mod.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         called_attrs = {
             node.func.attr
@@ -324,10 +326,10 @@ class TestEnvelopeCallPathUnchangedByPersistedTier:
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "cache"
         }
-        assert called_attrs == {"compute_stamp"}, (
+        assert called_attrs <= {"compute_stamp"}, (
             f"resolvers.py's cache.* call surface changed to {called_attrs!r} -- "
-            "expected only compute_stamp. The persisted tier (read_disk_revalidated) "
-            "must stay opt-in and unused by this existing caller."
+            "expected at most compute_stamp. The persisted tier (read_disk_revalidated) "
+            "must stay opt-in and unused by this module."
         )
 
     def test_compute_stamp_still_pure_no_caching(self, tmp_path: Path):

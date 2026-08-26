@@ -7,21 +7,23 @@ Purpose: installs (or appends onto an existing custom hook) DoE-claude's
 when the resolved target repo root IS DoE-claude itself. Consumer/sibling
 repos (and any other git repo) are skipped cleanly.
 
-Modelled closely on `coordinator_core.ops.install_claude_klabauter_precommit_hook` —
-same registry-driven shape, same repo-root-relative gate resolution, same
-exit-code clamping, same append-not-clobber behavior on a foreign existing
-hook. Kept as an independent module for the same reason that one gives for
-staying independent of `install_meta_repo_precommit_hook`: this installer's
-gate-execution contract is deliberately duplicated rather than grafted onto
-shared private plumbing, so a narrower contract does not risk the wider one
-regressing back in on a future edit to shared code. Only `py_probe_sh` is
-shared, and only because that module documents why.
+Modelled closely on the now-deleted `coordinator_core.ops.install_claude_klabauter_precommit_hook`
+(removed 2026-08-25, "the staged rollback gate dies without blocking a
+commit" — claude-klabauter ends with no pre-commit hook) — same registry-driven shape,
+same repo-root-relative gate resolution, same exit-code clamping, same
+append-not-clobber behavior on a foreign existing hook. Kept as an
+independent module for the same reason that one gave for staying independent
+of `install_meta_repo_precommit_hook`: this installer's gate-execution
+contract is deliberately duplicated rather than grafted onto shared private
+plumbing, so a narrower contract does not risk a shared one regressing back
+in on a future edit to shared code. Only `py_probe_sh` is shared, and only
+because that module documents why.
 
 Identity guard — the ONE load-bearing divergence from the claude-klabauter installer's
-shape. `install_claude_klabauter_precommit_hook` resolves "is this the target repo"
-from its OWN file location (`_self_repo_root()`), because that module ships
-INSIDE claude-klabauter. This module does not ship inside DoE-claude — it
-lives in claude-klabauter and targets a PEER repo — so there is no self-
+former shape. `install_claude_klabauter_precommit_hook` resolved "is this the target
+repo" from its OWN file location (`_self_repo_root()`), because that module
+shipped INSIDE claude-klabauter. This module does not ship inside DoE-claude —
+it lives in claude-klabauter and targets a PEER repo — so there is no self-
 relative anchor to read. Identity instead resolves through the canonical
 DoE-root resolver, `coordinator_core.doe_root_pointer.read_doe_root_pointer()`
 (registry-first four-tier chain over `repos.doe_claude`, DR-071). That
@@ -50,14 +52,15 @@ entry, not a new code path.
 source of truth for BOTH the install-time existence check (an absolute path,
 resolved against whatever repo root the caller supplies) AND the path
 EMITTED into the hook body (repo-root-relative) — the two can never drift
-apart. Unlike the claude-klabauter installer's `_bin_dir()` (self-relative, no
+apart. Unlike the claude-klabauter installer's former `_bin_dir()` (self-relative, no
 arguments, because that module's own location IS the target repo), this
 module's bin-dir helper is parameterised on the ALREADY-RESOLVED target repo
 root, because this module has no self-relative anchor into DoE-claude's tree
 to read.
 
-Exit-code clamping: identical contract and identical rationale to
-`install_claude_klabauter_precommit_hook`'s own "Exit-code clamping" section — a
+Exit-code clamping: identical contract and identical rationale to the
+now-deleted `install_claude_klabauter_precommit_hook`'s own "Exit-code clamping"
+section — a
 pre-commit hook exiting anything other than 0 or 1 is read by the Claude
 Code harness as a blocking DENY that kills Bash/Write/Edit together,
 INCLUDING the tools needed to repair the hook (bricked the primary macOS box
@@ -257,8 +260,8 @@ def _gate_block(gate: _Gate) -> List[str]:
     does not: relocate the checkout and every commit BLOCKs on a missing gate
     script until the installer is re-run. That is the same defect class that
     silently disarmed all four meta-repo gates when the executable surface
-    moved at `b644d5a9`, so it is not repeated here — see
-    `install_claude_klabauter_precommit_hook._gate_block`'s docstring for the fuller
+    moved at `b644d5a9`, so it is not repeated here — the now-deleted
+    `install_claude_klabauter_precommit_hook._gate_block`'s docstring carried the fuller
     account; this module inherits the same property for the same reason.
     """
     script_path = "/".join([*_BIN_SUBDIR, gate.filename])
@@ -395,9 +398,9 @@ def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
         print(f"{_PROG}: installed {hook_path}.", file=sys.stderr)
         return 0
 
-    # Marker-presence alone is NOT "up to date" — see
+    # Marker-presence alone is NOT "up to date" — the now-deleted
     # `install_claude_klabauter_precommit_hook._install_or_append_hook`'s own comment
-    # here (2026-07-28) for the empirical incident this guards against.
+    # carried (2026-07-28) the empirical incident this guards against.
     # A hook this installer wrote is compared against what it WOULD write
     # now, and rewritten on any difference. A hook carrying foreign content is
     # never rewritten wholesale — appending is the only safe move there, and a

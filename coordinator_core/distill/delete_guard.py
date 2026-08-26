@@ -412,14 +412,14 @@ def _git_object_exists(sha: str, repo_root: Path) -> bool:
     40-char-hex-looking string (exit 0) even when no such object exists in the
     repo; that would silently defeat this guard's whole purpose (a nonexistent
     SHA passing as "resolved")."""
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
     result = subprocess.run(
         ["git", "cat-file", "-e", sha],
         cwd=repo_root,
         capture_output=True,
         text=True,
-        **no_console_creationflags(),
+        **leaf_spawn_creationflags(),
     )
     return result.returncode == 0
 
@@ -477,7 +477,7 @@ def _git_objects_exist(shas: list[str], repo_root: Path) -> dict[str, bool]:
     """
     if not shas:
         return {}
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
     unique_shas = list(dict.fromkeys(shas))
     stdin_payload = ("\n".join(unique_shas) + "\n").encode("utf-8")
@@ -487,7 +487,7 @@ def _git_objects_exist(shas: list[str], repo_root: Path) -> dict[str, bool]:
             input=stdin_payload,
             cwd=repo_root,
             capture_output=True,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return {sha: False for sha in unique_shas}

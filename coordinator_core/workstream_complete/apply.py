@@ -256,7 +256,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -286,6 +286,7 @@ from coordinator_core.telemetry.composition_record import (
     make_fleet_budget,
 )
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
+from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import judgments as _judgments
@@ -1143,6 +1144,112 @@ def _execute_directives(
 
 
 # ---------------------------------------------------------------------------
+# Close-commit tail (DR-358, docs/plans/2026-08-25-the-close-ceremony-
+# rebuilt-from-the-requirement.md, chunk C13) -- the rebuilt `d-run-wsc-tail`
+# wired at the seam the removed directive used to occupy. See
+# `directives_commit_tail.py`'s own module docstring ("Step 3/3.5, 2026-08-23
+# kill ... 2026-08-25 rebuild") for why this is an IN-PROCESS call here,
+# never a re-added `directives[]` entry -- DR-358 rules a directive would add
+# dispatch/argv/CLI-boundary overhead hard constraint 1's budget forbids for
+# a call that is itself in-process.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_close_commit_kwargs(
+    decisions: dict[str, Any], sid: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """The removed `d-close-tail-args` step's argument computation, merged
+    into this one place per DR-358's own ruling on that row ("its
+    requirement is entirely subsumed by `d-run-wsc-tail`'s ... rather than as
+    a separate directive"). Every value is a caller-supplied, already-decided
+    `decisions[...]` fact -- this function composes no message text and
+    decides no path list itself, mirroring `run_close_commit`'s own Negative-
+    spec one layer down.
+
+    Returns `None` when there is nothing to commit: no caller-supplied
+    `decisions["subject"]` (commit-message-authoring stays `judgments.py`'s
+    call, never guessed here), or no resolved session id. This is the same
+    "nothing to commit" gate the removed `jp-commit-subject-missing`/
+    `jp-stage-paths-missing` judgment points formerly enforced in front of
+    `d-run-wsc-tail` -- those points now have nothing left to gate (see
+    `__init__.py`'s `build_directives` docstring, "Authoring-window halts in
+    front of d-run-wsc-tail -- REMOVED"), so this is a plain data-
+    availability check, not a re-implementation of a judgment point."""
+    subject = decisions.get("subject")
+    if not subject or not sid:
+        return None
+    return {
+        "session_id": sid,
+        "subject": subject,
+        "prose": decisions.get("prose") or "",
+        "deleted_paths": decisions.get("deleted_paths") or (),
+        "kept_entries": decisions.get("kept_entries") or (),
+        "stage_paths": decisions.get("stage_paths") or (),
+        "governing_plan_slug": decisions.get("governing_plan_slug"),
+        "deliverable_id": decisions.get("deliverable_id"),
+        "attributed_session_id": decisions.get("attributed_session_id"),
+    }
+
+
+def _run_close_commit_tail(
+    worktree_root: "Union[Path, str]", decisions: dict[str, Any], sid: Optional[str]
+) -> Optional[dict[str, Any]]:
+    """Invokes `directives_commit_tail.run_close_commit_and_release_claims`
+    -- never bare `run_close_commit`, which releases neither claim (see that
+    function's own docstring) -- at the seam the removed `d-run-wsc-tail`
+    directive used to occupy: the terminal step of the close sequence,
+    called unconditionally after `_execute_directives` returns, REGARDLESS
+    of that pass's own `landed`/`blocked`/`failed` outcome.
+
+    This unconditional placement is deliberate, not an oversight: DR-358
+    rules that claim release fires "whether the commit step itself succeeded
+    or failed" via `run_close_commit_and_release_claims`'s own `finally` --
+    gating this call on an earlier directive's success would short-circuit
+    that `finally` for every session whose close sequence hit an unrelated
+    directive failure or blocked judgment point first, silently reintroducing
+    the invisible-loss failure mode DR-358 closes.
+
+    Returns `None` (no attempt made, nothing folded into the report) when
+    `_resolve_close_commit_kwargs` finds no subject/sid to commit against.
+    Otherwise always attempts the call and folds either its `PipelineResult`
+    or a raised exception into a plain dict -- a raise here must not crash
+    the whole `apply()` pass, since claim release has already run in the
+    wrapped call's own `finally` by the time any exception reaches this
+    frame."""
+    kwargs = _resolve_close_commit_kwargs(decisions, sid)
+    if kwargs is None:
+        return None
+    try:
+        result = directives_commit_tail.run_close_commit_and_release_claims(worktree_root, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - closed call, fold rather than crash
+        return {"attempted": True, "commit_failed": True, "error": str(exc)}
+    return {
+        "attempted": True,
+        "commit_failed": result.commit_failed,
+        "committed_sha": result.committed_sha,
+        "pushed": result.pushed,
+        "integrity_breach": result.integrity_breach,
+        "diagnostics": list(result.diagnostics),
+    }
+
+
+def _run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> dict[str, Any]:
+    """Invokes `directives_commit_tail.run_push_outstanding_tail` at the
+    seam `_run_close_commit_tail`'s own docstring implicitly leaves open --
+    `run_close_commit` never pushes (`push_mode=PUSH_MODE_NEVER`, hard
+    constraints 5/6), so a push is "its own separate, later step" (that
+    function's own docstring). This IS that later step (C4b, 2026-08-25).
+
+    Called unconditionally, immediately after `_run_close_commit_tail`,
+    regardless of that step's own outcome -- a prior round's already-
+    committed, still-unpushed work must still be pushed even when THIS
+    round's own commit attempt failed or found nothing to commit; mirrors
+    `_run_close_commit_tail`'s own "called unconditionally" placement
+    rationale in `apply()` below."""
+    return directives_commit_tail.run_push_outstanding_tail(worktree_root)
+
+
+# ---------------------------------------------------------------------------
 # No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md, chunk C13) -- see module docstring
 # § No-commit row guard for the design rationale and why this lives in
@@ -1311,6 +1418,37 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 "error": str(exc),
                 "landed": [],
             }
+        # DR-358, C13 (docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-
+        # the-requirement.md): the rebuilt `d-run-wsc-tail` close-commit step
+        # -- an in-process call, never a re-added `directives[]` entry -- at
+        # the seam the removed directive used to occupy. Called
+        # UNCONDITIONALLY here, never gated on `exit_code`/`report` above --
+        # see `_run_close_commit_tail`'s own docstring for why gating this on
+        # an earlier directive's outcome would short-circuit DR-358's
+        # unconditional claim-release ruling.
+        worktree_root = envelope.get("artifact", {}).get("path")
+        if worktree_root:
+            close_commit_report = _run_close_commit_tail(worktree_root, effective_decisions, sid)
+            if close_commit_report is not None:
+                report["close_commit"] = close_commit_report
+                if close_commit_report.get("commit_failed") and exit_code == int(
+                    WorkstreamApplyExitCode.SUCCESS
+                ):
+                    exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+            # C4b (2026-08-25): the push leg `run_close_commit` itself never
+            # attempts (push_mode=PUSH_MODE_NEVER, hard constraints 5/6) --
+            # called unconditionally, matching `_run_close_commit_tail`'s own
+            # placement, so a still-outstanding push from an earlier round
+            # is not left behind by a session whose own commit attempt found
+            # nothing new to commit.
+            push_report = _run_push_outstanding_tail(worktree_root)
+            report["push"] = push_report
+            if push_report.get("push_status") == "push-failed" and exit_code == int(
+                WorkstreamApplyExitCode.SUCCESS
+            ):
+                exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
         if exit_code == int(WorkstreamApplyExitCode.SUCCESS):
             outcome = "success"
         elif exit_code == int(WorkstreamApplyExitCode.PARTIAL_MUTATION):

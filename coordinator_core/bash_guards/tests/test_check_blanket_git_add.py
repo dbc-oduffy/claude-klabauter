@@ -402,7 +402,15 @@ def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
     result = _denies(monkeypatch, tmp_path, cmd)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git add -- path/to/file" in reason
-    assert "scoped-git-commit" in reason
+    # The commit half names the trailing-pathspec `git commit` form, NOT
+    # `scoped-git-commit`: that helper and the op it fronted
+    # (`ceremony.scoped_git_commit`) were deleted under DR-344 on 2026-08-23,
+    # and `kill means kill forever`. The message was repointed; this
+    # assertion was not, so it pinned a command an agent could no longer run
+    # -- the exact "named in doctrine with no reachable entrypoint" failure
+    # this guard's own remedy text exists to avoid. Assert the runnable form.
+    assert "git commit -m" in reason and " -- path/to/file" in reason
+    assert "scoped-git-commit" not in reason
 
 
 @pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])

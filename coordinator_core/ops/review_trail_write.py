@@ -139,7 +139,10 @@ import os
 import platform
 import re
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 import time
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional
@@ -153,7 +156,6 @@ from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.session import scope as session_scope
-from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 
 logger = logging.getLogger(__name__)
 
@@ -853,7 +855,7 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
             # CREATE_NO_WINDOW, matching coverage.py._run's pairing; CREATE_NO_WINDOW
             # alone hangs on Windows when stdin is inherited/invalid.
             stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError(
@@ -942,7 +944,7 @@ def _batch_resolve_ref_pair(
             # Same pairing as `_resolve_ref_to_sha`: CREATE_NO_WINDOW alone
             # hangs on Windows when stdin is inherited/invalid.
             stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

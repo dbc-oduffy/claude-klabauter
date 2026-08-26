@@ -114,11 +114,8 @@ _RATCHET_BAR_MS = 2000.0
 # and this frozenset was not pruned, leaving the guard red until 2026-08-22.
 _RATIFIED_SUSPENSIONS = frozenset({
     "session.boot_sweep",
+    "fleet.archive_completed_handoffs",
     # hooks.cater_subagent_start — REINSTATED 65bbe1323, pruned here 2026-08-22.
-    # fleet.archive_completed_handoffs — REINSTATED 2026-08-25 (C1a/C1b rebuild +
-    # C5a measurement: 93.750ms worst process time, 2 spawns, cap 150, 229-file
-    # live corpus; see state/audits/2026-08-25-the-handoff-archive-op-earns-its-
-    # way-back.md § C5a), pruned here in the same commit.
 })
 
 

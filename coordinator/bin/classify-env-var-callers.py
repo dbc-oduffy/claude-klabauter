@@ -120,6 +120,10 @@ _SCAN_EXTENSIONS = {".py"}
 _REVIEWED_DISPOSITIONS: dict[str, tuple[str, str]] = {
     "coordinator/bin/assert-no-terminal-plans-in-live.py": (
         "dispatch", "sets a child's PYTHONPATH to the resolved root so the child imports the engine"),
+    "coordinator/bin/coordinator-safe-commit.py": (
+        "dispatch", "builds a PYTHONPATH=<root> ... coordinator_core.invoke remediation suggestion "
+                    "string (both cmd.exe and PowerShell/POSIX spellings) so a human retrying the "
+                    "commit sets the child's PYTHONPATH to reach the engine"),
     "coordinator/bin/check-deferral-orphan-memo.py": (
         "dispatch", "passes the root to cc_invoke as the engine to invoke"),
     "coordinator/bin/check-deferral-partial-strangle.py": (
@@ -154,6 +158,12 @@ _REVIEWED_DISPOSITIONS: dict[str, tuple[str, str]] = {
     "coordinator/bin/percolate-preflight-scratch-publish.py": (
         "locator", "returns <root>/coordinator as the plugin root; its own error text asks for "
                    "'the claude-klabauter repo root'. Wants the checkout, not the engine."),
+    "coordinator/tests/test_workday_evening_tz_coherence.py": (
+        "locator", "joins the root to coordinator_core/ops/workday_complete_backfill_scan.py and "
+                   "reads it as a read-only structural tripwire against claude-klabauter SOURCE (own comment: "
+                   "'read-only against claude-klabauter source'); a second, dispatch-shaped use in the same "
+                   "file (env['PYTHONPATH'] = claude_klabauter_root + ...) also resolves the same root, but "
+                   "the locator use is the one that must NOT be routed to the engine accessor."),
 
     "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py": (
         "ladder", "the resolution ladder itself — validates a CANDIDATE root's shape "

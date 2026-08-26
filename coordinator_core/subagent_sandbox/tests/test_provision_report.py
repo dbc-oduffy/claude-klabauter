@@ -445,8 +445,13 @@ def test_session_id_sanitizes_to_empty_emits_nothing(
 def test_label_sanitizes_to_empty_emits_nothing(
     git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """label == '@@@' whitelist-sanitizes down to '' -- rejected."""
-    dangerous_label = "@@@"
+    """label == '###' whitelist-sanitizes down to '' -- rejected.
+
+    Was '@@@' until '@' was admitted to the whitelist so the canonical
+    ``<name>@session-<short8>`` agent id survives sanitization unchanged; the
+    fixture needs a character the whitelist still drops, not a character that
+    happened to be dropped when it was written."""
+    dangerous_label = "###"
     policy_data = {
         "confined": [],
         "exempt": [],
@@ -608,7 +613,7 @@ def test_provision_key_exactly_dotdot_fails_open(
         assert list(share_root.rglob("*.md")) == []
 
 
-@pytest.mark.parametrize("bad_provision_key", ["///", "@@@"])
+@pytest.mark.parametrize("bad_provision_key", ["///", "###"])
 def test_provision_key_sanitizes_to_empty_fails_open(
     git_repo: Path,
     policy_path: Path,

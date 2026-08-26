@@ -3223,7 +3223,15 @@ _COMMITTING_OP_NAMES = frozenset(
         # archive_and_commit(/rm_and_commit(/commit_scoped( (or delegates to
         # one, as handoff.ship_and_archive does via archive_shipped_handoffs'
         # own _handle_act) turned up eight more:
-        "fleet.archive_actioned_memos",     # fleet/archive_actioned_memos.py -- archive_and_commit(...)
+        # "fleet.archive_actioned_memos" REMOVED (op KILLED outright by PM
+        # ruling -- see ops/ceremony/tail_ops.py's own note: "killed outright
+        # the same day", along with its sweep-actioned-memos.py CLI fire).
+        # fleet/archive_actioned_memos.py does not exist; nothing registers
+        # the name. It survived here as a dead allowlist entry, and because
+        # this list is the cheapest caller census available, it made the
+        # archival caller set read as NINE when it is EIGHT -- a spinoff was
+        # scoped against the wrong number on the strength of it (2026-08-25).
+        # Same removal shape as fleet.archive_shipped_handoffs above.
         "fleet.archive_completed_handoffs",  # fleet/archive_terminal_handoffs.py -- archive_and_commit(...)
         "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
         "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)
@@ -3247,6 +3255,12 @@ _COMMITTING_OP_NAMES = frozenset(
         # file does NOT route through `commit_scoped`), not a real call. See
         # `_COMMIT_SINK_CALL_MARKERS`'s substring-scan limit below, now fixed
         # to require an actual `ast.Call` site.
+        #
+        # Fifth pass (2026-08-25), same mechanical enforcement
+        # (test_committing_op_names_covers_registry_sink_scan), two more
+        # verified against handler source:
+        "handoff.transition",               # ops/handoff_transition.py -- archive_and_commit(...)
+        "fleet.migrate_handoff_vocabulary",  # ops/fleet/migrate_handoff_vocabulary.py -- archive_and_commit(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -3259,7 +3273,9 @@ _PYTHON_INTERPRETER_NAMES = ("python3", "python")
 #: token as its value. ``--repo`` and ``--params-file`` do; ``--dump-op-
 #: timeouts``, ``--bare``, and argparse's own ``-h``/``--help`` do not.
 _INVOKE_FLAGS_WITH_VALUE = frozenset({"--repo", "--params-file"})
-_INVOKE_FLAGS_NO_VALUE = frozenset({"--dump-op-timeouts", "--bare", "-h", "--help"})
+_INVOKE_FLAGS_NO_VALUE = frozenset(
+    {"--dump-op-timeouts", "--bare", "-h", "--help", "--allow-unstamped-dispatch"}
+)
 
 
 def _first_positional_after_invoke_module(tokens: list, start: int) -> Optional[int]:
@@ -5987,8 +6003,8 @@ def _git_commit_agent_may_commit(
 #: UNCHANGED by this correction -- text only.
 _GIT_COMMIT_AGENT_DENY_REASON = (
     "BLOCKED: git-commit-agent commits only via a non-sweeping, in-scope "
-    "pathspec -- use instead: `scoped-git-commit -m <subj> -- <path>...` "
-    "(reject `.`, `-A`, globs, repo-root/ancestor paths). Already used "
+    "pathspec -- use instead: `run_commit_pipeline` with an explicit `paths` "
+    "list (reject `.`, `-A`, globs, repo-root/ancestor paths). Already used "
     "that form? Check path scope, not argv shape."
 )
 
@@ -6071,12 +6087,12 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     _LEG_COMPOUND_COMMAND: (
         "BLOCKED: git-commit-agent commits via ONE uncompounded command -- "
         "yours chained a second segment (`;`, `&&`, `||`, `|`, newline). "
-        "Re-issue the `scoped-git-commit` call alone. Pathspec never "
+        "Re-issue the commit call alone. Pathspec never "
         "inspected -- do not re-check."
     ),
     _LEG_NO_PATHSPEC: (
         "BLOCKED: git-commit-agent found no `--`-separated pathspec here -- "
-        "use `scoped-git-commit -m <subj> -- <path>...`. Any invocation "
+        "use `git commit -m <subj> -- <path>...`. Any invocation "
         "without `--` (including `--help`) lands here; path scope was never "
         "checked."
     ),
@@ -6239,8 +6255,8 @@ def _deny_reason(
         if summary:
             return (
                 "BLOCKED: git-commit-agent commits only via a non-sweeping, "
-                "in-scope pathspec -- use instead: `scoped-git-commit -m "
-                "<subj> -- <path>...`. Argv shape was fine; denied on path "
+                "in-scope pathspec -- use instead: `run_commit_pipeline` with "
+                "an explicit `paths` list. Argv shape was fine; denied on path "
                 "scope: `%s`." % summary
             )
         return _GIT_COMMIT_AGENT_DENY_REASON

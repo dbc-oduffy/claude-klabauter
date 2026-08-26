@@ -86,7 +86,7 @@ def test_rung1_and_rung3_no_longer_return_their_candidate_directly():
 
 
 def test_pointer_rungs_are_the_only_surviving_direct_return():
-    """Rung 1.5 (`.claude-klabauter-root` / `.claude-klabauter-root` pointer files)
+    """Rung 1.5 (`.claude-klabauter-root` / `.claude-klabauter-live-root` pointer files)
     deliberately stays a direct return — its own docstring note explains why
     that is not gate-blind in the direction that matters (it already gives
     the gate's own answer). This is the ONE remaining exception; pinning it

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.subagent_sandbox import engine
 from coordinator_core.hooks.cater_subagent_start import (
     NAMED_DISPATCH_ROW_RESOLVED_MARKER,
     compose_catering,
@@ -38,6 +39,19 @@ SNIPPET_A_BODY = "INJECTION-ONLY-CANARY-A: this sentence exists nowhere except s
 
 NAMED_AGENT_ID = "a-catering-tester-0123456789abcdef"
 EM_SESSION_ID = "em-session-cater-1"
+
+
+def _canonical_key(raw_agent_id: str, payload_session_id: str) -> str:
+    """The `.agents/` directory name a named dispatch actually resolves to.
+
+    `_canonical_agent_id` derives `<name>@session-<short8>` from the PAYLOAD's
+    own `session_id`, not from the EM session the ledger row points back to --
+    so this cannot be a module constant; each test's payload session id gives
+    a different key. Derived through the engine rather than spelled out, so a
+    fixture can never drift from the resolver the way the raw-form keys these
+    tests used to carry did.
+    """
+    return engine._canonical_agent_id(raw_agent_id, payload_session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +182,12 @@ def test_mapping_shape_unnamed_dispatch_selects_row_on_agent_type(
 def test_mapping_shape_named_dispatch_resolves_via_backpointer(
     git_repo: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
+    _write_backpointer(
+        git_repo,
+        _canonical_key(NAMED_AGENT_ID, "session-map-named-1"),
+        EM_SESSION_ID,
+        ELIGIBLE_TYPE,
+    )
     payload = _payload(
         "patrik",  # teammate NAME, not a policy key
         "session-map-named-1",
@@ -254,7 +273,12 @@ def test_counter_fires_only_for_named_dispatch(
     compose_catering(unnamed_payload, cwd=str(git_repo))
     assert NAMED_DISPATCH_ROW_RESOLVED_MARKER not in capsys.readouterr().err
 
-    _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
+    _write_backpointer(
+        git_repo,
+        _canonical_key(NAMED_AGENT_ID, "session-counter-named"),
+        EM_SESSION_ID,
+        ELIGIBLE_TYPE,
+    )
     named_payload = _payload(
         "patrik",
         "session-counter-named",
@@ -271,7 +295,12 @@ def test_counter_fires_only_for_named_dispatch(
 # ---------------------------------------------------------------------------
 
 def test_counter_output_is_stderr_only(git_repo: Path, capsys: pytest.CaptureFixture) -> None:
-    _write_backpointer(git_repo, NAMED_AGENT_ID, EM_SESSION_ID, ELIGIBLE_TYPE)
+    _write_backpointer(
+        git_repo,
+        _canonical_key(NAMED_AGENT_ID, "session-stderr-only-1"),
+        EM_SESSION_ID,
+        ELIGIBLE_TYPE,
+    )
     payload = _payload(
         "patrik",
         "session-stderr-only-1",

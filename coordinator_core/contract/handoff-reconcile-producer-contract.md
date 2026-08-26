@@ -7,10 +7,30 @@
 > judgment. This doc pins the op's params/return shape, the DEC-1 policy-as-DoE-owned-data
 > boundary, the C3 clear-predicate spec, and the recommended invocation cadence.
 >
-> **Status: TURNABLE-ON, not yet wired to a live caller.** The op, the `reconcile/` compute
-> package, and the DoE-owned policy-YAML grammar pin are all shipped and green. There is no
-> `workday-start` (or other) call site invoking this op today — that wiring is DoE's to land on
-> receipt of the C6 proposal memo (see § 6). The op name `handoff.reconcile_open` is
+> **Status: WIRED AND FIRING, observation-only.** The op, the `reconcile/` compute package, and
+> the DoE-owned policy-YAML grammar pin are all shipped and green.
+>
+> **CORRECTED 2026-08-25 — the previous status line was stale and said the opposite.** It read
+> "not yet wired to a live caller… there is no `workday-start` (or other) call site invoking this
+> op today". There is: DoE's `coordinator/commands/workday-start.md` § 1.10.6 makes it a Step -0.9
+> judgment point (`### Auto-Reconcile`, after `### Addon Health`), routing through this repo's
+> `coordinator/bin/check-auto-reconcile.py`. Confirmed by `doe-claude-em` 2026-08-25, and by the
+> op-latency sink: **65 fires in 24 h, all `outcome=ok`, across 5 sessions**.
+>
+> **The call site and the arming flip were never coupled** — observation-only was *designed* to
+> run and surface, so "wired" does not mean "armed". `dry_run`/`auto_ship_enabled` still gate every
+> mutation exactly as § 6 and the grammar describe, and DoE has not flipped them.
+>
+> **Two open facts a reader should not mistake for settled.** (i) DoE accounts for exactly ONE fire
+> per `/workday-start`, and § 1.10.6 is the only `reconcile_open` call site in their whole plugin
+> tree — measured usage is ~13 per session, so ~12 fires per session are unattributed and are
+> presumed claude-klabauter-side. The sink cannot currently name them: `origin` is null on 63 of those 65
+> rows, so it records that an op fired and not who asked. (ii) Each fire costs **5,546 ms of
+> process time** (0 spawns), 11x this repo's 500 ms brightline —
+> `state/audits/2026-08-25-the-steady-state-residual-evaporated-and-the-cpu-blind-spot-behind-it.md`.
+> At ~13 fires that is ~70 s of CPU per session, which is what a rebuild is actually buying down.
+>
+> The op name `handoff.reconcile_open` is
 > **RATIFIED** by DoE (2026-07-13, `cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md`),
 > same path the cartography op names walked from provisional to ratified.
 >

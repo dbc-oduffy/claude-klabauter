@@ -71,7 +71,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Sequence
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 from coordinator_core.git.repo_root import show_toplevel
 
 _COMMIT_ISH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -124,7 +127,7 @@ def _is_commit_ish(repo_root: Path, token: str) -> bool:
             capture_output=True,
             text=True,
             cwd=str(repo_root),
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return False

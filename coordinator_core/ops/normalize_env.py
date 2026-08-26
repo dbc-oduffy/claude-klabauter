@@ -58,6 +58,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.run import git_ok
 from coordinator_core.install import prereq_probe
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -354,7 +355,14 @@ def _ne_print_probe_summary(probe_output: str, out) -> None:
 
 
 def _ne_split_path_entries(path_value: str) -> list:
-    return [p for p in path_value.split(os.pathsep) if p]
+    # `path_value` is always a POSIX zsh-login PATH snapshot (macOS
+    # ~/.bash_profile reconstruction, see `_ne_extra_zsh_path_entries`'s own
+    # docstring) -- colon-separated regardless of the HOST platform running
+    # this module. `os.pathsep` is ";" on Windows, which left the whole
+    # colon-joined string as one un-split entry there (latent bug: a host-OS
+    # separator applied to a target-OS-fixed string). Split on the literal
+    # POSIX separator, not the running interpreter's own pathsep.
+    return [p for p in path_value.split(":") if p]
 
 
 def _ne_extra_zsh_path_entries(recon_source: str) -> list:
@@ -777,21 +785,10 @@ def _ne_step1_longpaths(runner: NeRunner, out, in_stream=None) -> None:
         print(file=out)
         return
 
-    git_bin = shutil.which("git")
-    ok = False
-    if git_bin:
-        try:
-            proc = subprocess.run(
-                [git_bin, "config", "--global", "core.longpaths", "true"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                stdin=subprocess.DEVNULL,
-                **_CREATIONFLAGS,
-            )
-            ok = proc.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            ok = False
+    # `git_ok` folds an absent git, a spawn failure and a non-zero exit onto
+    # the same False this step already treated alike, so the try/except and
+    # the `which` probe it guarded both go away with it.
+    ok = git_ok(["config", "--global", "core.longpaths", "true"])
 
     if ok:
         print("  Applied.", file=out)

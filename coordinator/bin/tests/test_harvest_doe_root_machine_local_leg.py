@@ -186,7 +186,7 @@ def test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes() -> N
     name = "test_candidate_search_dirs_resolves_machine_local_leg_for_both_scopes"
 
     fake_doe_root = tempfile.mkdtemp(prefix="harvest-fake-doe-root-")
-    fake_claude_klabauter_root = tempfile.mkdtemp(prefix="harvest-fake-claude-klabauter-root-")
+    fake_claude_klabauter_root = tempfile.mkdtemp(prefix="harvest-fake-claude-klabauter-live-root-")
     stub_dir = tempfile.mkdtemp(prefix="harvest-fake-machine-local-impl-")
     saved_env = {k: os.environ.get(k) for k in _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION}
     saved_env["QUEUE_APPEND_OUTPUT_ROOT"] = os.environ.get("QUEUE_APPEND_OUTPUT_ROOT")
@@ -298,7 +298,7 @@ def test_second_run_idempotent_end_to_end() -> None:
         env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(fake_doe_root, "state", "lessons-outbox")
         # Real checkout — required so schema.validate/schema.describe (no
         # legacy fallback) can resolve coordinator_core.invoke at all.
-        env["CLAUDE_KLABAUTER_ROOT"] = _REPO_ROOT
+        env["COORDINATOR_ENGINE_ROOT"] = _REPO_ROOT
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]
 

@@ -345,10 +345,15 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
     # claude-doe `--doe-root <pointer>` and exports nothing. Both rows PASS
     # here, so an AC2 re-derived against REPO_DOE_CLAUDE would go RED on a
     # correct install — which is the failure this fixture exists to catch.
-    assert any(
-        "AC2 cold-shell: claude-doe --doe-root resolved from pointer alone" in line for line in r.lines
-    )
-    assert any("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset" in line for line in r.lines)
+    # `run_all`'s own AC2 cold-shell leg sources a POSIX `.sh` shim under a
+    # hand-built `/usr/bin:/bin` PATH — not applicable on Windows (see
+    # sandbox_check.py's own `os.name == "nt"` SKIP branch there), so neither
+    # PASS row is ever emitted on this host.
+    if os.name != "nt":
+        assert any(
+            "AC2 cold-shell: claude-doe --doe-root resolved from pointer alone" in line for line in r.lines
+        )
+        assert any("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset" in line for line in r.lines)
     assert not any(line.startswith("FAIL") and "AC2" in line for line in r.lines)
     assert r.pass_count > 0  # and the fixture's own present pieces PASS
 
@@ -357,6 +362,13 @@ def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_c
     """The shape DR-087 retired: export the pointer as rung-1
     ``REPO_DOE_CLAUDE`` and invoke claude-doe with no ``--doe-root``. AC2 must
     call BOTH halves out — a missing argv seam and a promoted mirror."""
+    if os.name == "nt":
+        pytest.skip(
+            "AC2 cold-shell sources a POSIX .sh shim under a hand-built "
+            "/usr/bin:/bin PATH -- run_all()'s own AC2 leg is a no-op SKIP "
+            "on Windows (sandbox_check.py's os.name == 'nt' branch), so "
+            "this fixture's FAIL lines can never appear here"
+        )
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
     tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl"
     tmpl.write_text(

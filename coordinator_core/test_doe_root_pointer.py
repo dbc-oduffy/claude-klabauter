@@ -31,6 +31,7 @@ import tomllib
 import pytest
 
 from coordinator_core import doe_root_pointer as drp
+from coordinator_core.testing.home_sandbox import sandbox_home
 
 
 @pytest.fixture(autouse=True)
@@ -77,8 +78,17 @@ def test_reads_pointer_file_under_claude_home(monkeypatch, tmp_path):
 
 def test_falls_back_to_home_when_claude_home_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    (tmp_path / ".claude").mkdir(parents=True)
+    # HOME alone does not isolate home resolution on Windows -- Path.home()
+    # prefers USERPROFILE (still pointed at the suite-wide quarantine dir by
+    # coordinator_core/conftest.py's autouse _quarantine_real_home fixture)
+    # ahead of HOME, so settings_home()'s Path.home() fallback would silently
+    # resolve into that quarantine dir instead of this test's tmp_path and
+    # read ITS seeded stub pointer instead of the one this test writes below.
+    # sandbox_home() sets every variable expanduser/Path.home() consult (see
+    # coordinator_core/testing/home_sandbox.py's own docstring for the
+    # 2026-07-20 incident this exists to prevent).
+    sandbox_home(monkeypatch, tmp_path)
+    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".claude" / ".doe-root").write_text("/tmp/from-home\n")
     assert drp.read_doe_root_pointer() == "/tmp/from-home"
 

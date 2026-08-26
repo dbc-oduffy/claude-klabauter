@@ -95,7 +95,7 @@ _CADENCES = ("bug-blitz", "mise-en-place", "bug-sweep", "debt-triage", "dogfood"
 _FAKE_OPERATOR_CONFIG = {
     "settings_home": "/fake/settings-home",
     "claude_klabauter_bin": "/fake/settings-home/bin",
-    "claude_klabauter_root": "/fake/claude-klabauter-root",
+    "claude_klabauter_root": "/fake/claude-klabauter-live-root",
     "doe_root": "/fake/doe-root",
 }
 
@@ -3447,7 +3447,7 @@ class TestTrampolineDispatchRouting:
         # CLAUDE_KLABAUTER_ROOT set explicitly: _backlog_grind_assemble_entry re-runs
         # its full resolution ladder on every call and this test box has no
         # machine-local registry entry for it.
-        monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
         shim = _load_entry_point_shim()
         brief_calls: list = []
         drop_calls: list = []
@@ -3479,7 +3479,7 @@ class TestTrampolineDispatchRouting:
         # The structural guard: this is what makes the NEXT added verb fail
         # loudly (wrong callee recorded) rather than silently landing in the
         # `main_drop` fallthrough the way `mint-run-id` did.
-        monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
         shim = _load_entry_point_shim()
         seen: dict = {}
 

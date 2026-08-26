@@ -112,7 +112,7 @@ _CLI_TIMEOUT_SECS = 180
 def _run(*args: str) -> subprocess.CompletedProcess:
     """Run bin/claude-klabauter-doctor-probe.py with the given args; CLAUDE_KLABAUTER_ROOT set to repo root."""
     env = dict(os.environ)
-    env["CLAUDE_KLABAUTER_ROOT"] = str(_REPO_ROOT)
+    env["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
     return subprocess.run(
         [sys.executable, str(_BIN_PROBE), *args],
         capture_output=True,

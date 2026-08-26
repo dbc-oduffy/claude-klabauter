@@ -63,8 +63,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
-from coordinator_core.locked_write import LockTimeout, held_lock
-from coordinator_core.session import core, liveness
+from coordinator_core.session import core, liveness, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -353,8 +352,8 @@ def _emit_normalize_diagnostic(reason: str) -> None:
             "once this process — further occurrences are silenced. This is "
             "NOT the routine path-outside-this-repo case (expected, handled "
             "by the relpath fallback); normalization fell back to a "
-            "best-effort relative path, so touched.txt entries written this "
-            "process may be mis-normalized or missing.",
+            "best-effort relative path, so touch-record entries written "
+            "this process may be mis-normalized or missing.",
             file=sys.stderr,
         )
     except Exception:
@@ -1555,15 +1554,277 @@ def _collect_peer_path_mtimes(
     return mtimes
 
 
-#: Sub-second, bounded acquire timeout for the ``touched.txt`` append lock
-#: (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md). Deliberately
-#: NOT ``held_lock``'s 10s default: a 10s blocking acquire looped once per
-#: declared path (``ipc._MAX_DECLARED_TOUCH_PATHS`` = 16) would be a ~160s
-#: worst case against the 300ms ``MUTATING`` budget -- the exact latency
-#: class C1 exists to remove. 0.2s is generous against the measured
-#: uncontended acquire cost (sub-millisecond; see the chunk report) while
-#: still bounding the worst case to a small multiple of the per-call budget
-#: even under real contention.
+#: C4 — the record filename ``touch()`` now writes and every reader in this
+#: module now reads (C3's seam, ``touch_record.py``). Distinct from the old
+#: bash-dialect ``"touched.txt"`` literal still used by
+#: ``hooks.track_touched_files`` (out of this chunk's scope — see this
+#: chunk's report for the Blocker-2 resolution: different filename, so no
+#: single record ever holds mixed dialect).
+_TOUCH_RECORD_FILENAME = "touch-record.jsonl"
+
+#: AC16(b) — a bound on how much of ONE peer/agent claimant's on-disk
+#: family Step 3/3b will read before treating that claimant's claims as
+#: withheld (the same fail-closed shape as an unreadable file — see the
+#: Step 3/3b call sites). A stat-only sum over `touch_record.discover_family`
+#: (no content read) decides this BEFORE any content is opened. Sized the
+#: same as `touch_record.MAX_RECORD_BYTES` (the write-time rotation bound,
+#: AC17) — a live sink can never itself exceed that bound by construction,
+#: so this cap only ever trips on an unrotated legacy-vintage sink or a
+#: pathological multi-generation family, never on ordinary traffic.
+_PEER_RECORD_READ_BUDGET_BYTES = touch_record.MAX_RECORD_BYTES
+
+
+def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[str], bool]:
+    """C0 — the REAL union read adapter for every consumer of one claimant's
+    touch record in this module (Step 1's self-file, Step 3's per-session
+    peer scan, Step 3b's per-agent scan, and the four agent-dir branches
+    folded onto this seam by this same chunk: the ``all_agent_dir_entries``
+    pre-scan, the recency/size race-window gate, the ``attr_agent_touched``
+    attribution branch, and Step 3b's own per-agent claim read).
+
+    Reads ``sink_path``'s on-disk ``touch-record.jsonl`` family through the
+    seam (``touch_record._read_stream_claims`` -- C3's own family-discovery +
+    decode + last-verb-wins fold, never re-implemented here) and re-renders
+    each surviving event as an OLD-dialect ``'<verb> <ts> <path>'`` line via
+    :func:`format_touch_event`. Then, if a SIBLING ``touched.txt`` exists
+    next to ``sink_path`` (same directory — the old-dialect writer's own
+    filename), its lines are PREPENDED ahead of the jsonl-derived lines
+    before returning — legacy first, so the downstream last-verb-wins fold
+    (``project_self_scope``/``project_peer_claims``/``_last_verb_map``) still
+    favours a LATER event in the new record over an earlier one only the
+    legacy file recorded. This is the ONE union every caller in this module
+    now goes through — no call site is a single-dialect parser anymore (see
+    this chunk's brief: AC21's inlined ``compute_scope`` Step 1 block, and
+    the four agent-dir branches, previously each grew their own legacy arm;
+    all now route through here instead).
+
+    Why re-render rather than hand callers ``TouchEvent`` objects directly:
+    the projection policies this module's OTHER callers still share
+    (``project_self_scope``, ``project_peer_claims``, ``_challenger_t_events``,
+    ``_collect_peer_path_mtimes``) are the same functions
+    ``coordinator_core.session.claims``, ``ops.session.safe_commit_offer``,
+    and ``coordinator-safe-commit`` still call against UNMIGRATED
+    ``touched.txt`` writers (this chunk's scope is only ``scope.py`` and
+    ``claim_index.py`` — those callers' own writers are future chunks). One
+    re-render adapter here lets this module's Step 1/3/3b keep using that
+    same, heavily-reviewed policy surface unchanged, rather than forking a
+    second TouchEvent-shaped policy implementation that would need to
+    reproduce every one of their fail-closed edge cases from scratch. The
+    events `_read_stream_claims` returns are already the FOLDED
+    last-verb-wins survivor per path, so the rendered jsonl-derived lines are
+    a strict (deduplicated) subset of what a hand-rolled multi-line file
+    would contain — every downstream function here re-folds by last-verb-wins
+    anyway, so this is lossless. The prepended legacy lines are NOT folded
+    here — they are handed through raw, in file order, exactly as the old
+    inlined Step 1 block and every other single-dialect ``touched.txt``
+    reader in this module did, so the shared downstream policy functions
+    keep doing that folding themselves.
+
+    Path fields off the jsonl arm need NO further normalization:
+    `touch_record.encode_line` canonicalizes at WRITE time (AC4), so
+    `event.path` is already exactly the dialect `canonicalize_relative_path`
+    produces. This is why C4 deletes `normalize_historical_touch_entry` (a
+    thin `classify_touch_entry(...).new_value` wrapper) at Step 1's one call
+    site rather than re-threading it through this adapter's output —
+    `classify_touch_entry` itself survives (see this chunk's report) for
+    its OWN reason, unrelated to dialect-folding. The prepended legacy lines
+    are handed through in their raw, on-disk dialect — Step 1's own AC8
+    defensive normalization pass (`classify_touch_entry`, applied to the
+    WHOLE candidate set after this union) still runs over them exactly as it
+    did before this chunk, so an absolute or escaping legacy entry is still
+    caught there, not here.
+
+    Returns ``(lines, degraded)`` — ``degraded`` mirrors `touch_record`'s own
+    AC6 typed signal (an unreadable jsonl family member, or a line that
+    failed to decode) OR'd with an unreadable sibling ``touched.txt``: never
+    "clean", never silently narrowed to an empty list.
+
+    AC9 (C8, docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
+    repointing-its-writers.md): RETAINED, not deleted, by deliberate choice —
+    both live conditions this chunk's brief names as the "callers live" bar
+    for keeping it still hold at C8:
+
+    (1) ``session/claims.py :: atomic_dedup_append`` is still a real writer
+        of the old bare-line dialect — the CLI-authored ``claim-path`` seam
+        (``js_bridge_cli._cmd_claim_path`` -> ``coordinator/lib/
+        coordinator_session.py :: claim_path``) still reaches it, even though
+        no in-repo production caller currently invokes that wrapper (``self_
+        claim``, migrated off it in C6, is the only production caller that
+        used to). A dormant CLI entry point is still a real writer, not a
+        proven-absent one: `grep`-provable HEAD state is "the function that
+        emits the old dialect still exists and is still wired to a callable
+        subcommand," not "no writer can produce it."
+    (2) This function's shared projection-policy consumers --
+        ``project_self_scope``, ``project_peer_claims``,
+        ``_challenger_t_events``, ``_collect_peer_path_mtimes`` -- are called
+        directly by ``session/claims.py`` and ``ops/session/safe_commit_
+        offer.py`` (see this function's own docstring above), both of which
+        are OUTSIDE this chunk's declared ``writes:`` scope
+        (``coordinator_core/session/scope.py`` and its test module only).
+        Deleting this seam without migrating those two files' call sites
+        would either break them or force an out-of-scope edit; neither is
+        available here.
+
+    What DID change by C8, proven in ``tests/test_scope.py`` (the
+    ``TestAC21...`` regression class this AC9 decision replaces): the ONE
+    writer that class was pinned against -- ``self_claim`` -- no longer
+    emits the old dialect at all (C6). The fixture that class depended on
+    (a session dir holding ONLY a legacy ``touched.txt``, written by
+    ``self_claim``) can no longer arise from any in-repo production writer;
+    a fresh test asserts that directly rather than leaving a vacuously-passing
+    pin whose premise HEAD no longer produces.
+    """
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    jsonl_lines = [
+        format_touch_event(
+            event.verb,
+            event.path,
+            when=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
+        )
+        for event in claims.values()
+    ]
+
+    legacy_path = Path(sink_path).parent / "touched.txt"
+    legacy_lines: List[str] = []
+    if legacy_path.is_file():
+        try:
+            legacy_lines = [
+                ln for ln in legacy_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln
+            ]
+        except OSError as exc:
+            degraded = True
+            print(
+                f"cs_compute_scope: failed to read {legacy_path} "
+                f"(non-fatal, scope may be incomplete): {exc}",
+                file=sys.stderr,
+            )
+
+    return legacy_lines + jsonl_lines, degraded
+
+
+def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[str], bool]:
+    """C0 — the agent-dir counterpart of :func:`_read_touch_record_as_
+    legacy_lines`, for the four ``.agents/<aid>/`` branches that feed
+    ``_normalize_agent_touched_entry`` (the pre-scan, the recency/size race
+    gate, the attribution branch, and Step 3b's own peer-claim read) rather
+    than ``parse_touch_event``.
+
+    Distinct dialect, distinct adapter: ``_normalize_agent_touched_entry``
+    treats an ENTIRE line as a bare repo-relative path (optionally
+    directory-shaped, trailing ``/``) — it has no verb/timestamp prefix to
+    strip, unlike the ``'<verb> <ts> <path>'`` lines
+    ``_read_touch_record_as_legacy_lines`` renders for the session-keyed
+    ``parse_touch_event`` dialect. Re-rendering THAT format here would feed
+    ``_normalize_agent_touched_entry`` a line whose "path" is literally
+    ``"T 1700000000.0 real/path.py"`` — not a re-use, a corruption of a
+    different dialect.
+
+    Reads ``sink_path``'s ``touch-record.jsonl`` family through the same
+    seam (`touch_record._read_stream_claims`), keeps only the surviving
+    TOUCH events (a bare-line corpus has no release representation, so a
+    RELEASE survivor contributes no entry here — dropped, never rendered as
+    a phantom claim), and renders each as its bare ``event.path`` — already
+    canonicalized at write time (AC4), so no further transform is applied.
+    Then, exactly as the session-keyed adapter does, prepends a sibling
+    ``touched.txt``'s raw bare-path lines ahead of the jsonl-derived ones
+    (legacy first). Today no writer emits `.agents/<aid>/touch-record.jsonl`
+    yet (`hooks.track_touched_files` still writes the old dialect only — see
+    this chunk's report, Blocker 2), so every live call reads exactly the
+    legacy file, byte-for-byte unchanged from before this chunk; a future
+    writer migration is picked up here for free.
+
+    Returns ``(lines, degraded)`` with the same AC6 degrade semantics as the
+    session-keyed adapter.
+    """
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    jsonl_lines = [
+        event.path for event in claims.values() if event.verb == touch_record.VERB_TOUCH
+    ]
+
+    legacy_path = Path(sink_path).parent / "touched.txt"
+    legacy_lines: List[str] = []
+    if legacy_path.is_file():
+        try:
+            legacy_lines = [
+                ln for ln in legacy_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln
+            ]
+        except OSError as exc:
+            degraded = True
+            print(
+                f"cs_compute_scope: failed to read {legacy_path} "
+                f"(non-fatal, scope may be incomplete): {exc}",
+                file=sys.stderr,
+            )
+
+    return legacy_lines + jsonl_lines, degraded
+
+
+def _agent_touch_activity(agent_dir: Path) -> Tuple[bool, float]:
+    """C0 — stat-only ``(has_activity, age_sec)`` signal for the not-yet-
+    back-pointed agent-dir race-window gate (Step 3b's ``touched_probe``
+    branch), computed across BOTH dialects of one agent dir's touch record —
+    its ``touch-record.jsonl`` family (``touch_record.discover_family``) AND
+    its sibling ``touched.txt`` — rather than the ``touched.txt``-only stat
+    the branch used before this chunk. ``has_activity`` is true iff the
+    combined on-disk size of every member is non-zero; ``age_sec`` is the
+    age (seconds) of the NEWEST member's mtime, or ``float('inf')`` if no
+    member exists or every ``stat()`` failed (treated as maximally stale —
+    never a plausibly-live race). A per-member ``stat()`` failure is
+    skipped, not fatal, mirroring this gate's own accepted-residual posture
+    (see the call site's docstring note on ``touched_probe`` becoming
+    unreadable mid-scan)."""
+    members: List[Path] = list(
+        touch_record.discover_family(agent_dir / _TOUCH_RECORD_FILENAME)
+    )
+    legacy = agent_dir / "touched.txt"
+    if legacy.is_file():
+        members.append(legacy)
+
+    total_size = 0
+    newest_mtime = 0.0
+    for member in members:
+        try:
+            st = member.stat()
+        except OSError:
+            continue
+        total_size += st.st_size
+        if st.st_mtime > newest_mtime:
+            newest_mtime = st.st_mtime
+
+    has_activity = total_size > 0
+    age_sec = (core.now_epoch() - newest_mtime) if newest_mtime else float("inf")
+    return has_activity, age_sec
+
+
+def _peer_record_read_budget_exceeded(sink_path: "Path | str") -> bool:
+    """AC16(b) — stat-only (no content read) check of whether ``sink_path``'s
+    on-disk family already exceeds :data:`_PEER_RECORD_READ_BUDGET_BYTES`.
+    Never raises: a ``stat()`` failure on any family member is treated as
+    "not over budget" here — Step 3/3b's own unreadable-file handling
+    (triggered by the subsequent content read, not this check) is what
+    fail-closes on a genuine read failure; this function only ever decides
+    whether to attempt that read at all.
+    """
+    total = 0
+    for member in touch_record.discover_family(sink_path):
+        try:
+            total += member.stat().st_size
+        except OSError:
+            continue
+        if total > _PEER_RECORD_READ_BUDGET_BYTES:
+            return True
+    return False
+
+
+#: C4: no longer used by `touch()` itself (its dedup-scan-then-append lock
+#: region is gone -- see that function's own docstring). SURVIVES anyway --
+#: `coordinator_core.session.claims._ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS`
+#: (outside this chunk's `writes:`) imports this exact attribute off this
+#: module; deleting it breaks that unrelated writer's own lock timeout at
+#: import time. Left at its original value/meaning (the shared acquire
+#: timeout class both writers agreed on) rather than renamed or repurposed.
 _TOUCH_LOCK_TIMEOUT_SECS = 0.2
 
 
@@ -1575,10 +1836,19 @@ def touch(
     lock: bool = True,
 ) -> None:
     """Port of ``cs_touch <session_id> <path>``: append a repo-relative file
-    path to this session's ``touched.txt`` as a ``T`` event (last-event
-    dedup — a path whose last event is already ``T`` is skipped; a path
-    whose last event is ``R`` or absent gets a fresh ``T``), then refresh
-    ``last_activity`` in ``meta.json``.
+    path to this session's ``touch-record.jsonl`` (C4 -- the writer flip;
+    see this chunk's report for landing order) as a ``T`` event, then
+    refresh ``last_activity`` in ``meta.json``.
+
+    C4/AC17: NO pre-append dedup read any more. The old dedup scan (skip if
+    the last event for this path was already T) is exactly the O(depth)
+    read ``touch_record.py``'s own negative-spec forbids re-adding on this
+    append path -- the reader's last-verb-wins projection (C3,
+    ``touch_record.project_live_claims``/``_read_stream_claims``) already
+    makes the identical CLAIMED/RELEASED decision at read time, so writing
+    a redundant T on an already-T path is harmless (idempotent under
+    last-verb-wins) and removing the read is what turns per-session growth
+    from O(distinct paths^2) cumulative back to O(edits) -- see AC17.
 
     HOT path. Live callers are the engine's self-report scope-touch contract
     (``ipc.py``'s ``_SCOPE_TOUCH_PATHS_KEY`` block, recorded by
@@ -1622,23 +1892,18 @@ def touch(
     Raises ``ValueError`` if ``sid`` or ``path`` is empty (bash
     ``${1:?}``/``${2:?}`` required-arg contract).
 
-    ``lock`` (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
-    when ``True`` (default), the dedup-scan-then-append region below is
-    wrapped in :func:`coordinator_core.locked_write.held_lock`, anchored at
-    ``root or cwd`` (realpath'd), so concurrent same-session declarations
-    against the SAME ``touched.txt`` serialize instead of racing the plain
-    ``open(..., "a")`` lseek+write on Windows (measured ~3% loss, see the
-    plan's Problem section). Pass ``lock=False`` ONLY when the caller
-    already holds this same lock across a whole batch of calls (e.g.
-    ``ipc._record_self_reported_touches``, which acquires ONCE for the
-    declared-path batch rather than once per path — a per-path acquire
-    nested inside that outer acquire would be re-entrant on the same target
-    and ``held_lock`` deadlocks for the full timeout on re-entry). Fails
-    open: no anchor available (``root`` and ``cwd`` both falsy),
-    ``LockTimeout``, or ``RuntimeError`` (no lock backend on this platform)
-    all degrade to the unlocked append — this function must never raise for
-    an operational locking failure, matching its pre-existing fail-open
-    contract for every other operational failure.
+    ``lock`` (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md;
+    VESTIGIAL as of C4 — see this function's body comment) — historically
+    wrapped the dedup-scan-then-append region in
+    :func:`coordinator_core.locked_write.held_lock` so concurrent
+    same-session declarations against the SAME ``touched.txt`` serialized
+    instead of racing the plain ``open(..., "a")`` lseek+write on Windows.
+    C4 (AC17) deletes the dedup read that region existed to serialize;
+    ``touch_record.append_event``'s single atomic append needs no
+    application-level lock (see ``touch_record.py``'s own negative-spec).
+    The parameter is accepted and silently ignored, purely for call-site
+    signature compatibility with existing callers — it no longer changes
+    this function's behavior in any way.
     """
     if not sid:
         raise ValueError("session_id required")
@@ -1655,7 +1920,7 @@ def touch(
         return
     fpath = normalized
 
-    touched = os.path.join(sdir, "touched.txt")
+    sink = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
 
     # Create session dir / backfill meta.json on touch if init() was skipped
     # (fail-safe). Guard on meta.json presence, not just the dir: another
@@ -1674,116 +1939,44 @@ def touch(
                 file=sys.stderr,
             )
 
-    def _dedup_scan_and_append() -> bool:
-        """Event-aware dedup (AC8) + append, run either under the lock or
-        unlocked (see ``lock`` param's docstring paragraph above). A path
-        whose LAST event is already T is skipped (unchanged claim); a path
-        whose last event is R (released) or with no event at all gets a
-        fresh T — an edit after a release must not be silently unclaimed.
-        Scan backwards and stop at the first matching line rather than
-        parsing the whole log (hot path — fires on every tool-call file
-        write / declared write).
-
-        Returns ``True`` iff a new event was actually written (so
-        ``last_activity`` should be refreshed) — ``False`` on dedup-skip or
-        an append failure (already logged to stderr below).
-
-        Both the read and the append MUST be inside the same lock scope
-        when ``lock`` is honoured — reading last-event state and appending
-        as two unguarded steps races the dedup DECISION even if the append
-        itself were made atomic, per the plan's pre-flight note.
-        """
-        if os.path.isfile(touched):
-            try:
-                existing = Path(touched).read_text(encoding="utf-8").splitlines()
-            except OSError:
-                existing = []
-            for line in reversed(existing):
-                if not line:
-                    continue
-                verb, _ts, line_path = parse_touch_event(line)
-                if line_path == fpath:
-                    if verb == "T":
-                        return False
-                    break
-
-        try:
-            with open(touched, "a", encoding="utf-8", newline="\n") as fh:
-                fh.write(format_touch_event("T", fpath) + "\n")
-        except OSError as exc:
-            # fail-open — touch() must never block a tool call on a write
-            # failure; surface it for debugging since this is not expected.
-            print(
-                f"cs_touch: failed to append {fpath!r} to {touched} "
-                f"(non-fatal): {exc}",
-                file=sys.stderr,
-            )
-            return False
-        return True
-
-    anchor = root or cwd
-    wrote = False
-    locked = False
-    if lock and not anchor:
-        # Silent-degrade parity with the other paths in this function that
-        # already log their fail-open (lazy core.init() failure above,
-        # append-OSError in _dedup_scan_and_append): a caller requesting
-        # `lock=True` with neither `root` nor `cwd` gets an UNLOCKED append
-        # with no diagnostic trace otherwise — indistinguishable from the
-        # locked path having simply succeeded. Review: code-reviewer P3
-        # (2026-08-14).
+    # C4/AC17: single atomic append, no dedup read, no app-level lock. The
+    # `lock` parameter is KEPT (accepted, not renamed/removed) for call-site
+    # signature compatibility with every existing caller (`ipc.py`,
+    # `cli_entry.py` — out of this chunk's `writes:`) but is now vestigial:
+    # `touch_record.append_event` -> `atomic_append.append_line` opens the
+    # sink fresh, by path, on every call and performs one O(1) write syscall
+    # per event (see that module's own negative-spec: "`locked_rmw` must
+    # never appear on this append path — the read-modify-write serialization
+    # it bought was never cross-session ... buys nothing atomic append does
+    # not already give at O(1)"). The OLD lock existed to serialize the
+    # dedup-scan-then-append TWO-step race (read last event, then append) —
+    # with the dedup read removed there is no longer a multi-step region for
+    # a lock to protect, so `held_lock`/`LockTimeout`/`_TOUCH_LOCK_TIMEOUT_
+    # SECS` are no longer exercised by this function. `lock=False` callers
+    # (batched multi-path callers holding an OUTER lock of their own) are
+    # unaffected either way, since this function no longer takes one itself.
+    del lock
+    try:
+        touch_record.append_event(
+            sink,
+            session_id=sid,
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path=fpath,
+        )
+    except touch_record.LineTooLong as exc:
+        # fail-open — touch() must never block a tool call on a write
+        # failure; surface it for debugging since this is not expected.
         print(
-            f"cs_touch: lock requested but no anchor (root/cwd both falsy) "
-            f"for session {sid}, path {fpath!r} — falling back to unlocked "
-            "append (non-fatal)",
+            f"cs_touch: failed to append {fpath!r} to {sink} "
+            f"(non-fatal): {exc}",
             file=sys.stderr,
         )
-    if lock and anchor:
-        try:
-            with held_lock(
-                Path(os.path.abspath(touched)),
-                anchor_root=Path(os.path.realpath(anchor)),
-                timeout=_TOUCH_LOCK_TIMEOUT_SECS,
-            ):
-                wrote = _dedup_scan_and_append()
-                # Mark the scan+append DONE as soon as the body completes —
-                # not after the `with` statement exits. `held_lock`'s
-                # `finally` (`_plat_unlock`/`os.close`) can raise `OSError`
-                # at RELEASE time, AFTER `_dedup_scan_and_append()` has
-                # already run to completion. Setting `locked = True` here
-                # (inside the `with`, before that release runs) means a
-                # subsequent release-time OSError still propagates and is
-                # caught below, but `locked` is already `True` by then — so
-                # the `if not locked:` fallback correctly does NOT re-run
-                # the scan+append on work that already happened. Setting
-                # this flag only AFTER the `with` block (the pre-existing
-                # shape) would have `locked` still `False` when a
-                # release-time exception is caught, wrongly triggering that
-                # re-run. Review: EM addendum (2026-08-15) to code-reviewer
-                # P1/P2.
-                locked = True
-        except (LockTimeout, RuntimeError, ValueError, OSError):
-            # LockTimeout: contended past the bound — degrade to the
-            # pre-C2 unlocked append rather than blocking the caller.
-            # RuntimeError: no lock backend on this platform.
-            # ValueError: held_lock's own absolute-path precondition —
-            # only reachable if `anchor` was somehow relative after
-            # realpath, which realpath never produces; defensive only.
-            # OSError: held_lock's acquire path (lock_dir.mkdir, os.open
-            # of the sidecar fd) or its release path (_plat_unlock,
-            # os.close in the `finally`) can both raise a plain OSError
-            # (disk full, permission denied, an already-invalidated fd);
-            # neither is a LockTimeout/RuntimeError/ValueError, and
-            # touch() must never raise for an operational lock failure —
-            # see this function's own fail-open contract above.
-            # Review: code-reviewer P1/P2 (2026-08-14).
-            locked = False
-    if not locked:
-        wrote = _dedup_scan_and_append()
+        return
 
-    if wrote:
-        # Update last_activity (best-effort, no failure on error).
-        core.update_meta_field(sdir, "last_activity", core.now_iso())
+    # Update last_activity (best-effort, no failure on error). Unconditional
+    # now that every call actually appends (no dedup-skip branch left).
+    core.update_meta_field(sdir, "last_activity", core.now_iso())
     return
 
 
@@ -1859,12 +2052,13 @@ def _tree_relocation_claim_pairs(
     ``src_norm`` is currently claimed; the caller must not read an empty
     result as an error, only as "this tree has nothing to restate."
     """
-    touched_path = os.path.join(sdir, "touched.txt")
-    if not os.path.isfile(touched_path):
-        return []
-    try:
-        lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    # C4: reads this session's own claim state through the seam (see
+    # `_read_touch_record_as_legacy_lines`'s own docstring) -- this
+    # function's own "read this session's touched.txt, project self-scope"
+    # contract is unaffected by the substrate swap.
+    sink_path = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
+    lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
+    if degraded:
         return []
     claimed = project_self_scope(lines)
     prefix = src_norm.rstrip("/") + "/"
@@ -2039,14 +2233,11 @@ def _restate_single_path_claim(
     src_norm = normalize_touch_path(src_rel, cwd)
     if src_norm is None:
         return
-    touched_path = os.path.join(sdir, "touched.txt")
-    was_claimed = False
-    if os.path.isfile(touched_path):
-        try:
-            lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
-        except OSError:
-            lines = []
-        was_claimed = src_norm in project_self_scope(lines)
+    # C4: seam-through read (see `_tree_relocation_claim_pairs`'s identical
+    # comment above).
+    sink_path = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
+    lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
+    was_claimed = not degraded and src_norm in project_self_scope(lines)
     if not was_claimed:
         return
 
@@ -2458,6 +2649,64 @@ def _release_from_touched_file(
         # released than requested, never more; safe direction.
 
 
+def _release_from_touch_record(
+    sink_path: "Path | str",
+    sid: str,
+    clean: Set[str],
+    when: datetime,
+    normalize: Callable[[str], Optional[str]],
+) -> None:
+    """C4 — the seam-through counterpart of
+    :func:`_release_from_touched_file`, for THIS session's OWN
+    ``touch-record.jsonl`` (never the agent-dir side, which stays on
+    :func:`_release_from_touched_file` against ``.agents/<aid>/touched.txt``
+    until a future chunk migrates that writer too — see
+    :func:`release_committed_claims`'s own call sites). Written to keep
+    `release_committed_claims` a correct round-trip counterpart of
+    `touch()`'s C4 writer flip: an R event that never reaches the same
+    substrate `compute_scope`'s Step 1 (and `claim_index`) now read would
+    leave every committed, genuinely-released path looking permanently
+    claimed, which is a real functional regression, not a cosmetic one.
+
+    Reads via the seam (`_read_touch_record_as_legacy_lines`) and reuses
+    `project_self_scope` unchanged (see that adapter's own docstring for
+    why re-rendering to the legacy dialect lets every existing
+    CLAIMED/RELEASED policy function keep working against the new
+    substrate). Writes via `touch_record.append_event` -- one atomic
+    append per released path, same shape as `touch()`'s own write.
+    """
+    claimed_lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
+    if degraded:
+        return  # fail-safe RETAIN -- mirrors `_release_from_touched_file`'s
+        # own OSError-skip posture.
+    claimed = project_self_scope(claimed_lines)
+    to_release: List[str] = []
+    for raw_path in sorted(claimed):
+        if not raw_path or raw_path.endswith("/"):
+            continue  # never release a directory entry
+        norm = normalize(raw_path)
+        if norm is None or norm.endswith("/"):
+            continue
+        if norm in clean:
+            to_release.append(raw_path)
+
+    if not to_release:
+        return  # AC10 — no empty write, don't churn the sink's mtime
+
+    for raw_path in to_release:
+        try:
+            touch_record.append_event(
+                sink_path,
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_RELEASE,
+                path=raw_path,
+                timestamp=when.timestamp(),
+            )
+        except touch_record.LineTooLong:
+            continue  # fail-safe RETAIN for this one path only
+
+
 def release_committed_claims(
     sid: str, paths: List[str], cwd: Optional[str] = None
 ) -> None:
@@ -2611,9 +2860,13 @@ def release_committed_claims(
 
     sdir = core.session_dir(sid, cwd)
     if sdir:
-        own_touched = os.path.join(sdir, "touched.txt")
-        _release_from_touched_file(
-            own_touched,
+        # C4: session-side release moved onto the seam (own sink only — see
+        # `_release_from_touch_record`'s own docstring for why the agent
+        # side below stays on the old writer).
+        own_sink = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
+        _release_from_touch_record(
+            own_sink,
+            sid,
             clean,
             when,
             lambda raw_path: normalize_touch_path(raw_path, cwd, root=cwd),
@@ -2638,18 +2891,37 @@ def release_committed_claims(
         _normalize_agent_touched_entry,
     )
 
+    # Three syscalls per agent dir (`Path.is_dir` stat, `is_file` stat, whole-file read)
+    # collapse to one `open()`: `entry.is_dir()` answers from the dirent `scandir` already
+    # returned, and the open's own `OSError` is the same `continue` the `is_file()` probe
+    # bought — closing the probe-then-read TOCTOU gap as a side effect. Only line 0 is ever
+    # used, so `readline()` replaces reading and splitting the whole file.
+    #
+    # This runs on the post-commit claim-release path of EVERY commit route, and it is
+    # O(agent dirs on disk) — a population that is neither bounded nor small, and not stable
+    # enough to quote a single figure for: measured at 1893 dirs, 504 fifteen minutes later,
+    # 277 an hour after that. Cost is linear either way — 37µs/dir before, 14µs/dir after,
+    # so 72.6ms -> 28.0ms at 1893 and 18.6ms -> 7.1ms at 504.
+    # Evidence: state/audits/2026-08-25-the-two-unattributed-pids-are-conhost-and-the-
+    # release-leg-is-a-directory-walk.md § Thread 2.
+    #
+    # NOT applied to `compute_scope`'s two walks: there the missing-back-pointer branch is
+    # not a `continue`, it runs the 30-minute live-race check the 36ed64f58 mis-attribution
+    # incident forced. Same win is available there behind a `FileNotFoundError` arm.
     for entry in agent_entries:
-        agent_dir = Path(entry.path)
-        if not agent_dir.is_dir():
-            continue
-        backptr = agent_dir / "em-session-id.txt"
-        if not backptr.is_file():
-            continue
         try:
-            first_lines = backptr.read_text(encoding="utf-8").splitlines()
+            if not entry.is_dir():
+                continue
         except OSError:
             continue
-        em_sid = (first_lines[0] if first_lines else "").strip()
+        agent_dir = Path(entry.path)
+        try:
+            with open(
+                os.path.join(entry.path, "em-session-id.txt"), "r", encoding="utf-8"
+            ) as fh:
+                em_sid = fh.readline().strip()
+        except OSError:
+            continue
         if em_sid != sid:
             continue  # not this session's own fan-out — never release it
         _release_from_touched_file(
@@ -2844,12 +3116,12 @@ def release_phantom_claims(sid: str, cwd: Optional[str] = None) -> None:
     sdir = core.session_dir(sid, cwd)
     if not sdir:
         return
-    touched_path = os.path.join(sdir, "touched.txt")
-    if not os.path.isfile(touched_path):
-        return
-    try:
-        lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    # C4: seam-through read (see `_read_touch_record_as_legacy_lines`'s own
+    # docstring) — this function's write side is migrated below too (it
+    # appends R events, unlike its read-only siblings above).
+    sink_path = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
+    lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
+    if degraded:
         return
 
     claimed = project_self_scope(lines)
@@ -2896,13 +3168,18 @@ def release_phantom_claims(sid: str, cwd: Optional[str] = None) -> None:
         return
 
     when = datetime.now(timezone.utc)
-    try:
-        with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
-            for raw_path in to_release:
-                fh.write(format_touch_event("R", raw_path, when) + "\n")
-    except OSError:
-        return  # fail-safe RETAIN -- a partial write releases fewer paths
-        # than requested, never more; safe direction.
+    for raw_path in to_release:
+        try:
+            touch_record.append_event(
+                sink_path,
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_RELEASE,
+                path=raw_path,
+                timestamp=when.timestamp(),
+            )
+        except touch_record.LineTooLong:
+            continue  # fail-safe RETAIN for this one path only
 
 
 def compute_scope(
@@ -3244,23 +3521,31 @@ def compute_scope(
     root = core.git_root(cwd)
     root_path = Path(root) if root else None
 
-    # --- Step 1: candidate set from touched.txt ---
-    raw_touch_lines: List[str] = []
-    touched_file = Path(sdir) / "touched.txt"
-    if touched_file.is_file():
-        try:
-            for line in touched_file.read_text(encoding="utf-8").splitlines():
-                if line:
-                    raw_touch_lines.append(line)
-        except OSError as exc:
-            # advisory — a mid-read failure here silently drops this
-            # session's touched.txt lines from scope; the mtime-dirty
-            # fallback (Step 2) partially compensates, but surface it.
-            print(
-                f"cs_compute_scope: failed to read {touched_file} "
-                f"(non-fatal, scope may be incomplete): {exc}",
-                file=sys.stderr,
-            )
+    # --- Step 1: candidate set from this session's own touch record ---
+    # C0: `_read_touch_record_as_legacy_lines` is a REAL union — it reads
+    # THIS session's own `touch-record.jsonl` family AND, if a sibling
+    # `touched.txt` exists, prepends its lines ahead of the jsonl-derived
+    # ones — legacy first, so a later event in the new record still wins the
+    # last-verb-wins fold below. As of C8 the only writer that can still
+    # produce that sibling file is `session/claims.py :: atomic_dedup_append`
+    # via the CLI-authored `claim-path` seam (out of C8's scope to migrate —
+    # see `_read_touch_record_as_legacy_lines`'s own AC9 docstring note);
+    # `self_claim` stopped writing it in C6, and the PreToolUse hook stopped
+    # in C7. The inlined AC21 block previously here (restored after C7b
+    # deleted it a wave early — see git blame for that history) is now the
+    # seam's own body; this is a plain call. A degraded read (AC6, OR'd
+    # across both dialects) is treated the same as the pre-existing OSError
+    # branch: advisory, scope may be incomplete this call, Step 2's
+    # mtime-dirty fallback partially compensates.
+    touched_file = Path(sdir) / _TOUCH_RECORD_FILENAME
+    raw_touch_lines, self_read_degraded = _read_touch_record_as_legacy_lines(touched_file)
+    if self_read_degraded:
+        print(
+            f"cs_compute_scope: degraded read of {touched_file} "
+            f"(non-fatal, scope may be incomplete): see "
+            "touch_record.degrade_counts()/logging for cause",
+            file=sys.stderr,
+        )
 
     # SELF-facing projection (P3): a path whose last event is R is
     # RELEASED here — `project_self_scope` never applies the peer-facing
@@ -3298,9 +3583,18 @@ def compute_scope(
     # worktree, or an unrescuable absolute entry) is DROPPED from the
     # candidate set entirely here — narrowing only, per the fail-closed
     # invariant; it never becomes a fabricated in-repo path.
+    # C4: `normalize_historical_touch_entry` deleted — it was a thin
+    # `classify_touch_entry(...).new_value` wrapper with one call site
+    # (here), plus a no-root passthrough guard preserved inline below
+    # (`classify_touch_entry` requires a real `worktree_root` — it is not
+    # itself None-safe). `classify_touch_entry` itself survives (see this
+    # chunk's report) and is unchanged.
     normalized_touched_set: List[str] = []
     for candidate in touched_set:
-        normalized_candidate = normalize_historical_touch_entry(candidate, root_path)
+        if not root_path:
+            normalized_candidate = candidate
+        else:
+            normalized_candidate = classify_touch_entry(candidate, root_path).new_value
         if normalized_candidate and normalized_candidate not in normalized_touched_set:
             normalized_touched_set.append(normalized_candidate)
     touched_set = normalized_touched_set
@@ -3582,125 +3876,158 @@ def compute_scope(
             other_sdir = os.path.join(base, other_id)
             if not os.path.isdir(other_sdir):
                 continue
-            other_touched = os.path.join(other_sdir, "touched.txt")
-            if os.path.isfile(other_touched):
-                try:
-                    lines = Path(other_touched).read_text(
-                        encoding="utf-8"
-                    ).splitlines()
-                except OSError as exc:
-                    unreadable_other_sessions.append(other_id)
-                    print(
-                        f"cs_compute_scope: failed to read {other_touched} "
-                        f"(non-fatal, its claims are indeterminate this "
-                        f"call — uncontested candidates will be withheld "
-                        f"from my_scope): {exc}",
-                        file=sys.stderr,
-                    )
-                    lines = []
-                    # C1: the claim set itself is unreadable — no path
-                    # content is knowable, so attribute against the same
-                    # session-id sentinel `unreadable_other_sessions` uses.
-                    if other_id not in attribution:
-                        attribution[other_id] = OwnerFact(
-                            other_id, "undetermined", "unreadable"
-                        )
+            other_touched = os.path.join(other_sdir, _TOUCH_RECORD_FILENAME)
 
-                # C1 — attribution (ungated): record every claim this peer's
-                # touched.txt holds BEFORE the liveness continue below and
-                # BEFORE the clean-path prune further down, so a dead peer's
-                # claim and a since-landed (clean-path-pruned) claim both
-                # still surface here even though neither enters
-                # `other_owner`. First-writer-wins, same discipline as
-                # `other_owner` (see this module's negative-spec).
-                peer_liveness = _peer_liveness_str(other_id)
-                for opath in lines:
-                    if not opath:
-                        continue
-                    _, _, opath_attr_field = parse_touch_event(opath)
-                    norm_attr_path = normalize_peer_claim_key(
-                        opath_attr_field, root_path
-                    )
-                    if norm_attr_path and norm_attr_path not in attribution:
-                        attribution[norm_attr_path] = OwnerFact(
-                            other_id, peer_liveness, "session"
-                        )
+            # AC16(a) -- LIVENESS-FIRST REORDER. A peer already known DEAD
+            # (`live_ids is not None and other_id not in live_ids`) is
+            # skipped on the liveness-set membership test ALONE: its record
+            # is never opened, read, or decoded. C0's verdict
+            # (docs/research/spike-verdicts/2026-08-25-what-the-peer-scan-
+            # actually-costs.md) measured this reorder at Corpus C width
+            # (50 peers x 5000 lines/peer) dropping this branch's per-dead-
+            # peer cost from 463.28ms to 0.23ms -- re-measured for THIS
+            # chunk's report, not cited from C0 verbatim. `session_abandoned`
+            # stays a POST-read check (below) -- it classifies a peer
+            # `live_ids` already calls live, so it cannot cheapen the read
+            # decision the way plain deadness does. Attribution is a real,
+            # accepted casualty of this reorder for a confirmed-dead peer:
+            # with no read, there is no per-path claim left to attribute --
+            # see this chunk's report for why that is the deliberate
+            # consequence of AC16(a), not an oversight.
+            if live_ids is not None and other_id not in live_ids:
+                continue
 
-                # Liveness gate (evaluated first — see the comment block
-                # above): a dead peer's touch record does not contest at
-                # all. Its read-failure handling above is unchanged by this
-                # — an unreadable claim set is never assumed dead.
-                #
-                # Abandonment is a SECOND, INDEPENDENT release condition
-                # (C4, docs/plans/2026-08-19-abandonment-is-its-own-
-                # verdict.md): `live_ids is None` (undetermined liveness)
-                # MUST stay "contested" — the abandonment check below is
-                # only ever reached once `live_ids is not None`, so it can
-                # only WIDEN release for a peer already positively
-                # liveness-classified as live (`other_id in live_ids`); it
-                # never substitutes for the fail-closed UNKNOWN-liveness
-                # degrade. `liveness.session_abandoned` is itself
-                # fail-closed toward NOT-abandoned on thin/absent evidence
-                # — see its own docstring — so this cannot widen release on
-                # indeterminate abandonment evidence either.
-                # Review: coordinator:code-reviewer P1 (coordinatorcode-
-                # reviewer-1da5144e.md) — the prior `live_ids is not None
-                # and other_id not in live_ids: continue` / unconditional
-                # `session_abandoned(...)`: continue` two-statement form let
-                # an UNDETERMINED (`live_ids is None`) peer be released
-                # through the unconditional abandonment check; folded into
-                # one condition so `live_ids is None` never reaches
-                # `session_abandoned` at all.
-                if live_ids is not None and (
-                    other_id not in live_ids
-                    or liveness.session_abandoned(other_id, cwd)
-                ):
+            # AC16(b) -- READ-COST CAP. A single LIVE peer with an oversized
+            # record still costs a full read with no cap otherwise. A
+            # stat-only family-size check (no content read) decides this
+            # BEFORE any content is opened; tripping it withholds this
+            # peer's claims via the SAME fail-closed mechanism as an
+            # unreadable file (`unreadable_other_sessions` -- C3's typed
+            # degrade posture, never a silent empty set).
+            if _peer_record_read_budget_exceeded(other_touched):
+                unreadable_other_sessions.append(other_id)
+                print(
+                    f"cs_compute_scope: {other_touched} family exceeds the "
+                    f"AC16(b) read budget ({_PEER_RECORD_READ_BUDGET_BYTES} "
+                    "bytes) -- withholding this peer's claims this call "
+                    "(non-fatal, uncontested candidates will be withheld "
+                    "from my_scope)",
+                    file=sys.stderr,
+                )
+                if other_id not in attribution:
+                    attribution[other_id] = OwnerFact(
+                        other_id, "undetermined", "unreadable"
+                    )
+                continue
+
+            # C4: seam-through read (C3's family + decode + last-verb-wins
+            # fold, re-rendered to the legacy dialect the unchanged
+            # `project_peer_claims`/`_collect_peer_path_mtimes` policies
+            # below still expect -- see `_read_touch_record_as_legacy_lines`).
+            lines, read_degraded = _read_touch_record_as_legacy_lines(other_touched)
+            if read_degraded:
+                unreadable_other_sessions.append(other_id)
+                print(
+                    f"cs_compute_scope: degraded read of {other_touched} "
+                    f"(non-fatal, its claims are indeterminate this "
+                    f"call — uncontested candidates will be withheld "
+                    f"from my_scope)",
+                    file=sys.stderr,
+                )
+                # C1: the claim set itself is unreadable — no path
+                # content is knowable, so attribute against the same
+                # session-id sentinel `unreadable_other_sessions` uses.
+                if other_id not in attribution:
+                    attribution[other_id] = OwnerFact(
+                        other_id, "undetermined", "unreadable"
+                    )
+
+            # C1 — attribution (ungated): record every claim this peer's
+            # touch record holds BEFORE the clean-path prune further down
+            # (the AC16(a) liveness continue has ALREADY run, above, before
+            # this peer's record was even opened — a dead peer never
+            # reaches here at all any more).
+            peer_liveness = _peer_liveness_str(other_id)
+            for opath in lines:
+                if not opath:
                     continue
-                # PEER-facing projection (P3): gate `other_owner` population
-                # through `project_peer_claims` before the existing AC8
-                # normalization/clean-path-prune pipeline below — a released
-                # path re-projects to CLAIMED only under the mtime-re-claim
-                # rule (§ Decision 3); a released path with no re-claim
-                # evidence stays absent here, same as `other_owner` never
-                # gaining an entry for it today.
-                nonblank_lines = [ln for ln in lines if ln]
-                peer_path_mtimes = _collect_peer_path_mtimes(
-                    nonblank_lines, root
+                # C4: the path field is already the canonical
+                # `path_dialect.canonicalize_relative_path` value (encoded
+                # at write time by `touch_record.encode_line`, AC4) — no
+                # further dialect-fold is needed. `normalize_peer_claim_key`
+                # survives (see this chunk's report) for its OWN reason
+                # (worktree-escape containment, not dialect-folding), so it
+                # still runs here, just never re-folding an already-clean
+                # dialect.
+                _, _, opath_attr_field = parse_touch_event(opath)
+                norm_attr_path = normalize_peer_claim_key(
+                    opath_attr_field, root_path
                 )
-                peer_claimed_paths = project_peer_claims(
-                    nonblank_lines, peer_path_mtimes, challenger_t_events
-                )
-                for opath in lines:
-                    if not opath:
-                        continue
-                    _, _, opath_field = parse_touch_event(opath)
-                    if opath_field not in peer_claimed_paths:
-                        continue
-                    # AC8: defensive read-side normalization of the
-                    # other_owner key space — a DIRECTIONAL counterpart to
-                    # Step 1's candidate-side transform, not the same
-                    # symmetric one (Review: code-reviewer Finding 1 —
-                    # sidecar coordinatorcode-reviewer-359b224b.md). This is
-                    # the arm that actually fixes the memo's headline
-                    # false-"owned by session X" symptom: a normalized Step
-                    # 1 candidate colliding against an UN-normalized
-                    # other_owner key would still mismatch. Unlike the
-                    # candidate side, a peer claim that the one-level strip
-                    # cannot resolve is NOT silently withheld here — see
-                    # `normalize_peer_claim_key`'s docstring for why
-                    # symmetric dropping on this side is unsafe.
-                    norm_opath = normalize_peer_claim_key(opath_field, root_path)
-                    if not norm_opath or norm_opath in other_owner:
-                        continue
-                    # Clean-path pruning: a claim on a path with no
-                    # uncommitted content is stale by construction (the
-                    # peer's work already landed) — see the docstring's
-                    # scope note on what this does and does not cover.
-                    # Gated on `dirty_scan_ok` (Review: staff-eng F0) — an
-                    # unreliable dirty set must not be read as "clean".
-                    if dirty_scan_ok and norm_opath not in dirty_files_set:
-                        continue
-                    other_owner[norm_opath] = other_id
+                if norm_attr_path and norm_attr_path not in attribution:
+                    attribution[norm_attr_path] = OwnerFact(
+                        other_id, peer_liveness, "session"
+                    )
+
+            # Abandonment (C4, docs/plans/2026-08-19-abandonment-is-its-own-
+            # verdict.md): a SECOND, INDEPENDENT release condition. AC16(a)'s
+            # continue above is gated `live_ids is not None and ...`, so an
+            # UNDETERMINED `live_ids is None` does NOT stop there and WOULD
+            # reach this line unless re-guarded here too — `live_ids is
+            # None` must never reach `session_abandoned` (Review:
+            # coordinator:code-reviewer P1, coordinatorcode-reviewer-
+            # 1da5144e.md), so this stays explicitly gated, same as the
+            # pre-C4 combined condition. This can only WIDEN release for a
+            # peer already positively live, never substitute for the
+            # fail-closed UNKNOWN-liveness degrade. `liveness.session_
+            # abandoned` is itself fail-closed toward NOT-abandoned on
+            # thin/absent evidence (see its own docstring).
+            if live_ids is not None and liveness.session_abandoned(other_id, cwd):
+                continue
+            # PEER-facing projection (P3): gate `other_owner` population
+            # through `project_peer_claims` before the existing AC8
+            # normalization/clean-path-prune pipeline below — a released
+            # path re-projects to CLAIMED only under the mtime-re-claim
+            # rule (§ Decision 3); a released path with no re-claim
+            # evidence stays absent here, same as `other_owner` never
+            # gaining an entry for it today.
+            nonblank_lines = [ln for ln in lines if ln]
+            peer_path_mtimes = _collect_peer_path_mtimes(
+                nonblank_lines, root
+            )
+            peer_claimed_paths = project_peer_claims(
+                nonblank_lines, peer_path_mtimes, challenger_t_events
+            )
+            for opath in lines:
+                if not opath:
+                    continue
+                _, _, opath_field = parse_touch_event(opath)
+                if opath_field not in peer_claimed_paths:
+                    continue
+                # AC8: defensive read-side normalization of the
+                # other_owner key space — a DIRECTIONAL counterpart to
+                # Step 1's candidate-side transform, not the same
+                # symmetric one (Review: code-reviewer Finding 1 —
+                # sidecar coordinatorcode-reviewer-359b224b.md). This is
+                # the arm that actually fixes the memo's headline
+                # false-"owned by session X" symptom: a normalized Step
+                # 1 candidate colliding against an UN-normalized
+                # other_owner key would still mismatch. Unlike the
+                # candidate side, a peer claim that the one-level strip
+                # cannot resolve is NOT silently withheld here — see
+                # `normalize_peer_claim_key`'s docstring for why
+                # symmetric dropping on this side is unsafe.
+                norm_opath = normalize_peer_claim_key(opath_field, root_path)
+                if not norm_opath or norm_opath in other_owner:
+                    continue
+                # Clean-path pruning: a claim on a path with no
+                # uncommitted content is stale by construction (the
+                # peer's work already landed) — see the docstring's
+                # scope note on what this does and does not cover.
+                # Gated on `dirty_scan_ok` (Review: staff-eng F0) — an
+                # unreliable dirty set must not be read as "clean".
+                if dirty_scan_ok and norm_opath not in dirty_files_set:
+                    continue
+                other_owner[norm_opath] = other_id
 
     # --- Step 3b: peer EM sessions' dispatched sub-agent claims ---
     # Extends the per-session scan above: a dispatched sub-agent's own
@@ -3797,17 +4124,16 @@ def compute_scope(
             _pre_agent_dir = Path(_pre_entry.path)
             if not _pre_agent_dir.is_dir():
                 continue
-            _pre_touched = _pre_agent_dir / "touched.txt"
-            if not _pre_touched.is_file():
-                continue
-            try:
-                _pre_raw_lines = _pre_touched.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                # Unreadable here is not fatal to the pre-scan: the main
-                # loop below re-reads (and fail-closes) the same file on
-                # its own terms; this pass only widens or narrows the git
-                # query, it never decides ownership.
-                continue
+            # C0: routed through the real union (`_read_touch_record_as_
+            # legacy_lines`) rather than this branch's own direct
+            # `touched.txt`-only read — never raises, so an unreadable
+            # member is not fatal to the pre-scan either: the main loop
+            # below re-reads (and fail-closes) the same claimant's record
+            # on its own terms; this pass only widens or narrows the git
+            # query, it never decides ownership.
+            _pre_raw_lines, _pre_degraded = _read_agent_touch_record_as_legacy_lines(
+                _pre_agent_dir / _TOUCH_RECORD_FILENAME
+            )
             for _pre_raw in _pre_raw_lines:
                 _pre_norm = _normalize_agent_touched_entry(_pre_raw)
                 if (
@@ -3896,33 +4222,25 @@ def compute_scope(
                 # disk sweep that already forced a revert of exactly that
                 # global-withhold shape (see the em-session-id.txt-missing
                 # branch above).
+                # C0: routed through the real union — `_agent_touch_
+                # activity` stats BOTH dialects (jsonl family + sibling
+                # `touched.txt`), and `_read_touch_record_as_legacy_lines`
+                # below reads content the same way, rather than this
+                # branch growing its own `touched.txt`-only legacy arm.
                 touched_probe = agent_dir / "touched.txt"
-                try:
-                    has_activity = touched_probe.stat().st_size > 0
-                except OSError:
-                    has_activity = False
+                has_activity, age_sec = _agent_touch_activity(agent_dir)
                 if has_activity:
-                    age_sec = core.now_epoch() - core.mtime_epoch(str(touched_probe))
                     if age_sec < liveness._THIRTY_MIN:
-                        try:
-                            raw_lines = touched_probe.read_text(
-                                encoding="utf-8"
-                            ).splitlines()
-                        except OSError as exc:
-                            # See the residual note above `touched_probe`'s
-                            # assignment: this arm silently no-ops the
-                            # withhold for this agent_dir this call unless
-                            # it says so.
-                            raw_lines = []
-                            print(
-                                f"cs_compute_scope: {touched_probe} became "
-                                f"unreadable between the size check and "
-                                f"this read ({exc}) — treating this "
-                                f"agent_dir as contesting nothing this "
-                                f"call rather than withholding (accepted "
-                                f"residual, not a fail-closed arm)",
-                                file=sys.stderr,
-                            )
+                        raw_lines, _race_degraded = _read_agent_touch_record_as_legacy_lines(
+                            agent_dir / _TOUCH_RECORD_FILENAME
+                        )
+                        # See the residual note above `touched_probe`'s
+                        # assignment: an unreadable member (a race between
+                        # the stat above and this read) silently no-ops the
+                        # withhold for this agent_dir this call unless the
+                        # union's own degrade logging already said so —
+                        # this branch never fails closed on its own, same
+                        # accepted-residual posture as before this chunk.
                         normalized_race_lines = [
                             _normalize_agent_touched_entry(raw) for raw in raw_lines
                         ]
@@ -4014,61 +4332,56 @@ def compute_scope(
             if not em_sid or em_sid == sid:
                 continue  # malformed, or this session's own fan-out (see above)
 
-            # C1 — attribution (ungated): record every claim this agent's
-            # touched.txt holds BEFORE the liveness continue below and
-            # BEFORE the clean-path prune further down, so a dead owning
-            # EM session's sub-agent claim still surfaces here even though
-            # it never enters `other_owner`. A SEPARATE read from the one
-            # below (rather than hoisting that read above the gate) is
-            # deliberate: the below read's failure feeds
-            # `unreadable_other_sessions` (a Step-4 fail-closed input) only
-            # for a LIVE em_sid today — hoisting it would widen that
-            # fail-closed trigger to a dead peer's unreadable file too,
-            # which this chunk must not change. This attribution-only read
-            # never touches `unreadable_other_sessions`.
-            attr_agent_touched = agent_dir / "touched.txt"
-            if attr_agent_touched.is_file():
-                try:
-                    attr_raw_lines = attr_agent_touched.read_text(
-                        encoding="utf-8"
-                    ).splitlines()
-                except OSError:
-                    attr_raw_lines = []
-                    if em_sid not in attribution:
-                        attribution[em_sid] = OwnerFact(
-                            em_sid, "undetermined", "unreadable"
+            # C0: routed through the real union (`_read_touch_record_as_
+            # legacy_lines`) rather than this branch's own direct
+            # `touched.txt`-only read. `.agents/<aid>/touched.txt` is still
+            # written exclusively by `hooks.track_touched_files` (outside
+            # this chunk's `writes:`), which still emits the OLD bash
+            # dialect (see this chunk's report, Blocker 2) -- there is no
+            # `touch-record.jsonl` for any agent dir to read yet, so this
+            # union call reads exactly that legacy file today, unchanged in
+            # substance -- but no longer through a second, single-dialect
+            # copy of the parse. Once a future chunk migrates `track_
+            # touched_files.py` onto the seam, this branch picks up the new
+            # dialect for free, with no further edit here.
+            attr_raw_lines, attr_read_degraded = _read_agent_touch_record_as_legacy_lines(
+                agent_dir / _TOUCH_RECORD_FILENAME
+            )
+            if attr_read_degraded and em_sid not in attribution:
+                attribution[em_sid] = OwnerFact(
+                    em_sid, "undetermined", "unreadable"
+                )
+            peer_liveness = _peer_liveness_str(em_sid)
+            normalized_attr_lines = [
+                _normalize_agent_touched_entry(raw) for raw in attr_raw_lines
+            ]
+            attr_dir_entries = [
+                n
+                for n in normalized_attr_lines
+                if n is not None and n.endswith("/")
+            ]
+            # C16: sliced from the single pre-loop batched call above.
+            dirty_by_dir_attr = {
+                d: global_dirty_by_dir.get(d, []) for d in attr_dir_entries
+            }
+            for norm in normalized_attr_lines:
+                if norm is None:
+                    continue
+                if norm.endswith("/"):
+                    for opath in dirty_by_dir_attr.get(norm, []):
+                        norm_attr_path = normalize_peer_claim_key(
+                            opath, root_path
                         )
-                peer_liveness = _peer_liveness_str(em_sid)
-                normalized_attr_lines = [
-                    _normalize_agent_touched_entry(raw) for raw in attr_raw_lines
-                ]
-                attr_dir_entries = [
-                    n
-                    for n in normalized_attr_lines
-                    if n is not None and n.endswith("/")
-                ]
-                # C16: sliced from the single pre-loop batched call above.
-                dirty_by_dir_attr = {
-                    d: global_dirty_by_dir.get(d, []) for d in attr_dir_entries
-                }
-                for norm in normalized_attr_lines:
-                    if norm is None:
-                        continue
-                    if norm.endswith("/"):
-                        for opath in dirty_by_dir_attr.get(norm, []):
-                            norm_attr_path = normalize_peer_claim_key(
-                                opath, root_path
-                            )
-                            if norm_attr_path and norm_attr_path not in attribution:
-                                attribution[norm_attr_path] = OwnerFact(
-                                    em_sid, peer_liveness, "agent"
-                                )
-                    else:
-                        norm_attr_claim = normalize_peer_claim_key(norm, root_path)
-                        if norm_attr_claim and norm_attr_claim not in attribution:
-                            attribution[norm_attr_claim] = OwnerFact(
+                        if norm_attr_path and norm_attr_path not in attribution:
+                            attribution[norm_attr_path] = OwnerFact(
                                 em_sid, peer_liveness, "agent"
                             )
+                else:
+                    norm_attr_claim = normalize_peer_claim_key(norm, root_path)
+                    if norm_attr_claim and norm_attr_claim not in attribution:
+                        attribution[norm_attr_claim] = OwnerFact(
+                            em_sid, peer_liveness, "agent"
+                        )
 
             # Liveness gate (evaluated first — same rationale as Step 3
             # above), keyed on the back-pointed em_sid: a dead owning EM
@@ -4086,19 +4399,25 @@ def compute_scope(
             ):
                 continue
 
-            agent_touched = agent_dir / "touched.txt"
-            if not agent_touched.is_file():
-                continue
-            try:
-                raw_lines = agent_touched.read_text(encoding="utf-8").splitlines()
-            except OSError as exc:
+            # C0: routed through the real union (`_read_touch_record_as_
+            # legacy_lines`) rather than this branch's own direct
+            # `touched.txt`-only read — see the `attr_agent_touched`
+            # branch's own comment above for why this reads identically to
+            # before this chunk while the writer stays unmigrated. An
+            # empty, non-degraded result (no jsonl family, no sibling
+            # `touched.txt`) naturally no-ops every loop below, the same
+            # outcome the old "file missing -> continue" arm produced.
+            raw_lines, agent_touched_degraded = _read_agent_touch_record_as_legacy_lines(
+                agent_dir / _TOUCH_RECORD_FILENAME
+            )
+            if agent_touched_degraded:
                 if em_sid not in unreadable_other_sessions:
                     unreadable_other_sessions.append(em_sid)
                 print(
-                    f"cs_compute_scope: failed to read {agent_touched} "
-                    f"(non-fatal, its claims are indeterminate this "
-                    f"call — uncontested candidates will be withheld "
-                    f"from my_scope): {exc}",
+                    f"cs_compute_scope: degraded read of {agent_dir}'s "
+                    f"touch record (non-fatal, its claims are "
+                    f"indeterminate this call — uncontested candidates "
+                    f"will be withheld from my_scope)",
                     file=sys.stderr,
                 )
                 continue
@@ -4382,10 +4701,46 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
             # dispatched agent that outlives its EM session can still be
             # writing to its dir. Skip anything recently touched — see
             # `_AGENT_DROP_RECENCY_SECONDS`'s docstring.
-            touched_path = os.path.join(agent_dir, "touched.txt")
+            #
+            # C7b re-key: this probe used to stat the literal old-dialect
+            # `touched.txt`. Once the writer cuts over (C7c), agent dirs
+            # stop writing that filename at all, so an unconditional literal
+            # `"touched.txt"` here would go permanently stale -- `os.stat`
+            # would raise `FileNotFoundError` for every agent forever, and
+            # this function's own fail-closed posture ("can't establish
+            # recency -- leave alone") would then never archive an owned
+            # agent dir again post-cutover. PROSPECTIVE hazard, not an
+            # observed failure: measured on this tree right now (C7b,
+            # pre-cutover), 0 of 493 live `.agents/*` dirs carry
+            # `touch-record.jsonl` while 204 still carry `touched.txt`, so
+            # this probe has not yet gone stale -- it will once C7c's writer
+            # lands and agent dirs stop refreshing `touched.txt`.
+            #
+            # Keyed on the NEWEST entry in the dir, not on any filename: a
+            # filename list only moves the fragility rather than removing it,
+            # and swapping the literal outright regresses every legacy dir on
+            # disk the moment it lands (204 of 493 here still carry only
+            # `touched.txt`). Widening this way means a future record rename
+            # can at worst DEFER an archive by one recency window, never
+            # disable the sweep -- the failure mode that silently stopped the
+            # sibling `ops/session/reap.py :: _reap_stale_agents` entirely.
+            # `em-session-id.txt` is excluded by name because it is the
+            # ownership BACKPOINTER, not an activity record: it is written
+            # once when the agent dir is created and never refreshed, so
+            # counting it would make every freshly-dispatched agent look
+            # permanently recent and defeat the guard. It is the one file
+            # here that is definitionally not a record -- everything else is
+            # treated as one, which is what keeps this rename-robust.
             try:
-                touched_mtime = os.stat(touched_path).st_mtime
-            except OSError:
+                touched_mtime = max(
+                    entry.stat().st_mtime
+                    for entry in os.scandir(agent_dir)
+                    if entry.is_file() and entry.name != "em-session-id.txt"
+                )
+            except (OSError, ValueError):
+                # OSError: dir unreadable/vanished. ValueError: `max()` on an
+                # empty dir (no files at all). Both leave recency unknowable,
+                # and this function's posture on that is fail-closed.
                 continue  # can't establish recency — fail-closed, leave alone
             if (time.time() - touched_mtime) <= _AGENT_DROP_RECENCY_SECONDS:
                 continue  # recently touched — may still be live

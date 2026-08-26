@@ -48,15 +48,13 @@ _TRANSPORT_FAIL = 3
 
 
 def _main(argv: list[str]) -> int:
-    from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
+    from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
     try:
-        claude_klabauter_root = _resolve_claude_klabauter_root()
+        require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"sprint-planning-assemble: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
 
     try:
         import coordinator_core.sprint_planning_assemble as mod

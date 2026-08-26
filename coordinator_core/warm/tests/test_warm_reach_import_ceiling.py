@@ -35,6 +35,8 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 #: AC3's stated budget. Not a round number chosen for comfort -- the criterion
 #: names 20ms, and the bar moves only when the plan's does.
 CEILING_MS = 20.0

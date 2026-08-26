@@ -116,7 +116,10 @@ from coordinator_core.ops.fleet._common import (
     check_repo_root,
 )
 from coordinator_core.session.claims import reconcile_dead_handoff_claim_frontmatter
-from coordinator_core.session.liveness import session_abandoned
+from coordinator_core.session.liveness import (
+    _NON_SESSION_DIR_NAMES,
+    session_abandoned,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -208,6 +211,33 @@ def _read_meta_json(session_dir: Path) -> Optional[dict]:
         return None
 
 
+def _newest_record_mtime(session_dir: Path) -> float:
+    """Newest mtime among a session dir's own files, or 0.0 if it cannot be read.
+
+    The staleness basis for a session dir carrying NO ``meta.json`` — the same
+    primitive sub-reap (ii) already uses for agent dirs
+    (``_reap_stale_agents``: ``max(entry.stat().st_mtime for entry in files)``),
+    reused deliberately rather than re-derived, so both sub-reaps answer "when
+    did anything here last happen" the same way.
+
+    0.0 is the same "unknown timestamp" sentinel ``_parse_last_activity``
+    returns, and callers must treat it as fail-closed-to-keep. An EMPTY dir
+    also reads 0.0 — ``max()`` over no entries is not a staleness answer, and a
+    dir with nothing in it has no evidence of age either way.
+    """
+    try:
+        files = [e for e in session_dir.iterdir() if e.is_file()]
+        if not files:
+            return 0.0
+        return max(e.stat().st_mtime for e in files)
+    except OSError as exc:
+        print(
+            f"skip: _newest_record_mtime: iterdir/stat failed: {exc}",
+            file=sys.stderr,
+        )
+        return 0.0
+
+
 def _parse_last_activity(meta: dict) -> float:
     """Return last_activity as UTC epoch float, or 0.0 on any parse failure.
 
@@ -288,6 +318,48 @@ def _reap_stale_sessions(
         sid = sdir.name
         if sid.startswith("."):
             continue  # skip .archive, .agents, .last-reap sentinel
+        if sid.startswith("_"):
+            # `_`-prefix already means "not a session" in this hub: sub-reap
+            # (ii) writes its archive entries as `.archive/_agents-<aid>-<date>`
+            # by the same convention. Honoured here so a co-located store that
+            # follows it is covered WITHOUT needing a name added to the
+            # denylist first — a denylist is a rule discharged by someone
+            # remembering to extend it, and the store that gets forgotten is
+            # the one nobody is looking at.
+            #
+            # Concretely: `_branch-overrides/overrides.log` (doe-claude-em,
+            # 2026-08-26) is an append-only audit trail of
+            # COORDINATOR_OVERRIDE_BRANCH uses, 51 days cold, in a sibling
+            # tree that runs this engine. NO code in this repo writes it —
+            # the only in-tree reference is an archived cross-repo memo — so
+            # it could not have been anticipated by name from here. Same
+            # class as `reconcile-history`, which IS denylisted; reaping it is
+            # non-destructive on its own, but a store that moves to .archive
+            # and is then silently re-created empty on next write is a quiet
+            # audit-trail truncation.
+            continue
+        if sid in _NON_SESSION_DIR_NAMES:
+            # NOT sessions: `decisions/` (thousands of records), the three
+            # claim stores, `logs/`, `reconcile-history/` (the file DR-300 is
+            # about), `workflow-fires/`, `hook-observations/`, `no-session/`,
+            # `agent-sessions-locks/`. They are co-located in the hub and this
+            # loop would otherwise treat each as a candidate session.
+            #
+            # This skip became LOAD-BEARING with the absent-meta fallback added
+            # directly below. Before it, these dirs were protected by accident:
+            # none carries a meta.json, so every one of them hit the
+            # unconditional fail-closed defer and was kept for the wrong
+            # reason. Routing absent-meta to a newest-file-mtime staleness
+            # check removed that accidental protection — a quiet repo would
+            # then have seen `decisions/` or `reconcile-history/` go 24h cold
+            # and be ARCHIVED as a stale session. The empty claim stores would
+            # still have read 0.0 and kept, which is precisely what would have
+            # made the loss look partial and random rather than systematic.
+            #
+            # Shared with `session.liveness`, never re-listed here: this loop
+            # and `live_session_ids` must agree on what is not a session, and
+            # a second copy is how they stop agreeing.
+            continue
 
         # Liveness check: if the session registry says this sid is live, keep it
         # — UNLESS that live witness is itself abandoned (C5): abandonment is a
@@ -298,22 +370,54 @@ def _reap_stale_sessions(
             continue  # live, not abandoned — keep
 
         # Read meta.json to get last_activity.
+        #
+        # ABSENT and CORRUPT are different questions, and `_read_meta_json`
+        # collapses them (missing-file and JSONDecodeError share one `return
+        # None` leg). Deferring on both made this sub-reap unable to reap a
+        # record-less dir AT ANY AGE: the defer fires before the staleness
+        # computation, so the 24h threshold below is never reached. That turned
+        # the reaper — the documented backstop for a session that died without
+        # a SessionEnd, and so never archived — into the reason such a dir is
+        # stranded permanently rather than merely un-archived. Measured across
+        # two trees (doe-claude-em, 2026-08-26): of the >30d unreaped dirs, 37
+        # of 37 in DoE-claude and 9 of 9 here carry no meta.json, and NONE
+        # carries one. Absent meta.json is not a partial signal for the stuck
+        # population, it is the whole discriminant.
+        #
+        # Corrupt STAYS deferred — a meta.json that exists but will not parse is
+        # genuinely ambiguous, and fail-closed-to-keep is the right answer to
+        # ambiguity. A dir with no meta.json at all whose newest file has not
+        # been touched in 24h is not ambiguous, and sub-reap (ii) already models
+        # the answer: `_reap_stale_agents` keys staleness on newest-contained-
+        # file mtime with no meta involved at all.
         meta = _read_meta_json(sdir)
         if meta is None:
-            # Can't read meta — ambiguous state; defer (fail-closed-to-keep).
-            deferred.append({
-                "id": sid,
-                "reason": "meta.json unreadable — deferred (fail-closed-to-keep)",
-            })
-            continue
-
-        last_activity_epoch = _parse_last_activity(meta)
+            if (sdir / "meta.json").exists():
+                # Present but unreadable — the ambiguous case; defer.
+                deferred.append({
+                    "id": sid,
+                    "reason": "meta.json unreadable — deferred (fail-closed-to-keep)",
+                })
+                continue
+            # Absent — fall back to the newest-contained-file mtime. Note the
+            # liveness skip above cannot have saved a dir on this path: a
+            # session with no meta.json is outside `live_session_ids`' scan
+            # scope by construction (that absence is the very defect landed at
+            # 6bf7fc291), so this mtime is the ONLY thing standing between a
+            # record-less dir and the archive. It is held to the same 24h
+            # threshold as every other session, not a looser one.
+            last_activity_epoch = _newest_record_mtime(sdir)
+        else:
+            last_activity_epoch = _parse_last_activity(meta)
         if last_activity_epoch == 0.0:
             # Unknown timestamp — defer (fail-closed-to-keep).
             # Mirrors shell cs_reap_stale: "epoch=0 → skip reap".
             deferred.append({
                 "id": sid,
-                "reason": "last_activity absent/unparseable — deferred (fail-closed-to-keep)",
+                "reason": (
+                    "last_activity absent/unparseable, and no readable record "
+                    "mtime to fall back to — deferred (fail-closed-to-keep)"
+                ),
             })
             continue
 
@@ -368,12 +472,16 @@ def _reap_stale_sessions(
 def _reap_stale_agents(
     sessions_dir: Path,
 ) -> Tuple[List[str], List[dict], List[dict]]:
-    """Sync: move stale agent dirs (touched.txt mtime > 24h) to .archive/.
+    """Sync: move stale agent dirs (newest contained file mtime > 24h) to .archive/.
 
     Returns (reaped_agents, deferred, failed).
 
-    Stale criterion: touched.txt mtime > 24h.
-    touched.txt absent → rmdir the empty agent dir (mirrors shell cs_reap_agents).
+    Stale criterion: newest mtime among the dir's files > 24h — deliberately
+    NOT keyed on one record filename. Keying it on `touched.txt` left every
+    agent dir that never got one (a dispatched agent that touched no file)
+    unreapable forever; see the body for the measured population and for the
+    prospective `touch-record.jsonl` rename this shape is also proof against.
+    No files at all → rmdir the empty agent dir (mirrors shell cs_reap_agents).
     Unreadable mtime → defer (fail-closed-to-keep).
     Archive dest already exists → skip (per-record idempotency).
     """
@@ -395,24 +503,57 @@ def _reap_stale_agents(
         if aid.startswith("."):
             continue
 
-        touched = adir / "touched.txt"
-        if not touched.exists():
-            # Empty agent dir — rmdir best-effort (mirrors shell cs_reap_agents).
+        # Staleness is keyed on the NEWEST file in the agent dir, not on one
+        # record filename.
+        #
+        # THE OBSERVED DEFECT: an agent dir that holds `em-session-id.txt` but
+        # never got a `touched.txt` -- a dispatched agent that touched no file
+        # -- was IMMORTAL. Absent that one name this loop fell to the rmdir
+        # arm below, which raises OSError on a dir that is not empty (the
+        # back-pointer is still in it) and was swallowed best-effort, so the
+        # dir was neither archived nor removed, on every pass, forever.
+        # Measured on this box: 175 such dirs already past the staleness
+        # window, 114 more not yet due, against 219 that carry `touched.txt`
+        # and reaped normally. The residue accumulates on
+        # `scope.compute_scope`'s Step 3b scan, which pays a read plus several
+        # stats per dir on the commit hot path.
+        #
+        # SECOND, PROSPECTIVE REASON, and it is why this is keyed on mtime
+        # rather than on a widened filename list: the touched-files record
+        # redesign renames this record to `touch-record.jsonl` (plus rotated
+        # siblings). A name-keyed predicate would silently acquire the same
+        # total functional stop at that cutover. A max-over-all-files probe
+        # cannot: an unrecognised filename can only hold the mtime newer and
+        # DEFER a reap, which is this function's existing fail-closed-to-keep
+        # direction, never cause an early one.
+        try:
+            files = [entry for entry in adir.iterdir() if entry.is_file()]
+        except OSError as exc:
+            print(f"skip: _reap_stale_agents: iterdir failed: {exc}", file=sys.stderr)
+            deferred.append({
+                "id": aid,
+                "reason": f"agent dir listing failed — deferred (fail-closed-to-keep): {exc}",
+            })
+            continue
+
+        if not files:
+            # Genuinely empty agent dir — rmdir best-effort (mirrors shell
+            # cs_reap_agents). Reached only when the dir holds no file at all,
+            # so this no longer competes with the record-bearing case above.
             try:
                 adir.rmdir()
                 _LOG.debug("session.reap: removed empty agent dir %s", aid)
             except OSError:
-                pass  # not empty or concurrent — best-effort
+                pass  # concurrent writer or non-empty subdir — best-effort
             continue
 
-        # Read touched.txt mtime for staleness check.
         try:
-            mtime = touched.stat().st_mtime
+            mtime = max(entry.stat().st_mtime for entry in files)
         except OSError as exc:
-            print(f"skip: _reap_stale_agents: mtime = touched.stat().st_mtime failed: {exc}", file=sys.stderr)
+            print(f"skip: _reap_stale_agents: mtime = max(entry.stat().st_mtime) failed: {exc}", file=sys.stderr)
             deferred.append({
                 "id": aid,
-                "reason": f"touched.txt stat failed — deferred (fail-closed-to-keep): {exc}",
+                "reason": f"agent record stat failed — deferred (fail-closed-to-keep): {exc}",
             })
             continue
 

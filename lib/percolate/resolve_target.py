@@ -91,7 +91,7 @@ def _settings_home_dir() -> Path:
     (``COORDINATOR_SETTINGS_HOME`` when set, else ``.coordinator-claude-settings``
     under ``CLAUDE_HOME`` or the home directory)
     rather than importing it: this module is deliberately self-contained, since
-    claude-klabauter-root resolution itself routes through the machine-local CLI this
+    claude-klabauter-live-root resolution itself routes through the machine-local CLI this
     function helps locate.
 
     ``Path.home()`` is used for the home fallback because it honours

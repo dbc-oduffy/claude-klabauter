@@ -198,16 +198,24 @@ class TestRenamedDirNamesExemption:
 class _FakeRewriteBasenameModule:
     """Stands in for `coordinator_core.percolate.rewrite_basename`: exercises
     `process_target`'s ledger-load call-site contract (`rename_ledger_path` then
-    `read_directory_rename_ledger`) without touching the real engine module or a
-    real ledger file on disk."""
+    `read_directory_rename_ledger`, and since 2026-08-26 `read_rename_ledger`
+    for the file-granular twin) without touching the real engine module or a
+    real ledger file on disk.
+
+    `file_names` defaults to empty rather than reusing `names`: this fake's
+    directory and FILE ledger legs are read by two different exemptions
+    (`renamed_dir_names` and the top-level orphan sweep's
+    `renamed_file_names`), and a fake that returned the same list for both
+    would make a test unable to tell which leg a call site actually read."""
 
     # Real production exception type (not a duplicated stand-in) -- see the
     # module-level import above for why this is required and why the fake
     # never needs to raise it itself.
     DirectoryRenamePairShapeError = _RealDirectoryRenamePairShapeError
 
-    def __init__(self, names=(), *, raise_on_read=None):
+    def __init__(self, names=(), *, file_names=(), raise_on_read=None):
         self._names = list(names)
+        self._file_names = list(file_names)
         self._raise_on_read = raise_on_read
 
     def rename_ledger_path(self, target_name, *, state_home=None):
@@ -217,6 +225,16 @@ class _FakeRewriteBasenameModule:
         if self._raise_on_read is not None:
             raise self._raise_on_read
         return list(self._names)
+
+    def read_rename_ledger(self, ledger):
+        """The FILE leg. Deliberately NOT gated on `raise_on_read`: that knob
+        models a corrupt/unreadable DIRECTORY read, and the call site reads the
+        two legs in sequence inside one `try` -- letting this one raise too
+        would leave a test unable to prove which read produced the degrade."""
+        return list(self._file_names)
+
+    def declared_file_dst_names(self, basename_pairs):
+        return frozenset()
 
 
 class _EngineSentinel:

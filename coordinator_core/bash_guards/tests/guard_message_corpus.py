@@ -88,8 +88,10 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import tempfile
+import unittest.mock
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,6 +126,71 @@ from coordinator_core.write_guards import engine as write_guards_engine
 
 _CMD_OVERRIDE_KEY = "__cmd__"
 _CWD_OVERRIDE_KEY = "__cwd__"
+
+#: Neutral, repo-local scratch parent every `tempfile.TemporaryDirectory(...)`
+#: call below is rooted under, instead of the bare `tempfile.gettempdir()`
+#: default. `gettempdir()` resolves under the real machine's user profile
+#: (`C:\Users\<name>\AppData\Local\Temp` on Windows) -- on a real developer
+#: box that path segment is itself a REDACTION-class token in
+#: `setup/percolate-hooks/percolate-store.yaml` (a real person's name/
+#: username), so any fixture that renders `str(scratch_dir)` into a
+#: guard/hook's own rendered text (the containment-denial reason, an
+#: advisory rewrite embedding the scratch cwd, ...) trips B7 purely because
+#: of WHICH MACHINE ran the suite, never because of anything the guard
+#: actually composed. `guard_concrete_path_citations`'s own fixture already
+#: worked around this one call site with a hand-picked synthetic literal
+#: (a drive-letter-rooted stand-in path, see `_wg_concrete_path_citations_fire`
+#: below); this is the same fix generalized to every OTHER `tempfile.
+#: TemporaryDirectory` call in this module, at one source, rather than
+#: hand-patching each fixture's rendered text individually. `scratch/`
+#: matches this repo's own `.gitignore` at any depth, so nothing lands
+#: under version control; each `TemporaryDirectory` still self-cleans on
+#: context exit, same as before.
+#:
+#: A SIBLING of the repo root, never a directory NESTED under it: several
+#: fixtures below (`bump-outside-repo-write`, `bump-foreign-repo-write`,
+#: the `block_consumed_handoff_edit`/`block_cutover_phase_hand_edit`/
+#: `block_memo_status_hand_edit` "no git root resolved" legs, ...) assert
+#: on the scratch dir having NO git-repo ancestor at all -- measured live:
+#: an earlier revision of this constant nested the scratch parent inside
+#: this repo's own checkout, which put a REAL `.git` back above every
+#: scratch dir (this repo's own) and silenced every one of those rows.
+_NEUTRAL_SCRATCH_PARENT = Path(__file__).resolve().parents[3].parent / "coordinator-guard-corpus-scratch"
+
+
+def _neutral_scratch_parent() -> str:
+    """The scratch parent every fixture tempdir is minted under.
+
+    TWO constraints, and satisfying one while breaking the other is the whole
+    history of this line.
+
+    1. OUTSIDE any git repo. `guard_inprocess_search._footer()`'s latch resolves
+       its path by walking UPWARD from `cwd` for a `.git` entry. A scratch inside
+       the repo makes that walk reach the real repo root, and the latch lands in
+       the live `.git/coordinator-sessions/` hub -- as a phantom session dir for
+       the two sites that mint their own `CLAUDE_CODE_SESSION_ID`, and, worse,
+       silently under the REAL session's id for the ten that leave it ambient,
+       where it suppresses the operator's footer paragraph for the rest of their
+       session with nothing to see. Measured 2026-08-26 (claude-klabauter-e6): eight
+       phantom dirs, and `test_liveness.py::TestLiveSessionIdsCorpus` red for as
+       long as they sit there. With the parent outside every repo the upward walk
+       finds no root at all, so `_latch_path` returns None and the write never
+       happens -- eliminated, not redirected.
+    2. NO USER-HOME SEGMENT. Rendered scratch paths are embedded verbatim in
+       agent-facing message text, so a path carrying the operator's username
+       leaks it into the corpus (B7). This is what put the scratch in-repo in the
+       first place, and it is the constraint a naive "just move it out" breaks.
+
+    Constraint 2 is NOT satisfied by inspection on this box and must not be
+    argued from one: `parents[3].parent` is the directory CONTAINING the repo,
+    which is a bare drive root on the Windows dev box and `<home>/dev/` for a
+    macOS fleet-floor checkout at `<home>/dev/claude-klabauter`. Same expression,
+    username on one platform and not the other. `test_scratch_parent_is_outside_
+    the_repo_and_carries_no_user_home` pins both constraints so the platform
+    nobody is running fails loudly instead of leaking quietly.
+    """
+    _NEUTRAL_SCRATCH_PARENT.mkdir(parents=True, exist_ok=True)
+    return str(_NEUTRAL_SCRATCH_PARENT)
 
 #: Shared identity payloads -- same literals `test_cd_prefix_bypass.py`'s
 #: own `_SUBAGENT_IDENTITY` and `TestReviewerBashOutsideAllowlistBypass`
@@ -412,7 +479,7 @@ def fire_row_for_audience(row: CorpusRow, audience: str) -> GuardCapture:
     if audience not in (SUBAGENT_AUDIENCE, EM_AUDIENCE):
         raise ValueError(f"unknown audience {audience!r}; expected {SUBAGENT_AUDIENCE!r} or {EM_AUDIENCE!r}")
     session_id = "guard-message-corpus-audience-%s-%s" % (audience, uuid.uuid4().hex)
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-audience-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-audience-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
@@ -441,6 +508,7 @@ def fire_row_for_audience(row: CorpusRow, audience: str) -> GuardCapture:
             )
 
 
+
 def fire_row(row: CorpusRow) -> GuardCapture:
     """Fire one `CorpusRow` through C1's capture seam.
 
@@ -452,7 +520,7 @@ def fire_row(row: CorpusRow) -> GuardCapture:
     which monkeypatch module globals directly.
     """
     session_id = "guard-message-corpus-%s" % uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
             # Review: coordinator:code-reviewer -- guard_inprocess_search's
@@ -1007,7 +1075,7 @@ def _branch_set_precedence_setup(
     mp.setattr(
         guard,
         "_other_canonical_branches",
-        lambda cwd=None: [("work/machine-b/2026-07-31", fixed_now - 3600)],
+        lambda cwd=None: [("work/scoutridge/2026-07-31", fixed_now - 3600)],
     )
     mp.setattr(guard, "_ahead_of_main", lambda branch, cwd=None: 12)
     # This fixture isolates the "fires with real name/count" property, not
@@ -1017,7 +1085,7 @@ def _branch_set_precedence_setup(
     # coverage in that file's `TestRecencyFilter`, not re-derived here).
     mp.setattr(guard, "should_prompt_rename", lambda *a, **k: False)
     return {
-        _CMD_OVERRIDE_KEY: "git checkout -b work/machine-b/2026-08-03",
+        _CMD_OVERRIDE_KEY: "git checkout -b work/scoutridge/2026-08-03",
         _CWD_OVERRIDE_KEY: "/repo",
     }
 
@@ -1464,7 +1532,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "branch-set-precedence",
         "branch-set-precedence-fire",
-        "git checkout -b work/machine-b/2026-08-03",
+        "git checkout -b work/scoutridge/2026-08-03",
         True,
         _REWRITE,
         False,
@@ -1785,7 +1853,7 @@ class WriteGuardRow:
 def fire_write_guard_row(row: WriteGuardRow) -> WriteGuardCapture:
     lookup = _wg_lookup()
     guard = lookup[row.guard]
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-wg-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-wg-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
             payload = row.payload_factory(scratch_dir, mp)
@@ -1856,6 +1924,33 @@ def _wg_memory_store_cap_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(mem / "MEMORY.md"), "content": content},
+    }
+
+
+def _wg_confined_agent_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """Fires `block_confined_agent_write`'s containment check: a resolved
+    `coordinator:code-reviewer` identity writing outside its own
+    `state/subagent-share/<session_id>/` sandbox. Identity resolution is
+    monkeypatched on the guard module directly (its own imports, not a
+    module-qualified call like the sibling `_subagent_identity` guards use)
+    -- was discovered by `write_guards.engine.discover_guard_names()` but
+    had NO corpus row at all until this dispatch, same registration gap
+    `block_subagent_grant_record_write`'s row above closes."""
+    from coordinator_core.write_guards import block_confined_agent_write as guard_mod
+
+    mp.setattr(guard_mod, "_resolve_subagent_identity", lambda raw, session_id: raw)
+    mp.setattr(guard_mod, "resolve_repo_root", lambda cwd: str(scratch_dir))
+    mp.setattr(
+        guard_mod,
+        "_read_backpointer_subagent_type",
+        lambda git_root, agent_id, expected_em_session_id=None: "coordinator:code-reviewer",
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(scratch_dir / "outside-sandbox.md"), "content": "x"},
+        "cwd": str(scratch_dir),
+        "agent_id": "deadbeef0123",
+        "session_id": "sess-c3c-caw",
     }
 
 
@@ -2046,6 +2141,20 @@ def _wg_subagent_guard_grant_write_fire(
 
     from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
 
+    # Deliberately the REAL `tempfile.gettempdir()`, not `_neutral_scratch_
+    # parent()` -- unlike every other fixture in this module, this guard's
+    # OWN check logic (`guard_unlock_sentinel.sentinel_path`) independently
+    # resolves `tempfile.gettempdir()` itself (module docstring: "Do NOT
+    # hardcode `/tmp` or reach for a different temp resolution") to decide
+    # whether a write targets the live unlock-sentinel location. Redirecting
+    # this row's OWN write target elsewhere makes the two paths diverge and
+    # the guard never recognizes its own row -- verified live (silent
+    # instead of firing) after routing this one row through the neutral
+    # parent. This row's denial text embeds a real machine tempdir path
+    # (and therefore, on a real developer box, that machine's own
+    # REDACTION-class username) for the same load-bearing reason
+    # `_bt_python3_invocation`'s real interpreter path does -- reported, not
+    # fixed here (see the cluster-D grind's own report).
     sentinel_path = str(
         Path(_tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}deadbeef0123.some-guard"
     )
@@ -2430,6 +2539,10 @@ def _wg_private_git_fact_resolver_fire(
 WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_completion_monolith_write", "fire", True, _wg_completion_monolith_fire),
     WriteGuardRow("block_completion_monolith_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_confined_agent_write", "fire", True, _wg_confined_agent_write_fire
+    ),
+    WriteGuardRow("block_confined_agent_write", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),
     WriteGuardRow("block_consumed_handoff_edit", "control", False, _wg_benign),
     WriteGuardRow(
@@ -2678,7 +2791,7 @@ def _fire_em_report_altitude(text: str) -> Optional[Dict[str, Any]]:
     adding-suppression-to-an-emitter-silently-breaks-*, a stale-suppressed-
     output trap on any session id reused across a second call. Mirrors
     `test_em_report_altitude.py`'s own `_tally_isolation` fixture."""
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-era-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-era-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".git")
         with pytest.MonkeyPatch.context() as mp:
@@ -2704,7 +2817,7 @@ def _fire_em_report_altitude_control() -> Optional[Dict[str, Any]]:
 
 
 def _fire_nudge_harness_directive_dispatch() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-nhdd-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-nhdd-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".git")
         transcript = scratch_dir / "transcript.jsonl"
@@ -2735,7 +2848,7 @@ def _fire_nudge_harness_directive_dispatch() -> Optional[Dict[str, Any]]:
 
 
 def _fire_nudge_harness_directive_dispatch_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-nhdd-ctrl-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-nhdd-ctrl-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".git")
         transcript = scratch_dir / "transcript.jsonl"
@@ -2795,6 +2908,7 @@ def _fire_nudge_unrouted_sizing() -> Optional[Dict[str, Any]]:
 import asyncio as _hooks_asyncio
 
 from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
+from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_start
 from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
 from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
 from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
@@ -2812,6 +2926,7 @@ from coordinator_core.hooks import context_pressure_precompact as _hook_context_
 from coordinator_core.hooks import session_heartbeat as _hook_session_heartbeat
 from coordinator_core.hooks import subagent_arrival_check as _hook_subagent_arrival_check
 from coordinator_core.hooks import subagent_fabrication_check as _hook_subagent_fabrication_check
+from coordinator_core.hooks import subagent_review_mark as _hook_subagent_review_mark
 from coordinator_core.hooks import subagent_zero_tool_use as _hook_subagent_zero_tool_use
 from coordinator_core.hooks import subagent_zero_tool_use_resolve as _hook_subagent_zero_tool_use_resolve
 from coordinator_core.hooks import subagent_zero_tool_use_surface as _hook_subagent_zero_tool_use_surface
@@ -2838,6 +2953,33 @@ def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str,
 def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _hooks_asyncio.run(_hook_agent_completion_log._handler({}, repo_root=None))
+    )
+
+
+# --- (24) cater_subagent_start -- AC10 coverage-gap closer (C-cluster-D grind):
+# empty `params`/`repo_root=None` is NOT the quiet arm here -- verified live:
+# `compose_catering` still composes the unconditional "agent-role-dispatched"
+# preamble (the canonical dispatched-worker-role block, injected for every
+# subagent regardless of `agent_type`/provisioning) plus a "sidecar
+# provisioning did not complete" note for the missing-scaffold case
+# `repo_root=None` takes. No sidecar write happens on this arm (the note
+# itself says provisioning "did not complete" -- `_provision` never ran),
+# so this is side-effect-free and safe to fire from a fast-tier corpus row.
+def _fire_cater_subagent_start_missing_provisioning() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_cater_subagent_start._handler({}, repo_root=None))
+    )
+
+
+# --- (25) subagent_review_mark -- AC10 coverage-gap closer (C-cluster-D grind):
+# module docstring, "Always returns `no_advisory()` -- this op never denies,
+# never advises; its only observable effect is the ledger append (or its
+# absence)." `_handler` itself early-returns `no_advisory()` the moment any of
+# `repo_root`/`session_id`/`agent_id`/`agent_type` is falsy (params={} takes
+# that arm) -- no ledger write, no agent-facing text, ever, structurally.
+def _fire_subagent_review_mark_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_subagent_review_mark._handler({}, repo_root=None))
     )
 
 
@@ -3060,20 +3202,41 @@ def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
 
 # --- (12) example_retrieval_repo_detect -- real firing row: `detect_banner(cwd)` returns
 # the UNINITIALIZED banner string for a scratch dir carrying a `.example-retrieval-repo/
-# manifest.json` marker with no `graph.db` beside it.
+# manifest.json` marker with no `graph.db` beside it. The example-game-repo-dedupe
+# probe's OWN upward walk is stubbed out here (real `.example-game-repo`/`Saved/
+# ExampleGameRepoProjectRag` markers on the machine's own home directory, several
+# levels above a bare `tempfile.gettempdir()` scratch dir, are within
+# `_find_marker_upward`'s `_MAX_LEVELS=6` walk on a real developer box and
+# silently short-circuit `detect_banner` to "" before the manifest marker
+# this row exists to exercise is ever reached -- corroborated live: this
+# row failed on a box with a real `C:\Users\<name>\.example-game-repo`) -- the
+# manifest lookup itself is left real, only the example-game-repo legs are forced
+# absent so this row exercises the UNINITIALIZED banner path regardless of
+# what happens to live above the scratch dir on the machine running the
+# suite.
 def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-") as scratch:
+    real_find_marker_upward = _hook_example_retrieval_repo_detect._find_marker_upward
+
+    def _stub_find_marker_upward(start_dir: str, marker: str, max_levels: int = 6) -> Optional[str]:
+        if marker in (".example-game-repo", os.path.join("Saved", "ExampleGameRepoProjectRag")):
+            return None
+        return real_find_marker_upward(start_dir, marker, max_levels)
+
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".example-retrieval-repo")
         (scratch_dir / ".example-retrieval-repo" / "manifest.json").write_text("{}", encoding="utf-8")
-        banner = _hook_example_retrieval_repo_detect.detect_banner(str(scratch_dir))
+        with unittest.mock.patch.object(
+            _hook_example_retrieval_repo_detect, "_find_marker_upward", _stub_find_marker_upward
+        ):
+            banner = _hook_example_retrieval_repo_detect.detect_banner(str(scratch_dir))
         if not banner:
             return None
         return {"hookSpecificOutput": {"additionalContext": banner}}
 
 
 def _fire_example_retrieval_repo_detect_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-ctrl-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-ctrl-", dir=_neutral_scratch_parent()) as scratch:
         banner = _hook_example_retrieval_repo_detect.detect_banner(scratch)
         if not banner:
             return None
@@ -3208,7 +3371,7 @@ def _fire_receiver_state_sensor_noop() -> Optional[Dict[str, Any]]:
 # state/subagent-share/<session_id>/ flags, and the handler returns
 # post_advisory() naming the runnable check.
 def _fire_subagent_sidecar_fill_check() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         (scratch_dir / ".git").mkdir()
         session_id = "sidecar-fill-check-corpus-row"
@@ -3225,7 +3388,7 @@ def _fire_subagent_sidecar_fill_check() -> Optional[Dict[str, Any]]:
 
 
 def _fire_subagent_sidecar_fill_check_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-ctrl-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-sfc-ctrl-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         (scratch_dir / ".git").mkdir()
         session_id = "sidecar-fill-check-corpus-row-control"
@@ -3241,7 +3404,7 @@ def _fire_subagent_sidecar_fill_check_control() -> Optional[Dict[str, Any]]:
 # points at the same scratch dir so `_run_bootstrap`'s settings-merge write
 # lands inside the scratch tree, never a real `.claude/` install.
 def _fire_ue_knowledge_distrust() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         (scratch_dir / "Example.uproject").write_text("{}", encoding="utf-8")
         result = _hook_ue_knowledge_distrust.run(str(scratch_dir), str(scratch_dir))
@@ -3251,7 +3414,7 @@ def _fire_ue_knowledge_distrust() -> Optional[Dict[str, Any]]:
 
 
 def _fire_ue_knowledge_distrust_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-ctrl-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ukd-ctrl-", dir=_neutral_scratch_parent()) as scratch:
         result = _hook_ue_knowledge_distrust.run(scratch, scratch)
         if not result.banner:
             return None
@@ -3291,6 +3454,13 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_unrouted_sizing", "fire-plan-message", True, _fire_nudge_unrouted_sizing),
     # --- C12 additions: the 23 previously-uncovered hooks/ modules. ---
     HookRow("agent_completion_log", "noop-control", False, _fire_agent_completion_log_noop),
+    HookRow(
+        "cater_subagent_start",
+        "fire-missing-provisioning",
+        True,
+        _fire_cater_subagent_start_missing_provisioning,
+    ),
+    HookRow("subagent_review_mark", "noop-control", False, _fire_subagent_review_mark_noop),
     HookRow(
         "block_unenumerated_agent_type",
         "fire-unenumerated-deny",
@@ -3606,6 +3776,43 @@ def fire_static_text_row(row: StaticTextRow) -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_scratch_parent_is_outside_the_repo_and_carries_no_user_home():
+    """Both of `_neutral_scratch_parent`'s constraints, pinned together.
+
+    They pull against each other -- moving the scratch out of the repo to stop
+    the latch leak is exactly what can put an operator's home directory in the
+    path -- so asserting either alone lets the other regress. Asserted here as
+    properties rather than against an expected literal: the correct value is
+    different on every machine, and a literal would pin this box.
+
+    The home leg is the one that cannot be checked by looking at this box.
+    `parents[3].parent` is a bare drive root here and `<home>/dev/` for a macOS
+    fleet-floor checkout, so the same expression is clean on the platform we run
+    and a B7 violation on the platform we do not. `Path.home()` makes that
+    falsifiable anywhere.
+    """
+    scratch = _NEUTRAL_SCRATCH_PARENT.resolve()
+    repo_root = Path(__file__).resolve().parents[3]
+
+    assert repo_root not in scratch.parents and scratch != repo_root, (
+        "scratch parent %s is inside the repo at %s -- guard_inprocess_search's "
+        "footer latch resolves by walking UPWARD for a .git entry, so every "
+        "fixture tempdir minted here writes into the live "
+        ".git/coordinator-sessions/ hub: a phantom session dir for the sites "
+        "that mint their own CLAUDE_CODE_SESSION_ID, and a silent write under "
+        "the real operator's id for the ones that leave it ambient."
+        % (scratch, repo_root)
+    )
+
+    home = Path.home().resolve()
+    assert home not in scratch.parents and scratch != home, (
+        "scratch parent %s sits under the user home %s, so every rendered "
+        "fixture path embeds the operator's username in agent-facing corpus "
+        "text (B7). This is what put the scratch inside the repo originally -- "
+        "it needs a location that is neither." % (scratch, home)
+    )
+
+
 def test_corpus_imports_cleanly_and_every_row_guard_resolves():
     """AC2's registration half: every row's `guard` name is a real
     `dispatch.py` registration (not a typo), resolved via the same
@@ -3760,9 +3967,25 @@ def test_every_hooks_row_guard_has_a_non_firing_control_row():
     `coordinator_reminder` (C12) is the same documented exception for a
     different reason: `render_reminder()` unconditionally returns the static
     Quick-Orient heredoc -- no input makes it return "", so there is no
-    non-firing cell to construct."""
+    non-firing cell to construct.
+
+    `cater_subagent_start` (cluster-D grind, 2026-08-26) is the same
+    exception for the same reason as `coordinator_reminder`: `compose_
+    catering`'s role-framing leg is unconditional and LAST (module
+    docstring, "role framing LAST and unconditional") -- verified live,
+    even `params={}`/`repo_root=None` (nothing resolved, no sidecar, no
+    provisioning) still composes the dispatched-worker-role preamble plus a
+    "sidecar provisioning did not complete" note. The only quiet arm
+    (`isinstance(payload, dict)` false) is unreachable through `_handler`
+    without crashing it first (`field(params, ...)` dereferences `params`
+    before `compose_catering` ever sees it), so there is no non-firing cell
+    reachable through the real `_handler` entrypoint this row exercises."""
     non_firing = {row.guard for row in HOOK_ROWS if not row.expected_speaker}
-    expected = {row.guard for row in HOOK_ROWS} - {"nudge_unrouted_sizing", "coordinator_reminder"}
+    expected = {row.guard for row in HOOK_ROWS} - {
+        "nudge_unrouted_sizing",
+        "coordinator_reminder",
+        "cater_subagent_start",
+    }
     assert non_firing == expected
 
 

@@ -108,7 +108,7 @@ def _claude_home() -> str:
 def _machine_local_impl() -> str:
     """Return the path to _machine_local.py, honouring MACHINE_LOCAL_IMPL for tests."""
     # TODO(33cf462): de-dup _claude_home/_machine_local_impl into shared module
-    # (queued: state/improvement-queue/2026-07-06-claude-klabauter-root-shared-helper-extraction.yaml)
+    # (queued: state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extraction.yaml)
     override = os.environ.get(_MACHINE_LOCAL_IMPL_ENV)
     if override:
         return override

@@ -50,16 +50,53 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session import touch_record
 from coordinator_core.session.scope import format_touch_event
 
 
+def _parse_fixture_line(line):
+    """Parse one `touched_lines` entry -- either a bare repo-relative path
+    (this suite's own fail-safe-CLAIMED shorthand) or a full
+    `format_touch_event`-produced `'<verb> <iso8601> <path>'` line -- into
+    `(verb, timestamp, path)` for `touch_record.append_event`."""
+    parts = line.split(None, 2)
+    if len(parts) == 3 and parts[0] in ("T", "R"):
+        verb, ts_str, path = parts
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+            return verb, ts, path
+        except ValueError:
+            pass
+    return "T", 0.0, line
+
+
 def _write_session(root, sid, *, meta=None, touched_lines=None, touched_mtime=None):
+    """C7b: `_rm_peer_claim_of` now reads claim CONTENT exclusively through
+    `touch_record.project_live_claims` against `touch-record.jsonl` -- the
+    AC21 union with legacy `touched.txt` content is deleted. `touched.txt`
+    itself is still written and still stamped with `touched_mtime` because
+    the function's mtime BACKSTOP (for a sid canonical liveness does not
+    cover) still stats that literal filename, unchanged by this chunk --
+    only the CLAIM-content read moved to the seam. `touch-record.jsonl` is
+    written alongside it, translated from the same `touched_lines`, so the
+    seam sees the same claims this fixture used to encode directly.
+
+    C3 (this chunk): the mtime BACKSTOP itself moved off a literal
+    `touched.txt` stat onto `liveness.newest_record_mtime(sid_dir)` -- the
+    newest mtime among ALL of the dir's regular files, not one hardcoded
+    name. `touch-record.jsonl` is therefore ALSO stamped with
+    `touched_mtime` here (whenever one is given) so this fixture's
+    deliberately-staled/fresh mtime is still what the backstop observes --
+    leaving it at its natural "just written" mtime would silently make
+    every "stale" fixture read as fresh again post-cutover.
+    """
     sdir = Path(root) / ".git" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     if meta is not None:
@@ -69,6 +106,15 @@ def _write_session(root, sid, *, meta=None, touched_lines=None, touched_mtime=No
         touched.write_text("\n".join(touched_lines) + "\n", encoding="utf-8")
         if touched_mtime is not None:
             os.utime(touched, (touched_mtime, touched_mtime))
+        record_sink = sdir / "touch-record.jsonl"
+        for line in touched_lines:
+            verb, ts, path = _parse_fixture_line(line)
+            touch_record.append_event(
+                record_sink, session_id=sid, agent_id=None, verb=verb, path=path,
+                timestamp=ts,
+            )
+        if touched_mtime is not None:
+            os.utime(record_sink, (touched_mtime, touched_mtime))
     return sdir
 
 
@@ -443,6 +489,98 @@ class TestEventLinePeerClaim:
         monkeypatch.setattr(session_scope, "project_peer_claims", _boom)
         target = str(tmp_path / "docs" / "plans" / "live-work.md")
         assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+
+
+class TestLegacyTouchedTxtOnlyUnion:
+    """C7c never landed -- `session/claims.py :: self_claim` still appends
+    the old `touched.txt` dialect via `atomic_dedup_append`. A peer whose
+    ONLY claim record is that legacy file (no `touch-record.jsonl` entry at
+    all) must still be contested. Regression: pre-fix this returns "" --
+    the jsonl seam alone projects zero claims for a sid with no jsonl file.
+    """
+
+    def test_legacy_only_claim_is_contested(self, tmp_path, monkeypatch):
+        root = str(tmp_path)
+        sdir = Path(root) / ".git" / "coordinator-sessions" / "peer-sess"
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "meta.json").write_text(json.dumps({"stable_pid": "1234"}) + "\n", encoding="utf-8")
+        touched = sdir / "touched.txt"
+        touched.write_text("docs/plans/live-work.md\n", encoding="utf-8")
+        mtime = time.time()
+        os.utime(touched, (mtime, mtime))
+        # Deliberately no touch-record.jsonl written -- the whole point of
+        # this fixture is a sid whose ONLY claim record is the legacy file.
+        monkeypatch.setattr(
+            session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
+        )
+        target = str(tmp_path / "docs" / "plans" / "live-work.md")
+        assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+
+    def test_jsonl_only_claim_still_works_no_regression(self, tmp_path, monkeypatch):
+        root = str(tmp_path)
+        _write_session(
+            root,
+            "peer-sess",
+            meta={"stable_pid": "1234"},
+            touched_lines=["docs/plans/live-work.md"],
+            touched_mtime=time.time(),
+        )
+        # _write_session writes both seams; delete the legacy file so only
+        # touch-record.jsonl remains, exercising the pure-jsonl path.
+        os.remove(Path(root) / ".git" / "coordinator-sessions" / "peer-sess" / "touched.txt")
+        monkeypatch.setattr(
+            session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
+        )
+        target = str(tmp_path / "docs" / "plans" / "live-work.md")
+        assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+
+    def test_union_of_disjoint_and_overlapping_paths(self, tmp_path, monkeypatch):
+        root = str(tmp_path)
+        sdir = _write_session(
+            root,
+            "peer-sess",
+            meta={"stable_pid": "1234"},
+            touched_lines=["docs/plans/jsonl-only.md"],
+            touched_mtime=time.time(),
+        )
+        # Overwrite touched.txt with a disjoint legacy-only path plus one
+        # overlapping with the jsonl seam, to assert the union (not either
+        # side alone) governs.
+        (sdir / "touched.txt").write_text(
+            "docs/plans/legacy-only.md\ndocs/plans/jsonl-only.md\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
+        )
+        legacy_target = str(tmp_path / "docs" / "plans" / "legacy-only.md")
+        jsonl_target = str(tmp_path / "docs" / "plans" / "jsonl-only.md")
+        assert dispatch_checks._rm_peer_claim_of(legacy_target, root) == "peer-sess"
+        assert dispatch_checks._rm_peer_claim_of(jsonl_target, root) == "peer-sess"
+
+    def test_unreadable_legacy_file_fails_closed(self, tmp_path, monkeypatch):
+        root = str(tmp_path)
+        sdir = _write_session(
+            root,
+            "peer-sess",
+            meta={"stable_pid": "1234"},
+            touched_lines=["docs/plans/jsonl-only.md"],
+            touched_mtime=time.time(),
+        )
+        legacy = sdir / "touched.txt"
+
+        def _boom(lines):
+            raise RuntimeError("legacy projection blew up")
+
+        monkeypatch.setattr(session_scope, "project_self_scope", _boom)
+        monkeypatch.setattr(
+            session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
+        )
+        # An unrelated target: a legacy-read failure must fail CLOSED
+        # (return sid), never widen to "unclaimed" for ANY target on this
+        # sid -- never "narrow" the claimed set.
+        target = str(tmp_path / "docs" / "plans" / "wholly-unrelated.md")
+        assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+        assert legacy.exists()
 
 
 class TestNoContestPaths:

@@ -16,11 +16,46 @@ Spec backlink: pln-coordinator-ops-buildout-from--903224 § AC13
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_KILL_LEDGER_PATH = _REPO_ROOT / "state" / "kill-ledger.md"
+
+#: Every kill-ledger entry from K-017 onward titles itself `## K-NNN — \`<op.key>\``
+#: (an optional parenthetical may trail the backticked key) -- the convention this
+#: parser relies on. Entries that predate it (K-001..K-016) or that kill something
+#: other than a single named op (prose titles, multi-op batches like K-056) are NOT
+#: recognised here and do not exempt anything; a kill logged outside this exact shape
+#: needs its own manifest-row handling, not a silent match.
+_KILL_LEDGER_HEADING_RE = re.compile(r"(?m)^## (K-\d+) — `([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)`")
+_KILL_LEDGER_STATUS_LANDED_RE = re.compile(r"\*\*Status:\*\*\s+\*\*LANDED\*\*")
+
+
+def _killed_op_keys() -> frozenset[str]:
+    """Op-keys with a LANDED entry in `state/kill-ledger.md` -- evidence-driven, not a
+    hardcoded skip-list, so the next kill doesn't need a matching edit here.
+
+    `ceremony.scoped_git_commit` (K-045, DR-344 kill-bar cut, landed `c07062c99`) is
+    the case this exists for: `op-classification.tsv` is a frozen 2026-07-22 audit
+    record of what was inventoried, correctly never edited to drop a row just because
+    its op died later -- but `_OP_KEY_SCOPE` correctly has no entry for a killed op
+    either. Both are right; the gate pinning "every manifest key resolves in scope"
+    was pinning the wrong property. The live property is: a manifest key resolves in
+    scope UNLESS the op it names has a landed kill-ledger entry.
+    """
+    text = _KILL_LEDGER_PATH.read_text(encoding="utf-8")
+    killed: set[str] = set()
+    matches = list(_KILL_LEDGER_HEADING_RE.finditer(text))
+    for i, m in enumerate(matches):
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        entry_body = text[body_start:body_end]
+        if _KILL_LEDGER_STATUS_LANDED_RE.search(entry_body):
+            killed.add(m.group(2))
+    return frozenset(killed)
 _AUDIT_DIR = _REPO_ROOT / "state" / "audits" / "2026-07-22-command-payload-inventory"
 _DISTINCT_OPS_TSV = _AUDIT_DIR / "distinct-ops-new.tsv"
 _MANIFEST_TSV = _AUDIT_DIR / "op-classification.tsv"
@@ -235,19 +270,34 @@ def test_manifest_op_keys_resolve_in_the_scope_table():
     minted (`branch.list_unmerged_work` for the shipped `git_branch.list_unmerged_work`)
     while every op-name still matches the oracle.
 
+    A key absent from `_OP_KEY_SCOPE` is exempted ONLY when `state/kill-ledger.md` carries
+    a LANDED entry for it (`_killed_op_keys`) — the manifest itself stays untouched (it is
+    a frozen 2026-07-22 audit record, not a live registry projection), so a later kill of
+    an inventoried op must not re-break this test, and an unexplained drift still fails it.
+
     Spec backlink: pln-coordinator-ops-buildout-from--903224 § AC5, § AC13
     """
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
 
+    killed = _killed_op_keys()
     unresolved = [
         (row["op-name"], row["op-key"])
         for row in _load_manifest_rows()
-        if row["op-key"].strip() not in _OP_KEY_SCOPE
+        if row["op-key"].strip() not in _OP_KEY_SCOPE and row["op-key"].strip() not in killed
     ]
     assert not unresolved, (
-        "manifest op-key(s) absent from _OP_KEY_SCOPE (dead cross-repo contract):\n"
+        "manifest op-key(s) absent from _OP_KEY_SCOPE and uncovered by any LANDED "
+        "kill-ledger entry (dead cross-repo contract):\n"
         + "\n".join(f"  {name}: {key}" for name, key in unresolved)
     )
+
+
+def test_killed_op_keys_finds_the_scoped_git_commit_kill():
+    """Narrow proof the kill-ledger parser actually works, not just that it exists:
+    K-045 (`ceremony.scoped_git_commit`, landed `c07062c99`) must resolve as killed —
+    this is the exact case `_killed_op_keys` was built for (see
+    `test_manifest_op_keys_resolve_in_the_scope_table`'s docstring)."""
+    assert "ceremony.scoped_git_commit" in _killed_op_keys()
 
 
 def test_manifest_scope_verdicts_match_the_scope_table():

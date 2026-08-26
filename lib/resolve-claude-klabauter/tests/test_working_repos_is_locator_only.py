@@ -132,7 +132,7 @@ def test_working_repos_membership_alone_does_not_exempt_a_different_session(
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -170,7 +170,7 @@ def test_no_working_repos_entry_needed_when_session_is_the_live_root(
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -198,7 +198,7 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)

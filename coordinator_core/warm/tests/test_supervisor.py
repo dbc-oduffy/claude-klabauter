@@ -272,7 +272,16 @@ def test_ensure_listener_returns_url_when_live_and_healthy(
 ) -> None:
     skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
-        port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
+        port=8934,
+        pid=999,
+        stable_pid_start_epoch=111,
+        # The record must advertise the token this clone actually computes:
+        # `ensure_listener` declines a SKEWED record (`_record_is_skewed`), since a
+        # stale listener passes `discovery_is_live` and `check_health` and then
+        # answers ENGINE_SKEW to the fire. A placeholder here made the fixture
+        # describe a listener no caller would ever have used.
+        engine_sha=skew.compute_client_token(tmp_path),
+        engine_root=tmp_path
     )
     monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
     monkeypatch.setattr(supervisor, "check_health", lambda url, **kw: True)
@@ -299,7 +308,16 @@ def test_ensure_listener_none_and_no_spawn_when_recent_boot_already_vouched_for(
 ) -> None:
     skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
-        port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
+        port=8934,
+        pid=999,
+        stable_pid_start_epoch=111,
+        # The record must advertise the token this clone actually computes:
+        # `ensure_listener` declines a SKEWED record (`_record_is_skewed`), since a
+        # stale listener passes `discovery_is_live` and `check_health` and then
+        # answers ENGINE_SKEW to the fire. A placeholder here made the fixture
+        # describe a listener no caller would ever have used.
+        engine_sha=skew.compute_client_token(tmp_path),
+        engine_root=tmp_path
     )
     # Alive but unhealthy (e.g. mid-boot, socket not accepting yet) -- and
     # young enough that `should_spawn` must not fire a second spawn.
@@ -317,7 +335,16 @@ def test_ensure_listener_spawns_when_discovery_is_dead(
 ) -> None:
     skew.write_engine_stamp(tmp_path, "sha-test")
     supervisor.write_discovery(
-        port=8934, pid=999, stable_pid_start_epoch=111, engine_sha="x", engine_root=tmp_path
+        port=8934,
+        pid=999,
+        stable_pid_start_epoch=111,
+        # The record must advertise the token this clone actually computes:
+        # `ensure_listener` declines a SKEWED record (`_record_is_skewed`), since a
+        # stale listener passes `discovery_is_live` and `check_health` and then
+        # answers ENGINE_SKEW to the fire. A placeholder here made the fixture
+        # describe a listener no caller would ever have used.
+        engine_sha=skew.compute_client_token(tmp_path),
+        engine_root=tmp_path
     )
     monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: False)
     spawned = []

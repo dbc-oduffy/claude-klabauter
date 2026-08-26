@@ -373,6 +373,14 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
 
         class _R:
             returncode = 0
+            # `_ne_step1_longpaths` now delegates to
+            # `coordinator_core.git.run.git_ok` -> `run_git`, which builds a
+            # `GitResult` from the real `subprocess.CompletedProcess` shape
+            # (reads `.stdout`/`.stderr`, not just `.returncode` -- the prior
+            # direct `ne.subprocess.run(...).returncode == 0` shape this stub
+            # was written against no longer exists at this call site).
+            stdout = b""
+            stderr = b""
 
         return _R()
 
@@ -388,7 +396,21 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
     with patch.object(ne, "_ne_run_probe_fn", return_value=verify_ndjson):
         ne._ne_step1_longpaths(runner, out=out)
 
-    assert captured["timeout"] == 15
+    # `_ne_step1_longpaths` no longer calls `subprocess.run` directly with a
+    # literal timeout=15 -- it delegates to `coordinator_core.git.run.git_ok`
+    # (no explicit `timeout=` of its own), which resolves the WALL-CLOCK
+    # `subprocess.run(timeout=)` argument as this call's process-time budget
+    # (`LOCAL_PLUMBING_BUDGET_SECS`, the non-remote lane ceiling -- this is a
+    # local git-config call) plus the shared box's scheduling headroom
+    # (`_SPAWN_SCHEDULING_HEADROOM_SECS`), per `git/run.py::_wall_bound`. Pin
+    # the PROPERTY (git_ok's own budget-resolution formula) rather than the
+    # literal this test predates.
+    from coordinator_core.git.run import (
+        LOCAL_PLUMBING_BUDGET_SECS,
+        _SPAWN_SCHEDULING_HEADROOM_SECS,
+    )
+
+    assert captured["timeout"] == LOCAL_PLUMBING_BUDGET_SECS + _SPAWN_SCHEDULING_HEADROOM_SECS
     assert captured["stdin"] is subprocess.DEVNULL
     assert captured.get("creationflags", 0) == getattr(subprocess, "CREATE_NO_WINDOW", 0)
     assert "git core.longpaths=true" in runner.steps_succeeded

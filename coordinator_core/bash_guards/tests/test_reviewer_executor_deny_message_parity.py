@@ -122,8 +122,8 @@ _EXPECTED_REVIEWER_DENY_MESSAGE = (
     "  Denied: find with a write/execute flag such as -delete or -exec\n"
     "  Denied: unquoted shell-chaining metacharacter (; && || ` $( < & or newline)\n"
     "  coordinator-doc-new --type review-findings [--plan <path>] [--chunk <id>] ...\n"
-    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...\n"
-    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ..."
+    "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...\n"
+    "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ..."
 )
 
 

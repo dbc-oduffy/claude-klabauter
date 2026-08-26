@@ -185,6 +185,7 @@ class TestBrief:
             "check-no-illegal-paths",
             "merge-release-notes-derive",
             "orphan-branch-sweep",
+            "tier-u-grant",
         }
         assert {d["cli"] for d in do["directives"]} == expected_clis
 

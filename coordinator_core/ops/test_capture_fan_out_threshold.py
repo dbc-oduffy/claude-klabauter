@@ -73,9 +73,23 @@ def _expected_value() -> int:
     return 3 * 4
 
 
+def _patch_registry(monkeypatch, reg: "_FakeRegistry") -> None:
+    """`_key_already_captured` reads `merged_flat_registry()` in-process
+    (2026-08-16 zero-spawn cutover) rather than shelling out to
+    `machine-local keys` -- patch that read directly so `_FakeRegistry`'s
+    `keys` set stays the single source of truth for both the idempotency
+    check and the `machine-local set` write path these tests still assert
+    on. Patching only `subprocess.run` (the pre-cutover contract) leaves the
+    idempotency check reading the REAL on-disk registry, which is exactly
+    the false-green this helper closes.
+    """
+    monkeypatch.setattr(mod, "_merged_flat_registry", lambda: dict.fromkeys(reg._keys, ""))
+
+
 def test_key_absent_writes_3x_cores(monkeypatch):
     reg = _FakeRegistry(keys=[])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=False)
 
@@ -87,6 +101,7 @@ def test_key_absent_writes_3x_cores(monkeypatch):
 def test_key_present_no_clobber(monkeypatch):
     reg = _FakeRegistry(keys=[mod._KEY])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=False)
 
@@ -98,6 +113,7 @@ def test_key_present_no_clobber(monkeypatch):
 def test_check_only_absent_key_no_mutation(monkeypatch):
     reg = _FakeRegistry(keys=[])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=True)
 
@@ -110,6 +126,7 @@ def test_check_only_absent_key_no_mutation(monkeypatch):
 def test_check_only_present_key_reports_pre_existing(monkeypatch):
     reg = _FakeRegistry(keys=[mod._KEY])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=True)
 
@@ -120,6 +137,7 @@ def test_check_only_present_key_reports_pre_existing(monkeypatch):
 def test_main_bad_flag_usage_error(monkeypatch, capsys):
     reg = _FakeRegistry(keys=[])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     rc = mod.main(["--bogus"])
 
@@ -131,6 +149,7 @@ def test_main_bad_flag_usage_error(monkeypatch, capsys):
 def test_main_no_args_writes(monkeypatch, capsys):
     reg = _FakeRegistry(keys=[])
     monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    _patch_registry(monkeypatch, reg)
 
     rc = mod.main([])
 

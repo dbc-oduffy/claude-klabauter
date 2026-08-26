@@ -68,6 +68,7 @@ Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 WS-9 / AC-28
 
 from __future__ import annotations
 
+import re
 import json
 import os
 import shlex
@@ -82,6 +83,11 @@ from coordinator_core.session.declared_writes import declare_write
 _HOOK_SEAM_MARKER = "COORDINATOR HOOK SEAM"
 _PLUGIN_ROOT_TOKEN = "${CLAUDE_PLUGIN_ROOT}"
 _HOOKS_DISABLED_MARKER_NAME = ".coordinator-hooks-disabled"
+
+# Non-"command" `type` values this layer knows have no script path to audit.
+# Anything else present-and-non-"command" (a typo like "Command"/"cmd") is an
+# unrecognized shape, not a legitimate skip — see _check_one_hooks_doc.
+_KNOWN_NON_COMMAND_HOOK_TYPES = {"http"}
 
 # Generator-provenance: the only auto-repair write (--fix, layer 2) targets
 # DoE-claude's coordinator/hooks/hooks.json -- a sibling repo's tree, never
@@ -195,8 +201,23 @@ def _extract_script_path(argv: List[str]) -> Optional[str]:
     is `args[2]`, ahead of the injector and bootstrap paths the loader pops off
     the tail; in the legacy wrapped form it is the token after the quoted
     bootstrap; bare, it is the token right after the interpreter.
+
+    The interpreter is matched on its BASENAME, case-folded and stripped of an
+    `.exe` suffix, never on the whole token. Windows is first-class and an
+    ABSOLUTE interpreter path is its ordinary registration shape; a bare
+    `python3` found on `$PATH` is the POSIX case, not the general one. Matching
+    the full token reported "command shape not understood" for
+    `C:\\...\\Python313\\python3.EXE <script>.py` — a live hook firing on every
+    tool call — and a checker that calls a working registration broken is worse
+    than one that stays quiet: it is the finding a reader learns to scroll past
+    before a true one arrives.
     """
-    if not argv or argv[0] not in ("python3", "python"):
+    if not argv:
+        return None
+    interpreter = os.path.basename(argv[0].replace("\\", "/")).lower()
+    if interpreter.endswith(".exe"):
+        interpreter = interpreter[: -len(".exe")]
+    if interpreter not in ("python3", "python"):
         return None
     rest = argv[1:]
     if rest and rest[0] == "-c":
@@ -214,8 +235,16 @@ def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
 
 
 def _iter_hook_commands(hooks_doc: Any):
-    """Yield every (event, matcher_index, hook_index, argv) tuple in a
-    hooks.json-shaped or settings.json `hooks`-block-shaped document.
+    """Yield every (event, matcher_index, hook_index, argv, hook_type) tuple in
+    a hooks.json-shaped or settings.json `hooks`-block-shaped document.
+
+    `hook_type` is the entry's own `type` field, defaulted to `"command"` when
+    absent (the historical shape). It rides along so the caller can tell "a
+    command registration I could not read" from "not a command registration at
+    all" — a distinction with teeth: the live PreToolUse fan-in is a
+    `type: "http"` entry pointing at the warm engine, it has no script path by
+    construction, and reporting it as an unreadable command called the warm
+    entrypoint broken on a healthy box.
 
     `argv` is the normalised full invocation from `_hook_argv`, so callers see
     one shape whether the registration is legacy-string or exec-form. Yielding
@@ -242,7 +271,10 @@ def _iter_hook_commands(hooks_doc: Any):
             for h_idx, hook in enumerate(block.get("hooks", []) or []):
                 if not isinstance(hook, dict):
                     continue
-                yield event, m_idx, h_idx, _hook_argv(hook)
+                hook_type = hook.get("type")
+                if not isinstance(hook_type, str) or not hook_type:
+                    hook_type = "command"
+                yield event, m_idx, h_idx, _hook_argv(hook), hook_type
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +357,37 @@ def _check_one_hooks_doc(
     missing = 0
     bare = 0
     total = 0
+    non_command = 0
 
-    for event, m_idx, h_idx, argv in _iter_hook_commands(doc):
+    for event, m_idx, h_idx, argv, hook_type in _iter_hook_commands(doc):
+        if hook_type != "command":
+            if hook_type in _KNOWN_NON_COMMAND_HOOK_TYPES:
+                # Not a command registration, so it has no script path to audit
+                # and nothing this layer can say about it. Counted, never
+                # asserted on: the live PreToolUse fan-in is `type: "http"`
+                # into the warm engine, and calling that "command shape not
+                # understood" reported the healthy warm entrypoint as broken.
+                non_command += 1
+                continue
+            # A present type that is neither "command" nor a known
+            # non-command shape (e.g. a hand-edit typo like "Command" or
+            # "cmd") is not "nothing to audit" — it's a registration this
+            # layer cannot read. Review: coordinator:code-reviewer Finding 3
+            # — silently folding it into non_command made a mistyped type
+            # indistinguishable from a legitimate http entry. `broken` (not
+            # `info`) because an unreadable registration is closer to "this
+            # entry cannot be verified at all" than to "nothing to see" —
+            # the same posture the module already takes for unparsable argv
+            # shapes just below.
+            findings.append(
+                Finding(
+                    "broken",
+                    f"{label} [{event}/{m_idx}/{h_idx}]: unrecognized hook "
+                    f"type {hook_type!r} — not 'command' and not a known "
+                    f"non-command type ({sorted(_KNOWN_NON_COMMAND_HOOK_TYPES)!r}).",
+                )
+            )
+            continue
         total += 1
         if argv is None:
             findings.append(
@@ -355,7 +416,24 @@ def _check_one_hooks_doc(
             bare += 1
 
     if total == 0:
-        return "ok", [], True
+        # An unrecognized-type finding may already be sitting in `findings`
+        # even though no command was ever counted — that's a real `broken`,
+        # not the quiet "nothing to audit" case below, so it takes priority.
+        if any(f.severity == "broken" for f in findings):
+            return "broken", findings, True
+        if non_command:
+            # Says WHY it is quiet. "ok with nothing audited" and "ok, all
+            # registrations pass" are the same word, and this module's whole
+            # posture is that absence of a check must never be indistinguishable
+            # from the check passing.
+            return "ok", findings + [
+                Finding(
+                    "info",
+                    f"{label}: no command registrations to audit "
+                    f"({non_command} non-command hook(s), e.g. type: http).",
+                )
+            ], True
+        return "ok", findings, True
 
     if bare:
         findings.append(
@@ -603,6 +681,181 @@ def _check_kill_switch_marker() -> Layer:
 
 
 # ---------------------------------------------------------------------------
+# Git-hook generation currency
+# ---------------------------------------------------------------------------
+
+_GIT_HOOK_GEN_RE = re.compile(r"coordinator-hook-gen: (\d+)")
+
+#: The two hooks `git_hook_install` emits, paired with the installer entrypoint
+#: that regenerates each. Order is the order they are repaired in.
+_GEN_HOOKS = ("prepare-commit-msg", "post-commit")
+
+
+def _git_hook_install():
+    """Import the emitter, which lives in `coordinator/bin/lib`, not on sys.path.
+
+    Returns None when it cannot be found — a doctor check must degrade to
+    `unknown` rather than raise, since it runs on machines whose layout is the
+    thing being diagnosed.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        cand = parent / "coordinator" / "bin" / "lib"
+        if (cand / "git_hook_install.py").is_file():
+            _sys_path_push(str(cand))
+            try:
+                import git_hook_install  # noqa: PLC0415
+
+                return git_hook_install
+            except Exception:
+                return None
+            finally:
+                _sys_path_pop(str(cand))
+    return None
+
+
+def _stale_generation_hooks(ghi) -> tuple[List[tuple], Optional[int]]:
+    """Every registered clone whose installed hook predates the emitter's stamp.
+
+    Reads only — the repair is `_fix_stale_hook_generations`. Returns
+    (rows, current_stamp), each row (repo_name, repo_path, hook_name, found_gen).
+    """
+    try:
+        from coordinator_core.machine_resolver import merged_flat_registry
+    except Exception:
+        return [], None
+    current = getattr(ghi, "_HOOK_GEN_STAMP", None)
+    if current is None:
+        return [], None
+
+    stale: List[tuple] = []
+    for key, path in sorted(merged_flat_registry().items()):
+        if not key.startswith("repos.") or not path:
+            continue
+        name = key.split(".", 1)[1]
+        for hook in _GEN_HOOKS:
+            f = Path(path) / ".git" / "hooks" / hook
+            if not f.is_file():
+                continue  # absent is not stale — never install where nothing was
+            try:
+                body = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            m = _GIT_HOOK_GEN_RE.search(body)
+            if not m:
+                continue  # unstamped: a foreign or hand-written hook, not ours to touch
+            if int(m.group(1)) != current:
+                stale.append((name, path, hook, int(m.group(1))))
+    return stale, current
+
+
+def _check_hook_generation_currency() -> Layer:
+    """Do the INSTALLED hook bodies match the generator?
+
+    Exists because `_HOOK_GEN_STAMP` made currency decidable and nothing
+    consumed it. Measured 2026-08-25: 15 of 16 registered clones sat at gen 4
+    against an emitter at 8, so every guard emitted into those bodies was live
+    in the generator and dead on every box. The only non-test caller of the
+    installer entrypoints ran at registration time, so a stamp bump reached
+    only repos someone happened to re-register.
+
+    That gap is why this check reports the INSTALLED artifact rather than the
+    generator: a session that reads the emitter concludes the guard is present
+    and is right about the generator and wrong about the machine. Two sessions
+    reached wrong conclusions from exactly that on 2026-08-25.
+
+    NEGATIVE SPEC: an absent hook is not stale, and an unstamped hook is not
+    ours -- neither is repaired. Installing where nothing was installed, or
+    rewriting a body carrying no `coordinator-hook-gen` line, would make this
+    check a fleet-wide hook installer wearing a diagnostic's costume.
+    """
+    name = "Git-hook generation currency"
+    ghi = _git_hook_install()
+    if ghi is None:
+        return Layer(name, "unknown", [Finding("info", "git_hook_install not importable — cannot compare generations")])
+
+    stale, current = _stale_generation_hooks(ghi)
+    if current is None:
+        return Layer(name, "unknown", [Finding("info", "no machine registry or no _HOOK_GEN_STAMP — nothing to compare")])
+    if not stale:
+        return Layer(name, "ok", [])
+
+    repos = sorted({row[0] for row in stale})
+    findings = [
+        Finding(
+            "broken",
+            f"{len(stale)} installed hook(s) across {len(repos)} repo(s) predate the emitter "
+            f"(gen {current}) — the guards in those bodies are not live on this machine. "
+            "Re-run with --fix. Repos: " + ", ".join(repos),
+        )
+    ]
+    return Layer(name, "broken", findings)
+
+
+def _fix_stale_hook_generations(fix_report: List[str]) -> None:
+    """Regenerate every stale installed hook to the emitter's current stamp.
+
+    Idempotent by construction: the installer entrypoints return
+    `already-current` when a body is at the stamp, so re-running is free. Only
+    `.git/hooks/` is written, which is untracked and per-clone -- nothing
+    tracked is mutated in any sibling repo.
+    """
+    ghi = _git_hook_install()
+    if ghi is None:
+        return
+    stale, current = _stale_generation_hooks(ghi)
+    if not stale or current is None:
+        return
+
+    bin_dir = None
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "coordinator" / "bin" / "lib" / "git_hook_install.py").is_file():
+            bin_dir = str(parent / "coordinator" / "bin")
+            break
+    if bin_dir is None:
+        return
+
+    entry = {
+        "prepare-commit-msg": getattr(ghi, "ensure_prepare_commit_msg_hook", None),
+        "post-commit": getattr(ghi, "ensure_post_commit_hook", None),
+    }
+    # Hold the emitter's own directory on sys.path for the WHOLE sweep. The
+    # installer lazy-imports siblings out of `coordinator/bin/lib` while it
+    # runs, and `_git_hook_install` pops the path before returning -- so
+    # repairing with the path already popped makes those imports fail inside a
+    # function contractually forbidden from raising, which turns a failed
+    # rewrite into a silent no-op that reports success.
+    lib_dir = str(Path(bin_dir) / "lib")
+    _sys_path_push(lib_dir)
+    try:
+        _repair_each(entry, stale, bin_dir, fix_report, current)
+    finally:
+        _sys_path_pop(lib_dir)
+
+
+def _repair_each(entry, stale, bin_dir: str, fix_report: List[str], current: int) -> None:
+    """One installer call per stale hook, each isolated from the others."""
+    for repo_name, repo_path, hook, found in stale:
+        fn = entry.get(hook)
+        if fn is None:
+            continue
+        outcome: List[str] = []
+        try:
+            fn(bin_dir, root=repo_path, outcome=outcome)
+        except Exception as exc:  # never let one clone stop the sweep
+            fix_report.append(f"{repo_name}/{hook}: FAILED ({type(exc).__name__}: {exc})")
+            continue
+        f = Path(repo_path) / ".git" / "hooks" / hook
+        m = _GIT_HOOK_GEN_RE.search(f.read_text(encoding="utf-8", errors="replace")) if f.is_file() else None
+        now = int(m.group(1)) if m else None
+        if now == current:
+            fix_report.append(f"{repo_name}/{hook}: gen {found} -> {current} ({','.join(outcome) or 'rewritten'})")
+        else:
+            fix_report.append(f"{repo_name}/{hook}: STILL gen {now} after repair — investigate")
+
+
+# ---------------------------------------------------------------------------
 # Orchestration + rendering
 # ---------------------------------------------------------------------------
 
@@ -613,10 +866,12 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_hook_registration())
     report.layers.append(_check_foreign_platform_paths())
     report.layers.append(_check_kill_switch_marker())
+    report.layers.append(_check_hook_generation_currency())
 
     fix_report: List[str] = []
     if fix:
         _fix_bare_hook_commands(fix_report)
+        _fix_stale_hook_generations(fix_report)
 
     return report, fix_report
 

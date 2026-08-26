@@ -69,6 +69,8 @@ import pytest
 from coordinator_core.frontmatter.baton_class import _PRE_RENAME_ALIASES
 from coordinator_core.git.ls_files import tracked_files
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCHEMA_PATH = (
     Path(__file__).resolve().parents[1] / "frontmatter" / "schemas" / "handoff.schema.json"

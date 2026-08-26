@@ -108,7 +108,7 @@ kind of provenance pointer; adding a new field to either schema was rejected as
 unnecessary schema churn for a value that already fits the existing contract).
 Before writing a new entry, this script greps the plan's own harvest routing
 target (project-scope: <repo-or-QUEUE_APPEND_OUTPUT_ROOT>/state/improvement-queue/*.yaml;
-central-scope: <claude-klabauter-root-or-QUEUE_APPEND_OUTPUT_ROOT>/state/improvement-queue/*.yaml; lessons:
+central-scope: <claude-klabauter-live-root-or-QUEUE_APPEND_OUTPUT_ROOT>/state/improvement-queue/*.yaml; lessons:
 <doe-root-or-LESSON_PROMOTE_OUTBOX_ROOT>/state/lessons-outbox/*.yaml) for that exact
 harvest-key string in the `evidence:` field of already-written entries. A match means
 "already harvested from this plan" — skip, do not double-write. This is a best-effort

@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import claim_neighbours, claims, core, scope, shape
+from coordinator_core.session import claim_neighbours, claims, core, scope, shape, touch_record
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -1748,6 +1748,48 @@ class TestMyAgentTouched:
             "docs/a b c.md"
         ]
 
+    def test_jsonl_only_agent_dir_is_seen(self, tmp_path):
+        """C1: reads through `scope._read_touch_record_as_legacy_lines`, the
+        seam C0 made a real union of legacy `touched.txt` and
+        `touch-record.jsonl` — an agent dir carrying ONLY the new-dialect
+        record (no `touched.txt` on disk at all) must still contribute its
+        claimed path, where a direct `touched.txt` read would silently see
+        nothing."""
+        from coordinator_core.session import touch_record
+
+        repo = _make_repo(tmp_path)
+        adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / "a1"
+        adir.mkdir(parents=True, exist_ok=True)
+        (adir / "em-session-id.txt").write_text("my-sid\n")
+        assert not (adir / "touched.txt").exists()
+        touch_record.append_event(
+            adir / scope._TOUCH_RECORD_FILENAME,
+            session_id="my-sid",
+            agent_id="a1",
+            verb=touch_record.VERB_TOUCH,
+            path="src/jsonl_only.py",
+        )
+        out = claims.my_agent_touched("my-sid", mode="exact", cwd=str(repo))
+        assert out == ["src/jsonl_only.py"]
+
+    def test_both_dialects_resolve_from_same_agent_dir(self, tmp_path):
+        """Both a legacy `touched.txt` line and a `touch-record.jsonl` event
+        for the same agent dir surface — the union seam's contract, not a
+        single-dialect parser."""
+        from coordinator_core.session import touch_record
+
+        repo = _make_repo(tmp_path)
+        adir = self._make_agent(repo, "a1", "my-sid", ["src/legacy.py"])
+        touch_record.append_event(
+            adir / scope._TOUCH_RECORD_FILENAME,
+            session_id="my-sid",
+            agent_id="a1",
+            verb=touch_record.VERB_TOUCH,
+            path="src/jsonl.py",
+        )
+        out = claims.my_agent_touched("my-sid", mode="exact", cwd=str(repo))
+        assert set(out) == {"src/legacy.py", "src/jsonl.py"}
+
     def test_empty_agents_dir_is_genuinely_silent(self, tmp_path, capsys):
         """The negative case for the above: a genuinely-empty (but readable)
         .agents/ dir must NOT log anything — only an actual scan failure
@@ -1767,22 +1809,40 @@ class TestMyAgentTouched:
 # ---------------------------------------------------------------------------
 
 
+def _touch_record_path(repo, sid):
+    return Path(repo) / ".git" / "coordinator-sessions" / sid / scope._TOUCH_RECORD_FILENAME
+
+
 class TestSelfClaim:
     def test_required_arg_raises(self):
         with pytest.raises(ValueError):
             claims.self_claim("")
 
     def test_fast_path_env_sid_appends(self, tmp_path, monkeypatch):
+        # C6: self_claim now emits the NEW dialect (touch-record.jsonl via
+        # touch_record.append_event), never touched.txt / atomic_dedup_append.
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "fast-sid")
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "fast-sid"
         sdir.mkdir(parents=True)
-        (sdir / "touched.txt").write_text("")
+        _write_session(repo, "fast-sid", _fresh())
         assert claims.self_claim("edited/file.py", cwd=str(repo)) is True
-        lines = (sdir / "touched.txt").read_text().splitlines()
+        record_path = _touch_record_path(repo, "fast-sid")
+        assert record_path.is_file()
+        assert not (sdir / "touched.txt").exists()
+        lines = record_path.read_bytes().splitlines()
         assert len(lines) == 1
-        verb, _ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "edited/file.py")
+        event = touch_record.decode_line(lines[0])
+        assert (event.verb, event.path, event.session_id, event.agent_id) == (
+            "T",
+            "edited/file.py",
+            "fast-sid",
+            None,
+        )
+        # AC4, C6 half: reads back through the single read seam.
+        projection = touch_record.project_live_claims(str(record_path), cwd=str(repo))
+        assert not projection.degraded
+        assert "edited/file.py" in projection.claims
 
     def test_fast_path_session_dir_absent_noop(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
@@ -1791,46 +1851,42 @@ class TestSelfClaim:
         assert claims.self_claim("x.py", cwd=str(repo)) is True
 
     def test_fallback_exactly_one_live_claims(self, tmp_path, monkeypatch):
+        # The fallback branch's interesting surface (module docstring):
+        # zero-live / one-live / many-live. This is the one-live case.
         repo = _make_repo(tmp_path)
         _clear_all_sid_env(monkeypatch)
         _write_session(repo, "solo-live", _fresh())
         assert claims.self_claim("f.py", cwd=str(repo)) is True
-        touched = (
-            Path(repo)
-            / ".git"
-            / "coordinator-sessions"
-            / "solo-live"
-            / "touched.txt"
-        )
-        lines = touched.read_text().splitlines()
+        record_path = _touch_record_path(repo, "solo-live")
+        assert record_path.is_file()
+        lines = record_path.read_bytes().splitlines()
         assert len(lines) == 1
-        verb, _ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "f.py")
+        event = touch_record.decode_line(lines[0])
+        assert (event.verb, event.path, event.session_id, event.agent_id) == (
+            "T",
+            "f.py",
+            "solo-live",
+            None,
+        )
 
     def test_fallback_zero_live_skips(self, tmp_path, monkeypatch):
+        # zero-live case: no append fires at all.
         repo = _make_repo(tmp_path)
         _clear_all_sid_env(monkeypatch)
         # Only a stale session -> zero live -> skip, still True.
         _write_session(repo, "stale-only", _stale())
         assert claims.self_claim("f.py", cwd=str(repo)) is True
-        touched = (
-            Path(repo)
-            / ".git"
-            / "coordinator-sessions"
-            / "stale-only"
-            / "touched.txt"
-        )
-        assert not touched.exists()
+        assert not _touch_record_path(repo, "stale-only").exists()
 
     def test_fallback_ambiguous_two_live_skips(self, tmp_path, monkeypatch):
+        # many-live case: ambiguous attribution -> no append fires for either.
         repo = _make_repo(tmp_path)
         _clear_all_sid_env(monkeypatch)
         _write_session(repo, "live-a", _fresh())
         _write_session(repo, "live-b", _fresh())
         assert claims.self_claim("f.py", cwd=str(repo)) is True
-        base = Path(repo) / ".git" / "coordinator-sessions"
-        assert not (base / "live-a" / "touched.txt").exists()
-        assert not (base / "live-b" / "touched.txt").exists()
+        assert not _touch_record_path(repo, "live-a").exists()
+        assert not _touch_record_path(repo, "live-b").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1849,15 +1905,15 @@ class TestSelfClaimAbsolutePathNormalization:
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid")
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid"
         sdir.mkdir(parents=True)
-        (sdir / "touched.txt").write_text("")
         (Path(repo) / "src").mkdir()
         target = Path(repo) / "src" / "new.py"
         target.write_text("y")  # untracked -> relpath branch
         assert claims.self_claim(str(target), cwd=str(repo)) is True
-        lines = (sdir / "touched.txt").read_text().splitlines()
+        record_path = _touch_record_path(repo, "abs-sid")
+        lines = record_path.read_bytes().splitlines()
         assert len(lines) == 1
-        verb, _ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "src/new.py")
+        event = touch_record.decode_line(lines[0])
+        assert (event.verb, event.path) == ("T", "src/new.py")
 
     def test_absolute_tracked_path_normalized_via_git_ls_files(
         self, tmp_path, monkeypatch
@@ -1866,13 +1922,13 @@ class TestSelfClaimAbsolutePathNormalization:
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid2")
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid2"
         sdir.mkdir(parents=True)
-        (sdir / "touched.txt").write_text("")
         target = Path(repo) / "README.md"  # tracked -> git ls-files branch
         assert claims.self_claim(str(target), cwd=str(repo)) is True
-        lines = (sdir / "touched.txt").read_text().splitlines()
+        record_path = _touch_record_path(repo, "abs-sid2")
+        lines = record_path.read_bytes().splitlines()
         assert len(lines) == 1
-        verb, _ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "README.md")
+        event = touch_record.decode_line(lines[0])
+        assert (event.verb, event.path) == ("T", "README.md")
 
     def test_still_absolute_path_skipped_never_written_raw(
         self, tmp_path, monkeypatch
@@ -1885,7 +1941,6 @@ class TestSelfClaimAbsolutePathNormalization:
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid3")
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid3"
         sdir.mkdir(parents=True)
-        (sdir / "touched.txt").write_text("")
 
         def _boom(*a, **k):
             raise ValueError("simulated relpath failure")
@@ -1895,9 +1950,7 @@ class TestSelfClaimAbsolutePathNormalization:
         monkeypatch.setattr(scope_mod.os.path, "relpath", _boom)
         outside = "/totally/outside/xyz.py"
         assert claims.self_claim(outside, cwd=str(repo)) is True
-        lines = (sdir / "touched.txt").read_text().splitlines()
-        assert outside not in lines
-        assert lines == []
+        assert not _touch_record_path(repo, "abs-sid3").exists()
 
 
 def _write_successor(repo, basename, predecessor_basename, field="predecessor"):
@@ -2277,6 +2330,20 @@ def _add_and_commit_tracked(repo, rel, content):
     return path
 
 
+def _decoded_touch_events(sink: Path) -> list:
+    """Read a touch-record.jsonl sink and return every decoded TouchEvent, in
+    file order. C7 dialect repoint: mirrors
+    test_hooks_bookkeeping.py's ``_decoded_touch_events`` helper -- this
+    file's own established prior art for reading the jsonl sink instead of
+    the retired ``touched.txt`` line dialect."""
+    if not sink.exists():
+        return []
+    return [
+        touch_record.decode_line(line)
+        for line in touch_record.iter_complete_lines(sink.read_bytes())
+    ]
+
+
 class TestRelocateTouchedPath:
     def test_relocated_tracked_file_leaves_both_halves_claimed(self, tmp_path):
         """THE LOAD-BEARING CASE: a tracked file A this session T-claimed is
@@ -2378,11 +2445,10 @@ class TestRelocateTouchedPath:
 
         assert not (Path(repo) / "a.py").exists()
         assert (Path(repo) / "b.py").read_text() == "original\n"
-        touched_path = Path(core.session_dir("mine", cwd=str(repo))) / "touched.txt"
-        lines = touched_path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            _verb, _ts, path = scope.parse_touch_event(line)
-            assert path != "b.py"
+        sink = Path(core.session_dir("mine", cwd=str(repo))) / scope._TOUCH_RECORD_FILENAME
+        events = _decoded_touch_events(sink)
+        for event in events:
+            assert event.path != "b.py"
 
     def test_dst_under_dot_archive_moves_but_writes_no_claim(self, tmp_path):
         """Destination carve-out (b): dst_rel resolves under the
@@ -2404,11 +2470,10 @@ class TestRelocateTouchedPath:
 
         assert not (Path(repo) / "a.py").exists()
         assert (Path(repo) / ".archive" / "a.py").exists()
-        touched_path = Path(core.session_dir("mine", cwd=str(repo))) / "touched.txt"
-        lines = touched_path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            _verb, _ts, path = scope.parse_touch_event(line)
-            assert path != ".archive/a.py"
+        sink = Path(core.session_dir("mine", cwd=str(repo))) / scope._TOUCH_RECORD_FILENAME
+        events = _decoded_touch_events(sink)
+        for event in events:
+            assert event.path != ".archive/a.py"
 
 
 # ---------------------------------------------------------------------------

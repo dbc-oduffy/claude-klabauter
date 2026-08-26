@@ -3,29 +3,31 @@ coordinator_core.hooks.cater_subagent_start -- engine-side catering
 composer for a SubagentStart payload (C2,
 docs/plans/2026-08-21-catering-rides-subagentstart.md).
 
-DoE-claude's PreToolUse(Agent) hook (`enforce-agent-dispatch-mode.py`)
-composes four legs for an `Agent`-tool child; a Workflow `agent()` spawn
-never reaches that hook (see the gating plan's Problem section), so it
-arrives uncatered. `docs/research/spike-verdicts/2026-08-21-subagentstart-
-additionalcontext-caters-a-workflow-spawn.md` proved `SubagentStart`
-`hookSpecificOutput.additionalContext` is a working per-child injection
-channel on BOTH the `Agent` path and a Workflow `agent()` spawn, carrying
-every input the existing assembler/provisioner already take (`agent_type`,
-`cwd`, `session_id`).
+DoE-claude's former PreToolUse(Agent) hook (`enforce-agent-dispatch-mode.py`)
+used to compose its own catering legs for an `Agent`-tool child, but those
+legs (including the named-teammate clause, `_compose_teammate_clause`) were
+retired from that hook at `10cd4cda9` (2026-08-21, -1001 lines).
+`SubagentStart` is now the sole catering path for every child, named or
+unnamed, Agent-tool or Workflow `agent()` spawn alike. `docs/research/
+spike-verdicts/2026-08-21-subagentstart-additionalcontext-caters-a-workflow-
+spawn.md` proved `SubagentStart` `hookSpecificOutput.additionalContext` is a
+working per-child injection channel on both shapes of spawn, carrying every
+input the existing assembler/provisioner already take (`agent_type`, `cwd`,
+`session_id`).
 
-This module ports the Agent-path composition ORDER verbatim from
-`enforce-agent-dispatch-mode.py :: main` -- load-bearing for how a child
+This module composes three legs, in an order load-bearing for how a child
 reads the result:
 
     sidecar offer (report_sidecar) OR miss notice
       -> injected contract blocks
       -> role framing (LAST, unconditional, outside any roster lookup)
 
-Three legs, not four. Anti-scope (gating plan): the named-teammate clause
-(`_compose_teammate_clause` on the Agent path) is deliberately NOT ported --
-its gate field (`tool_input.name`) does not exist on a SubagentStart
-payload, and its `SendMessage("main")` return channel does not exist for a
-Workflow child.
+A named dispatch's teammate NAME is reachable on this path -- `payload
+["agent_type"]` carries it directly, unlike the retired Agent-path hook's
+`tool_input.name` gate, which never existed here. There is no fourth,
+teammate-clause leg to port: the delivery instruction that clause used to
+inject now lives resident in DoE's own agent definitions (`03d81fa41`)
+rather than in any hook-injected prose.
 
 In-process only -- no subprocess. `provision_report.py`'s own
 `_PROVISION_TIMEOUT_SECONDS = 10` exceeds this registration's entire 5s
@@ -39,13 +41,18 @@ eligibility/assembly logic.
 
 Fail-open on every arm (AC5), matching `provision_report.py`'s contract
 verbatim: `compose_catering` never raises, and a failure in any one leg
-never suppresses the other two -- each leg is independently wrapped. An
-unenumerated type (not on `policy.report_sidecar`) stays silent for the
-sidecar leg -- the same "expected miss, no diagnostic" posture
-`coordinator_core.dispatch.provision._log_unenumerated_sidecar_miss`
-already takes for the sibling subagent-sidecar seam (this module does not
-duplicate that diagnostic; it is a defence-in-depth net for a governance
-gap this plan does not own).
+never suppresses the other two -- each leg is independently wrapped. A
+type that resolved and is genuinely not on `policy.report_sidecar` stays
+silent for the sidecar leg -- the same "expected miss, no diagnostic"
+posture `coordinator_core.dispatch.provision._log_unenumerated_sidecar_
+miss` already takes for the sibling subagent-sidecar seam (this module
+does not duplicate that diagnostic; it is a defence-in-depth net for a
+governance gap this plan does not own). That silence is distinct from the
+population that genuinely lost a sidecar, which gets the miss notice
+instead (`_resolve_sidecar_leg`): a NAMED dispatch whose `subagent_type`
+never resolved (its `agent_type` is always the teammate NAME, never a
+policy key, so the roster lookup could never have succeeded for it
+either way), or a dispatch for which no type resolved at all.
 
 The `sidecar_path: <path>` and `sidecar_provisioning: missed` marker lines
 are byte-identical to their Agent-path counterparts
@@ -115,9 +122,14 @@ full breakdown and the plan-level disposition this needs.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import secrets
 import sys
 from collections.abc import Mapping
+from datetime import datetime, timezone
+from hashlib import blake2b
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -126,12 +138,32 @@ from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_sp
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
+from coordinator_core.session import scope as session_scope
 from coordinator_core.subagent_sandbox.engine import (
+    _NAMED_TEAMMATE_RE,
     load_policy,
     resolve_effective_types,
     resolve_git_root,
 )
+
+#: Permissive canonical-shape match for THIS predicate only -- deliberately
+#: NOT `engine._TEAMMATE_CANONICAL_RE` (bug-backlog `2026-08-25-separator-
+#: name-miss-marker-hole`). `engine`'s regex VALIDATES a well-formed
+#: canonical id (`[A-Za-z0-9_.-]+@session-...`) for callers that need to
+#: reject a malformed one; this predicate CLASSIFIES whether a dispatch is
+#: a named one AT ALL, and a classifier that inherits a validator's name-
+#: charset restriction goes silent on exactly the population it exists to
+#: catch -- a teammate named with a separator the validator excludes
+#: (`feature/auth-review@session-...`, `docs/api-check@session-...`) whose
+#: `subagent_type` never resolved. Matching on the SEPARATOR shape alone
+#: (`<non-empty name>@session-<suffix>`) subsumes the strict pattern, so
+#: this predicate no longer needs `_TEAMMATE_CANONICAL_RE` at all -- it is
+#: not imported here; `engine`'s own module keeps using it for its
+#: distinct (validating) job.
+_NAMED_TEAMMATE_CANONICAL_SHAPE_RE = re.compile(r"^.+@session-.+$")
 from coordinator_core.subagent_sandbox.provision_report import (
+    _exit_interview_section,
+    _frontmatter,
     _provision,
     _sanitize_segment,
     assemble_contract_blocks_for_payload,
@@ -150,7 +182,11 @@ OP_NAME = "hooks.cater_subagent_start"
 SIDECAR_PATH_MARKER_PREFIX = "sidecar_path: "
 
 #: Same marker as `enforce-agent-dispatch-mode.py :: _compose_sidecar_miss_
-#: text` -- AC5's partial-catering clause tests this exact line.
+#: text` -- AC5's partial-catering clause tests this exact line. Used ONLY
+#: by the no-path miss body (`docs/plans/2026-08-25-a-missed-sidecar-
+#: leaves-a-file-the-em-ca.md` AC3) -- the path-bearing miss body reuses
+#: `SIDECAR_PATH_MARKER_PREFIX` instead, so a consumer keying off "sidecar_
+#: path: " (the same key an ordinary offer uses) finds the sentinel too.
 SIDECAR_MISS_MARKER = "sidecar_provisioning: missed"
 
 #: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`
@@ -197,16 +233,34 @@ def _compose_sidecar_offer_text(sidecar_path: str) -> str:
     )
 
 
-def _compose_sidecar_miss_text() -> str:
-    """Port of `enforce-agent-dispatch-mode.py ::
-    _compose_sidecar_miss_text` verbatim in substance -- an eligible type
-    whose provisioning came back empty is TOLD, never left to read silence
-    as ineligibility (AC5's partial-catering clause)."""
+def _compose_sidecar_miss_text(sentinel_path: str = "") -> str:
+    """Parameterized over two authored bodies (`docs/plans/2026-08-25-a-
+    missed-sidecar-leaves-a-file-the-em-ca.md` AC3), replacing the retired
+    single-body `enforce-agent-dispatch-mode.py ::
+    _compose_sidecar_miss_text` port -- an eligible type whose provisioning
+    came back empty is TOLD, never left to read silence as ineligibility
+    (AC5's partial-catering clause).
+
+    `sentinel_path` non-empty (`_resolve_sidecar_leg` wrote a sentinel, or
+    reused an existing one): tell the child the sentinel exists and name
+    its literal path via `SIDECAR_PATH_MARKER_PREFIX`, same marker shape an
+    ordinary sidecar offer uses. `sentinel_path` empty (no sentinel is
+    possible or the write itself failed): the no-path body, which never
+    tells the child to derive or scaffold its own path -- that instruction
+    (`the path your agent definition names`) is retired for both bodies;
+    the string is gone by construction (AC3)."""
+    if sentinel_path:
+        return (
+            "\n\nSidecar provisioning did not complete for this dispatch, "
+            "but a sentinel scaffold was written for you -- persist your "
+            "findings there as normal, and say in them that provisioning "
+            "missed.\n" + SIDECAR_PATH_MARKER_PREFIX + sentinel_path
+        )
     return (
         "\n\nSidecar provisioning did not complete for this dispatch -- no "
-        "scaffold exists on disk. Scaffold your own at the path your agent "
-        "definition names, persist your findings there as normal, and say "
-        "in them that provisioning missed.\n" + SIDECAR_MISS_MARKER
+        "scaffold exists on disk. Report your findings inline in your "
+        "reply and say in them that provisioning missed.\n"
+        + SIDECAR_MISS_MARKER
     )
 
 
@@ -435,23 +489,229 @@ def _resolve_contract_blocks_payload(
     return patched
 
 
+def _is_named_teammate_agent_id(agent_id: str) -> bool:
+    """True iff `agent_id` is a named-teammate id, in either shape
+    `resolve_effective_types` can hand back -- the EM-side canonical
+    `<name>@session-<short>` form, or the subagent-side raw
+    `a<name>-<16hex>` form (the Staff Engineer F4 fallback, when `_canonical_
+    agent_id` could not canonicalize because `session_id` was absent or
+    too short).
+
+    AC2 of the governing plan says not to mint a third spelling of this
+    predicate, and for the subagent-side shape that still holds --
+    `_NAMED_TEAMMATE_RE` is reused verbatim below. The canonical-shape arm
+    diverges deliberately (bug-backlog `2026-08-25-separator-name-miss-
+    marker-hole`): `engine._TEAMMATE_CANONICAL_RE` VALIDATES a well-formed
+    canonical id for callers that must reject a malformed one, but this
+    predicate's job is to CLASSIFY whether a dispatch is named AT ALL --
+    a classifier that inherits a validator's name-charset restriction goes
+    silent on exactly the malformed-but-real inputs it most needs to flag.
+    `_canonical_agent_id` genuinely mints ids like
+    `feature/auth-review@session-11111111` for a teammate named with a
+    `/`, and such a dispatch whose `subagent_type` never resolved must
+    still hit the roster-miss branch below, not go silent. So this arm
+    matches permissively on the SEPARATOR shape
+    (`_NAMED_TEAMMATE_CANONICAL_SHAPE_RE`, `<non-empty name>@session-
+    <suffix>`) rather than `engine`'s stricter charset -- that shape
+    subsumes the strict pattern, so this is still only two arms, not a
+    third spelling: an unnamed dispatch's bare-hex id (no `@`) matches
+    neither."""
+    return bool(
+        _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id)
+        or _NAMED_TEAMMATE_RE.fullmatch(agent_id)
+    )
+
+
+def _compute_sentinel_leaf(agent_id: str) -> Optional[str]:
+    """Collision-free-by-construction leaf for the miss-leg sentinel (AC4).
+
+    `_sanitize_segment` MANGLES rather than rejects (retracted-premise
+    section, governing plan): it strips `[^A-Za-z0-9._@-]` and returns
+    `None` only for the degenerate empty/dot/dotdot results, so sanitizing
+    ALONE is non-injective -- two distinct teammate names can mangle onto
+    one sanitized stem, and an idempotent-hit write would then have the
+    second dispatch silently reuse the first's sentinel (report
+    misattribution). The digest is over the RAW `agent_id`, before
+    sanitization, so two names that mangle identically still diverge in
+    their digest and get distinct leaves. Deterministic and spawn-free --
+    derivable by an EM from `(teammate name, session short id)` alone,
+    with no on-disk lookup.
+
+    Returns `None` when `agent_id` sanitizes to a degenerate result (should
+    not occur for a well-formed canonical id, but the caller must not write
+    a path-less sentinel either way)."""
+    sanitized = _sanitize_segment(agent_id)
+    if sanitized is None:
+        return None
+    digest = blake2b(agent_id.encode("utf-8"), digest_size=4).hexdigest()
+    return f"{sanitized}-{digest}"
+
+
+def _write_miss_sentinel(
+    payload: Dict[str, Any], cwd: Optional[str], agent_id: str, agent_type: str
+) -> str:
+    """Write (or idempotently reuse) the miss-leg sentinel scaffold for a
+    named dispatch that lost its report sidecar to the provisioning race
+    (`docs/plans/2026-08-25-a-missed-sidecar-leaves-a-file-the-em-ca.md`
+    AC1/AC4/AC5/AC7). Returns the sentinel's repo-relative path, or `""` on
+    any failure or when no sentinel is derivable.
+
+    The sentinel is never child-created (that plan's own anti-scope) --
+    claude-klabauter writes it eagerly, before the child's first tool call, so an EM
+    polling the derivable path never has to distinguish not-yet-written
+    from never-provisioned.
+
+    FAIL-OPEN (AC7): the try/except lives HERE, around the write, not in
+    `compose_catering`'s outer wrap -- that wrap zeroes both `_resolve_
+    sidecar_leg` return values on an exception, which would drop the miss
+    marker text entirely, strictly worse than today.
+
+    ATOMICITY (anti-scope): write to a `.tmp-<nonce>` sibling and
+    `os.replace` onto the target, never bare `open(path, "x")` then a
+    separate `write()` -- a hook killed between those two steps would leave
+    a zero-byte sentinel with no frontmatter key, which an existence-only
+    idempotent-hit check would then reuse forever. An existing file at the
+    target path IS treated as an idempotent hit (no second write, no
+    touch-claim) -- mirrors `_provision`'s own idempotent-hit contract for
+    a re-fired dispatch against the same derived leaf.
+
+    SCAFFOLD (AC5): stamps `provisioning: missed` and `scaffold_sha256:
+    <hex over the body-below-frontmatter>` into the frontmatter emitted by
+    `_frontmatter` (reused, not reimplemented) -- a file present but
+    lacking the declared `scaffold_sha256` key is a corrupt/foreign
+    scaffold, not a byte-identical-to-template baseline that would drift
+    with the template.
+
+    TOUCH-CLAIM: mirrors `_provision`/`_provision_plan_derivable_doc` --
+    `session_scope.touch_written_path` fires only on the branch that
+    actually wrote bytes, never on an idempotent hit.
+    """
+    try:
+        leaf = _compute_sentinel_leaf(agent_id)
+        if leaf is None:
+            return ""
+
+        # Non-spawning root read, matching this module's own contract
+        # ("In-process only -- no subprocess", module docstring) and the
+        # sibling legs at `compose_catering`/`assemble_contract_blocks_for_
+        # payload`. `resolve_git_root` shells out to `git rev-parse
+        # --show-toplevel`; the race arm never reached `_provision`, so it
+        # carried NO spawn before this leg existed, and reintroducing one
+        # here would break the plan's own zero-added-spawn criterion on the
+        # SubagentStart hot path. A wrong answer here only means "this
+        # lookup missed" -- the leg fails open to the no-path marker, never
+        # to a wrong verdict -- which is exactly `resolve_git_root_cheap`'s
+        # stated rule for who may use the cheap read.
+        git_root = _show_toplevel_no_spawn(cwd)
+        if not git_root:
+            return ""
+
+        session_id = payload.get("session_id") or None
+        if not session_id:
+            return ""
+        sanitized_session_id = _sanitize_segment(str(session_id))
+        if sanitized_session_id is None:
+            return ""
+
+        session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        doc_path = session_dir / f"{leaf}.md"
+        rel_path = f"state/subagent-share/{sanitized_session_id}/{leaf}.md"
+
+        if doc_path.exists():
+            # Idempotent hit: a re-fired dispatch against the same derived
+            # leaf reuses the existing sentinel rather than clobbering it.
+            # No touch-claim here -- this call did not write the bytes.
+            return rel_path
+
+        body = "## Run notes\n\n## Observations\n\n" + _exit_interview_section()
+        scaffold_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+        spawned_at = datetime.now(timezone.utc).isoformat()
+        frontmatter = _frontmatter(agent_type, spawned_at, str(session_id))
+        closing_marker = "---\n\n"
+        assert frontmatter.endswith(closing_marker)
+        frontmatter = (
+            frontmatter[: -len(closing_marker)]
+            + "provisioning: missed\n"
+            + f"scaffold_sha256: {scaffold_sha256}\n"
+            + closing_marker
+        )
+        doc_text = frontmatter + body
+
+        tmp_path = session_dir / f"{leaf}.tmp-{secrets.token_hex(4)}.md"
+        with open(tmp_path, "x", encoding="utf-8", newline="\n") as handle:
+            handle.write(doc_text)
+        os.replace(tmp_path, doc_path)
+
+        # SUBSUME: touch-claim (docs/plans/2026-08-05-in-process-writers-
+        # declare-their-writes.md C2), same rationale as `_provision`'s own
+        # create branch -- `session_id` here is the RAW payload["session_id"]
+        # (the dispatching session).
+        session_scope.touch_written_path(str(session_id), rel_path, git_root)
+
+        return rel_path
+    except Exception:
+        return ""
+
+
 def _resolve_sidecar_leg(
-    payload: Dict[str, Any], cwd: Optional[str], agent_type: str, subagent_type: str
+    payload: Dict[str, Any],
+    cwd: Optional[str],
+    agent_id: str,
+    agent_type: str,
+    subagent_type: str,
 ) -> tuple[str, str]:
     """Resolve the sidecar-offer/miss-notice leg. Returns
-    ``(sidecar_path, sidecar_text)`` -- ``sidecar_path`` is `""` when no
-    sidecar was provisioned (whether because the type is ineligible, or
-    because an eligible provision came back empty); ``sidecar_text`` is
-    the composed offer/miss prose, or `""` when neither applies (the
-    ineligible-type case -- stays silent, matching the Agent-path hook's
-    own `_is_report_sidecar_eligible` gate on the miss notice).
+    ``(sidecar_path, sidecar_text)``.
 
-    `agent_type`/`subagent_type` arrive pre-resolved from the caller
-    (`compose_catering`) rather than re-derived here -- `resolve_effective_
-    types`'s back-pointer read is in-process file I/O, not a process
-    spawn, but this module still resolves it exactly once per dispatch
-    (brightline: "add no second one") now that the contract-blocks leg
-    needs the same two values.
+    Separates two silences that a single "no type is on the roster" branch
+    used to conflate (bug-backlog `2026-08-25-sidecar-provisioning-missed-
+    never-fires-f49eb749c024.yaml`; plan `docs/plans/2026-08-25-a-named-
+    dispatch-keeps-its-report.md` AC5):
+
+      - a NAMED dispatch (`agent_id` in either named-teammate shape --
+        `_is_named_teammate_agent_id`) whose `subagent_type` did NOT
+        resolve (the back-pointer row was not yet written, or was never
+        written) emits the miss notice. THIS is the population that
+        genuinely lost a sidecar: for a named dispatch, `agent_type` is
+        always the teammate NAME (never a `report_sidecar` policy key --
+        `resolve_effective_types`'s own contract), so the roster lookup
+        below is structurally incapable of finding it there; only the
+        back-pointer-resolved `subagent_type` could ever have matched, and
+        it did not. `agent_id` in the EM-derivable canonical `<name>@
+        session-<short>` shape ALSO gets a sentinel written eagerly here
+        (`_write_miss_sentinel`, `docs/plans/2026-08-25-a-missed-sidecar-
+        leaves-a-file-the-em-ca.md`), and the miss notice names its literal
+        path; the raw `a<name>-<16hex>` fallback shape gets no sentinel
+        (its hex is not EM-derivable) and takes the no-path body instead.
+      - NO type resolved at all (`agent_type` and `subagent_type` both
+        falsy) ALSO emits the miss notice -- the resolver-exception arm
+        (`compose_catering`'s own `except` catching a `resolve_effective_
+        types` raise) and any other payload shape that yields empty legs
+        for both. `agent_id` is empty in this arm, so no sentinel is
+        possible; always the no-path body.
+      - an UNNAMED dispatch (bare-hex or unresolvable `agent_id`) whose
+        `agent_type` resolved but is genuinely absent from `policy.
+        report_sidecar` stays SILENT (unchanged) -- `compose_catering`
+        runs for every SubagentStart, so this is the majority population,
+        and it matches the Agent-path hook's own `_is_report_sidecar_
+        eligible` gate on the miss notice verbatim. Firing the marker here
+        would broadcast a miss instruction to types whose definitions were
+        never catered a sidecar at all.
+      - an eligible type whose `_provision` came back empty also emits the
+        miss notice (unchanged) -- an eligible dispatch is told, never
+        left to read silence as ineligibility. Same canonical-shape gate
+        as above applies: a sentinel is written and named only when
+        `agent_id` is in the EM-derivable canonical shape.
+
+    `agent_id`/`agent_type`/`subagent_type` arrive pre-resolved from the
+    caller (`compose_catering`) rather than re-derived here --
+    `resolve_effective_types`'s back-pointer read is in-process file I/O,
+    not a process spawn, but this module still resolves it exactly once
+    per dispatch (brightline: "add no second one") now that the
+    contract-blocks leg needs `agent_type`/`subagent_type` too.
 
     `policy_path=None` on both `load_policy` and `_provision` deliberately
     reuses `load_policy`'s own existing 3-rung fallback (explicit path ->
@@ -462,6 +722,22 @@ def _resolve_sidecar_leg(
     would duplicate logic that already exists, exactly the shape this
     module's own docstring says to avoid.
     """
+    if not agent_type and not subagent_type:
+        # Resolver-exception arm: `agent_id` is empty here (AC3), so no
+        # sentinel is possible -- the no-path body, unconditionally.
+        return "", _compose_sidecar_miss_text()
+
+    if not subagent_type and agent_id and _is_named_teammate_agent_id(agent_id):
+        # SHAPE GATE (AC2): sentinel keys ONLY on the canonical
+        # `<name>@session-<short>` shape. The raw `a<name>-<16hex>`
+        # fallback carries 16 hex digits no EM can derive, so a sentinel
+        # there would be unpollable by construction -- write none, take
+        # the no-path body.
+        sentinel_path = ""
+        if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
+            sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
+        return sentinel_path, _compose_sidecar_miss_text(sentinel_path)
+
     policy = load_policy(None)
 
     sidecar_eligible = bool(
@@ -474,7 +750,14 @@ def _resolve_sidecar_leg(
     sidecar_path = _provision(payload, None, cwd) or ""
     if sidecar_path:
         return sidecar_path, _compose_sidecar_offer_text(sidecar_path)
-    return "", _compose_sidecar_miss_text()
+
+    # Same shape gate as above: an eligible type whose `_provision` came
+    # back empty still only gets a sentinel when `agent_id` is in the
+    # EM-derivable canonical shape.
+    sentinel_path = ""
+    if agent_id and _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
+        sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
+    return sentinel_path, _compose_sidecar_miss_text(sentinel_path)
 
 
 def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> str:
@@ -496,6 +779,7 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     if not isinstance(payload, dict):
         return ""
 
+    agent_id = ""
     agent_type = ""
     subagent_type = ""
     try:
@@ -506,15 +790,15 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
         # wrong/absent root here only means "this lookup missed", never a
         # wrong VERDICT. `repo_root.show_toplevel` walks and never spawns.
         git_root = _show_toplevel_no_spawn(cwd)
-        _agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)
+        agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)
     except Exception:
-        agent_type, subagent_type = "", ""
+        agent_id, agent_type, subagent_type = "", "", ""
 
     sidecar_path = ""
     sidecar_text = ""
     try:
         sidecar_path, sidecar_text = _resolve_sidecar_leg(
-            payload, cwd, agent_type, subagent_type
+            payload, cwd, agent_id, agent_type, subagent_type
         )
     except Exception:
         sidecar_path, sidecar_text = "", ""

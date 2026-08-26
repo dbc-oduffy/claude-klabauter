@@ -313,16 +313,17 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
     # comment: `uninstall_legs.py:817`'s `home` is computed at line 816
     # (`os.environ.get("HOME") or os.environ.get("USERPROFILE") or
     # resolved_home`, an explicit USERPROFILE rung one line up);
-    # `test_envelope_resolve_context.py:91` asserts against
+    # `test_resolvers_resolve_context.py:91` asserts against
     # `resolvers.py`'s own `resolve_context()`, whose real chain (line 1573,
     # baselined in RUNG_ORDER_BASELINE) already defaults to `Path.home()`.
+    # (file renamed from `test_envelope_resolve_context.py`, 5321fbb91.)
     (
         "coordinator_core/install/uninstall_legs.py",
         817,
         'claude_home = os.environ.get("CLAUDE_HOME") or home',
     ),
     (
-        "coordinator_core/ops/emit/tests/test_envelope_resolve_context.py",
+        "coordinator_core/ops/emit/tests/test_resolvers_resolve_context.py",
         91,
         'claude_home = _P(os.environ.get("CLAUDE_HOME", str(_P.home()))) / ".claude"',
     ),
@@ -368,7 +369,7 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
 #   coordinator_core/ops/migrate_state_to_claude_klabauter.py:313 (main)
 #   coordinator/bin/check-machine-path-leak.py:327 (already independently
 #     F4-reviewed -- see this file's RUNG_ORDER_BASELINE removal note)
-#   coordinator/bin/gen-claude-klabauter-root-pointer.py:78 (_settings_home)
+#   coordinator/bin/gen-claude-klabauter-live-root-pointer.py:78 (_settings_home)
 #   coordinator/bin/tests/test_claude_machine_local.py:54 (_default_settings_home)
 #
 # Deliberately NOT baselined here. `find_bare_home_or_chains`'s own

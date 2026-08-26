@@ -72,13 +72,21 @@ Negative-spec:
     index — the same per-node frontmatter reads (`_read_meta`, one pass over
     `collect_live_handoff_paths`) feed BOTH the Branch A/B classification and
     `dag.build_reverse_edge_index`'s `metas=` hand-in.
-  - Does NOT spawn one git process per candidate — one `git cat-file
-    --batch-check`-equivalent (`git cat-file --batch`, positionally
-    reconciled — see `_batch_resolve_shipped_in` below) for every `shipped_in`,
-    one `git status --porcelain` for worktree-dirty exclusion, and (on the act
-    path) the existing `archive_and_commit` helper's own single `git add` +
-    single `git commit`. Spawn count does not scale with candidate count
-    (AC-5).
+  - Does NOT spawn one git process per candidate, and (C10 of this plan,
+    AC-11) does not spawn ANY git process for the `shipped_in` rail at all —
+    `_resolve_shipped_in_no_spawn` below answers object-existence by reading
+    loose objects and packed `.idx` files directly, bounded and
+    dependency-free (no dulwich/pygit2, no `.git/index` DIRC parser — see
+    that function's own docstring for the fail-closed degradation contract).
+    The worktree-dirty rail keeps its single `git status --porcelain`
+    spawn on the standalone/op path (`known_dirty_relpaths=None`); a future
+    in-plane caller that already computed divergence via
+    `commit_pipeline`/`commit_scoped` passes it through
+    `known_dirty_relpaths=` instead, so `plan_sweep` spawns 1 git process on
+    the standalone path (worktree-dirty only) and 0 on the in-plane path.
+    (On the act path) the existing `archive_and_commit` helper's own single
+    `git add` + single `git commit`. Spawn count does not scale with
+    candidate count (AC-5).
 """
 
 from __future__ import annotations
@@ -97,7 +105,7 @@ from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, build_reverse_edge_index
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
-from coordinator_core.ops.ceremony.git_native import cat_file_batch_objects, status_porcelain
+from coordinator_core.ops.ceremony.git_native import status_porcelain
 from coordinator_core.ops.fleet._common import (
     Move,
     _is_identical_duplicate,
@@ -120,6 +128,23 @@ _LOG = logging.getLogger(__name__)
 
 # Destination archive family label for the wire envelope (contract §2.1).
 _FAMILY = "handoff"
+
+# Scan-rail refusal reasons. NEGATIVE SPEC: these never reach the cockpit
+# wire. They are `_scan_terminal`'s own refusals, reported through the
+# opt-in `skipped` out-param (and `plan_sweep`'s `scan_skipped`), which no
+# wire-building caller passes — `_handle_act`'s wire `skipped` keeps only
+# the reasons the producer contract already publishes, so AC-4's
+# byte-identity holds without an allowlist for a future reason to drift out
+# of. A rail that refuses a candidate MUST name itself here: a bare
+# `continue` makes "every rail still refuses" and "every rail silently
+# drops everything" indistinguishable from outside, which is how AC-2 was
+# ticked on a mechanism that reported nothing.
+_SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
+_SCAN_REASON_NOT_TERMINAL = "not-terminal"
+_SCAN_REASON_MEMBERSHIP_ERROR = "reverse-membership-error: retained (fail-closed)"
+_SCAN_REASON_LIVE_CHILD = "live-child: a live successor/spinoff still points here"
+_SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
+_SCAN_REASON_CONSUMED_BY_LIVE = "consumed-by-live-session: consumed_by names a live session"
 
 # Succession-only edge kinds — the DR-324 Check-3 narrowing applies this
 # subset (instead of the default all-three-kinds set) ONLY for a Branch-B-
@@ -228,33 +253,139 @@ def _release_sweep_lock(lock_path: Optional[Path]) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _batch_resolve_shipped_in(worktree: Path, shas: Sequence[str]) -> Dict[str, bool]:
-    """Resolve every distinct `shipped_in` sha's `<sha>^{commit}` existence in
-    ONE `git cat-file --batch` feed (existence-only use of the batch primitive
-    — see `cat_file_batch_objects`'s own reconciliation contract).
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
-    POSITIONAL RECONCILIATION WARNING (why this must not be re-derived ad hoc):
-    `git cat-file --batch`/`--batch-check`'s output for a RESOLVABLE ref
-    echoes the resolved OBJECT sha, not the input ref text — a naive
-    field-keyed parse ("does this output line's first field match my input
-    ref?") silently mis-binds every entry, reading real resolutions as
-    "unresolvable" (observed as 11 false skips in this plan's manual
-    prototype run, per the C1a dispatch brief). `cat_file_batch_objects`
-    avoids this by walking `objects` in the SAME order they were written to
-    stdin and consuming exactly one output record per input line, never by
-    matching a field — reused here unchanged rather than re-implementing that
-    reconciliation.
+# Pack .idx v2/v3 magic ("\377tOc") — presence distinguishes v2+ (magic +
+# 4-byte version) from v1 (no magic; the fanout table starts at offset 0).
+_PACK_IDX_MAGIC = b"\xfftOc"
 
-    Deduplicates before the spawn (repeat shipped_in values across candidates
-    are common). Returns {} without spawning anything when there is nothing
-    to resolve.
+# Only v2 is read for its sha-table layout below. v1 (no magic) is also
+# read, positionally, via a distinct entry stride (see `_sha_in_pack_idx`).
+# Any OTHER version (v3, v4, or anything future) is explicitly unhandled —
+# degrades to unresolvable, never guessed at.
+_SUPPORTED_PACK_IDX_VERSION = 2
+
+
+def _sha_in_pack_idx(idx_path: Path, target: bytes) -> bool:
+    """Existence-only binary search over one pack `.idx`'s sorted sha table.
+
+    Reads ONLY the fanout table (1024 bytes) plus the O(log N) sha entries
+    the binary search visits — never the whole file, never a pack's zlib
+    object bodies, never `.git/index`. Raises ValueError/OSError on any
+    unhandled shape (unexpected version, truncated file); the caller treats
+    that as "not found in this idx" and degrades to unresolvable overall —
+    this function never returns a false "found".
+    """
+    with open(idx_path, "rb") as f:
+        header = f.read(8)
+        if len(header) < 8:
+            raise ValueError(f"{idx_path}: truncated header")
+        if header[:4] == _PACK_IDX_MAGIC:
+            version = int.from_bytes(header[4:8], "big")
+            if version != _SUPPORTED_PACK_IDX_VERSION:
+                raise ValueError(f"{idx_path}: unsupported idx version {version}")
+            fanout_offset = 8
+            entry_stride = 20
+            sha_field_offset = 0
+        else:
+            # v1: no magic — header bytes ARE the first two fanout entries.
+            fanout_offset = 0
+            entry_stride = 24  # 4-byte pack-offset + 20-byte sha, interleaved
+            sha_field_offset = 4
+
+        f.seek(fanout_offset)
+        fanout_bytes = f.read(1024)
+        if len(fanout_bytes) != 1024:
+            raise ValueError(f"{idx_path}: truncated fanout table")
+        fanout = [int.from_bytes(fanout_bytes[i * 4:i * 4 + 4], "big") for i in range(256)]
+
+        first_byte = target[0]
+        lo = fanout[first_byte - 1] if first_byte > 0 else 0
+        hi = fanout[first_byte]
+        shas_start = fanout_offset + 1024
+
+        while lo < hi:
+            mid = (lo + hi) // 2
+            f.seek(shas_start + mid * entry_stride + sha_field_offset)
+            candidate = f.read(20)
+            if len(candidate) != 20:
+                raise ValueError(f"{idx_path}: truncated sha entry at index {mid}")
+            if candidate == target:
+                return True
+            if candidate < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        return False
+
+
+def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
+    """Existence-only, dependency-free answer to "does this sha name an
+    object that exists" — the Rail-2 bounded reader (C10, AC-11).
+
+    Reads, in order: the loose object path `.git/objects/<2>/<38>` (a
+    `stat`), then each pack `.idx` via its fanout table and a binary search
+    over the sorted sha list. No zlib, no object body, no `.git/index`
+    parsing — existence only.
+
+    FAIL-CLOSED DEGRADATION (the correctness argument, made explicit): any
+    condition this reader does not model — a malformed/non-hex sha, an
+    `objects/info/alternates` file (the object could live ONLY in an
+    alternate object store this reader never reads), a `multi-pack-index`
+    (objects may be indexed there without an equivalent per-pack `.idx`
+    entry this reader would find), an unexpected `.idx` version, or any read
+    error — returns False (unresolvable), NEVER True. A caller's existing
+    "unresolvable retains (fail-closed)" disposition (`_classify_branch`)
+    means a false-unresolvable degrades to "retain, don't archive" — the
+    only direction this reader is permitted to err in. Guessing "exists" on
+    an unhandled case would turn that fail-closed archive gate fail-open,
+    which is the one thing this function must never do.
+    """
+    sha = sha_hex.strip().lower()
+    if len(sha) != 40 or not _HEX_DIGITS.issuperset(sha):
+        return False
+    try:
+        target = bytes.fromhex(sha)
+    except ValueError:
+        return False
+
+    objects_dir = common_dir / "objects"
+    try:
+        if (objects_dir / "info" / "alternates").exists():
+            return False  # unmodeled path — see docstring
+        pack_dir = objects_dir / "pack"
+        if (pack_dir / "multi-pack-index").exists():
+            return False  # unmodeled path — see docstring
+
+        loose = objects_dir / sha[:2] / sha[2:]
+        if loose.is_file():
+            return True
+
+        if not pack_dir.is_dir():
+            return False
+        for idx_path in sorted(pack_dir.glob("*.idx")):
+            try:
+                if _sha_in_pack_idx(idx_path, target):
+                    return True
+            except (OSError, ValueError):
+                continue  # this idx unreadable/unsupported — try the rest
+        return False
+    except OSError:
+        return False
+
+
+async def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Dict[str, bool]:
+    """Resolve every distinct `shipped_in` sha's object-existence via the
+    Rail-2 bounded reader — ZERO git spawns (C10, AC-11; supersedes the
+    prior `git cat-file --batch` rail).
+
+    Deduplicates first (repeat shipped_in values across candidates are
+    common). Returns {} when there is nothing to resolve.
     """
     distinct = sorted({s.strip() for s in shas if s and isinstance(s, str) and s.strip()})
     if not distinct:
         return {}
-    specs = [f"{sha}^{{commit}}" for sha in distinct]
-    resolved = await asyncio.to_thread(cat_file_batch_objects, worktree, specs)
-    return {sha: resolved.get(f"{sha}^{{commit}}") is not None for sha in distinct}
+    return {sha: _object_exists_no_spawn(common_dir, sha) for sha in distinct}
 
 
 async def _dirty_handoff_relpaths(worktree: Path) -> set:
@@ -382,6 +513,8 @@ async def _scan_terminal(
     common_dir: Path,
     *,
     scan_errors: Optional[List[str]] = None,
+    known_dirty_relpaths: Optional[set] = None,
+    skipped: Optional[List[dict]] = None,
 ) -> List[Tuple[Path, str, str, Optional[str]]]:
     """Return every terminal, childless, unclaimed candidate — UNCAPPED,
     oldest-first — as (path, note, status_label, terminal_since) tuples.
@@ -390,6 +523,24 @@ async def _scan_terminal(
     sorted output, so the same ordering rule serves both dry_run:true preview
     (which candidates are the ones this cap will act on next) and dry_run:false
     act (which candidate_ids this invocation is willing to move).
+
+    `known_dirty_relpaths` (C10, AC-11): the standalone/op path leaves this
+    None and this function spawns its own `git status --porcelain` (Rail 1,
+    `_dirty_handoff_relpaths`) — unchanged. An in-plane caller that has
+    ALREADY computed worktree divergence for these same paths this
+    invocation (`commit_pipeline`/`commit_scoped`'s own
+    `_diverging_paths_chunked`/`diverging_paths` pass) passes that answer
+    through here instead, so this rail spawns nothing — reusing the
+    existing computation rather than asking the same question twice. Do NOT
+    reimplement this rail's own git-status logic on the in-plane path; feed
+    it the candidate set's divergence answer.
+
+    `skipped` — opt-in out-param. When a list is supplied, every rail that
+    refuses a candidate appends `{id, reason}` to it, so a refusal is
+    observable from outside instead of vanishing into a bare `continue`.
+    This channel carries the whole live corpus's non-terminal population
+    (the bulk of it), so it is deliberately NOT wired to any wire-building
+    caller — see the `_SCAN_REASON_*` block's negative spec.
 
     ONE frontmatter pass over collect_live_handoff_paths(worktree_root)
     populates: (a) the metas dict fed to dag.build_reverse_edge_index (Check
@@ -422,16 +573,22 @@ async def _scan_terminal(
     for p, key in zip(live_paths, live_set_str):
         metas[key] = _read_meta(str(p)) or {}
 
-    # ONE git cat-file batch for every shipped_in value across the corpus.
+    # Rail 2 — bounded, git-spawn-free existence reader for every shipped_in
+    # value across the corpus (C10, AC-11).
     shipped_in_shas = [
         str(meta.get("shipped_in")).strip()
         for meta in metas.values()
         if (meta.get("deployment_state") or "").strip().lower() == "shipped" and meta.get("shipped_in")
     ]
-    shipped_in_resolved = await _batch_resolve_shipped_in(worktree_root, shipped_in_shas)
+    shipped_in_resolved = await _batch_resolve_shipped_in(common_dir, shipped_in_shas)
 
-    # ONE git status --porcelain for worktree-dirty exclusion.
-    dirty_relpaths = await _dirty_handoff_relpaths(worktree_root)
+    # Rail 1 — worktree-dirty exclusion. known_dirty_relpaths (in-plane
+    # reuse) short-circuits the git status spawn entirely; see this
+    # function's own docstring.
+    if known_dirty_relpaths is not None:
+        dirty_relpaths = known_dirty_relpaths
+    else:
+        dirty_relpaths = await _dirty_handoff_relpaths(worktree_root)
 
     # ONE reverse-edge index build over the metas already read above — no
     # second per-node frontmatter scan.
@@ -440,15 +597,21 @@ async def _scan_terminal(
     # ONE resolve_live_session_ids() call, hoisted out of the per-candidate loop.
     live_sids = await asyncio.to_thread(resolve_live_session_ids)
 
+    def _refuse(candidate_id: str, reason: str) -> None:
+        if skipped is not None:
+            skipped.append({"id": candidate_id, "reason": reason})
+
     for p, key in zip(live_paths, live_set_str):
         meta = metas[key]
         rel = rel_id(p, worktree_root)
 
         if rel in dirty_relpaths:
-            continue  # worktree-dirty — retained pending commit
+            _refuse(rel, _SCAN_REASON_WORKTREE_DIRTY)
+            continue
 
         qualifies, reason, status_label, branch_b_qualified = _classify_branch(meta, shipped_in_resolved)
         if not qualifies:
+            _refuse(rel, f"{_SCAN_REASON_NOT_TERMINAL}: {reason}")
             continue
 
         # Check 3: childlessness, DR-324-narrowed for a Branch-B-qualified
@@ -459,8 +622,10 @@ async def _scan_terminal(
             children = reverse_membership(str(p), live_set_str, index=index, edge_kinds=check3_edge_kinds)
         except ValueError as exc:
             _LOG.warning("_scan_terminal: reverse_membership error for %s — %s (fail-closed, retained)", p, exc)
+            _refuse(rel, f"{_SCAN_REASON_MEMBERSHIP_ERROR}: {exc}")
             continue
         if children:
+            _refuse(rel, _SCAN_REASON_LIVE_CHILD)
             continue
 
         # Check 4: no live claim — claim-dir primary key, consumed_by fallback.
@@ -476,10 +641,12 @@ async def _scan_terminal(
                 )
                 holder_live = True
         if holder_live:
+            _refuse(rel, _SCAN_REASON_LIVE_CLAIM)
             continue
         if not claim_dir.is_dir() or not holder_live:
             consumed_by_sid = _get_handoff_consumed_by(str(p))
             if consumed_by_sid and consumed_by_sid in live_sids:
+                _refuse(rel, f"{_SCAN_REASON_CONSUMED_BY_LIVE}: {consumed_by_sid}")
                 continue
 
         terminal_since = _terminal_since(meta, p)
@@ -490,20 +657,84 @@ async def _scan_terminal(
     return results
 
 
-async def _handle_act(
-    mode: str,
+async def plan_sweep(
     worktree_root: Path,
     common_dir: Path,
-    candidate_ids: List[str],
     cap: int,
-) -> dict:
-    """Act path: re-verify each candidate_id at act time, cap the moves
-    ACTUALLY APPLIED this invocation to `cap` (oldest-first among the
-    caller-supplied candidate_ids), and defer the rest with a first-class
-    reason rather than truncating silently.
+    *,
+    candidate_ids: Optional[List[str]] = None,
+    known_dirty_relpaths: Optional[set] = None,
+    scan_skipped: Optional[List[dict]] = None,
+) -> Tuple[List[Move], List[dict]]:
+    """Classification-only planning: scan, cap-slot, and every exclusion
+    rail — everything `_handle_act` used to do UP TO building its `moves`
+    list. Mutates nothing, commits nothing, spawns nothing beyond what
+    `_scan_terminal` itself spawns.
+
+    `candidate_ids=None` — the in-plane path: every terminal candidate,
+    cap-slotted oldest-first straight off `_scan_terminal`'s own ordering.
+
+    `candidate_ids=<sequence>` — the op/act path: today's `_handle_act`
+    re-verify/defer/duplicate semantics. Only this mode can emit the
+    `deferred-cap`/`duplicate-candidate-id`/re-verify reasons that are a
+    function of caller-supplied candidate_ids.
+
+    `known_dirty_relpaths` (C10, AC-11) — passed straight through to
+    `_scan_terminal`; see that function's own docstring. None (default) on
+    the standalone/op path spawns Rail 1's `git status --porcelain` (1 git
+    spawn total, Rail 2 already spawns none); a provided set on the
+    in-plane path spawns nothing (0 git spawns total).
+
+    `scan_skipped` (opt-in out-param) — `_scan_terminal`'s own rail
+    refusals, `{id, reason}` per refused record. Separate from the returned
+    `skipped` because it carries the whole non-terminal population, which
+    the cockpit wire must not: a wire-building caller passes nothing here
+    and its envelope is byte-unchanged, while a diagnostic caller (the
+    CLI) passes a list and sees why every record it did not archive was
+    refused. Discharges AC-2's "every rail names itself".
+
+    Returns (moves, skipped) — `moves` are `Move` objects ready for
+    `apply_sweep` or `archive_and_commit`; `skipped` is a list of
+    `{id, reason}` using the same reason strings that ship today, unchanged.
     """
-    terminal = await _scan_terminal(worktree_root, common_dir)
+    terminal = await _scan_terminal(
+        worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
+        skipped=scan_skipped,
+    )
     terminal_by_id = {rel_id(p, worktree_root): (p, note) for p, note, _label, _ts in terminal}
+
+    moves: List[Move] = []
+    skipped: List[dict] = []
+
+    def _plan_one(cid: str) -> None:
+        handoff_path, _note = terminal_by_id[cid]
+        dst = handoff_archive_dest(worktree_root, handoff_path)
+        force = False
+        if dst.exists():
+            if not _is_identical_duplicate(handoff_path, dst):
+                _LOG.warning(
+                    "archive_terminal_handoffs: %s NOT archived — a DIFFERENT file already "
+                    "occupies the archive destination %s.",
+                    cid, rel_id(dst, worktree_root),
+                )
+                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
+                return
+            force = True
+        moves.append(Move(src=handoff_path, dst=dst, candidate_id=cid, force=force))
+
+    if candidate_ids is None:
+        # In-plane path: _scan_terminal's own return value is already
+        # oldest-first sorted, so terminal_by_id's iteration order IS the
+        # cap-slotting order.
+        ordered_ids = list(terminal_by_id.keys())
+        deferred_ids = set(ordered_ids[cap:])
+        for cid in ordered_ids:
+            if cid in deferred_ids:
+                skipped.append({"id": cid, "reason": f"deferred-cap: invocation cap ({cap}) reached"})
+                continue
+            _plan_one(cid)
+        return moves, skipped
+
     requested_set = set(candidate_ids)
     # _scan_terminal's own return value is already oldest-first sorted; the
     # cap slot for a caller-supplied candidate_id is decided by that order,
@@ -513,11 +744,6 @@ async def _handle_act(
     oldest_first_requested = [cid for cid in terminal_by_id if cid in requested_set]
     allowed_ids = set(oldest_first_requested[:cap])
     deferred_ids = set(oldest_first_requested[cap:])
-
-    acted: List[dict] = []
-    skipped: List[dict] = []
-    failed: List[dict] = []
-    moves: List[Move] = []
 
     for cid in candidate_ids:
         if cid not in terminal_by_id:
@@ -539,21 +765,65 @@ async def _handle_act(
             # than double-move.
             skipped.append({"id": cid, "reason": "duplicate-candidate-id"})
             continue
-        handoff_path, _note = terminal_by_id[cid]
-        dst = handoff_archive_dest(worktree_root, handoff_path)
-        force = False
-        if dst.exists():
-            if not _is_identical_duplicate(handoff_path, dst):
-                _LOG.warning(
-                    "archive_terminal_handoffs: %s NOT archived — a DIFFERENT file already "
-                    "occupies the archive destination %s.",
-                    cid, rel_id(dst, worktree_root),
-                )
-                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
-                continue
-            force = True
-        moves.append(Move(src=handoff_path, dst=dst, candidate_id=cid, force=force))
+        _plan_one(cid)
         allowed_ids.discard(cid)  # consumed — guards a duplicate id in candidate_ids
+
+    return moves, skipped
+
+
+def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
+    """Apply pre-planned moves via `os.replace` only — no git spawn.
+
+    Ensures `dst.parent` exists before each replace. Refuses a non-`force`
+    move onto an existing `dst` (`os.replace` has no fail-if-exists mode, so
+    the force=False fail-on-existing-dst contract is enforced explicitly
+    here — mirrors `archive_and_commit`'s own same-named guard). On
+    `OSError` the item lands in `failed` and the loop continues, matching
+    today's `replace-failed` behaviour.
+
+    Returns (acted, failed) — `acted` items are `{id, archived: True}`;
+    `failed` items are `{id, reason}`.
+    """
+    acted: List[dict] = []
+    failed: List[dict] = []
+
+    for move in moves:
+        if not move.force and move.dst.exists():
+            failed.append({
+                "id": move.candidate_id,
+                "reason": "dst-exists: refusing overwrite (force=False)",
+            })
+            continue
+        try:
+            move.dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(str(move.src), str(move.dst))
+        except OSError as exc:
+            failed.append({
+                "id": move.candidate_id,
+                "reason": f"replace-failed: {exc}",
+            })
+            continue
+        acted.append({"id": move.candidate_id, "archived": True})
+
+    return acted, failed
+
+
+async def _handle_act(
+    mode: str,
+    worktree_root: Path,
+    common_dir: Path,
+    candidate_ids: List[str],
+    cap: int,
+) -> dict:
+    """Act path: re-verify each candidate_id at act time, cap the moves
+    ACTUALLY APPLIED this invocation to `cap` (oldest-first among the
+    caller-supplied candidate_ids), and defer the rest with a first-class
+    reason rather than truncating silently.
+    """
+    moves, skipped = await plan_sweep(worktree_root, common_dir, cap, candidate_ids=candidate_ids)
+
+    acted: List[dict] = []
+    failed: List[dict] = []
 
     if moves:
         n = len(moves)

@@ -112,19 +112,19 @@ def test_error_envelope_is_not_read_as_a_verdict():
     ).encode()
     out = hook_http.interpret_result("PreToolUse", frame)
     assert "permissionDecision" not in out["hookSpecificOutput"]
-    assert "did not run" in out["additionalContext"]
+    assert "did not run" in out["hookSpecificOutput"]["additionalContext"]
     assert "-32601" in out["systemMessage"]
 
 
 def test_unparseable_response_is_reported_not_swallowed():
     out = hook_http.interpret_result("PreToolUse", b"<html>502 Bad Gateway</html>")
-    assert "did not run" in out["additionalContext"]
+    assert "did not run" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_result_that_is_not_an_object_is_reported():
     frame = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "ok"}).encode()
     out = hook_http.interpret_result("PreToolUse", frame)
-    assert "did not run" in out["additionalContext"]
+    assert "did not run" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_unreachable_is_not_a_deny():
@@ -138,7 +138,7 @@ def test_unreachable_is_not_silent():
     out = hook_http.unreachable_response("PreToolUse", "connection refused")
     assert out["suppressOutput"] is False
     assert "connection refused" in out["systemMessage"]
-    assert "did not run" in out["additionalContext"]
+    assert "did not run" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_blocking_events_are_distinguished_from_advisory_ones():

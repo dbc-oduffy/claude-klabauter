@@ -351,6 +351,14 @@ def read_engine_stamp_sha(engine_root: Path) -> Optional[str]:
     if not raw.startswith("sha:"):
         return None
     sha = raw[len("sha:"):].strip()
+    # The identity may carry a `+dirty-<hex>` suffix when the round that
+    # wrote it shipped a dirty engine scope (`round.py :: stamp_engine_row`).
+    # That suffix exists so the stamp's BYTES -- and therefore
+    # `compute_client_token` -- distinguish two rounds at the same HEAD whose
+    # shipped content differs. It is deliberately NOT part of this function's
+    # answer: callers here want the source COMMIT, and `publish_lag` feeds it
+    # straight to a git history check that cannot resolve a decorated ref.
+    sha = sha.split("+", 1)[0].strip()
     return sha or None
 
 

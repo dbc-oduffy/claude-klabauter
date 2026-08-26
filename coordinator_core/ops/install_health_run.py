@@ -12,7 +12,7 @@ see the DoE trampoline's own header note for the anti-pattern this collapses
 Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   DoE deleted its entire `coordinator/bin/install-health/` drop-in directory
   (the trio: `ensure-python3-exe-shim.sh`, `check-windows-ssh-binary.sh`,
-  plus the claude-klabauter-root sourced-lib `coordinator-claude-klabauter-root.sh`) under a
+  plus the claude-klabauter-live-root sourced-lib `coordinator-claude-klabauter-root.sh`) under a
   PM kill-first ruling — cross-repo/inbox/2026-07-22-claude-central-em-
   install-health-trio-deleted-kill-first.md. The drop-in directory now
   lives (if at all) under claude-klabauter's OWN tree
@@ -29,7 +29,7 @@ Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   itself, a DoE-side concept unrelated to where leg content lives. Every
   claude-klabauter-side surface (the drop-in directory, and the `seed-skill-overrides`
   helper lookup) instead resolves off `coordinator_engine_root()`
-  (`coordinator_core.engine_root`) — the canonical claude-klabauter-root resolver
+  (`coordinator_core.engine_root`) — the canonical claude-klabauter-live-root resolver
   (env var -> settings-home pointer file -> machine-local registry -> raise,
   never silent). This is the same dual-anchor split already applied
   elsewhere in this port (e.g. `coordinator_core.install.substrate`'s

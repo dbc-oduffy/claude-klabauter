@@ -73,7 +73,9 @@ Negative-spec:
 
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
 import re
 from typing import List, Optional
 
@@ -529,6 +531,33 @@ def translate_msys_path(path: str) -> Optional[str]:
     return None
 
 
+
+def _native_path():
+    r"""The path flavour of the HOST THIS GUARD IS JUDGING FOR -- `ntpath` when
+    `_host_is_windows()`, `posixpath` otherwise.
+
+    Bare `os.path` was the wrong instrument for the two calls in
+    `resolve_relative` below. Everything upstream of them routes its platform
+    decision through `_host_is_windows()` (`translate_msys_path` is identity
+    off Windows, and returns native `C:\...` form on it), but `os.path` is
+    bound at import to the INTERPRETER's platform instead. On a real host the
+    two always agree, so production behaviour is unchanged in both directions:
+    on Windows `os.path` IS `ntpath`, on POSIX it IS `posixpath`.
+
+    They disagree in exactly one place -- a test that forces
+    `_host_is_windows()` True on a POSIX box to exercise the Windows branch.
+    There, `translate_msys_path` yields `C:\repo\anchor\f.txt` and
+    `posixpath.isabs` calls it RELATIVE, so the fall-through join produced
+    `C:\repo\anchor/C:\repo\anchor\f.txt`. That is an impossible hybrid
+    host, not a defect this function could ever hit in production -- but it
+    also meant the Windows branch could not be proven off Windows, which is
+    the vacuity `1b532df30` ("the MSYS regressions passed off Windows without
+    testing anything") set out to end. Routing these two calls through the
+    same seam as everything else makes the branch genuinely testable on the
+    fleet's macOS floor.
+    """
+    return ntpath if _host_is_windows() else posixpath
+
 def resolve_relative(base: str, target: str) -> Optional[str]:
     """`target` resolved against `base` if relative, else `target` itself --
     the lifted, translation-aware twin of the `_resolve_relative` previously
@@ -578,9 +607,10 @@ def resolve_relative(base: str, target: str) -> Optional[str]:
     b = translate_msys_path(base)
     if b is None:
         return None
-    if os.path.isabs(t):
+    native = _native_path()
+    if native.isabs(t):
         return t
-    return os.path.join(b, t)
+    return native.join(b, t)
 
 
 # ---------------------------------------------------------------------------

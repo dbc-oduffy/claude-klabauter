@@ -344,3 +344,209 @@ def test_build_governing_plan_directives_composes_the_attest_directive(tmp_path)
     ids_no_review = {d["id"] for d in directives_no_review}
     assert "d-attest-review-verified" not in ids_no_review
     assert "d-stamp-plan-implemented" in ids_no_review
+
+
+# ---------------------------------------------------------------------------
+# Lesson-capture body transport — the multi-paragraph leg
+# (state/bug-backlog/2026-08-20-wsc-lesson-assembler-cannot-forward-coor-
+# e08ce311c0fc.yaml). Before this, a lesson whose body ran past one line
+# could only reach disk by abandoning the directive and hand-running
+# `coordinator-lesson-add`: the assembler always emitted `--body`, and the
+# CLI refuses a newline-bearing `--body` outright.
+# ---------------------------------------------------------------------------
+
+
+def _lesson(**overrides):
+    base = {"title": "t", "body": "one line", "scope": "project"}
+    base.update(overrides)
+    return base
+
+
+def _add_args(decisions, repo_root=None):
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        build_lesson_capture_directives,
+    )
+
+    return build_lesson_capture_directives(decisions, repo_root)[0]["args"]
+
+
+def test_single_line_body_still_travels_as_body():
+    args = _add_args({"lessons": [_lesson()]})
+    assert args[args.index("--body") + 1] == "one line"
+    assert "--body-file" not in args
+
+
+def test_multi_paragraph_body_is_spooled_and_forwarded_as_body_file(tmp_path):
+    body = "First paragraph.\n\nSecond paragraph, the half that makes it actionable."
+    args = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
+
+    assert "--body" not in args
+    spooled = Path(args[args.index("--body-file") + 1])
+    assert spooled.read_text(encoding="utf-8") == body
+    assert spooled.parent == tmp_path / "state" / "ceremony" / "wsc-lesson-body"
+
+
+def test_multi_paragraph_body_spool_is_idempotent_across_passes(tmp_path):
+    body = "Para one.\n\nPara two."
+    first = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
+    second = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
+
+    assert first == second
+    spool_dir = tmp_path / "state" / "ceremony" / "wsc-lesson-body"
+    assert [p.name for p in spool_dir.iterdir()] == [Path(first[first.index("--body-file") + 1]).name]
+
+
+def test_explicit_body_file_is_forwarded_verbatim(tmp_path):
+    args = _add_args({"lessons": [_lesson(body=None, body_file="state/scratch/body.md")]})
+    assert args[args.index("--body-file") + 1] == "state/scratch/body.md"
+    assert "--body" not in args
+
+
+def test_body_and_body_file_together_are_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="exactly one of 'body' or 'body_file'"):
+        _add_args({"lessons": [_lesson(body_file="somewhere.md")]})
+
+
+def test_neither_body_nor_body_file_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="exactly one of 'body' or 'body_file'"):
+        _add_args({"lessons": [_lesson(body="")]})
+
+
+def test_multi_paragraph_body_without_a_repo_root_refuses_rather_than_composing_argv():
+    import pytest
+
+    with pytest.raises(ValueError, match="multi-paragraph"):
+        _add_args({"lessons": [_lesson(body="a\n\nb")]})
+
+
+# ---------------------------------------------------------------------------
+# Queue-append body transport — same multi-paragraph leg, the queue side
+# (AC13/AC14, docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-the-
+# requirement.md, C10). `coordinator-queue-append` does not raise on a
+# newline-bearing `--body` the way `coordinator-lesson-add` does, so this
+# leg silently truncated a multi-paragraph queue entry to its first line
+# before this fix.
+# ---------------------------------------------------------------------------
+
+
+def _universal_lesson(**overrides):
+    base = _lesson(
+        scope="universal",
+        queue_title="qt",
+        queue_body="one line",
+        surface="some/surface.py",
+        proposed_action="do the thing",
+        change_kind="skill-edit",
+    )
+    base.update(overrides)
+    return base
+
+
+def _queue_args(decisions, repo_root=None):
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        build_lesson_capture_directives,
+    )
+
+    directives = build_lesson_capture_directives(decisions, repo_root)
+    queue = [d for d in directives if d["cli"] == "coordinator-queue-append"]
+    assert len(queue) == 1
+    return queue[0]["args"]
+
+
+def test_single_line_queue_body_still_travels_as_body():
+    args = _queue_args({"lessons": [_universal_lesson()]})
+    assert args[args.index("--body") + 1] == "one line"
+    assert "--body-file" not in args
+
+
+def test_multi_paragraph_queue_body_is_spooled_and_forwarded_as_body_file(tmp_path):
+    body = "First paragraph.\n\nSecond paragraph, the half a truncated queue entry lost."
+    args = _queue_args({"lessons": [_universal_lesson(queue_body=body)]}, repo_root=tmp_path)
+
+    assert "--body" not in args
+    spooled = Path(args[args.index("--body-file") + 1])
+    assert spooled.read_text(encoding="utf-8") == body
+    assert spooled.parent == tmp_path / "state" / "ceremony" / "wsc-lesson-body"
+
+
+def test_multi_paragraph_queue_body_without_a_repo_root_refuses_rather_than_composing_argv():
+    import pytest
+
+    with pytest.raises(ValueError, match="multi-paragraph"):
+        _queue_args({"lessons": [_universal_lesson(queue_body="a\n\nb")]})
+
+
+def test_resolves_ids_never_spools_a_body(tmp_path):
+    """`lesson_capture_resolves_ids` holds no repo_root; deriving the id
+    list must not walk the argv builder into a disk write."""
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        lesson_capture_resolves_ids,
+    )
+
+    decisions = {"lessons": [_lesson(body="a\n\nb")]}
+    assert lesson_capture_resolves_ids(decisions) == ["d-add-lesson-1"]
+
+
+# ---------------------------------------------------------------------------
+# `decisions["lessons"]` template shape (AC14) — a bare `None` gave a caller
+# no clue what a lesson entry looks like, so a first `--decisions` attempt
+# always cost a round trip to `build_lesson_capture_directives`'s own
+# `ValueError`. `preflight.decisions_template` now pre-fills a discoverable
+# single-entry shape instead.
+# ---------------------------------------------------------------------------
+
+
+def test_lessons_template_default_names_every_required_and_optional_key():
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        LESSONS_TEMPLATE_DEFAULT,
+        _LESSON_OPTIONAL_FLAGS,
+        _LESSON_REQUIRED_KEYS,
+    )
+
+    assert len(LESSONS_TEMPLATE_DEFAULT) == 1
+    shape = LESSONS_TEMPLATE_DEFAULT[0]
+    for key in _LESSON_REQUIRED_KEYS:
+        assert key in shape
+    for key, _flag in _LESSON_OPTIONAL_FLAGS:
+        assert key in shape
+    for key in ("queue_title", "queue_body", "surface", "proposed_action", "change_kind"):
+        assert key in shape
+    assert all(value is None for value in shape.values())
+
+
+def test_build_decisions_template_ships_the_lessons_shape_not_a_bare_none():
+    from coordinator_core.workstream_complete import build_decisions_template
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        LESSONS_TEMPLATE_DEFAULT,
+    )
+
+    template = build_decisions_template(judgment_points=[])
+    assert template["lessons"] == LESSONS_TEMPLATE_DEFAULT
+    # Mutating the returned template must not mutate the shared constant.
+    template["lessons"][0]["title"] = "mutated"
+    assert LESSONS_TEMPLATE_DEFAULT[0]["title"] is None
+
+
+# ---------------------------------------------------------------------------
+# `build_directives` must forward `repo_root` to the lesson-capture builder.
+# The builder refuses a multi-paragraph body with no root to spool into, so a
+# caller that drops the parameter turns a contained per-directive failure into
+# an uncaught crash of the whole brief. Pinned at the call site because no
+# unit-level call of the builder can observe its caller's argument list.
+# ---------------------------------------------------------------------------
+
+
+def test_build_directives_forwards_repo_root_to_lesson_capture():
+    import inspect
+
+    from coordinator_core import workstream_complete as wsc
+
+    src = inspect.getsource(wsc.build_directives)
+    assert "build_lesson_capture_directives(decisions, repo_root=repo_root)" in src, (
+        "build_directives must forward repo_root to the lesson-capture builder; "
+        "omitting it turns every multi-paragraph lesson body into an uncaught crash"
+    )

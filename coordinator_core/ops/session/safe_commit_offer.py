@@ -737,6 +737,20 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     (``rebuild`` resolves ``.agents/<aid>/em-session-id.txt`` back-pointers)
     and so is last-event-wins, so neither is re-derived here.
 
+    NEGATIVE SPEC -- ``safe_paths`` is a LOWER BOUND on what this session
+    wrote, never a complete inventory of it, and ``indeterminate`` does NOT
+    detect the difference. A path's absence here is not evidence the session
+    did not author it: the claim index reads one dialect, records nothing a
+    shell redirect or spawned CLI wrote, and goes fully blind on the
+    Edit/Write route whenever the mirror is percolated with a reader ahead of
+    its writer -- which happened, fleet-wide and undetected, on 2026-08-26
+    (``state/audits/2026-08-26-touch-ledger-coverage-and-the-published-
+    dialect-split.md``; ``claim_index._TOUCHED_FILENAME``'s own negative spec
+    enumerates all three classes). This surfaces to the operator as an
+    ordinary scope refusal on their own file, with ``indeterminate`` False.
+    Do NOT "fix" that by reading the worktree here -- see ``orphans`` below;
+    the fix belongs at the index's coverage, not at this answer's shape.
+
     ``excluded`` -- every CONTESTED path: one this session holds that a peer
     holds too. Withheld from ``safe_paths`` (a peer's path is not yours) but
     NAMED, because a silent omission reintroduces exactly the doubt this
@@ -1573,7 +1587,7 @@ def _commit_changed_count(sha: Optional[str], worktree_root: Optional[str]) -> O
 #: file) — NOT that anything was mis-committed, and NOT that the entries are
 #: known-bad.
 _DEGRADED_SCOPE_NOTICE = (
-    "DEGRADED INPUT — touched.txt was written this process after an "
+    "DEGRADED INPUT — the touch record was written this process after an "
     "unexpected path-normalization failure (see stderr: normalize_touch_path); "
     "entries may have been dropped or mis-normalized, so the scope below may "
     "be incomplete or name the wrong path. Routine out-of-repo paths do not "
@@ -1712,13 +1726,25 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
         # CLI-written file always takes, since only the Edit/Write hot path
         # writes `touched.txt`. The `excluded` count is already stated above;
         # this line adds the disposition and the route out, not a second count.
-        if excluded:
+        #
+        # `excluded` alone did not carry that distinction. A session whose every
+        # write went through the Bash tool -- the channel this harness's own
+        # bypass-permissions instruction directs work through, and the one the
+        # touch-list never sees -- produces `excluded: []` AND a non-empty
+        # `residue`, and fell to the clean-tree line below with its own dirty
+        # files listed in the residue table directly above it. Observed
+        # 2026-08-26 (state/bug-backlog/2026-08-26-safe-commit-offer-attributes-
+        # no-bash-wri-47b599a8460a.yaml): three modified tracked files, exit 0,
+        # "working tree clean". Either signal means dirty paths exist, so the
+        # clean-tree claim requires BOTH to be empty.
+        if excluded or residue:
             lines.append(
                 "Nothing to commit for session %s — every dirty path was seen "
                 "and declined; none carried this session's claim. A file a CLI "
                 "or a workflow-internal agent wrote for this session records no "
-                "claim and reads as untouched here. Commit it by name: "
-                '`coordinator-safe-commit "<subject>" -- <paths>`.'
+                "claim and reads as untouched here — so does anything written "
+                "through the Bash tool rather than Edit/Write. Commit it by "
+                'name: `coordinator-safe-commit "<subject>" -- <paths>`.'
                 % report["session_id"]
             )
         else:

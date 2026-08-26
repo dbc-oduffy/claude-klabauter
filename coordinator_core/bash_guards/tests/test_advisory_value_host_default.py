@@ -165,7 +165,13 @@ _TRIGGERS = {
     "head-tail-plumbing-rewrite": "find . -type f | head -n 5",
     "plumbing-and-loops": "find . -type f | head -n 5",
     # host_independent (8)
-    "inprocess-search": "grep -rn TODO /tmp",
+    # A DEDICATED dir, never a bare `/tmp`: this box keeps live sockets and
+    # ~50 peers' scratch under the shared tempdir, so `grep -rn TODO /tmp`
+    # walked an unbounded, foreign tree and declined on the process-time
+    # budget (or, before the `_is_regular_file` walk-skip in
+    # `search/engine.py`, on the first socket it met). Still `-r` over a
+    # real directory, so the tree-walk leg stays exercised.
+    "inprocess-search": "grep -rn TODO /tmp/h6-search",
     "sed-range-read-advise": "sed -n '5,10p' /tmp/h6-somefile.txt",
     "cat-heredoc-write-advise": "cat > /tmp/h6-probe.txt <<'EOF'\nhello\nEOF",
     "block-illegal-filename": "echo hi > file:name.txt",
@@ -257,6 +263,10 @@ def _isolated_tempdir(tmp_path, monkeypatch):
         # both variants: suppress-only gives 3 failed/40 passed, this gives 1/42.
         os.makedirs(os.path.dirname("/tmp/h6-somefile.txt"), exist_ok=True)
         with open("/tmp/h6-somefile.txt", "w", encoding="utf-8") as fh:
+            fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
+        # `inprocess-search`'s own trigger walks THIS dir, not the shared `/tmp`.
+        os.makedirs("/tmp/h6-search", exist_ok=True)
+        with open("/tmp/h6-search/probe.txt", "w", encoding="utf-8") as fh:
             fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
     yield
 

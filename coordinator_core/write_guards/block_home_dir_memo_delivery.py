@@ -148,8 +148,9 @@ def _deny_reason(target: str) -> str:
     return (
         f"[home-dir memo guard] DENY {target}: not a memo receiver, goes "
         "unseen by /pickup. Use instead:\n"
-        "  bin/cross-repo-memo --to doe-claude-em --topic <slug> "
-        '--title "<one line>"'
+        "  cross-repo-memo draft <slug> --to doe-claude-em "
+        '--title "<one line>"\n'
+        "  cross-repo-memo send <slug>"
     )
 
 

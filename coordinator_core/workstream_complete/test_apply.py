@@ -2070,12 +2070,22 @@ def test_execute_directives_progress_survives_a_directive_writing_its_own_stderr
 
 def test_disabled_op_line_names_the_op_and_the_directive() -> None:
     """At exit 4 the report is sixty lines of JSON whose one load-bearing line is
-    an op refusal buried inside a `failed` entry's `error`. This names it."""
-    from coordinator_core.op_budget_suspension import refusal_message
+    an op refusal buried inside a `failed` entry's `error`. This names it.
 
+    The fixture op is drawn from `SUSPENDED_OPS` rather than hardcoded — see
+    `test_disabled_op_line_covers_degraded_entries_too`, which already had it
+    right. This test and `test_disabled_op_line_names_no_remedy` both pinned
+    `review_trail.write`, which LEFT that table when PM ruling 2026-08-23
+    readmitted the op, so both went red asserting a disabled-op line for an op
+    that is registered and reinstated — the very claim C7/AC11 corrects
+    elsewhere in this plan. The table is the authority and it is meant to
+    shrink; a fixture that restates a row from it goes stale by construction."""
+    from coordinator_core.op_budget_suspension import SUSPENDED_OPS, refusal_message
+
+    op = next(iter(SUSPENDED_OPS))
     report = {
         "failed": [
-            {"id": "d_wsc_tail_write", "error": f"wsc-tail.py exited 3 — {refusal_message('review_trail.write')}"},
+            {"id": "d_wsc_tail_write", "error": f"wsc-tail.py exited 3 — {refusal_message(op)}"},
             {"id": "d_other", "error": "some-cli exited 1 (args=[])"},
         ],
         "degraded": [],
@@ -2084,7 +2094,7 @@ def test_disabled_op_line_names_the_op_and_the_directive() -> None:
     lines = ws_apply.render_disabled_op_lines(report)
 
     assert lines == [
-        "DISABLED OP review_trail.write — off for the op budget bar; "
+        f"DISABLED OP {op} — off for the op budget bar; "
         "d_wsc_tail_write did not run."
     ]
 
@@ -2119,9 +2129,10 @@ def test_disabled_op_line_names_no_remedy() -> None:
     """Negative-spec: only one row in `SUSPENDED_OPS` carries a sanctioned
     `fallback`, and inventing a plausible one for the rest is the improvisation
     that field exists to prevent. This renderer offers none."""
-    from coordinator_core.op_budget_suspension import refusal_message
+    from coordinator_core.op_budget_suspension import SUSPENDED_OPS, refusal_message
 
-    report = {"failed": [{"id": "d", "error": refusal_message("review_trail.write")}], "degraded": []}
+    op = next(iter(SUSPENDED_OPS))
+    report = {"failed": [{"id": "d", "error": refusal_message(op)}], "degraded": []}
 
     line = ws_apply.render_disabled_op_lines(report)[0]
 
@@ -2138,3 +2149,220 @@ def test_suspension_marker_still_matches_the_live_refusal_message() -> None:
 
     for op in SUSPENDED_OPS:
         assert f"{op}{ws_apply._SUSPENSION_MARKER}" in refusal_message(op)
+
+
+# ---------------------------------------------------------------------------
+# Close-commit tail wiring (C13, docs/plans/2026-08-25-the-close-ceremony-
+# rebuilt-from-the-requirement.md) -- regression coverage for the seam C13
+# wired only into throwaway scratch scripts. See this section's own tests'
+# docstrings for the three ruling-shaped properties each one pins.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCommitTailResult:
+    """Stand-in for `run_close_commit`'s `PipelineResult` -- only the fields
+    `_run_close_commit_tail` itself reads are populated; the rest of that
+    shape is `directives_commit_tail`'s own concern, not this seam's."""
+
+    def __init__(
+        self,
+        *,
+        commit_failed: bool = False,
+        committed_sha: Optional[str] = "deadbeef",
+        pushed: bool = True,
+        integrity_breach: bool = False,
+        diagnostics: tuple = (),
+    ) -> None:
+        self.commit_failed = commit_failed
+        self.committed_sha = committed_sha
+        self.pushed = pushed
+        self.integrity_breach = integrity_breach
+        self.diagnostics = diagnostics
+
+
+def test_apply_close_commit_tail_fires_and_folds_into_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A normal apply reaches `run_close_commit_and_release_claims` -- never
+    bare `run_close_commit`, which releases no claim -- and its result lands
+    in `report["close_commit"]`."""
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    def fake_release_call(worktree_root: Any, **kwargs: Any) -> _FakeCommitTailResult:
+        calls.append((worktree_root, kwargs))
+        return _FakeCommitTailResult()
+
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit_and_release_claims",
+        fake_release_call,
+    )
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("bare run_close_commit must never be called directly")
+        ),
+    )
+    monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda decisions, root: None)
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {
+            "artifact": {"path": str(tmp_path)},
+            "directives": [_directive("d_a", "archive-stamp-cli")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "preflight": {"session_shape": {"sid": "sess-1"}},
+        }
+
+    monkeypatch.setattr(ws_apply, "brief", fake_brief)
+
+    exit_code, report = ws_apply.apply(decisions={"subject": "a close commit"})
+
+    assert len(calls) == 1
+    assert calls[0][0] == str(tmp_path)
+    assert calls[0][1]["session_id"] == "sess-1"
+    assert calls[0][1]["subject"] == "a close commit"
+    assert report["close_commit"]["attempted"] is True
+    assert report["close_commit"]["commit_failed"] is False
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_apply_close_commit_tail_fires_even_when_a_directive_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DR-358's unconditional-release ruling: the tail must fire regardless
+    of the directive pass's own exit code -- NOT gated on
+    `exit_code == SUCCESS`, which is exactly the "tidying up" that would
+    silently reintroduce the invisible-loss failure mode DR-358 closes."""
+    calls: list[Any] = []
+
+    def fake_release_call(worktree_root: Any, **kwargs: Any) -> _FakeCommitTailResult:
+        calls.append(worktree_root)
+        return _FakeCommitTailResult()
+
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit_and_release_claims",
+        fake_release_call,
+    )
+    monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda decisions, root: None)
+
+    def failing_main(argv: list[str]) -> int:
+        return 1
+
+    modules = {"archive-stamp-cli": _fake_module(failing_main, "fake_a")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {
+            "artifact": {"path": str(tmp_path)},
+            "directives": [_directive("d_a", "archive-stamp-cli")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "preflight": {"session_shape": {"sid": "sess-1"}},
+        }
+
+    monkeypatch.setattr(ws_apply, "brief", fake_brief)
+
+    exit_code, report = ws_apply.apply(decisions={"subject": "a close commit"})
+
+    assert any(f.get("id") == "d_a" for f in report.get("failed", []))
+    assert len(calls) == 1, "the tail must fire even though a directive in this pass failed"
+    assert "close_commit" in report
+    assert exit_code != int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+@pytest.mark.parametrize(
+    "decisions,sid",
+    [
+        ({}, "sess-1"),
+        ({"subject": "a close commit"}, None),
+    ],
+    ids=["subject-missing", "sid-missing"],
+)
+def test_apply_close_commit_tail_does_not_fire_without_subject_and_sid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    decisions: dict[str, Any],
+    sid: Optional[str],
+) -> None:
+    """Mirrors the removed `jp-commit-subject-missing` gate: no subject or no
+    resolved session id means nothing to commit against, so the tail must
+    not call `run_close_commit_and_release_claims` at all."""
+    calls: list[Any] = []
+
+    def fake_release_call(worktree_root: Any, **kwargs: Any) -> _FakeCommitTailResult:
+        calls.append(worktree_root)
+        return _FakeCommitTailResult()
+
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit_and_release_claims",
+        fake_release_call,
+    )
+    monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda d, root: None)
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {
+            "artifact": {"path": str(tmp_path)},
+            "directives": [_directive("d_a", "archive-stamp-cli")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "preflight": {"session_shape": {"sid": sid}},
+        }
+
+    monkeypatch.setattr(ws_apply, "brief", fake_brief)
+
+    exit_code, report = ws_apply.apply(decisions=decisions)
+
+    assert calls == []
+    assert "close_commit" not in report
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_apply_close_commit_failure_escalates_success_to_partial_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A commit failure on an otherwise-SUCCESS directive pass escalates the
+    exit code to `PARTIAL_MUTATION` without masking an already-worse code."""
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit_and_release_claims",
+        lambda worktree_root, **kwargs: _FakeCommitTailResult(commit_failed=True),
+    )
+    monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda decisions, root: None)
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"archive-stamp-cli": _fake_module(ok_main, "fake_a")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {
+            "artifact": {"path": str(tmp_path)},
+            "directives": [_directive("d_a", "archive-stamp-cli")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "preflight": {"session_shape": {"sid": "sess-1"}},
+        }
+
+    monkeypatch.setattr(ws_apply, "brief", fake_brief)
+
+    exit_code, report = ws_apply.apply(decisions={"subject": "a close commit"})
+
+    assert report["close_commit"]["commit_failed"] is True
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)

@@ -414,7 +414,7 @@ def _run_oracle_inject_anchor(
 
 @_requires_append_oracle
 @pytest.mark.real_home  # oracle subprocess resolves CLAUDE_KLABAUTER_ROOT via the real machine-local
-# registry / <settings-home>/machine-local/.claude-klabauter-root pointer — see note below.
+# registry / <settings-home>/machine-local/.claude-klabauter-live-root pointer — see note below.
 class TestAppendDayByteParity:
     """Facade-wiring parity: changelog.append_day env/arg mapping vs. step9-append-changelog.sh
     (strang-10 AC).
@@ -565,7 +565,7 @@ class TestAppendDayByteParity:
 
 @_requires_backfill_oracle
 @pytest.mark.real_home  # oracle subprocess resolves CLAUDE_KLABAUTER_ROOT via the real machine-local
-# registry / <settings-home>/machine-local/.claude-klabauter-root pointer — see note below.
+# registry / <settings-home>/machine-local/.claude-klabauter-live-root pointer — see note below.
 class TestBackfillGapsByteParity:
     """Byte-identical parity: changelog.backfill_gaps == backfill-week-changelog-gaps.py.
 

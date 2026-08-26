@@ -255,6 +255,8 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
     candidates = [sha for sha in unique_shas if sha not in ancestor_set]
     valid_not_ancestor: set[str] = set()
     if candidates:
+        from coordinator_core.win_portability import leaf_spawn_creationflags
+
         stdin_payload = "\n".join(candidates) + "\n"
         try:
             batch_check = subprocess.run(
@@ -264,7 +266,7 @@ def classify_shas_on_origin_main(repo_root: Path, shas: list[str]) -> dict[str, 
                 text=True,
                 check=False,
                 timeout=LOCAL_PLUMBING_BUDGET_SECS,
-                **no_console_creationflags(),
+                **leaf_spawn_creationflags(),
             )
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return {sha: None for sha in unique_shas}
@@ -345,6 +347,8 @@ def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[
     """
     if not refs:
         return {}
+    from coordinator_core.win_portability import leaf_spawn_creationflags
+
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), "cat-file", "--batch-check=%(objectname) %(objecttype)"],
@@ -353,7 +357,7 @@ def _resolve_refs_batch(repo_root: Path, refs: list[str]) -> dict[str, Optional[
             text=True,
             check=False,
             timeout=LOCAL_PLUMBING_BUDGET_SECS,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return {ref: None for ref in refs}

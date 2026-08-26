@@ -288,8 +288,6 @@ _BASELINE: set[tuple[str, str]] = {
      '# contract/generator, claude-klabauter owns engine). The `jq` and `bash >= 4.3`'),
     ('coordinator/bin/workday-complete-close.py',
      'invoked them: `python3 "${_mkb_bin}/<cli>.py" ...` with no cd)."""'),
-    ('coordinator/bin/workday-complete-reconcile.py',
-     '`git add -- "$_ENTRY" 2>/dev/null || true` (staging failure here is'),
     ('coordinator/bin/workday-start-day-branch-resolve.py',
      'printf \'%s  %s\\\\n\' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$REAP_LOG" >> ~/.claude/logs/coordinator-reap.log'),
     ('coordinator/lib/percolate/resolve_target.py',

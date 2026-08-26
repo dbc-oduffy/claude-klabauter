@@ -104,6 +104,7 @@ from __future__ import annotations
 
 from typing import Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core.telemetry import spawn_counter
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Every LOCAL git call -- reads and writes alike. A budget, not a dial:
@@ -179,17 +180,41 @@ class GitResult(NamedTuple):
         distinction closes.
     `stdout` / `stderr` -- decoded text, never `None`; empty strings on a
         timeout or a failed spawn.
+    `stdout_bytes` -- git's stdout as the bytes it actually wrote, populated
+        ONLY when the call ran in binary mode (`binary=True`, or `input`,
+        which implies it). `b""` otherwise, and `b""` on a timeout or a
+        failed spawn. It is a SECOND view of the same stream rather than a
+        replacement for `stdout`: a `-z` reader needs the undecoded bytes
+        (see `run_git`'s `binary` entry), while everything around it -- error
+        messages, `git_out`, existing call sites -- keeps reading text, and
+        neither should have to know which the other wanted. Last field and
+        defaulted, so the four-field keyword constructions in this tree's
+        test doubles keep working untouched.
     """
 
     returncode: int
     stdout: str
     stderr: str
     timed_out: bool
+    stdout_bytes: bytes = b""
 
     @property
     def ok(self) -> bool:
         """True iff git ran and exited 0."""
         return self.returncode == 0
+
+
+def _as_bytes(raw) -> bytes:
+    """The raw counterpart to `_as_text`, for `GitResult.stdout_bytes`.
+
+    Returns `b""` for a text-mode capture rather than re-encoding the decoded
+    string. Re-encoding would look like it worked and would hand back bytes
+    that are NOT what git wrote wherever `errors="replace"` had already
+    substituted U+FFFD -- a silent lie to exactly the byte-exactness callers
+    this field exists for. An empty value they can see is the honest answer;
+    a caller that wants the bytes asks for `binary=True` and gets them.
+    """
+    return raw if isinstance(raw, bytes) else b""
 
 
 def _resolve_budget(timeout: Optional[float], remote: bool) -> float:
@@ -268,6 +293,7 @@ def run_git(
     remote: bool = False,
     env: Optional[Mapping[str, str]] = None,
     input: Optional[bytes] = None,
+    binary: bool = False,
 ) -> GitResult:
     """Run `git <args>` under this seam's bound and return a `GitResult`.
 
@@ -325,6 +351,23 @@ def run_git(
     This parameter is what stops that gate and this one from pulling in
     opposite directions.
 
+    `binary` -- capture stdout/stderr UNDECODED and publish them on
+    `GitResult.stdout_bytes`. `input` already implies it; this flag is for
+    the readers that need byte-exact OUTPUT without having anything to write,
+    which is the whole `-z` family (`ls-files -z`, `status --porcelain -z`,
+    `check-attr -z`) plus `cat-file --batch`. The reason it must exist is the
+    same one that makes `input` bytes-only, pointed the other way: `stdout`
+    decodes with `errors="replace"`, so a path byte git cannot decode comes
+    back as U+FFFD. For a caller whose entire predicate is "are these bytes
+    what the declaration says they are" (`ops/eol/census.py`), that
+    substitution IS the bug it is looking for, and for
+    `git/ls_files_bytes.py` it is the reason that module exists at all. Text
+    mode would also universal-newline-translate a `
+` inside a blob,
+    which is precisely the difference `ops/eol/repair.py` reads `cat-file
+    --batch` to measure. `stdout` stays populated (decoded, `replace`) in
+    binary mode too, so an error path can still print something readable.
+
     Never raises for a git-side failure -- see the module's negative spec.
     Raises `TypeError` immediately if `input` is passed as `str`: that is a
     caller-contract violation, checked before any subprocess is spawned, not
@@ -351,14 +394,27 @@ def run_git(
     # ValueError on both), so DEVNULL is supplied only when there is nothing
     # to write; a git command that finds an inherited stdin can block waiting
     # on a prompt, which is what DEVNULL is there to prevent.
-    if input is None:
+    if input is not None:
+        mode_kwargs = {"input": input}
+    elif binary:
+        # Binary with nothing to write: DEVNULL still applies, since the
+        # reason it is here (a git command that finds an inherited stdin can
+        # block on a prompt) has nothing to do with which mode we capture in.
+        mode_kwargs = {"stdin": subprocess.DEVNULL}
+    else:
         mode_kwargs = {
             "encoding": "utf-8",
             "errors": "replace",
             "stdin": subprocess.DEVNULL,
         }
-    else:
-        mode_kwargs = {"input": input}
+
+    # The brightline's second axis. Counted here rather than at the call sites
+    # because this is the chokepoint every git call is already required to pass
+    # through (see `coordinator_core.git.git_state`'s docstring). Bumped BEFORE
+    # the spawn, not after: process creation is the cost being counted, and a
+    # `git` that raises still paid it — counting only on the success path would
+    # hide exactly the timeouts worth finding.
+    spawn_counter.bump()
 
     try:
         # NOT hand-rolled over `Popen`, deliberately. `subprocess.run`'s own
@@ -392,6 +448,7 @@ def run_git(
         # subject never reads, which makes migrating cost more than staying.
         stderr=_as_text(getattr(completed, "stderr", "")),
         timed_out=False,
+        stdout_bytes=_as_bytes(completed.stdout),
     )
 
 

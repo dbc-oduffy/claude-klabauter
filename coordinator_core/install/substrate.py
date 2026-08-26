@@ -1798,6 +1798,32 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # candidate regardless of exec bit.
 _AGENT_HELPER_DATA_SUFFIXES = frozenset({".md", ".toml", ".yaml", ".yml", ".txt"})
 
+# BYTE-COPIED BIN MEMBERS -- installed name -> claude-klabauter-live-root-relative source
+# path components, for the entries whose installed body is the SOURCE FILE'S
+# OWN BYTES rather than a body `_write_agent_forwarder` generates.
+#
+# One entry today, ``claude-doe``, and its delivery is not this module's:
+# `maximalist.py`'s Step 3.5b (`_install_claude_doe_wrapper`) points
+# ``~/.local/bin/claude-doe`` at ``<settings-home>/bin/claude-doe`` as a POSIX
+# symlink, and `coordinator_core.ops.install_claude_doe_wrapper` (run by
+# `scripts/setup.py :: install_claude_doe_launcher_chain`, AFTER the forwarder
+# loop here) `shutil.copyfile`s the wrapper source onto that path -- through the
+# symlink, onto the settings-home file. The generated forwarder this module
+# writes is therefore never the FINAL body on POSIX; the source bytes are. The
+# wrapper carries its own shebang precisely because of this delivery shape
+# (`coordinator/bin/claude-doe.py`'s file header; guard
+# `install/tests/test_installed_posix_targets_have_shebang.py`).
+#
+# Declared here, as data, so a verifier can ask which installed names are
+# byte copies without a hand-list of its own -- `settings_home_report.
+# _byte_copied_body_matches_source` is that reader, and `maximalist`'s Step
+# 3.5b derives its own ``wrapper_src`` from this same mapping so the source
+# path has one spelling. A new byte-copied member adds a row here and needs no
+# edit in either reader.
+BYTE_COPIED_BIN_SOURCES: "dict[str, tuple[str, ...]]" = {
+    "claude-doe": ("coordinator", "bin", "claude-doe.py"),
+}
+
 
 def _is_pytest_infrastructure(filename: str) -> bool:
     """True for a pytest collection artifact living in ``coordinator/bin/`` —

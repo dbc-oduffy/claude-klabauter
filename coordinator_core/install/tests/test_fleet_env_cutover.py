@@ -19,6 +19,14 @@ Negative-spec:
       (`test_fleet_env_swap.py`'s surface) — this file only exercises the
       real-directory -> junction bootstrapping move that mechanism cannot
       perform on itself.
+    - Does NOT flip the process-global `os.name` to reach the WinError-5
+      branch — `junction._host_is_nt` (a module-level override point, see its
+      own docstring) is patched instead. Flipping `os.name` makes every
+      `Path` built afterwards in the same process a `WindowsPath`, which
+      silently turned `str(Path(...))` into a backslash string in
+      `fleet_env.py` and planted a stray `\\private\\var\\...\\fleet-env.lock`
+      at the repo root, once per test here. `conftest.py`'s
+      `_no_new_repo_root_entries` fixture now fails any test that does it.
     - Does NOT re-run the N=70 background-reader load probe the plan's retry
       budget was measured against — that probe is itself real load on a
       50-70-session box and must not be re-run casually (see
@@ -118,7 +126,7 @@ def test_retry_exhausted_raises_named_remediation_and_mutates_nothing(
     env_root = tmp_path / "fleet-env"
     _write_marker(env_root, "UNTOUCHED")
 
-    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(junction, "_host_is_nt", lambda: True)
 
     def _always_blocked(*_args, **_kwargs):
         raise _permission_error(5)
@@ -146,7 +154,7 @@ def test_retry_gives_up_within_the_stated_budget(tmp_path, monkeypatch: pytest.M
     env_root = tmp_path / "fleet-env"
     _write_marker(env_root, "CONTENT")
 
-    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(junction, "_host_is_nt", lambda: True)
     monkeypatch.setattr(
         fleet_env.os, "rename", lambda *_a, **_k: (_ for _ in ()).throw(_permission_error(5))
     )
@@ -166,7 +174,7 @@ def test_non_transient_permission_error_is_not_retried(tmp_path, monkeypatch: py
     env_root = tmp_path / "fleet-env"
     _write_marker(env_root, "CONTENT")
 
-    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(junction, "_host_is_nt", lambda: True)
     calls = {"n": 0}
 
     def _wrong_code(*_args, **_kwargs):
@@ -220,7 +228,7 @@ def test_restore_under_load_goes_through_bounded_retry_not_a_bare_rename(
     env_root = tmp_path / "fleet-env"
     _write_marker(env_root, "RESTORE-UNDER-LOAD")
 
-    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(junction, "_host_is_nt", lambda: True)
     monkeypatch.setattr(
         junction,
         "create_junction",
@@ -262,7 +270,7 @@ def test_restore_retry_exhausted_names_generation_dir_and_absent_state(
     env_root = tmp_path / "fleet-env"
     _write_marker(env_root, "UNRECOVERABLE")
 
-    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(junction, "_host_is_nt", lambda: True)
     monkeypatch.setattr(
         junction,
         "create_junction",

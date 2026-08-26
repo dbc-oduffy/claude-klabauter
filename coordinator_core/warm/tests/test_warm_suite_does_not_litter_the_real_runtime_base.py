@@ -52,6 +52,24 @@ _WRITER_MODULES = (
     # listed here, which is exactly the escape the docstring above warns
     # about: it ran outside this file's subprocess litter-guard.
     "coordinator_core/warm/tests/test_server_loop.py",
+    # Added 2026-08-25 with the atomic-discovery-write fix. This guard caught it
+    # on the first full-suite run, and it was right to: the same omission had
+    # already bitten in an ad-hoc script that afternoon, which wrote 400 junk
+    # records into the live per-user runtime base on a box running 50-70
+    # sessions. `write_discovery(engine_root=...)` resolves through `svc_dir()`
+    # to a per-clone hash under the REAL base, so passing a tmp_path does NOT
+    # sandbox it -- the tmp root just hashes to a new directory beside the live
+    # ones. Only this file's subprocess litter-guard actually contains it.
+    "coordinator_core/warm/tests/test_discovery_write_is_atomic.py",
+    # Added 2026-08-25 with the front door (C2/C3/C4). Both modules call
+    # `front_door.write_discovery`, which resolves through `svc_dir()` against the
+    # REAL `%LOCALAPPDATA%` exactly as the atomic-write note above describes --
+    # a tmp_path HOME quarantine does not sandbox it, it just hashes to a fresh
+    # directory beside the operator's live ones. Caught by this guard on the first
+    # run against the in-flight chunks, which is the guard doing its job a second
+    # time on the same shape.
+    "coordinator_core/warm/tests/test_front_door.py",
+    "coordinator_core/warm/tests/test_front_door_routing.py",
 )
 
 

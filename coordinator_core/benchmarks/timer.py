@@ -63,8 +63,21 @@ class BenchmarkSampleInvalid(RuntimeError):
 
 
 def _build_argv(op: str, params_json: str, repo: Optional[str]) -> list[str]:
-    """Builds the invoke argv, omitting --repo for bare/none-scoped ops."""
-    argv = [sys.executable, "-m", "coordinator_core.invoke", op, params_json]
+    """Builds the invoke argv, omitting --repo for bare/none-scoped ops.
+
+    Always carries `--allow-unstamped-dispatch`: this harness's whole point
+    is timing the live/dev engine tree (see this module's own docstring),
+    which by construction has no build stamp. Per-invocation CLI flag on a
+    freshly spawned child process -- ipc.py's in-process
+    `allow_unstamped_dispatch()` (set by the parent pytest process's own
+    `conftest.py::pytest_configure`) does not reach this subprocess, so the
+    gate has to be opted out of again here, the second of the two sanctioned
+    carve-outs named in `ipc.allow_unstamped_dispatch`'s docstring.
+    """
+    argv = [
+        sys.executable, "-m", "coordinator_core.invoke", op, params_json,
+        "--allow-unstamped-dispatch",
+    ]
     if repo is not None:
         argv += ["--repo", repo]
     return argv

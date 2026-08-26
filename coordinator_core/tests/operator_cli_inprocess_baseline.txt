@@ -7,7 +7,9 @@
 # line here.
 #
 # 2026-08-06, end of the conversion sweep: 110 of the original 155 were
-# converted (see git log for DR-276). **The 45 that remain are no longer an
+# converted (see git log for DR-276). **The 45 (now 44 -- `detect-staged-
+# rollback.py` deleted 2026-08-25, "the staged rollback gate dies without
+# blocking a commit") that remain are no longer an
 # undifferentiated backlog** — every one was individually classified during that
 # sweep, with per-file evidence in `state/subagent-share/`. They fall in four
 # kinds, and the practical consequence is that this list is now mostly
@@ -108,7 +110,6 @@ coordinator/bin/coordinator-safe-commit.py
 # private — and is not why this entry exists.)
 coordinator/bin/cross-repo-memo.py
 coordinator/bin/day-coverage-sweep.py
-coordinator/bin/detect-staged-rollback.py
 coordinator/bin/dirty-tree-gate.py
 coordinator/bin/emit-goal-from-artifact.py
 coordinator/bin/generate-repomap.py
@@ -116,19 +117,25 @@ coordinator/bin/handoff-deliverable-carry.py
 coordinator/bin/lessons-outbox-drain.py
 coordinator/bin/list-orphaned-plans.py
 coordinator/bin/orphan-branch-sweep.py
+# `percolate-round.py` (added 2026-08-25): `scoped-git-commit` (the
+# `ceremony.scoped_git_commit` CLI) was killed 2026-08-23 (PM ruling,
+# DR-344) -- deleted, not suspended, and not replaced by any registered op
+# `run_op_main` can route to. This CLI's commit step was re-pointed at
+# `commit_pipeline.run_commit_pipeline` in-process instead, mirroring
+# `publish.py::_commit_published_dests` immediately below -- same
+# mechanism (the killed CLI was a trampoline over this exact function),
+# now the sanctioned in-process path since its own wrapper op is gone. See
+# the call site's own comment in `percolate-round.py` for the full
+# rationale.
+coordinator/bin/percolate-round.py
 coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
-# `query-file-attribution.py` (added 2026-08-15): its ONE in-process op reach
-# this gate credits is `_resolve_repo_name_or_exit`'s `from
-# coordinator_core.ops.emit.context import resolve_repo_name` — a pure data
-# producer (the canonical owner-qualified repo-slug lookup), not an op with a
-# `main(argv)` for `run_op_main` to route to. The CLI is structurally
-# read-only end to end (see its own module docstring's Negative-spec: "Do NOT
-# write to state/ or any other disk location — read-only consumer"), so there
-# is no write for `declare_write`/`recording_declared_writes` to claim.
-# Routing this import through the seam would buy an import hop and a
-# permanently-empty declaration list, the same shape as the
-# `orphan-branch-sweep.py`/`day-coverage-sweep.py` pair above.
-coordinator/bin/query-file-attribution.py
+# `query-commit-closures.py` (added 2026-08-25): same "porter trampoline"
+# shape as `query-goals.py`/`query-completion-rollups.py`/`query-routine-
+# signals.py` -- it porters `sections/commit_closures.py:collect(ctx)`, an
+# emit *section* with NO registered op behind it, so there is no op name
+# for `run_op_main` to route to. See its own module docstring for the full
+# reasoning (explicitly cites `query-goals.py`'s as the fuller version).
+coordinator/bin/query-commit-closures.py
 # `query-goals.py` and `query-completion-rollups.py` (added earlier, both
 # labeled "porter trampolines"): same shape as `query-routine-signals.py`
 # immediately below -- each porters an emit *section*
@@ -139,6 +146,16 @@ coordinator/bin/query-file-attribution.py
 # which cite this exact reasoning and this exact sibling file.
 coordinator/bin/query-completion-rollups.py
 coordinator/bin/query-goals.py
+# `query-record-history.py` (added 2026-08-25): its ONE in-process op reach
+# this gate credits is `_supported_types_hint`'s best-effort `from
+# coordinator_core.ops.record_history import supported_record_types` --
+# the same precedent `query-records.py::_list_schemas` already establishes
+# for reaching engine-side metadata from a CLI, wrapped in a bare `except
+# Exception` and used only to enrich an error message. The actual op
+# dispatch goes through `cc_invoke.route()` -- already on the wire path,
+# same reasoning as `check-auto-reconcile.py` above -- so there is nothing
+# for `declare_write`/`recording_declared_writes` to claim here either.
+coordinator/bin/query-record-history.py
 # `query-routine-signals.py` (added 2026-08-15): its ONE in-process op reach
 # this gate credits is `main()`'s `from coordinator_core.ops.emit.sections
 # import routine_signals` — `routine_signals.collect(ctx)` is a plain
@@ -160,7 +177,6 @@ coordinator/bin/review-brightline-gate.py
 coordinator/bin/safe-commit-offer.py
 coordinator/bin/spinoff-deliverable-and-commit.py
 coordinator/bin/sweep-boot.py
-coordinator/bin/sweep-terminal-plans.py
 coordinator/bin/sync-main.py
 coordinator/bin/update-docs-probes.py
 coordinator/bin/verify-orientation-cache-sync.py

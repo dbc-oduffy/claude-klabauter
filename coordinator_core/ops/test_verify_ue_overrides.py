@@ -107,11 +107,17 @@ def test_missing_settings_json(monkeypatch, tmp_path, capsys):
         **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
     rc = vuo.main([])
     assert rc == 1
     err = capsys.readouterr().err
     assert "MISSING:" in err
-    assert "claude-ue-bootstrap.sh" in err
+    # The bash `~/.claude/bin/claude-ue-bootstrap.sh` remediation was retired
+    # by the C5 native port (unrunnable on every machine as the old message
+    # named it) -- the surviving remediation names the ported CLI directly,
+    # no `.sh` suffix (see verify_ue_overrides.py's own inline comment at
+    # the MISSING: print site).
+    assert "claude-ue-bootstrap" in err
 
 
 def test_wrong_key_value(monkeypatch, tmp_path, capsys):
@@ -126,6 +132,7 @@ def test_wrong_key_value(monkeypatch, tmp_path, capsys):
         **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
     rc = vuo.main([])
     assert rc == 1
     err = capsys.readouterr().err
@@ -144,6 +151,7 @@ def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
         **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
     rc = vuo.main([])
     assert rc == 1
     err = capsys.readouterr().err
@@ -157,6 +165,7 @@ def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
         **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
     rc = vuo.main([])
     out = capsys.readouterr().out
     assert rc == 0
@@ -177,6 +186,7 @@ def test_success_all_expected(monkeypatch, tmp_path, capsys):
         },
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
     rc = vuo.main([])
     out = capsys.readouterr().out
     assert rc == 0

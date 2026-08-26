@@ -84,6 +84,9 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, NamedTuple, Optional
@@ -497,11 +500,6 @@ def build_governing_plan_directives(
 # captured lesson is never written while `apply` still reports success.
 
 
-#: Optional `decisions["lessons"][n]` keys → the `coordinator-lesson-add` flag
-#: that carries them, in the order they are appended to the directive's argv.
-#: Every optional flag the CLI accepts appears here: a facet the EM composes but
-#: the assembler has no flag for is a facet silently dropped on the way to disk,
-#: which is what forces an author to bypass the directive and hand-run the CLI.
 #: Keys every `decisions["lessons"]` entry must carry before a lesson-add
 #: directive can be composed. Validated up front rather than indexed blind:
 #: a missing key previously surfaced as a bare `KeyError` traceback out of
@@ -511,9 +509,31 @@ def build_governing_plan_directives(
 #: Negative-spec: do NOT default a missing value here. These are
 #: author-composed prose; substituting a placeholder would put an
 #: unauthored lesson on disk, which is worse than refusing.
-_LESSON_REQUIRED_KEYS: tuple[str, ...] = ("title", "body", "scope")
+_LESSON_REQUIRED_KEYS: tuple[str, ...] = ("title", "scope")
 
-_LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = (
+#: The body transport pair. Forwarded by `_lesson_body_args`, which picks
+#: ONE of them per entry, never the generic loop below — an entry carrying
+#: both flags is what `coordinator_core.argv_fidelity.resolve_body` refuses
+#: outright. Listed here so the pair stays declared in one place alongside
+#: the facets, and so the drift guard
+#: (`test_assembler_covers_every_optional_flag_the_lesson_cli_accepts`)
+#: reads them as forwarded: they are optional at the CLI's argparse layer
+#: (exactly-one-of is enforced after parse), so the guard counts them.
+_LESSON_BODY_FLAGS: tuple[tuple[str, str], ...] = (
+    ("body", "--body"),
+    ("body_file", "--body-file"),
+)
+
+_LESSON_BODY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_BODY_FLAGS)
+
+#: Optional `decisions["lessons"][n]` keys → the `coordinator-lesson-add` flag
+#: that carries them, in the order they are appended to the directive's argv.
+#: Every optional flag the CLI accepts appears here: a facet the EM composes but
+#: the assembler has no flag for is a facet silently dropped on the way to disk,
+#: which is what forces an author to bypass the directive and hand-run the CLI.
+#: The body pair leads (its two keys are handled by `_lesson_body_args`, and
+#: the generic loop skips them via `_LESSON_BODY_KEYS`); the facets follow.
+_LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + (
     ("trigger", "--trigger"),
     ("why", "--why"),
     ("how_to_apply", "--how-to-apply"),
@@ -521,6 +541,57 @@ _LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = (
     ("proposed_target", "--proposed-target"),
     ("evidence", "--evidence"),
 )
+
+#: Where a multi-paragraph `body` is materialized so it can travel as
+#: `--body-file`. Content-addressed and therefore idempotent: the same body
+#: re-composed on a re-run resolves to the same path with the same bytes,
+#: so a repeated `apply` pass adds no file and mutates none.
+_LESSON_BODY_SPOOL_RELDIR = "state/ceremony/wsc-lesson-body"
+
+
+#: `preflight.decisions_template`'s discoverable stand-in for the bare
+#: `None` a free-value key gets by default (`__init__.py::build_decisions_
+#: template`). `_LESSON_REQUIRED_KEYS`/`_LESSON_BODY_KEYS`/
+#: `_LESSON_OPTIONAL_FLAGS` plus the queue-append facet keys
+#: `_iter_capturable_lessons` reads for `wants_queue` are ALL represented
+#: here, keyed to `None`, so a caller can discover every key this module's
+#: builders read by looking at the template's OWN output rather than
+#: reverse-engineering this module's source — the exact gap
+#: `build_lesson_capture_directives`'s `ValueError`s used to surface only a
+#: round trip later, after a malformed `--decisions` was already composed
+#: and rejected. A single-entry list, not an empty one: an empty `[]`
+#: reads as "the shape is a list of lessons" with no clue what a lesson
+#: dict looks like, which is the same discoverability gap in a different
+#: costume. Never resolved to anything else at runtime — this is a static
+#: hint, not a computed fact, so it carries no `resolved_free_values`
+#: entry the way `governing_plan_slug` does.
+LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
+    {
+        "title": None,
+        "body": None,
+        "body_file": None,
+        "scope": None,
+        "trigger": None,
+        "why": None,
+        "how_to_apply": None,
+        "target_wiki": None,
+        "proposed_target": None,
+        "evidence": None,
+        "queue_title": None,
+        "queue_body": None,
+        "surface": None,
+        "proposed_action": None,
+        "change_kind": None,
+    }
+]
+
+#: Union source for `build_decisions_template`'s static-shape overrides
+#: (mirrors `FREE_VALUE_KEYS`'s own per-submodule union pattern) — a free-
+#: value key that wants a discoverable non-`None` template default rather
+#: than the generic `None` every other free-value key gets.
+FREE_VALUE_KEY_STATIC_DEFAULTS: dict[str, Any] = {
+    _KEY_LESSONS: LESSONS_TEMPLATE_DEFAULT,
+}
 
 
 def lesson_add_directive_id(idx: int) -> str:
@@ -539,17 +610,171 @@ def lesson_capture_resolves_ids(decisions: dict[str, Any]) -> list[str]:
     judgment point's "capture" disposition must name in `resolves` for its
     directives to fire.
 
-    Derived by asking the directive builder itself rather than re-deriving
-    the id set from `decisions`: the queue-append directive is CONDITIONAL
-    (universal scope + five populated queue fields), so an index-range
-    reconstruction would name `d-queue-append-lesson-<n>` ids that were
-    never built — phantom `resolves` entries, which the fleet-wide sweep
-    guard (`ceremony_common.test_phantom_resolves_id_sweep`) correctly
-    rejects. Delegating makes the two exact by construction."""
-    return [d["id"] for d in build_lesson_capture_directives(decisions)]
+    Derived from the SAME validated walk the directive builder uses
+    (`_iter_capturable_lessons`) rather than re-deriving the id set from
+    `decisions`: the queue-append directive is CONDITIONAL (universal scope
+    + five populated queue fields), so an index-range reconstruction would
+    name `d-queue-append-lesson-<n>` ids that were never built — phantom
+    `resolves` entries, which the fleet-wide sweep guard
+    (`ceremony_common.test_phantom_resolves_id_sweep`) correctly rejects.
+    Sharing the walk makes the two exact by construction.
+
+    Walks, rather than calls the builder: composing argv can MATERIALIZE a
+    multi-paragraph body to disk (`_lesson_body_args`), and an id list has
+    no business writing a spool file — nor does it hold the `repo_root`
+    that write needs."""
+    ids: list[str] = []
+    for idx, _lesson, wants_queue in _iter_capturable_lessons(decisions):
+        ids.append(lesson_add_directive_id(idx))
+        if wants_queue:
+            ids.append(lesson_queue_directive_id(idx))
+    return ids
 
 
-def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str, Any]]:
+def _lesson_body_spool_path(repo_root: Path, body: str) -> Path:
+    """Content-addressed spool path for `body` under `repo_root`."""
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:24]
+    return Path(repo_root) / _LESSON_BODY_SPOOL_RELDIR / f"{digest}.md"
+
+
+def _spool_body_to_file(repo_root: Path, body: str) -> str:
+    """Materialize `body` at its content-addressed spool path and return the
+    path as a string. Shared by `_lesson_body_args` (the `--body`/`--body-file`
+    leg) and the queue-append `--body` leg below — same idempotent
+    write-if-absent behaviour both need: a repeated `apply` pass composing the
+    same body resolves to the same path with the same bytes, so it adds no
+    file and mutates none on a re-run."""
+    path = _lesson_body_spool_path(repo_root, body)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}.tmp.", suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(body)
+        os.replace(tmp_str, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_str)
+        except OSError:
+            pass
+        raise
+    return str(path)
+
+
+def _lesson_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Path]) -> list[str]:
+    """The two-element body transport for one lesson's `coordinator-lesson-add`
+    argv — `--body` or `--body-file`, never both.
+
+    An explicit `body_file` wins and is forwarded verbatim (the CLI resolves
+    it, and its `-` stdin sentinel is not this assembler's to interpret).
+    Otherwise a SINGLE-LINE body travels as `--body`; a multi-paragraph one
+    is spooled under `_LESSON_BODY_SPOOL_RELDIR` and forwarded as
+    `--body-file`, because `coordinator-lesson-add` refuses a newline-bearing
+    `--body` outright (`coordinator_core.argv_fidelity.refuse_newline_argv`
+    — cmd.exe truncates an argv at its first LF). Without the spool the
+    author's only route for a real lesson body was to abandon the directive
+    and hand-run the CLI.
+
+    `repo_root` is required to spool. `None` is legal only while every body
+    in play is single-line — a multi-paragraph body then refuses here rather
+    than composing argv the CLI is certain to reject mid-apply."""
+    body_file = str(lesson.get("body_file") or "").strip()
+    if body_file:
+        return ["--body-file", body_file]
+    body = str(lesson["body"])
+    if "\n" not in body:
+        return ["--body", body]
+    if repo_root is None:
+        raise ValueError(
+            f"decisions[{_KEY_LESSONS!r}][{idx}]['body'] is multi-paragraph and no "
+            "repo_root was supplied to spool it; pass repo_root, or supply "
+            "'body_file' instead."
+        )
+    return ["--body-file", _spool_body_to_file(repo_root, body)]
+
+
+def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Path]) -> list[str]:
+    """The two-element body transport for one lesson's `coordinator-queue-
+    append` argv — `--body` for a single-line `queue_body`, `--body-file`
+    for a multi-paragraph one, mirroring `_lesson_body_args` exactly.
+
+    `coordinator-queue-append` does not refuse a newline-bearing `--body`
+    the way `coordinator-lesson-add` does (it silently `str.replace`s a
+    literal `\\n` escape, which is not the same thing as a REAL embedded
+    newline surviving a `.cmd` launcher's argv — see that CLI's own
+    `--body-file` docstring: "cmd.exe truncates its argv at the first LF").
+    A real multi-paragraph `queue_body` composed as `--body` therefore loses
+    every line after the first the same way a lesson body did before this
+    fix, just without the CLI raising to say so — so this leg spools
+    exactly like the lesson-add leg rather than trusting the silent
+    single-line success.
+
+    `repo_root` is required to spool. `None` is legal only while
+    `queue_body` is single-line — a multi-paragraph one then refuses here
+    rather than composing argv the CLI would silently truncate."""
+    body = str(lesson["queue_body"])
+    if "\n" not in body:
+        return ["--body", body]
+    if repo_root is None:
+        raise ValueError(
+            f"decisions[{_KEY_LESSONS!r}][{idx}]['queue_body'] is multi-paragraph and "
+            "no repo_root was supplied to spool it; pass repo_root."
+        )
+    return ["--body-file", _spool_body_to_file(repo_root, body)]
+
+
+def _iter_capturable_lessons(
+    decisions: dict[str, Any],
+) -> "list[tuple[int, Mapping[str, Any], bool]]":
+    """Every `decisions["lessons"]` entry, validated, as
+    `(idx, lesson, wants_queue_append)`.
+
+    The one place an entry's shape is checked, so `lesson_capture_resolves_ids`
+    and `build_lesson_capture_directives` cannot disagree about which entries
+    are capturable. Validated up front rather than indexed blind: a missing
+    key previously surfaced as a bare `KeyError` traceback, which reads as an
+    engine crash mid-ceremony rather than the malformed-input error it is."""
+    out: list[tuple[int, Mapping[str, Any], bool]] = []
+    for idx, lesson in enumerate(decisions.get(_KEY_LESSONS, []) or []):
+        if not isinstance(lesson, Mapping):
+            # A bare string is the natural first guess at this shape, and it
+            # used to reach `.get` and die on AttributeError -- a traceback
+            # where the block below is deliberately designed to name the
+            # offending entry and its missing keys. Same refusal, same
+            # nothing-written guarantee, just legible.
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] is a "
+                f"{type(lesson).__name__}, not a mapping (required keys: "
+                f"{list(_LESSON_REQUIRED_KEYS)!r}). Supply them and re-run "
+                "apply -- this is a malformed decisions map, not a ceremony "
+                "failure, and nothing has been written."
+            )
+        missing = [k for k in _LESSON_REQUIRED_KEYS if not str(lesson.get(k) or "").strip()]
+        if missing:
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] is missing required "
+                f"key(s) {missing!r} (required: {list(_LESSON_REQUIRED_KEYS)!r}). "
+                "Supply them and re-run apply — this is a malformed decisions "
+                "map, not a ceremony failure, and nothing has been written."
+            )
+        supplied = [k for k in ("body", "body_file") if str(lesson.get(k) or "").strip()]
+        if len(supplied) != 1:
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] supplied {supplied!r} for its "
+                "body; exactly one of 'body' or 'body_file' is required. Supply "
+                "one and re-run apply — this is a malformed decisions map, not a "
+                "ceremony failure, and nothing has been written."
+            )
+        wants_queue = lesson.get("scope") == "universal" and all(
+            lesson.get(k) not in (None, "")
+            for k in ("queue_title", "queue_body", "surface", "proposed_action", "change_kind")
+        )
+        out.append((idx, lesson, wants_queue))
+    return out
+
+
+def build_lesson_capture_directives(
+    decisions: dict[str, Any], repo_root: Optional[Path] = None
+) -> list[dict[str, Any]]:
     """Step 1 / Step 1.2's mechanical directive tail.
 
     Expects `decisions["lessons"]`: a list of dicts, one per lesson this
@@ -560,7 +785,15 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
     edge needed, matching this module's plan-claim/stamp pair above). Each
     entry:
         {"title": str, "body": str, "scope": "universal"|"project"|"wiki-only"}
-    plus, optionally, any of the structured facets `coordinator-lesson-add`
+    where `body` may be replaced by `body_file` (a path the CLI reads) —
+    exactly one of the two, matching `coordinator-lesson-add`'s own
+    exactly-one-of contract. A multi-paragraph `body` needs no such
+    substitution: `_lesson_body_args` spools it and forwards `--body-file`
+    itself, which is what `repo_root` is for. Supply `repo_root` whenever a
+    body may run past one line; omitting it is legal only for single-line
+    bodies (see `_lesson_body_args`).
+
+    Plus, optionally, any of the structured facets `coordinator-lesson-add`
     accepts — `trigger`, `why`, `how_to_apply`, `target_wiki`,
     `proposed_target`, `evidence`. Each is forwarded to its matching flag
     when populated and omitted when absent or empty
@@ -585,58 +818,32 @@ def build_lesson_capture_directives(decisions: dict[str, Any]) -> list[dict[str,
     classification judgment's own gate.
     """
     directives: list[dict[str, Any]] = []
-    for idx, lesson in enumerate(decisions.get(_KEY_LESSONS, []) or []):
+    for idx, lesson, wants_queue in _iter_capturable_lessons(decisions):
         add_id = lesson_add_directive_id(idx)
-        if not isinstance(lesson, Mapping):
-            # A bare string is the natural first guess at this shape, and it
-            # used to reach `.get` and die on AttributeError -- a traceback
-            # where the block below is deliberately designed to name the
-            # offending entry and its missing keys. Same refusal, same
-            # nothing-written guarantee, just legible.
-            raise ValueError(
-                f"decisions[{_KEY_LESSONS!r}][{idx}] is a "
-                f"{type(lesson).__name__}, not a mapping (required keys: "
-                f"{list(_LESSON_REQUIRED_KEYS)!r}). Supply them and re-run "
-                "apply -- this is a malformed decisions map, not a ceremony "
-                "failure, and nothing has been written."
-            )
-        missing = [k for k in _LESSON_REQUIRED_KEYS if not str(lesson.get(k) or "").strip()]
-        if missing:
-            raise ValueError(
-                f"decisions[{_KEY_LESSONS!r}][{idx}] is missing required "
-                f"key(s) {missing!r} (required: {list(_LESSON_REQUIRED_KEYS)!r}). "
-                "Supply them and re-run apply — this is a malformed decisions "
-                "map, not a ceremony failure, and nothing has been written."
-            )
-        add_args = [
-            "--title", str(lesson["title"]),
-            "--body", str(lesson["body"]),
-            "--scope", str(lesson["scope"]),
-        ]
+        add_args = ["--title", str(lesson["title"])]
+        add_args += _lesson_body_args(idx, lesson, repo_root)
+        add_args += ["--scope", str(lesson["scope"])]
         for key, flag in _LESSON_OPTIONAL_FLAGS:
+            if key in _LESSON_BODY_KEYS:
+                continue
             value = lesson.get(key)
             if value in (None, ""):
                 continue
             add_args += [flag, str(value)]
         directives.append(_directive(add_id, "coordinator-lesson-add", add_args))
-        if lesson.get("scope") == "universal" and all(
-            lesson.get(k) not in (None, "")
-            for k in ("queue_title", "queue_body", "surface", "proposed_action", "change_kind")
-        ):
+        if wants_queue:
+            queue_args = ["--schema", "improvement-queue", "--queue-scope", "central"]
+            queue_args += ["--title", str(lesson["queue_title"])]
+            queue_args += _queue_body_args(idx, lesson, repo_root)
+            queue_args += ["--surface", str(lesson["surface"])]
+            queue_args += ["--proposed-action", str(lesson["proposed_action"])]
+            queue_args += ["--change-kind", str(lesson["change_kind"])]
+            queue_args += ["--status", "open"]
             directives.append(
                 _directive(
                     lesson_queue_directive_id(idx),
                     "coordinator-queue-append",
-                    [
-                        "--schema", "improvement-queue",
-                        "--queue-scope", "central",
-                        "--title", str(lesson["queue_title"]),
-                        "--body", str(lesson["queue_body"]),
-                        "--surface", str(lesson["surface"]),
-                        "--proposed-action", str(lesson["proposed_action"]),
-                        "--change-kind", str(lesson["change_kind"]),
-                        "--status", "open",
-                    ],
+                    queue_args,
                     depends_on=add_id,
                 )
             )

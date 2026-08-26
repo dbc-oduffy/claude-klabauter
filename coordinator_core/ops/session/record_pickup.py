@@ -73,6 +73,33 @@ Negative-spec:
     finding. Plan-claim and actioned-memos writes stay on bash until (if) ported.
   - Does NOT use raw pid/kill -0 for lock liveness — mirrors bash: liveness is inferred
     from the lock's own `claimed_at` recency (30s staleness bound), not process liveness.
+
+Seam-routing finding (2026-08-25 terminal-handoff-sweep C5, contributes to AC-9):
+  traced to ground whether the pickup occasion's own commit reaches
+  `commit_pipeline :: commit`'s `commit_paths` (the C4 fold-in seam) — it does
+  NOT, and the seam is genuinely unreachable from here, not merely unwired:
+    - This module's own write (`_record_pickup_sync`) targets
+      `<git_common_dir>/coordinator-sessions/<sid>/session-shape.json`, a path
+      under `.git/` — untracked by construction (see `GENERATES = []` below),
+      so it is not a candidate for ANY commit, this seam or another.
+    - The claim-stamp write that DOES touch a tracked file (the handoff
+      frontmatter's `status: open -> claimed` transition) is made by
+      `coordinator_core.ops.handoff_transition._handler` (registered as
+      `handoff.transition`, reached via `archive_stamp.cs_claim_handoff` ->
+      `archive_stamp._call_handoff_transition`) — that handler's own docstring
+      states plainly it "Does NOT git-commit. Writes one frontmatter file
+      in-place only." (handoff_transition.py, module docstring + `_handler`
+      docstring, both lines ~230/~3371). It never reaches `commit_pipeline ::
+      commit` either.
+  Net: no code in the pickup occasion's own call chain (record_pickup, nor
+  its caller cs_claim_handoff, nor handoff.transition) ever constructs a
+  `commit_paths` list or calls `commit_pipeline :: commit` — there is no
+  fold-in edit to make here. Disposition (b)/(c) from the C5 brief do not
+  apply to THIS module either: (b)'s extra add+commit invocations would have
+  nothing eligible to stage (this module's only write target is untracked),
+  and (c) (drop the pickup occasion, PM-gated) is out of an executor's remit
+  and orthogonal to this file. The zero-git-spawn behavior below is the
+  positive assertion this finding rests on, not an incidental property.
 """
 
 from __future__ import annotations
@@ -94,8 +121,7 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.ops.ceremony import tail_ops
-from coordinator_core.ops.fleet._common import _sessions_dir, main_worktree_root
+from coordinator_core.ops.fleet._common import _sessions_dir
 
 _LOG = logging.getLogger(__name__)
 
@@ -487,24 +513,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error_result(str(exc))
     except OSError as exc:
         return _error_result(f"session-shape.json write failed for sid={sid}: {exc}")
-
-    # C4 (docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md
-    # § C4): fire the same detached archive-sweep CLI seam
-    # (sweep-terminal-handoffs.py, cap=150 owned by that CLI itself, never
-    # passed here) on the pickup path -- `fire_archive_sweeps_detached` is a
-    # synchronous, non-blocking spawn (`detached_spawn.spawn_detached`,
-    # effectively 0ms) recording only the SPAWN attempt outcome. A pickup
-    # write already landed above by this point; this fire must never fail,
-    # block, or extend `session.record_pickup`'s own result -- a spawn
-    # failure is logged and dropped, never surfaced into the pickup wire
-    # envelope (which has no field for it and is not this chunk's contract
-    # to widen).
-    try:
-        await asyncio.to_thread(tail_ops.fire_archive_sweeps_detached, main_worktree_root(common_dir))
-    except Exception as exc:  # noqa: BLE001 -- best-effort, never fails the pickup write
-        _LOG.warning(
-            "session.record_pickup: fire_archive_sweeps_detached raised %s: %s",
-            type(exc).__name__, exc,
-        )
 
     return result

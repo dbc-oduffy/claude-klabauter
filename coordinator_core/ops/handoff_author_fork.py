@@ -586,7 +586,7 @@ def _resolve_origin_handoff(
             # picks up backslashes on Windows.
             "path": "state/handoffs/" + hfile.name,
             "handoff_id": handoff_id,
-            "claimed_at": claim_state.claimed_at,
+            "claimed_at": claim_state.claimed_at,  # dr084: write-not-read, output dict key sourced from resolve_claim_state()
         })
 
     if not candidates:
@@ -595,7 +595,7 @@ def _resolve_origin_handoff(
         only = candidates[0]
         return only["path"], only["handoff_id"]  # type: ignore[return-value]
 
-    parsed = [(c, _parse_claim_timestamp(c["claimed_at"])) for c in candidates]  # type: ignore[arg-type]
+    parsed = [(c, _parse_claim_timestamp(c["claimed_at"])) for c in candidates]  # type: ignore[arg-type]  # dr084: reads back this function's own output dict (built at line 589 from resolve_claim_state()), not a raw frontmatter read
     # Filtered (not just checked) so the sort key below is `datetime`, never
     # `datetime | None` — a static type checker cannot narrow `parsed`'s
     # element type across the `any(...)` + raise below, and an untimestamped

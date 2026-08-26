@@ -748,8 +748,14 @@ remediation = "This probe reports 'cannot tell' (skipped) when route coverage is
 # ---------------------------------------------------------------------------
 
 # READ-ONLY probe: consumes the per-machine sentinel that the eol.audit_producers
-# cadence rider (coordinator_core/ops/session/boot_sweep.py, C8) writes to
-# <git-common-dir>/coordinator-eol-audit-producers-last-run.json. Does NOT re-run
+# cadence rider wrote to
+# <git-common-dir>/coordinator-eol-audit-producers-last-run.json. That rider lived in
+# coordinator_core/ops/session/boot_sweep.py (C8), DELETED at 2e7eff5c1 with the
+# composite; nothing writes either eol sentinel until C3 of
+# docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md gives both riders a
+# ceremony-gate host. The probes stay registered through that gap on purpose — an
+# absent-producer verdict on every doctor run is what keeps the missing rider legible.
+# Does NOT re-run
 # the census or the producer audit itself — doctor is not on its own timer, so a
 # probe that computed here would only ever fire when a human happened to run the
 # doctor, which is the invocation gap this plan
@@ -774,10 +780,10 @@ triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_eol_audit_producers"
 required = false
 severity_if_fail = "degraded"
-remediation = "Add newline=\"\\n\" (or the declared line ending) to the named write call(s) reported in the probe's data.offenders; see coordinator_core/ops/eol/audit_producers.py module docstring for the ratchet's contract. An absent sentinel means the session-boot cadence rider (C8) has not run yet on this machine — boot a session in this repo to populate it."
+remediation = "Add newline=\"\\n\" (or the declared line ending) to the named write call(s) reported in the probe's data.offenders; see coordinator_core/ops/eol/audit_producers.py module docstring for the ratchet's contract. An absent sentinel means the C8 cadence rider that wrote it was deleted at 2e7eff5c1 and has no successor host — invoke eol.audit_producers directly for a current verdict."
 
 # READ-ONLY probe: the CENSUS half of AC10. Consumes the per-machine sentinel the
-# eol.census cadence rider (C8, 15-minute window) writes to
+# eol.census cadence rider (C8, 1-hour window as of its deletion) wrote to
 # <git-common-dir>/coordinator-eol-census-last-run.json. Same read-only contract as
 # its audit_producers sibling above — never re-runs the census, because doctor is
 # not on its own timer.
@@ -800,7 +806,7 @@ triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_eol_census"
 required = false
 severity_if_fail = "degraded"
-remediation = "Run eol.repair against this tree to normalize toward each path's DECLARED eol attribute — it refuses any file git reports dirty and any file whose index blob is not byte-identical to its normalized worktree content, so it can only make EOL-only changes. See coordinator_core/ops/eol/repair.py. An absent sentinel means the session-boot cadence rider (C8) has not run yet on this machine — boot a session in this repo to populate it."
+remediation = "Run eol.repair against this tree to normalize toward each path's DECLARED eol attribute — it refuses any file git reports dirty and any file whose index blob is not byte-identical to its normalized worktree content, so it can only make EOL-only changes. See coordinator_core/ops/eol/repair.py. An absent sentinel means the C8 cadence rider that wrote it was deleted at 2e7eff5c1 and has no successor host — invoke eol.census directly for a current verdict."
 
 [[probe]]
 id = "claude-klabauter.warm.roundtrip"

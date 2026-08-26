@@ -73,7 +73,7 @@ def _stub_operator_config(monkeypatch) -> None:
     concern this suite is not exercising (that resolution machinery has its
     own conformance suite), and the autouse HOME-quarantine fixture
     (`coordinator_core/conftest.py`) means it fails to resolve a real
-    settings-home/claude-klabauter-root/doe-root under a bare `tmp_path`. Stub it to a
+    settings-home/claude-klabauter-live-root/doe-root under a bare `tmp_path`. Stub it to a
     successful no-op, same posture `test_workstream_complete.py` uses for the
     unrelated `compute_session_shape_gate` seam."""
     monkeypatch.setattr(

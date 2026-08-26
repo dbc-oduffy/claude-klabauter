@@ -210,7 +210,11 @@ def test_install_bin_resolvers_succeeds_when_only_the_py_launcher_is_found(
     monkeypatch.setattr(pyresolve, "resolve_python_bin", lambda **_: ("py", ["-3"]))
 
     claude_klabauter_root, ml_bin, ch_bin = _make_install_bin_resolvers_fixture(tmp_path)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1 of the resolver chain; deleted
+    # rather than left alone so an inherited ancestor-process value cannot
+    # reintroduce the retired-name advisory.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()

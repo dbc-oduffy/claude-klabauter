@@ -259,17 +259,22 @@ class TestComputeOffer:
         scope.touch("mine", "shared.py", cwd=str(repo))
         scope.touch("other", "shared.py", cwd=str(repo))
 
+        # C7b: `_read_lines_discard_torn_tail` was deleted with the legacy
+        # line-dialect reader. `_read_stream_claims` is its replacement at
+        # the same seam and keeps the same `(value, complete)` convention --
+        # the blinding here is still "this one claimant's record cannot be
+        # read", only the record's name and the value's shape changed.
         other_touched = os.path.join(
-            core.session_dir("other", cwd=str(repo)), "touched.txt"
+            core.session_dir("other", cwd=str(repo)), scope._TOUCH_RECORD_FILENAME
         )
-        real_reader = claim_index._read_lines_discard_torn_tail
+        real_reader = claim_index._read_stream_claims
 
         def _unreadable(path):
             if os.path.normcase(str(path)) == os.path.normcase(other_touched):
-                return [], False
+                return {}, False
             return real_reader(path)
 
-        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
 
         assert offer["indeterminate"] is True
@@ -283,13 +288,15 @@ class TestComputeOffer:
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         scope.touch("mine", "a.py", cwd=str(repo))
-        touched_file = Path(core.session_dir("mine", cwd=str(repo))) / "touched.txt"
-        before = touched_file.read_text()
+        touched_file = (
+            Path(core.session_dir("mine", cwd=str(repo))) / scope._TOUCH_RECORD_FILENAME
+        )
+        before = touched_file.read_bytes()
         status_before = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         ).stdout
         safe_commit_offer.compute_offer("mine", cwd=str(repo))
-        assert touched_file.read_text() == before
+        assert touched_file.read_bytes() == before
         status_after = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         ).stdout
@@ -1542,7 +1549,7 @@ class TestRenderReportDegradedScopeInput:
 
         assert scope.normalize_diagnostic_fired() is True
         assert lines[0].startswith("DEGRADED INPUT")
-        assert "touched.txt" in lines[0] and "may be incomplete" in lines[0]
+        assert "touch record" in lines[0] and "may be incomplete" in lines[0]
         assert "committed" in lines[-1], (
             "the degraded-input notice leads; the verdict must still be last "
             "(coordinator/tests/test_safe_commit_offer_outcome_signal.py)"
@@ -1611,7 +1618,7 @@ class TestRenderReportDegradedScopeInput:
         rendered = safe_commit_offer._render_report(_report(_group()))
         banner = rendered.splitlines()[0]
 
-        assert "touched.txt" in banner and "may be" in banner
+        assert "touch record" in banner and "may be" in banner
         assert "dropped or mis-normalized" in banner
         assert "Routine out-of-repo paths do not raise this." in banner
         assert "\n" not in safe_commit_offer._DEGRADED_SCOPE_NOTICE, (
@@ -1920,15 +1927,19 @@ class TestFullOwnershipMap:
         (repo / "theirs.py").write_text("t")
         scope.touch("peer", "theirs.py", cwd=str(repo))
 
-        blinded = os.path.join(core.session_dir("peer", cwd=str(repo)), "touched.txt")
-        real_reader = claim_index._read_lines_discard_torn_tail
+        # C7b: retargeted at `_read_stream_claims` -- see the sibling
+        # blinding test above for why.
+        blinded = os.path.join(
+            core.session_dir("peer", cwd=str(repo)), scope._TOUCH_RECORD_FILENAME
+        )
+        real_reader = claim_index._read_stream_claims
 
         def _unreadable(path):
             if os.path.normcase(str(path)) == os.path.normcase(blinded):
-                return [], False
+                return {}, False
             return real_reader(path)
 
-        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
         mine, peer_map = safe_commit_offer.full_ownership_map("mine", cwd=str(repo))
 

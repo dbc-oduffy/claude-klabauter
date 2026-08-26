@@ -1,56 +1,69 @@
 """
 coordinator_core.hooks.tests.test_track_touched_files_fresh_dir — guards the
-mkdir precondition C1 kept when session bootstrap was stripped out of
-``track_touched_files._handler``.
+mkdir precondition(s) a session dir that does not exist yet depends on, for
+BOTH halves of `_handler`'s work: the T-event record itself and the
+`meta.json` liveness registry entry `_ensure_session_record_sync` owns.
 
-``_ensure_session_dir``/``_needs_session_init``/``_bootstrap_session`` were
-deleted (they cost a `session.core.init` call and two cold `git rev-parse`
-spawns on the first edit of every session — see docs/plans/2026-08-22-track-
-touched-files-pays-only-for-the-append.md § C1). A bare
-``os.makedirs(session_dir, exist_ok=True)`` was kept immediately before the
-touched.txt handling.
+C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+its-writers.md) RETIRES this module's original premise. Before C7, this
+hook's own `os.makedirs(session_dir, exist_ok=True)` was the ONLY thing
+standing between a session whose first tool call is an Edit and a silently
+lost T event: the OLD append path (`_append_locked` -> `locked_rmw`, falling
+back to `_append`'s bare `open(path, "a")` when `locked_rmw` was unavailable)
+did not create parent directories on that fallback, so a missing session dir
+raised `FileNotFoundError`, swallowed by this module's silent-failure
+contract.
 
-**Narrow, true rationale** (corrected 2026-08-23 — the original claim below
-was falsified by code-review slice P3-test-surface): on the PRIMARY append
-path, this mkdir is redundant. ``locked_write.py::locked_rmw`` creates the
-target file's parent directory itself (``target_dir.mkdir(parents=True,
-exist_ok=True)``) immediately before it ``mkstemp``s, unconditionally, so a
-fresh session dir gets created by ``locked_rmw`` regardless of whether the
-handler's own mkdir ran. The handler's mkdir is load-bearing ONLY on the
-FALLBACK path: ``_append_locked`` catches any non-(``LockTimeout``,
-``MutateAbort``) exception from ``locked_rmw`` (non-POSIX locking, a
-non-git fixture, a lock-backend failure) and falls through to ``_append``,
-which opens the target with ``"a"`` — that mode does NOT create parent
-directories. On a session whose first tool call is an Edit, hitting that
-fallback without the handler's mkdir raises ``FileNotFoundError``, swallowed
-by the module's silent-failure contract: the T event is lost with NO signal.
-(A ``_touch_if_absent`` pre-create helper also sat on this path until C9
-removed it as dead weight; it never created parents either, so it never
-covered this case.)
+C7 deletes that append mechanism entirely -- `_append_touch_record` now
+routes through `touch_record.append_event` (-> `atomic_append.append_line`),
+and `append_event`'s own contract is to create its sink's parent directory
+on EVERY call (`touch_record.py`'s own docstring: "Creates sink's parent
+directory first, per append_line's own contract that callers do so"). The
+append half of this hook's work no longer depends on the hook's own
+`os.makedirs` call AT ALL -- proven directly below
+(``TestAppendTouchRecordSelfCreatesItsParentDir``), isolated from
+`_ensure_session_record_sync` entirely.
 
-This module has two cases:
+The record half (`_ensure_session_record_sync`'s own `meta.json`
+create-once-per-session) is SEPARATELY self-sufficient too:
+`session.core.init` (called when `meta.json` is absent) does its own
+`sdir.mkdir(parents=True, exist_ok=True)` before writing anything --
+verified below (``TestSessionRecordSelfCreatesViaCoreInit``). The hook's own
+`os.makedirs(session_dir, exist_ok=True)` call is KEPT in production (it is
+cheap, harmless, and untouched by this chunk -- see
+`track_touched_files.py`'s own docstring for why removing it was judged out
+of this chunk's scope), but this module's ORIGINAL claim that it is the
+"ONLY thing" preventing a lost T event or a missing `meta.json` no longer
+holds, and this module stops asserting that claim as a guard.
 
-- ``test_t_event_lands_when_session_dir_did_not_exist`` drives the PRIMARY
-  path (real ``locked_rmw``) into a session dir that did not exist
-  beforehand. This is cheap coverage that the primary path works end to end,
-  but it is NOT evidence for the handler's mkdir — ``locked_rmw``'s own
-  self-creation would carry this case even with the handler's mkdir deleted.
-- ``test_t_event_lands_via_fallback_when_session_dir_did_not_exist`` is the
-  actual guard: it monkeypatches ``locked_rmw`` to raise a plain
-  ``RuntimeError`` (neither ``LockTimeout`` nor ``MutateAbort``), forcing
-  ``_append_locked`` through the ``_append`` fallback — the one branch that
-  genuinely lacks a self-creating mkdir. Delete the handler's
-  ``os.makedirs(session_dir, exist_ok=True)`` and THIS test fails: `_append`
-  opens "a" against a directory that was never created and raises
-  ``FileNotFoundError``, swallowed silently, so ``touched.txt`` never
-  appears.
+This module has three cases now:
 
-Negative-spec: does NOT assert anything about meta.json, started_at, or
-head_at_start — those were part of the deleted bootstrap and are no longer
-this hook's concern (liveness now stamps only through the claiming ceremony
-or `session/scope.py::cs_touch`, see the plan § C1 rationale).
+- ``test_t_event_lands_when_session_dir_did_not_exist`` -- end-to-end smoke
+  coverage through the real `_handler`, driving a session dir that does not
+  exist beforehand, confirming the whole pipeline still lands the T event.
+  Not isolated to any one mkdir (multiple self-creating calls now cover the
+  same ground) -- kept as cheap coverage of the common case, not a guard for
+  any one of them.
+- ``TestAppendTouchRecordSelfCreatesItsParentDir`` -- isolates
+  `_append_touch_record` from `_ensure_session_record_sync` entirely (calls
+  it directly against a sink whose parent directory chain does not exist)
+  and proves `touch_record.append_event`'s own self-creation is what makes
+  the append half work, independent of the hook's `os.makedirs`.
+- ``TestSessionRecordSelfCreatesViaCoreInit`` -- isolates
+  `_ensure_session_record_sync` and proves `session.core.init`'s own mkdir
+  creates `meta.json`'s parent directory even when the hook's own
+  `os.makedirs` call is neutered to a no-op.
+
+Negative-spec: does NOT assert anything about `started_at` or
+`head_at_start` -- those ride along inside `core.init` and were never this
+module's concern. Does NOT assert anything about the OLD `locked_rmw`
+fallback path -- that mechanism no longer exists in this module at all
+(`ttf.locked_rmw` is not an attribute after C7); a test that still
+monkeypatches it would fail with `AttributeError`, not exercise a real
+branch.
 
 Spec backlink: docs/plans/2026-08-22-track-touched-files-pays-only-for-the-append.md § C1
+Spec backlink: docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-its-writers.md § C7
 Review backlink: state/subagent-share/26c961e1-b1da-43f7-a851-3dce6fd60700/2026-08-23-codereview-sliceP3-test-surface-track-touched-files-fresh-dir.md
 """
 
@@ -63,7 +76,7 @@ import pytest
 
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
-from coordinator_core.session import scope as touch_scope
+from coordinator_core.session import touch_record
 
 # Spawns a real external process (git init fixture); runs at cadence gates,
 # not per-commit.
@@ -84,19 +97,23 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
+def _decoded_paths(sink_path) -> list[str]:
+    if not sink_path.exists():
+        return []
+    events = [
+        touch_record.decode_line(line)
+        for line in touch_record.iter_complete_lines(sink_path.read_bytes())
+    ]
+    return [event.path for event in events]
+
+
 class TestHandlerWritesIntoFreshSessionDir:
     """Drives `_handler` with a session_id whose session dir does not exist
-    beforehand — the shape an earlier draft of C1 broke by dropping the mkdir
-    that guards the append's fallback precondition. Two cases: the primary
-    path (cheap smoke coverage, NOT a guard — see module docstring) and the
-    forced fallback path (the actual guard for the handler's own mkdir)."""
+    beforehand — end-to-end smoke coverage that the whole pipeline (not any
+    one mkdir in isolation — see the isolated classes below for that) still
+    lands the T event."""
 
     def test_t_event_lands_when_session_dir_did_not_exist(self, tmp_path):
-        """Primary path (real `locked_rmw`): a session dir absent before the
-        call still ends up with the T event, because `locked_rmw` self-creates
-        the parent directory. NOT evidence for the handler's own mkdir —
-        `locked_rmw` would carry this case even if that mkdir were deleted.
-        Kept as cheap end-to-end coverage of the common case."""
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         target = repo / "src" / "new.py"
@@ -118,75 +135,78 @@ class TestHandlerWritesIntoFreshSessionDir:
         }
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
-        touched_file = session_dir / "touched.txt"
-        assert touched_file.exists(), (
-            "handler did not create touched.txt in a session dir that did "
-            "not exist beforehand (primary path)"
+        touch_record_sink = session_dir / "touch-record.jsonl"
+        assert touch_record_sink.exists(), (
+            "handler did not create touch-record.jsonl in a session dir "
+            "that did not exist beforehand"
         )
-        lines = [
-            line
-            for line in touched_file.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
-        assert lines, (
-            "touched.txt exists but carries no T event — the append itself "
-            "silently failed against the fresh session dir"
+        entries = _decoded_paths(touch_record_sink)
+        assert entries, (
+            "touch-record.jsonl exists but carries no T event — the append "
+            "itself silently failed against the fresh session dir"
         )
-        entries = [touch_scope.parse_touch_event(line)[2] for line in lines]
         assert "src/new.py" in entries
 
-    def test_t_event_lands_via_fallback_when_session_dir_did_not_exist(
+
+class TestAppendTouchRecordSelfCreatesItsParentDir:
+    """Isolates `_append_touch_record` from `_ensure_session_record_sync` and
+    the rest of `_handler` entirely — calls it directly against a sink whose
+    entire parent directory chain does not exist. Proves
+    `touch_record.append_event`'s own self-creation (not the hook's
+    `os.makedirs`, which this test never invokes) is what makes a fresh
+    session's first append land."""
+
+    def test_append_creates_missing_parent_chain_and_lands_the_event(self, tmp_path):
+        sink = tmp_path / "does" / "not" / "exist" / "yet" / "touch-record.jsonl"
+        assert not sink.parent.exists(), (
+            "test fixture leaked a pre-existing parent dir; the point of "
+            "this test is a sink whose parent chain is entirely absent"
+        )
+
+        ttf._append_touch_record(str(sink), "sess-fresh-01", None, "src/new.py")
+
+        assert sink.exists(), (
+            "_append_touch_record did not create its sink despite a missing "
+            "parent directory chain — touch_record.append_event's own "
+            "self-creation contract did not hold"
+        )
+        entries = _decoded_paths(sink)
+        assert entries == ["src/new.py"]
+
+
+class TestSessionRecordSelfCreatesViaCoreInit:
+    """Isolates `_ensure_session_record_sync` with the hook's own
+    `os.makedirs` neutered to a no-op, proving `session.core.init`'s own
+    `sdir.mkdir(parents=True, exist_ok=True)` (not the hook's makedirs,
+    which this test disables) is what creates `meta.json`'s parent
+    directory for a session dir that did not exist beforehand."""
+
+    def test_meta_json_lands_via_core_init_mkdir_even_with_hooks_makedirs_disabled(
         self, tmp_path, monkeypatch
     ):
-        """Fallback path (`locked_rmw` forced to raise): the actual guard for
-        the handler's `os.makedirs(session_dir, exist_ok=True)`. Delete that
-        mkdir and this test fails — `_append_locked` catches the plain
-        `RuntimeError` below (neither `LockTimeout` nor `MutateAbort`) and
-        falls through to `_append`, which opens the target with `"a"` and does
-        NOT create parent directories, so a missing session dir raises
-        `FileNotFoundError`, swallowed by the module's silent-failure
-        contract — `touched.txt` never appears."""
-
-        def _raise(*args, **kwargs):
-            raise RuntimeError("forced: simulate locked_rmw unavailable")
-
-        monkeypatch.setattr(ttf, "locked_rmw", _raise)
-
         repo = _make_repo(tmp_path)
-        (repo / "src").mkdir()
-        target = repo / "src" / "new.py"
-        target.write_text("y")
-
         common_dir = git_common_dir(repo)
-        session_id = "freshdirfallback01"
+        session_id = "freshdirinit0001"
         session_dir = common_dir / "coordinator-sessions" / session_id
+        sessions_base = common_dir / "coordinator-sessions"
 
         assert not session_dir.exists(), (
             "test fixture leaked a pre-existing session dir; the point of "
-            "this test is a session whose first tool call is an Edit"
+            "this test is a session whose dir does not exist beforehand"
         )
 
-        params = {
-            "session_id": session_id,
-            "tool_name": "Edit",
-            "file_path": str(target),
-        }
-        asyncio.run(ttf._handler(params, repo_root=common_dir))
+        # Neuter the hook's own makedirs call to a no-op — session.core's
+        # own `Path.mkdir` (a different call) is left untouched, so this
+        # isolates core.init's self-creation from the hook's own mkdir.
+        monkeypatch.setattr(ttf.os, "makedirs", lambda *args, **kwargs: None)
 
-        touched_file = session_dir / "touched.txt"
-        assert touched_file.exists(), (
-            "handler did not create touched.txt via the _append fallback in "
-            "a session dir that did not exist beforehand — the handler's own "
-            "mkdir precondition for the fallback path was dropped"
+        ttf._ensure_session_record_sync(
+            str(session_dir), session_id, str(sessions_base), str(repo)
         )
-        lines = [
-            line
-            for line in touched_file.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
-        assert lines, (
-            "touched.txt exists but carries no T event — the _append "
-            "fallback silently failed against the fresh session dir"
+
+        meta_file = session_dir / "meta.json"
+        assert meta_file.is_file(), (
+            "meta.json was not created for a fresh session dir with the "
+            "hook's own os.makedirs neutered — session.core.init's own "
+            "mkdir did not create the parent directory"
         )
-        entries = [touch_scope.parse_touch_event(line)[2] for line in lines]
-        assert "src/new.py" in entries

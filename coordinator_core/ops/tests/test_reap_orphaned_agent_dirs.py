@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import reap_orphaned_agent_dirs as reaper
+from coordinator_core.session import touch_record
 
 
 def _touch(path: Path, *, age_seconds: float = 0.0) -> None:
@@ -178,6 +179,68 @@ def test_r4_age_within_threshold_is_not_a_candidate(sessions_dir, monkeypatch, t
 
     assert verdict.candidate is False
     assert "R4 fails" in verdict.reason
+
+
+def test_read_touched_paths_legacy_only(sessions_dir):
+    """C2 — a sibling `touched.txt` with no `touch-record.jsonl` family still
+    reads through the seam, unchanged from the pre-C2 direct read."""
+    adir = _make_agent_dir(sessions_dir / ".agents", "agent-k", touched=["src/foo.py"])
+
+    assert reaper._read_touched_paths(adir) == ["src/foo.py"]
+
+
+def test_read_touched_paths_jsonl_only(sessions_dir):
+    """C2 — an agent dir with only a `touch-record.jsonl` family (no
+    `touched.txt`) is read via the seam's agent-dir dialect adapter."""
+    adir = sessions_dir / ".agents" / "agent-l"
+    adir.mkdir(parents=True)
+    touch_record.append_event(
+        adir / reaper._TOUCH_RECORD_FILENAME,
+        session_id="em-owner-1",
+        agent_id=None,
+        verb=touch_record.VERB_TOUCH,
+        path="src/bar.py",
+    )
+
+    assert reaper._read_touched_paths(adir) == ["src/bar.py"]
+
+
+def test_read_touched_paths_unions_legacy_and_jsonl(sessions_dir):
+    """C2 — the seam prepends legacy `touched.txt` lines ahead of the
+    jsonl-derived ones, so a reader that unions both dialects sees both
+    paths."""
+    adir = _make_agent_dir(sessions_dir / ".agents", "agent-m", touched=["src/legacy.py"])
+    touch_record.append_event(
+        adir / reaper._TOUCH_RECORD_FILENAME,
+        session_id="em-owner-1",
+        agent_id=None,
+        verb=touch_record.VERB_TOUCH,
+        path="src/jsonl.py",
+    )
+
+    assert reaper._read_touched_paths(adir) == ["src/legacy.py", "src/jsonl.py"]
+
+
+def test_read_touched_paths_absent_record_is_empty(sessions_dir):
+    """No `touched.txt` and no `touch-record.jsonl` family — silence, not
+    an error, matching the pre-C2 OSError-catch posture."""
+    adir = _make_agent_dir(sessions_dir / ".agents", "agent-n")
+
+    assert reaper._read_touched_paths(adir) == []
+
+
+def test_read_touched_paths_degraded_read_is_empty(sessions_dir, monkeypatch):
+    """A degraded read (unreadable/malformed family member) is treated as
+    silence — the same safe direction as the prior bare OSError catch: an
+    empty touched-paths list only ever clears R3's "still dirty" rail, it
+    never widens candidacy."""
+    adir = _make_agent_dir(sessions_dir / ".agents", "agent-o", touched=["src/foo.py"])
+
+    monkeypatch.setattr(
+        reaper, "_read_agent_touch_record_as_legacy_lines", lambda sink_path: (["src/foo.py"], True)
+    )
+
+    assert reaper._read_touched_paths(adir) == []
 
 
 def test_touched_path_is_dirty_directory_and_case_helper_directly():

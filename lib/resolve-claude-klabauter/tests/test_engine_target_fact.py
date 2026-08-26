@@ -18,7 +18,7 @@ Covers, against the shim's own ``resolve_engine_target``:
     disposition as absence — never raised, never encoded as a third state.
 
 Also proves the HARD CONSTRAINT from C3's body: the fact lives inside the
-same ``(registry.toml, registry.local.toml, .claude-klabauter-root)`` tuple
+same ``(registry.toml, registry.local.toml, .claude-klabauter-live-root)`` tuple
 ``coordinator_core.engine_root._registry_mtime_pair`` already stats, so
 writing it self-invalidates both ``_ROOT_MEMO`` and ``_GATE_MEMO`` by mtime
 — no explicit reset call (``_reset_root_memo()`` is a test-only seam with

@@ -61,7 +61,7 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
         "MACHINE_LOCAL_REGISTRY_DIR": str(tmp_path / "no-such-registry-dir"),
     }
     (settings_home / "machine-local").mkdir(parents=True, exist_ok=True)
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
     (settings_home / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
 
     result = resolve_operator_config(env=env)
@@ -168,8 +168,14 @@ def test_guard_plugin_root_registry_doe_claude_anchor_parity(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
+    # TOML literal string (single-quoted), not a basic (double-quoted) one:
+    # a Windows path's backslashes (`C:\Users\...`) are escape sequences in
+    # a basic string -- `\U` in particular is an invalid 8-hex-digit Unicode
+    # escape, so the TOML load raises and silently degrades to "no registry
+    # key" rather than resolving the value below. Literal strings process no
+    # escapes.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.doe_claude" = "{registry_root}"\n'
+        f"\"repos.doe_claude\" = '{registry_root}'\n"
     )
     home = tmp_path / "home"
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -184,8 +190,10 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
+    # TOML literal string -- see the sibling doe_claude parity test's comment
+    # above for why a basic (double-quoted) string breaks on a Windows path.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = "{claude_klabauter_root}"\n'
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
     )
     home = tmp_path / "home"
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -233,7 +241,7 @@ def _happy_env(tmp_path):
     doe_root = tmp_path / "DoE-claude"
     doe_root.mkdir()
 
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
     (settings_home / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
 
     env = {
@@ -258,7 +266,7 @@ def test_resolve_operator_config_happy_path(tmp_path):
 
 def test_resolve_operator_config_missing_claude_klabauter_root_sentinel_is_corrupt(tmp_path):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
-    (settings_home / "machine-local" / ".claude-klabauter-root").unlink()
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").unlink()
 
     with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):
         resolve_operator_config(env=env)
@@ -285,7 +293,7 @@ def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
 def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path):
     env, settings_home, claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     not_a_dir = tmp_path / "not-a-real-directory"
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text(str(not_a_dir) + "\n")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(not_a_dir) + "\n")
 
     with pytest.raises(OperatorConfigError, match="claude_klabauter_root"):
         resolve_operator_config(env=env)

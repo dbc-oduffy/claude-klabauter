@@ -978,9 +978,16 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
         "and an AC1 that reads <=3" % (run_git_argvs,)
     )
     verbs = [argv[0] for argv in git_argvs]
-    assert verbs == ["interpret-trailers", "update-index"], (
-        "AC1: only the trailer spawn and the bound-6 shared update-index "
-        "should remain through _git() on the fast, in-process path"
+    assert verbs == ["update-index"], (
+        "AC1: only the bound-6 shared update-index should remain through "
+        "_git() on the fast, in-process path. The `interpret-trailers` spawn "
+        "that used to sit ahead of it is gone -- `_apply_trailers` formats "
+        "trailers in process for any message inside "
+        "`commit_trailers.can_format_trailers_in_process` (no `#` comment "
+        "line), which this fixture's message is. A message OUTSIDE that "
+        "envelope still spawns git, so this list growing an "
+        "`interpret-trailers` back means the envelope narrowed -- not that "
+        "the replacement was reverted"
     )
     assert _committed_content_at_head(repo, "file.txt") == "AUTHORED CONTENT\n"
     fsck = subprocess.run(
@@ -1576,6 +1583,38 @@ def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_
     )
 
     assert result is None
+
+
+def test_agree_branch_cas_refusal_stays_fresh_under_an_open_index_cache_scope(tmp_path):
+    """C2 AC3: `_agree_branch_cas_refusal`'s own `_index_blobs` call must
+    remain a real disk read even while `git_state.index_read_cache_scope()`
+    is open for the surrounding commit -- the compare-and-swap must never be
+    served from the within-call cache the OTHER three `read_index` callers
+    now share. Same mutate-in-the-window shape as the unscoped test above,
+    run with the scope active to prove `fresh=True` actually bypasses it
+    rather than merely happening to still work outside one."""
+    from coordinator_core.git.git_state import index_read_cache_scope
+
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("one\n")
+    _real_git(["add", "--", "a.txt"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    with index_read_cache_scope():
+        pre_index_blobs = git_native._index_blobs(repo, ["a.txt"])
+        pre_head_blobs = git_native._head_blobs(repo, ["a.txt"])
+
+        (repo / "a.txt").write_text("two\n")
+        _real_git(["add", "--", "a.txt"], repo)
+
+        result = git_native._agree_branch_cas_refusal(
+            repo, ["a.txt"], pre_index_blobs, pre_head_blobs
+        )
+
+    assert result is not None
+    assert result.ok is False
+    assert "a.txt" in result.stderr
+    assert "index entry changed since this call's own snapshot" in result.stderr
 
 
 # ---------------------------------------------------------------------------

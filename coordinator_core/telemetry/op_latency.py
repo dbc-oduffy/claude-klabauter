@@ -127,6 +127,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -174,6 +175,90 @@ def execution_route() -> str:
     """
     declared = os.environ.get(ROUTE_ENV)
     return declared if declared in EXECUTION_ROUTES else IN_PROCESS
+
+
+#: Invocation ORIGIN — what kind of caller produced this row. Orthogonal to
+#: `route` above, which records the TRANSPORT (which process served the op) and
+#: says nothing about the nature of the caller. Both ship: a warm-server row and
+#: a benchmark row are different facts, and neither answers the other's question.
+#:
+#: Why this exists (the contamination the census could not see): `ping` recorded
+#: 10,832 completions in seven days, none of them production traffic — five
+#: benchmark modules (`benchmarks/floor.py`, `harness.py`, `interleave.py`,
+#: `concurrency_probe.py`, `op_fixtures.py`) time it as the engine's bare-invoke
+#: floor. Before this field, an in-process test dispatch and a real one were
+#: indistinguishable on disk, so EVERY completion count used to convict an op
+#: was contaminated by an unknown amount. Measured 2026-08-25 against the live
+#: sink: `route` and `source_path` both describe transport, and exactly 9 rows in
+#: a 29,596-row generation carried a fixture-shaped `t_start` — so no read-time
+#: heuristic could recover origin either. It has to be written down at the sink.
+PRODUCTION = "production"
+TEST = "test"
+BENCHMARK = "benchmark"
+INVOCATION_ORIGINS = frozenset({PRODUCTION, TEST, BENCHMARK})
+
+# Review: coordinatorcode-reviewer -- readers are told "treat absent origin as
+# unknown, never as production" but had nothing to spell that with, and
+# `entry.get("origin", PRODUCTION)` is the tempting wrong reach given this
+# module's own default direction. This is what a READER substitutes for a
+# missing "origin" key on a pre-existing row -- the writer (invocation_origin
+# above) never returns it and never will. Deliberately NOT added to
+# INVOCATION_ORIGINS: that frozenset gates what a caller may DECLARE, and
+# nobody may declare themselves unknown.
+UNKNOWN = "unknown"
+
+#: A harness declares its own origin here; benchmark runners set it to
+#: `BENCHMARK`. Same env-var-not-import discipline as ROUTE_ENV: this module is
+#: on the dispatch hot path and must not import a harness to ask what it is.
+ORIGIN_ENV = "COORDINATOR_INVOCATION_ORIGIN"
+
+#: pytest stamps this per test. Reading it is how a test dispatch self-identifies
+#: without every test file having to remember to declare anything — the failure
+#: mode of an opt-in-only tag is that the tests which forget are exactly the ones
+#: contaminating the census.
+_PYTEST_ENV = "PYTEST_CURRENT_TEST"
+
+
+def invocation_origin() -> str:
+    """Origin of the invocation the CURRENT process is recording.
+
+    Precedence: an explicit ``ORIGIN_ENV`` declaration wins; otherwise a live
+    ``PYTEST_CURRENT_TEST`` (pytest genuinely running in THIS interpreter)
+    means ``TEST``; otherwise ``PRODUCTION``.
+
+    Defaults to ``PRODUCTION`` deliberately, and this is the one place the
+    default direction is arguable. An unrecognised or absent declaration reads
+    as production traffic, so a harness that forgets to declare itself
+    CONTAMINATES rather than disappears. The alternative default hides real ops
+    from their own census, which is the worse failure: an over-counted op is
+    visibly wrong to anyone who reads the row, an absent one is invisible to
+    everyone (see this module's `repo_key_source` fallback for the same call
+    made the same way, and the 85-hour blind spot that motivated it).
+
+    # Review: coordinatorcode-reviewer -- PYTEST_CURRENT_TEST is inherited as
+    # an env-var SNAPSHOT at spawn time, not live-linked to the parent. A
+    # long-lived process (a warm server, most concretely) booted by a test
+    # fixture keeps that stale env var baked in for its entire life; if it
+    # later serves genuine interactive traffic -- exactly what
+    # `route=warm_server` exists to describe -- every row it writes would
+    # still read TEST, silently deleting real traffic from the production
+    # census. That is the same invisible-to-everyone failure this function's
+    # PRODUCTION default claims to avoid, just reached via a stale
+    # declaration rather than an absent one. Gating on `"pytest" in
+    # sys.modules` as well as the env var means only a process where pytest
+    # is ACTUALLY running reads as TEST; a spawned/forked child that merely
+    # inherited the env var but never imported pytest reads as PRODUCTION.
+
+    Never raises, per the never-breaks-dispatch contract: two `os.environ.get`
+    calls, one dict-membership check against `sys.modules` (no import --
+    `sys` is always already loaded), well inside this module's sub-1ms budget.
+    """
+    declared = os.environ.get(ORIGIN_ENV)
+    if declared in INVOCATION_ORIGINS:
+        return declared
+    if os.environ.get(_PYTEST_ENV) and "pytest" in sys.modules:
+        return TEST
+    return PRODUCTION
 
 
 def double_routed_corr_ids(entries) -> set:
@@ -304,6 +389,84 @@ def sink_generations(repo_root: Path) -> list:
     return [p for p in paths if p.is_file()]
 
 
+#: Modules internal to the dispatch chokepoint itself -- never the fact
+#: `caller_module()` exists to name. A frame whose `__name__` equals one of
+#: these, or is a dotted child of one, is skipped rather than reported: it is
+#: this instrument's own plumbing (this module, `coordinator_core.ipc`'s
+#: `dispatch_message` wrapper) or the asyncio machinery that schedules a
+#: coroutine between the caller's own call and the frame that actually runs
+#: it (`loop.run_until_complete(dispatch_message(msg))` interposes several
+#: `asyncio.*` frames between the caller and this point -- see module-level
+#: "Caller provenance" note below for the traced shape). Every OTHER
+#: `coordinator_core.*` submodule is left un-skipped on purpose: an op
+#: handler that itself calls back into `dispatch_message` (rare, but not
+#: forbidden) should attribute to ITS OWN module, not disappear into this
+#: skip list merely for sharing the `coordinator_core` package prefix.
+_CALLER_SKIP_PREFIXES = (
+    "coordinator_core.telemetry.op_latency",
+    "coordinator_core.ipc",
+    "asyncio",
+)
+
+#: Bound on how many frames `caller_module()` walks before giving up. A
+#: finite, small cap -- never an unbounded walk up the stack -- keeps this
+#: within the module's own sub-1ms "Cheap" budget even in the deepest
+#: observed call shape (dispatch_message -> several asyncio scheduling
+#: frames -> the caller).
+_CALLER_WALK_MAX_FRAMES = 20
+
+
+def caller_module() -> Optional[str]:
+    """Best-effort ``__name__`` of the invoking module/entry point.
+
+    Caller provenance (why C1 exists): `dispatch_message` is the SOLE
+    process-level dispatch chokepoint (see its own docstring), so its one
+    `record_op_started`/`record_op_latency` call site cannot distinguish a
+    CLI invocation (`coordinator_core.invoke.__main__`) from a direct-import
+    dispatch (`coordinator_core.ops.check_auto_reconcile.get_response`) from
+    a warm-server pool worker -- 63 of 65 `handoff.reconcile_open` rows
+    carried no attribution at all before this. Walking the call stack from
+    inside the dispatch chokepoint is the only way to answer "who fired
+    this" without threading a new parameter through every existing caller
+    (out of this chunk's `writes:` scope) -- see `_CALLER_SKIP_PREFIXES` for
+    which frames are the chokepoint's own plumbing rather than the answer.
+
+    Traced shape for an event-loop-mediated caller (e.g.
+    ``loop.run_until_complete(dispatch_message(msg))``): the frame that
+    calls `dispatch_message` does not itself appear directly above this
+    function's frame -- several `asyncio.tasks`/`asyncio.base_events` frames
+    interpose while the loop schedules and resumes the coroutine. Skipping
+    the `asyncio` prefix (rather than only this module's own) is what lets
+    the walk reach past that scheduling machinery to the real caller.
+
+    Returns the first frame's `__name__` that is not itself skipped, or
+    ``None`` if the walk is exhausted (`_CALLER_WALK_MAX_FRAMES`) or the
+    module cannot be determined -- never a free-text label, and never a
+    guess: an unattributed row stays unattributed rather than fabricating
+    an identity for it.
+
+    Never raises: `sys._getframe(1)` raising ``ValueError`` (called with no
+    caller on the stack -- effectively unreachable in real use, but
+    defensive per this module's never-breaks-dispatch contract) is caught
+    and treated as unknown. Pure frame-object attribute reads, no stat, no
+    filesystem walk, no import -- well inside the module's sub-1ms budget.
+    """
+    try:
+        frame = sys._getframe(1)
+    except ValueError:
+        return None
+    depth = 0
+    while frame is not None and depth < _CALLER_WALK_MAX_FRAMES:
+        name = frame.f_globals.get("__name__")
+        if isinstance(name, str) and not any(
+            name == prefix or name.startswith(prefix + ".") for prefix in _CALLER_SKIP_PREFIXES
+        ):
+            return name
+        frame = frame.f_back
+        depth += 1
+    return None
+
+
 def new_correlation_id() -> str:
     """Build a correlation id unique across concurrent processes on this box.
 
@@ -330,6 +493,7 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
             return
 
         entry["route"] = execution_route()
+        entry["origin"] = invocation_origin()
 
         key_source = "envelope"
         if repo_root is None:
@@ -408,6 +572,7 @@ def record_op_latency(
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
     corr_id: Optional[str] = None,
+    caller: Optional[str] = None,
 ) -> None:
     """Append one JSON line recording a single op invocation's wall-clock cost.
 
@@ -415,7 +580,7 @@ def record_op_latency(
         {"op": str, "t_start": float epoch, "elapsed_ms": float,
          "outcome": "ok"|"error"|"timeout", "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
-         "kind": "complete", "corr_id": str|null}
+         "kind": "complete", "corr_id": str|null, "caller": str|null}
 
     ``outcome`` "timeout" means the CALLING side gave up waiting — it does NOT
     mean the op handler stopped running (see module docstring negative-spec).
@@ -426,6 +591,10 @@ def record_op_latency(
     need to be joinable. Optional and defaults to None so existing callers
     that predate the started-row instrument are unaffected; this is the ONLY
     signature change made to this function, and it is purely additive.
+
+    ``caller``, when provided, is the invoking module/entry point (see
+    `caller_module`) -- optional and additive in the same way as ``corr_id``,
+    defaulting to ``None`` so pre-C1 callers are unaffected.
 
     Resolves the sink path via ``coordinator_core.lifecycle.git_common_dir`` from
     ``repo_root`` (deferred import — see module docstring's "Cheap" requirement).
@@ -445,6 +614,7 @@ def record_op_latency(
         "repo_key": None,
         "kind": "complete",
         "corr_id": corr_id,
+        "caller": caller,
     }
     _write_entry(entry, repo_root)
 
@@ -456,13 +626,19 @@ def record_op_started(
     corr_id: str,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    caller: Optional[str] = None,
 ) -> None:
     """Append one JSON line marking an op invocation's START, before it runs.
 
     Record shape:
         {"op": str, "t_start": float epoch, "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
-         "kind": "started", "corr_id": str}
+         "kind": "started", "corr_id": str, "caller": str|null}
+
+    ``caller``, when provided, is the invoking module/entry point that
+    called through to `coordinator_core.ipc.dispatch_message` for this
+    invocation (see `caller_module`) -- optional and additive, defaulting to
+    ``None`` so pre-C1 callers are unaffected.
 
     Written at the ``coordinator_core.ipc.dispatch_message`` wrapper's entry,
     BEFORE ``_dispatch_message_impl`` is awaited — so it is already durable
@@ -492,6 +668,7 @@ def record_op_started(
         "repo_key": None,
         "kind": "started",
         "corr_id": corr_id,
+        "caller": caller,
     }
     _write_entry(entry, repo_root)
 

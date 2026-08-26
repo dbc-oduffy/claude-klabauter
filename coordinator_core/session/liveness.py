@@ -318,6 +318,20 @@ _NON_SESSION_DIR_NAMES = frozenset(
         # session id. Missed on the 2026-08-19 pass because the sink happened
         # to be empty at that moment and reappeared mid-run.
         "workflow-fires",
+        # `commit_ledger/store.py`'s baton-chain sink -- a fixed directory name
+        # that module owns outright (`LEDGER_DIRNAME`), holding one `.jsonl` per
+        # `handoff_id` plus predecessor-pointer sidecars. Same class as
+        # `hook-observations` and `workflow-fires`: a named cross-session data
+        # directory, keyed by handoff rather than by session, never a session id.
+        #
+        # This entry is NOT the passlist move the 2026-08-19 ruling forbids.
+        # That ruling governs STRAY dirs minted by accident -- audit/advisory
+        # writers that had to be fixed, not quieted. A deliberate named sink a
+        # module owns is the case this denylist exists for, which is why the two
+        # entries above it are here. The distinguishing test is whether a writer
+        # is minting a session id it had no business minting (delete the writer)
+        # or owns a fixed non-session name (name it here).
+        ".commit-ledger",
     }
 )
 
@@ -1108,6 +1122,87 @@ def resolve_live_session_ids() -> FrozenSet[str]:
 #: measurement ever separates them, even though they share a value today.
 _ABANDONMENT_WINDOW_SEC = 30 * 60
 
+#: Filenames excluded from ``newest_record_mtime``'s directory scan -- kept
+#: as its own named constant (rather than inlined) so a future addition
+#: carries its own reason inline, matching this module's existing exclusion-
+#: list convention (``_NON_SESSION_DIR_NAMES`` above).
+_RECORD_MTIME_EXCLUDED_NAMES = frozenset(
+    {
+        # The ownership backpointer (written once, at claim/dispatch time,
+        # and never refreshed afterward) -- counting it makes every
+        # freshly-dispatched agent read as permanently recent regardless of
+        # its actual activity (AC6, docs/plans/2026-08-25-the-legacy-touch-
+        # record-is-retired-by-repointing-its-writers.md § C5).
+        "em-session-id.txt",
+        # meta.json is DELIBERATELY NOT excluded yet -- flagged here as the
+        # next candidate (C5 brief) rather than added speculatively; a
+        # caller relying on meta.json's own mtime as part of "the newest
+        # record" today (e.g. session_abandoned's meta-carrying branch) must
+        # keep working until a dedicated assessment adds it above.
+    }
+)
+
+
+def newest_record_mtime(dir) -> Optional[int]:
+    """THE single shared implementation of the recency policy (AC6, C5) --
+    every filename-keyed mtime probe this chunk repoints (``session_abandoned``
+    below, ``shape.py``, ``stable_pid_watch.py``, ``core.py``) and C3's own
+    fifth probe (``dispatch_checks.py :: _rm_peer_claim_of``) import and
+    assert against THIS function rather than each re-deriving the policy
+    against a hardcoded literal (``touched.txt``, ``dispatched-agents.txt``).
+
+    Returns the newest mtime (epoch seconds, via ``int(entry.stat().st_mtime)``)
+    among ``dir``'s top-level REGULAR files, excluding
+    ``_RECORD_MTIME_EXCLUDED_NAMES``, or ``None`` (AC6b) when ``dir`` does not
+    exist, is not a directory, or holds no eligible regular file. ``None`` is
+    itself the useful signal here -- a directory holding only non-session
+    content (e.g. a stray ``.commit-ledger``-shaped dir) or genuinely no files
+    at all yields no liveness refresh, rather than a manufactured epoch-0 or
+    directory-mtime substitute a caller could mistake for real evidence (this
+    deliberately does NOT fall back to the directory's own mtime the way
+    ``_dir_recency_fallback_epoch`` does -- that is a DIFFERENT policy for a
+    DIFFERENT caller, ``session_live``'s Layer 2, and is untouched by this
+    function).
+
+    WIDEN, DO NOT SWAP (AC6, plan Anti-scope): keying on the newest file
+    rather than a single literal name means a future record rename can only
+    DEFER a recency decision (the renamed file is still picked up under its
+    new name) and never DISABLE one -- the C7b regression this guards
+    against swapped the literal onto a name absent from 204 of 493 legacy
+    agent dirs and silently regressed them.
+
+    Scope discipline (AC6's own § Recency keying must not widen the
+    phantom-live-peer surface): this function does not decide which
+    directories are session directories -- callers must scope ``dir`` to a
+    directory that already carries (or is being probed for) a session
+    record; a stray non-session dir enumerated by a caller that skips that
+    scoping is a caller-side defect, not one this function can close (see
+    ``live_session_verdicts``'s ``_NON_SESSION_DIR_NAMES`` denylist).
+    """
+    p = Path(dir)
+    if not p.is_dir():
+        return None
+    newest: Optional[int] = None
+    try:
+        with os.scandir(p) as it:
+            for entry in it:
+                if entry.name in _RECORD_MTIME_EXCLUDED_NAMES:
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                try:
+                    candidate = int(entry.stat().st_mtime)
+                except OSError:
+                    continue
+                if newest is None or candidate > newest:
+                    newest = candidate
+    except OSError:
+        return None
+    return newest
+
 
 def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     """Abandonment predicate — additive, separate from every liveness verdict
@@ -1125,35 +1220,45 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     signal, read from a source a working session cannot fail to write, across
     the measured window (``_ABANDONMENT_WINDOW_SEC``) -- the primary gate.
     The census's OR-combined signal set for a meta-carrying session dir is
-    ``last_activity`` (meta.json), ``touched.txt`` mtime (dominant writer:
-    ``hooks.track_touched_files``, PostToolUse Edit/Write/MultiEdit/
-    NotebookEdit -- independent of ``last_activity`` on its dominant path;
-    the minority ``scope.py::touch()`` overlap is a real caveat, not a
-    disqualifier), and ``dispatched-agents.txt`` mtime (``hooks.
-    track_dispatched_agents``, PostToolUse:Agent -- never touches
-    meta.json). The FRESHEST of whichever of these are present must be
-    OLDER than the window for the primary gate to fire at all; a session
-    fresh on ANY one of them reads NOT-abandoned outright.
+    ``last_activity`` (meta.json's own content field) and ``dir_record``
+    (AC6, C5: ``newest_record_mtime(sdir)`` -- the newest record file in the
+    dir, excluding ``em-session-id.txt``, WIDENED off any single filename
+    literal so a future record rename can only DEFER this decision, never
+    DISABLE it. Pre-C5 this signal was two separately-named literals,
+    ``touched.txt`` mtime (dominant writer: ``hooks.track_touched_files``,
+    PostToolUse Edit/Write/MultiEdit/NotebookEdit) and ``dispatched-
+    agents.txt`` mtime (``hooks.track_dispatched_agents``, PostToolUse:Agent)
+    -- both independent of ``last_activity`` on their dominant path (the
+    minority ``scope.py::touch()`` overlap is a real caveat, not a
+    disqualifier); C5 collapsed both into the one shared helper's scan of the
+    same directory, so either writer (or a future record dialect) still
+    moves ``dir_record`` without moving ``last_activity``. The FRESHEST of
+    whichever of these are present must be OLDER than the window for the
+    primary gate to fire at all; a session fresh on ANY one of them reads
+    NOT-abandoned outright.
 
     The >= 2 independent stale signals rule (C1's census) survives beneath
     that bar as a belt-and-braces FLOOR, not the primary safety argument:
     even once the freshest-signal gate fires, at least two of the PRESENT
     candidate signals must independently be stale past the window. A fixture
-    carrying a stale ``last_activity`` and nothing else (no ``touched.txt``,
-    no ``dispatched-agents.txt``) has exactly one candidate -- the freshest-
-    signal gate fires (there is nothing fresher), but the floor never reaches
-    two, so this reads NOT-abandoned. Named negative-spec test:
+    carrying a stale ``last_activity`` and nothing else (no record file in
+    the dir) has exactly one candidate -- the freshest-signal gate fires
+    (there is nothing fresher), but the floor never reaches two, so this
+    reads NOT-abandoned. Named negative-spec test:
     ``test_session_abandoned_stale_last_activity_alone_is_not_abandoned``.
 
     Meta-less sid (no ``meta.json`` in the session dir at all -- C1's
-    "Meta-less sid, decided" finding): there is no ``last_activity`` and no
-    heartbeat/scope-touch writer reaches this dir, so ``touched.txt`` mtime
-    (or, absent that, ``_dir_recency_fallback_epoch``'s directory-mtime
-    fallback) is the ONLY avoidance-independent recency evidence available,
-    and stands alone through the SAME window -- the >= 2 floor cannot apply
-    when only one candidate can ever exist for this population, and C1's
-    corpus measurement found it overwhelmingly ancient in practice, not a
-    live-corpus edge case.
+    "Meta-less sid, decided" finding): there is no ``last_activity``, so
+    ``newest_record_mtime(sdir)`` (AC6b: ``None`` when no eligible record
+    file exists) is the ONLY avoidance-independent recency evidence
+    available, and stands alone through the SAME window -- the >= 2 floor
+    cannot apply when only one candidate can ever exist for this population,
+    and C1's corpus measurement found it overwhelmingly ancient in practice,
+    not a live-corpus edge case. A ``None`` result (no record file at all)
+    reads NOT-abandoned, same absent-evidence bias as every other arm here --
+    this no longer falls back to ``_dir_recency_fallback_epoch``'s
+    directory-mtime substitute (that fallback is a DIFFERENT policy for a
+    DIFFERENT caller, ``session_live``'s Layer 2, and stays there unchanged).
 
     No sdir at all (empty/unknown sid, or the sessions dir/this sid's dir
     does not exist) -> False, not True: absent evidence is never dispositive
@@ -1183,49 +1288,30 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
 
     sdir_path = Path(sdir)
     now_epoch = core.now_epoch()
-
-    def _file_mtime_epoch(name: str) -> Optional[int]:
-        p = sdir_path / name
-        try:
-            if not p.is_file():
-                return None
-        except OSError:
-            return None
-        try:
-            return core.mtime_epoch(str(p))
-        except OSError:
-            return None
-
-    touched_epoch = _file_mtime_epoch("touched.txt")
     meta_present = (sdir_path / "meta.json").is_file()
 
     if not meta_present:
-        # Meta-less sid (C1's "Meta-less sid, decided"): touched.txt alone,
-        # or the directory-mtime fallback -- through the same window, no
-        # >= 2 floor (there is structurally only ever one candidate here).
-        if touched_epoch is not None:
-            source_epoch = touched_epoch
-        else:
-            # Review: coordinator:code-reviewer P2 sibling trap
-            # (coordinatorcode-reviewer-1da5144e.md) —
-            # `_dir_recency_fallback_epoch` returns 0 ONLY on a TOCTOU
-            # directory-stat failure (its own docstring), which is
-            # unreadable/absent evidence, not a genuinely ancient
-            # timestamp. Letting a `0` read as epoch-0 would score it
-            # maximally stale and fire ABANDONED on no real evidence at
-            # all — fail toward NOT-abandoned instead, same bias as the
-            # no-candidates arm below.
-            fallback_epoch = _dir_recency_fallback_epoch(sdir)
-            if not fallback_epoch:
-                return False
-            source_epoch = fallback_epoch
+        # Meta-less sid (C1's "Meta-less sid, decided"): the newest record
+        # file in the dir (AC6, C5) is the sole candidate -- no >= 2 floor
+        # (there is structurally only ever one candidate here). `None`
+        # (AC6b: no eligible file present) is absent evidence, not a
+        # maximally-stale timestamp -- fail toward NOT-abandoned, same bias
+        # as the no-candidates arm below.
+        source_epoch = newest_record_mtime(sdir)
+        if source_epoch is None:
+            return False
         elapsed = now_epoch - source_epoch
         if elapsed < 0:
             elapsed = 0
         return elapsed >= _ABANDONMENT_WINDOW_SEC
 
-    # Meta-carrying sid: OR-combine the three candidate signals, primary gate
+    # Meta-carrying sid: OR-combine the two candidate signals, primary gate
     # on the freshest, belt-and-braces floor on >= 2 independently stale.
+    # `last_activity` (meta.json's own content field) and `dir_record`
+    # (AC6, C5: `newest_record_mtime`, widened off any single filename
+    # literal) are independent sources -- a session whose activity writes
+    # only a record file (never refreshing `last_activity`) still moves
+    # `dir_record` without moving `last_activity`, and vice versa.
     candidates: list[tuple[str, int]] = []
 
     # Review: coordinator:code-reviewer P2 (coordinatorcode-reviewer-
@@ -1241,11 +1327,9 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
         last_activity_epoch = core.iso_to_epoch(last_iso)
         if last_activity_epoch:
             candidates.append(("last_activity", last_activity_epoch))
-    if touched_epoch is not None:
-        candidates.append(("touched.txt", touched_epoch))
-    dispatched_epoch = _file_mtime_epoch("dispatched-agents.txt")
-    if dispatched_epoch is not None:
-        candidates.append(("dispatched-agents.txt", dispatched_epoch))
+    dir_record_epoch = newest_record_mtime(sdir)
+    if dir_record_epoch is not None:
+        candidates.append(("dir_record", dir_record_epoch))
 
     if not candidates:
         # No positive-activity evidence at all -- absence is not dispositive

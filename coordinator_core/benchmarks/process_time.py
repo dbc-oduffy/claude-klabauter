@@ -244,6 +244,53 @@ def _resume_all_threads(pid: int) -> None:
     _k32.CloseHandle(snap)
 
 
+def _windows_query_job_accounting(job) -> "_JobObjectBasicAccountingInformation":
+    """Reads the job's basic accounting block (info class 1 -- class 2
+    returns ERROR_BAD_LENGTH on this box, module docstring trap 3)."""
+    info = _JobObjectBasicAccountingInformation()
+    if not _k32.QueryInformationJobObject(
+        wintypes.HANDLE(job),
+        _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+        None,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return info
+
+
+def _windows_spawn_into_job(
+    job,
+    cmd: Sequence[str],
+    env: Optional[dict],
+    cwd: Optional[str],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+) -> int:
+    """Spawns `cmd` CREATE_SUSPENDED, assigns it to `job` before it can
+    execute anything chargeable, resumes it, and waits. Returns its rc.
+
+    The single Windows spawn mechanism in this module: both the k-batched
+    external-command path and the single-invocation tree path below go
+    through here, so there is exactly ONE job-accounting instrument to
+    reason about rather than a sibling that drifts from it.
+    """
+    proc = subprocess.Popen(
+        list(cmd),
+        env=env,
+        cwd=cwd,
+        stdout=stdout,
+        stderr=stderr,
+        creationflags=_CREATE_SUSPENDED,
+    )
+    if not _k32.AssignProcessToJobObject(
+        wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle))
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    _resume_all_threads(proc.pid)
+    return proc.wait()
+
+
 def _windows_batched_process_time_ms(
     cmd: Sequence[str],
     k: int,
@@ -257,31 +304,10 @@ def _windows_batched_process_time_ms(
         rc = 0
         t0 = time.perf_counter()
         for _ in range(k):
-            proc = subprocess.Popen(
-                list(cmd),
-                env=env,
-                cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=_CREATE_SUSPENDED,
-            )
-            if not _k32.AssignProcessToJobObject(
-                wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle))
-            ):
-                raise ctypes.WinError(ctypes.get_last_error())
-            _resume_all_threads(proc.pid)
-            rc = proc.wait()
+            rc = _windows_spawn_into_job(job, cmd, env, cwd)
         wall_ms = (time.perf_counter() - t0) * 1000.0 / k
 
-        info = _JobObjectBasicAccountingInformation()
-        if not _k32.QueryInformationJobObject(
-            wintypes.HANDLE(job),
-            _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
-            ctypes.byref(info),
-            ctypes.sizeof(info),
-            None,
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
+        info = _windows_query_job_accounting(job)
         process_time_ms = (info.TotalUserTime + info.TotalKernelTime) / 10000.0 / k
         procs_per_call = info.TotalProcesses / k
     finally:
@@ -728,3 +754,177 @@ def batched_process_time_quantiles(
         "k": k,
         "samples": samples,
     }
+
+
+def single_invocation_tree_process_time(
+    cmd: Sequence[str],
+    env: Optional[dict] = None,
+    cwd: Optional[str] = None,
+    stdout_path: Optional[str] = None,
+    stderr_path: Optional[str] = None,
+) -> dict:
+    """Measures ONE invocation of `cmd` and everything it spawns -- the
+    root's own CPU plus every descendant's -- as a single figure.
+
+    This is the sibling `batched_process_time_ms` cannot be, for the class
+    of thing that cannot be run `k` times. A close ceremony, a merge, an
+    install: each mutates state, so the second invocation measures a
+    different job than the first, and the k-batched primitive's whole
+    premise (identical repeats, amortised) does not hold. That primitive
+    also discards stdio; for a once-only invocation the output IS the
+    evidence of what was measured, so it is captured to disk here.
+
+    NOT a second accounting mechanism. On Windows this shares
+    `_windows_spawn_into_job` and `_windows_query_job_accounting` with the
+    batched path -- the same job object, the same info class, the same
+    CREATE_SUSPENDED-then-assign ordering that keeps pre-assignment CPU
+    from escaping the job. On Darwin it calls `_darwin_one_invocation`
+    directly, which is precisely the per-invocation unit the batched path
+    loops over.
+
+    Why this exists at all (the trap it closes): `os.times()` reports
+    `children_user`/`children_system` as 0.0 on Windows always (module
+    docstring, trap 1), so a probe that sums a parent's own
+    `time.process_time()` and calls it the cost of a spawn-heavy operation
+    reports a FLOOR and presents it as a total. An operation that shells
+    out 47 times reads as if those 47 processes were free.
+
+    Returns:
+        {
+            "process_time_ms": float,  # user+kernel CPU, root AND descendants
+            "wall_ms": float,          # context only -- never gate on this
+            "procs": int,              # distinct processes in the tree,
+                                       #   INCLUDING the root (so a command
+                                       #   that spawns nothing reports 1)
+            "rc": int,                 # the root's exit code
+            "k": 1,                    # shape parity with the batched dict
+            "stdout_path": str | None,
+            "stderr_path": str | None,
+        }
+
+    `k` is present and always 1 so a caller can consume either primitive's
+    dict without branching on which one produced it.
+
+    QUANTISATION (Windows): job-object accounting lands on ~15.6ms
+    scheduler ticks (module docstring, trap 2), and k=1 cannot amortise
+    that away -- it is the price of measuring something unrepeatable. The
+    figure carries roughly +/-16ms of tick noise, which is immaterial
+    against a 500ms bar and NOT immaterial against a 60ms one. A caller
+    near the smaller bar wants `batched_process_time_ms` on a repeatable
+    proxy instead, and must not reach for this function because it is more
+    convenient.
+
+    `procs` INCLUDES the root here, where the batched path's
+    `procs_per_call` also counts it -- stated explicitly because the
+    difference between "the ceremony spawned 47" and "the tree contains 48
+    processes" is exactly the kind of off-by-one that turns a census into
+    an argument.
+
+    stdio: `stdout_path`/`stderr_path` are opened in binary append-free
+    write mode and handed to the child. Left as None, the child INHERITS
+    this process's stdio -- which for an interactive harness means the
+    measured command's output lands in the operator's terminal, not in
+    evidence. Pass them for anything whose output is being recorded.
+
+    Raises whatever the underlying platform path raises -- `NotImplementedError`
+    off Windows/Darwin, `OSError`/`ctypes.WinError`/`RuntimeError` on a
+    measurement-mechanism failure. Never silently degrades to a wrong unit.
+    """
+    if IS_WINDOWS:
+        out_f = open(stdout_path, "wb") if stdout_path else None
+        err_f = open(stderr_path, "wb") if stderr_path else None
+        try:
+            job = _k32.CreateJobObjectW(None, None)
+            if not job:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                t0 = time.perf_counter()
+                rc = _windows_spawn_into_job(
+                    job,
+                    cmd,
+                    env,
+                    cwd,
+                    stdout=out_f if out_f is not None else None,
+                    stderr=err_f if err_f is not None else None,
+                )
+                wall_ms = (time.perf_counter() - t0) * 1000.0
+                info = _windows_query_job_accounting(job)
+                process_time_ms = (info.TotalUserTime + info.TotalKernelTime) / 10000.0
+                procs = int(info.TotalProcesses)
+            finally:
+                _k32.CloseHandle(wintypes.HANDLE(job))
+        finally:
+            if out_f is not None:
+                out_f.close()
+            if err_f is not None:
+                err_f.close()
+
+        return {
+            "process_time_ms": round(process_time_ms, 3),
+            "wall_ms": round(wall_ms, 3),
+            "procs": procs,
+            "rc": rc,
+            "k": 1,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+        }
+
+    if IS_DARWIN:
+        if signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN:
+            raise RuntimeError(
+                "process_time: SIGCHLD is SIG_IGN in this process -- both XNU "
+                "and Linux destroy CPU accounting for auto-reaped children "
+                "under that disposition (module docstring); refusing to "
+                "silently under-report rather than measuring through it"
+            )
+        # `_posix_spawnp_suspended` passes NULL file_actions, so the child
+        # inherits this process's descriptors. Redirecting OUR OWN fds 1/2
+        # around the spawn is therefore the redirection mechanism -- not a
+        # workaround for a missing feature, but the same thing a shell does.
+        saved = []
+        out_f = open(stdout_path, "wb") if stdout_path else None
+        err_f = open(stderr_path, "wb") if stderr_path else None
+        try:
+            if out_f is not None:
+                saved.append((1, os.dup(1)))
+                os.dup2(out_f.fileno(), 1)
+            if err_f is not None:
+                saved.append((2, os.dup(2)))
+                os.dup2(err_f.fileno(), 2)
+            t0 = time.perf_counter()
+            process_time_ms, procs, attach_failed, rc = _darwin_one_invocation(cmd, env, cwd)
+            wall_ms = (time.perf_counter() - t0) * 1000.0
+        finally:
+            for fd, backup in saved:
+                os.dup2(backup, fd)
+                os.close(backup)
+            if out_f is not None:
+                out_f.close()
+            if err_f is not None:
+                err_f.close()
+
+        if attach_failed:
+            # Same refusal as the batched path: an unresolved residual means
+            # some subtree exited unobserved, so `procs` is a lower bound.
+            raise RuntimeError(
+                f"process_time: attach_failed={attach_failed} after bounded "
+                f"retry -- procs would be {procs} (LOWER BOUND, not exact). "
+                "Refusing to return an undercount."
+            )
+
+        return {
+            "process_time_ms": round(process_time_ms, 3),
+            "wall_ms": round(wall_ms, 3),
+            "procs": int(procs),
+            "rc": rc,
+            "k": 1,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+        }
+
+    raise NotImplementedError(
+        "single_invocation_tree_process_time: no process-tree accounting "
+        "primitive for this platform. Same boundary as "
+        "batched_process_time_ms -- see its docstring for which half is "
+        "missing where."
+    )

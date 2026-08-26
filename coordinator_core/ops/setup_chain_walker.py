@@ -140,7 +140,7 @@ def _loaded_manifest_repo_id(manifest_path: Path | None) -> str:
     hardcoded ``coordinator-claude`` literal, which is what hid Defect B's
     wrong-tree walk: the banner claimed ``repo: coordinator-claude``
     regardless of which manifest was actually loaded, so a walk that had
-    silently fallen back to `<claude-klabauter-root>/coordinator`'s OWN manifest
+    silently fallen back to `<claude-klabauter-live-root>/coordinator`'s OWN manifest
     (`repo_id: claude-klabauter`) still announced itself as walking
     coordinator-claude. Returns a bracketed diagnostic placeholder — never
     the stale literal — when ``manifest_path`` is None or the field/file is
@@ -438,7 +438,7 @@ def _sibling_fallback(
       call sites do that anymore).
     - It must not BE the claude-klabauter engine's own tree, nor a subdirectory of it,
       nor the walked repo's own ``repo_root`` (or a subdirectory of that) —
-      the exact coincidental match (`<claude-klabauter-root>/coordinator` resolving as
+      the exact coincidental match (`<claude-klabauter-live-root>/coordinator` resolving as
       a "sibling" of itself) that manufactured Defect A's "found but broken"
       contradiction out of "not found here".
 
@@ -1301,7 +1301,7 @@ def _resolve_coordinator_root_ladder(
     `_self_resolve_walker_roots` / `main`) reports a real diagnostic with
     the ladder as remediation instead of falling back to a location-derived
     guess (the guess was the root cause of Defect B: it coincidentally
-    matched `<claude-klabauter-root>/coordinator`, claude-klabauter's OWN plugin-source mirror,
+    matched `<claude-klabauter-live-root>/coordinator`, claude-klabauter's OWN plugin-source mirror,
     not any real coordinator-claude checkout).
     """
     err = sys.stderr if err is None else err

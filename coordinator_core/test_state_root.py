@@ -58,6 +58,13 @@ def stub_peers(monkeypatch):
     monkeypatch.setattr(sr, "is_meta_repo", lambda _g: False)
     monkeypatch.setattr(sr, "_resolve_git_root", lambda: _SIBLING)
     monkeypatch.setattr(sr, "published_engine_mirror_path", lambda: None)
+    # No live engine tree registered, by default. The published-mirror guard
+    # now consults `_live_engine_source_root()` before refusing, so leaving
+    # this unstubbed would let the REAL machine-local registry decide whether
+    # a fail-loud test raises -- green on a box with no claude-klabauter key, red on a
+    # developer box that has one. Tests that exercise the fallback stub it
+    # themselves.
+    monkeypatch.setattr(sr, "_live_engine_source_root", lambda: None)
     return monkeypatch
 
 
@@ -109,6 +116,58 @@ def test_rule2_engine_fail_loud_when_resolved_engine_is_published_mirror(stub_pe
     assert _PUBLISHED_MIRROR in str(exc.value)
     # Must NOT silently return a path under the published mirror.
     assert not str(exc.value).startswith(_state(_PUBLISHED_MIRROR))
+
+
+_LIVE_TREE = "/repos/claude-klabauter-live"
+
+#: Bound at import, before `stub_peers` replaces the module attribute with a
+#: `lambda: None`. The two rung-order tests below exercise the real ladder,
+#: so they must not call the fixture's stub of it.
+_REAL_LIVE_ENGINE_SOURCE_ROOT = sr._live_engine_source_root
+
+
+def test_resolved_engine_falls_back_to_registered_live_tree(stub_peers):
+    """A dual-boot box runs the engine FROM the mirror by design; that must
+    route the state WRITE to the registered live tree, not refuse.
+
+    Before this, `central=True` was structurally unresolvable on every box
+    whose session root is a sibling repo -- /workday-complete Step 1.5's
+    cruft-sweep among the casualties -- while the live tree sat in the
+    registry the whole time."""
+    stub_peers.setattr(
+        sr,
+        "coordinator_engine_root_with_class",
+        lambda: ("/repos/claude-klabauter", "resolved-engine"),
+    )
+    stub_peers.setattr(sr, "_live_engine_source_root", lambda: _LIVE_TREE)
+    assert sr.coordinator_state_root(central=True) == _state(_LIVE_TREE)
+    assert (
+        sr.coordinator_state_root(central=True, subject="engine")
+        == _state(_LIVE_TREE)
+    )
+
+
+def test_live_tree_fallback_prefers_transform_proof_key(stub_peers):
+    """`engine.source_root` carries no repo token, so it survives the publish
+    identifier transform intact; `repos.claude_klabauter` does not and is
+    rewritten to name the mirror. Rung order must put the survivor first."""
+    stub_peers.setattr(sr, "engine_source_root", lambda: _LIVE_TREE)
+    stub_peers.setattr(sr, "is_published_engine_mirror", lambda _r: False)
+    assert _REAL_LIVE_ENGINE_SOURCE_ROOT() == _LIVE_TREE
+
+
+def test_live_tree_fallback_refuses_a_mirror_valued_registry_key(stub_peers):
+    """Under the publish transform `repos.claude_klabauter` resolves the mirror
+    to ITSELF. The fallback must yield None there so the caller refuses --
+    laundering that value into a "live tree" is the exact defect the guard
+    exists for."""
+    mirror = "/repos/claude-klabauter"
+    stub_peers.setattr(sr, "engine_source_root", lambda: None)
+    stub_peers.setattr(sr, "is_published_engine_mirror", lambda r: r == mirror)
+    import coordinator_core.machine_resolver as mr
+
+    stub_peers.setattr(mr, "registry_get", lambda _k: mirror)
+    assert _REAL_LIVE_ENGINE_SOURCE_ROOT() is None
 
 
 def test_rule4_fail_loud_when_resolved_engine_is_published_mirror(stub_peers):

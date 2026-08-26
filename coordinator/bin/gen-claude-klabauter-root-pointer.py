@@ -1,7 +1,7 @@
-"""gen-claude-klabauter-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.
+"""gen-claude-klabauter-live-root-pointer.py — project the claude-klabauter repo root into a cold-readable pointer file.
 
 Purpose: reads repos.claude_klabauter from the machine-local registry and writes
-<settings-home>/machine-local/.claude-klabauter-root (one line, the claude-klabauter repo root, no
+<settings-home>/machine-local/.claude-klabauter-live-root (one line, the claude-klabauter repo root, no
 trailing junk) so that BOTH the bash resolver (coordinator-claude-klabauter-root.sh rung
 1.5) and the Python transport (cc_invoke.py::_resolve_claude_klabauter_root rung 1.5) can
 read the pointer with zero subprocess spawn, avoiding the 5s bash-fallback hang
@@ -34,8 +34,8 @@ Resolution order for the claude-klabauter clone root:
   3. fail-loud with remediation.
 
 Usage:
-    gen-claude-klabauter-root-pointer.py             — write (or refresh) the live pointer
-    gen-claude-klabauter-root-pointer.py --check-only — validate without mutating the live pointer
+    gen-claude-klabauter-live-root-pointer.py             — write (or refresh) the live pointer
+    gen-claude-klabauter-live-root-pointer.py --check-only — validate without mutating the live pointer
 
 Idempotency: if the live pointer already contains the correct value, the file is
 not rewritten (avoids spurious mtime churn and concurrent-write races in steady state).
@@ -59,7 +59,7 @@ import subprocess
 import sys
 import tempfile
 
-GENERATES = []  # writes only <settings-home>/machine-local/.claude-klabauter-root, outside claude-klabauter's tracked tree
+GENERATES = []  # writes only <settings-home>/machine-local/.claude-klabauter-live-root, outside claude-klabauter's tracked tree
 
 # ---------------------------------------------------------------------------
 # Settings-home resolution — inline mirror of cc_invoke.py::_resolve_claude_klabauter_root.
@@ -109,7 +109,7 @@ def _machine_local_impl() -> str:
 
     Settings-home-first (DR-210 Amendment 2026-07-24: "resolves nothing
     through ~/.claude/bin") — this file already inlines `_settings_home()`
-    above (for the `.claude-klabauter-root` pointer path) for the single-file-module
+    above (for the `.claude-klabauter-live-root` pointer path) for the single-file-module
     portability reason documented there; reused here rather than a new
     cross-module import, so this file's own inlining discipline stays intact.
     Falls back to the retired compat mirror (`_claude_home()`) only when the
@@ -166,7 +166,7 @@ def _resolve_claude_klabauter_root() -> str:
     resolved = _machine_local_get("repos.claude_klabauter")
     if not resolved:
         print(
-            "gen-claude-klabauter-root-pointer.py: cannot resolve repos.claude_klabauter "
+            "gen-claude-klabauter-live-root-pointer.py: cannot resolve repos.claude_klabauter "
             "(env REPO_CLAUDE_KLABAUTER unset; machine-local registry lookup failed/empty).",
             file=sys.stderr,
         )
@@ -194,7 +194,7 @@ def main() -> int:
 
     if not os.path.isdir(claude_klabauter_root):
         print(
-            f"gen-claude-klabauter-root-pointer.py: claude-klabauter root not found at {claude_klabauter_root!r}",
+            f"gen-claude-klabauter-live-root-pointer.py: claude-klabauter root not found at {claude_klabauter_root!r}",
             file=sys.stderr,
         )
         print(
@@ -206,7 +206,7 @@ def main() -> int:
 
     if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):
         print(
-            f"gen-claude-klabauter-root-pointer.py: coordinator_core/ subdir absent at "
+            f"gen-claude-klabauter-live-root-pointer.py: coordinator_core/ subdir absent at "
             f"{claude_klabauter_root!r}/coordinator_core",
             file=sys.stderr,
         )
@@ -216,12 +216,12 @@ def main() -> int:
         )
         return 1
 
-    pointer_file = os.path.join(_settings_home(), "machine-local", ".claude-klabauter-root")
+    pointer_file = os.path.join(_settings_home(), "machine-local", ".claude-klabauter-live-root")
 
     if args.check_only:
         # Dry-run safety: write to a temp file, validate, discard. The live
         # pointer_file is never touched.
-        fd, tmp_path = tempfile.mkstemp(prefix="gen-claude-klabauter-root-pointer.")
+        fd, tmp_path = tempfile.mkstemp(prefix="gen-claude-klabauter-live-root-pointer.")
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 f.write(claude_klabauter_root + "\n")
@@ -229,13 +229,13 @@ def main() -> int:
                 written = f.read().strip()
             if written != claude_klabauter_root:
                 print(
-                    f"gen-claude-klabauter-root-pointer.py: --check-only validation failed "
+                    f"gen-claude-klabauter-live-root-pointer.py: --check-only validation failed "
                     f"(wrote {written!r}, expected {claude_klabauter_root!r})",
                     file=sys.stderr,
                 )
                 return 1
             print(
-                f"gen-claude-klabauter-root-pointer.py: --check-only OK — would write "
+                f"gen-claude-klabauter-live-root-pointer.py: --check-only OK — would write "
                 f"{claude_klabauter_root!r} to {pointer_file} (not written)",
                 file=sys.stderr,
             )
@@ -262,7 +262,7 @@ def main() -> int:
 
     # Atomic write: write to a sibling temp file then os.replace into place
     # (same-filesystem rename is atomic on POSIX and Windows alike).
-    fd, tmp_live = tempfile.mkstemp(prefix=".claude-klabauter-root.tmp.", dir=pointer_dir)
+    fd, tmp_live = tempfile.mkstemp(prefix=".claude-klabauter-live-root.tmp.", dir=pointer_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(claude_klabauter_root + "\n")
@@ -274,7 +274,7 @@ def main() -> int:
             pass
         raise
 
-    print(f"gen-claude-klabauter-root-pointer.py: wrote {claude_klabauter_root!r} to {pointer_file}", file=sys.stderr)
+    print(f"gen-claude-klabauter-live-root-pointer.py: wrote {claude_klabauter_root!r} to {pointer_file}", file=sys.stderr)
     return 0
 
 

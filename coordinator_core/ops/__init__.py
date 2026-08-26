@@ -116,7 +116,13 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.handoff_children",
         'registers "handoff.has_live_children" and "handoff.blocked_by_dependents"',
     ),
-    ("coordinator_core.hooks", "registers the 15 hooks.* ops (6 advisory + 8 bookkeeping + 1 arrival-check)"),
+    (
+        "coordinator_core.hooks",
+        "coordinator_core.hooks is ITSELF lazy (2026-08-22, mirroring this package's own "
+        "C6 retirement) -- a bare import of the package registers nothing; only its own "
+        "_eager_import_all() forces its 19 hooks.* ops to register. Handled as a special "
+        "case in the loop below, not a plain importlib.import_module() call.",
+    ),
     (
         "coordinator_core.frontmatter.schema_cli",
         'registers "schema.describe", "schema.validate" (C7 byte-parity CLI + JSON-RPC ops)',
@@ -171,7 +177,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_draft", 'registers "memo.draft" (C7 wiring)'),
     ("coordinator_core.ops.fleet.memo_compose", 'registers "memo.compose" (C7 wiring)'),
     ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
+    ("coordinator_core.ops.fleet.memo_reconcile_outbox", 'registers "memo.reconcile_outbox"'),
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
+    ("coordinator_core.ops.ceremony.push_outstanding", 'registers "push.outstanding"'),
     ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),
     (
         "coordinator_core.ops.spec_backlink_resolve",
@@ -607,7 +615,18 @@ def _eager_import_all() -> None:
     """
     for module_path, _note in _EAGER_OP_MODULES:
         try:
-            importlib.import_module(module_path)
+            if module_path == "coordinator_core.hooks":
+                # This sub-package is itself lazy — a bare import registers
+                # none of its 19 hooks.* ops. Force ITS eager-import routine
+                # rather than just importing the package (see the entry's
+                # note above and coordinator_core/hooks/__init__.py's own
+                # _eager_import_all() docstring).
+                hooks_module = importlib.import_module(module_path)
+                hooks_module._eager_import_all()
+                for poisoned_path, poisoned_exc in hooks_module.get_poisoned_modules().items():
+                    _POISONED_MODULES[poisoned_path] = poisoned_exc
+            else:
+                importlib.import_module(module_path)
         except Exception as exc:  # noqa: BLE001 — intentional broad catch, see docstring
             _POISONED_MODULES[module_path] = exc
             # ERROR-severity logging call (§ FUNCTION gate C4C brief "make the

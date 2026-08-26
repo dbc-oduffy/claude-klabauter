@@ -231,11 +231,11 @@ def cmd_whoami_status(args: argparse.Namespace) -> int:
 
 
 def _resolve_claude_klabauter_root_for_exec_summary(settings_home: "str | None") -> "str | None":
-    """Native mirror of the skill's claude-klabauter-root fallback chain used only by
+    """Native mirror of the skill's claude-klabauter-live-root fallback chain used only by
     the exec-summary generator lookup:
     REPO_CLAUDE_KLABAUTER, falling back to COORDINATOR_ENGINE_ROOT (via the
-    accessor), falling back to `<settings-home>/machine-local/.claude-klabauter-root`,
-    falling back to `.claude/machine-local/.claude-klabauter-root` under CLAUDE_HOME or,
+    accessor), falling back to `<settings-home>/machine-local/.claude-klabauter-live-root`,
+    falling back to `.claude/machine-local/.claude-klabauter-live-root` under CLAUDE_HOME or,
     absent that, the platform home directory (USERPROFILE on Windows, HOME or
     the passwd entry on POSIX).
 
@@ -254,8 +254,8 @@ def _resolve_claude_klabauter_root_for_exec_summary(settings_home: "str | None")
         or os.path.join(home, ".coordinator-claude-settings")
     )
     for pointer_path in (
-        os.path.join(resolved_settings_home, "machine-local", ".claude-klabauter-root"),
-        os.path.join(home, ".claude", "machine-local", ".claude-klabauter-root"),
+        os.path.join(resolved_settings_home, "machine-local", ".claude-klabauter-live-root"),
+        os.path.join(home, ".claude", "machine-local", ".claude-klabauter-live-root"),
     ):
         try:
             with open(pointer_path, "r", encoding="utf-8") as handle:
@@ -308,7 +308,7 @@ def cmd_resolve_exec_summary_generator(args: argparse.Namespace) -> int:
         print(
             "[repo-setup-args-and-register] generate-exec-summary.py unresolvable "
             "(checked coordinator/bin/ and the claude-klabauter sibling via "
-            "REPO_CLAUDE_KLABAUTER/CLAUDE_KLABAUTER_ROOT/.claude-klabauter-root) — exec-summary "
+            "REPO_CLAUDE_KLABAUTER/CLAUDE_KLABAUTER_ROOT/.claude-klabauter-live-root) — exec-summary "
             "generation skipped",
             file=sys.stderr,
         )

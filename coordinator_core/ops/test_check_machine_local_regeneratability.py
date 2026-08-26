@@ -180,6 +180,20 @@ def test_missing_key_flags_unclassified_warning(tmp_path, capsys, monkeypatch):
         """
 schema = 1
 
+"coordinator.python"       = ""
+"plugin.mirrors"           = ""
+"publish.targets"          = []
+"repos.example-sim-repo"           = ""
+"repos.example_retrieval_repo"        = ""
+"repos.example_retrieval_repo_ue_addon" = ""
+"repos.example_game_workbench_repo" = ""
+"repos.example_repo"         = ""
+"repos.example_stats_repo"         = ""
+"repos.example_league_data_repo"   = ""
+"repos.experiments"        = ""
+"repos.example_cockpit_repo"    = ""
+"repos.example-os-repo"           = ""
+
 [regeneratability]
 # coordinator.python intentionally omitted
 "publish.targets"               = "idempotent-regeneratable"
@@ -450,6 +464,21 @@ def test_claude_klabauter_unclassified_warns(tmp_path, capsys, monkeypatch):
     (ml_dir / "registry.toml").write_text(
         """
 schema = 1
+
+"coordinator.python"       = ""
+"plugin.mirrors"           = ""
+"publish.targets"          = []
+"repos.example-sim-repo"           = ""
+"repos.example_retrieval_repo"        = ""
+"repos.example_retrieval_repo_ue_addon" = ""
+"repos.example_game_workbench_repo" = ""
+"repos.example_repo"         = ""
+"repos.example_stats_repo"         = ""
+"repos.example_league_data_repo"   = ""
+"repos.experiments"        = ""
+"repos.example_cockpit_repo"    = ""
+"repos.example-os-repo"           = ""
+"repos.claude_klabauter"   = ""
 
 [regeneratability]
 "coordinator.python"           = "idempotent-regeneratable"

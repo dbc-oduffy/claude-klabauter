@@ -882,6 +882,28 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/write_surface_manifest.py",
         ("_emit_write_surface_manifest",),
     ),
+    #
+    # -- 2026-08-25 widening: 3 more live registry ops MEASURED to have an EMPTY
+    # function-granular reachable spawn set (`test_registry_divergence_and_residual_stay_
+    # accounted`'s completeness guard), same EM adjudication step 2 as the C2a widening
+    # above -- an op reaching no spawn site needs zero legitimization. `handoff.
+    # ship_and_archive` and `hooks.session_heartbeat` were previously carried as
+    # `_STATIC_SPAWN_COUNT_PINS` residual rows and moved here once their reachable set
+    # went empty (their pins are removed in the same change); `memo.reconcile_outbox` is
+    # new to both routes.
+    #
+    "handoff.ship_and_archive": (
+        "coordinator_core/ops/handoff_ship_archive.py",
+        ("_handler",),
+    ),
+    "hooks.session_heartbeat": (
+        "coordinator_core/hooks/session_heartbeat.py",
+        ("_handler",),
+    ),
+    "memo.reconcile_outbox": (
+        "coordinator_core/ops/fleet/memo_reconcile_outbox.py",
+        ("_memo_reconcile_outbox",),
+    ),
 }
 
 #: The two counter shapes a legitimation may rest on. Each names what it guarantees AND the hole
@@ -1034,8 +1056,8 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
     ),
     (
         "execute_plan_assemble.dispatch_ledger_delivered",
-        "coordinator_core/execute_plan_assemble/row_spans.py",
-        "_run_git",
+        "coordinator_core/git/run.py",
+        "run_git",
         "git",
         0,
     ): _Legitimation(
@@ -1047,26 +1069,26 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         # `close_out_and_stamp.py` into `row_spans.py` (`close_out_and_stamp.py` now imports it),
         # which changed `site_key`'s `path` component and left this entry stale -- the same
         # function, same behaviour, same companion test, just relocated.
+        #
+        # Relocated a second time 2026-08-25 (G7, shared-git-runner migration): `row_spans.py::
+        # _run_git` and `close_out_and_stamp.py::_batch_git_cat_file_check` both stopped calling
+        # `subprocess.run` directly and now delegate to `coordinator_core.git.run.run_git`, which
+        # is where the two-entry collapse below the module docstring's own "site relocates, stays
+        # legitimized" precedent applies a second time: the two former call-path-distinct sites
+        # are now literally the same physical `subprocess.run` call inside `run_git`'s own body,
+        # so the pair of entries this dict used to carry collapses to this one. The companion
+        # test's patch target moved with it (`test_dispatch_ledger_delivered_spawn_budget.py ::
+        # _count_git_calls` now patches the real `subprocess` module's `run` attribute directly,
+        # not `close_out_and_stamp.subprocess.run`, which no longer exists once that module
+        # dropped its own `import subprocess`) -- still the same global module attribute either
+        # way, so leg 1 (mechanism) still holds and legs 2/3 (assertion, execution) are unchanged.
         counter=_GLOBAL_SUBPROCESS_RUN,
         counted_by="coordinator_core/execute_plan_assemble/tests/"
         "test_dispatch_ledger_delivered_spawn_budget.py",
         executed="Measured 2026-08-19: origin-recorded at close_out_and_stamp.py:611 (now "
-        "row_spans.py) under the counter of `test_multiple_committed_rows_spawn_exactly_two_git_"
-        "calls` (`assert spawns == budgeted`).",
-    ),
-    (
-        "execute_plan_assemble.dispatch_ledger_delivered",
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-        "_batch_git_cat_file_check",
-        "git",
-        0,
-    ): _Legitimation(
-        counter=_GLOBAL_SUBPROCESS_RUN,
-        counted_by="coordinator_core/execute_plan_assemble/tests/"
-        "test_dispatch_ledger_delivered_spawn_budget.py",
-        executed="Measured 2026-08-19: origin-recorded at close_out_and_stamp.py:2633 under the "
-        "counter of `test_multiple_committed_rows_spawn_exactly_two_git_calls` "
-        "(`assert spawns == budgeted`).",
+        "git/run.py::run_git, reached from both row_spans.py::_run_git and close_out_and_stamp.py"
+        "::_batch_git_cat_file_check) under the counter of "
+        "`test_multiple_committed_rows_spawn_exactly_two_git_calls` (`assert spawns == budgeted`).",
     ),
     (
         "ops.discover_working_repos",
@@ -1394,7 +1416,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "ceremony.post_commit_tail": (
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
@@ -1421,13 +1442,14 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "eol.census": (
-        ("coordinator_core/git/ls_files_bytes.py", "_tracked_files_bytes_uncached", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "eol.repair": (
-        ("coordinator_core/git/ls_files_bytes.py", "_tracked_files_bytes_uncached", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "fleet.archive_completed_handoffs": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_paper_trail": (
@@ -1437,9 +1459,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_release_accumulator": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
-    "fleet.archive_shipped_handoffs": (
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_terminal_sizings": (
@@ -1498,9 +1517,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "handoff.repoint_origin": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
-    "handoff.ship_and_archive": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
     "handoff.transition": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
@@ -1509,15 +1525,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "hooks.cater_subagent_start": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
-    "hooks.session_heartbeat": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
-    ),
-    "hooks.track_touched_files": (
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "memo.transition": (
@@ -1530,18 +1537,12 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/repo_root.py", "_spawn_rev_parse", "git", 0),
     ),
     "priority.drain": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "research.archive_workdir": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "research.restructure_for_repeat_topic": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "review.freeze_diff": (
@@ -1551,8 +1552,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "review_trail.write": (
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "schema.drift_gate": (
@@ -1560,9 +1559,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git_scope.py", "scoped_cat_file_batch", "git", 0),
     ),
     "session.boot_sweep": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 0),
-        ("coordinator_core/session/core.py", "init", "git", 1),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "session.commits": (
@@ -1596,11 +1593,10 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "engine.drift": ("coordinator_core/ops/engine_drift.py", "_engine_drift"),
     "eol.census": ("coordinator_core/ops/eol/census.py", "_eol_census"),
     "eol.repair": ("coordinator_core/ops/eol/repair.py", "_eol_repair"),
-    "fleet.archive_completed_handoffs": ("coordinator_core/ops/fleet/archive_handoffs.py", "_handler"),
+    "fleet.archive_completed_handoffs": ("coordinator_core/ops/fleet/archive_terminal_handoffs.py", "_handler"),
     "fleet.archive_paper_trail": ("coordinator_core/ops/fleet/archive_paper_trail.py", "_handler"),
     "fleet.archive_queue_entry": ("coordinator_core/ops/fleet/archive_queue_entry.py", "_handler"),
     "fleet.archive_release_accumulator": ("coordinator_core/ops/fleet/archive_release_accumulator.py", "_handler"),
-    "fleet.archive_shipped_handoffs": ("coordinator_core/ops/fleet/archive_shipped_handoffs.py", "_handler"),
     "fleet.archive_terminal_sizings": ("coordinator_core/ops/fleet/archive_sizings.py", "_archive_terminal_sizings"),
     "fleet.migrate_handoff_vocabulary": ("coordinator_core/ops/fleet/migrate_handoff_vocabulary.py", "_handler"),
     "fleet.prune_closed_bugs": ("coordinator_core/ops/fleet/prune_bugs.py", "_handler"),
@@ -1614,11 +1610,8 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.reconcile_close_terminal": ("coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler"),
     "handoff.reconcile_open": ("coordinator_core/ops/handoff_reconcile.py", "_handler"),
     "handoff.repoint_origin": ("coordinator_core/ops/handoff_repoint_origin.py", "_handler"),
-    "handoff.ship_and_archive": ("coordinator_core/ops/handoff_ship_archive.py", "_handler"),
     "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "hooks.cater_subagent_start": ("coordinator_core/hooks/cater_subagent_start.py", "_handler"),
-    "hooks.session_heartbeat": ("coordinator_core/hooks/session_heartbeat.py", "_handler"),
-    "hooks.track_touched_files": ("coordinator_core/hooks/track_touched_files.py", "_handler"),
     "memo.transition": ("coordinator_core/ops/memo_transition.py", "_handler"),
     "orientation.regenerate_cache": ("coordinator_core/orientation/regenerate_cache.py", "_orientation_regenerate_cache"),
     "priority.drain": ("coordinator_core/ops/priority_drain.py", "_priority_drain"),
@@ -1709,11 +1702,21 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 94, (
+    assert total_pairs == 77, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "94 expected after queue.close/ceremony.wsc_tail/fleet.archive_actioned_memos/fleet."
+        "77 expected after queue.close/ceremony.wsc_tail/fleet.archive_actioned_memos/fleet."
         "archive_completed_plans/session.sweep_consumed_handoffs's kills removed their 16 "
-        "combined pairs from the measured 110 this chunk's own re-derivation found -- update this "
+        "combined pairs from the measured 110 this chunk's own re-derivation found, and (2026-08-25) "
+        "hooks.track_touched_files/fleet.archive_shipped_handoffs/handoff.ship_and_archive/hooks."
+        "session_heartbeat dropped out (killed or moved to _BUDGETED_ENTRYPOINTS with an empty "
+        "reachable set), session/core.py::init stopped spawning git for the 6 ops that reached it "
+        "only there (-12 pairs), and fleet.archive_completed_handoffs's rebuild "
+        "(archive_terminal_handoffs.py) added one new git_native._git._invoke site while "
+        "ceremony.post_commit_tail lost its git/run.py::run_git site (G7 routing), and "
+        "(2026-08-25, +1) session.boot_sweep gained git/run.py::run_git because 8c9b0ca44 "
+        "migrated boot_backstop.py::_git off its own subprocess spelling onto the shared runner "
+        "-- the pair count rises while the SPAWN count does not, which is what consolidating onto "
+        "a shared seam does to a static reachable-site metric -- update this "
         "constant deliberately if the shift is real and understood, never to silence a drift you "
         "have not traced."
     )
@@ -2110,7 +2113,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "deliverable.cascade_terminal": (
         ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-        ("coordinator_core/execute_plan_assemble/row_spans.py", "_run_git", "git", 0),
     ),
     "distill.apply_disposal": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
@@ -2238,12 +2240,14 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         "_CLUSTER_D5_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 45, (
+    assert total_pairs == 44, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "45 expected after ceremony.wsc_tail/completion.reconcile_commits/fleet."
+        "44 expected after ceremony.wsc_tail/completion.reconcile_commits/fleet."
         "archive_completed_plans's kills dropped their entrypoint and disposition entries from "
-        "the prior 49 -- update this constant deliberately if the shift is real and understood, "
-        "never to silence a drift you have not traced."
+        "the prior 49, and (2026-08-25, G7 routing) deliverable.cascade_terminal lost its "
+        "execute_plan_assemble/row_spans.py::_run_git site once that function stopped calling "
+        "subprocess.run directly -- update this constant deliberately if the shift is real and "
+        "understood, never to silence a drift you have not traced."
     )
 
     for op_key in _CLUSTER_D5_OPEN_DISPOSITION:
@@ -3310,8 +3314,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/eol/census.py", "_check_attr_eol_text", "git", 0),
         ("coordinator_core/ops/eol/census.py", "_dirty_paths", "git", 0),
         ("coordinator_core/ops/eol/repair.py", "_index_blobs", "git", 0),
-        ("coordinator_core/ops/fleet/archive_handoffs.py", "_shipped_in_resolvable", "git", 0),
-        ("coordinator_core/ops/fleet/archive_shipped_handoffs.py", "_sha_reachable", "git", 0),
         ("coordinator_core/ops/hibernate_machine.py", "_run_binary", "<dynamic>", 0),
         ("coordinator_core/ops/hibernate_machine.py", "hibernate", "pmset", 0),
         ("coordinator_core/ops/hibernate_machine.py", "hibernate", "shutdown", 1),
@@ -4354,17 +4356,6 @@ _NAMED_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "of the C2a-widened 175 measured-empty rows)."
     ),
     (
-        "coordinator_core/ops/fleet/archive_handoffs.py",
-        "_shipped_in_resolvable",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- awaited (asyncio.create_subprocess_exec, D4) "
-        "single `git cat-file -e <sha>^{commit}` reachability check; "
-        "`fleet.archive_shipped_handoffs` (this function's owning op) is not "
-        "a `_BUDGETED_ENTRYPOINTS` row."
-    ),
-    (
         "coordinator_core/ops/merge_quiet_activity_gate.py",
         "_head_commit_epoch_seconds",
         "git",
@@ -4463,7 +4454,6 @@ _TRANCHE_A_FILES: frozenset = frozenset({
     "coordinator_core/hooks/subagent_fabrication_check.py",
     "coordinator_core/ops/ceremony/update_docs_scan.py",
     "coordinator_core/ops/distill_apply_disposal.py",
-    "coordinator_core/ops/fleet/archive_handoffs.py",
     "coordinator_core/ops/merge_quiet_activity_gate.py",
     "coordinator_core/ops/session/guard_settings_integrity.py",
     "coordinator_core/orientation/regenerate_cache.py",
@@ -4499,12 +4489,15 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "reaches outside tranche a's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS) == 33, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS) == 32, (
         f"_NAMED_ARGV0_DISPOSITIONS carries {len(_NAMED_ARGV0_DISPOSITIONS)} "
-        "entries, not the 33 expected after fleet.archive_completed_plans's kill "
+        "entries, not the 32 expected after fleet.archive_completed_plans's kill "
         "removed its 2 named-argv0 sites (archive_plans.py deleted whole) from "
-        "the dispatch brief's own tranche-a slice of 35 -- a count drift here "
-        "means either a site was missed or one was double-counted."
+        "the dispatch brief's own tranche-a slice of 35, and "
+        "fleet.archive_shipped_handoffs's kill (2026-08-25, C1b) removed "
+        "archive_handoffs.py's `_shipped_in_resolvable` site along with the "
+        "whole module -- a count drift here means either a site was missed or "
+        "one was double-counted."
     )
 
 
@@ -4729,18 +4722,6 @@ _NAMED_ARGV0_DISPOSITIONS_B: dict[tuple[str, str, str, int], str] = {
         "machine diagnostic's sole spawn."
     ),
     (
-        "coordinator_core/ops/fleet/archive_shipped_handoffs.py",
-        "_sha_reachable",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- awaited (asyncio.create_subprocess_exec, "
-        "D4) single `git cat-file -e <sha>^{commit}` reachability check "
-        "per this function's own docstring; `fleet.archive_shipped_"
-        "handoffs` (this function's owning op) is not a "
-        "`_BUDGETED_ENTRYPOINTS` row."
-    ),
-    (
         "coordinator_core/ops/orphan_branch_sweep.py",
         "_git",
         "git",
@@ -4902,7 +4883,6 @@ _TRANCHE_B_FILES: frozenset = frozenset({
     "coordinator_core/ops/cruft_sweep.py",
     "coordinator_core/ops/session/boot_backstop.py",
     "coordinator_core/ops/orphan_branch_sweep.py",
-    "coordinator_core/hooks/track_touched_files.py",
     "coordinator_core/ops/bootstrap_repo.py",
     "coordinator_core/ops/commit_anchors.py",
     "coordinator_core/ops/cutover_gate.py",
@@ -4912,7 +4892,6 @@ _TRANCHE_B_FILES: frozenset = frozenset({
     "coordinator_core/install/clone_sibling_repo.py",
     "coordinator_core/ops/completion_ops.py",
     "coordinator_core/ops/ensure_python3_exe_shim.py",
-    "coordinator_core/ops/fleet/archive_shipped_handoffs.py",
     "coordinator_core/ops/percolate_check_inverse_drift.py",
     "coordinator_core/ops/session/resolve_chain_terminal_disposition.py",
     "coordinator_core/plugin_health/drift.py",
@@ -4949,15 +4928,17 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
         "reaches outside tranche b's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 30, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 29, (
         f"_NAMED_ARGV0_DISPOSITIONS_B carries "
-        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 30 "
+        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 29 "
         "still-frozen named-argv0 sites tranche b's own file list names "
         "now that C6 (2026-08-23) drained the 2 dead "
-        "`_ensure_session_dir` ordinals, and C5 of docs/plans/2026-08-22-the-"
+        "`_ensure_session_dir` ordinals, C5 of docs/plans/2026-08-22-the-"
         "boot-backstop-asks-git-nothing.md collapsed boot_sweep.py's four "
         "`_commit_consumed_metadata` ordinals into one `boot_backstop.py::"
-        "_git` site, out of _FROZEN_UNENROLLED_SPAWN_SITES -- a count drift "
+        "_git` site, and fleet.archive_shipped_handoffs's kill (2026-08-25, "
+        "C1b) removed archive_shipped_handoffs.py's `_sha_reachable` site "
+        "along with the whole module -- a count drift "
         "here means either a site was missed or one was double-counted."
     )
 
@@ -5613,53 +5594,65 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: re-derives every value on each run and fails the moment any op's live count no longer matches; a growth here
 #: (an op reaching a NEW spawn site, directly or via a shared helper or a thread hop) is a
 #: correctness signal, never something to silence by editing the number to match.
+#: RAISED 2026-08-25 (fleet.archive_completed_handoffs/archive_paper_trail/archive_queue_entry/
+#: archive_release_accumulator/archive_terminal_sizings/prune_closed_bugs/reap_integrated_findings/
+#: reap_unintegrated_findings/migrate_handoff_vocabulary, handoff.archive_transition/
+#: reconcile_close_terminal/transition): commit 648f2e4eb (C1b/C2/C5a) killed
+#: `ops/fleet/archive_handoffs.py` (2000ms+ over the brightline) and rebuilt the terminal-handoff
+#: archiver from scratch as `ops/fleet/archive_terminal_handoffs.py`, a shared module the fleet
+#: archive/reap/prune ops and the handoff transition ops all reach through their own common
+#: helpers. Verified, not assumed: the new module's own docstring is explicit about spawn
+#: discipline ("does NOT spawn one git process per candidate... ZERO git spawns for the shipped_in
+#: rail"), and the count here is a STATIC reachable-site ceiling (D7), not execution evidence --
+#: these ops' own `_LEGITIMIZED_SITES`/spawn-budget companions (where they exist) still gate what
+#: actually runs. Every value below is a fresh `_measure_static_spawn_counts` read against the
+#: live tree post-rebuild, not a guess.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "handoff.reconcile_open": 19,
-    "handoff.archive_transition": 17,
-    "handoff.reconcile_close_terminal": 17,
-    "fleet.migrate_handoff_vocabulary": 16,
-    "handoff.transition": 16,
-    "deliverable.cascade_terminal": 11,
+    "handoff.archive_transition": 18,
+    "handoff.reconcile_close_terminal": 18,
+    "fleet.migrate_handoff_vocabulary": 17,
+    "handoff.transition": 17,
+    "fleet.archive_completed_handoffs": 15,
+    "fleet.reap_integrated_findings": 15,
+    "fleet.reap_unintegrated_findings": 15,
+    "fleet.archive_paper_trail": 13,
+    "fleet.archive_queue_entry": 13,
+    "fleet.archive_release_accumulator": 13,
+    "fleet.archive_terminal_sizings": 13,
+    "fleet.prune_closed_bugs": 13,
+    "deliverable.cascade_terminal": 10,
+    "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
-    "fleet.archive_completed_handoffs": 9,
-    "fleet.reap_integrated_findings": 9,
-    "fleet.reap_unintegrated_findings": 9,
     "memo.transition": 9,
-    "ceremony.post_commit_tail": 8,
+    "ceremony.post_commit_tail": 7,
     "cruft_sweep.run": 8,
-    "fleet.archive_shipped_handoffs": 8,
-    "handoff.ship_and_archive": 8,
-    "fleet.archive_paper_trail": 7,
-    "fleet.archive_queue_entry": 7,
-    "fleet.archive_release_accumulator": 7,
-    "fleet.archive_terminal_sizings": 7,
-    "fleet.prune_closed_bugs": 7,
+    "memo.send": 8,
     "workflow.fire": 6,
-    "review_trail.write": 5,
-    "session.boot_sweep": 4,
     "ceremony.session_instructions": 4,
-    "eol.repair": 4,
-    "hooks.cater_subagent_start": 4,
+    "eol.repair": 1,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
-    "priority.drain": 4,
     "workday.drain_pending_push": 4,
     "branch.merge_into_workstream": 3,
     "distill.assemble_disposal_manifest": 3,
-    "eol.census": 3,
+    "eol.census": 1,
+    "push.outstanding": 3,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
     "repo.clone_and_register": 3,
     "repo.create_and_push_remote": 3,
-    "research.archive_workdir": 3,
-    "research.restructure_for_repeat_topic": 3,
+    "review_trail.write": 3,
     "tracker.push_suggestion": 3,
     "backlog.record": 2,
     "cartography.churn": 2,
     "cartography.file_index": 2,
     "ceremony.update_docs_scan": 2,
     "changelog.backfill_gaps": 2,
+    "hooks.cater_subagent_start": 2,
+    "priority.drain": 2,
+    "session.boot_sweep": 2,
     "changelog.inject_anchor": 2,
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
@@ -5675,7 +5668,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "goal.close_day_apply": 2,
     "handoff.close_origin_stub": 2,
     "handoff.propagate": 2,
-    "hooks.session_heartbeat": 2,
     "install.probe_windows_terminal_presence": 2,
     "plan.propagate": 2,
     "plugin_health.forwarder_drift": 2,
@@ -5689,6 +5681,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "baton.resolve_swept_in_archive": 1,
     "bug_sweep.verify_fix_files_changed": 1,
     "cartography.chunk_table": 1,
+    "research.archive_workdir": 1,
+    "research.restructure_for_repeat_topic": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "ceremony.init_anchor_injection_state": 1,
@@ -5718,6 +5712,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.subagent_fabrication_check": 1,
     "hooks.subagent_review_mark": 1,
     "hooks.suggest_sonnet_research": 1,
+    # Restored 2026-08-25 after being dropped on a "module killed" reading that the
+    # tree does not support: coordinator_core/hooks/track_touched_files.py is on disk
+    # and `hooks.track_touched_files` is in the live registry. Its reachable set is the
+    # single `_git_run` site, measured live.
     "hooks.track_touched_files": 1,
     "install.clone_idempotent": 1,
     "install.detect_python3_appx_stub": 1,
@@ -5765,15 +5763,21 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "handoff.reconcile_open": 19,
-    "handoff.archive_transition": 17,
-    "handoff.reconcile_close_terminal": 17,
-    "fleet.migrate_handoff_vocabulary": 16,
-    "handoff.transition": 16,
-    "deliverable.cascade_terminal": 11,
+    "handoff.archive_transition": 18,
+    "handoff.reconcile_close_terminal": 18,
+    "fleet.migrate_handoff_vocabulary": 17,
+    "handoff.transition": 17,
+    "fleet.archive_completed_handoffs": 15,
+    "fleet.reap_integrated_findings": 15,
+    "fleet.reap_unintegrated_findings": 15,
+    "fleet.archive_paper_trail": 13,
+    "fleet.archive_queue_entry": 13,
+    "fleet.archive_release_accumulator": 13,
+    "fleet.archive_terminal_sizings": 13,
+    "fleet.prune_closed_bugs": 13,
+    "deliverable.cascade_terminal": 10,
+    "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
-    "fleet.archive_completed_handoffs": 9,
-    "fleet.reap_integrated_findings": 9,
-    "fleet.reap_unintegrated_findings": 9,
     "memo.transition": 9,
 }
 

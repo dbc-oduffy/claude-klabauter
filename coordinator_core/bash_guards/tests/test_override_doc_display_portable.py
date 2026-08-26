@@ -5,7 +5,7 @@ guard message (`operator_override_note`, via
 
 2026-08-05 (PM-raised, break-class): this pointer used to PREFER an
 in-process-resolved absolute path (env var, else a direct read of the
-`.claude-klabauter-root` pointer file), falling back to the repo-qualified hint
+`.claude-klabauter-live-root` pointer file), falling back to the repo-qualified hint
 (`OVERRIDE_KEYS_DOC_DISPLAY`) only when that resolution failed. On a host
 where it resolved, the rendered guard message carried the operator's home
 directory and repo checkout name -- a machine-path leak reaching every

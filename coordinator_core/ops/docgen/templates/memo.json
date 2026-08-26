@@ -17,7 +17,7 @@
     {"kind": "raw", "lines": [
       "",
       "<!-- Replace with the memo body. -->",
-      "<!-- Send when ready: cross-repo-memo --to {to} --topic {topic} --body-file <this-file> -->",
+      "<!-- Send when ready: cross-repo-memo send {topic}   (drafted to {to}) -->",
       ""
     ]}
   ]

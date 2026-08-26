@@ -85,14 +85,14 @@ def current_repo_sha(repo_root: str) -> str | None:
     script's own historical sys.path dance for the same import.
     """
     try:
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import leaf_spawn_creationflags
 
         proc = subprocess.run(
             ["git", "-C", repo_root, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             timeout=10,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.SubprocessError, ImportError):
         return None

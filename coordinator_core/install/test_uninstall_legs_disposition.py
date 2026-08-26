@@ -304,6 +304,8 @@ class TestRenderUninstallDryRunReport:
 
 
 class TestOrchestrateUninstallDryRunWiring:
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_dry_run_with_no_receipt_prints_honest_message_and_mutates_nothing(
         self, monkeypatch, capsys, tmp_path
     ):
@@ -326,6 +328,8 @@ class TestOrchestrateUninstallDryRunWiring:
         out = capsys.readouterr().out
         assert "no install receipt found" in out
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_dry_run_with_populated_receipt_prints_report_and_mutates_nothing(
         self, monkeypatch, capsys
     ):
@@ -781,6 +785,8 @@ class TestOrchestrateUninstallCmdAutorunComposition:
         monkeypatch.setattr(uninstall_legs, "uninstall_remove_substrate", lambda *a, **kw: True)
         monkeypatch.setattr(uninstall_legs, "uninstall_set_plugin_endstate", lambda *a, **kw: True)
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_autorun_leg_runs_between_remove_shim_and_remove_substrate(self, monkeypatch):
         order = []
         self._stub_other_legs_ok(monkeypatch)
@@ -818,6 +824,8 @@ class TestOrchestrateUninstallCmdAutorunComposition:
             "set-plugin-endstate",
         ]
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_autorun_leg_failure_fails_loud_and_stops_sequencing(self, monkeypatch, capsys):
         self._stub_other_legs_ok(monkeypatch)
         monkeypatch.setattr(uninstall_legs, "uninstall_strip_cmd_autorun", lambda *a, **kw: False)
@@ -833,6 +841,8 @@ class TestOrchestrateUninstallCmdAutorunComposition:
         err = capsys.readouterr().err
         assert "FAILED at surface: cmd.exe AutoRun guard" in err
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_dry_run_never_calls_the_autorun_leg(self, monkeypatch, capsys):
         monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: None)
 

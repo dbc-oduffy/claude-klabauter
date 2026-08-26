@@ -66,7 +66,7 @@ from typing import Any, Dict, Optional, Tuple
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-PRIORITY = 30
+PRIORITY = 137  # hard-deny band; next free slot after guard_memory_store_cap (136)
 
 _DECISIONS_PATH_RE = re.compile(r"(?:^|[/\\])docs[/\\]decisions[/\\][^/\\]+\.md$", re.IGNORECASE)
 _ID_LINE_RE = re.compile(r"^id:\s*(.+?)\s*$")

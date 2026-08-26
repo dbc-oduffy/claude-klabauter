@@ -305,3 +305,48 @@ def test_dr_279_blast_radius_table_matches_live_registry():
         "  Update docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md's "
         "'Blast radius' table to match."
     )
+
+
+# --- Scope-table coverage: no dispatchable op may fall to the default -------
+#
+# `resolve_op_repo_key` and `baton_assemble.apply` both read the scope as
+# `OP_KEY_SCOPE.get(op, "none")`. That default is the documented rule for an
+# unclassified op, and it cannot tell "assigned none" from "never classified":
+# a dispatchable op missing from the table is silently treated as touching no
+# repo state, and runs without a concurrency partition key instead of raising.
+#
+# Nothing catches that at runtime by design, so it is pinned here. The gap is
+# a table edit away at all times -- an op added to OP_MODULE_MAP without a
+# scope row -- and the failure it produces is a partitioning bug, not an
+# error. Prompted by `push.outstanding`, which reached the published engine
+# with neither half and made the defaulted lookup print a scope nobody had
+# assigned (2026-08-26, doe-claude-94; see
+# `coordinator_core/invoke/__main__.py`'s --repo arg-scope check, now gated on
+# `_registry_map.resolves()`).
+
+
+def test_every_dispatchable_op_is_scope_classified():
+    """Every op in OP_MODULE_MAP must carry an explicit OP_KEY_SCOPE row."""
+    from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+    unclassified = sorted(set(OP_MODULE_MAP) - set(OP_KEY_SCOPE))
+    assert not unclassified, (
+        "dispatchable op(s) absent from OP_KEY_SCOPE, so `OP_KEY_SCOPE.get(op, "
+        '"none")` silently scopes them to no repo key: %s' % unclassified
+    )
+
+
+def test_registry_map_has_no_duplicate_op_keys():
+    """A duplicated key is invisible at runtime -- the later row wins -- so it
+    survives review and merges cleanly from both sides. The machine-a merge left
+    `push.outstanding` in twice (fixed 2026-08-26); this reads the source text
+    because the parsed dict cannot show what it collapsed."""
+    import re
+    from pathlib import Path
+
+    from coordinator_core.ops import _registry_map
+
+    source = Path(_registry_map.__file__).read_text(encoding="utf-8")
+    keys = re.findall(r'^\s+"([^"]+)":\s+"coordinator_core\.', source, re.M)
+    duplicates = sorted({k for k in keys if keys.count(k) > 1})
+    assert not duplicates, "duplicate OP_MODULE_MAP key(s): %s" % duplicates

@@ -2587,24 +2587,44 @@ def _pytest_module_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
 def _agent_touched_test_files(raw_agent_id: str, session_id: str,
                               repo_root: Optional[str]) -> List[str]:
     """This agent's own touched test files, for the R9 deny text's
-    better-alternative line. Best-effort: ``[]`` on any failure.
+    better-alternative line. Best-effort on identity/path resolution
+    failures (``[]``); the touched-set read itself never raises (C3's
+    ``project_live_claims`` contract) and never collapses a degraded
+    stream to a hard failure -- see below.
 
-    Reads ``<git_common_dir>/coordinator-sessions/.agents/<canonical_agent_id>/
-    touched.txt`` (repo-relative POSIX paths) written by
-    ``coordinator_core.hooks.track_touched_files``, canonicalizing the raw
-    agent id through that module's own ``_resolve_subagent_identity`` rather
-    than reimplementing its regex -- same single-source reason the classifier
-    is not forked.
+    Reads the agent-keyed sink, ``<git_common_dir>/coordinator-sessions/
+    .agents/<canonical_agent_id>/touch-record.jsonl``, through C3's single
+    read seam, ``coordinator_core.session.touch_record.project_live_claims``
+    -- never a second, ad hoc parse of that file. The raw agent id is
+    canonicalized through the CANONICAL resolver,
+    ``coordinator_core.write_guards._subagent_identity._resolve_subagent_identity``
+    (imported by ten other guards) -- rather than
+    ``track_touched_files``'s own now-retired copy (C7 deletes that module;
+    C9 folded its one extra branch, the already-canonical
+    ``<name>@session-<short>`` rebuild, into this canonical resolver first so
+    this repoint carries zero behavior change).
 
-    Deliberately NOT falling back to the session-level ``touched.txt``: that
-    set belongs to the EM and to other agents, and borrowing it to phrase
-    "the tests you touched" would launder exactly the relevance R9 asserts.
+    This call site is advisory only (it phrases the R9 deny's
+    better-alternative line; the deny itself already fired on the directory
+    argument alone) so C3's typed failure signal is honored, not
+    re-adjudicated, by taking ``TouchProjection.claims`` exactly as the seam
+    returns it -- whatever it could decode, including a partial result
+    behind a ``degraded=True`` read -- rather than this function inventing
+    its own collapse-to-``[]``-on-any-error behavior the way the retired
+    direct-file-read implementation did (one bad line used to blank out an
+    otherwise-healthy file; the seam isolates the fault per-line/per-file
+    instead, so more real signal survives here than before, never less).
+
+    Deliberately NOT falling back to the session-level sink: that set
+    belongs to the EM and to other agents, and borrowing it to phrase "the
+    tests you touched" would launder exactly the relevance R9 asserts.
     """
     if not raw_agent_id or not repo_root:
         return []
     try:
-        from coordinator_core.hooks.track_touched_files import _resolve_subagent_identity
+        from coordinator_core.write_guards._subagent_identity import _resolve_subagent_identity
         from coordinator_core.lifecycle import git_common_dir
+        from coordinator_core.session import touch_record
 
         canonical = _resolve_subagent_identity(raw_agent_id, session_id or "")
         if not canonical:
@@ -2612,18 +2632,15 @@ def _agent_touched_test_files(raw_agent_id: str, session_id: str,
         base = git_common_dir(repo_root)
         if base is None:
             return []
-        touched = Path(base) / "coordinator-sessions" / ".agents" / canonical / "touched.txt"
-        lines = touched.read_text(encoding="utf-8").splitlines()
+        sink = Path(base) / "coordinator-sessions" / ".agents" / canonical / "touch-record.jsonl"
+        projection = touch_record.project_live_claims(sink, cwd=repo_root)
     except Exception:
         return []
     out: List[str] = []
-    for line in lines:
-        entry = line.strip()
-        if not entry or not entry.endswith(".py"):
-            continue
-        name = entry.rsplit("/", 1)[-1]
-        if name.startswith("test_") or name.endswith("_test.py"):
-            out.append(entry)
+    for path in projection.claims:
+        name = path.rsplit("/", 1)[-1]
+        if name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py")):
+            out.append(path)
     return out
 
 

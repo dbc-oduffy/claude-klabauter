@@ -506,85 +506,86 @@ def _resolve_python_invocation() -> "tuple[str, List[str]]":
 
 
 def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = None) -> str:
-    """Build a copy-pasteable `ceremony.scoped_git_commit` invocation for the
-    concurrency-refusal deny message in `do_scoped` — the rung-B shape
+    """Build a copy-pasteable retry command for the concurrency-refusal deny
+    message in `do_scoped` — the rung-B shape
     (`docs/wiki/bash-guard-threat-model.md`): reproduce the caller's own
     situation in corrected form rather than naming a destination with no
-    route. `--scope-from <handoff>` was that destination-with-no-route (the
-    /handoff skill stopped emitting the `scope:` frontmatter block it reads,
-    2026-07-25) — this suggests the mechanism the skill actually routes
-    through today instead.
+    route.
+
+    2026-08-25 fix (break-class, EM-verified this session): the prior form
+    of this suggestion emitted `python -m coordinator_core.invoke
+    ceremony.scoped_git_commit ...`. That op was killed 2026-08-23 under
+    DR-344 (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md)
+    — `coordinator-invoke ceremony.scoped_git_commit ...` now returns
+    `{"error": {"code": -32601, "message": "Method not found:
+    'ceremony.scoped_git_commit'"}}`. The emitted command also passed
+    `--repo`, which that op's own `scope="none"` rejects by DR-279 ("--repo
+    is meaningless for op ... scope='none'") — it was doubly unrunnable even
+    before the kill. This docstring's own prior "Verified runnable
+    (2026-07-29 ...)" claim was true when written and false from the kill
+    date onward; nothing re-verified it in between, so it kept shipping a
+    dead retry command to every EM who hit the concurrency refusal.
+
+    The route today (SSOT: DoE-claude coordinator/snippets/scoped-commit-
+    route.md) is `coordinator_core.ops.ceremony.commit_pipeline ::
+    run_commit_pipeline` — NOT `git_native.commit_scoped` directly, which
+    silently skips all five commit gates (branch_gate, dirty_tree_gate,
+    deletion_block_gate, carry_gate, op_scope_coverage_gate). The killed op
+    was not a thin wrapper over the pipeline (~2000 of its ~2058 lines were
+    its own pathspec/staleness/message validation, none of which moved), so
+    this suggestion does not claim that validation — it hands the pipeline
+    the caller's own dirty-path set exactly as the killed op used to, and
+    the caller still owns trimming `paths` to what THIS workstream owns
+    before running it (a dirty tree may hold a sibling session's files
+    too). `run_commit_pipeline` has no CLI/op-registry entry point (pure
+    Python, called in-process by every other caller in this tree — see
+    `coordinator/bin/percolate-round.py`), so the suggestion writes a small,
+    self-contained retry SCRIPT to a tempfile and emits `<python>
+    <script-path>` rather than a `-m`/`--params-file` invocation — there is
+    no module to invoke it through.
+
+    Verified runnable (2026-08-25, scratch repo, this host): the emitted
+    `<python> <script-path>` form, run from an unrelated cwd with no ambient
+    PYTHONPATH, produced a real commit (`committed=True sha=<40-hex>`) — see
+    this function's own test coverage
+    (`coordinator/tests/test_coordinator_safe_commit.py::
+    test_t17e_scoped_commit_suggestion_runs_from_cwd_without_native_coordinator_core`)
+    for the automated round-trip.
 
     Params come from `_current_dirty_files()` (this session's own dirty
     tree, the same source `do_scoped` itself stages from) and `os.getcwd()`
     (this tool never chdirs, so cwd is the worktree root) — both directly
-    observable here, unlike the handoff-body round-trip `--scope-from` used
-    to require. The caller still owns narrowing `paths` to what THIS
-    workstream owns before running it; a dirty tree may hold a sibling
-    session's files too.
+    observable here.
 
-    Verified runnable (2026-07-29, scratch repo, `ceremony.scoped_git_commit`
-    registered): `python3 -m coordinator_core.invoke ceremony.scoped_git_commit
-    '{"worktree_root": ..., "paths": [...], "message": ...}' --repo <root> --bare`
-    returns `{"committed": true, "sha": "...", "pushed": ...}` on success.
+    `PYTHONPATH` is resolved via `cc_invoke._resolve_claude_klabauter_root()` (module-
+    level import, line ~159) — the DISPATCH axis ("which engine executes"),
+    not the LOCATOR axis (`cc_invoke.resolve_engine_root(__file__)`, "where
+    is THIS co-located script's own tree") a dual-boot box with a published
+    mirror installed would answer wrong (see `cc_invoke._resolve_engine_
+    root`'s own "DISPATCH axis vs LOCATOR axis" docstring note). No absolute
+    path is hardcoded in source; the value is resolved fresh on every call.
 
-    2026-07-29 fix (round 1): the bareword `python3 -m coordinator_core.
-    invoke` above only resolves when `coordinator_core` is already on
-    `sys.path` — true in claude-klabauter's own tree, false in every OTHER caller repo
-    (DoE-claude foremost), where it dies with `ModuleNotFoundError` the
-    instant it's copy-pasted. Fixed by resolving claude-klabauter's root at emit time
-    via `cc_invoke.resolve_engine_root()` directly (module-level import, line
-    ~159). This is a resolve-only site — it wants the root as a value and
-    performs no `sys.path` insert — which is why it calls the resolver rather
-    than `_import_session()`'s inserting `require_engine_on_path()` wrapper;
-    both ride the same ladder. Self-location (this script's own
-    enclosing checkout) is tried first, falling back to
-    `_resolve_claude_klabauter_root()`'s pointer-file/registry ladder; settings-home
-    is the sanctioned resolution point (PM ruling, 2026-07-29) for that
-    fallback: its own Rung 1.5 already reads
-    `<settings-home>/machine-local/.claude-klabauter-live-root` ahead of any bash-spawning
-    fallback, so this call routes through it. No
-    absolute path is hardcoded in source; the value is resolved fresh on
-    every call.
+    The interpreter is resolved via `_resolve_python_invocation()`, never a
+    hardcoded `python3` literal (absent on stock Windows), and the emitted
+    STRING branches on `os.name` — this process runs natively on the same
+    host the caller is reading the deny message on, so `os.name` here is a
+    reliable proxy for the caller's platform. Windows gets two explicitly-
+    labeled forms (cmd.exe's `set VAR=val&& cmd`, PowerShell's
+    `$env:VAR='val'; cmd`) built via `subprocess.list2cmdline` for correct
+    Windows argv quoting, since a single string cannot be simultaneously
+    correct in both POSIX and Windows shell grammars — see this function's
+    own verification note in the test file for which half is macOS/Windows-
+    verified vs. reasoned-but-unverified.
 
-    2026-07-29 fix (round 2, same-day PM follow-up): round 1 baked the
-    resolved root into a `PYTHONPATH=<root> cmd` inline-assignment prefix —
-    POSIX-shell-only syntax, broken verbatim in cmd.exe and PowerShell, and
-    it also still hardcoded `python3`, absent on stock Windows. Fixed by (a)
-    resolving the interpreter via `_resolve_python_invocation()` instead of
-    a literal, and (b) branching the emitted STRING on `os.name` — this
-    process runs natively on the same host the caller is reading the deny
-    message on, so `os.name` here is a reliable proxy for the caller's
-    platform. Windows gets two explicitly-labeled forms (cmd.exe's `set
-    VAR=val&& cmd`, PowerShell's `$env:VAR='val'; cmd`) built via
-    `subprocess.list2cmdline` for correct Windows argv quoting, since a
-    single string cannot be simultaneously correct in both POSIX and
-    Windows shell grammars — see this function's own verification note in
-    the test file for which half is macOS-verified vs. reasoned-but-
-    unverified on Windows.
-
-    2026-08-20 fix (A24, docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md
-    § C24): the emitted retry command was shaped wrong on two axes. (1)
-    Params rode positional argv (`... ceremony.scoped_git_commit '<params
-    json>' --repo ...`) — the exact shape `cc_invoke`'s own
-    `cc_invoke`/`cc_invoke_bare` moved OFF of, unconditionally, to escape
-    `FileNotFoundError: [WinError 206] The filename or extension is too
-    long` once `paths` holds enough dirty files (see cc_invoke.py's own
-    "Params transport" docstring note). Fixed: params are now written to a
-    tempfile at emit time and the suggestion references it via
-    `--params-file <path>`, matching cc_invoke's own unconditional
-    transport. (2) `PYTHONPATH` was resolved via `cc_invoke.
-    resolve_engine_root(__file__)` — the LOCATOR axis ("where is THIS
-    co-located script's own tree"), which answers with the SOURCE checkout
-    this script happens to sit in. This is a DISPATCH command (`python -m
-    coordinator_core.invoke ...`), which needs the DISPATCH axis instead —
-    "which engine executes" (see `cc_invoke._resolve_engine_root`'s own
-    "DISPATCH axis vs LOCATOR axis" docstring note) — so a dual-boot box
-    with a published mirror installed got a retry command pointed at the
-    live working tree rather than the engine `coordinator_core.invoke`
-    itself would actually dispatch to. Fixed by resolving via
-    `cc_invoke._resolve_claude_klabauter_root()` (module-level import, line ~159)
-    instead.
+    2026-08-07 fix (round 3, carried forward): the cmd.exe-runnable command
+    must be the FIRST line of the returned string — `subprocess.run(
+    suggestion, shell=True, ...)` on Windows spawns via cmd.exe, and a
+    string containing embedded newlines only ever executes the FIRST line
+    when run that way (every line after the first newline is silently never
+    run). The live, directly-runnable cmd.exe command stays on line 1 with
+    no comment ahead of it; the labelled `# cmd.exe:`/`# PowerShell:`
+    reference block (still POSIX-`#`-commented) follows as copy-paste
+    reference text for a human reading the deny message directly.
 
     `host_is_windows` (default `None` -> real `os.name == "nt"`) mirrors
     the override-parameter pattern `coordinator_core.bash_guards.
@@ -596,23 +597,41 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     thread into `_resolve_python_invocation()` below — that call resolves
     the REAL host's interpreter via `coordinator_core.pyresolve`, which
     internally constructs a `pathlib.WindowsPath` on the `nt` branch and is
-    genuinely unconstructible cross-platform (verified: forcing `os.name`
-    itself to `"nt"` in-process on macOS raises `UnsupportedOperation`
-    three frames into that resolver) — this parameter controls only THIS
-    function's own string-assembly branch, not a platform this process
+    genuinely unconstructible cross-platform — this parameter controls only
+    THIS function's own string-assembly branch, not a platform this process
     cannot actually resolve a real interpreter for."""
     worktree_root = os.getcwd()
     dirty = _current_dirty_files()
     paths = dirty if dirty else ["<your-paths>"]
-    params = json.dumps({"worktree_root": worktree_root, "paths": paths, "message": subject or "<subject>"})
+    script_text = (
+        "from coordinator_core.ops.ceremony import commit_pipeline\n"
+        "result = commit_pipeline.run_commit_pipeline(\n"
+        "    %s,\n"
+        "    session_id=%s,\n"
+        "    subject=%s,\n"
+        "    stage_paths=%s,\n"
+        "    caller_paths=set(%s),\n"
+        ")\n"
+        "print('committed=%%r sha=%%r' %% (bool(result.committed_sha), result.committed_sha))\n"
+        % (
+            json.dumps(worktree_root),
+            json.dumps("coordinator-safe-commit-remediation"),
+            json.dumps(subject or "<subject>"),
+            json.dumps(paths),
+            json.dumps(paths),
+        )
+    )
     try:
-        params_fd, params_path = tempfile.mkstemp(prefix="coordinator-safe-commit-remediation-params-")
-        with os.fdopen(params_fd, "w", encoding="utf-8", newline="\n") as params_fh:
-            params_fh.write(params)
+        script_fd, script_path = tempfile.mkstemp(
+            prefix="coordinator-safe-commit-remediation-", suffix=".py"
+        )
+        with os.fdopen(script_fd, "w", encoding="utf-8", newline="\n") as script_fh:
+            script_fh.write(script_text)
     except OSError as exc:
         return (
-            "  # params-file write failed (%s) — could not stage the retry command's\n"
-            "  # payload; run ceremony.scoped_git_commit directly instead."
+            "  # retry-script write failed (%s) — could not stage the retry\n"
+            "  # command's payload; run coordinator_core.ops.ceremony.commit_pipeline\n"
+            "  # :: run_commit_pipeline directly instead."
             % (exc,)
         )
     try:
@@ -621,49 +640,17 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
         return (
             "  # claude-klabauter root resolution failed (%s) — run from claude-klabauter's own\n"
             "  # tree, or fix the engine-root resolution first, then:\n"
-            "  python3 -m coordinator_core.invoke ceremony.scoped_git_commit --params-file %s --repo %s --bare"
-            % (exc, params_path, worktree_root)
+            "  python3 %s"
+            % (exc, script_path)
         )
 
     python_bin, python_args = _resolve_python_invocation()
-    module_argv = [
-        python_bin,
-        *python_args,
-        "-m",
-        "coordinator_core.invoke",
-        "ceremony.scoped_git_commit",
-        "--params-file",
-        params_path,
-        "--repo",
-        worktree_root,
-        "--bare",
-    ]
+    module_argv = [python_bin, *python_args, script_path]
 
     is_windows = (os.name == "nt") if host_is_windows is None else host_is_windows
     if is_windows:
         win_cmdline = subprocess.list2cmdline(module_argv)
         posh_root = claude_klabauter_root.replace("'", "''")  # PowerShell single-quote escaping
-        # 2026-08-07 fix (round 3): a leading `# cmd.exe:` label line made
-        # the cmd.exe-runnable command NOT the first line of the returned
-        # string. That matters beyond readability: `subprocess.run(
-        # suggestion, shell=True, ...)` on Windows spawns via cmd.exe
-        # (Python's `shell=True` default there), and passing a string
-        # containing embedded newlines to `cmd /c` only ever executes the
-        # FIRST line — every line after the first newline is silently
-        # never run (verified: `cmd /c "REM x\necho y"` exits 0 printing
-        # nothing; `echo y` never fires). With the label first, cmd.exe
-        # tried to run the literal text `# cmd.exe:` as a command and
-        # failed with "'#' is not recognized..."; with any OTHER line
-        # first, that line — not the real command — would have been the
-        # only one to ever execute. The fix: put the live, directly-
-        # runnable cmd.exe command on line 1 with no comment ahead of it,
-        # and keep the original `# cmd.exe:`/`# PowerShell:` labelled
-        # reference block (still POSIX-`#`-commented, unchanged text) AFTER
-        # it — those lines are correctly never executed when the whole
-        # string is blindly run via cmd.exe (same "only line 1 runs"
-        # mechanism, now working FOR this shape instead of against it), and
-        # remain there as copy-paste reference text for a human reading the
-        # deny message directly.
         return (
             "  set PYTHONPATH=%s&& %s\n"
             "  # cmd.exe:\n"
@@ -1626,7 +1613,7 @@ def do_scoped(
     # sessions because it relies on session-id resolution, which is
     # ambiguity-guarded but still a single-session model. When >1 live
     # session is detected, refuse and direct the caller to a direct
-    # `ceremony.scoped_git_commit` invocation or COORDINATOR_OVERRIDE_SCOPE=1
+    # `run_commit_pipeline` retry script or COORDINATOR_OVERRIDE_SCOPE=1
     # — which honors a pre-staged explicit-path `git add -- <paths>` index
     # as-is, falling back to `git add -A` only when nothing was pre-staged
     # (2026-07-25 fix — see do_override docstring).
@@ -1639,8 +1626,10 @@ def do_scoped(
     # is inoperative in the situation the caller is actually in is worse
     # than none (docs/wiki/bash-guard-threat-model.md). `_scoped_commit_
     # suggestion` below reproduces the caller's own dirty-path set as a
-    # verified-runnable `ceremony.scoped_git_commit` command instead — a
-    # copy, not a re-derivation.
+    # verified-runnable `run_commit_pipeline` retry script instead — a
+    # copy, not a re-derivation. (2026-08-25: `ceremony.scoped_git_commit`
+    # itself was killed 2026-08-23 under DR-344 — see that function's own
+    # docstring.)
     #
     # Exception: combined-mode (do_scope_from delegating). do_scope_from
     # already handled identity resolution and the handoff-scope overlap
@@ -1675,7 +1664,7 @@ def do_scoped(
             print(
                 "\nDid you mean:\n" + _scoped_commit_suggestion(subject) + "\n\n"
                 "(dirty files this session touched are pre-filled above — trim 'paths' "
-                "to what THIS workstream owns before running; ceremony.scoped_git_commit "
+                "to what THIS workstream owns before running; run_commit_pipeline "
                 "selects the agree-case vs. private-index staging form for you). For a "
                 "true emergency, stage explicitly (git add -- <paths>) and set "
                 "COORDINATOR_OVERRIDE_SCOPE=1 — it commits your pre-staged index as-is "

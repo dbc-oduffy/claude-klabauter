@@ -86,6 +86,7 @@ from typing import List, NamedTuple, Optional, Sequence
 
 from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry.engine_report import iter_sink_entries
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Re-exported so a caller need not import `op_latency` separately just to
 #: compare a `DoorRouteResult.route` against the two PASS/fall-through values.
@@ -196,6 +197,7 @@ def read_door_route(
             capture_output=True,
             timeout=timeout,
             check=False,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         pass

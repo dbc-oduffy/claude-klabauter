@@ -1,31 +1,38 @@
 """Section porter — RoutineSignals (envelope key: ``routine_signals``).
 
-Emits exactly six RoutineSignal records — weekly, docs, arch-audit, bug-sweep,
-dormant-repo, distill-backlog — in that order. Each carries a computed staleness
-``computed_state`` + ``overdue`` boolean derived from a live source: two staleness
-checks (natively ported ``coordinator_core.ops.check_weekly_staleness`` /
+Emits exactly SEVEN RoutineSignal records — weekly, docs, arch-audit, bug-sweep,
+dormant-repo, distill-backlog, deep_spawn_worklist — in that order. Each carries a
+computed staleness ``computed_state`` + ``overdue`` boolean derived from a live source:
+two staleness checks (natively ported ``coordinator_core.ops.check_weekly_staleness`` /
 ``check_arch_audit_staleness``, invoked in-process), commit counts since the last
 update-docs / bug-sweep commit (ONE depth-capped ``git log`` for both — see
 ``_commits_since_last_batch``), a static "unknown" dormant-repo placeholder
-(cross-repo scan needs the tc-4 connector), and a native distill-backlog count
-(``_count_distill_backlog`` below — port of ``count-distill-backlog.sh --format json``).
+(cross-repo scan needs the tc-4 connector), a native distill-backlog count
+(``_count_distill_backlog`` below — port of ``count-distill-backlog.sh --format json``),
+and a deep-spawn-worklist regrowth signal (``_deep_spawn_worklist_signal`` below — reads
+the committed baseline ``state/baselines/deep-per-item-spawn-worklist.json`` written by
+``coordinator_core/tests/test_deep_per_item_spawn_worklist.py``'s own advisory run; see
+that function's docstring for why this MUST NOT walk the corpus itself).
 
-All six use provenance derivation ``rolled_up``; there is no malformed bucket for this
+All seven use provenance derivation ``rolled_up``; there is no malformed bucket for this
 section (the shapes are constructed, never parsed). Byte/semantic parity port.
 
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) § SECTION 4 —
   RoutineSignals.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P04
+Deep-spawn-worklist reader spec backlink:
+  state/dispatch-briefs/2026-08-26-the-worklist-gets-a-reader/C1.md
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
+import json
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +61,11 @@ _THRESHOLD_DORMANT = (
 _THRESHOLD_DISTILL = (
     "fresh (pending=0), mild (pending 1-5), stale (pending >= 6), "
     "unknown (archive empty or unreadable)"
+)
+_THRESHOLD_DEEP_SPAWN_WORKLIST = (
+    "unknown: baseline missing, or first run (no prior baseline to diff against); "
+    "stale: baseline generated_at >=14 days old; quiet: no new sites since last run; "
+    "regrowth: new sites since last run (overdue)"
 )
 
 # count-distill-backlog.sh --format json failure fallback.
@@ -415,6 +427,88 @@ def _commits_since_last_batch(repo_root: Path, patterns: dict[str, str]) -> dict
     return matched
 
 
+# ---------------------------------------------------------------------------
+# Deep-spawn-worklist regrowth signal — reads a committed baseline, never the corpus.
+# ---------------------------------------------------------------------------
+
+#: Resolved once, against THIS module's own file location (`parents[4]` reaches the
+#: engine repo root, matching `test_deep_per_item_spawn_worklist.py`'s own
+#: `_REPO_ROOT` -- that file is `coordinator_core/tests/...`, two dirs under the repo
+#: root; this one is `coordinator_core/ops/emit/sections/...`, four dirs under it). The
+#: worklist is a property of THIS engine's own corpus, not the emitting repo being
+#: scanned, so this is deliberately NOT derived from `ctx.repo_root`.
+_DEEP_SPAWN_WORKLIST_BASELINE_PATH = (
+    Path(__file__).resolve().parents[4] / "state" / "baselines"
+    / "deep-per-item-spawn-worklist.json"
+)
+
+_DEEP_SPAWN_WORKLIST_STALE_DAYS = 14
+
+
+def _deep_spawn_worklist_baseline_age_days(generated_at: str) -> Optional[float]:
+    """`None` when `generated_at` cannot be parsed -- callers treat that the same as a
+    missing baseline (honesty rule: no fabricated age)."""
+    try:
+        stamp = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except (ValueError, TypeError):
+        return None
+    return (datetime.now(timezone.utc) - stamp).total_seconds() / 86400.0
+
+
+def _deep_spawn_worklist_signal(ctx: EmitContext) -> dict:
+    """Reads ONE small JSON file (`_DEEP_SPAWN_WORKLIST_BASELINE_PATH`) and reports what
+    is already computed there -- MUST NOT walk the corpus, import the worklist module, or
+    parse the audit markdown (this runs on a budgeted path in every repo in the fleet; see
+    the dispatch brief's "The emitter must be CHEAP" note). The worklist test module is
+    never imported here, by construction: no import of
+    ``coordinator_core.tests.test_deep_per_item_spawn_worklist`` appears anywhere in this
+    function or this module.
+
+    States, in priority order: baseline missing -> "unknown"; `generated_at` unparseable
+    or >= 14 days old -> "stale"; `new_since_last` null (first run) -> "unknown";
+    `new_since_last` empty -> "quiet"; `new_since_last` non-empty -> "regrowth"
+    (`overdue: True`, the ONLY state that sets it -- this is a report field, not a gate).
+
+    `quiet` renders NO `top` rows (cheap-to-skip-in-one-glance, per the brief) even though
+    the baseline itself may carry ranked rows; every other state passes the baseline's own
+    (already-capped-at-3) `top` through unchanged.
+    """
+    try:
+        raw = _DEEP_SPAWN_WORKLIST_BASELINE_PATH.read_text(encoding="utf-8")
+        baseline = json.loads(raw)
+    except (OSError, ValueError):
+        return _build_signal(
+            ctx, "deep_spawn_worklist", "unknown", False, {}, _THRESHOLD_DEEP_SPAWN_WORKLIST
+        )
+
+    generated_at = baseline.get("generated_at")
+    age_days = _deep_spawn_worklist_baseline_age_days(generated_at) if generated_at else None
+    new_since_last = baseline.get("new_since_last")
+
+    if age_days is None or age_days >= _DEEP_SPAWN_WORKLIST_STALE_DAYS:
+        state, overdue = "stale", False
+    elif new_since_last is None:
+        state, overdue = "unknown", False
+    elif not new_since_last:
+        state, overdue = "quiet", False
+    else:
+        state, overdue = "regrowth", True
+
+    top = [] if state == "quiet" else baseline.get("top", [])[:3]
+    inputs = {
+        "total_sites": baseline.get("total_sites"),
+        "by_depth": baseline.get("by_depth"),
+        "new_count": None if new_since_last is None else len(new_since_last),
+        "top": top,
+        "generated_at": generated_at,
+    }
+    return _build_signal(
+        ctx, "deep_spawn_worklist", state, overdue, inputs, _THRESHOLD_DEEP_SPAWN_WORKLIST
+    )
+
+
 def _build_signal(ctx: EmitContext, kind: str, state: str, overdue: bool,
                   inputs: dict, threshold: str) -> dict:
     """Assemble one RoutineSignal record (parity: bash build_routine_signal:904-939)."""
@@ -433,7 +527,7 @@ def _build_signal(ctx: EmitContext, kind: str, state: str, overdue: bool,
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
-    """Build the six RoutineSignal records (records=[6 signals], malformed=[])."""
+    """Build the seven RoutineSignal records (records=[7 signals], malformed=[])."""
     # Resolved once (not per staleness check): both check-weekly and check-arch-audit
     # calls below share the same coordinator root for the duration of this collect()
     # invocation, so re-resolving per call is a redundant subprocess spawn on a
@@ -505,6 +599,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             )},
             _THRESHOLD_DISTILL,
         ),
+        _deep_spawn_worklist_signal(ctx),
     ]
 
     return signals, []

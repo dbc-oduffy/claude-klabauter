@@ -857,6 +857,17 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
 _REVIEW_BRIGHTLINE_CLI = "review-brightline-gate"
 _COVERAGE_GATE_RUNNER_CLI = "wsc-coverage-gate-runner"
 
+#: The review-trail writer, addressed DIRECTLY rather than through
+#: `wsc-coverage-gate-runner write-trail`. That subcommand was REMOVED by PM
+#: ruling 2026-08-23 (kill `review_trail.write`'s wrapper) and its argparse now
+#: offers only `claim-plan`, so every emitted `d-write-trail-*` directive was
+#: rejected at argv before the CLI ran -- which gates `d-run-wsc-tail`, i.e. the
+#: ceremony's own commit step, on a partitioned close. This CLI is the same
+#: native-op trampoline the removed subcommand shelled out to (see
+#: `build_write_review_trail_directive`'s docstring), so addressing it directly
+#: is the shortest path back to the behaviour the ruling intended to keep.
+_REVIEW_TRAIL_WRITER_CLI = "coordinator-write-review-trail"
+
 
 def build_review_brightline_gate_directive(
     session_id: str,
@@ -1210,7 +1221,6 @@ def build_write_review_trail_directive(
             "never a symbolic ref like HEAD (SKILL.md:554)"
         )
     args = [
-        "write-trail",
         "--sha-range", sha_range,
         "--reviewer", reviewer,
         "--scope", scope,
@@ -1219,7 +1229,7 @@ def build_write_review_trail_directive(
     ]
     if scope_kind:
         args += ["--scope-kind", scope_kind]
-    return _directive("d-write-review-trail", _COVERAGE_GATE_RUNNER_CLI, args)
+    return _directive("d-write-review-trail", _REVIEW_TRAIL_WRITER_CLI, args)
 
 
 # ---------------------------------------------------------------------------

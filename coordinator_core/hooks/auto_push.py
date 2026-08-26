@@ -4,9 +4,10 @@ coordinator_core.hooks.auto_push — naked-Python post-commit auto-push helper.
 Purpose: DR-059 windows-hostile-bash -> Python port of the DoE-owned bash script
 `coordinator/bin/coordinator-auto-push` (223 lines). Pushes the current branch to
 origin if it is a `work/*` branch, classifying push failures so retryable classes
-(ref-lock, network, gh-transient) get a bounded jittered retry while everything
-else fails loud without blocking the commit. Always exits 0 -- auto-push must
-never block a commit.
+(ref-lock, network, gh-transient) get a bounded jittered retry, non-fast-forward
+gets a bounded poll for supersession (never a re-push -- see `run_push_with_retry`),
+and everything else fails loud without blocking the commit. Always exits 0 --
+auto-push must never block a commit.
 
 This module is the claude-klabauter half of the auto-push reimplementation; the DoE half
 (retiring the bash script + repointing `coordinator-ensure-post-commit-hook` to
@@ -143,10 +144,27 @@ is a hang detector, not a performance budget."""
 GIT_PUSH_TIMEOUT_SECS = 120
 """Wall-clock bound for `git push`, the one network-bound call here.
 
-Sized against the load norm rather than a fast path: 50-70 concurrent LLMs
-plus a dozen sessions sharing this checkout means a genuine push can be slow.
-Expiry is classified as a retryable network-class failure, which is what a
-stalled SSH leg actually is."""
+A hang detector, not a performance budget -- `GIT_READ_TIMEOUT_SECS`'s
+docstring draws the same distinction for its own 30s, and it applies here too:
+cutting this too far converts a slow-but-succeeding push into an unpublished
+commit, which on a branch where auto-push is the sole publisher is worse than
+the hang this bound exists to catch. Load never justifies the number either
+way -- this repo's own doctrine is that load RAISES the bar, and "the box was
+busy" is never the answer (CLAUDE.md § Load norm); a docstring citing 50-70
+concurrent LLMs as the reason a push is slow inverts that doctrine, which is
+what an earlier version of this paragraph did.
+
+There is no healthy-push duration data anywhere in this repo, so this bound is
+UNVALIDATED and awaiting one: `push_once` records each attempt's observed
+duration and outcome onto the detached child's existing durable stderr trail,
+`.git/auto-push-respawn-stderr.log` -- read that log to accrue the data that
+would make this number settable.
+
+Expiry is classified as its own non-retryable `timeout` class by
+`classify_error()`'s dedicated `_PAT_TIMEOUT` arm (see that arm's comment),
+which is deliberately absent from `_RETRYABLE_CLASSES` -- it is NOT a
+retryable network-class failure, despite what an earlier version of this
+docstring claimed."""
 
 CONTRACT_PUBLISH_TIMEOUT_SECS = 300
 """Wall-clock bound for the DoE cockpit-contract publish child.
@@ -184,6 +202,34 @@ _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 # no pending record is written. A caller that sets this and does NOT push is
 # the one misuse this seam has, which is why the name says SUPPRESS_FOR_
 # SYNC_PUSH rather than DISABLE.
+#
+# AC9 disposition (docs/decisions/DR-329-push-runs-on-a-cadence-not-on-
+# every-commit.md; docs/plans/2026-08-25-push-re-homes-onto-the-cadence-
+# surfaces.md, chunk C5b): retained deliberately, not tightened, because
+# this variable already IS the engine-asserted condition AC9 asked for --
+# an upstream caller sets it, this hook only reads it, never re-derives
+# session state itself. `coordinator_core/ops/ceremony/git_native.py::
+# _sole_publisher_env` sets it whenever `push_mode in
+# commit_pipeline.py::_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK` (today
+# `{PUSH_MODE_SYNC, PUSH_MODE_NEVER}`), so every commit `run_commit_
+# pipeline` makes already stands this hook down -- including under DR-329's
+# ratified cadence disposition, where the six named cadence surfaces will
+# call with `push_mode=NEVER` (commit_pipeline.py's own C5 chunk, gated
+# behind DR-329's ratification and still unlanded as of this note) and
+# publish instead via their own synchronous `push_outstanding()` checkpoint
+# call, per DR-329 §6's supersession of DEC-1. No new condition is needed
+# here for that path.
+#
+# What remains genuinely unconditional -- and correctly so -- is a `work/*`
+# commit made OUTSIDE the engine (a manual `git commit`, an IDE commit, any
+# caller that never set this variable): this hook is that commit's sole
+# publisher, and gating it on inferred session state was the shape AC9's
+# brief named and refused (`claude-klabauter-59`'s declined symmetric change
+# on `prepare-commit-msg`, for the same reason: re-deriving session state
+# inside a hook duplicates the engine's own hand-mirrored ladder). Measured
+# at HEAD with every session env var cleared, this path issues its detached
+# push regardless -- ~203ms / 1 spawn -- because there is no other
+# publisher for it to defer to.
 _ENV_SUPPRESS_FOR_SYNC_PUSH = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
 
 #: Generator-provenance declaration: every write in this module (push-
@@ -271,6 +317,20 @@ _PAT_GH_SERVER_REJECT = re.compile(r"^remote: (error|rejected|fatal):", re.MULTI
 # prior (non-retrying) behavior exactly, so this changes only the label an
 # operator/banner sees, never the retry/timing decision.
 _PAT_TIMEOUT = re.compile(r"^fatal: push exceeded \d+s and was killed", re.MULTILINE)
+# push_once's own spawn-failure message -- the process never started, so there
+# is no git stderr at all and every content-matching arm above is structurally
+# inapplicable. Matched on the literal prefix THIS module writes rather than on
+# the OS exception text it appends, because that text is platform- and
+# locale-dependent ("[WinError 2] The system cannot find the file specified"
+# vs "No such file or directory") and would make the arm a translation table.
+# Previously fell through to "unknown": the 2026-08-25 cluster (three
+# FileNotFoundError spawns at 0.00s) reported as "direct push/unknown after 1",
+# which reads as a git rejection nobody classified rather than as "git was
+# never reached". Deliberately NOT in _RETRYABLE_CLASSES -- an unresolvable
+# interpreter/PATH does not heal between two attempts in one process, and
+# leaving it non-retrying preserves "unknown"'s exact prior timing behavior, so
+# this changes only the label an operator sees.
+_PAT_SPAWN_ERROR = re.compile(r"^fatal: git push failed to spawn:", re.MULTILINE)
 
 
 def classify_error(stderr_text: str) -> str:
@@ -305,6 +365,8 @@ def classify_error(stderr_text: str) -> str:
     # _PAT_AUTH to be case-insensitive (real git prints the capitalized form on
     # SSH auth failure, so that fix is owed) would otherwise silently reclassify
     # every push timeout as "auth" and send the operator to check credentials.
+    if _PAT_SPAWN_ERROR.search(stderr_text):
+        return "spawn-error"
     if _PAT_TIMEOUT.search(stderr_text):
         return "timeout"
     if _PAT_AUTH.search(stderr_text):
@@ -368,8 +430,144 @@ def extract_first_err(stderr_text: str) -> str:
 # Branch resolution + gate
 # ---------------------------------------------------------------------------
 
+#: Sentinel distinguishing "not yet looked up" from a cached negative result,
+#: so an unresolvable git is looked up exactly once, not once per spawn.
+_GIT_EXE_UNRESOLVED = object()
+_GIT_EXE_CACHE: object = _GIT_EXE_UNRESOLVED
+
+
+def git_exe() -> str | None:
+    """Resolve `git` to an absolute path, once per process.
+
+    Every git spawn in this module goes through here instead of handing a
+    bare ``"git"`` to `subprocess.run`. A bare-`git` spawn raises
+    `FileNotFoundError` ([WinError 2] on Windows) whenever PATH cannot
+    resolve it at spawn time -- and in the DETACHED respawn that carries the
+    push, that failure is near-invisible: the 2026-08-25 cluster (three
+    attempts, 21:32-21:34) left only `outcome=spawn-error:FileNotFoundError`
+    at 0.00s in `.git/auto-push-respawn-stderr.log` and reported as class
+    `unknown`. Resolving once collapses three PATH walks into one and turns
+    "git is not reachable" from an opaque OS error raised at each call site
+    into a single named, logged diagnostic.
+
+    Handed to `subprocess.run` as `executable=`, NOT as argv[0], and that is
+    not a style choice. Every spawn here keeps building a literal
+    `["git", ...]` argv, because that literal is what
+    `coordinator_core/tests/test_shared_git_runner.py` keys on to see this
+    module at all -- `git/run.py`'s negative spec states the key outright.
+    Putting the resolved path in argv[0] fixes this defect by making a
+    git-spawning module invisible to the gate that inventories git spawns,
+    which is not a trade this fix gets to make: both of that gate's registers
+    are shrink-only and already at their ceilings, so there is no row to move
+    into. `executable=` resolves the binary AND leaves the claim the gate
+    reads true -- POSIX execs the absolute path with argv[0] still "git",
+    Windows passes it as lpApplicationName alongside the same command line.
+
+    Adjacent, unfixed, and NOT this function's to fix: five modules already
+    spawn a `shutil.which("git")`-resolved binary from argv[0]
+    (`git/ls_files.py`, `git/ls_files_bytes.py`, `ops/eol/census.py`,
+    `ops/eol/repair.py`, `ops/normalize_env.py`) and are invisible to that
+    same gate today. Widening its detector surfaces all five at once against
+    a register that cannot take a row, so the remedy is migrating them onto
+    `coordinator_core.git.run`, which is its own change.
+
+    Returns None when git is unresolvable -- a degrade case every caller
+    reports and survives, never a raise. The negative is cached too: PATH
+    does not change under a running hook, so a re-lookup would buy the same
+    answer for another PATH walk.
+    """
+    global _GIT_EXE_CACHE
+    if _GIT_EXE_CACHE is _GIT_EXE_UNRESOLVED:
+        import shutil
+
+        _GIT_EXE_CACHE = shutil.which("git") or _git_exe_off_path()
+    return _GIT_EXE_CACHE  # type: ignore[return-value]
+
+
+def _git_exe_off_path() -> str | None:
+    """Locate `git.exe` without consulting PATH. Windows-only; None elsewhere.
+
+    `shutil.which` above is a PATH walk, and PATH is the thing that failed --
+    measured against a reproduction of the 2026-08-25 cluster, a child whose
+    inherited PATH carries no Git directory gets `which("git") is None` and
+    every bare-`git` spawn raises the same `[WinError 2]`. Resolving through
+    PATH therefore renames that failure without preventing it: the push still
+    does not happen, it just reports `spawn-error` instead of `unknown`. These
+    rungs were measured RUNNING (`rev-parse` rc=0) under exactly that stripped
+    PATH, which is the bar an anchor has to clear -- resolving a path that does
+    not execute is not a fix.
+
+    Order is deliberate, and each rung's standing is different. `GIT_EXEC_PATH`
+    first because it names the very git that invoked us when it is present --
+    measured exported into a git-spawned subprocess on this box, but NOT
+    documented: `githooks(5)` promises only that variables "such as GIT_DIR,
+    GIT_WORK_TREE, etc." reach a hook and never names this one. So it is a
+    first rung on evidence, never a guarantee, and never the only rung -- it
+    was absent in the detached respawn this function exists for. The registry
+    key is the documented one: Git for Windows' installer writes
+    HKLM\\SOFTWARE\\GitForWindows\\InstallPath expressly so third-party tools
+    can locate the install, and removes it on uninstall. HKCU is probed after
+    it purely as a cheap miss -- no per-user variant is documented. The
+    well-known path is last: a guess, correct on a default install, and better
+    than returning None.
+
+    Not the cause here, but worth not re-deriving: a PATH over ~8191 chars can
+    break lookups on some spawn paths (CPython #137254). The PATH in the
+    failing window was 3,086 chars, so truncation is ruled out by measurement.
+
+    Never raises -- a missing key, a denied read, or no Windows at all all mean
+    "this rung has no answer", never a broken push path.
+    """
+    if os.name != "nt":
+        return None
+
+    def _usable(candidate: "str | None") -> "str | None":
+        return candidate if candidate and os.path.isfile(candidate) else None
+
+    exec_path = os.environ.get("GIT_EXEC_PATH")
+    if exec_path:
+        exec_path = exec_path.replace("/", os.sep)
+        # libexec/git-core/git.exe, then the ../../bin sibling it hardlinks from.
+        for candidate in (
+            os.path.join(exec_path, "git.exe"),
+            os.path.abspath(os.path.join(exec_path, "..", "..", "bin", "git.exe")),
+        ):
+            if _usable(candidate):
+                return candidate
+
+    try:
+        import winreg
+
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(root, r"SOFTWARE\GitForWindows") as key:
+                    install_path = winreg.QueryValueEx(key, "InstallPath")[0]
+            except OSError:
+                continue
+            found = _usable(os.path.join(str(install_path), "cmd", "git.exe"))
+            if found:
+                return found
+    except Exception:
+        pass
+
+    for base in (os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles")):
+        if base:
+            found = _usable(os.path.join(base, "Git", "cmd", "git.exe"))
+            if found:
+                return found
+    return None
+
+
 def _run_git(repo_root: str | None, args: list[str]) -> str | None:
     """Run a git command, returning stripped stdout on success or None on failure."""
+    resolved = git_exe()
+    if resolved is None:
+        print(
+            f"coordinator-auto-push: git {' '.join(args)} skipped: "
+            f"git is not resolvable",
+            file=sys.stderr,
+        )
+        return None
     cmd = ["git"]
     if repo_root:
         cmd += ["-C", repo_root]
@@ -378,6 +576,7 @@ def _run_git(repo_root: str | None, args: list[str]) -> str | None:
     try:
         result = subprocess.run(
             cmd,
+            executable=resolved,
             capture_output=True,
             text=True,
             check=False,
@@ -574,6 +773,31 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     (`block-off-daily-branch.sh`) was retired 2026-07-05, which makes this
     allowlist the surviving enforcement point, not a redundant second one.
     Review: the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
+
+    AC9b (docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md):
+    named owner per declined class, so a branch this gate skips is never
+    silently unpublished.
+
+      - `main` -- never pushed by this hook. Named owner: `push_with_retry`'s
+        `allow_protected_branch=True` override
+        (`coordinator_core/ops/ceremony/commit_pipeline.py`), a keyword-only,
+        per-call escape hatch that skips this gate on purpose and prints via
+        `_emit_push_policy_line("override-exercised", ...)` every time it
+        fires. As of that function's own docstring, its one sanctioned
+        consumer is DoE-claude's `merging-to-main` SKILL, Step 10 item 5 (the
+        post-merge, on-`main`, release-notes bookkeeping commit) -- no op in
+        this repo passes it. `main` otherwise reaches origin by PR merge,
+        which is GitHub's own action, not a push this hook or engine issues.
+      - `migration/*` / `release/*` / `feature/*` -- no automated publisher.
+        Named owner: the committing operator, by this function's own skip
+        message ("push manually if intended") -- deliberate, not a gap:
+        these are recognized long-lived workstream shapes this doctrine
+        chooses to keep off the auto-push path entirely, same as `main`.
+
+    Every other unrecognized branch shape falls into the same
+    operator-owned, "push manually if intended" bucket as migration/release/
+    feature above -- the skip message names it explicitly rather than
+    silently dropping it.
     """
     if branch.startswith("work/"):
         return True, None
@@ -616,6 +840,34 @@ def route_label(windows_bash: bool, ssh_remote: bool) -> str:
     return "direct push"
 
 
+def _log_push_attempt_duration(branch: str, duration_secs: float, outcome: str) -> None:
+    """Record one `git push` attempt's observed wall-clock duration and
+    outcome (AC16).
+
+    Written with a plain `print(..., file=sys.stderr)` -- no new file, no new
+    state path, no spawn -- onto whatever `push_once`'s caller already routed
+    this process's stderr to: the detached child's existing durable trail,
+    `.git/auto-push-respawn-stderr.log` (opened by `_open_respawn_stderr_log`
+    and handed to the respawned child as its stderr fd). This is the data
+    `GIT_PUSH_TIMEOUT_SECS`'s docstring names as what would make that bound
+    settable -- there is no healthy-push duration data anywhere else in this
+    repo.
+
+    Deliberately NOT routed through `log_failure`/`.git/push-failures.log`:
+    that surface's own docstrings (`log_race_resolved`, `log_dead_ref_failure`)
+    twice state its counts must mean "unrecovered failures", and both
+    `workday.surface_auto_push_failure_stats` and the cross-repo Stop-time
+    tripwire (`runtime-tripwire-em-check.py::_check_push_failures`,
+    DoE-claude) read it -- a success row landing there would poison both
+    consumers' counts.
+    """
+    print(
+        f"coordinator-auto-push: push attempt on {branch} took "
+        f"{duration_secs:.2f}s (outcome={outcome})",
+        file=sys.stderr,
+    )
+
+
 def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool) -> tuple[bool, str]:
     """Run a single push attempt. Returns (succeeded, stderr_text).
 
@@ -625,13 +877,25 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
     no-shell-spawns PM ruling; see "Transport history" above for the
     preserved rationale. windows_bash/ssh_remote are accepted for call-site
     and test-seam compatibility but no longer branch transport choice.
+
+    Records this attempt's observed duration and outcome via
+    `_log_push_attempt_duration` (AC16) before returning, on every exit path
+    (timeout, spawn failure, and normal completion alike).
     """
     del windows_bash, ssh_remote
 
     subprocess = _subprocess()
+    started = time.monotonic()
+    resolved = git_exe()
+    if resolved is None:
+        _log_push_attempt_duration(
+            branch, time.monotonic() - started, "spawn-error:unresolvable-git"
+        )
+        return False, "fatal: git push failed to spawn: git is not resolvable"
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, "push", "origin", branch, "--set-upstream"],
+            executable=resolved,
             capture_output=True,
             text=True,
             check=False,
@@ -643,13 +907,26 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
         # Classified as "timeout" by classify_error()'s dedicated _PAT_TIMEOUT
         # arm (matched on this literal phrase) -- not retried, same as the
         # "unknown" fallback it used to land in before that arm existed.
+        _log_push_attempt_duration(branch, time.monotonic() - started, "timeout")
         return False, (
             f"fatal: push exceeded {GIT_PUSH_TIMEOUT_SECS}s and was killed "
             f"(Could not read from remote repository: timed out)"
         )
     except Exception as exc:
-        return False, str(exc)
-    return result.returncode == 0, result.stderr or ""
+        # Synthesized with the same literal phrase the unresolvable-git arm
+        # above uses, so classify_error()'s `_PAT_SPAWN_ERROR` labels both
+        # `spawn-error` instead of the `unknown` that hid the 2026-08-25
+        # FileNotFoundError cluster. The exception's own text is appended,
+        # never relied on for matching -- OS spawn messages are platform- and
+        # locale-dependent, and this module's own prefix is not.
+        _log_push_attempt_duration(
+            branch, time.monotonic() - started, f"spawn-error:{type(exc).__name__}"
+        )
+        return False, f"fatal: git push failed to spawn: {type(exc).__name__}: {exc}"
+    duration = time.monotonic() - started
+    succeeded = result.returncode == 0
+    _log_push_attempt_duration(branch, duration, "success" if succeeded else "failure")
+    return succeeded, result.stderr or ""
 
 
 # ---------------------------------------------------------------------------
@@ -767,10 +1044,14 @@ def log_failure(
 #   - gh-transient  -- GitHub server-side 5xx / commit_refs / sideband
 #                       disconnect; the server needs SECONDS to recover, so
 #                       back off 2s, 4s.
-# Non-FF, auth, and unknown classes fail loud without retry -- non-FF in
-# particular means a concurrent push already landed work we don't have, so
-# silent retry would mask the divergence (and auto-rebasing a dirty shared
-# tree in a post-commit hook is both unsafe and usually blocked).
+# Non-FF is not re-pushed -- a concurrent push already landed work we don't
+# have, so blindly resending the same push would just collide again (and
+# auto-rebasing a dirty shared tree in a post-commit hook is both unsafe and
+# usually blocked). Instead it gets a bounded poll of `_is_superseded()` on
+# the existing backoff for the remaining attempts: if the poll confirms our
+# commit already reached origin by some other path, the race resolved on its
+# own and nothing more is sent; if every poll comes back negative, this is a
+# genuine divergence and fails loud without retry, same as auth/unknown.
 # gh-push-protection / gh-size-limit / gh-lfs-quota are deliberately NOT
 # retryable: secrets, oversized files, and quota don't self-heal.
 # ---------------------------------------------------------------------------
@@ -803,10 +1084,14 @@ def _is_ancestor(repo_root: str, candidate_sha: str, ref: str) -> bool:
     safe default that falls through to the normal retry/fail-loud path rather
     than silently swallowing a real divergence.
     """
+    resolved = git_exe()
+    if resolved is None:
+        return False
     subprocess = _subprocess()
     try:
         result = subprocess.run(
             ["git", "-C", repo_root, "merge-base", "--is-ancestor", candidate_sha, ref],
+            executable=resolved,
             capture_output=True,
             text=True,
             check=False,
@@ -1326,6 +1611,136 @@ def _peer_commit_within_window(repo_root: str, branch: str, now: float) -> bool 
     return False
 
 
+_ANCESTOR_WALK_MAX_COMMITS = 20000
+"""Bound on the spawn-free ancestry walk in `_remote_is_ancestor_no_spawn` --
+well past any honest divergence check on this hot path (the commit being
+tested is recent, not a full-history rebase), and a bound only a genuinely
+pathological or corrupt object graph would ever reach. Exists so a walk that
+cannot find `remote_sha` terminates in bounded time rather than degrading
+into an unbounded local-disk crawl on every commit."""
+
+
+def _read_ref_sha_no_spawn(common_dir: Path, ref: str) -> str | None:
+    """Read `ref`'s sha spawn-free: loose ref file first, `packed-refs`
+    fallback -- the same two-step lookup `_canonical_branch_case` already
+    uses for `refs/heads/*`, generalized to any ref path (here: `refs/heads/
+    <branch>` and `refs/remotes/origin/<branch>`).
+
+    Returns None if the ref does not resolve at all (no loose file, no
+    packed-refs entry) -- the caller treats an unresolvable ref as "no
+    answer" (e.g. no remote-tracking ref yet on a brand-new branch), never
+    as a divergence signal either way.
+    """
+    ref_path = common_dir / ref
+    try:
+        text = ref_path.read_text(encoding="utf-8").strip()
+        if text and not text.startswith("ref:"):
+            return text
+    except OSError:
+        pass
+
+    try:
+        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in packed_text.splitlines():
+        line = line.strip()
+        if not line or line[0] in "#^":
+            continue
+        parts = line.split(" ", 1)
+        if len(parts) != 2:
+            continue
+        if parts[1].strip() == ref:
+            return parts[0].strip()
+    return None
+
+
+def _remote_is_ancestor_no_spawn(common_dir: Path, remote_sha: str, local_sha: str) -> bool | None:
+    """Spawn-free mirror of `_is_ancestor(repo_root, remote_sha, local_branch)`
+    for this one call site: is `remote_sha` reachable by walking `local_sha`'s
+    parent chain, read directly off the object store via
+    `coordinator_core.git.git_objects._read_object` (packs then loose, no
+    `git` subprocess)?
+
+    Returns None -- not False -- when the walk cannot reach a definitive
+    answer (a commit object is missing/corrupt, a non-commit object turns up
+    where a parent was expected, or the walk exceeds
+    `_ANCESTOR_WALK_MAX_COMMITS`). `_branch_diverged_no_spawn` treats None
+    the same as "not diverged", the same fail-toward-publishing direction
+    every other precondition in this module already takes on an
+    indeterminate answer.
+    """
+    from coordinator_core.git.git_objects import _read_object
+
+    if remote_sha == local_sha:
+        return True
+
+    seen: set[str] = set()
+    frontier = [local_sha]
+    steps = 0
+    while frontier:
+        sha = frontier.pop()
+        if sha in seen:
+            continue
+        seen.add(sha)
+        steps += 1
+        if steps > _ANCESTOR_WALK_MAX_COMMITS:
+            return None
+        obj = _read_object(common_dir, sha)
+        if obj is None:
+            return None
+        kind, payload = obj
+        if kind != "commit":
+            return None
+        for line in payload.split(b"\n"):
+            if not line:
+                break
+            if line.startswith(b"parent "):
+                parent = line[len(b"parent "):].decode("ascii", "replace").strip()
+                if parent == remote_sha:
+                    return True
+                frontier.append(parent)
+    return False
+
+
+def _branch_diverged_no_spawn(repo_root: str, branch: str) -> bool:
+    """Spawn-free divergence test for `_hold_window`'s divergence gate (C4):
+    True iff the remote's last-known tip is NOT an ancestor of the local
+    branch -- the mirror of "local not an ancestor of remote", i.e. a push
+    on this branch is guaranteed to be rejected non-fast-forward before it
+    is ever issued.
+
+    Reads `refs/remotes/origin/<branch>` (with a `packed-refs` fallback)
+    UNFETCHED -- this runs at the head of `run_push_with_retry`, before any
+    fetch in this process, so the remote-tracking ref may be stale. That is
+    acceptable and deliberate: staleness only biases this predicate toward
+    False (an actually-diverged branch reads as not-yet-diverged) -- the
+    safe direction, immediate push, i.e. today's behaviour -- never the
+    reverse.
+
+    Returns False (not diverged -- push) whenever any precondition is
+    unmet: no remote-tracking ref yet (first push on a new branch), no
+    resolvable local ref, or the ancestry walk itself can't reach a
+    definitive answer. Every one of these mirrors the fail-toward-
+    publishing posture `_shared_branch_live_count`/`_peer_commit_within_
+    window` already take on their own indeterminate cases.
+    """
+    try:
+        common_dir = resolve_git_common_dir(repo_root)
+    except OSError:
+        return False
+
+    remote_sha = _read_ref_sha_no_spawn(common_dir, f"refs/remotes/origin/{branch}")
+    if not remote_sha:
+        return False
+
+    local_sha = _read_ref_sha_no_spawn(common_dir, f"refs/heads/{branch}")
+    if not local_sha:
+        return False
+
+    return _remote_is_ancestor_no_spawn(common_dir, remote_sha, local_sha) is False
+
+
 def _hold_window(repo_root: str, branch: str) -> bool:
     """Decide whether `run_push_with_retry` should push NOW or has already
     delegated to an existing holder.
@@ -1348,6 +1763,13 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     at wake time, a superset of what this call would have pushed (AC14's
     coalescing-token contract), so a second commit inside one window never
     stacks a second sleeper.
+
+    Also returns False when (d) `_branch_diverged_no_spawn` finds the
+    remote's last-known tip is not an ancestor of `branch` -- a push here is
+    guaranteed non-fast-forward before it is even attempted, so this writes/
+    updates the pending record and defers instead of pushing into that wall
+    (C4). Checked AFTER the live-record gate above and BEFORE the peer-
+    commit bypass below, per that predicate's own placement note.
 
     AC14a precondition (1) -- the record was written and read back
     successfully -- is enforced by `_write_pending_record`'s return value:
@@ -1413,6 +1835,28 @@ def _hold_window(repo_root: str, branch: str) -> bool:
         and existing.get("branch") == branch
         and not _record_is_stale(existing, now)
     ):
+        return False
+
+    # Divergence gate (C4) -- deliberately AFTER the live-record check's
+    # `return False` and BEFORE `_peer_commit_within_window` below, never
+    # above either gate (same regression `_peer_commit_within_window`'s own
+    # placement note describes: testing a bypass-shaped predicate first can
+    # push and unlink a still-sleeping incumbent's record). A branch already
+    # diverged from its upstream is a push `_hold_window` cannot make
+    # succeed -- publishing that here would let it retry into the wall on
+    # every subsequent commit, so it defers to a pending record instead,
+    # spawn-free (AC13) and without a fetch (see
+    # `_branch_diverged_no_spawn`'s docstring for why a stale read is safe).
+    if _branch_diverged_no_spawn(repo_root, branch):
+        sha = _run_git(repo_root, ["rev-parse", branch])
+        hold_until = now + _HOLD_WINDOW_SECONDS
+        wrote = _write_pending_record(repo_root, branch, sha, hold_until, os.getpid())
+        # A failed write is AC14a precondition (1) unmet -- push immediately
+        # rather than deferring un-recorded, same fallback `_write_pending_
+        # record`'s own docstring already documents for the non-diverged
+        # holder path below.
+        if not wrote:
+            return True
         return False
 
     # Deliberately BELOW the live-record check: an incumbent holder's record is
@@ -1656,12 +2100,13 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
     class is hit. Test seam: COORDINATOR_AUTO_PUSH_NO_SLEEP=1 skips backoff
     sleeps so the test suite doesn't pay the seconds-scale gh-transient wait.
 
-    non-fast-forward is handled inline, not via `_RETRYABLE_CLASSES`: each
-    rejection is first checked against `_is_superseded` (read-only fetch +
-    ancestor test) before deciding whether to retry or give up, rather than
-    blindly resending the same push (see the "Retry policy" module comment
-    above `_backoff_seconds` for why this class needs a different retry
-    shape than ref-lock/network/gh-transient).
+    non-fast-forward is handled inline, not via `_RETRYABLE_CLASSES`: `push_once`
+    is issued exactly once for this class, and the rejection is checked against
+    `_is_superseded` (read-only fetch + ancestor test) -- immediately, then again
+    on each remaining attempt's existing backoff -- rather than blindly
+    resending the same push (see the "Retry policy" module comment above
+    `_backoff_seconds` for why this class needs a different retry shape than
+    ref-lock/network/gh-transient).
 
     On a SUCCESSFUL push -- either the direct-success path or a
     non-fast-forward race that turns out already resolved -- this also fires
@@ -1777,21 +2222,31 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
                     _maybe_publish_cockpit_contract(repo_root, cockpit_script, old_remote_sha, local_sha)
                 return
 
-            if attempt < MAX_ATTEMPTS:
+            # Not (yet) superseded -- poll on the remaining attempts' existing
+            # backoff rather than re-issuing `push_once`. A concurrent push
+            # already landed work we don't have; resending the same push would
+            # only collide again.
+            poll_attempt = attempt
+            while poll_attempt < MAX_ATTEMPTS:
                 print(
                     f"coordinator-auto-push: race on {branch} (non-fast-forward, "
-                    f"attempt {attempt}/{MAX_ATTEMPTS}) -- retrying",
+                    f"attempt {poll_attempt}/{MAX_ATTEMPTS}) -- polling for supersede",
                     file=sys.stderr,
                 )
                 if not _no_sleep():
-                    time.sleep(_backoff_seconds(err_class, attempt))
-                attempt += 1
-                continue
+                    time.sleep(_backoff_seconds(err_class, poll_attempt))
+                poll_attempt += 1
+                if local_sha and _is_superseded(repo_root, branch, local_sha):
+                    _clear_pending_record_if_branch(repo_root, branch)
+                    log_race_resolved(repo_root, branch, route, poll_attempt)
+                    if cockpit_script is not None:
+                        _maybe_publish_cockpit_contract(repo_root, cockpit_script, old_remote_sha, local_sha)
+                    return
 
-            # Retries exhausted and still not superseded -- a genuine,
+            # Polls exhausted and still not superseded -- a genuine,
             # unrecoverable-without-rebase divergence. Fail loud, as before.
             first_err = extract_first_err(stderr_text)
-            log_failure(repo_root, branch, route, err_class, attempt, first_err, stderr_text)
+            log_failure(repo_root, branch, route, err_class, poll_attempt, first_err, stderr_text)
             return
 
         if attempt < MAX_ATTEMPTS and err_class in _RETRYABLE_CLASSES:
@@ -2231,6 +2686,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-async", dest="async_mode", action="store_false")
     parser.add_argument("--repo-root", dest="repo_root", default=None)
     parser.add_argument("--branch", dest="branch", default=None)
+    # A caller that has ALREADY released this commit's claims, with paths it
+    # knows directly, suppresses the release leg below rather than paying for
+    # it twice. Narrower than `_ENV_SUPPRESS_FOR_SYNC_PUSH`, deliberately: that
+    # one also stands the push down, which a caller that does not publish its
+    # own commits must not do. See `_release_claims_for_head`'s own
+    # "never double-releasing" note and the 2026-08-25 measurement that found
+    # the archival path doing exactly that.
+    parser.add_argument(
+        "--no-claim-release", dest="claim_release", action="store_false", default=True
+    )
     try:
         args, _unknown = parser.parse_known_args(argv)
     except SystemExit:
@@ -2253,7 +2718,11 @@ def main(argv: list[str] | None = None) -> int:
         if not repo_root:
             return 0
 
-        if args.branch is None:
+        if args.branch is None and not args.claim_release:
+            # Caller already released (see --no-claim-release). Skipping saves
+            # this leg's `git show` plus its `git status --porcelain`.
+            pass
+        elif args.branch is None:
             # Only on the genuine post-commit invocation, and BEFORE the branch
             # gate below -- the ledger must be released for a commit on a branch
             # this hook declines to push, exactly as for one it pushes.

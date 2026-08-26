@@ -185,6 +185,74 @@ def test_commit_range_narrows_the_walk(tmp_path):
     assert result[0]["subject"] == "after range"
 
 
+def test_sha_only_path_returns_sha_only_dicts(tmp_path):
+    """C1 AC1: the sha-only path returns `{"sha": str}` rows, no diff
+    payload keys, and the selector is unchanged (`--grep=^Session-Id:`)."""
+    repo = _init_repo(tmp_path)
+    _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-other")
+    sha = _commit(
+        repo, "b.txt", "line1\nline2\n", "feat: add b", "Session-Id: sid-target"
+    )
+
+    result = session_commits.resolve_session_commits(
+        repo, "sid-target", sha_only=True
+    )
+
+    assert result == [{"sha": sha}]
+
+
+def test_sha_only_path_issues_no_raw_or_numstat_flags(tmp_path, monkeypatch):
+    """C1 AC1: the sha-only `git log` invocation composes neither `--raw`
+    nor `--numstat`."""
+    repo = _init_repo(tmp_path)
+    _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-target")
+
+    captured_args = []
+    real_git = session_commits._git
+
+    def _spy(args, cwd):
+        captured_args.append(list(args))
+        return real_git(args, cwd=cwd)
+
+    monkeypatch.setattr(session_commits, "_git", _spy)
+
+    session_commits.resolve_session_commits(repo, "sid-target", sha_only=True)
+
+    assert len(captured_args) == 1
+    assert "--raw" not in captured_args[0]
+    assert "--numstat" not in captured_args[0]
+    assert any(
+        a == "--grep=^Session-Id: sid-target" for a in captured_args[0]
+    )
+
+
+def test_default_return_is_byte_identical_with_sha_only_param_present(tmp_path):
+    """C1 AC2: adding `sha_only` is additive — the default (no `sha_only`
+    flag) return is unchanged, proven against the full-data shape this
+    suite already locks in."""
+    repo = _init_repo(tmp_path)
+    _commit(repo, "a.txt", "1\n", "seed", "Session-Id: sid-other")
+    sha = _commit(
+        repo, "b.txt", "line1\nline2\n", "feat: add b", "Session-Id: sid-target"
+    )
+
+    result = session_commits.resolve_session_commits(repo, "sid-target")
+
+    assert result == [
+        {
+            "sha": sha,
+            "subject": "feat: add b",
+            "committer_epoch": result[0]["committer_epoch"],
+            "touched_paths": ["b.txt"],
+            "added": 2,
+            "deleted": 0,
+            "files": [
+                {"path": "b.txt", "added": 2, "deleted": 0, "status": "A"}
+            ],
+        }
+    ]
+
+
 def test_body_line_quoting_a_trailer_is_a_documented_accepted_over_match(tmp_path):
     """Matches this module's documented over-match acceptance: a body line
     that happens to quote another session's trailer verbatim also matches

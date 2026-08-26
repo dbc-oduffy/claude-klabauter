@@ -96,6 +96,24 @@ from typing import Sequence
 RAW_CMDLINE_FILE_ENV = "_LAUNCHER_RAW_CMDLINE_FILE"
 
 
+def _host_is_nt() -> bool:
+    """True iff the CURRENT process is running on `nt`.
+
+    A named seam for `recover_windows_argv`/`recover_json_flag_argv`'s
+    Windows-only branch, so a test exercises that branch by patching THIS
+    function (`monkeypatch.setattr(_mod, "_host_is_nt", lambda: True)`)
+    rather than the process-global `os.name`. Flipping `os.name` itself
+    makes every `pathlib.Path(...)` constructed afterwards in the same
+    process — including this module's own `Path(raw_file)` read in
+    `_consume_raw_capture` — pick `WindowsPath`, which then fails to find a
+    real POSIX temp path; the test file used to work around that by also
+    pinning `Path` to `pathlib.PosixPath`, a pin that is itself fatal on a
+    real `nt` host. Patching this predicate instead leaves `os.name`, and
+    therefore `pathlib.Path`, untouched, so no such pin is needed.
+    """
+    return os.name == "nt"
+
+
 class UnsoundRawCmdlineTransport(Exception):
     """Raised when the captured ``%CMDCMDLINE%`` cannot vouch for argv fidelity.
 
@@ -354,7 +372,7 @@ def recover_json_flag_argv(
     ``_coordinator_launcher_``-prefixed directory. Call one or the other for
     a given invocation, never both.
     """
-    if os.name != "nt":
+    if not _host_is_nt():
         return argv
     raw = _consume_raw_capture()
     if not raw:
@@ -408,7 +426,7 @@ def recover_windows_argv(argv: list[str], launcher_cmd_name: str) -> list[str]:
     distinct from every fail-safe branch below, which returns `argv`
     unchanged for conditions where non-recovery is known to be safe.
     """
-    if os.name != "nt":
+    if not _host_is_nt():
         return argv
     raw = _consume_raw_capture()
     if not raw:

@@ -409,7 +409,7 @@ import os
 import re
 import subprocess
 import yaml
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -1451,7 +1451,7 @@ def _tracked_files(root: Path) -> Tuple[str, ...]:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        **no_console_creationflags(),
+        **leaf_spawn_creationflags(),
         check=True,
     ).stdout
     return tuple(p for p in out.split("\0") if p)

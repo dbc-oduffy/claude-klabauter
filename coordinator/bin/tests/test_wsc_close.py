@@ -46,18 +46,6 @@ def _load_wsc_close_module():
     return mod
 
 
-def _load_wsc_tail_module():
-    """`wsc-tail.py` is the OTHER end of the tail-args splice — loaded the
-    same by-path way (hyphenated filename) so a cross-parser flag mismatch
-    is a test failure here rather than a silent argv drop at ceremony time."""
-    spec = importlib.util.spec_from_file_location(
-        "wsc_tail_test_module", _BIN_DIR / "wsc-tail.py"
-    )
-    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
-
-
 _wsc_close = _load_wsc_close_module()
 
 
@@ -183,39 +171,34 @@ def test_review_scope_kind_absent_does_not_trip_partial_supply():
     assert "--review-scope-kind" not in out
 
 
-def test_tail_args_parser_accepts_every_flag_the_directive_builder_emits():
+def test_review_scope_kind_round_trips_through_wsc_close_own_parser():
     """Regression (example-retrieval-repo-em memo, 2026-07-28): the brief builder emitted
-    `--scope-kind`, which this parser rejected -> exit 2 -> `d-run-wsc-tail`
-    spliced an EMPTY argv, silently dropping ALL FIVE `--review-*` flags while
-    the ceremony still reported success. Pins the two ends of that splice
-    together, so a flag rename on either side fails here instead of in a live
-    ceremony."""
-    from coordinator_core.workstream_complete import directives_commit_tail
+    `--scope-kind`, which `wsc-close tail-args`'s own parser rejected -> exit 2
+    -> `d-run-wsc-tail` spliced an EMPTY argv, silently dropping ALL FIVE
+    `--review-*` flags while the ceremony still reported success.
 
-    directive = directives_commit_tail.build_close_tail_args_directive(
-        {
-            "review": {
-                "sha_range": "abc..def",
-                "reviewer": "code-reviewer",
-                "scope": "diff",
-                "verdict": "APPROVE",
-                "diff_loc": "120",
-                "scope_kind": "diff",
-            }
-        }
+    Narrowed 2026-08-25 (C4/C12, DR-358): `directives_commit_tail.
+    build_close_tail_args_directive` and `coordinator/bin/wsc-tail.py` — the
+    directive-builder hop and the third argv hop this test used to also pin —
+    were both retired; `d-close-tail-args` folds into `run_close_commit`'s own
+    kwargs in-process, no CLI or directive layer above it. What survives here
+    is the one hop that still exists: `wsc-close tail-args`'s own parser must
+    still accept `--review-scope-kind` and `_build_tail_args` must still emit
+    it, so a rename on either side of THIS boundary still fails loud."""
+    parsed = _wsc_close._build_parser().parse_args(
+        [
+            "tail-args",
+            "--review-sha-range", "abc..def",
+            "--review-reviewer", "code-reviewer",
+            "--review-scope", "diff",
+            "--review-verdict", "APPROVE",
+            "--review-diff-loc", "120",
+            "--review-scope-kind", "diff",
+        ]
     )
-    emitted_argv = directive["args"]
-    assert "--review-scope-kind" in emitted_argv
-
-    # Hop 1: the brief builder's argv must parse under `wsc-close tail-args`
-    # (`args[0]` is the `tail-args` subcommand token itself).
-    parsed = _wsc_close._build_parser().parse_args(emitted_argv)
     assert parsed.review_scope_kind == "diff"
 
-    # Hop 2: what `tail-args` then prints on stdout is spliced verbatim into
-    # `wsc-tail.py`'s own argv, so THAT parser must accept it too. Pinning
-    # only hop 1 would still let a wsc-tail-side rename break the ceremony.
-    spliced = _wsc_close._build_tail_args(
+    out = _wsc_close._build_tail_args(
         deleted_paths=None,
         kept_entries=None,
         review_sha_range=parsed.review_sha_range,
@@ -225,56 +208,33 @@ def test_tail_args_parser_accepts_every_flag_the_directive_builder_emits():
         review_diff_loc=parsed.review_diff_loc,
         review_scope_kind=parsed.review_scope_kind,
     )
-    # `--subject` is wsc-tail's own required base arg; at apply time the
-    # spliced tokens are APPENDED to a base argv that already carries it.
-    tail_args = _load_wsc_tail_module()._build_arg_parser().parse_args(
-        ["--subject", "s", *spliced]
-    )
-    assert tail_args.review_scope_kind == "diff"
+    assert out[-2:] == ["--review-scope-kind", "diff"]
 
 
-def test_reviewer_evidence_survives_all_three_argv_hops():
-    """Regression (DoE-claude memo 2026-08-13 § 2): the value was supplied in
-    `decisions["review"]`, accepted by `wsc-tail.py`'s parser, and forwarded by
-    the op — but neither intermediate argv layer carried it, so the op-side
-    delegate-reviewer gate never saw the correlation it checks. Pins all three
-    hops, the same way the `--review-scope-kind` regression above does."""
-    from coordinator_core.workstream_complete import directives_commit_tail
+def test_reviewer_evidence_is_emitted_when_supplied():
+    """Regression (DoE-claude memo 2026-08-13 § 2): `reviewer_evidence` was
+    accepted by `decisions["review"]` but dropped by an intermediate argv
+    layer, so the op-side delegate-reviewer gate never saw the correlation it
+    checks.
 
-    evidence = "state/subagent-share/sid/coordinatorcode-reviewer-abc123.md"
-    directive = directives_commit_tail.build_close_tail_args_directive(
-        {
-            "review": {
-                "sha_range": "abc..def",
-                "reviewer": "code-reviewer",
-                "scope": "chain",
-                "verdict": "ok",
-                "diff_loc": "120",
-                "reviewer_evidence": evidence,
-            }
-        }
-    )
-    emitted_argv = directive["args"]
-    assert "--review-reviewer-evidence" in emitted_argv
-
-    parsed = _wsc_close._build_parser().parse_args(emitted_argv)
-    assert parsed.review_reviewer_evidence == evidence
-
-    spliced = _wsc_close._build_tail_args(
+    Narrowed 2026-08-25 (C4/C12, DR-358) — see
+    `test_review_scope_kind_round_trips_through_wsc_close_own_parser`'s
+    docstring for why: this now pins only `_build_tail_args`'s own emission,
+    the one hop of the original three-hop splice still standing."""
+    out = _wsc_close._build_tail_args(
         deleted_paths=None,
         kept_entries=None,
-        review_sha_range=parsed.review_sha_range,
-        review_reviewer=parsed.review_reviewer,
-        review_scope=parsed.review_scope,
-        review_verdict=parsed.review_verdict,
-        review_diff_loc=parsed.review_diff_loc,
-        review_scope_kind=parsed.review_scope_kind,
-        review_reviewer_evidence=parsed.review_reviewer_evidence,
+        review_sha_range="abc..def",
+        review_reviewer="code-reviewer",
+        review_scope="chain",
+        review_verdict="ok",
+        review_diff_loc="120",
+        review_reviewer_evidence="state/subagent-share/sid/coordinatorcode-reviewer-abc123.md",
     )
-    tail_args = _load_wsc_tail_module()._build_arg_parser().parse_args(
-        ["--subject", "s", *spliced]
-    )
-    assert tail_args.review_reviewer_evidence == evidence
+    assert out[-2:] == [
+        "--review-reviewer-evidence",
+        "state/subagent-share/sid/coordinatorcode-reviewer-abc123.md",
+    ]
 
 
 def test_reviewer_evidence_absent_does_not_trip_partial_supply():
@@ -315,7 +275,13 @@ def test_reviewer_evidence_mixed_with_slices_is_refused():
         )
 
 
-def test_slice_reviewer_evidence_survives_to_the_wsc_tail_parser():
+def test_slice_reviewer_evidence_is_carried_in_the_spliced_json():
+    """Narrowed 2026-08-25 (C4/C12, DR-358) — see
+    `test_review_scope_kind_round_trips_through_wsc_close_own_parser`'s
+    docstring: `wsc-tail.py` (the parser this used to also round-trip
+    through, via `_parse_review_slices`) is retired. What survives is
+    `_build_tail_args`'s own JSON splice, still the only place this value is
+    at risk of being dropped on this side of the boundary."""
     import json as _json
 
     evidence = "state/subagent-share/sid/a.md"
@@ -339,12 +305,6 @@ def test_slice_reviewer_evidence_survives_to_the_wsc_tail_parser():
         ],
     )
     assert _json.loads(spliced[1])["reviewer_evidence"] == evidence
-
-    wsc_tail = _load_wsc_tail_module()
-    tail_args = wsc_tail._build_arg_parser().parse_args(["--subject", "s", *spliced])
-    slices, errors = wsc_tail._parse_review_slices(tail_args)
-    assert errors == []
-    assert slices[0]["reviewer_evidence"] == evidence
 
 
 def test_partial_review_fields_raises_with_missing_named():

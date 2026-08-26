@@ -63,7 +63,12 @@ def test_pointer_disagreeing_with_registry_is_named_with_both_paths(
     real.mkdir()
     _stub_registry(monkeypatch, {"repos.claude_klabauter": str(real)})
     pointer = machine_local / ".claude-klabauter-root"
-    pointer.write_text("X:/claude-klabauter", encoding="utf-8")  # abs-path-ok: the foreign path from the incident, never resolved
+    # The incident's pointer held a foreign-platform path, but what this test needs
+    # is only that the target NOT EXIST. Spelling that as a literal is the same bet
+    # the production bug was: `X:/claude-klabauter` is a real checkout on the primary
+    # box, so the literal resolved and `absent_targets` came back empty. Derive it
+    # from tmp_path instead, which is absent by construction on every host.
+    pointer.write_text(str(tmp_path / "no-such-klabauter"), encoding="utf-8")
 
     report = rcr.reconcile("claude_klabauter", machine_local)
 

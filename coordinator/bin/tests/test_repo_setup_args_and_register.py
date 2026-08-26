@@ -198,7 +198,7 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
                 ]
             )
             with mock.patch.dict(os.environ, {"CLAUDE_HOME": home_tmp}, clear=False):
-                # Isolate from this machine's REAL claude-klabauter-root registration
+                # Isolate from this machine's REAL claude-klabauter-live-root registration
                 # (both env-var and pointer-file rungs) so the fallback
                 # ladder genuinely bottoms out — otherwise this test would
                 # spuriously pass/fail depending on the running machine's

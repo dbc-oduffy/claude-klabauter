@@ -1,9 +1,11 @@
 """coordinator_core/ops/test_workday_complete_step2_5_dirty_tree_spawn_budget.py
 
 Spawn-count regression for `workday_complete_step2_5_dirty_tree.py::_classify_main_pass`'s
-EOL-PHANTOM / SUBMODULE probes, following the exact-equality `spawn_count_budget` template
-`coordinator_core/benchmarks/budget-manifest.json`'s `overrides["ceremony.scoped_git_commit"]`
-entry already carries.
+EOL-PHANTOM / SUBMODULE probes, following the exact-equality `spawn_count_budget` convention
+every row in `coordinator_core/benchmarks/budget-manifest.json` carries -- an exact-count
+ceiling per call shape, not a latency figure (see `ceremony.wsc_tail`'s row for a live worked
+example; the row this docstring used to cite, `overrides["ceremony.scoped_git_commit"]`, was
+deleted at K-045).
 
 WHY A SPAWN COUNT, NOT A LATENCY FIGURE: this repo runs 50-70 concurrent LLM
 sessions at any given moment (CLAUDE.md's "Load norm" section) — a wall-clock

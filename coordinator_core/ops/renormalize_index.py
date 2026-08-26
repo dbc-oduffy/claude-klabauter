@@ -84,7 +84,7 @@ import subprocess
 import sys
 from typing import List, Optional, Set
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.git.repo_root import git_dir as _git_dir_seam
 
 
@@ -139,7 +139,7 @@ def _git_ls_files_modified(cwd: Optional[str] = None) -> Optional[List[str]]:
             capture_output=True,
             cwd=cwd,
             check=False,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, FileNotFoundError):
         return None

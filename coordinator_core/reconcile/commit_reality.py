@@ -616,29 +616,95 @@ def _deliverable_deleted_by_commit(
     return _evaluate_pending()
 
 
+#: Process-lifetime cache for `_all_reachable_shas`, keyed by the string form of
+#: `worktree_root`. One reconciliation pass evaluates MANY handoffs (and, per
+#: handoff, several signal/gate call sites) against the same worktree in the
+#: same process — see `_all_reachable_shas`'s own docstring for why a single
+#: `git rev-list --branches` over the whole window replaces what used to be a
+#: `cat-file -e` + `branch --contains` PAIR of spawns on every one of those
+#: calls (P2 measured cost, CLAUDE.md § Load norm: 88 spawns on a workday-start
+#: sweep, this module's per-commit share of that count).
+_REACHABLE_SHA_CACHE: Dict[str, Set[str]] = {}
+
+
+def _reset_reachable_sha_cache() -> None:
+    """Clear `_REACHABLE_SHA_CACHE` — test-only escape hatch.
+
+    Purpose: each test constructs its own throwaway repo fixture, often
+    reusing the same `worktree_root` string across cases (e.g. a fixed tmp_path
+    name) within one test-process lifetime; without an explicit reset a stale
+    cache entry from an earlier case would silently answer a later case's
+    query. Production callers never need this — a reconciliation pass is one
+    short-lived process per invocation, so the cache is naturally scoped to
+    "this window" already.
+    """
+    _REACHABLE_SHA_CACHE.clear()
+
+
+def _all_reachable_shas(worktree_root: Path) -> Set[str]:
+    """Signal (c)'s batched evidence source: every commit SHA reachable from
+    ANY local branch, computed with ONE `git rev-list --branches` spawn per
+    worktree_root and reused for the rest of the reconciliation window.
+
+    Purpose: replaces the previous per-candidate-SHA pattern of one
+    `git cat-file -e <sha>` PLUS one `git branch --contains <sha>` spawn
+    (2 spawns), repeated once per handoff per call site (the three-signal
+    path, the explicit-ship-claim path, and the cross-handoff attribution
+    guard can each ask this question for a DIFFERENT sha within a single
+    handoff's own evaluation). `git rev-list --branches` lists every commit
+    reachable from `refs/heads/*` exactly once, in one process — the same
+    "ANY local branch" scope `_sha_on_any_local_branch`'s docstring already
+    commits to (not `--all`, which would additionally pull in tags and
+    remote-tracking refs and widen this predicate's meaning). Cached per
+    `worktree_root` for the lifetime of the process (see
+    `_REACHABLE_SHA_CACHE`), so a reconciliation pass touching dozens of open
+    handoffs pays this ONE spawn once, not once per (handoff, call site, sha)
+    triple.
+
+    Fails closed on a non-zero `git rev-list` exit (malformed repo state,
+    empty repo with no branches, etc.): the cache stores an empty set, so
+    every reachability query for this worktree_root answers False until the
+    process ends — the same fail-closed posture the two-spawn predicate had
+    on a `cat-file`/`branch` failure.
+    """
+    key = str(worktree_root)
+    cached = _REACHABLE_SHA_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = _git(worktree_root, ["rev-list", "--branches"])
+    shas: Set[str] = set()
+    if result.returncode == 0:
+        shas = {ln.strip() for ln in result.stdout.splitlines() if ln.strip()}
+    _REACHABLE_SHA_CACHE[key] = shas
+    return shas
+
+
 def _sha_on_any_local_branch(worktree_root: Path, sha: str) -> bool:
     """Signal (c): is `sha` a valid git object contained by ANY local branch?
 
     NOTE the name is deliberately NOT "reachable on HEAD" (a prior name this
-    function carried, and a trap for the next reader): after `git cat-file -e`
-    this runs `git branch --contains <sha>` and returns True if ANY local
-    branch contains it — not specifically HEAD's own ancestry. On a repo with
-    per-machine daily `work/{machine}/{date}` branches this accepts
-    essentially any commit present in the local clone, including a concurrent
-    sibling session's commit on its own branch. Callers that need a stronger
-    ownership signal than "this object exists somewhere in my local clone"
-    must pair this with a provenance check (see `_sha_attributed_to_session`)
-    rather than relying on this predicate alone (sidecar finding 4, review
+    function carried, and a trap for the next reader): this checks membership
+    in `_all_reachable_shas`'s set — every commit reachable from ANY local
+    branch, not specifically HEAD's own ancestry. On a repo with per-machine
+    daily `work/{machine}/{date}` branches this accepts essentially any commit
+    present in the local clone, including a concurrent sibling session's
+    commit on its own branch. Callers that need a stronger ownership signal
+    than "this object exists somewhere in my local clone" must pair this with
+    a provenance check (see `_sha_attributed_to_session`) rather than relying
+    on this predicate alone (sidecar finding 4, review
     `state/subagent-share/eb3895a6-344e-4c49-b965-7e924303ae90/
     coordinatoreng-director-7848035c.md`, 2026-07-26).
+
+    Formerly two subprocess spawns per call (`git cat-file -e` +
+    `git branch --contains`); now an in-process set-membership check against
+    `_all_reachable_shas`'s single batched `git rev-list --branches` per
+    worktree_root — see that function's docstring for the spawn-count
+    rationale. A `sha` that is a valid object but NOT a commit (e.g. a bare
+    blob/tree SHA) is correctly absent from a commit-only `rev-list`, so it
+    still answers False here exactly as the old cat-file+branch pairing did
+    once `branch --contains` failed to find it on any branch.
     """
-    exists = _git(worktree_root, ["cat-file", "-e", sha])
-    if exists.returncode != 0:
-        return False
-    contains = _git(worktree_root, ["branch", "--contains", sha])
-    if contains.returncode != 0:
-        return False
-    return bool(contains.stdout.strip())
+    return sha in _all_reachable_shas(worktree_root)
 
 
 def _sha_attributed_to_session(worktree_root: Path, sha: str, session_id: Optional[str]) -> bool:

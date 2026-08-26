@@ -346,7 +346,17 @@ def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_default_root_uses_sentinel_when_present(tmp_path):
+def test_default_root_uses_sentinel_when_present(tmp_path, monkeypatch):
+    # `read_doe_root_pointer_file`'s rung 1 (settings-home's own
+    # `machine-local/.doe-root` durable mirror) resolves via
+    # `_settings_home.settings_home()` UNCONDITIONALLY -- the injectable
+    # `home` parameter this test passes only reaches rung 2 (the legacy
+    # `<home>/.claude/.doe-root` file). On a real dev box that already has a
+    # settings-home `.doe-root` on disk, rung 1 wins and this test would
+    # silently assert against THAT machine's real DoE-clone path instead of
+    # the fixture's. Point COORDINATOR_SETTINGS_HOME at an empty tmp dir so
+    # rung 1 has nothing to read and falls through to the fixture's rung 2.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-settings-home"))
     tmp_home = tmp_path / "home"
     sentinel_dir = tmp_home / ".claude"
     sentinel_dir.mkdir(parents=True)
@@ -356,7 +366,12 @@ def test_default_root_uses_sentinel_when_present(tmp_path):
     assert result == fake_doe_root
 
 
-def test_default_root_falls_back_when_sentinel_absent(tmp_path):
+def test_default_root_falls_back_when_sentinel_absent(tmp_path, monkeypatch):
+    # Same real-machine-settings-home isolation as the sibling test above --
+    # without it, rung 1 can resolve against this box's actual settings-home
+    # `.doe-root` and this "no sentinel anywhere" case would never truly
+    # exercise the OSS-mirror fallback.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-settings-home"))
     tmp_home = tmp_path / "home2"
     tmp_home.mkdir(parents=True)
     result = vc.default_root(str(tmp_home))

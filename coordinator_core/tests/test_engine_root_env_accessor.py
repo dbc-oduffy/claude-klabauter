@@ -17,6 +17,7 @@ that and is the thing to refuse.
 """
 from __future__ import annotations
 
+import ast
 import pathlib
 
 import pytest
@@ -205,11 +206,32 @@ def test_cc_invoke_precedence_is_pinned_to_the_accessor():
     ).read_text(encoding="utf-8")
 
     # The rung-1 environment read must consult the NEW name and NOT fall back
-    # to the old one — the exact edit C14 made in the accessor.
-    assert 'existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")\n' in src, (
-        "cc_invoke's rung-1 read drifted from the accessor's post-C14 precedence"
+    # to the old one -- the exact edit C14 made in the accessor. Pinned BY AST,
+    # not by source line: this used to assert the literal text
+    # `existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")` and went red when the
+    # call site was reworded to `env_root = os.environ.get(...) or ""`, which
+    # renames a local and swaps one default form while changing neither the name
+    # read nor the precedence. A duplicate that drifts is the hazard; a duplicate
+    # that is rephrased is not, and a gate that cannot tell them apart reports the
+    # second as the first. The claim is the property.
+    tree = ast.parse(src)
+    env_reads = {
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "environ"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in ("_ENGINE_ROOT_NEW_VAR", "_ENGINE_ROOT_OLD_VAR")
+    }
+    assert "_ENGINE_ROOT_NEW_VAR" in env_reads, (
+        "cc_invoke's rung-1 read drifted from the accessor's post-C14 precedence: "
+        "it no longer reads _ENGINE_ROOT_NEW_VAR from the environment at all"
     )
-    assert 'os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR' not in src, (
+    assert "_ENGINE_ROOT_OLD_VAR" not in env_reads, (
         "cc_invoke still falls back to the retired name; C14 removed that rung"
     )
     # And the child-env write must export the new name only.

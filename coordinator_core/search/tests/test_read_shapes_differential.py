@@ -140,6 +140,13 @@ def test_sed_range_past_eof_declines(tree):
 # ------------------------------------------------------------------- composed
 
 
+
+def _absorbs_wc(cmd: str) -> bool:
+    """True when `cmd` pipes into a `wc` stage, whose BSD-vs-GNU padding divergence
+    `engine._stage_wc` declares deliberate. Matched on the PIPED segment only, so a
+    file or pattern that merely contains the letters "wc" never trips it."""
+    return any(seg.strip().split()[:1] == ["wc"] for seg in cmd.split("|")[1:])
+
 def _assert_stage_output_matches_real(cmd: str, cwd) -> None:
     """Composed shapes (AC3's evidence that no stage code changed) compare as
     LINE LISTS, not raw bytes: the stage pipeline joins with `"\\n"` and never
@@ -152,7 +159,22 @@ def _assert_stage_output_matches_real(cmd: str, cwd) -> None:
     if ours is None:
         pytest.skip("declined -- the real command runs unchanged, which is correct")
     _rc, theirs = run_real(cmd, cwd)
-    assert ours.splitlines() == theirs.splitlines(), (
+    ours_lines, theirs_lines = ours.splitlines(), theirs.splitlines()
+    if _absorbs_wc(cmd):
+        # `engine._stage_wc` carries a KNOWN, DELIBERATE DIVERGENCE block: BSD `wc`
+        # (macOS) right-pads its count to width 8, GNU `wc` does not, and probing the
+        # host's own `wc` to reproduce the padding would cost the process spawn this
+        # whole package exists to avoid -- so the count ships unpadded on every
+        # platform, VALUE always correct. Asserting byte-equality against the real
+        # host here made this cell contradict a decision already weighed and taken
+        # upstream: on BSD it went red over exactly the whitespace `_stage_wc`
+        # declares it is giving up, which is a defective assertion, not a finding.
+        # Only the declared divergence is normalized -- leading/trailing space on a
+        # `wc` count line -- and only for commands that actually absorb a `wc` stage,
+        # so every other composed shape stays as strict as it was.
+        ours_lines = [ln.strip() for ln in ours_lines]
+        theirs_lines = [ln.strip() for ln in theirs_lines]
+    assert ours_lines == theirs_lines, (
         "in-process answer disagrees with real command\n"
         "  command : %s\n  ours    : %r\n  real    : %r" % (cmd, ours, theirs)
     )

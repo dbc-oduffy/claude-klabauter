@@ -63,9 +63,24 @@ def _load_round_module():
 
 _round = _load_round_module()
 
-# Imported AFTER `_load_round_module()`, deliberately: that call is what puts the engine
-# on `sys.path` for this process (`percolate-round.py` inserts `coordinator/lib` at its
-# own import time), so `coordinator_core` is not resolvable above this line.
+# The engine root is put on `sys.path` EXPLICITLY here, not inherited from
+# `_load_round_module()` above. That call does happen to leave the engine
+# reachable — `percolate-round.py` inserts `coordinator/lib` at its own import
+# time — but depending on it made this file's bootstrap an undeclared
+# side effect of a sibling's import order: reorder or slim that sibling and
+# this import dies with `ModuleNotFoundError: coordinator_core` on the
+# published mirror, with nothing here naming the dependency. Declaring it is
+# the same seam ~175 other CLIs under this directory already use.
+# NOTE `_BIN_DIR / "lib"`, not `_LIB_DIR` — this file's `_LIB_DIR` is
+# `coordinator/lib` (the percolate helpers), while `cc_invoke` lives in
+# `coordinator/bin/lib`. They are different directories.
+_CC_INVOKE_DIR = str(_BIN_DIR / "lib")
+if _CC_INVOKE_DIR not in sys.path:
+    sys.path.insert(0, _CC_INVOKE_DIR)
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
+
+require_dispatch_engine_on_path()
+
 from coordinator_core import publish_lane  # noqa: E402  type: ignore[import-not-found]
 
 

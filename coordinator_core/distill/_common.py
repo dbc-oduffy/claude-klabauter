@@ -268,14 +268,14 @@ def active_reference_guard(
     if not existing_scope:
         return False
     if shutil.which("rg") is not None:
-        from coordinator_core.win_portability import no_console_creationflags
+        from coordinator_core.win_portability import leaf_spawn_creationflags
 
         result = subprocess.run(
             ["rg", "--fixed-strings", "--files-with-matches", needle, *existing_scope],
             cwd=repo_root,
             capture_output=True,
             text=True,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
         # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
         if result.returncode == 2:

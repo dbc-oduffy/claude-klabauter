@@ -81,6 +81,7 @@ Spec backlink: state/handoffs/2026-08-12-engine-root-bootstrap-shared-seam.md
 """
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -351,7 +352,7 @@ def test_coordinator_initiative_create_imports_coordinator_core() -> None:
     script = os.path.join(_BIN_DIR, "coordinator-initiative.py")
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
-    env["CLAUDE_KLABAUTER_ROOT"] = "/nonexistent-regression-probe-root"
+    env["COORDINATOR_ENGINE_ROOT"] = "/nonexistent-regression-probe-root"
     proc = subprocess.run(
         [
             sys.executable,
@@ -414,6 +415,11 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
     """
     real_cc_invoke = os.path.join(_LIB_DIR, "cc_invoke.py")
     real_mlir = os.path.join(_LIB_DIR, "machine_local_impl_resolve.py")
+    # cc_invoke.py imports this at module TOP (not lazily, unlike the sibling
+    # above) since the resolver-ladder split, so a mirror without it dies on a
+    # ModuleNotFoundError before any rung runs -- the mirror payload's own
+    # dependency gap, never the thing this probe is asking about.
+    real_engine_bootstrap = os.path.join(_LIB_DIR, "engine_bootstrap.py")
     real_claude_klabauter_root = os.path.dirname(os.path.dirname(_BIN_DIR))  # .../coordinator/bin -> .../<repo>
 
     with tempfile.TemporaryDirectory() as mirror_root, tempfile.TemporaryDirectory() as empty_settings_home:
@@ -425,7 +431,7 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
         # alongside cc_invoke.py, so the mirror shape being tested here must
         # too, or this probe would trip a real seam's own dependency gap
         # rather than testing the thing AC3 asks about.
-        for src in (real_cc_invoke, real_mlir):
+        for src in (real_cc_invoke, real_mlir, real_engine_bootstrap):
             with open(src, encoding="utf-8") as fh:
                 source = fh.read()
             with open(os.path.join(mirror_lib, os.path.basename(src)), "w", encoding="utf-8") as fh:
@@ -474,7 +480,7 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
 
         # Sub-case 2: CLAUDE_KLABAUTER_ROOT set to the real checkout -- seam threads it onto sys.path.
         env_with_root = dict(base_env)
-        env_with_root["CLAUDE_KLABAUTER_ROOT"] = real_claude_klabauter_root
+        env_with_root["COORDINATOR_ENGINE_ROOT"] = real_claude_klabauter_root
         proc2 = subprocess.run(
             [sys.executable, probe_script],
             capture_output=True,
@@ -522,7 +528,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
         mirror_lib = os.path.join(mirror_bin, "lib")
         os.makedirs(mirror_lib, exist_ok=True)
 
-        for name in ("cc_invoke.py", "git_hook_install.py"):
+        for name in ("cc_invoke.py", "engine_bootstrap.py", "git_hook_install.py"):
             with open(os.path.join(real_lib_dir, name), encoding="utf-8") as fh:
                 source = fh.read()
             with open(os.path.join(mirror_lib, name), "w", encoding="utf-8") as fh:
@@ -536,7 +542,7 @@ def test_ensure_hooks_fleet_and_gate_validate_invocable_mirror_shaped_checkout()
 
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
-        env["CLAUDE_KLABAUTER_ROOT"] = real_claude_klabauter_root
+        env["COORDINATOR_ENGINE_ROOT"] = real_claude_klabauter_root
 
         # coordinator-ensure-hooks-fleet: probe the module-level bootstrap
         # directly (does NOT call main()/ensure_hooks_fleet(), which would
@@ -764,9 +770,21 @@ def test_no_undiscovered_bootstrap_gaps() -> None:
 # env-first file must stay env-first.
 #
 # `lib/cc_invoke.py` is the sole multi-family entry -- it defines both variants.
+# ROWS REMOVED 2026-08-25 -- each named a file that no longer calls a resolver,
+# which this map's own drift message says to drop in the same commit as the
+# removal. Three of them (`scoped-git-commit`, `sweep-actioned-memos.py`,
+# `sweep-shipped-handoffs.py`) no longer EXIST on disk at all; the other three
+# (`coordinator-prepare-commit-msg`, `schema-drift-gate.py`,
+# `workday-complete-assemble.py`) became thin forwarders whose bootstrap now
+# happens inside `lib/entry_point_shim.py` on their behalf, so the resolver
+# call is no longer in the file this map keys on.
 _RESOLVER_FAMILY_BY_FILE = {
+    # ROWS ADDED 2026-08-25 -- eleven files called a resolver with no row here.
+    # The map is a two-way snapshot (drift + vanished + undiscovered), so a
+    # missing row is as much a stale-snapshot failure as an orphaned one.
     "advance-tracker-status.py": frozenset({"env_first"}),
     "age-sweep-lessons.py": frozenset({"env_first"}),
+    "app-session.py": frozenset({"env_first"}),
     "append-goal-event.py": frozenset({"env_first"}),
     "append-plan-session.py": frozenset({"env_first"}),
     "archive-paper-trail.py": frozenset({"env_first"}),
@@ -774,16 +792,19 @@ _RESOLVER_FAMILY_BY_FILE = {
     "autonomous-verb.py": frozenset({"self_location"}),
     "cartography.py": frozenset({"self_location"}),
     "check-auto-reconcile.py": frozenset({"env_first"}),
+    "check-mcp-versions.py": frozenset({"self_location"}),
+    "check-no-illegal-paths.py": frozenset({"env_first"}),
     "coordinator-ceremony-hook.py": frozenset({"env_first"}),
     "coordinator-doc-new.py": frozenset({"env_first"}),
     "coordinator-initiative.py": frozenset({"env_first"}),
     "coordinator-lesson-add.py": frozenset({"env_first"}),
-    "coordinator-prepare-commit-msg": frozenset({"self_location"}),
+    "coordinator-prepare-commit-msg.py": frozenset({"self_location"}),
     "coordinator-safe-commit.py": frozenset({"env_first"}),
     "coordinator-tasks-mirror.py": frozenset({"env_first"}),
     "coordinator-validate-local-config.py": frozenset({"self_location"}),
     "coordinator-write-review-trail.py": frozenset({"env_first"}),
     "cross-repo-memo.py": frozenset({"env_first"}),
+    "debash-scorecard.py": frozenset({"env_first"}),
     "distill-delete-guard.py": frozenset({"self_location"}),
     "distill-harvest-debt.py": frozenset({"self_location"}),
     "distill-log-append.py": frozenset({"self_location"}),
@@ -792,16 +813,20 @@ _RESOLVER_FAMILY_BY_FILE = {
     "distill-sidecar-sweep.py": frozenset({"self_location"}),
     "doctor.py": frozenset({"self_location"}),
     "emit-goal-from-artifact.py": frozenset({"env_first"}),
+    "engine-gap-lint.py": frozenset({"env_first"}),
     "fan-out-dispatch.py": frozenset({"env_first"}),
     "fix-concrete-path-citations.py": frozenset({"self_location"}),
+    "fleet-env-cutover.py": frozenset({"self_location"}),
     "handoff-archive-transition.py": frozenset({"env_first"}),
     "handoff-backfill-claim-stamp.py": frozenset({"env_first"}),
+    "handoff-discharge-criteria.py": frozenset({"env_first"}),
     "handoff-has-live-children.py": frozenset({"env_first"}),
     "handoff-reconcile-close-terminal.py": frozenset({"env_first"}),
     "handoff-stamp-phase.py": frozenset({"env_first"}),
     "lessons-outbox-drain.py": frozenset({"self_location"}),
     "lib/cc_invoke.py": frozenset({"env_first", "self_location"}),
     "lib/coordinator_registry.py": frozenset({"env_first"}),
+    "lib/entry_point_shim.py": frozenset({"self_location"}),
     "lib/repo_identity.py": frozenset({"env_first"}),
     "lib/workday_ceremony_lib.py": frozenset({"env_first"}),
     "merge-gate-and-pr.py": frozenset({"env_first"}),
@@ -821,16 +846,11 @@ _RESOLVER_FAMILY_BY_FILE = {
     "reaper-resting-batons.py": frozenset({"env_first"}),
     "record-platform-outcome.py": frozenset({"env_first"}),
     "regen-cockpit-schema.py": frozenset({"env_first"}),
-    "schema-drift-gate.py": frozenset({"env_first"}),
-    "scoped-git-commit": frozenset({"env_first"}),
     "seed-marketplace-enabledplugins.py": frozenset({"self_location"}),
     "spawn-census": frozenset({"self_location"}),
     "standup.py": frozenset({"env_first"}),
-    "sweep-actioned-memos.py": frozenset({"env_first"}),
-    "sweep-shipped-handoffs.py": frozenset({"env_first"}),
-    # Both families by design: this file is cc_invoke's own test, and asserts on
-    # BOTH ladders' behaviour (notably the env-first-vs-self-location-first order
-    # divergence, plan AC8). Not a bootstrap, and not family drift.
+    "sweep-terminal-handoffs.py": frozenset({"env_first"}),
+    "test_sweep_actioned_memos.py": frozenset({"env_first"}),
     "tests/test_cc_invoke_py.py": frozenset({"env_first", "self_location"}),
     "tests/test_checked_repo_resolver.py": frozenset({"env_first"}),
     "tests/test_checked_repo_resolver_c4.py": frozenset({"env_first"}),
@@ -838,7 +858,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "whats-next.py": frozenset({"env_first"}),
     "with-suite-mutex": frozenset({"env_first"}),
     "workday-complete-args-and-validate.py": frozenset({"env_first"}),
-    "workday-complete-assemble.py": frozenset({"self_location"}),
     "workday-complete-backfill-inject-anchor.py": frozenset({"env_first"}),
     "workday-complete-close.py": frozenset({"self_location"}),
     "workday-complete-step1-validate.py": frozenset({"self_location"}),
@@ -898,6 +917,45 @@ def test_resolver_family_map_no_family_drift() -> None:
     )
 
 
+def _assert_shim_never_self_locates() -> None:
+    """The teeth behind `entry_point_shim.py`'s depth exemption above.
+
+    The shim is allowed to call a self-location-first resolver from
+    `coordinator/bin/lib/` ONLY because it hands over a top-level
+    `BIN_DIR / "<entrypoint>.py"` path -- the depth `parents[2]` is correct
+    for. Passing its own `__file__` would probe one directory too deep and
+    silently fall through to the registry ladder, which is exactly the trap
+    the exemption must not become a hole for.
+    """
+    shim = os.path.join(str(_BIN_DIR), "lib", "entry_point_shim.py")
+    if not os.path.isfile(shim):
+        return
+    with open(shim, encoding="utf-8") as fh:
+        source = fh.read()
+    # AST, not a regex over the text: the shim's own docstring QUOTES the
+    # `require_colocated_engine_on_path(__file__)` form it deliberately does
+    # NOT use, and a text scan reads that prose as a call site.
+    governed = {"require_colocated_engine_on_path", "resolve_colocated_claude_klabauter_root"}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name not in governed:
+            continue
+        for arg in node.args:
+            offending = any(
+                isinstance(sub, ast.Name) and sub.id == "__file__"
+                for sub in ast.walk(arg)
+            )
+            assert not offending, (
+                f"entry_point_shim.py:{node.lineno} passes its own __file__ to "
+                f"{name}(): the fixed-depth parents[2] rung misresolves from "
+                f"lib/. Pass the top-level BIN_DIR / '<entrypoint>.py' path it "
+                f"stands in for."
+            )
+
+
 def test_no_self_location_family_call_below_top_level() -> None:
     """AC4 (part 2): the depth trap is unrepresentable. `resolve_colocated_claude_klabauter_root`
     / `require_colocated_engine_on_path` resolve via a fixed-depth `parents[2]` rung
@@ -920,14 +978,24 @@ def test_no_self_location_family_call_below_top_level() -> None:
       still caught -- by `test_resolver_family_map_no_family_drift` above, which
       covers `tests/` unexempted -- so this exemption narrows the depth check
       without opening a hole.
+    - `coordinator/bin/lib/entry_point_shim.py` bootstraps on behalf of the
+      TOP-LEVEL entry points it stands in for, and passes each one's own
+      `BIN_DIR / "<name>.py"` path rather than its own `__file__` -- so
+      `parents[2]` is evaluated against a `coordinator/bin/X.py` path and
+      resolves correctly, which is the whole point of the rule rather than an
+      exception to it. `_assert_shim_never_self_locates` below is what keeps
+      this exemption honest: the moment the shim passes its OWN `__file__`, it
+      IS bootstrapping itself at the wrong depth and fails loud.
     """
     _assert_bare_entrypoint_classifier_available()
+    _assert_shim_never_self_locates()
     offenders = [
         site
         for site in scan_resolver_call_sites(_BIN_DIR)
         if site.family == FAMILY_SELF_LOCATION
         and "/" in site.rel_path
         and site.rel_path != "lib/cc_invoke.py"
+        and site.rel_path != "lib/entry_point_shim.py"
         and not site.rel_path.startswith("tests/")
     ]
     assert not offenders, (

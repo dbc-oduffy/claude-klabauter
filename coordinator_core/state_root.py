@@ -59,8 +59,9 @@ Five routing rules (verbatim from the bash oracle's header):
   (`StateRootError`) whenever engine-subject state would resolve under a
   `RESOLUTION_RESOLVED_ENGINE` root (Rules 2/4/5-meta), mirroring this
   module's existing fail-loud posture for other unresolvable/ambiguous cases
-  (Rule 1, Rule 3's cross-cutting branch). It does NOT invent an alternative
-  state location.
+  (Rule 1, Rule 3's cross-cutting branch) once no registered live tree is
+  reachable. It never INVENTS an alternative state location — the fallback
+  leg below reads one the machine already registered, or refuses.
 
   Rule 5's sibling-repo branch gets the SAME guard applied to an arbitrary
   candidate git root rather than only "my own" claude-klabauter root: before treating
@@ -75,6 +76,14 @@ Five routing rules (verbatim from the bash oracle's header):
   claude-klabauter engine root" (Rules 2/4/5-meta) or "this is just some sibling repo"
   (Rule 5 sibling). Bug backlog:
   `state/bug-backlog/2026-08-13-state-root-rule-5-cannot-tell-a-publishe-fd79452138b2.yaml`.
+
+  A refusal is the LAST leg, not the only one. Before raising, the guard asks
+  `_live_engine_source_root()` whether a live engine tree is registered to
+  write to instead (`engine.source_root`, then `repos.claude_klabauter`, each
+  mirror-checked). A dual-boot box runs the engine FROM the mirror by
+  design, so refusing on the execution root alone made central state
+  structurally unresolvable on every box whose session root is a sibling
+  repo — see that function's docstring.
 
 Public API:
     coordinator_state_root(central=False, subject=None, artifact=None, git_root=None) -> str
@@ -116,6 +125,8 @@ from coordinator_core.engine_root import (
     classify_env_resolved_root,
     coordinator_engine_root,
     coordinator_engine_root_with_class,
+    engine_source_root,
+    is_published_engine_mirror,
     published_engine_mirror_path,
 )
 from coordinator_core.meta_repo_identity import (
@@ -198,18 +209,63 @@ def _claude_klabauter_state() -> str:
     if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:
         resolution_class = classify_env_resolved_root(claude_klabauter_root)
     if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
+        live_root = _live_engine_source_root()
+        if live_root:
+            return _state_of(live_root)
         raise StateRootError(
             "coordinator_state_root: engine-subject state resolved to a "
-            f"PUBLISHED engine mirror ('{claude_klabauter_root}'), not a live working "
-            "tree — refusing to write state into a published mirror. This "
-            "would leak runtime/session artifacts (e.g. operator-machine "
-            "identifiers) into a public repo and can strand or split a state "
-            "corpus. Remediate: run from a live working-tree checkout of "
-            "claude-klabauter (e.g. unset any published-mirror registration "
-            "for this session), or set COORDINATOR_ENGINE_ROOT explicitly to a working "
-            "tree."
+            f"PUBLISHED engine mirror ('{claude_klabauter_root}'), and no live "
+            "working tree is registered to write to instead — refusing to "
+            "write state into a published mirror. This would leak "
+            "runtime/session artifacts (e.g. operator-machine identifiers) "
+            "into a public repo and can strand or split a state corpus. "
+            "Remediate: register the live engine tree — machine-local set "
+            "engine.source_root <path-to-live-claude-klabauter> — or set "
+            "COORDINATOR_ENGINE_ROOT explicitly to a working tree."
         )
     return _state_of(claude_klabauter_root)
+
+
+def _live_engine_source_root() -> Optional[str]:
+    """Resolve the LIVE engine working tree for a state WRITE whose execution
+    root is the published mirror, or None when no live tree is reachable.
+
+    A dual-boot box runs the engine FROM the published mirror by design, so
+    `coordinator_engine_root_with_class()` correctly answers "mirror" for
+    execution routing. State is a write, not an execution: the mirror answer
+    is the wrong target but it is not the whole answer, and refusing on it
+    alone made central state structurally unresolvable on every box whose
+    session root is a sibling repo rather than claude-klabauter itself — the ceremony
+    surfaces that write central state (cruft-sweep's run log among them) then
+    fail with no reachable escape hatch, on a box where the live tree is
+    sitting in the registry the whole time.
+
+    Ladder mirrors `coordinator_core.ops.queue_append`'s central-write
+    resolver, the in-repo precedent for exactly this split:
+
+      1. `engine.source_root` — the transform-proof key. Carries no repo
+         token, so the publish identifier transform leaves it intact and a
+         mirror-run engine reaches the live tree through it.
+      2. `repos.claude_klabauter` — correct on a consumer install. Under the
+         publish transform this key is rewritten to name the mirror, which is
+         why the mirror check below is not optional: the rewritten key
+         resolves the mirror to ITSELF, the exact laundering that lost two
+         working files before it was caught.
+
+    NEGATIVE SPEC — this does NOT relax the published-mirror guard. Every
+    rung is mirror-checked and a mirror answer yields None, which returns the
+    caller to its refusal. It supplies the "write here instead" leg the guard
+    never had, never a "write there anyway" one.
+    """
+    source_root = engine_source_root()
+    if source_root:
+        return source_root
+    from coordinator_core.machine_resolver import registry_get
+
+    candidate = (registry_get("repos.claude_klabauter") or "").strip()
+    if candidate and not is_published_engine_mirror(candidate):
+        return candidate
+    return None
 
 
 def _resolve_git_root(git_root: Optional[str] = None) -> str:

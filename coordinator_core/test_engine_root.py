@@ -7,7 +7,7 @@ chain, coordinator/lib/coordinator-claude-klabauter-root.sh):
      C14 closed the dual-read window; it now answers nothing and reaching for it
      here would test the retirement, not the rung. The retirement itself is
      covered by tests/test_engine_root_env_accessor.py.)
-  1.5. <settings-home>/machine-local/.claude-klabauter-root pointer file.
+  1.5. <settings-home>/machine-local/.claude-klabauter-live-root pointer file.
   2. `machine-local get repos.claude_klabauter` CLI.
   3. Hard failure (RuntimeError) with remediation text.
 
@@ -48,7 +48,7 @@ def test_rung1_5_pointer_file_used_when_env_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text("  /tmp/from-pointer  \n")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text("  /tmp/from-pointer  \n")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     assert mr.coordinator_engine_root() == "/tmp/from-pointer"
 
@@ -69,7 +69,7 @@ def test_rung1_5_falls_through_when_pointer_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text("   \n")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text("   \n")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setattr(mr.shutil, "which", lambda _name: None)
     with pytest.raises(RuntimeError):
@@ -157,7 +157,7 @@ def test_rung2_timeout_falls_to_error(monkeypatch, tmp_path):
 def test_env_var_wins_over_pointer_file(monkeypatch, tmp_path):
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text("/tmp/from-pointer")
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text("/tmp/from-pointer")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/tmp/from-env-wins")

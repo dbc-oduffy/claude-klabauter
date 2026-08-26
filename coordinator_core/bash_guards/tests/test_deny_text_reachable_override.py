@@ -217,7 +217,7 @@ def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
     resolves to nothing. The display form first became a repo-qualified hint
     ("claude-klabauter " + the relative path, 2 words), then
     `_resolve_override_keys_doc_display()` upgraded it to resolve the
-    claude-klabauter root (env var, then the `.claude-klabauter-root` pointer file -- never the
+    claude-klabauter root (env var, then the `.claude-klabauter-live-root` pointer file -- never the
     `machine-local` subprocess rung, never on this render-time path) into a
     single absolute-path token when available, falling back to the hint
     otherwise. The absolute form is actually ONE WORD SHORTER than the hint

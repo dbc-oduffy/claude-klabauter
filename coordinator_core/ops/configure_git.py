@@ -61,7 +61,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.git.repo_root import git_dir
 from coordinator_core.install.write_surface import (
     StaticClause,
@@ -189,7 +189,7 @@ def _git_config_get(scope: Sequence[str], key: str) -> str | None:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return None
@@ -206,7 +206,7 @@ def _git_config_set(scope: Sequence[str], key: str, value: str) -> bool:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return False

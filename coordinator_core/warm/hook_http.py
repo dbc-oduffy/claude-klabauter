@@ -44,7 +44,7 @@ NEGATIVE SPEC.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 #: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
@@ -161,6 +161,75 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
 #: middle, and it is a prefix match rather than a fixed list because guards add override
 #: keys without telling this module.
 FORWARDED_ENV_PREFIXES = ("COORDINATOR_ALLOW_", "COORDINATOR_OVERRIDE_", "COORDINATOR_PROBE_", "COORDINATOR_SCOPE_")
+
+
+OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
+OVERRIDE_CANARY_HEADER = "X-Coordinator-Env-Canary"
+OVERRIDE_CANARY_ENV = "COORDINATOR_PROBE_CANARY"
+OVERRIDE_HEADER_PREFIX = "X-Coordinator-Env-"
+
+
+def env_from_headers(
+    headers: Mapping[str, str]
+) -> Tuple[Dict[str, str], Optional[str]]:
+    """The caller's forwardable environment, read off REGISTRATION HEADERS rather than the body.
+
+    THE BODY HAS NO `env` KEY AND CANNOT BE MADE TO HAVE ONE. Measured n=2 on harness
+    2.1.246 with two positive controls: a registration's `allowedEnvVars` enables `${...}`
+    interpolation into `headers` and does nothing else, while the POST body carries
+    `cwd, effort, hook_event_name, permission_mode, prompt_id, session_id, tool_input,
+    tool_name, tool_use_id, transcript_path` and no `env` under any spelling -- exactly the
+    key set DoE's 2026-08-19 spike recorded as the FULL verbatim event. Headers are the only
+    channel that carries a caller-side value, so this is where the override boundary lives.
+    See `docs/research/spike-verdicts/2026-08-25-allowedenvvars-populates-headers-not-the-post-body.md`.
+
+    Returns `(env, disarm_reason)`. A non-None `disarm_reason` means the channel is declared
+    but not working, and the caller MUST refuse to report a verdict.
+
+    NEGATIVE SPEC -- WHY A VETO MUST BE LOUD, AND WHY EMPTY ALONE CANNOT SAY SO. An
+    `httpHookAllowedEnvVars` SETTING is a ceiling on the registration: when present it vetoes
+    names the registration itself allowed, and a vetoed interpolation arrives as the EMPTY
+    STRING rather than verbatim (finding 3,
+    `docs/research/spike-verdicts/2026-08-25-http-hook-headers-expand-env-vars-but-not-path-placeholders.md`).
+    An empty override header is therefore ambiguous between "the caller set nothing" and
+    "a setting silently disarmed the channel" -- and the two differ in the PERMISSIVE
+    direction, because the guard reads a missing override as "no override requested" and
+    proceeds. Two headers disambiguate it and neither is optional:
+
+      `X-Coordinator-Env-Channel` -- a STATIC LITERAL. Present iff the registration declares
+      this channel at all. Absent means an old-style registration, which is not a fault: the
+      result is `({}, None)`, today's behaviour exactly.
+
+      `X-Coordinator-Env-Canary` -- `${COORDINATOR_PROBE_CANARY}`, a var the launcher always
+      exports non-empty. Interpolated, so a setting-level veto empties it. Channel declared
+      AND canary empty is a veto that has certainly eaten every other override header too,
+      and is the one case that returns a `disarm_reason`.
+
+    Do NOT "simplify" this to a single header. A lone literal cannot detect the veto (it is
+    not interpolated, so it survives one); a lone canary cannot tell a veto from a
+    registration that never declared the channel, and would fail every legacy registration
+    closed. The pair is the mechanism.
+    """
+    lowered = {k.lower(): v for k, v in headers.items()}
+
+    if not (lowered.get(OVERRIDE_CHANNEL_HEADER.lower()) or "").strip():
+        return {}, None
+
+    if not (lowered.get(OVERRIDE_CANARY_HEADER.lower()) or "").strip():
+        return {}, (
+            "override channel declared but %s interpolated empty -- an "
+            "httpHookAllowedEnvVars setting is vetoing this registration's allowedEnvVars, "
+            "so no caller override reached the guard" % OVERRIDE_CANARY_ENV
+        )
+
+    reserved = {OVERRIDE_CHANNEL_HEADER.lower(), OVERRIDE_CANARY_HEADER.lower()}
+    prefix = OVERRIDE_HEADER_PREFIX.lower()
+    candidates = {
+        key[len(prefix):].upper(): value
+        for key, value in lowered.items()
+        if key.startswith(prefix) and key not in reserved and value != ""
+    }
+    return forwardable_env(candidates), None
 
 
 def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:

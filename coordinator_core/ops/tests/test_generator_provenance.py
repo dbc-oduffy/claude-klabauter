@@ -940,6 +940,185 @@ def run(artifact_path):
     assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
 
 
+def test_r7_scratch_mkstemp_fdopen_is_excluded(tmp_path):
+    """A mkstemp descriptor written and never `replace`d is a scratch file:
+    nothing it wrote reaches the tree, so it contributes no signal at all."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_scratch_fd.py",
+        """
+import os
+import tempfile
+
+def run(subject):
+    fd, msg_path = tempfile.mkstemp(prefix="msg-")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(subject)
+    return msg_path
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    assert [r for r in records if r.generator == "coordinator_core/gen_scratch_fd.py"] == []
+
+
+def test_r7_does_not_swallow_a_promoted_mkstemp_fd(tmp_path):
+    """R3's contract, restated against R7: a temp file that BECOMES the
+    artifact keeps its site counted even when the destination is dynamic.
+    R7 must read the replace, not just the mkstemp."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_promoted_fd.py",
+        """
+import os
+import tempfile
+
+def run(dest):
+    fd, tmp_name = tempfile.mkstemp(dir=".")
+    with os.fdopen(fd, "w") as handle:
+        handle.write("{}")
+    os.replace(tmp_name, dest)
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [r for r in records if r.generator == "coordinator_core/gen_promoted_fd.py"]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
+def test_r7_follows_an_aliased_promotion(tmp_path):
+    """`tmp_path_ = Path(tmp_name)` then `os.replace(tmp_path_, dest)` promotes
+    `tmp_name` as surely as replacing it by name. Reading only the literal
+    replace argument would call this scratch and drop a real write site --
+    the live shape in `coordinator_core/percolate/manifest.py`."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_aliased_promotion.py",
+        """
+import os
+import tempfile
+from pathlib import Path
+
+def run(dest):
+    fd, tmp_name = tempfile.mkstemp(dir=".")
+    tmp_file = Path(tmp_name)
+    with os.fdopen(fd, "w") as handle:
+        handle.write("{}")
+    os.replace(tmp_file, dest)
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [r for r in records if r.generator == "coordinator_core/gen_aliased_promotion.py"]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
+def test_r8_local_name_bound_to_a_tempdir_base_is_excluded(tmp_path):
+    """R5 reads expressions; this write target is a bare Name. Without R8 the
+    `tempfile.gettempdir()` root one line up is invisible."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_local_tempdir_name.py",
+        """
+import os
+import tempfile
+
+def run(paths):
+    pathspec_path = os.path.join(tempfile.gettempdir(), "pathspec.txt")
+    with open(pathspec_path, "w") as fh:
+        fh.write("
+".join(paths))
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    assert [
+        r for r in records if r.generator == "coordinator_core/gen_local_tempdir_name.py"
+    ] == []
+
+
+def test_r8_never_substitutes_across_functions(tmp_path):
+    """Scope-correctness, the failure this rule is most likely to cause.
+
+    `stage` binds `path` once to a tempdir root, so its own write is R5-
+    excluded. `deliver` takes `path` as a PARAMETER and writes wherever the
+    caller says -- genuinely unresolved, and it must stay that way. A flat
+    module-wide binding map substitutes `stage`'s tempdir into `deliver` and
+    drops the module from the population entirely. The live casualty of that
+    bug ran the other way: it reported
+    `coordinator_core/tests/test_review_brightline_gate.py` as an undeclared
+    writer of a production module it only ever reads."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_scope_leak.py",
+        """
+import os
+import tempfile
+
+def stage(body):
+    path = os.path.join(tempfile.gettempdir(), "staged.txt")
+    with open(path, "w") as fh:
+        fh.write(body)
+
+def deliver(path, body):
+    with open(path, "w") as fh:
+        fh.write(body)
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [r for r in records if r.generator == "coordinator_core/gen_scope_leak.py"]
+    assert len(matches) == 1, (
+        "deliver()'s parameter write must survive R8 -- a flat binding map "
+        "substitutes stage()'s tempdir into it and the module disappears"
+    )
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
+def test_r8_does_not_substitute_a_twice_assigned_name(tmp_path):
+    """Two assignments make the value at the write site control-flow
+    dependent; substituting either would be a guess, so the site stays
+    unresolved."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_two_assignments.py",
+        """
+import tempfile
+from pathlib import Path
+
+def run(flag):
+    target = Path(tempfile.gettempdir()) / "a.json"
+    if flag:
+        target = Path("tracked.json")
+    target.write_text("{}")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [r for r in records if r.generator == "coordinator_core/gen_two_assignments.py"]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
+def test_r9_devnull_is_not_a_write_target(tmp_path):
+    _write(
+        tmp_path,
+        "coordinator_core/gen_devnull.py",
+        """
+import os
+import sys
+
+def run():
+    setattr(sys, "stdout", open(os.devnull, "w"))
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    assert [r for r in records if r.generator == "coordinator_core/gen_devnull.py"] == []
+
+
 def test_r5_tempfile_gettempdir_base_excluded(tmp_path):
     _write(
         tmp_path,
@@ -956,6 +1135,31 @@ def run():
     records = discover_generators(tmp_path)
     matches = [r for r in records if r.generator == "coordinator_core/gen_tempdir_base.py"]
     assert matches == []
+
+
+def test_r5_os_devnull_target_excluded(tmp_path):
+    """`open(os.devnull, "w")` is a discard sink, never a repo artifact.
+
+    Census 2026-08-26 (docs/problems/
+    2026-08-26-what-a-reinstall-on-the-mac-actually-hits.md § 6):
+    `coordinator_core/warm/server.py` rebinds its stdio to `os.devnull` and was
+    the one confirmed false positive in the WRITE_TARGET_UNRESOLVED population
+    — R1's class (`sys.stdout`/`StringIO`) reached through the target position
+    rather than a `json.dump` file argument.
+    """
+    _write(
+        tmp_path,
+        "coordinator_core/gen_devnull_target.py",
+        """
+import os
+
+def run():
+    open(os.devnull, "w", encoding="utf-8")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    assert [r for r in records if r.generator == "coordinator_core/gen_devnull_target.py"] == []
 
 
 def test_r5_sessions_dir_base_excluded(tmp_path):

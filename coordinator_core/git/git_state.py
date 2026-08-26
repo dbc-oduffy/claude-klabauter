@@ -40,11 +40,23 @@ Negative-spec:
     - NO process-lifetime cache, NO memoisation keyed on repo root. A caller
       needing a second observation (a compare-and-swap, e.g.
       `_agree_branch_cas_refusal`) takes its pre-state as a value parameter
-      and calls this module fresh for the current side; a cache here would
-      collapse that CAS into a single stale look with the guard still
-      reading green -- the exact 2026-08-14 partial-stage incident this
-      module exists to not repeat. `read_index` therefore stats the index
-      file FRESH on every call (see `IndexSnapshot.stat_identity`).
+      and calls this module fresh for the current side; a process-lifetime
+      cache here would collapse that CAS into a single stale look with the
+      guard still reading green -- the exact 2026-08-14 partial-stage
+      incident this module exists to not repeat. `read_index` therefore
+      stats the index file FRESH on every call BY DEFAULT (see
+      `IndexSnapshot.stat_identity`).
+    - The ONE exception (C2, 2026-08-26,
+      docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md):
+      `index_read_cache_scope()` opens a cache scoped to a single call's
+      lifetime (a `contextvars.ContextVar`, never a module-level/process
+      cache), for callers that read the SAME on-disk index multiple times
+      within one commit and have no need to observe a mid-call write. A
+      caller that DOES need that (the compare-and-swap re-read) passes
+      `read_index(repo, fresh=True)`, which always stats+parses regardless
+      of an open scope and never populates it -- `_agree_branch_cas_refusal`
+      is the one production caller that does this, by design (see AC3 of
+      the plan above).
     - Does NOT return `{}` on any parse failure. Signature mismatch,
       unsupported version, a split index, or any unmerged (`stage > 0`)
       entry all RAISE `IndexParseError` -- an empty dict reads as "nothing
@@ -53,11 +65,13 @@ Negative-spec:
 
 from __future__ import annotations
 
+import contextvars
 import os
 import struct
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterator, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_objects import _read_object
@@ -69,6 +83,8 @@ __all__ = [
     "IndexSnapshot",
     "IndexParseError",
     "read_index",
+    "index_read_cache_scope",
+    "head_branch",
     "head_sha",
     "head_tree_sha",
     "read_tree_spine",
@@ -78,6 +94,11 @@ __all__ = [
 _SIGNATURE = b"DIRC"
 _SUPPORTED_VERSIONS = (2, 3, 4)
 _SHA_LEN = 20  # sha1 only; a sha256 index carries a different OID length
+#: The symref prefix `head_branch` strips to match `git rev-parse
+#: --abbrev-ref HEAD`. A symref outside this namespace is returned whole --
+#: git does not abbreviate those to a bare name either.
+_HEADS_PREFIX = "refs/heads/"
+
 #: Fixed-width fields preceding the name in every entry, EXCLUDING the
 #: optional v3+ extended-flags halfword: ctime(8) + mtime(8) + dev(4) +
 #: ino(4) + mode(4) + uid(4) + gid(4) + size(4) + sha1(20) + flags(2) = 62.
@@ -120,10 +141,56 @@ class IndexParseError(ValueError):
     """
 
 
-def read_index(repo: Union[str, Path]) -> IndexSnapshot:
+#: Scoped-to-one-call `read_index` cache (C2). `None` outside any
+#: `index_read_cache_scope()` -- the ordinary, still-default, fully-fresh
+#: path. A `contextvars.ContextVar` rather than a module global so an async/
+#: threaded caller never leaks one call's cache into a concurrent one on the
+#: same process; keyed on the resolved index PATH (not `repo`) so two `repo`
+#: spellings of the same worktree still share a hit.
+_INDEX_CALL_CACHE: "contextvars.ContextVar[Optional[Dict[Path, IndexSnapshot]]]" = (
+    contextvars.ContextVar("_index_call_cache", default=None)
+)
+
+
+@contextmanager
+def index_read_cache_scope() -> Iterator[None]:
+    """Open a `read_index` cache for the lifetime of this `with` block only.
+
+    Every ordinary (`fresh=False`, the default) `read_index(repo)` call made
+    while this scope is open, for the SAME resolved index path, returns the
+    snapshot from the FIRST such call in this scope rather than re-reading
+    and re-parsing `.git/index` -- see AC3 of
+    docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md.
+
+    Never nest this with the intent of sharing one cache across two
+    unrelated commits -- each call to this context manager opens its OWN
+    fresh, empty cache (nesting just shadows the outer one for the inner
+    block's duration, then restores it on exit); there is no cross-call
+    persistence anywhere in this module, by design (see module negative-
+    spec). `read_index(repo, fresh=True)` -- used by
+    `_agree_branch_cas_refusal`'s re-observation -- ignores this scope
+    entirely: it neither reads from nor writes into it.
+    """
+    token = _INDEX_CALL_CACHE.set({})
+    try:
+        yield
+    finally:
+        _INDEX_CALL_CACHE.reset(token)
+
+
+def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     """Parse `resolve_git_dir(repo)/index` directly (no `git` spawn) into an
     `IndexSnapshot` -- `{path: IndexEntry(mode, sha, stage)}` plus the index
-    file's `stat_identity`, read FRESH on every call.
+    file's `stat_identity`.
+
+    By default (`fresh=False`) this stats+parses the index file FRESH on
+    every call UNLESS an `index_read_cache_scope()` is currently open, in
+    which case a prior call THIS SCOPE already made for the same resolved
+    index path is returned instead of re-reading the file (C2). Pass
+    `fresh=True` to force a real disk read regardless of any open scope,
+    and to skip populating it -- the compare-and-swap re-observation
+    (`_agree_branch_cas_refusal`) always does this; see module negative-
+    spec and `index_read_cache_scope`'s own docstring.
 
     Handles index v2, v3 (extended per-entry flags) and v4 (name
     prefix-compression). Raises `IndexParseError` -- never returns `{}` --
@@ -141,10 +208,19 @@ def read_index(repo: Union[str, Path]) -> IndexSnapshot:
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
 
+    cache = None if fresh else _INDEX_CALL_CACHE.get()
+    if cache is not None:
+        cached = cache.get(index_path)
+        if cached is not None:
+            return cached
+
     try:
         raw = index_path.read_bytes()
     except FileNotFoundError:
-        return IndexSnapshot({}, None)
+        snapshot = IndexSnapshot({}, None)
+        if cache is not None:
+            cache[index_path] = snapshot
+        return snapshot
     except OSError as exc:
         raise IndexParseError(f"could not read {index_path}: {exc}") from exc
 
@@ -161,7 +237,10 @@ def read_index(repo: Union[str, Path]) -> IndexSnapshot:
     )
 
     entries = _parse_index_bytes(raw, index_path=index_path)
-    return IndexSnapshot(entries, stat_identity)
+    snapshot = IndexSnapshot(entries, stat_identity)
+    if cache is not None:
+        cache[index_path] = snapshot
+    return snapshot
 
 
 def _iter_sharedindex_siblings(gitdir: Path):
@@ -323,6 +402,52 @@ def _decode_varint(raw: bytes, offset: int, *, index_path: Path) -> Tuple[int, i
         offset += 1
         val = ((val + 1) << 7) | (c & 0x7F)
     return val, offset
+
+
+def head_branch(repo: Union[str, Path]) -> Optional[str]:
+    """The current branch NAME -- what `git rev-parse --abbrev-ref HEAD`
+    reports -- read from `resolve_git_dir(repo)/HEAD` with no `git` spawn.
+
+    HEAD is worktree-PRIVATE, so this reads the private gitdir and never the
+    common dir (module docstring's first bullet); a linked worktree on its own
+    branch must not report the main worktree's.
+
+    Returns:
+        - `"<name>"` for a symref into `refs/heads/` -- the branch name with
+          the prefix stripped, matching `--abbrev-ref`'s output. This is the
+          only reader here that is correct on an UNBORN branch: no ref file
+          exists yet, but HEAD still names it, and `--abbrev-ref` reports it
+          too. `head_sha` returns `None` for that same state, deliberately --
+          the two answer different questions and disagree here on purpose.
+        - `"HEAD"` for a detached HEAD, which is `--abbrev-ref`'s own literal
+          answer for that state, not a sentinel invented here.
+        - the full ref for a symref outside `refs/heads/`, unstripped.
+        - `None` only when HEAD is unreadable or empty. Never raises.
+
+    Deliberately NOT folded into `head_sha`: that function resolves a symref
+    THROUGH to a sha and needs the common dir plus a packed-refs fallback to
+    do it; this one stops at HEAD's own contents and touches exactly one file.
+    A caller wanting both pays one extra small read rather than making either
+    signature three-valued in a second dimension.
+    """
+    gitdir = resolve_git_dir(repo)
+    try:
+        content = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+    if not content:
+        return None
+
+    if not content.startswith("ref:"):
+        return "HEAD"
+
+    ref = content[len("ref:") :].strip()
+    if not ref:
+        return None
+    if ref.startswith(_HEADS_PREFIX):
+        return ref[len(_HEADS_PREFIX) :] or None
+    return ref
 
 
 def head_sha(repo: Union[str, Path]) -> Optional[str]:

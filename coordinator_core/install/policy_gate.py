@@ -66,6 +66,7 @@ durable guarantee.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import subprocess
 import sys
@@ -195,7 +196,13 @@ def _probe_env() -> dict:
     if not env.get(_PS_MODULE_PATH_ENV):
         system_root = env.get("SystemRoot")
         if system_root:
-            env[_PS_MODULE_PATH_ENV] = os.path.join(
+            # `system_root` and `_WINDOWS_POWERSHELL_MODULE_DIR` are both a
+            # WINDOWS-shaped path -- `os.path` is bound to the HOST's
+            # flavour at interpreter start (`posixpath` on a POSIX dev box),
+            # so it silently splices a forward slash into a backslash path.
+            # `ntpath` is the explicit, host-independent flavour selection,
+            # mirroring the precedent in `coordinator_core.pyresolve`.
+            env[_PS_MODULE_PATH_ENV] = ntpath.join(
                 system_root, _WINDOWS_POWERSHELL_MODULE_DIR
             )
     return env

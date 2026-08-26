@@ -652,6 +652,40 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
                 tree = ast.parse(text)
             except SyntaxError:
                 continue
+            # The text hit above is a cheap PREFILTER, never the population
+            # gate. `query-work-state.py` names both symbols in prose only --
+            # its module docstring explains why its `--repo-root` flag
+            # deliberately bypasses the checked resolver -- and was reported as
+            # an offender for documenting that decision. The verdict-side walk
+            # below already reasons about exactly this ("a module docstring
+            # mentioning the word does not match"); the same reasoning belongs
+            # on the way IN. Require a real import node, so a module that never
+            # calls the resolver is never asked what it does with the verdict.
+            imports_resolver = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "repo_identity":
+                    imports_resolver = True
+                    break
+                if isinstance(node, ast.Import) and any(
+                    alias.name == "repo_identity" for alias in node.names
+                ):
+                    imports_resolver = True
+                    break
+            if not imports_resolver:
+                continue
+            # Named, reasoned exemptions -- never a bare skip list. C18
+            # (state/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C18.md,
+            # DR-277 EM decision D5) removed priority-set.py's cwd identity gate
+            # outright: `priority.set` is scope="none" and resolves its ledger
+            # write centrally, so a MISMATCH verdict has nothing to advise on
+            # there. It still needs the resolver for `cwd_repo_root`, so it
+            # imports and deliberately discards the verdict. This check's premise
+            # -- "bound the root and ignored disposition entirely" is a defect --
+            # does not hold for a door with no disposition to act on.
+            # `tests/test_priority_set_no_cwd_gate.py` pins that absence, so the
+            # behaviour is covered rather than merely exempted here.
+            if path.name in ("priority-set.py",):
+                continue
             # Match the FIELD ACCESS, not a bare name. The three shapes call
             # sites actually use are `v["verdict"]` (Subscript over a string
             # constant), `v.get("verdict")` (Call arg), and `v.verdict`

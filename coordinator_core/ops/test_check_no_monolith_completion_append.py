@@ -170,7 +170,31 @@ def test_root_with_no_recognized_subdirs_exits_2(tmp_path):
     assert hits == []
 
 
-def test_unreadable_file_fails_closed_rc1(tmp_path):
+def _make_open_raise_for(unreadable_path, monkeypatch):
+    """Simulate an unreadable file portably.
+
+    `os.chmod(path, 0o000)` is a POSIX-only unreadable-file simulation: on
+    Windows, chmod's owner-read bit has no enforcement effect (CreateFile
+    still succeeds for the owning process), so the file opens cleanly and
+    the fail-closed path this test exists to exercise never fires --
+    Windows is first-class here, so the file needs to fail to open on every
+    platform, not just POSIX ones. Monkeypatching `builtins.open` to raise
+    OSError for exactly this one path (real `open` for every other path)
+    reproduces the same `except OSError` branch the production code
+    actually guards, without depending on OS permission enforcement.
+    """
+    real_open = open
+    target = os.path.abspath(str(unreadable_path))
+
+    def _fake_open(path, *args, **kwargs):
+        if os.path.abspath(str(path)) == target:
+            raise OSError(13, "Permission denied", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _fake_open)
+
+
+def test_unreadable_file_fails_closed_rc1(tmp_path, monkeypatch):
     """BEHAVIOUR CHANGE regression: a file the scan cannot open must not be
     silently skipped — this is the failure-path case for the 2026-07-22
     break-class fix (previously a bare `continue` let this return rc 0)."""
@@ -180,28 +204,26 @@ def test_unreadable_file_fails_closed_rc1(tmp_path):
     )
     unreadable_path = root / "skills" / "unreadable.md"
     unreadable_path.write_text("placeholder\n", encoding="utf-8")
-    os.chmod(unreadable_path, 0o000)
-    try:
-        hits, unreadable, rc = scan(str(root))
-    finally:
-        os.chmod(unreadable_path, 0o644)
+    _make_open_raise_for(unreadable_path, monkeypatch)
+
+    hits, unreadable, rc = scan(str(root))
+
     assert rc == 1
     assert hits == []
     assert any("unreadable.md" in u for u in unreadable)
 
 
-def test_main_unreadable_file_only_exits_1_with_scan_incomplete_message(tmp_path, capsys):
+def test_main_unreadable_file_only_exits_1_with_scan_incomplete_message(tmp_path, capsys, monkeypatch):
     root = _make_root(
         tmp_path,
         **{"skills/clean.md": "archive/completed/2026-05/my-task.md\n"},
     )
     unreadable_path = root / "skills" / "unreadable.md"
     unreadable_path.write_text("placeholder\n", encoding="utf-8")
-    os.chmod(unreadable_path, 0o000)
-    try:
-        rc = main(["--root", str(root)])
-    finally:
-        os.chmod(unreadable_path, 0o644)
+    _make_open_raise_for(unreadable_path, monkeypatch)
+
+    rc = main(["--root", str(root)])
+
     captured = capsys.readouterr()
     assert rc == 1
     assert "SCAN INCOMPLETE" in captured.err

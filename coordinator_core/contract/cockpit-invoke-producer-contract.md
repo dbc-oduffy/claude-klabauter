@@ -82,7 +82,7 @@ channel. Three slice-1 ops expose existing coordinator sweep behavior behind a w
 | op | what it exposes |
 |----|----------------|
 | `fleet.archive_completed_plans` | `cs_sweep_terminal_plans` — git-mv terminal plans into `archive/` |
-| `fleet.archive_completed_handoffs` | `coordinator-handoff-archive.sh` — git-mv consumed/childless handoffs into `archive/` |
+| `fleet.archive_completed_handoffs` | `coordinator_core/ops/fleet/archive_terminal_handoffs.py` — a thin `@register_op` wrapper over the `plan_sweep` (classification) / `apply_sweep` (`os.replace`) seam pair, git-mv-committing consumed/childless handoffs into `archive/` via the shared `archive_and_commit` helper. The op key stays the human-confirmed cockpit surface (dry_run:true preview / dry_run:false act, unchanged below); the in-plane ceremony occasion calls `plan_sweep` + `apply_sweep` directly inside `commit_pipeline :: commit` and no longer dispatches this op (`docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md`). |
 | `fleet.prune_closed_bugs` | bug-backlog closure — git-mv closed bug entries into `archive/` |
 
 All three are **MUTATING** ops. They follow a two-call confirm→act flow:

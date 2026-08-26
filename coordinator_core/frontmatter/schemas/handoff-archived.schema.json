@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/handoff-archived.schema.json",
   "x-schema-name": "handoff-archived",
-  "x-schema-version": "2.7.0",
+  "x-schema-version": "2.8.0",
   "x-bump-class": "nested-field-additive",
-  "x-bump-note": "2.6.0 -> 2.7.0 (nested-field-additive) declares the archived twin of `governing_plan` landing on handoff.schema.json 8.6.0 -> 8.7.0 in this same commit (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md § C5/C6, R5) -- see that file's note for the full rationale. Declared here, not enforced, on the same reasoning already established below: the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it. PRIOR: 2.5.0 -> 2.6.0 (nested-field-additive) declares the archived twin of `reconcile_disposition` / `reconcile_disposition_reason` landing on handoff.schema.json 8.0.0 -> 8.1.0 in this same commit — see that file's note for the full adoption rationale (ask 4 of cross-repo/inbox/2026-08-14-claude-klabauter-em-reviewed-range-pattern-and-direction-blind-parity-gate.md). Declared here, not enforced, on the same reasoning already established for producer/reaped_from_session below: the archival path carries frontmatter through wholesale, so a live record carrying either key archives carrying it. PRIOR: 2.4.0 -> 2.5.0 (producer-axis) declares the archived twin of the `producer` object landing on handoff.schema.json 7.0.0 -> 7.1.0 in this same commit (typed_command + op_identity, D5/D6/D9) — see that file's note for the full rationale and DR-097 discharge statement. Classified nested-field-additive on the same grounds: a new optional top-level object, no domain narrowed, no archived document invalidated. Declared here, not enforced (neither sub-field is required on this permissive sibling), because the archival path carries frontmatter through wholesale — same reasoning as the reaped-from-session-declaration bump below. PRIOR: 2.3.0 -> 2.4.0 (reaped-from-session-declaration) declares the optional top-level string `reaped_from_session`, the archived twin of the same declaration landing on handoff.schema.json 6.0.0 -> 6.1.0 in this same commit \u2014 see that file's note for the full rationale and the sender's memo. Classified nested-field-additive on the same grounds: a new optional top-level scalar, no domain narrowed, no archived document invalidated. Declared here even though claude-klabauter-em explicitly asserted nothing about this file, because the two questions are not the same one: they were right to revert a BACKFILL that wrote the key onto archived records (that asserts a conclusion about an archived document), and declaring the key asserts no such conclusion \u2014 the archival path carries frontmatter through wholesale, so a live carrier archives carrying it, and leaving it undeclared here rebuilds the undeclared-on-disk state one archival sweep later. Sits beside the claim vocabulary (consumed_by/consumed_at/claimed_by/claimed_at) this schema already declares. PRIOR: 2.2.0 -> 2.3.0 (baton-kind-vocabulary-one-axis-per-field C10) WIDENED the `kind` enum to admit the new D1 target names (`roadmap-baton`, `goal-seed`, `roadmap-seed`) landing on the live handoff.schema.json's own C10 narrow, retaining every retired name (`spinoff-roadmap`, `spinoff-goal`, `spinoff-roadmap-creator`) alongside them rather than swapping \u2014 this schema's whole reason for being more permissive than the live schema is that the archived corpus permanently retains historical kind values, exactly as it already does for `spike-result` and for `consumed`/`superseded` on `status` above. Classified nested-field-additive (widening an existing field's enum domain, never rejects a previously-valid document) \u2014 not major, since narrowing is the semantics-changed case that classification exists for, and this bump is the strict inverse of that. 2.1.0 -> 2.2.0 declared the optional `shipped_in_kind` discriminant (DR-096, closed enum ship-commit|successor|scope-derived|no-commit, parity with handoff.schema.json), with NO cross-field enforcement \u2014 unlike the live schema this record is purely additive since archived batons are grandfathered per DR-096 \u00a7 Census, never migrated. Prior bump 2.0.0 -> 2.1.0 added the optional top-level `disposed_successors` array (reverse-pointing lineage edges, parity with handoff.schema.json). DR-097 trigger-(A) notice DISCHARGED 2026-08-12: delivered to claude-klabauter-em at their 9b495331c (cross-repo/inbox/2026-08-12-doe-claude-em-dr-097-notice-producer-bump-on-both-handoff-schemas.md), stating the bump CLASS nested-field-additive per DR-097:86-90, not merely that a bump occurred.",
+  "x-bump-note": "2.7.0 -> 2.8.0 (nested-field-additive) is the companion bump to handoff.schema.json 8.7.0 -> 8.8.0 -- see that entry for the full reasoning. Adopts upstream claude-klabauter's 2.7.0 (`governing_plan`, byte-identical) plus its `deliverable_id` description revision, and declares `human_claimant` (string-or-null, optional) so an archived handoff validates the same claim vocabulary its live sibling does. Not renumbered as 2.7.0: claude-klabauter has already used that number for the adopted content. PRIOR: 2.6.0 -> 2.7.0 (nested-field-additive) declares the archived twin of `governing_plan` landing on handoff.schema.json 8.6.0 -> 8.7.0 in this same commit (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md \u00a7 C5/C6, R5) -- see that file's note for the full rationale. Declared here, not enforced, on the same reasoning already established below: the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it. PRIOR: 2.5.0 -> 2.6.0 (nested-field-additive) declares the archived twin of `reconcile_disposition` / `reconcile_disposition_reason` landing on handoff.schema.json 8.0.0 -> 8.1.0 in this same commit \u2014 see that file's note for the full adoption rationale (ask 4 of cross-repo/inbox/2026-08-14-claude-klabauter-em-reviewed-range-pattern-and-direction-blind-parity-gate.md). Declared here, not enforced, on the same reasoning already established for producer/reaped_from_session below: the archival path carries frontmatter through wholesale, so a live record carrying either key archives carrying it. PRIOR: 2.4.0 -> 2.5.0 (producer-axis) declares the archived twin of the `producer` object landing on handoff.schema.json 7.0.0 -> 7.1.0 in this same commit (typed_command + op_identity, D5/D6/D9) \u2014 see that file's note for the full rationale and DR-097 discharge statement. Classified nested-field-additive on the same grounds: a new optional top-level object, no domain narrowed, no archived document invalidated. Declared here, not enforced (neither sub-field is required on this permissive sibling), because the archival path carries frontmatter through wholesale \u2014 same reasoning as the reaped-from-session-declaration bump below. PRIOR: 2.3.0 -> 2.4.0 (reaped-from-session-declaration) declares the optional top-level string `reaped_from_session`, the archived twin of the same declaration landing on handoff.schema.json 6.0.0 -> 6.1.0 in this same commit \u2014 see that file's note for the full rationale and the sender's memo. Classified nested-field-additive on the same grounds: a new optional top-level scalar, no domain narrowed, no archived document invalidated. Declared here even though claude-klabauter-em explicitly asserted nothing about this file, because the two questions are not the same one: they were right to revert a BACKFILL that wrote the key onto archived records (that asserts a conclusion about an archived document), and declaring the key asserts no such conclusion \u2014 the archival path carries frontmatter through wholesale, so a live carrier archives carrying it, and leaving it undeclared here rebuilds the undeclared-on-disk state one archival sweep later. Sits beside the claim vocabulary (consumed_by/consumed_at/claimed_by/claimed_at) this schema already declares. PRIOR: 2.2.0 -> 2.3.0 (baton-kind-vocabulary-one-axis-per-field C10) WIDENED the `kind` enum to admit the new D1 target names (`roadmap-baton`, `goal-seed`, `roadmap-seed`) landing on the live handoff.schema.json's own C10 narrow, retaining every retired name (`spinoff-roadmap`, `spinoff-goal`, `spinoff-roadmap-creator`) alongside them rather than swapping \u2014 this schema's whole reason for being more permissive than the live schema is that the archived corpus permanently retains historical kind values, exactly as it already does for `spike-result` and for `consumed`/`superseded` on `status` above. Classified nested-field-additive (widening an existing field's enum domain, never rejects a previously-valid document) \u2014 not major, since narrowing is the semantics-changed case that classification exists for, and this bump is the strict inverse of that. 2.1.0 -> 2.2.0 declared the optional `shipped_in_kind` discriminant (DR-096, closed enum ship-commit|successor|scope-derived|no-commit, parity with handoff.schema.json), with NO cross-field enforcement \u2014 unlike the live schema this record is purely additive since archived batons are grandfathered per DR-096 \u00a7 Census, never migrated. Prior bump 2.0.0 -> 2.1.0 added the optional top-level `disposed_successors` array (reverse-pointing lineage edges, parity with handoff.schema.json). DR-097 trigger-(A) notice DISCHARGED 2026-08-12: delivered to claude-klabauter-em at their 9b495331c (cross-repo/inbox/2026-08-12-doe-claude-em-dr-097-notice-producer-bump-on-both-handoff-schemas.md), stating the bump CLASS nested-field-additive per DR-097:86-90, not merely that a bump occurred.",
   "applies_to": "archive/handoffs/**/*.md",
   "description": "Archived handoff \u2014 relaxed-schema sibling of handoff for already-consumed handoffs archived by /pickup. deployment_state and gate_dependency are not required; cross-field rules from handoff do not apply. Spec backlink: pln-roadmap-skill-and-handoff-lifecyc-114164 \u00a7 Phase 1b",
   "type": "object",
@@ -64,6 +64,17 @@
     "claimed_at": {
       "type": "string",
       "description": "Timestamp when the handoff was claimed (ISO 8601 date-time; DR-084 successor of consumed_at). Stamped by the claim transition for race-forensics precision."
+    },
+    "human_claimant": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Human operator identity associated with the claiming session, mirroring the shape already declared on the cockpit-contract trio (handoff-summary/cockpit-contract/snapshot-envelope schemas). Written by the claim stamp (claude-klabauter's archive-stamp-cli, engine-subject, not this repo's writer) alongside claimed_by/claimed_at. String-or-null, optional, no cross-field coupling declared here."
     },
     "reaped_from_session": {
       "type": "string",
@@ -149,21 +160,21 @@
     "producer": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Archived-handoff sibling of the live handoff.schema.json's `producer` (D5, D6) — declared here, not enforced (this archived schema's cross-field rules from the live handoff do not apply), because the archival path carries frontmatter through wholesale: a live record carrying the key archives carrying it, and leaving it undeclared here would rebuild the undeclared-on-disk state one archival sweep later, exactly the reasoning `reaped_from_session` above already established for this file. Unlike the live schema, neither sub-field is required here — an archived record written before this bump has no `producer` key at all, and this schema's whole reason for being more permissive than the live schema is grandfathering exactly that kind of pre-existing record. `typed_command` and `op_identity` vocabulary is the SAME single declaration at handoff.schema.json's `x-producer-typed-command` annotation — not restated here, following this file's own kind/status precedent of pointing back at the live schema rather than duplicating an enum. Present-as-null (D9) governs a record written under this bump's vocabulary; it is not retroactively imposed on records archived before `producer` existed. Spec backlink: pln-producer-axis-on-the-baton-con-b68971 \u00a7 C1, D5, D6, D9.",
+      "description": "Archived-handoff sibling of the live handoff.schema.json's `producer` (D5, D6) \u2014 declared here, not enforced (this archived schema's cross-field rules from the live handoff do not apply), because the archival path carries frontmatter through wholesale: a live record carrying the key archives carrying it, and leaving it undeclared here would rebuild the undeclared-on-disk state one archival sweep later, exactly the reasoning `reaped_from_session` above already established for this file. Unlike the live schema, neither sub-field is required here \u2014 an archived record written before this bump has no `producer` key at all, and this schema's whole reason for being more permissive than the live schema is grandfathering exactly that kind of pre-existing record. `typed_command` and `op_identity` vocabulary is the SAME single declaration at handoff.schema.json's `x-producer-typed-command` annotation \u2014 not restated here, following this file's own kind/status precedent of pointing back at the live schema rather than duplicating an enum. Present-as-null (D9) governs a record written under this bump's vocabulary; it is not retroactively imposed on records archived before `producer` existed. Spec backlink: pln-producer-axis-on-the-baton-con-b68971 \u00a7 C1, D5, D6, D9.",
       "properties": {
         "typed_command": {
           "type": [
             "string",
             "null"
           ],
-          "description": "One of the 48 members declared once at handoff.schema.json's `x-producer-typed-command`, or null — see the live schema's `producer.typed_command` for the full read-side contract."
+          "description": "One of the 55 members declared once at handoff.schema.json's `x-producer-typed-command`, or null \u2014 see the live schema's `producer.typed_command` for the full read-side contract."
         },
         "op_identity": {
           "enum": [
             "machine-minted",
             "hand-authored"
           ],
-          "description": "Machine-vs-human axis, resolved at the creation seam — see the live schema's `producer.op_identity` for the full write-site semantics."
+          "description": "Machine-vs-human axis, resolved at the creation seam \u2014 see the live schema's `producer.op_identity` for the full write-site semantics."
         }
       }
     },
@@ -249,17 +260,6 @@
       ],
       "description": "ID-companion for predecessor (C2, add-not-swap) \u2014 the predecessor's handoff_id, resolved and stamped at author time from the SAME predecessor the path field names. Null when the predecessor has no handoff_id or predecessor is none/null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case \u2014 a plain 'type: string' declaration would reject the documented null value."
     },
-    "governing_plan": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Archived twin of handoff.schema.json's `governing_plan` (R5, docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md § C5/C6) -- repo-relative POSIX path to the plan this baton executed, or null. Declared here, not enforced (the live schema's writer-side conflict check does not apply to an already-archived record): the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it."
-    },
     "origin_handoff_id": {
       "anyOf": [
         {
@@ -270,6 +270,17 @@
         }
       ],
       "description": "ID-companion for origin_handoff (C2, add-not-swap) \u2014 the originating baton's handoff_id, resolved and stamped at author time from the SAME baton origin_handoff names. Null when the originating baton has no handoff_id or origin_handoff is null. Backfilled into this archived schema per its declare-every-field convention (C2, review integrator). Shape is anyOf[string,null] to match the live handoff.schema.json shape and its own documented null case \u2014 a plain 'type: string' declaration would reject the documented null value."
+    },
+    "governing_plan": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Archived twin of handoff.schema.json's `governing_plan` (R5, docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md \u00a7 C5/C6) -- repo-relative POSIX path to the plan this baton executed, or null. Declared here, not enforced (the live schema's writer-side conflict check does not apply to an already-archived record): the archival path carries frontmatter through wholesale, so a live record carrying the key archives carrying it."
     }
   },
   "allOf": [

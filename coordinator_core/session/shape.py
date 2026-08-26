@@ -595,14 +595,22 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
       value first (BSD cat trailing newline / Windows ``\\r``).
 
     files_touched:
-      Count DISTINCT lines in ``<sdir>/touched.txt`` (the bash
-      ``sort -u | wc -l`` dedup). Guard: absent ``touched.txt`` -> 0.
+      Count DISTINCT lines returned by ``scope._read_touch_record_as_
+      legacy_lines`` for this session's own touch record (the bash
+      ``sort -u | wc -l`` dedup, ported as ``len(set(lines))``) — the
+      union of ``<sdir>/touch-record.jsonl`` (rendered back to the old
+      ``'<verb> <ts> <path>'`` dialect) and, if present, a sibling
+      ``<sdir>/touched.txt``. Guard: no session dir -> 0 (the seam itself
+      already fails open to ``([], False)`` for an absent/unreadable
+      record, so no extra guard is needed here beyond the ``sdir`` check).
 
       COVERAGE LIMIT ON THIS COUNT — DECLARED, NOT SILENTLY INHERITED
       (docs/decisions/DR-258-bash-mediated-writes-are-a-named-permanent-limit.md,
-      ratified permanent, not a gap awaiting a fix): ``touched.txt``'s
+      ratified permanent, not a gap awaiting a fix): this record's
       producer, ``hooks.track_touched_files`` (``coordinator_core/hooks/
-      track_touched_files.py``), is registered only on the
+      track_touched_files.py``, now appending ``touch-record.jsonl`` events
+      via ``touch_record.append_event`` rather than the retired bare
+      ``touched.txt`` dialect), is registered only on the
       ``Write|Edit|MultiEdit|NotebookEdit`` path. A path written through
       Bash or PowerShell records no claim there, so this count is a FLOOR on
       the session's true touched-path set, never a clean total — a session
@@ -623,9 +631,10 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
       DIRECTION OF ERROR MATTERS, AND IT IS THE UNSAFE ONE HERE:
       ``baton_assemble._compute_dirty_tree_attribution`` (read-only
       reference, ``coordinator_core/baton_assemble/__init__.py``) depends on
-      this same ``touched.txt`` and degrades (``degraded: True``) only when
-      the file is missing/unreadable or no session id resolves; when the
-      file is present but DR-258-incomplete, it returns ``degraded: False``
+      this same underlying record (via ``touch_record.project_live_claims``)
+      and degrades (``degraded: True``) only when the record is
+      missing/unreadable or no session id resolves; when the
+      record is present but DR-258-incomplete, it returns ``degraded: False``
       with an under-populated ``mine`` -- an UNDER-claim, which is the safe
       direction for a probe whose only job is to stop OVER-claiming a peer's
       work. This function's ``files_touched`` has no such safety valve: it
@@ -671,17 +680,25 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
 
     # ---- files_touched ----
     # DR-258 coverage limit (see docstring's "COVERAGE LIMIT ON THIS COUNT"):
-    # touched.txt only records Write|Edit|MultiEdit|NotebookEdit-mediated
-    # paths, never Bash/PowerShell ones -- this count is a floor, not a
-    # clean total. Ratified permanent; do not "fix" by widening producers.
+    # the underlying record only captures Write|Edit|MultiEdit|NotebookEdit-
+    # mediated paths, never Bash/PowerShell ones -- this count is a floor,
+    # not a clean total. Ratified permanent; do not "fix" by widening
+    # producers.
+    #
+    # Lazy import (not module-level): coordinator_core.session.scope is a
+    # heavier sibling module than this function needs at import time, and
+    # keeping the cross-sibling import local here mirrors the existing lazy-
+    # import pattern in this package (see core.py :: init's lazy `git_state`
+    # import and its comment) rather than adding a new top-level dependency
+    # edge between shape.py and scope.py. No cycle exists today (scope.py
+    # does not import shape.py), but this keeps the two modules' load order
+    # decoupled the same way the rest of the package already does.
+    from coordinator_core.session import scope as _scope
+
     touched = 0
-    touched_file = Path(sdir) / "touched.txt"
-    if touched_file.is_file():
-        try:
-            lines = touched_file.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            lines = []
-        touched = len(set(lines))
+    touch_record_path = Path(sdir) / _scope._TOUCH_RECORD_FILENAME
+    lines, _touch_degraded = _scope._read_touch_record_as_legacy_lines(touch_record_path)
+    touched = len(set(lines))
 
     # Review: code-reviewer (Finding 3) — trailing "\n" to match the bash
     # printf '...\n' oracle.

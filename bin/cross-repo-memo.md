@@ -10,14 +10,15 @@ DoE-claude and now lives in THIS repo, at `coordinator/bin/cross-repo-memo.py`. 
 no longer a DoE-owned file; resolve it repo-relatively when you're already in this
 tree, or via PATH otherwise (PATH setup is machine-local, not this doc's concern).
 
-## One-shot form
+## Draft, then send
+
+The one-shot flag form (`--to/--topic/--title/--body-file`, and its stdin variant) was
+RETIRED. `argparse` rejects it -- it is not a deprecated-but-working path. Two steps:
 
 ```sh
-cross-repo-memo --to <receiver-em> --topic <slug> --title "<one-line summary>" \
-  [--body-file <path>] [--summary "<tl;dr>"] [--kind ask|consult|fyi] \
-  [--self-receipt --decision accepted|declined|partial|superseded] \
-  [--supersedes <path>] [--in-reply-to <inbound-memo-basename>]
-# body from stdin when --body-file is omitted or '-'
+cross-repo-memo draft <slug> --to <receiver-em> --title "<one-line>" --kind ask|consult|fyi|proposal \n  [--summary "<tl;dr>"] [--in-reply-to <inbound-memo-basename>]
+# edit the printed outbox path, then:
+cross-repo-memo send <slug>
 ```
 
 Flag reference (verified against `cross-repo-memo --help`):
@@ -75,9 +76,9 @@ actioned it) — never by looking for a surviving local draft.
 ## Example — memo to central EM
 
 ```sh
-echo "claude-klabauter/rag boundary: state/ reconciliation item — see docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md" \
-  | cross-repo-memo --to claude-central-em --topic claude-klabauter-rag-boundary-note \
-      --title "claude-klabauter/rag boundary: state/ reconciliation item" --kind fyi
+cross-repo-memo draft claude-klabauter-rag-boundary-note --to claude-central-em --kind fyi \n    --title "claude-klabauter/rag boundary: state/ reconciliation item"
+# write the body into the printed outbox path, then:
+cross-repo-memo send claude-klabauter-rag-boundary-note
 ```
 
 Sent memos land in the receiver's `cross-repo/inbox/` (`delivery_mode: receiver-repo`)

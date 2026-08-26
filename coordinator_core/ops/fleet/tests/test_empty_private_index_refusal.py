@@ -104,7 +104,7 @@ def test_missing_index_reports_empty_tree_and_names_the_sha(tmp_path: Path):
     env = dict(os.environ)
     env["GIT_INDEX_FILE"] = str(tmp_path / "index-that-does-not-exist")
 
-    reason = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
+    reason, tree_sha = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
 
     assert reason is not None, "a missing index must never be reported as safe to commit"
     assert "empty-private-index" in reason
@@ -123,7 +123,7 @@ def test_zero_byte_index_reports_unreadable_not_empty(tmp_path: Path):
     env = dict(os.environ)
     env["GIT_INDEX_FILE"] = str(zero_byte)
 
-    reason = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
+    reason, tree_sha = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
 
     assert reason is not None
     assert "private-index-unreadable" in reason
@@ -146,7 +146,11 @@ def test_seeded_index_is_permitted(tmp_path: Path):
         cwd=str(root), env=env, capture_output=True, text=True, check=True,
     )
 
-    assert _run(_empty_private_index_breach(root, env, "archive_and_commit")) is None
+    reason, tree_sha = _run(_empty_private_index_breach(root, env, "archive_and_commit"))
+    assert reason is None
+    # The guard hands its tree sha back so the caller commits THAT tree instead
+    # of re-spawning an identical `git write-tree` (2026-08-25 de-duplication).
+    assert tree_sha and tree_sha != EMPTY_TREE_SHA
 
 
 def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path):

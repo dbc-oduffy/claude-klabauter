@@ -80,7 +80,96 @@ shell TEXT for a process that has not started yet -- a different concern).
 
 from __future__ import annotations
 
-__all__ = ["python_probe_lines"]
+import sys
+
+from coordinator_core.win_portability import split_path
+
+__all__ = ["python_probe_lines", "baked_python_lines"]
+
+
+def _sh_double_quote_escape(value: str) -> str:
+    """Escape `value` for interpolation inside an sh double-quoted string."""
+    for char in ("\\", '"', "$", "`"):
+        value = value.replace(char, "\\" + char)
+    return value
+
+
+def baked_python_lines(var: str = "_py") -> str:
+    """Return POSIX-sh source assigning a BAKED interpreter path to `<var>`,
+    instead of walking `$PATH` at hook-run time.
+
+    Use this from an installer that is ITSELF running under the interpreter
+    the emitted hook should use. Use `python_probe_lines` where that is not
+    true and a candidate set genuinely must be walked when the hook fires.
+
+    WHY THIS IS NOT A WEAKENING OF THE PROBE. Both of `python_probe_lines`'
+    load-bearing behaviours are discharged BY CONSTRUCTION rather than
+    reproduced: there is no candidate SET to walk, because `sys.executable`
+    IS the interpreter the installer is already executing under; and there is
+    no WindowsApps stub-vs-real collision to disambiguate, because a
+    Microsoft Store App Execution Alias stub cannot be the process that is
+    resolving this line. This is C17's shape
+    (`install_claude_klabauter_precommit_hook._py_resolve_line`, 2026-08-21), lifted
+    here so it outlives that module's deletion and so the hooks
+    `coordinator.bin.lib.git_hook_install` emits can reach it.
+
+    WHAT IT REMOVES. `python_probe_lines` emits `<var>="$(_py_resolve)"` — a
+    command substitution, i.e. a SUBSHELL, wrapping nested loops over
+    candidate names x `$PATH` entries x exe suffixes. That is one process per
+    emitted hook, paid on every fire. Reported as a SPAWN COUNT rather than a
+    duration deliberately: the per-hook delta sits at roughly one scheduler
+    quantum on this box, and a process-time figure inside the quantum is not
+    a result (DR-344 § the brightline; the predecessor plan was corrected for
+    quoting one).
+
+    THE WALK IS THE FALLBACK, NOT A CASUALTY — AND ON A FAIL-OPEN HOOK THAT IS
+    LOAD-BEARING. A baked absolute path goes stale the moment Python is
+    upgraded, a venv is rebuilt, or the hook is installed on a box where the
+    recorded path does not exist. `[ -x "$<var>" ]` re-tests executability ONCE
+    at hook-run time (not per-candidate), and on failure falls back to
+    `_py_resolve` — so the emitted body still carries the walk and still finds
+    an interpreter, paying its subshell ONLY when the bake is dead.
+
+    Why that fallback is not optional here, stated because the obvious
+    simplification is to drop it: `install_claude_klabauter_precommit_hook`'s C17 bake
+    (this function's ancestor) lands on `pre-commit`, which fails CLOSED — a
+    bad bake stops commits and forces a human to act, loudly. The hooks
+    `git_hook_install` emits fail OPEN: an unresolved interpreter warns to
+    stderr and `exit 0`s, so commits keep flowing without trailers and without
+    a push. A bare bake there is not graceful degradation, it is a SILENT-OFF
+    mode that presents exactly like "the engine already did this work" — and
+    nothing goes red. C17's shape is therefore not portable to a fail-open
+    hook without keeping a recovery rung; "C17 did it" does not survive the
+    fail-open/fail-closed difference. (Finding raised by claude-klabauter-59's
+    staff-eng review, 2026-08-25; the first revision of this function dropped
+    the walk outright and would have shipped that fleet-wide.)
+
+    Negative spec: this does NOT replace `python_probe_lines`, and that
+    function's `$PATH` walk is not dead code.
+    `install_doe_claude_precommit_hook` and `install_meta_repo_precommit_hook`
+    emit hooks into OTHER repos, where the installing interpreter is not
+    necessarily the one the emitted hook should run under. Repointing those
+    is a cross-repo change needing their owners' sign-off, never a mechanical
+    sweep from here.
+    """
+    baked = "/".join(split_path(sys.executable))
+    walk = python_probe_lines(var)
+    assignment = '{}="$(_py_resolve)"'.format(var)
+    if not walk.endswith(assignment):  # pragma: no cover - emitter contract drift
+        raise AssertionError(
+            "python_probe_lines no longer ends with the {!r} assignment; "
+            "baked_python_lines composes on that shape and must be updated "
+            "with it rather than silently emitting a body without a "
+            "fallback.".format(assignment)
+        )
+    function_only = walk[: -len(assignment)].rstrip("\n")
+    return "\n".join(
+        [
+            function_only,
+            '{}="{}"'.format(var, _sh_double_quote_escape(baked)),
+            '[ -x "${}" ] || {}="$(_py_resolve)"'.format(var, var),
+        ]
+    )
 
 
 def python_probe_lines(var: str = "_py") -> str:

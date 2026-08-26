@@ -53,6 +53,9 @@ _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
 _CC_INVOKE_PY = _LIB_DIR / "cc_invoke.py"
 _MLIR_PY = _LIB_DIR / "machine_local_impl_resolve.py"
+# cc_invoke.py imports this at module top since the resolver-ladder split; a
+# synthetic checkout without it dies on ModuleNotFoundError before any rung runs.
+_ENGINE_BOOTSTRAP_PY = _LIB_DIR / "engine_bootstrap.py"
 
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
@@ -132,7 +135,8 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     Plants ONLY the two `_walk_up_to_checkout` markers at the checkout root —
     a real `coordinator_core/` package dir (empty stand-in is enough; the
     probe only checks `.is_dir()`) and a `pyproject.toml` file — plus a real
-    copy of cc_invoke.py (+ its machine_local_impl_resolve.py dependency) at
+    copy of cc_invoke.py (+ its machine_local_impl_resolve.py and
+    engine_bootstrap.py dependencies) at
     the shape's own nesting depth under `coordinator/bin/lib/`.
     """
     if shape == "mktcache":
@@ -173,6 +177,7 @@ def _build_checkout(root: Path, shape: str) -> tuple[Path, Path]:
     cc_invoke_copy = lib_dir / "cc_invoke.py"
     shutil.copyfile(_CC_INVOKE_PY, cc_invoke_copy)
     shutil.copyfile(_MLIR_PY, lib_dir / "machine_local_impl_resolve.py")
+    shutil.copyfile(_ENGINE_BOOTSTRAP_PY, lib_dir / "engine_bootstrap.py")
 
     _assert_markers_present(checkout_root)
     return checkout_root, cc_invoke_copy
@@ -259,7 +264,7 @@ def test_explicit_claude_klabauter_root_wins_over_self_location_on_the_locator_a
         isolated_home = tmp_path / "empty-home"
         isolated_home.mkdir()
 
-        env = _hermetic_child_env(str(isolated_home), extra={"CLAUDE_KLABAUTER_ROOT": str(other_root)})
+        env = _hermetic_child_env(str(isolated_home), extra={"COORDINATOR_ENGINE_ROOT": str(other_root)})
         snippet = textwrap.dedent(
             """\
             import sys
@@ -315,7 +320,7 @@ def test_dispatch_axis_env_still_wins_but_now_via_delegation_not_verbatim_trust(
         isolated_home = tmp_path / "empty-home"
         isolated_home.mkdir()
 
-        env = _hermetic_child_env(str(isolated_home), extra={"CLAUDE_KLABAUTER_ROOT": str(other_root)})
+        env = _hermetic_child_env(str(isolated_home), extra={"COORDINATOR_ENGINE_ROOT": str(other_root)})
         snippet = _RESOLVE_SNIPPET.format(lib_dir=str(cc_invoke_copy.parent))
         result = subprocess.run(
             [sys.executable, "-c", snippet],

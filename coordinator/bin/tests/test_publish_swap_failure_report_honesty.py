@@ -111,9 +111,16 @@ def test_swap_failure_report_makes_no_unearned_write_claims(monkeypatch, tmp_pat
 
     fixed_bytes = b"self.engine_claude_klabauter = _RealEngineClaudeKlabauter()\n"
 
-    def fake_post_rsync(engine_ctx, store_path, sync_target, effective_source_dir, visited_sink=None):
+    def fake_post_rsync(
+        engine_ctx,
+        store_path,
+        sync_target,
+        effective_source_dir,
+        visited_sink=None,
+        sync_changed_paths=None,
+    ):
         (sync_target.dest_dir / "test_function_gate_wiring.py").write_bytes(fixed_bytes)
-        return None
+        return None, None
 
     monkeypatch.setattr(publish, "dispatch_percolate_post_rsync", fake_post_rsync)
     monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())

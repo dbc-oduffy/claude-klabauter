@@ -82,7 +82,7 @@ def _run_install(tmp_path: Path, monkeypatch, bin_dst: Path, *, seed: str = "v1"
     for f, _exec_bit in _CH_FAMILY_FILES:
         _write(ch_bin / f, f"ch-source-content::{f}::{seed}\n")
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
@@ -256,11 +256,11 @@ class TestConcurrentInstallLeavesTheFamilyByteCompleteAndConsistent:
         _run_install(tmp_path, monkeypatch, bin_dst, seed="v0")
 
         # threading.local-free: each thread gets its own tmp source tree and
-        # its own CLAUDE_KLABAUTER_ROOT monkeypatch is process-global (fine -- same
+        # its own engine-root monkeypatch is process-global (fine -- same
         # value in both), but its own ml_bin/ch_bin content so the two racing
         # generations are distinguishable in the final result.
         bin_manifest = _load_bin_templates_manifest(_resolve_bin_templates_manifest_root())
-        os.environ["CLAUDE_KLABAUTER_ROOT"] = str(_REPO_ROOT)
+        os.environ["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
 
         def _race(seed: str, ml_bin: Path, ch_bin: Path) -> None:
             for entry in bin_manifest.install_bin_resolvers_entries():

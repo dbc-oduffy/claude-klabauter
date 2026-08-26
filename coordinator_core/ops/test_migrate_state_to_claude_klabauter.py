@@ -35,7 +35,16 @@ def _mkclaude_home(root: Path, files: dict) -> Path:
 
 def _run(argv, claude_home: Path, claude_klabauter_root: Path, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    # COORDINATOR_ENGINE_SOURCE_ROOT, not the retired CLAUDE_KLABAUTER_ROOT spelling
+    # (DR-326's 2026-08-20 amendment eliminated CLAUDE_KLABAUTER_ROOT outright — no axis
+    # reads it any more, engine_root.py's own "NEGATIVE SPEC" section). Setting
+    # the dead name here left `main()` falling through to
+    # `_default_claude_klabauter_root()` == this live repo's own root, so every
+    # --populate/--finalize run in this suite was copying/removing files
+    # against the SHARED WORKING TREE instead of tmp_path -- confirmed via
+    # `state/a.txt` (this suite's own "hello\n" fixture) landing tracked in
+    # the live repo at HEAD.
+    monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(claude_klabauter_root))
     rc = mstm.main(argv)
     captured = capsys.readouterr()
     return rc, captured.out, captured.err

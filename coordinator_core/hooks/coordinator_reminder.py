@@ -17,7 +17,7 @@ the DoE-side thin stub (coordinator/hooks/scripts/coordinator-reminder.py),
 mirroring the preuse-write-dispatch.py -> write_guards.engine transport shape --
 NOT the register_op()/IPC resident-dispatch path used by coordinator_core.hooks'
 Pre/PostToolUse siblings (this hook is not on that resident-engine dispatch path;
-DoE resolves claude-klabauter-root and imports this module directly, same as
+DoE resolves claude-klabauter-live-root and imports this module directly, same as
 write_guards.engine.evaluate_payload_json).
 
 Contract:

@@ -5,11 +5,18 @@ chunk D9 / AC11. Extended by chunk C12 of
 `docs/plans/2026-08-22-the-import-path-costs-nothing.md`
 (dispatch brief `state/dispatch-briefs/2026-08-22-the-import-path-costs-nothing/C12.md`)
 to gate the `coordinator/bin/query-*.py` CLASS -- see "C12: gate the class,
-not four named interpreters" below.
+not the named interpreters individually" below.
 
 C12 reconciliation (do not re-derive, cite): C12's brief flagged that
 `coordinator_core/benchmarks/import_budget.py` already exists, already
-gates three of this file's four named entrypoints via a wall-clock-refusing,
+gates three of this file's named entrypoints (four at C12 authorship, six as
+of C3 of `docs/plans/2026-08-25-the-post-commit-leg-stops-pushing-into-a-wall.md`,
+four again as of C3 of `docs/plans/2026-08-25-the-staged-rollback-gate-dies-
+without-blocking-a-commit.md` -- that chunk removed the `detect_staged_
+rollback_fired` and `ops_detect_staged_rollback` rows along with the op and
+CLI trampoline they measured, `hooks_auto_push` survives untouched -- see
+this file's own `_TARGETS` tuple for the current count) via a
+wall-clock-refusing,
 `len(sys.modules)`-delta mechanism, and asked whoever executes C12 to either
 (a) extend that mechanism to the newly-in-scope class or (b) reverse its
 documented wall-clock refusal. THIS FILE ALREADY independently mirrors (a)'s
@@ -25,15 +32,19 @@ sibling module. No reversal of the wall-clock refusal (b) is made; the
 secondary CPU-time guard here stays the pre-existing catastrophic-only floor,
 unchanged in kind.
 
-C12: gate the class, not four named interpreters. `coordinator/bin/
-query-*.py` (12 scripts at C12 authorship) was previously ungated on process
-time entirely -- not one of the four named `_Target` rows below, not
-`test_pickup_assemble_import_perf`, not the amplification gate (spawn count,
-not per-item cost). `_discover_query_bin_scripts()` globs the directory
-rather than enumerating file names, so a future 13th `query-*.py` script is
-swept in automatically; see that helper's own docstring for the shared,
-class-wide ceiling sizing rationale (as opposed to the four hook targets
-below, whose ceilings stay per-target/hand-tuned because their baselines
+C12: gate the class, not the named interpreters individually. `coordinator/
+bin/query-*.py` (12 scripts at C12 authorship) was previously ungated on
+process time entirely -- not one of the named `_Target` rows below (four at
+C12 authorship, six as of C3 of
+`docs/plans/2026-08-25-the-post-commit-leg-stops-pushing-into-a-wall.md`,
+four again as of C3 of `docs/plans/2026-08-25-the-staged-rollback-gate-dies-
+without-blocking-a-commit.md`),
+not `test_pickup_assemble_import_perf`, not the amplification gate (spawn
+count, not per-item cost). `_discover_query_bin_scripts()` globs the
+directory rather than enumerating file names, so a future 13th `query-*.py`
+script is swept in automatically; see that helper's own docstring for the
+shared, class-wide ceiling sizing rationale (as opposed to the named hook
+targets below, whose ceilings stay per-target/hand-tuned because their baselines
 differ from each other by up to ~2.4x -- the query-bin class does not have
 that spread).
 
@@ -42,8 +53,12 @@ Note on AC1 (`<50ms`, `coordinator_core.ops` import)/AC8 (`<80ms`,
 discovery delta) statistic/load-regime pinning, named in C12's brief: those
 three ACs belong to a different gate (measured against
 `coordinator_core.ops`/`coordinator_core.hooks`/write-guard-discovery-delta
-directly, not against this file's four named `_Target` entrypoints or the
-query-bin class), and are outside this file's `writes:` scope -- not
+directly, not against this file's named `_Target` entrypoints (four at C12
+authorship, six as of C3 of
+`docs/plans/2026-08-25-the-post-commit-leg-stops-pushing-into-a-wall.md`,
+four again as of C3 of `docs/plans/2026-08-25-the-staged-rollback-gate-dies-
+without-blocking-a-commit.md`) or
+the query-bin class), and are outside this file's `writes:` scope -- not
 addressed by this edit. This file's own targets already carry their
 pinned statistic (min-of-`_SAMPLE_COUNT` CPU-time samples) and load regime
 (idle box at authorship) per-target, unchanged by this chunk except for the
@@ -58,22 +73,24 @@ tool call:
     2. `preuse-write-dispatch.py`     -> coordinator_core.write_guards.engine.evaluate_payload_json
     3. `postuse-advisory-dispatch.py` -> coordinator_core.hooks.postuse_advisory_dispatch
 
-Plus a fourth, in-tree CLI trampoline (AC9): `coordinator/bin/detect-staged-
-rollback.py`, the sole entry in `install_claude_klabauter_precommit_hook._GATE_REGISTRY`
-and so itself a hot-path git-hook interpreter, spawned on every commit. This
-one is targeted in its FULL (post-`main`-guard) form, not the file form: like
-the three wrapper scripts above, its top level is a thin, main-guarded
-trampoline (`sys.path.insert` the local `lib/` dir, `import cc_invoke`) that
-defers the real payload -- `coordinator_core.ops.detect_staged_rollback` --
-to a function-local import inside `_import_main()`. Measuring the file form
-alone (a bare `import` of the trampoline module) only sees the shallow
-preamble and passes green while the hot path -- what actually runs when the
-pre-commit hook fires -- regresses freely underneath it. The probe below
-therefore `exec_module`s the trampoline file and calls its own
-`_import_main()` (the deferred-import step; NOT the CLI's `main()`, which
-would spawn real git subprocesses against this repo) to capture the same
-module set and `sys.path` growth the real pre-commit hook pays on every
-commit.
+Plus a fourth, in-tree module import (C3 of
+`docs/plans/2026-08-25-the-post-commit-leg-stops-pushing-into-a-wall.md`,
+dispatch brief `state/dispatch-briefs/2026-08-25-the-post-commit-leg-stops-
+pushing-into-a-wall/C3.md`): `coordinator_core.hooks.auto_push`, the
+post-commit hook's own payload module, gated as a plain `import` (not the
+FULL trampoline form) since the post-commit leg's `sh` rung invokes this
+module directly rather than through a separate CLI trampoline file.
+
+HISTORICAL, REMOVED 2026-08-25 (C3 of `docs/plans/2026-08-25-the-staged-
+rollback-gate-dies-without-blocking-a-commit.md`): this file used to also
+target `coordinator/bin/detect-staged-rollback.py` (AC9's CLI-trampoline
+form, `detect_staged_rollback_fired`) and a plain `import
+coordinator_core.ops.detect_staged_rollback` (`ops_detect_staged_rollback`,
+added by C3 of `docs/plans/2026-08-25-the-commit-gate-stops-importing-a
+-subsystem.md`). Both rows are deleted along with the op module and its CLI
+trampoline they measured -- claude-klabauter ends with no pre-commit hook on that
+gate, so there is nothing left to target. See those plans' own history for
+the shape this file used to gate; not restated here.
 
 Why this gate targets COST PER INTERPRETER, not spawn count: the baseline audit
 (`state/audits/2026-08-07-hot-path-spawn-baseline.md`) measured hook processes at
@@ -251,8 +268,9 @@ class _Target:
     cli_script_path: str | None = None
     # Whether firing a `cli_script_path` target should call the trampoline's
     # own `_import_main()` after `exec_module` (AC9's deferred-import shape --
-    # `detect_staged_rollback_fired` needs this, see its own comment) or stop
-    # at `exec_module` alone. The `coordinator/bin/query-*.py` family (C12)
+    # the now-deleted `detect_staged_rollback_fired` row needed this, see
+    # module docstring's HISTORICAL note) or stop at `exec_module` alone. The
+    # `coordinator/bin/query-*.py` family (C12)
     # has no `_import_main()` split: every one of them does its real work via
     # module-level `import` statements already executed by `exec_module`
     # itself (confirmed by grep -- none of the 12 define `_import_main`), so
@@ -371,76 +389,40 @@ _TARGETS: Sequence[_Target] = (
         cpu_floor_ms=600.0,
     ),
     _Target(
-        name="detect_staged_rollback_fired",
-        import_path="coordinator_core.ops.detect_staged_rollback",
-        # AC9's fourth row -- see module docstring's AC9 paragraph for why
-        # this target is fired via `cli_script_path` (below) instead of a
-        # plain `import`. Measured 82 modules newly imported on this
-        # machine/Python version at authorship when `coordinator/bin/detect-
-        # staged-rollback.py` is exec'd and its own `_import_main()` called
-        # (the FULL, post-main-guard form -- the file form alone measured
-        # only 25). ~15% / 13-module margin, matching write_guards_engine's
-        # sizing rationale (a smaller absolute baseline needs relatively
-        # more margin than a percentage would give it).
-        module_count_ceiling=95,
-        # Measured 2 `sys.path` entries added on this machine at authorship
-        # (the trampoline's own `lib/` dir insert, plus the dispatch-engine
-        # root insert `_import_main()` triggers via
-        # `require_dispatch_engine_on_path`). See the field's own doc
-        # comment on `_Target` above for the C8 re-baseline obligation this
-        # number carries.
-        sys_path_entry_ceiling=4,
-        cli_script_path=str(_REPO_ROOT / "coordinator" / "bin" / "detect-staged-rollback.py"),
-        # `yaml` IS present here (the op module imports it, unlike the other
-        # three targets' absence lists) -- not listed as absent, per the
-        # module docstring's "do not list a heavy module in an absence tuple
-        # before the cut that removes it lands" rule. `pydantic` and
-        # `asyncio` are confirmed absent.
-        heavy_modules_expected_absent=("pydantic", "asyncio"),
-        # Idle min-of-3 CPU time measured ~46.9ms on this machine (min-of-3
-        # sampled at authorship for extra confidence given this is a new
-        # target; the real gate below still only samples _SAMPLE_COUNT=2).
-        # ~4.7x headroom over that idle measurement, matching
-        # bash_guards_dispatch's multiplier.
-        cpu_floor_ms=220.0,
-    ),
-    _Target(
-        name="ops_detect_staged_rollback",
-        import_path="coordinator_core.ops.detect_staged_rollback",
-        # C3 of `docs/plans/2026-08-25-the-commit-gate-stops-importing-a-subsystem.md`
-        # (dispatch brief `state/dispatch-briefs/2026-08-25-the-commit-gate-stops-
-        # importing-a-subsystem/C3.md`). Distinct from `detect_staged_rollback_fired`
-        # above: that target fires the FULL post-`main`-guard CLI trampoline form
-        # (`coordinator/bin/detect-staged-rollback.py` + `_import_main()`, itself
-        # measuring 54 modules post-C2, well under its own 95-module ceiling written
-        # before this plan's cut); this target is a PLAIN `import
-        # coordinator_core.ops.detect_staged_rollback` of the op module itself -- the
-        # surface C2 actually repointed off `coordinator_core.bash_guards._helpers`.
-        # Measured 36 modules on this machine/Python version post-C2 (fresh-subprocess
+        name="hooks_auto_push",
+        import_path="coordinator_core.hooks.auto_push",
+        # C3 of `docs/plans/2026-08-25-the-post-commit-leg-stops-pushing-into-a-wall.md`
+        # (dispatch brief `state/dispatch-briefs/2026-08-25-the-post-commit-leg-stops-
+        # pushing-into-a-wall/C3.md`). The post-commit leg's own payload module -- the
+        # second-highest-frequency hook in the repo (module docstring's "why a _Target
+        # row" section, plan Problem statement), previously absent from this file
+        # entirely. Fired as a plain `import` (not the FULL CLI-trampoline form,
+        # matching `bash_guards_dispatch`'s and `write_guards_engine`'s shape):
+        # the post-commit `sh` rung imports
+        # this module directly, with no separate trampoline file to exec.
+        # Measured 64 modules on this machine/Python version post-C1 (fresh-subprocess
         # sys.modules before/after diff, idle box). Smaller absolute baseline needs
         # relatively more margin than a flat percentage would give it (module
-        # docstring, same rationale as `write_guards_engine`'s and
-        # `detect_staged_rollback_fired`'s comments) -- ~17% / 6-module margin.
-        module_count_ceiling=42,
-        # Measured 0 `sys.path` growth on this machine at this baseline (a bare
-        # module import, no trampoline `sys.path.insert`). Small fixed margin, not a
+        # docstring, same rationale as `write_guards_engine`'s comment) -- ~15% /
+        # 10-module margin, matching `write_guards_engine`'s own ~15% convention.
+        module_count_ceiling=74,
+        # Measured 0 `sys.path` growth on this machine at this baseline (a bare module
+        # import, no trampoline `sys.path.insert`). Small fixed margin, not a
         # percentage of zero, matching `bash_guards_dispatch`'s convention.
         sys_path_entry_ceiling=2,
-        # Names the two modules this plan's C2 chunk cut from this op's import graph
-        # (plan Problem section): `_helpers` was the eager re-export shim dragging in
-        # `subagent_sandbox.engine` transitively for one string constant. Listing both
-        # here means a regression that re-introduces either edge names itself instead
-        # of showing up only as a silent module-count drift.
-        heavy_modules_expected_absent=(
-            "coordinator_core.bash_guards._helpers",
-            "coordinator_core.subagent_sandbox.engine",
-        ),
-        # Idle min-of-3 CPU time measured 0.0-15.6ms on this machine (Windows
-        # scheduler-tick quantisation dominates a sample this light -- the same
-        # quantum `write_guards_engine`'s own comment names). ~9.6x headroom over the
-        # non-zero sample, matching `write_guards_engine`'s multiplier for the same
-        # reason: the smallest baselines in this file need the widest proportional
-        # floor since spawn noise is a larger fraction of the signal.
+        # `pydantic` and `asyncio` confirmed absent from this target's measured import
+        # set, matching the convention of every other plain-`import` target in this
+        # file (`bash_guards_dispatch`, `write_guards_engine`).
+        heavy_modules_expected_absent=("pydantic", "asyncio"),
+        # Idle min-of-3 CPU time measured 15.6-31.3ms on this machine (Windows
+        # scheduler-tick quantisation dominates a sample this light, the same quantum
+        # `write_guards_engine`'s own comment names). ~9.6x headroom over the min
+        # sample, matching `write_guards_engine`'s multiplier for the same reason: the
+        # smallest baselines in this file need the widest proportional floor since
+        # spawn noise is a larger fraction of the signal. This is a structural bound
+        # from this target's OWN measurement, not a threshold derived from C2's
+        # separately-measured timer figures (module docstring's "Why a _Target row,
+        # not a new probe" section of the C3 plan makes this distinction explicit).
         cpu_floor_ms=150.0,
     ),
 )
@@ -476,8 +458,8 @@ def _query_bin_targets() -> Sequence[_Target]:
     34-module observed max), `sys_path_entry_ceiling=5` (2 above the 3
     observed max), `cpu_floor_ms=250.0` (~4x the 62.5ms observed max,
     matching this file's own convention of a wide catastrophic-only
-    multiplier over idle-box measurement, see `bash_guards_dispatch`'s and
-    `detect_staged_rollback_fired`'s comments) are sized so ONE new heavy
+    multiplier over idle-box measurement, see `bash_guards_dispatch`'s
+    comment) are sized so ONE new heavy
     script joining the family with a materially different (bigger) import
     graph still trips the gate, while ordinary cross-script variance within
     the family does not. Per-target (not shared) sizing, elsewhere in this
@@ -515,19 +497,22 @@ _TARGETS_BY_NAME = {t.name: t for t in _TARGETS}
 def _probe_env() -> dict:
     """Env for every probe subprocess spawned by this file.
 
-    Sets `COORDINATOR_ENGINE_ROOT` to this checkout explicitly: `detect_
-    staged_rollback_fired`'s FULL-form fire (`_fire_lines`, `cli_script_path`
-    branch) calls `require_dispatch_engine_on_path()`, whose registry/
-    pointer-file rungs read `HOME`/`USERPROFILE` -- both of which this
-    suite's own `coordinator_core/conftest.py::_quarantine_real_home`
-    autouse fixture points at a throwaway per-test directory, which a
-    probe subprocess spawned FROM a test inherits by default (no explicit
-    `env=` previously meant `subprocess.run` copied the quarantined
-    environment verbatim). This repo IS `detect-staged-rollback.py`'s own
-    dispatch engine, so naming it explicitly, rung 1 of that resolution
-    ladder (env var, outranking the pointer-file rungs the quarantine
-    breaks), is correct regardless of HOME quarantine, CI, or any other
-    environment this file runs under -- not a test-only workaround.
+    Sets `COORDINATOR_ENGINE_ROOT` to this checkout explicitly: any
+    `cli_script_path`-form target's FULL-form fire (`_fire_lines`,
+    `cli_script_path` branch -- the `query-*.py` family today; the
+    now-deleted `detect_staged_rollback_fired` row originally motivated this,
+    see module docstring's HISTORICAL note) calls
+    `require_dispatch_engine_on_path()`, whose registry/pointer-file rungs
+    read `HOME`/`USERPROFILE` -- both of which this suite's own
+    `coordinator_core/conftest.py::_quarantine_real_home` autouse fixture
+    points at a throwaway per-test directory, which a probe subprocess
+    spawned FROM a test inherits by default (no explicit `env=` previously
+    meant `subprocess.run` copied the quarantined environment verbatim).
+    This repo IS every such trampoline's own dispatch engine, so naming it
+    explicitly, rung 1 of that resolution ladder (env var, outranking the
+    pointer-file rungs the quarantine breaks), is correct regardless of HOME
+    quarantine, CI, or any other environment this file runs under -- not a
+    test-only workaround.
     """
     env = dict(os.environ)
     env["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
@@ -704,10 +689,9 @@ def test_hot_path_hook_import_budget_axes_are_complete() -> None:
     readable assertion rather than leaving it as an inspection-only fact of
     the dataclass shape (module docstring's RATCHET paragraph, AC10)."""
     assert len(_TARGETS) >= 5, (
-        f"expected at least the 3 original hook targets plus the AC9 "
-        f"detect-staged-rollback fired-form target plus C3's plain "
-        f"coordinator_core.ops.detect_staged_rollback import target; "
-        f"found {len(_TARGETS)}."
+        f"expected at least the 3 original hook targets plus "
+        f"`hooks_auto_push` plus at least one discovered `query-*.py` "
+        f"target; found {len(_TARGETS)}."
     )
     for target in _TARGETS:
         assert isinstance(target.module_count_ceiling, int) and target.module_count_ceiling > 0, (
@@ -739,12 +723,13 @@ def test_hot_path_hook_import_budget_gate_catches_a_planted_regression() -> None
     NOT a separate, weaker check: it is the production assertion logic,
     exercised against a known-bad input.
 
-    Covers C3's new `ops_detect_staged_rollback` row (and every other row)
-    without a dedicated per-target demonstration: `_assert_module_ceiling` is
-    the exact function `test_hot_path_hook_import_modules` calls for every
-    entry in `_TARGETS`, so proving it trips here proves it trips for any
-    row, C3's included -- a target-specific demonstration would exercise the
-    same shared logic a second time, not different logic.
+    Covers every row in `_TARGETS`, including `hooks_auto_push` and the
+    query-bin family, without a dedicated per-target demonstration:
+    `_assert_module_ceiling` is the exact function
+    `test_hot_path_hook_import_modules` calls for every entry in `_TARGETS`,
+    so proving it trips here proves it trips for any row -- a target-specific
+    demonstration would exercise the same shared logic a second time, not
+    different logic.
     """
     target = _TARGETS_BY_NAME["write_guards_engine"]
     imported, _sys_path_growth = _imported_module_names(

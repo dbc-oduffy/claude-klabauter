@@ -75,7 +75,9 @@ class _EngineCtxStub:
         self.engine_claude_klabauter = _RealEngineClaudeKlabauter()
 
 
-def _make_target(name: str, repo_root: Path, dest_subdir: str, *, source_dir: Path | None = None) -> "publish.ResolvedTarget":
+def _make_target(
+    name: str, repo_root: Path, dest_subdir: str, *, source_dir: Path | None = None, mode: str = "mirror"
+) -> "publish.ResolvedTarget":
     """A `ResolvedTarget` whose `dest_dir` sits `dest_subdir` below a repo
     root carrying a real `.git` marker -- `_dest_prefix_for` (the row's
     `dest_subdir`/module-prefix, § this chunk's own brief) resolves off
@@ -84,7 +86,7 @@ def _make_target(name: str, repo_root: Path, dest_subdir: str, *, source_dir: Pa
     dest_dir = repo_root / dest_subdir if dest_subdir else repo_root
     return publish.ResolvedTarget(
         name=name,
-        mode="mirror",
+        mode=mode,
         source_dir=source_dir if source_dir is not None else (repo_root.parent / "src"),
         dest_dir=dest_dir,
     )
@@ -197,6 +199,81 @@ class TestModulePrefixResolution:
         assert resolved == {"coordinator/bin/lib/coordinator_registry.py"}
         assert "lib" in search_paths
 
+    def test_flat_staging_dir_toplevel_expects_empty_set(self, tmp_path):
+        """state/dispatch-briefs/2026-08-26-the-preswap-gate-learns-the-
+        destinations-layout/SPEC.md item 1, constraint 3: a row whose
+        STAGED tree is flat at `rel_root == ""` (no top-level `coordinator/`
+        or `coordinator_core/` directory at all) resolves an EMPTY expected
+        set, not the three claude-klabauter-nested-layout `rel_path`s -- those are
+        spelled in claude-klabauter's own source tree (`coordinator/bin/lib/...`,
+        `coordinator_core/data_root.py`) and a flat staged tree can never
+        contain them at those literal paths, whatever `target.mode` the row
+        carries (§ EM feedback: `target.mode` alone is not the
+        discriminator -- `coordinator-claude`'s `mode == "mirror"` row
+        lands just as flat via its own `source_map`)."""
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "bin").mkdir()
+        (staging_dir / "lib").mkdir()
+        assert publish._function_gate_expected_seed_rel_paths_for_rel_root(
+            "", staging_dir=staging_dir
+        ) == frozenset()
+
+    def test_mirror_mode_row_with_flat_source_map_expects_empty_set(self, tmp_path):
+        """The exact row the EM's feedback named: `coordinator-claude`
+        (`mode == "mirror"`, `source_map ==
+        "plugin-source:claude-klabauter/coordinator=bin,lib"`) lands at
+        `rel_root == ""` with a STAGED tree that never contains a
+        `coordinator/` directory -- its own source_map renames
+        `coordinator/bin`/`coordinator/lib` to the dest-relative top-level
+        names `bin`/`lib`. `target.mode == "mirror"` here, proving the
+        derivation is keyed on the row's own staged layout, not `mode`."""
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "bin").mkdir()
+        (staging_dir / "lib").mkdir()
+        (staging_dir / "hooks").mkdir()
+        assert publish._function_gate_expected_seed_rel_paths_for_rel_root(
+            "", staging_dir=staging_dir
+        ) == frozenset()
+
+    def test_non_flat_toplevel_still_expects_all_three(self, tmp_path):
+        """Regression guard alongside the flat-staging narrowing above: a
+        genuine (non-flat) toplevel row -- `coordinator/` and
+        `coordinator_core/` both genuinely present at the staged root --
+        must keep demanding all three seed `rel_path`s, unchanged from
+        pre-fix behavior."""
+        staging_dir = tmp_path / "staging"
+        (staging_dir / "coordinator").mkdir(parents=True)
+        (staging_dir / "coordinator_core").mkdir()
+        assert publish._function_gate_expected_seed_rel_paths_for_rel_root(
+            "", staging_dir=staging_dir
+        ) == frozenset(rel_path for rel_path, _ in publish._FUNCTION_GATE_SEED_MODULES)
+
+    def test_no_staging_dir_falls_back_to_pre_fix_behavior(self):
+        """`staging_dir=None` (the default) -- a caller that predates this
+        narrowing, or simply never supplies one -- must reproduce the
+        pre-fix "all three, unconditionally" toplevel expectation exactly,
+        never a silent empty-set degrade."""
+        assert publish._function_gate_expected_seed_rel_paths_for_rel_root("") == frozenset(
+            rel_path for rel_path, _ in publish._FUNCTION_GATE_SEED_MODULES
+        )
+
+    def test_staging_dir_is_a_noop_for_nonempty_rel_root(self, tmp_path):
+        """The staged-layout reconciliation only applies at `rel_root ==
+        ""` (§ item 1, constraint 2: the `coordinator_core` row's own
+        mis-rooting check stays keyed on `rel_root` alone) -- passing
+        `staging_dir` alongside a nonempty `rel_root` must not change the
+        expected set, even when that `staging_dir` itself has no
+        `coordinator_core/` directory (the exact shape the mis-rooting
+        probe stages: `data_root.py` at the staging root, not nested)."""
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "data_root.py").write_text("x = 1\n", encoding="utf-8")
+        assert publish._function_gate_expected_seed_rel_paths_for_rel_root(
+            "coordinator_core", staging_dir=staging_dir
+        ) == frozenset({"coordinator_core/data_root.py"})
+
 
 # ---------------------------------------------------------------------------
 # dispatch_preswap_function_gate -- direct unit tests, REAL subprocess.
@@ -263,6 +340,66 @@ class TestDispatchPreswapFunctionGate:
         captured = capsys.readouterr()
         assert "pre-swap function gate FAILED" in captured.err
         assert "does not equal the expected subset" in captured.err
+
+    def test_flat_layout_toplevel_row_passes(self, tmp_path):
+        """state/dispatch-briefs/2026-08-26-the-preswap-gate-learns-the-
+        destinations-layout/SPEC.md item 1, constraint 3 (new coverage
+        item 1): a `target.mode == "flat-mirror"` row landing at
+        `dest_subdir == ""` -- `coordinator-claude-repo-root-install-md`'s
+        own shape -- must pass the pre-swap gate even though its staged
+        tree carries none of the three claude-klabauter-nested-layout seed
+        `rel_path`s at all (a genuinely flat mirror has no `coordinator/`
+        or `coordinator_core/` prefix to stage them under)."""
+        repo_root = tmp_path / "dest-repo"
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "install.md").write_text("nothing here\n", encoding="utf-8")
+        target = _make_target("coordinator-claude-repo-root-install-md", repo_root, "", mode="flat-mirror")
+
+        ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
+        assert ok is True
+
+    def test_flat_layout_does_not_mask_coordinator_core_mis_rooting(self, tmp_path, capsys):
+        """new coverage item 2: a flat staged layout must not go green for
+        the wrong reason -- a `target.mode == "flat-mirror"` row whose
+        `dest_subdir` is `coordinator_core` (not the empty toplevel case
+        the staged-layout reconciliation narrows) is still held to the
+        EXPECTED-SUBSET assertion at that `rel_root`; `mode` alone must not
+        suppress the `coordinator_core` mis-rooting refusal (§ item 1,
+        constraint 2)."""
+        repo_root = tmp_path / "dest-repo"
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "unrelated.py").write_text("x = 1\n", encoding="utf-8")
+        target = _make_target("claude-klabauter", repo_root, "coordinator_core", mode="flat-mirror")
+
+        ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "pre-swap function gate FAILED" in captured.err
+        assert "does not equal the expected subset" in captured.err
+
+    def test_mirror_mode_row_flat_via_source_map_passes(self, tmp_path):
+        """EM feedback, new coverage requirement: `coordinator-claude`'s
+        main mirror row (`mode == "mirror"`, `dest_subdir == ""`,
+        `source_map == "plugin-source:claude-klabauter/coordinator=bin,
+        lib"`) must pass the pre-swap gate too -- this is the row that
+        `target.mode == "flat-mirror"` alone did NOT cover, and the memo's
+        own prediction of what would fail once the row cleared the
+        orphan-sweep guard. Its staged tree is genuinely flat (no
+        `coordinator/` directory -- the source_map already renamed it to
+        `bin`/`lib` before staging), same physical shape as the two
+        `flat-mirror`-mode rows, despite the different `mode` value."""
+        repo_root = tmp_path / "dest-repo"
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        (staging_dir / "bin").mkdir()
+        (staging_dir / "lib").mkdir()
+        (staging_dir / "hooks").mkdir()
+        target = _make_target("coordinator-claude", repo_root, "", mode="mirror")
+
+        ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
+        assert ok is True
 
     def test_engine_claude_klabauter_none_asserts_narrowed_by_caller(self, tmp_path):
         """Item 1 of the brief: this caller (unlike the end-of-run leg) has

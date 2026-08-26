@@ -3,14 +3,21 @@ bin.tests.test_claude_klabauter_doctor_warm_probes — Unit tests for claude-kla
 
 Covers `_run_probe_warm_residency` — resident warm server enumeration via
 psutil.process_iter cmdline matching, plus its REACHABLE/ORPHAN classification
-using the hand-rolled connect-and-close pipe primitive
-(`_warm_check_pipe_reachable`).
+using the two connect-and-close reachability primitives —
+`_warm_check_pipe_reachable` (Windows named pipe) and
+`_warm_check_socket_reachable` (POSIX AF_UNIX, delegating to
+`election.probe_endpoint`).
 
 Loads bin/claude-klabauter-doctor-probe.py as a module via importlib, matching the
-existing `_make_fake_psutil` pattern in test_claude_klabauter_doctor_new_probes.py — no
-test spawns a real server or opens a real named pipe; `_warm_check_pipe_reachable`
-itself is monkeypatched per-scenario so classification is deterministic and
-platform-independent.
+existing `_make_fake_psutil` pattern in test_claude_klabauter_doctor_new_probes.py. No
+test spawns a real warm server; the aggregation tests monkeypatch BOTH
+primitives (`_stub_reachability`) so classification is deterministic and
+platform-independent whichever host runs them.
+
+`TestWarmSocketReachabilityPrimitive` is the exception and the reason the
+POSIX leg is cheaper to trust than the Windows one: an AF_UNIX endpoint is a
+file a test can bind and abandon, so live / stale / absent are all reachable
+against REAL sockets with no stub at all.
 
 Covered:
   AC7  — a resident server whose pipe is unaddressable is reported ORPHAN, not
@@ -136,6 +143,29 @@ def _stub_pipe_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         election, "pipe_name", lambda token, engine_clone=None: r"\\.\pipe\stub-" + str(token)
     )
+    monkeypatch.setattr(
+        election, "socket_path", lambda token, engine_clone=None: Path("/stub") / f"{token}.sock"
+    )
+
+
+def _stub_reachability(monkeypatch: pytest.MonkeyPatch, mod: ModuleType, classification: str) -> None:
+    """Force both transports' reachability primitives to one classification.
+
+    The probe dispatches on `sys.platform`, so stubbing only the Windows
+    primitive leaves every classification assertion platform-dependent — the
+    thing this file's header promises it is not. Both legs are stubbed so the
+    classification tests below assert the probe's aggregation logic, which is
+    shared, on whichever host runs them.
+    """
+    reachable_tuple = {
+        "reachable": (True, False),
+        "orphan": (False, False),
+        "cannot_tell": (None, True),
+    }[classification if classification != "orphan_no_endpoint" else "orphan"]
+    monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: reachable_tuple)
+    monkeypatch.setattr(
+        mod, "_warm_check_socket_reachable", lambda sock, election_module: classification
+    )
 
 
 class TestWarmResidencyProbe:
@@ -167,7 +197,7 @@ class TestWarmResidencyProbe:
         fake_psutil = _make_fake_psutil(procs)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
-        monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: (True, False))
+        _stub_reachability(monkeypatch, mod, "reachable")
 
         result = mod._run_probe_warm_residency(tmp_path)
 
@@ -190,7 +220,7 @@ class TestWarmResidencyProbe:
         fake_psutil = _make_fake_psutil(procs)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
-        monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: (False, False))
+        _stub_reachability(monkeypatch, mod, "orphan")
 
         result = mod._run_probe_warm_residency(tmp_path)
 
@@ -215,7 +245,7 @@ class TestWarmResidencyProbe:
         fake_psutil = _make_fake_psutil(procs)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
-        monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: (False, False))
+        _stub_reachability(monkeypatch, mod, "orphan")
 
         result = mod._run_probe_warm_residency(tmp_path)
 
@@ -237,7 +267,7 @@ class TestWarmResidencyProbe:
         fake_psutil = _make_fake_psutil(procs)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
-        monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: (True, False))
+        _stub_reachability(monkeypatch, mod, "reachable")
         # No breadcrumb file exists under tmp_path/engine — read_breadcrumb returns None.
 
         result = mod._run_probe_warm_residency(tmp_path)
@@ -261,7 +291,7 @@ class TestWarmResidencyProbe:
         fake_psutil = _make_fake_psutil(procs)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
         _stub_pipe_resolution(monkeypatch)
-        monkeypatch.setattr(mod, "_warm_check_pipe_reachable", lambda pipe: (None, True))
+        _stub_reachability(monkeypatch, mod, "cannot_tell")
 
         result = mod._run_probe_warm_residency(tmp_path)
 
@@ -299,4 +329,141 @@ class TestWarmResidencyProbe:
 
         assert _is_parseable_probe_result(result)
         assert result.status == mod._INFO
+        assert result.skipped is True
+
+
+@pytest.fixture
+def short_sock_dir():
+    """A directory short enough to hold an AF_UNIX path.
+
+    `pytest`'s `tmp_path` is nested deep enough under macOS's private temp
+    root that `sockaddr_un.sun_path`'s 104-byte budget is blown before the
+    socket name is even appended — `connect` then raises "AF_UNIX path too
+    long", which is a fixture defect, not the behaviour under test.
+    Production hits the same wall honestly: `election.socket_path` raises
+    `SocketPathTooLongError` up front rather than leaving `bind` to report
+    it as an unexplained OSError.
+    """
+    import shutil
+    import tempfile
+
+    base = tempfile.mkdtemp(prefix="wsr", dir="/tmp")
+    try:
+        yield Path(base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+class TestWarmSocketReachabilityPrimitive:
+    """`_warm_check_socket_reachable` — the POSIX leg, against REAL AF_UNIX sockets.
+
+    These are the tests that cannot be written on the Windows leg: an
+    AF_UNIX endpoint is a file the test can create, bind, and abandon, so
+    every state is reachable without a monkeypatch. The classification tests
+    above stub the primitive; these exercise it.
+
+    Linux is UNEXERCISED — no Linux box is reachable from this fleet
+    (PM, 2026-08-26). `election.probe_endpoint` is POSIX-general and these
+    tests will run there unchanged, but running-there is not the same as
+    having-run-there and this file does not claim it.
+    """
+
+    def test_live_listener_reads_reachable(self, short_sock_dir: Path) -> None:
+        mod = _require_module()
+        import socket
+
+        from coordinator_core.warm import election
+
+        sock_path = short_sock_dir / "live.sock"
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            srv.bind(str(sock_path))
+            srv.listen(1)
+            assert mod._warm_check_socket_reachable(sock_path, election) == mod._REACH_REACHABLE
+        finally:
+            srv.close()
+
+    def test_stale_socket_file_with_no_listener_is_the_orphan_signal(
+        self, short_sock_dir: Path
+    ) -> None:
+        """AC: a socket file whose listener has exited classifies as orphan.
+
+        Bind, listen, then close WITHOUT unlinking — exactly the corpse a
+        killed server leaves behind. `connect` then gets ECONNREFUSED, the
+        only proof of staleness POSIX offers.
+        """
+        mod = _require_module()
+        import socket
+
+        from coordinator_core.warm import election
+
+        sock_path = short_sock_dir / "stale.sock"
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(str(sock_path))
+        srv.listen(1)
+        srv.close()
+
+        assert sock_path.exists(), "the corpse must survive close() for this to be the stale case"
+        assert mod._warm_check_socket_reachable(sock_path, election) == mod._REACH_ORPHAN
+
+    def test_absent_endpoint_is_distinct_from_a_refused_one(self, short_sock_dir: Path) -> None:
+        """AC: PROBE_ABSENT does not silently render as the refused-orphan signal.
+
+        Both are unreachable, but "no endpoint was ever found" and "an
+        endpoint refused the connection" are different evidence, and the
+        probe's detail string names them separately.
+        """
+        mod = _require_module()
+
+        from coordinator_core.warm import election
+
+        result = mod._warm_check_socket_reachable(short_sock_dir / "nothing-here.sock", election)
+        assert result == mod._REACH_ORPHAN_NO_ENDPOINT
+        assert result != mod._REACH_ORPHAN
+
+    def test_absent_endpoint_survives_into_the_probe_detail_string(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The distinction is worthless if aggregation flattens it."""
+        mod = _require_module()
+
+        engine_root = tmp_path / "engine"
+        procs = [{"pid": 777, "create_time": 0.0, "cmdline": _server_cmdline(engine_root)}]
+        monkeypatch.setitem(sys.modules, "psutil", _make_fake_psutil(procs))
+        _stub_pipe_resolution(monkeypatch)
+        _stub_reachability(monkeypatch, mod, "orphan_no_endpoint")
+        monkeypatch.setattr(mod.sys, "platform", "linux")
+
+        result = mod._run_probe_warm_residency(tmp_path)
+
+        assert _is_parseable_probe_result(result)
+        assert result.status == mod._DEGRADED
+        assert result.data["servers"][0]["classification"] == mod._REACH_ORPHAN_NO_ENDPOINT
+        assert "no endpoint" in result.detail.lower()
+        assert "warm-engine-stop" not in result.remediation.lower()
+
+    def test_probe_cap_bounds_per_resident_connect_cost(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Residents past the cap report cannot_tell, never an unprobed PASS."""
+        mod = _require_module()
+
+        engine_root = tmp_path / "engine"
+        over = mod._WARM_REACHABILITY_PROBE_CAP + 3
+        procs = [
+            {"pid": 1000 + i, "create_time": 0.0, "cmdline": _server_cmdline(engine_root)}
+            for i in range(over)
+        ]
+        monkeypatch.setitem(sys.modules, "psutil", _make_fake_psutil(procs))
+        _stub_pipe_resolution(monkeypatch)
+        _stub_reachability(monkeypatch, mod, "reachable")
+
+        result = mod._run_probe_warm_residency(tmp_path)
+
+        rows = result.data["servers"]
+        assert len(rows) == over
+        assert all(r["classification"] == mod._REACH_REACHABLE
+                   for r in rows[: mod._WARM_REACHABILITY_PROBE_CAP])
+        assert all(r["classification"] == mod._REACH_CANNOT_TELL
+                   for r in rows[mod._WARM_REACHABILITY_PROBE_CAP:])
         assert result.skipped is True

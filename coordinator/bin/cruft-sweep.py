@@ -268,16 +268,32 @@ from coordinator_core.cli_entry import recording_declared_writes  # noqa: E402
 SELF_NAME = "cruft-sweep"
 
 
+#: Why a resolution failed, keyed by the flag whose default went unresolved.
+#: `_state_root_or_empty` folds the StateRootError to "" for the bash-oracle
+#: concatenation semantics; the REASON is what the refusal below needs, and
+#: dropping it is what left a caller reading "fix the root: machine-local get
+#: <key>" against a registry key that was correct all along.
+_STATE_ROOT_FAILURES: dict[bool, str] = {}
+
+
 def _state_root_or_empty(*, central: bool = False) -> str:
     """coordinator_state_root(...), folding StateRootError to "" — mirrors the
     bash oracle's `$(coordinator_state_root ...)` command-substitution
     semantics: a failing subshell contributes an empty string to the
     surrounding string concatenation rather than aborting the script (the
     failure only becomes visible later, as a malformed path). Faithful
-    port of an existing bash-oracle quirk, not a design choice made here."""
+    port of an existing bash-oracle quirk, not a design choice made here.
+
+    Records the swallowed reason in `_STATE_ROOT_FAILURES` so
+    `_reject_rootless_defaults` can name the ACTUAL cause. The empty-string
+    return is the oracle-faithful part; discarding the diagnosis was never
+    load-bearing."""
     try:
-        return coordinator_state_root(central=central)
-    except StateRootError:
+        root = coordinator_state_root(central=central)
+        _STATE_ROOT_FAILURES.pop(central, None)
+        return root
+    except StateRootError as exc:
+        _STATE_ROOT_FAILURES[central] = str(exc)
         return ""
 
 
@@ -606,11 +622,22 @@ def _reject_rootless_defaults(
     ]
     if not unresolved:
         return
+    causes = [
+        _STATE_ROOT_FAILURES[central]
+        for central in (True, False)
+        if central in _STATE_ROOT_FAILURES
+    ]
+    reason = (
+        " Cause: " + " / ".join(causes)
+        if causes
+        else " Cause: no state root is registered for this machine — "
+        "machine-local set repos.claude_klabauter <path-to-live-claude-klabauter>."
+    )
     sys.exit(
         _usage_error(
             "state root did not resolve; refusing to write to the drive root "
-            "(%s). Pass %s, or fix the root: machine-local get repos.claude_klabauter"
-            % (cfg.log_path, " and ".join(unresolved))
+            "(%s). Pass %s.%s"
+            % (cfg.log_path, " and ".join(unresolved), reason)
         )
     )
 

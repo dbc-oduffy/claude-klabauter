@@ -76,6 +76,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.git.run import run_git
 from coordinator_core.install._shared import is_pointer
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.write_surface import (
@@ -97,12 +98,6 @@ LEGACY_MACHINE_LOCAL_DIRNAME = "machine-local"
 compat pointer: `<claude_base>/machine-local`. A module-level constant so
 `migrate_substrate_to_settings_home` and `WRITE_SURFACE` read one spelling
 rather than each carrying their own literal."""
-
-_GIT_PROBE_TIMEOUT_SECS = 5.0
-"""Upper bound on the single `git ls-files` probe in `_tracked_file_count`.
-Bounded rather than unbounded because this runs inside an installer on a box
-carrying 50-70 concurrent sessions; a wedged git there would hang the install
-instead of degrading to the per-file message."""
 
 LEGACY_MANIFEST_FILENAME = "settings-manifest.md"
 """The legacy single-file migration target: `<claude_base>/settings-manifest.md`,
@@ -131,19 +126,14 @@ def _tracked_file_count(claude_base: Path, dirname: str) -> Optional[int]:
     """
     if not (claude_base / ".git").exists():
         return None
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(claude_base), "ls-files", "--", dirname],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_PROBE_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    # `run_git` never raises for a git-side failure, so the try/except this
+    # replaces has nothing left to catch: absent git, a timeout and a non-zero
+    # exit all arrive as a result whose `.ok` is False, which is the single
+    # "cannot establish" answer this function already folded all three onto.
+    result = run_git(["-C", str(claude_base), "ls-files", "--", dirname])
+    if not result.ok:
         return None
-    if proc.returncode != 0:
-        return None
-    return len([line for line in proc.stdout.splitlines() if line.strip()])
+    return len([line for line in result.stdout.splitlines() if line.strip()])
 
 
 def _unconvergeable_message(claude_base: Path, legacy_ml: Path, tracked: int) -> str:

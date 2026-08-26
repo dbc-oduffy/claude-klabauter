@@ -31,7 +31,7 @@ plumbing, not a vendored copy of fixture content.
 
 THE KNOWN LADDER DIVERGENCE (see module-level ``_XFAIL_ENV_RUNG_REASON``
 table): claude-klabauter's live-tree ladder has NO env-var rungs at all (registry
-key then ``.claude-klabauter-root`` sentinel only); DoE's ``_resolve_live_working_tree``
+key then ``.claude-klabauter-live-root`` sentinel only); DoE's ``_resolve_live_working_tree``
 checks ``LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, CLAUDE_KLABAUTER_ROOT)`` first.
 C4a's wrapper adds a CLAUDE_KLABAUTER_ROOT-only rung (not REPO_CLAUDE_KLABAUTER). Cases
 that fail ONLY because of this are marked ``xfail(strict=True)`` — see the
@@ -142,7 +142,7 @@ _NO_ENV_RUNGS_REASON_TEMPLATE = (
     "{cid}: claude-klabauter's live-tree ladder "
     "(coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::_resolve_claude_klabauter_root) has "
     "NO env-var rungs at all — registry key 'repos.claude_klabauter' then the "
-    "'.claude-klabauter-root' sentinel only. DoE's _resolve_live_working_tree "
+    "'.claude-klabauter-live-root' sentinel only. DoE's _resolve_live_working_tree "
     "(coordinator/hooks/scripts/_engine_root.py:527-560) checks "
     "LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, CLAUDE_KLABAUTER_ROOT) first. C4a's wrapper "
     "(coordinator_core/engine_root.py::coordinator_engine_root_with_class) adds a "
@@ -249,8 +249,8 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     # Added 2026-08-20 (session fc8834f1) on doe-claude-em's request, landed
     # with the fixture in their `fa0bfb6d9`. Reproduced here before entering it
     # rather than taken on their report.
-    "coordinator-engine-root-beats-claude-klabauter-root-when-both-set": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
-        cid="coordinator-engine-root-beats-claude-klabauter-root-when-both-set"
+    "coordinator-engine-root-beats-claude-klabauter-live-root-when-both-set": _NO_ENV_RUNGS_REASON_TEMPLATE.format(
+        cid="coordinator-engine-root-beats-claude-klabauter-live-root-when-both-set"
     )
     + " NOTE THE DISCRIMINANT THIS CASE PINS IS CONFORMANT, and that is what "
     "separates this entry from every other one in this table: the wrapper "

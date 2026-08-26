@@ -554,6 +554,47 @@ class _SpawnRecorder:
         subprocess.Popen.__init__ = self._orig_init  # type: ignore[assignment]
 
 
+
+def _remove_minted_session_dir(cwd: str) -> None:
+    """Remove the real session directory `_SESSION_ID` mints under `cwd`.
+
+    NEGATIVE-SPEC -- do NOT "fix" this by adding `_SESSION_ID` to
+    `liveness._NON_SESSION_DIR_NAMES`. That constant's own `hook-observations`
+    comment records the 2026-08-19 ruling: phantom-session writers are DELETED,
+    never quieted with a passlist entry, per
+    `test_every_non_uuid_real_child_is_denylisted_or_a_file`'s instruction.
+
+    Why a real directory exists to remove at all: this bench measures the REAL
+    relay against the REAL worktree (`origin_worktree=cwd`), so
+    `hooks.track_dispatched_agents` writes `dispatched-agents.txt` under
+    `<cwd>/.git/coordinator-sessions/<_SESSION_ID>/` exactly as it would for a
+    live session. Pointing the bench at a throwaway worktree instead would stop
+    measuring the path it exists to measure. So the side effect is kept and
+    reversed rather than avoided.
+
+    Why it matters beyond a stray directory: `live_session_verdicts` enumerates
+    every non-denylisted child of the sessions root, and a freshly-mtimed one
+    reads LIVE on the Layer-2 recency window. Left behind, this directory is a
+    phantom live peer in every peer-claim adjudication on the box for as long as
+    its mtime stays warm -- i.e. a benchmark run perturbs claim decisions for
+    every concurrent session, not just its own.
+
+    Best-effort by construction: a bench must never fail the measurement it just
+    took because cleanup lost a race with a concurrent reader.
+    """
+    import shutil
+
+    victim = os.path.join(cwd, ".git", "coordinator-sessions", _SESSION_ID)
+    if os.path.basename(victim) != _SESSION_ID:
+        return
+    try:
+        shutil.rmtree(victim)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def enumerate_spawn_set(cwd: str) -> List[SpawnRecord]:
     """Runs the real relay call IN-PROCESS (this interpreter, never a
     spawned child -- the patch above only sees `subprocess.Popen`
@@ -579,6 +620,7 @@ def enumerate_spawn_set(cwd: str) -> List[SpawnRecord]:
             )
     finally:
         obs.SUSPENDED_OPS = orig_suspended_ops
+        _remove_minted_session_dir(cwd)
     for r in results:
         if isinstance(r, ipc.HookDispatchError):
             raise RuntimeError("enumerate_spawn_set: op errored: %r" % (r,))

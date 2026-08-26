@@ -423,7 +423,7 @@ def write_root_for(*, owning_repo: str | None, repo_root: Path) -> Path:
     Semantic brightline guard (AC12, this function's half): on the arm-3
     (`owning_repo is None`) path ONLY, additionally raises if the resolved
     HOLDER root equals the caller-supplied `repo_root`. `holder_repo_root()`
-    already guards holder-root != claude-klabauter-root; this guard needs the caller's
+    already guards holder-root != claude-klabauter-live-root; this guard needs the caller's
     root and so lives here instead.
 
     Deliberately NOT applied to arm 2: a producer that STATES an owning repo

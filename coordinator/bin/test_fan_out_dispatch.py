@@ -420,7 +420,7 @@ def test_wiki_append_row_gets_candidate_restatements_populated(root):
         "target-wiki.md\t-\twiki-append\n",
     )
     code, so, se = run_helper(
-        repo_n, spec_file=spec_n, extra_env={"CLAUDE_KLABAUTER_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
+        repo_n, spec_file=spec_n, extra_env={"COORDINATOR_ENGINE_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
     )
     assert code == 0, f"wiki-append row must exit zero: {se}"
     assert "candidate_restatements:" in so
@@ -435,7 +435,7 @@ def test_non_wiki_row_gets_no_candidate_restatements_field(root):
     spec_o = os.path.join(root, "spec_o.tsv")
     write(spec_o, "code-chunk\tRefactor the helper\tcode.py\t-\tcode-edit\n")
     code, so, se = run_helper(
-        repo_o, spec_file=spec_o, extra_env={"CLAUDE_KLABAUTER_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
+        repo_o, spec_file=spec_o, extra_env={"COORDINATOR_ENGINE_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
     )
     assert code == 0
     assert "candidate_restatements" not in so, "non-wiki change_kind must not get the field"
@@ -447,7 +447,7 @@ def test_three_and_four_field_rows_get_no_candidate_restatements_field(root):
     spec_p = os.path.join(root, "spec_p.tsv")
     write(spec_p, "legacy-chunk\tFix the thing\tsome_file.py\n")
     code, so, se = run_helper(
-        repo_p, spec_file=spec_p, extra_env={"CLAUDE_KLABAUTER_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
+        repo_p, spec_file=spec_p, extra_env={"COORDINATOR_ENGINE_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
     )
     assert code == 0
     assert "candidate_restatements" not in so, "absent change_kind (3-field row) gets no field"
@@ -464,7 +464,7 @@ def test_empty_pin_field_before_change_kind_fails_loud(root):
     spec_r = os.path.join(root, "spec_r.tsv")
     write(spec_r, "chunk-r\tSome brief\ttarget-wiki.md\t\twiki-append\n")
     code, so, se = run_helper(
-        repo_r, spec_file=spec_r, extra_env={"CLAUDE_KLABAUTER_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
+        repo_r, spec_file=spec_r, extra_env={"COORDINATOR_ENGINE_ROOT": _REAL_CLAUDE_KLABAUTER_ROOT}
     )
     assert code == 1, "empty 4th field + populated 5th field must be a hard parse error"
     assert so == "", "no output emitted on parse error"
@@ -481,9 +481,9 @@ def test_generator_failure_degrades_to_empty_list_not_a_raise(root):
     write(os.path.join(repo_q, "target-wiki.md"), "# Doctrine\nSome text.\n")
     spec_q = os.path.join(root, "spec_q.tsv")
     write(spec_q, "wiki-chunk\tSome incoming prose\ttarget-wiki.md\t-\twiki-new\n")
-    bogus_claude_klabauter_root = os.path.join(root, "does-not-exist-claude-klabauter-root")
+    bogus_claude_klabauter_root = os.path.join(root, "does-not-exist-claude-klabauter-live-root")
     code, so, se = run_helper(
-        repo_q, spec_file=spec_q, extra_env={"CLAUDE_KLABAUTER_ROOT": bogus_claude_klabauter_root}
+        repo_q, spec_file=spec_q, extra_env={"COORDINATOR_ENGINE_ROOT": bogus_claude_klabauter_root}
     )
     assert code == 0, "an unresolvable claude-klabauter root must not block the dispatch"
     assert "EXECUTOR DISPATCH BLOCK: wiki-chunk" in so, "the block is still emitted"

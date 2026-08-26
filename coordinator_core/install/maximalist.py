@@ -124,7 +124,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 from coordinator_core._settings_home import native_path_form
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
 
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
@@ -301,6 +301,7 @@ def _registry_get_for_check(key: str) -> Optional[str]:
 
 from coordinator_core.install._shared import RequireHomeError, require_home
 from coordinator_core.install._shared import env_overlay as _env_overlay
+from coordinator_core.install.substrate import BYTE_COPIED_BIN_SOURCES
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -637,7 +638,7 @@ def _is_windows_host() -> bool:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=10,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
         uname = result.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
@@ -933,6 +934,19 @@ def _install_claude_doe_wrapper(
     PATH prepend) rather than re-resolved here, so this function has exactly
     one source of truth for the settings-home ``bin/`` directory.
 
+    Consequence of that symlink, named because a verifier has to know it:
+    ``coordinator_core.ops.install_claude_doe_wrapper`` (the launcher-chain
+    step `scripts/setup.py :: install_claude_doe_launcher_chain` runs after
+    the forwarder loop) ``shutil.copyfile``s ``wrapper_src`` onto
+    ``~/.local/bin/claude-doe`` -- i.e. THROUGH this symlink, onto the
+    settings-home file. The final POSIX body at ``<settings_bin>/claude-doe``
+    is therefore the wrapper source's own bytes, not the generated
+    trampoline. `substrate.BYTE_COPIED_BIN_SOURCES` declares that shape (and
+    is where ``wrapper_src`` below is derived from), so
+    `settings_home_report` can verify the member by byte comparison against
+    this root's source instead of looking for a trampoline marker that a byte
+    copy can never carry.
+
     Windows has no equivalent-cost native symlink story -- ``os.symlink``
     there requires either elevated (Administrator) privileges or Developer
     Mode enabled by default, neither of which this installer can assume or
@@ -962,7 +976,7 @@ def _install_claude_doe_wrapper(
     is overridden.
     """
     orch.phase_header("claude-doe wrapper install (Step 3.5b -- ~/.local/bin/claude-doe)")
-    wrapper_src = os.path.join(claude_klabauter_root, "coordinator", "bin", "claude-doe.py")
+    wrapper_src = os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])
     wrapper_dst = os.path.join(claude_home_dir, ".local", "bin", "claude-doe")
     local_bin = os.path.dirname(wrapper_dst)
 
@@ -1098,7 +1112,7 @@ def run(
     to the run, and covers any phase that writes env without this fix noticing.
 
     ``claude_klabauter_root`` is REQUIRED (not defaulted here) -- the phases it feeds
-    (``claude-doe`` wrapper install, ``gen-claude-klabauter-root-pointer.py``) resolve
+    (``claude-doe`` wrapper install, ``gen-claude-klabauter-live-root-pointer.py``) resolve
     real subprocess/file-copy targets, so silently defaulting to
     ``Path(__file__).resolve().parents[2]`` inside this function would make
     every direct-call test (this module's own coverage in
@@ -1343,7 +1357,7 @@ def _run_body(
     # it here, from the claude-klabauter clone that is running THIS install, closes the
     # loop from the claude-klabauter side without waiting on a coordinator-side fix.
     #
-    # This block MUST run before Step 3.5a.1b (gen-claude-klabauter-root-pointer.py) below:
+    # This block MUST run before Step 3.5a.1b (gen-claude-klabauter-live-root-pointer.py) below:
     # that advisory step resolves the claude-klabauter root via REPO_CLAUDE_KLABAUTER or
     # `machine-local get repos.claude_klabauter`, which is exactly the read this
     # write makes possible for the first time on a fresh machine.
@@ -1361,7 +1375,7 @@ def _run_body(
         else:
             orch.skip_note(f"Seed repos.claude_klabauter registry key -- check-only (would seed: {claude_klabauter_clone})")
     elif not (claude_klabauter_clone / "coordinator_core").is_dir():
-        # Mirrors gen-claude-klabauter-root-pointer.py's own sanity guard: a bare
+        # Mirrors gen-claude-klabauter-live-root-pointer.py's own sanity guard: a bare
         # directory-existence check on the wrong marker cannot distinguish
         # "the claude-klabauter clone" from "some directory" (an unrelated 18-entry
         # bin/ sits at this repo's root alongside coordinator/bin's real 563
@@ -1386,7 +1400,7 @@ def _run_body(
                 _verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))
             else:
                 print(
-                    "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-root-pointer.py "
+                    "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-live-root-pointer.py "
                     "(Step 3.5a.1b below) may not resolve this run",
                     file=sys.stderr,
                 )
@@ -1413,26 +1427,26 @@ def _run_body(
         env=env,
     )
 
-    # -- Step 3.5a.1b -- gen-claude-klabauter-root-pointer.py (advisory) --
+    # -- Step 3.5a.1b -- gen-claude-klabauter-live-root-pointer.py (advisory) --
     # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
     # `claude-doe` below: this script lives at
-    # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
+    # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-live-root-pointer.py` post
     # b644d5a9, not under the DoE clone's `coord_root/bin/`.
     py_bin = shutil.which("python3") or shutil.which("python")
     if py_bin:
         claude_klabauter_pointer_args = ["--check-only"] if check_only else []
         orch.run_advisory(
-            "gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-root pointer)",
+            "gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
             [
                 py_bin,
-                os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),
+                os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-live-root-pointer.py"),
                 *claude_klabauter_pointer_args,
             ],
             env=env,
         )
     else:
         print(
-            "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",
+            "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b)",
             file=sys.stderr,
         )
 
@@ -1900,7 +1914,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # a declaring writer module. POSIX: `os.symlink` + atomic
         # `os.replace` onto `~/.local/bin/claude-doe`, pointed at
         # `<settings-home>/bin/claude-doe`. Windows: `shutil.copy2` of the
-        # wrapper binary from `<claude-klabauter-root>/coordinator/bin/claude-doe.py`
+        # wrapper binary from `<claude-klabauter-live-root>/coordinator/bin/claude-doe.py`
         # to a same-directory temp path, `os.chmod` on that temp path, then
         # atomic `os.replace` onto the same destination (no native symlink
         # story assumed — see the function's own docstring). One entry
@@ -1917,7 +1931,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                         "<settings-home>/bin/claude-doe (atomic "
                         "os.replace of a temp symlink); Windows instead "
                         "shutil.copy2's the wrapper binary from "
-                        "<claude-klabauter-root>/coordinator/bin/claude-doe.py to a "
+                        "<claude-klabauter-live-root>/coordinator/bin/claude-doe.py to a "
                         "same-directory temp path, chmods +x, then "
                         "publishes with an atomic os.replace onto this "
                         "path. Written in-line by this orchestrator, not "

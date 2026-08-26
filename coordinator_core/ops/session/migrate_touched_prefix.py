@@ -442,8 +442,12 @@ def _print_report(report: MigrationReport) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description=(
-            "One-time corrective migration for touched.txt '../'/absolute-path "
-            "poisoning. Dry-run by default; pass --apply to write."
+            "One-time corrective migration for '../'/absolute-path poisoning "
+            "in the retired legacy touched.txt record. This op reads and "
+            "rewrites the OLD touched.txt dialect BY DESIGN -- it exists to "
+            "clean up files written before the writer flip to touch-record.jsonl "
+            "and continues to operate on that legacy corpus for as long as it "
+            "survives on disk. Dry-run by default; pass --apply to write."
         )
     )
     ap.add_argument(

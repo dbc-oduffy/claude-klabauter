@@ -44,6 +44,8 @@ Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C6
 
 from __future__ import annotations
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 import dataclasses
 import statistics
 import subprocess
@@ -172,6 +174,7 @@ def run(
     error propagates unmodified -- the whole run stops rather than silently
     dropping an op.
     """
+    declare_benchmark_origin()
     target_ops = ops if ops is not None else _default_target_ops()
 
     # Review: code-reviewer (Slice B F2, P2) — fail loud on a plausible fat-finger

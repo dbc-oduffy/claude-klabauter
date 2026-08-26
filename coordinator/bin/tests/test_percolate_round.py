@@ -188,6 +188,27 @@ class _SubprocessSpy:
         if cmd and str(cmd[0]) == "git" and "ls-files" in cmd:
             return _completed(self._ls_files_returncode, "", "")
 
+        # C2 (docs/plans/2026-08-26-a-refused-round-strands-its-payload-
+        # forever.md): `_pathspec_from_manifest` now reads dest HEAD via
+        # these two spawns instead of trusting the manifest's own two sets
+        # directly. Default to the fixture's own DELETE/REMOVE-tagged paths
+        # for `ls-tree` (so the removal side, `head_tree - declared_
+        # payload`, still names exactly what these pre-existing fixtures
+        # expect) and an empty `diff --name-only` (the add side already
+        # covers NEW/UPDATE via head-tree non-membership -- see `_install_
+        # manifest_stub`'s `declared_payload=added`). Dedicated pathspec-
+        # derivation tests spawn a REAL git repo instead of this spy.
+        if cmd and str(cmd[0]) == "git" and "ls-tree" in cmd:
+            removed = [
+                p for tag, p in _parse_fixture_change_lines(self._real_stdout)
+                if tag in ("DELETE", "REMOVE")
+            ]
+            stdout = "".join(f"{p}\n" for p in removed)
+            return _completed(0, stdout, "")
+
+        if cmd and str(cmd[0]) == "git" and "diff" in cmd and "--name-only" in cmd:
+            return _completed(0, "", "")
+
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._dest_ahead_returncode, self._dest_ahead_stdout, "")
 
@@ -295,7 +316,17 @@ def _install_manifest_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
         removed = frozenset(p for tag, p in changes if tag in ("DELETE", "REMOVE"))
         if not added and not removed:
             return None
-        return _mod._RoundManifest(round_id="test", added_or_updated=added, removed=removed)
+        # `declared_payload` is the row's own claim of what should exist --
+        # the NEW/UPDATE-tagged fixture paths, never the DELETE/REMOVE ones
+        # (those are declared ABSENT). Matches the spy's `ls-tree` default
+        # above: the removal side (`head_tree - declared_payload`) needs
+        # `removed` to be HEAD-tracked-but-undeclared, not itself declared.
+        return _mod._RoundManifest(
+            round_id="test",
+            added_or_updated=added,
+            removed=removed,
+            declared_payload=added,
+        )
 
     monkeypatch.setattr(_mod, "_read_fresh_round_manifest", _fake_read_fresh_manifest)
 
@@ -2824,5 +2855,173 @@ def test_branch0_gate_still_offers_setup_for_every_other_failure(monkeypatch, ca
     set up still gets the setup walk, which remains the correct offer."""
     err = _branch0_stderr(monkeypatch, capsys, "MISSING_IGNORE\n")
     assert "first-run setup" in err
+
+
+# ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-26-a-refused-round-strands-its-payload-forever.md,
+# AC2/AC2b/AC3) -- `_pathspec_from_manifest` now derives the commit set by
+# comparing `declared_payload` against DEST HEAD, never dest's working tree.
+# These drive the real `git` binary against a throwaway repo (no
+# `subprocess.run` stub) -- the thing under test IS the two dest-HEAD reads
+# (`_dest_head_tree`/`_dest_head_diff_names`) plus the union/difference
+# built from them, so stubbing `_run` here would test the stub, not the
+# derivation.
+# ---------------------------------------------------------------------------
+
+
+def _git_head(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env.setdefault("GIT_AUTHOR_NAME", "test")
+    env.setdefault("GIT_AUTHOR_EMAIL", "test@example.invalid")
+    env.setdefault("GIT_COMMITTER_NAME", "test")
+    env.setdefault("GIT_COMMITTER_EMAIL", "test@example.invalid")
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _init_head_repo(tmp_path: Path, files: "dict[str, str]") -> Path:
+    """A real, throwaway git repo at `tmp_path / 'dest-repo'` with one commit
+    naming `files` (dest-relative rel path -> content). This is the fixture's
+    HEAD -- callers then mutate the worktree/add untracked paths to model a
+    round's declared payload diverging from it."""
+    repo = tmp_path / "dest-repo"
+    repo.mkdir()
+    _git_head(repo, "init", "-q")
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    _git_head(repo, "add", "-A")
+    _git_head(repo, "commit", "-q", "-m", "initial")
+    return repo
+
+
+def test_pathspec_from_manifest_names_untracked_declared_payload_path(tmp_path):
+    """AC2: a declared-payload path absent from dest HEAD entirely (a genuine
+    new file, or a prior round's stranded-but-never-committed sync) is named
+    for the commit -- the `git diff HEAD` leg alone would miss it (it never
+    reports untracked files), so this pins the `_dest_head_tree` membership
+    check that covers that gap."""
+    repo = _init_head_repo(tmp_path, {"kept.md": "orig\n"})
+    (repo / "new.md").write_text("new content\n", encoding="utf-8")
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"kept.md", "new.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "new.md" in pathspec
+    assert "kept.md" not in pathspec  # unchanged from HEAD -- not named
+
+
+def test_pathspec_from_manifest_names_head_diverged_worktree_equal_path(tmp_path):
+    """AC2: "a path byte-equal to dest's worktree but differing from dest
+    HEAD reaches the pathspec" -- the exact residue shape a refused round
+    strands. Modelled by committing HEAD with stale content, then leaving
+    the worktree holding the already-synced (declared) content without
+    committing it -- the worktree/declared-payload comparison this module
+    used to run would find no divergence at all (worktree already matches
+    what publish just staged); only a HEAD-baseline comparison names it."""
+    repo = _init_head_repo(tmp_path, {"stranded.md": "stale head content\n"})
+    (repo / "stranded.md").write_text("already-synced content\n", encoding="utf-8")
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"stranded.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "stranded.md" in pathspec
+
+
+def test_removal_side_is_gated_off_until_ac1b(tmp_path):
+    """The removal side stays OFF by default (§ `_REMOVAL_SIDE_ENABLED`), and
+    this test is the guard on that gate, not a description of a limitation.
+
+    `head_tree - declared_payload` is data loss while either operand is
+    mis-scoped, and both currently are: `head_tree` spans the whole mirror
+    (all nine rows) while `declared_payload` carries only the rows THIS run
+    processed, and `declared_payload` is itself sourced from the percolation
+    SURFACE rather than the full payload. A `--target`-filtered round would
+    mark the rest of the mirror for deletion. If someone flips the constant
+    without also scoping `head_tree` and discharging AC1b's count
+    measurement, this test fails and says why."""
+    assert _mod._REMOVAL_SIDE_ENABLED is False
+
+    repo = _init_head_repo(
+        tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
+    )
+    (repo / "gone.md").unlink()  # physically gone from the worktree already
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"kept.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "gone.md" not in pathspec, (
+        "removal side fired while gated off -- see _REMOVAL_SIDE_ENABLED"
+    )
+    assert "kept.md" not in pathspec
+
+
+def test_pathspec_from_manifest_names_head_only_path_for_removal(tmp_path, monkeypatch):
+    """AC2b, with the gate opened for this test only: a path deleted from
+    source, already absent from dest's worktree (Step 4's real run already
+    removed it from disk), but still present (tracked) in dest HEAD, is named
+    for removal -- the worktree baseline hides this outright (nothing on disk
+    to compare); only a HEAD-vs-declared-payload set difference finds it.
+
+    Kept green while the gate is shut so the derivation itself stays under
+    test: what is gated is whether the round ACTS on this set, never whether
+    the set is computed correctly."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
+    repo = _init_head_repo(
+        tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
+    )
+    (repo / "gone.md").unlink()  # physically gone from the worktree already
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"kept.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "gone.md" in pathspec
+    assert "kept.md" not in pathspec
+
+
+def test_pathspec_from_manifest_never_names_undeclared_staging_directory(tmp_path):
+    """AC3: reconstructs the `eebf1c67` shape -- a stranded publish-staging
+    directory sitting at dest, differing from HEAD (untracked, so a raw
+    HEAD-vs-worktree survey would name every file in it), but declared by no
+    row. Only the declared-payload path is named; the staging directory's
+    contents never reach the pathspec, by construction (they are never even
+    considered -- the add side only ever iterates `declared_payload`)."""
+    repo = _init_head_repo(tmp_path, {"kept.md": "orig\n"})
+    (repo / "kept.md").write_text("changed\n", encoding="utf-8")
+    staging_dir = repo / "coordinator" / ".bin.publish-staging-dsnce3r6.prior"
+    staging_dir.mkdir(parents=True)
+    (staging_dir / "leftover.py").write_text("stranded\n", encoding="utf-8")
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"kept.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert pathspec == ["kept.md"]
+    assert not any("publish-staging" in p for p in pathspec)
+
+
+def test_report_commit_residual_reports_pathspec_larger_than_real_changes(capsys):
+    """`_report_commit_residual`'s own divergence report must stay accurate
+    now that `pathspec` can legitimately exceed `real_changes` (stranded
+    residue landing, not narrower filtering) -- pinned separately from the
+    filtering-narrows-it direction the original message text assumed."""
+    real_changes = [("NEW", "a.md")]
+    pathspec = ["a.md", "stranded.md", "gone.md"]
+    _mod._report_commit_residual("alpha", real_changes, pathspec)
+    err = capsys.readouterr().err
+    assert "stranded residue" in err
+    assert "2 carried into the pathspec beyond" in err
 
 

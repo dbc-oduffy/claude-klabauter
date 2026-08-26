@@ -411,7 +411,7 @@ def test_schema_missing_fails_loud() -> None:
                 "--target-wiki", "docs/wiki/some.md",
             ],
             env={
-                "CLAUDE_KLABAUTER_ROOT": bad_claude_klabauter_root,
+                "COORDINATOR_ENGINE_ROOT": bad_claude_klabauter_root,
                 "LESSON_PROMOTE_OUTBOX_ROOT": outbox,
             },
         )
@@ -427,21 +427,32 @@ def test_schema_missing_fails_loud() -> None:
 # ---------------------------------------------------------------------------
 
 def test_multiline_body_roundtrip() -> None:
-    """Review: code-reviewer Slice-B — (B-F8) multi-line --body must round-trip without a
-    trailing newline. The _yaml_str fix changes | (clip chomping) to |- (strip chomping)
-    so 'First line.\\nSecond line.' parses back as exactly that string with NO trailing
-    newline added.
+    """Review: code-reviewer Slice-B — (B-F8) a multi-line body must round-trip
+    without a trailing newline. The _yaml_str fix changes | (clip chomping) to
+    |- (strip chomping) so 'First line.\\nSecond line.' parses back as exactly
+    that string with NO trailing newline added.
+
+    Carried through --body-file, not --body: the CLI refuses a --body value
+    containing a newline outright ("pass --body-file instead"), so --body-file
+    is the multi-line input it actually accepts and the only one this
+    assertion can be made through. The subject is unchanged — |- header, exact
+    bytes, no trailing newline.
     """
-    name = "Test 8 — multi-line --body roundtrip: |- header, exact bytes, no trailing newline"
+    name = "Test 8 — multi-line body roundtrip: |- header, exact bytes, no trailing newline"
     body_input = "First line.\nSecond line."
 
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
         wiki_root = _wiki_root_with(tmpdir, "roundtrip-multiline.md")
+        # newline="" so the exact bytes reach the CLI on Windows too — the
+        # trailing-newline assertion below is the whole point of this test.
+        body_path = os.path.join(tmpdir, "body.md")
+        with open(body_path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(body_input)
         result = _run_cli(
             [
                 "--title", "Multiline body roundtrip lesson",
-                "--body", body_input,
+                "--body-file", body_path,
                 "--change-kind", "wiki-append",
                 "--target-wiki", "docs/wiki/roundtrip-multiline.md",
             ],
@@ -486,27 +497,19 @@ def test_multiline_body_roundtrip() -> None:
 # Shared env-forcing helpers for A7/A13 tests
 # ---------------------------------------------------------------------------
 
-def _force_doe_unresolvable_env() -> dict[str, str | None]:
-    """Env overrides that make doe_root() raise _DoeUnresolvable deterministically.
-
-    UNSETS DOE_ROOT/REPO_DOE_CLAUDE (None → _run_cli removes the key entirely,
-    not just blanks it — REPO_DOE_CLAUDE is exported into every login shell by
-    this install surface, so it is present ambiently on a real dev machine; an
-    empty-string override is NOT equivalent to absence here, since the real
-    `machine-local` binary — used by coordinator_registry.py's own
-    schema-manifest bootstrap at import time, a resolution independent of and
-    unaffected by MACHINE_LOCAL_IMPL — treats an explicitly-empty env var
-    differently from an absent one). Also points MACHINE_LOCAL_IMPL at a
-    nonexistent script so the registry lookup coordinator_registry.doe_root()
-    performs AT RUNTIME (distinct from the import-time bootstrap above) fails
-    closed to None — independent of whatever repos.doe_claude happens to be
-    registered on the machine actually running this test.
-    """
-    return {
-        "DOE_ROOT": None,
-        "REPO_DOE_CLAUDE": None,
-        "MACHINE_LOCAL_IMPL": "/nonexistent/coordinator-lesson-promote-test-probe.py",
-    }
+# `_force_doe_unresolvable_env()` used to live here — DELETED 2026-08-25, and
+# deliberately not replaced. It claimed to make doe_root() raise
+# _DoeUnresolvable by unsetting DOE_ROOT/REPO_DOE_CLAUDE and pointing
+# MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
+# rung spawned the `machine-local` CLI; it reads the registry in-process now,
+# and five codename-free rungs have since been added below it. The helper
+# therefore returned an env in which doe_root() still resolved, and its only
+# caller was asserting exit 3 against a box where the CLI exited 2.
+#
+# Do not rebuild it by adding more env keys: the same ladder carries
+# coordinator_registry's import-time manifest bootstrap, so an env with every
+# rung dead fails at IMPORT with an install-integrity error, never reaching the
+# branch under test. Patch `doe_root` in-process instead — see Test 13/14.
 
 
 def _force_legacy_route_env(tmpdir: str) -> dict[str, str]:
@@ -517,7 +520,7 @@ def _force_legacy_route_env(tmpdir: str) -> dict[str, str]:
     """
     fake_root = os.path.join(tmpdir, "not-a-claude-klabauter-checkout")
     os.makedirs(fake_root, exist_ok=True)
-    return {"CLAUDE_KLABAUTER_ROOT": fake_root}
+    return {"COORDINATOR_ENGINE_ROOT": fake_root}
 
 
 # ---------------------------------------------------------------------------
@@ -657,24 +660,70 @@ def test_target_wiki_normalization_collapses_equivalent_forms() -> None:
 # ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_during_validation_exits_three() -> None:
+    """Test 13 — DoE root unresolvable during --target-wiki validation → exit 3.
+
+    Converted to the in-process pattern Test 14 below already uses, for the
+    same reason and one more. `_force_doe_unresolvable_env()` was built when
+    `MACHINE_LOCAL_IMPL` was the single lever over the registry rung; that rung
+    now reads the registry IN-PROCESS (`machine_local_impl_resolve.
+    registry_get()`, CLI spawn only as fallback), and the ladder beneath it has
+    since grown five codename-free rungs (`.doe-root` pointer, marketplace
+    cache, flat layout, CLAUDE_PLUGIN_ROOT, plugin-mirror live_path) that the
+    helper never touched. On a real dev box those resolve, so the CLI reached
+    the wiki-inventory check and exited 2 on a target-wiki miss — the test was
+    asserting exit 3 against an environment that was never unresolvable.
+
+    Neutralising the whole ladder by env is not the fix either: it is the SAME
+    ladder `coordinator_registry`'s import-time manifest bootstrap rides, so a
+    subprocess with every rung dead fails at import with an install-integrity
+    error (exit 1) long before validation. There is no environment shape where
+    "manifest bootstrap resolves" and "runtime doe_root() does not" diverge.
+    Patching `doe_root` directly is what keeps the exit-3 branch and its
+    remediation text covered.
+    """
+    import importlib.machinery
+    import importlib.util as _importlib_util
+    import io as _io
+    import unittest.mock as _mock
+
     name = "Test 13 — DoE root unresolvable during --target-wiki validation → exit 3, nothing written"
+    cli_path = _script_path()
+    loader = importlib.machinery.SourceFileLoader("coordinator_lesson_promote_t13", cli_path)
+    spec = _importlib_util.spec_from_loader("coordinator_lesson_promote_t13", loader)
+    cli_mod = _importlib_util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(cli_mod)
+
+    captured_err = _io.StringIO()
+    captured_out = _io.StringIO()
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
-        env = {"LESSON_PROMOTE_OUTBOX_ROOT": outbox}
-        env.update(_force_doe_unresolvable_env())
-        result = _run_cli(
-            [
+        with (
+            _mock.patch.dict(os.environ, {"LESSON_PROMOTE_OUTBOX_ROOT": outbox}),
+            _mock.patch.object(
+                cli_mod, "doe_root",
+                side_effect=cli_mod._DoeUnresolvable(
+                    "repos.doe_claude not set in machine-local registry and "
+                    "REPO_DOE_CLAUDE env var not set"
+                ),
+            ),
+            _mock.patch.object(
+                cli_mod, "_describe_schema_node",
+                return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
+            ),
+            _mock.patch("sys.stderr", captured_err),
+            _mock.patch("sys.stdout", captured_out),
+        ):
+            rc = cli_mod.main([
                 "--title", "some title",
                 "--body", "some body",
                 "--change-kind", "wiki-append",
                 "--target-wiki", "docs/wiki/some-real-target.md",
-            ],
-            env=env,
-        )
-        if result.returncode != 3:
-            raise AssertionError(f"{name}: " + (f"expected exit 3; got {result.returncode}. stderr: {result.stderr!r}"))
-        if "machine-local set repos.doe_claude" not in result.stderr:
-            raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {result.stderr!r}"))
+            ])
+
+        if rc != 3:
+            raise AssertionError(f"{name}: " + (f"expected exit 3; got {rc}. stderr: {captured_err.getvalue()!r}"))
+        if "machine-local set repos.doe_claude" not in captured_err.getvalue():
+            raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
         if os.path.isdir(outbox) and os.listdir(outbox):
             raise AssertionError(f"{name}: " + ("outbox has entries but the write should have been skipped"))
 

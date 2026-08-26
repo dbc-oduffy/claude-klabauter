@@ -25,7 +25,10 @@ this addition would be the wrong tradeoff.
 Probe under test:
   claude-klabauter.publish.provenance — current / absent / unreadable / unknown-sha /
                                behind paths. AC5: absent/unreadable/unknown
-                               must never read as "current".
+                               must never read as "current". A never-published
+                               box reports "not recorded" as step-zero `warn`
+                               (normal state, no install-time action); the
+                               drift and corruption arms keep `fail`.
 
 Probe-authoring invariant (per state/lessons/2026-07-04-a-diagnostic-must-always-emit-a-parseabl.yaml):
   Every probe must emit a parseable _ProbeResult on ALL paths — including its own
@@ -156,9 +159,11 @@ class TestPublishProvenanceProbe:
     unknown-sha / behind paths (AC4, AC5).
 
     Key invariant (AC5): a record that is absent, unreadable, or names no
-    row for this claude-klabauter checkout must NEVER be reported as current — always
-    "unknown" (DEGRADED here, matching the sibling claude-klabauter.root.pointer
-    probe's degrade-not-crash posture), never PASS.
+    row for this claude-klabauter checkout must NEVER be reported as current, never
+    PASS. Which non-PASS it is depends on what the state MEANS: a box that
+    has not published yet is normal and reports `warn`; a record that landed
+    and then broke, or a published sha that has fallen behind, is a fault
+    with a runnable remediation and reports `fail`.
     """
 
     def test_current_engine_is_pass(
@@ -212,11 +217,22 @@ class TestPublishProvenanceProbe:
         assert result.status != mod._PASS
         assert result.data["commits_behind"] == 1
 
-    def test_absent_record_is_unknown_never_current(
+    def test_absent_record_is_not_recorded_never_current(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC5: with no record ever written, the probe must report
-        'unknown', never 'current'."""
+        """AC5: with no record ever written, the probe must never report
+        'current' — and must not report a fault either.
+
+        Classification pin. A box that has never published is the NORMAL
+        state of a fresh install, and a percolate round is a workstream act
+        with its own gates that the installer printing this line cannot
+        perform (guard-messaging.md: only offer remediation the current
+        reader can run). Reported as step-zero `warn`, not `fail`
+        (docs/problems/2026-08-26-what-a-reinstall-on-the-mac-actually-hits.md
+        § 5). The static half of this rule is
+        bin/tests/test_probe_status_classification.py; this test is the half
+        that catches a remediation naming an action the reader cannot take.
+        """
         mod = _require_module()
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings_home"))
 
@@ -229,7 +245,12 @@ class TestPublishProvenanceProbe:
 
         assert _is_parseable_probe_result(result)
         assert result.status != mod._PASS
-        assert "unknown" in result.detail.lower()
+        assert result.status == mod._INFO
+        assert mod._sz_status(result) == mod._SZ_WARN, (
+            "a never-published box is the normal state of a fresh install — it must not "
+            "render with the same `fail` token as a real fault"
+        )
+        assert "not recorded" in result.detail.lower()
         assert result.required is False
 
     def test_unreadable_record_is_unknown_never_current(
@@ -310,7 +331,11 @@ class TestPublishProvenanceProbe:
 
         assert _is_parseable_probe_result(result)
         assert result.status != mod._PASS
-        assert "unknown" in result.detail.lower()
+        assert result.status == mod._INFO
+        assert mod._sz_status(result) == mod._SZ_WARN, (
+            "a checkout that has not published yet is normal, not a fault"
+        )
+        assert "not recorded" in result.detail.lower()
 
     def test_failed_row_never_read_as_published(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -335,7 +360,38 @@ class TestPublishProvenanceProbe:
 
         assert _is_parseable_probe_result(result)
         assert result.status != mod._PASS
-        assert "unknown" in result.detail.lower()
+        assert "not recorded" in result.detail.lower()
+
+    def test_drift_and_corruption_still_render_as_fail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reclassification above is bounded: a published build that has
+        fallen behind HEAD, and a record that landed and then broke, are real
+        conditions with runnable remediations. Both keep `fail`.
+        """
+        mod = _require_module()
+        settings_home = tmp_path / "settings_home"
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+        claude_klabauter_root = tmp_path / "claude-klabauter"
+        _init_repo(claude_klabauter_root)
+        (claude_klabauter_root / "f.txt").write_text("v1", encoding="utf-8")
+        published_head = _commit_all(claude_klabauter_root, "v1")
+        toplevel = _toplevel(claude_klabauter_root)
+        (claude_klabauter_root / "f.txt").write_text("v2", encoding="utf-8")
+        _commit_all(claude_klabauter_root, "v2")
+
+        _write_record(
+            settings_home,
+            {"klabauter": {"published": True, "toplevels": {toplevel: published_head}}},
+        )
+        behind = mod._run_probe_publish_provenance(claude_klabauter_root)
+        assert mod._sz_status(behind) == mod._SZ_FAIL
+
+        record_path = settings_home / "machine-local" / "publish-provenance.json"
+        record_path.write_text("{not valid json", encoding="utf-8")
+        corrupt = mod._run_probe_publish_provenance(claude_klabauter_root)
+        assert mod._sz_status(corrupt) == mod._SZ_FAIL
 
     def test_none_root_emits_skip(self) -> None:
         mod = _require_module()

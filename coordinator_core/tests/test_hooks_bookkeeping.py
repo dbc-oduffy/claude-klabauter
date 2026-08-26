@@ -109,6 +109,21 @@ def _make_session(
     return session_dir, touched
 
 
+def _decoded_touch_events(sink: Path) -> list:
+    """Read a touch-record.jsonl sink and return every decoded TouchEvent, in
+    file order. C7 dialect repoint: mirrors the retired
+    scope.parse_touch_event(line)-per-line helper these tests used to call
+    against touched.txt."""
+    from coordinator_core.session import touch_record
+
+    if not sink.exists():
+        return []
+    return [
+        touch_record.decode_line(line)
+        for line in touch_record.iter_complete_lines(sink.read_bytes())
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Golden-snapshot normalizer
 # ---------------------------------------------------------------------------
@@ -215,9 +230,8 @@ class TestTrackTouchedFiles:
 
     def test_session_keyed_write(self, tmp_path: Path) -> None:
         """Handler appends a T-event for file_path to
-        .git/coordinator-sessions/<sid>/touched.txt."""
+        .git/coordinator-sessions/<sid>/touch-record.jsonl."""
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         ctx = self._ctx(tmp_path)
         sid = "aabbccddeeff0011"
         _make_session(tmp_path, sid)
@@ -225,10 +239,9 @@ class TestTrackTouchedFiles:
             {"session_id": sid, "tool_name": "Write", "file_path": "src/foo.py", "agent_id": ""},
             repo_root=ctx.repo_root,
         ))
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
-        lines = [l for l in touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
-        assert any(verb == "T" and path == "src/foo.py" for verb, _ts, path in events)
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
+        events = _decoded_touch_events(sink)
+        assert any(e.verb == "T" and e.path == "src/foo.py" for e in events)
 
     def test_dedup_idempotency_same_path_twice(self, tmp_path: Path) -> None:
         """Same file_path submitted twice → TWO T-events (dedup retired; append-only
@@ -240,19 +253,17 @@ class TestTrackTouchedFiles:
         original whole-line dedup contract.
         """
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         ctx = self._ctx(tmp_path)
         sid = "aabbccddeeff0022"
         _make_session(tmp_path, sid)
         params = {"session_id": sid, "tool_name": "Edit", "file_path": "lib/util.py", "agent_id": ""}
         _run(_handler(params, repo_root=ctx.repo_root))
         _run(_handler(params, repo_root=ctx.repo_root))
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
-        lines = [l for l in touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
-        matches = [(verb, path) for verb, _ts, path in events if path == "lib/util.py"]
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
+        events = _decoded_touch_events(sink)
+        matches = [(e.verb, e.path) for e in events if e.path == "lib/util.py"]
         assert len(matches) == 2, (
-            f"Expected exactly TWO 'lib/util.py' T-events (append-only, dedup retired); got {lines}"
+            f"Expected exactly TWO 'lib/util.py' T-events (append-only, dedup retired); got {events}"
         )
         assert all(verb == "T" for verb, _path in matches)
         # The projection still resolves the path as held: the LAST event for
@@ -289,9 +300,8 @@ class TestTrackTouchedFiles:
     # consequence is ever judged unacceptable -- the fix would be a stamp at the
     # investigate-only pickup path.
     def test_agent_keyed_write(self, tmp_path: Path) -> None:
-        """Subagent fire: writes a T-event to .agents/<canonical_id>/touched.txt as well."""
+        """Subagent fire: writes a T-event to .agents/<canonical_id>/touch-record.jsonl as well."""
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         ctx = self._ctx(tmp_path)
         sid = "aabbccddeeff0033"
         _make_session(tmp_path, sid)
@@ -302,12 +312,11 @@ class TestTrackTouchedFiles:
              "file_path": "coordinator_core/ops/foo.py", "agent_id": agent_id},
             repo_root=ctx.repo_root,
         ))
-        agent_touched = _cs_dir(tmp_path) / ".agents" / agent_id / "touched.txt"
-        assert agent_touched.exists(), "Agent-keyed touched.txt must be created"
-        lines = [l for l in agent_touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
+        agent_sink = _cs_dir(tmp_path) / ".agents" / agent_id / "touch-record.jsonl"
+        assert agent_sink.exists(), "Agent-keyed touch-record.jsonl must be created"
+        events = _decoded_touch_events(agent_sink)
         assert any(
-            verb == "T" and path == "coordinator_core/ops/foo.py" for verb, _ts, path in events
+            e.verb == "T" and e.path == "coordinator_core/ops/foo.py" for e in events
         )
 
     def test_agent_keyed_write_canonical_shape_rewritten_against_live_session(
@@ -325,7 +334,6 @@ class TestTrackTouchedFiles:
         hooks-inside-a-teammate-session.md.
         """
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         ctx = self._ctx(tmp_path)
         live_sid = "f91c46a7bbbbbbbb"
         _make_session(tmp_path, live_sid)
@@ -337,14 +345,13 @@ class TestTrackTouchedFiles:
             repo_root=ctx.repo_root,
         ))
         expected_dir = _cs_dir(tmp_path) / ".agents" / f"hookprobe-named@session-{live_sid[:8]}"
-        agent_touched = expected_dir / "touched.txt"
-        assert agent_touched.exists(), (
+        agent_sink = expected_dir / "touch-record.jsonl"
+        assert agent_sink.exists(), (
             f"Agent-keyed write must land under the LIVE-short directory {expected_dir}"
         )
-        lines = [l for l in agent_touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
+        events = _decoded_touch_events(agent_sink)
         assert any(
-            verb == "T" and path == "coordinator_core/ops/foo.py" for verb, _ts, path in events
+            e.verb == "T" and e.path == "coordinator_core/ops/foo.py" for e in events
         )
         stale_dir = _cs_dir(tmp_path) / ".agents" / stale_agent_id
         assert not stale_dir.exists(), "Must not also create a stale-short-keyed directory"
@@ -393,7 +400,6 @@ class TestTrackTouchedFiles:
     def test_path_normalized_relative_passthrough(self, tmp_path: Path) -> None:
         """Relative paths pass through normalization unchanged, in the written T-event."""
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         ctx = self._ctx(tmp_path)
         sid = "aabbccddeeff0077"
         _make_session(tmp_path, sid)
@@ -402,11 +408,10 @@ class TestTrackTouchedFiles:
              "file_path": "coordinator_core/hooks/new.py"},
             repo_root=ctx.repo_root,
         ))
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
-        lines = [l for l in touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
+        events = _decoded_touch_events(sink)
         assert any(
-            verb == "T" and path == "coordinator_core/hooks/new.py" for verb, _ts, path in events
+            e.verb == "T" and e.path == "coordinator_core/hooks/new.py" for e in events
         )
 
     def test_agent_dir_born_here_carries_an_owner(self, tmp_path: Path) -> None:
@@ -432,7 +437,7 @@ class TestTrackTouchedFiles:
             repo_root=ctx.repo_root,
         ))
         agent_dir = _cs_dir(tmp_path) / ".agents" / aid
-        assert (agent_dir / "touched.txt").read_text().strip() != "", (
+        assert (agent_dir / "touch-record.jsonl").read_bytes().strip() != b"", (
             "precondition: the agent-keyed touch must have been recorded"
         )
         bp = agent_dir / "em-session-id.txt"
@@ -590,9 +595,10 @@ class TestTrackTouchedFiles:
             repo_root=ctx.repo_root,
         ))
         assert result == {}
-        # Bookkeeping otherwise unaffected -- the touched-file write still lands.
-        agent_touched = agent_dir / "touched.txt"
-        assert "coordinator_core/hooks/boom.py" in agent_touched.read_text()
+        # Bookkeeping otherwise unaffected -- the touch-record write still lands.
+        agent_sink = agent_dir / "touch-record.jsonl"
+        events = _decoded_touch_events(agent_sink)
+        assert any(e.path == "coordinator_core/hooks/boom.py" for e in events)
 
 
 # ---------------------------------------------------------------------------
@@ -1440,9 +1446,8 @@ class TestConcurrency:
     """Concurrent asyncio.gather invocations must not lose or corrupt entries (D6)."""
 
     def test_c1_concurrent_dedup_no_lost_entry(self, tmp_path: Path) -> None:
-        """Two concurrent track_touched_files calls on the same touched.txt — no lost entries."""
+        """Two concurrent track_touched_files calls on the same touch-record.jsonl — no lost entries."""
         from coordinator_core.hooks.track_touched_files import _handler, _FILE_LOCKS
-        from coordinator_core.session.scope import parse_touch_event
         # Review: code-reviewer F10 (nit) — make structural check explicit rather than relying
         # on ImportError; if _FILE_LOCKS is renamed, this gives a clear assertion failure.
         assert isinstance(_FILE_LOCKS, dict), "_FILE_LOCKS lock registry must be a dict (D6 write-atomicity)"
@@ -1450,7 +1455,7 @@ class TestConcurrency:
         sid = "concurrency00001"
         _make_session(tmp_path, sid)
         ctx = _FakeCtx(str(tmp_path / ".git"))
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
 
         async def _concurrent():
             path_a = "src/module_a.py"
@@ -1463,24 +1468,22 @@ class TestConcurrency:
             )
 
         asyncio.run(_concurrent())
-        lines = [l for l in touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
-        paths = [path for verb, _ts, path in events if verb == "T"]
+        events = _decoded_touch_events(sink)
+        paths = [e.path for e in events if e.verb == "T"]
         # Both entries must appear
-        assert "src/module_a.py" in paths, f"path_a missing; lines={lines!r}"
-        assert "src/module_b.py" in paths, f"path_b missing; lines={lines!r}"
+        assert "src/module_a.py" in paths, f"path_a missing; events={events!r}"
+        assert "src/module_b.py" in paths, f"path_b missing; events={events!r}"
 
-    def test_c1_concurrent_same_path_no_duplicate(self, tmp_path: Path) -> None:
+    def test_c1_concurrent_same_path_both_events_land(self, tmp_path: Path) -> None:
         """Two concurrent calls with the SAME path → TWO T-events, both intact
         (dedup retired — append-only last-event-wins; D6 still guarantees no
         torn/corrupted write, not a single-entry collapse)."""
         from coordinator_core.hooks.track_touched_files import _handler
-        from coordinator_core.session.scope import parse_touch_event
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
         sid = "concurrency00002"
         _make_session(tmp_path, sid)
         ctx = _FakeCtx(str(tmp_path / ".git"))
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
 
         async def _concurrent():
             path = "src/shared_module.py"
@@ -1492,12 +1495,11 @@ class TestConcurrency:
             )
 
         asyncio.run(_concurrent())
-        lines = [l for l in touched.read_text().splitlines() if l]
-        events = [parse_touch_event(l) for l in lines]
-        matches = [(verb, path) for verb, _ts, path in events if path == "src/shared_module.py"]
+        events = _decoded_touch_events(sink)
+        matches = [(e.verb, e.path) for e in events if e.path == "src/shared_module.py"]
         assert len(matches) == 2, (
             f"Expected TWO T-events for src/shared_module.py (append-only, dedup retired) — "
-            f"no lost/corrupted entry; lines={lines!r}"
+            f"no lost/corrupted entry; events={events!r}"
         )
         assert all(verb == "T" for verb, _path in matches)
 
@@ -1679,7 +1681,18 @@ def _git_init_lenient(path: Path) -> None:
 
 
 class TestCrossProcessConcurrency:
-    """Concurrent OS-process writes to the same bookkeeping files are serialised by locked_rmw.
+    """Concurrent OS-process writes to the same bookkeeping files do not lose or corrupt entries.
+
+    Two different mechanisms, since C7 split them. The C1 touch-record tests go through
+    ``touch_record.append_event`` -> ``atomic_append.append_line``, which is append-only
+    and does NOT dedup: ``touch_record.py``'s own negative-spec forbids the last-event
+    dedup read (AC17, a bound on per-record growth). Duplicate suppression moved to READ
+    time, in ``project_live_claims``'s last-verb-wins projection. The C4
+    dispatched-agents tests still go through ``locked_rmw`` and still dedup at write time.
+
+    So a C1 test asserting TWO events for one path is not a weakened dedup test -- it is
+    the correct assertion for an append-only writer, and the property it guards is
+    no-loss/no-tear, not collapse-to-one.
 
     Existing TestConcurrency tests cover asyncio.gather within one process (asyncio.Lock / D6).
     These tests spawn real subprocesses to exercise the cross-process flock layer added in C5.
@@ -1689,7 +1702,7 @@ class TestCrossProcessConcurrency:
     (locked_rmw fallback path), though cross-process protection is absent there.
     """
 
-    def test_c1_cross_process_same_path_no_duplicate(self, tmp_path: Path) -> None:
+    def test_c1_cross_process_same_path_both_events_land(self, tmp_path: Path) -> None:
         """Two subprocesses writing the same file_path to touched.txt → both T-events land
         intact (dedup retired — append-only last-event-wins).
 
@@ -1726,15 +1739,13 @@ asyncio.run(_handler(
         p1.wait()
         p2.wait()
 
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
-        assert touched.exists(), "touched.txt must exist after subprocess writes"
-        lines = [ln for ln in touched.read_text().splitlines() if ln]
-        from coordinator_core.session.scope import parse_touch_event
-        events = [parse_touch_event(l) for l in lines]
-        matches = [(verb, path) for verb, _ts, path in events if path == file_path]
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
+        assert sink.exists(), "touch-record.jsonl must exist after subprocess writes"
+        events = _decoded_touch_events(sink)
+        matches = [(e.verb, e.path) for e in events if e.path == file_path]
         assert len(matches) == 2, (
             f"Expected TWO T-events for {file_path} across the two subprocesses "
-            f"(append-only, dedup retired) — no lost/corrupted entry; got {lines!r}"
+            f"(append-only, dedup retired) — no lost/corrupted entry; events={events!r}"
         )
         assert all(verb == "T" for verb, _path in matches)
 
@@ -1770,14 +1781,12 @@ asyncio.run(_handler(
         p1.wait()
         p2.wait()
 
-        touched = _cs_dir(tmp_path) / sid / "touched.txt"
-        assert touched.exists()
-        lines = [ln for ln in touched.read_text().splitlines() if ln]
-        from coordinator_core.session.scope import parse_touch_event
-        events = [parse_touch_event(l) for l in lines]
-        paths = [path for verb, _ts, path in events if verb == "T"]
-        assert path_a in paths, f"path_a missing from cross-process write; lines={lines!r}"
-        assert path_b in paths, f"path_b missing from cross-process write; lines={lines!r}"
+        sink = _cs_dir(tmp_path) / sid / "touch-record.jsonl"
+        assert sink.exists()
+        events = _decoded_touch_events(sink)
+        paths = [e.path for e in events if e.verb == "T"]
+        assert path_a in paths, f"path_a missing from cross-process write; events={events!r}"
+        assert path_b in paths, f"path_b missing from cross-process write; events={events!r}"
 
     def test_c4_cross_process_same_agent_no_duplicate(self, tmp_path: Path) -> None:
         """Two subprocesses dispatching the same agent_id → exactly one row in dispatched-agents.txt.

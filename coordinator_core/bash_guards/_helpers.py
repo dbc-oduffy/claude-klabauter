@@ -335,11 +335,14 @@ COMMAND_LINE_LABEL = "Command:"
 
 #: Both re-exported from the leaf ``_override_doc`` module (2026-08-25, "the
 #: commit gate stops importing a subsystem") rather than defined here --
-#: ``coordinator_core.ops.detect_staged_rollback`` (on the commit pre-commit
-#: hook path) imports these two names FROM THE LEAF directly, so importing
-#: it must not pull in this module's much wider import graph
-#: (``subagent_sandbox.engine``, ``session.identity``, etc.). Every existing
-#: importer of ``_helpers.OVERRIDE_KEYS_DOC``/``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``
+#: originally split so ``coordinator_core.ops.detect_staged_rollback`` (on
+#: the commit pre-commit hook path) could import these two names FROM THE
+#: LEAF directly without pulling in this module's much wider import graph
+#: (``subagent_sandbox.engine``, ``session.identity``, etc.). That caller is
+#: gone (deleted 2026-08-25, "the staged rollback gate dies without blocking
+#: a commit" -- claude-klabauter ends with no pre-commit hook), but the leaf split
+#: still stands: every existing importer of
+#: ``_helpers.OVERRIDE_KEYS_DOC``/``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``
 #: keeps working unmodified via this re-export. See ``_override_doc.py``'s
 #: own module docstring and each constant's own docstring there for the full
 #: history (including the 2026-08-05 break-class absolute-path-leak fix) --

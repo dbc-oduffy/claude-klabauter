@@ -59,6 +59,7 @@ from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_sourc
 from coordinator_core.tests.test_no_bare_hot_path_spawn import (
     _EXEMPTION_TAG,
     _SubprocessImportResolver,
+    _collect_no_console_names,
     _is_no_console_shaped,
 )
 
@@ -68,7 +69,23 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: because the defect is not confined to the engine package -- 7 of the
 #: sites in the landing survey were operator-facing CLIs under
 #: `coordinator/bin/`, where a swallowed child is MOST visible to a human.
-_SCAN_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin", "coordinator/lib", "bin")
+#: `scripts/` and `coordinator/scripts/` were added 2026-08-25 after a census found
+#: FOUR live violations in `scripts/setup.py` alone -- `register_claude_klabauter_root`,
+#: `offer_warm_opt_in`, `install_machine_identity`,
+#: `_seed_fleet_env_root_from_klabauter`, every one a `machine-local set` spawn
+#: discarding the child's own reason for failing. `find_output_swallowing_spawns(
+#: [REPO_ROOT / "scripts"])` returned `[]` against that directory: unwalked roots
+#: do not read as clean, they read as absent, and the gate reported green over a
+#: population it could not see. Add a root here rather than trusting that the
+#: install surface is somebody else's problem.
+_SCAN_ROOTS: tuple[str, ...] = (
+    "coordinator_core",
+    "coordinator/bin",
+    "coordinator/lib",
+    "coordinator/scripts",
+    "scripts",
+    "bin",
+)
 
 #: Spawn functions that accept std-stream kwargs. `os.system`/`os.popen` are
 #: absent on purpose: neither takes `creationflags`, so neither can reach the
@@ -77,7 +94,16 @@ _SPAWN_NAMES: frozenset[str] = frozenset({"run", "Popen", "check_output", "call"
 
 #: Any ONE of these is sufficient to set STARTF_USESTDHANDLES -- see the
 #: module docstring's measurement.
-_STREAM_KWARGS: frozenset[str] = frozenset({"stdin", "stdout", "stderr", "capture_output"})
+#:
+#: `input` belongs here and was missing: `subprocess.run` converts it to
+#: `stdin=PIPE` before `Popen` ever sees it (`subprocess.py`, the
+#: `if input is not None: kwargs["stdin"] = PIPE` arm), so a call passing
+#: `input=` is as safe as one passing `stdin=` and flagging it is a FALSE
+#: POSITIVE -- `install/substrate.py :: _fnm_step`'s `bash -s` spawn was
+#: reading as a violation on that axis alone.
+_STREAM_KWARGS: frozenset[str] = frozenset(
+    {"stdin", "stdout", "stderr", "capture_output", "input"}
+)
 
 #: Sites known to violate, deliberately NOT fixed, each with the reason and
 #: the owner who holds the fix. This is a DEFERRAL LEDGER, not an
@@ -100,19 +126,34 @@ class OutputSwallowingSite:
     enclosing: str
 
 
-def _carries_no_console_signal(node: ast.Call, source_lines: list[str]) -> bool:
+def _carries_no_console_signal(
+    node: ast.Call, source_lines: list[str], resolved: frozenset[str] = frozenset()
+) -> bool:
     """True if this call passes console-suppressing creationflags.
 
-    Matched three ways, mirroring the sibling gate's own resolution: an
-    explicit `creationflags=` keyword, a `**` splat whose callee/name is
-    `no_console_*`-shaped, or a literal CREATE_NO_WINDOW constant spelled in
-    the call's source span (the hand-rolled shape the primitive replaced).
+    Matched four ways: an explicit `creationflags=` keyword, a `**` splat whose
+    callee/name is `no_console_*`-shaped, a `**` splat naming an ALIAS resolved to
+    the primitive by `_collect_no_console_names`, or a literal CREATE_NO_WINDOW
+    constant spelled in the call's source span.
+
+    THE ALIAS ARM IS THE ONE THIS GATE WAS MISSING, and it is not a corner case.
+    `_is_no_console_shaped` is a name-SHAPE test — `identifier.lstrip("_").
+    startswith("no_console")` — so it returns False for `_NO_CONSOLE`, the
+    module-constant spelling this repo uses most. The literal-span fallback does
+    not rescue it either: a `**_NO_CONSOLE` splat's own source span contains no
+    "CREATE_NO_WINDOW" text, because the constant is spelled at the assignment and
+    not at the call. Every `**_NO_CONSOLE`-shaped site in the tree was therefore
+    invisible here — reported green, never actually examined. The sibling gate does
+    not have the bug because `_collect_no_console_names` is precisely what it uses;
+    this gate simply never called it.
     """
     for kw in node.keywords:
         if kw.arg == "creationflags":
             return True
-        if kw.arg is None and _is_no_console_shaped(_splat_identifier(kw.value) or ""):
-            return True
+        if kw.arg is None:
+            ident = _splat_identifier(kw.value) or ""
+            if _is_no_console_shaped(ident) or ident in resolved:
+                return True
 
     span = "\n".join(source_lines[node.lineno - 1 : (node.end_lineno or node.lineno)])
     return "CREATE_NO_WINDOW" in span or "0x08000000" in span
@@ -141,7 +182,9 @@ def _is_passthrough_shaped(identifier: str) -> bool:
     return "passthrough" in tail and ("kw" in tail or "spawn" in tail)
 
 
-def _has_untraceable_splat(node: ast.Call) -> bool:
+def _has_untraceable_splat(
+    node: ast.Call, resolved: frozenset[str] = frozenset()
+) -> bool:
     """True if a `**splat` that is NOT the no-console primitive is present.
 
     Such a splat may itself carry `stdout=`/`stderr=`, which this AST-only
@@ -149,21 +192,41 @@ def _has_untraceable_splat(node: ast.Call) -> bool:
     doubt. See the module docstring's false-negative preference.
     """
     for kw in node.keywords:
-        if kw.arg is None and not _is_no_console_shaped(_splat_identifier(kw.value) or ""):
-            return True
+        if kw.arg is None:
+            ident = _splat_identifier(kw.value) or ""
+            # A splat resolved to the primitive is TRACEABLE — it contributes
+            # creationflags and nothing else. Without this arm every
+            # `**_NO_CONSOLE` site took this skip-on-doubt exit as WELL as failing
+            # `_carries_no_console_signal`, so the blind spot was covered twice
+            # over and no single fix would have lifted it.
+            if not _is_no_console_shaped(ident) and ident not in resolved:
+                return True
     return False
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, source_lines: list[str], resolver: _SubprocessImportResolver) -> None:
+    def __init__(
+        self,
+        source_lines: list[str],
+        resolver: _SubprocessImportResolver,
+        module_aliases: frozenset[str] = frozenset(),
+    ) -> None:
         self._lines = source_lines
         self._resolver = resolver
         self._enclosing: list[str] = []
         self.sites: list[tuple[int, str]] = []
+        # Two-pass alias resolution, matching the sibling gate's own contract:
+        # module scope once, then each function scope unioned on top for the
+        # duration of that scope. A same-named local inside another function must
+        # not leak across scopes, which is why this is a stack and not a set.
+        self._scope_aliases: list[frozenset[str]] = [module_aliases]
 
     def _visit_scope(self, node) -> None:
         self._enclosing.append(node.name)
+        local = _collect_no_console_names(getattr(node, "body", []))
+        self._scope_aliases.append(self._scope_aliases[-1] | frozenset(local))
         self.generic_visit(node)
+        self._scope_aliases.pop()
         self._enclosing.pop()
 
     visit_FunctionDef = _visit_scope
@@ -179,10 +242,10 @@ class _Visitor(ast.NodeVisitor):
             ]
             if (
                 _EXEMPTION_TAG not in span
-                and _carries_no_console_signal(node, self._lines)
+                and _carries_no_console_signal(node, self._lines, self._scope_aliases[-1])
                 and not (kwnames & _STREAM_KWARGS)
                 and not any(_is_passthrough_shaped(name) for name in splats)
-                and not _has_untraceable_splat(node)
+                and not _has_untraceable_splat(node, self._scope_aliases[-1])
             ):
                 self.sites.append((node.lineno, self._enclosing[-1] if self._enclosing else "<module>"))
         self.generic_visit(node)
@@ -227,7 +290,11 @@ def find_output_swallowing_spawns(roots: list[pathlib.Path]) -> list[OutputSwall
             if not resolver.module_aliases and not resolver.function_aliases:
                 continue
 
-            visitor = _Visitor(source.splitlines(), resolver)
+            visitor = _Visitor(
+                source.splitlines(),
+                resolver,
+                frozenset(_collect_no_console_names(tree.body)),
+            )
             visitor.visit(tree)
             if not visitor.sites:
                 continue

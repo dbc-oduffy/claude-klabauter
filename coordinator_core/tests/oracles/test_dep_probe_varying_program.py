@@ -38,6 +38,12 @@ def _write_manifest(tmp_path: Path, exprs: list[str]) -> tuple[Path, Path]:
     fallback ladder, which is orthogonal to this oracle's claim)."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    # `_sibling_search_root` walks up from `repo_root` for the nearest `.git`
+    # entry (`resolve_git_root_cheap`) before falling back to a manifest-
+    # nesting-depth guess; without a real marker here it takes that fallback
+    # and resolves siblings against the wrong ancestor, and `sibling_path`
+    # never matches the `sib-N` dirs this fixture creates beside `repo_root`.
+    (repo_root / ".git").mkdir()
     deps = []
     for i, expr in enumerate(exprs):
         sibling_dir = f"sib-{i}"

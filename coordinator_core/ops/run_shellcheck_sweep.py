@@ -80,7 +80,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 import sys
 import tempfile
 from pathlib import Path
@@ -186,7 +186,7 @@ def _lint_one_file(repo_root: Path, rel_path: str, deadline: float) -> List[dict
                 capture_output=True,
                 text=True,
                 timeout=spawn_bound(_SHELLCHECK_SITE, deadline),
-                **no_console_creationflags(),
+                **leaf_spawn_creationflags(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(_SHELLCHECK_NOT_FOUND_MESSAGE) from exc

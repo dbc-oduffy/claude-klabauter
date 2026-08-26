@@ -565,6 +565,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # false premise, for the one op in this family that writes into two repos.
     # Spec: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C2/AC8
     "memo.send":                              "common_dir",
+    # memo.reconcile_outbox — "common_dir", same premise as memo.draft/memo.compose
+    # above: it moves already-delivered entries within the CALLING repo's OWN
+    # state/memo-outbox/ tree, so the handler derives that repo's worktree via
+    # main_worktree_root(common_dir). Diverges from memo.send's shape on the one axis
+    # that matters here — nothing it touches is outside the sender's own tree. Without
+    # this entry dispatch resolves repo_root=None and the handler fails loud on its
+    # missing-repo_root guard.
+    # Spec: state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-after-a-send.yaml
+    "memo.reconcile_outbox":                  "common_dir",
     "memo.draft":                             "common_dir",
     "memo.compose":                           "common_dir",
     # memo.list_outbox — keyed on git_common_dir: enumerates the CALLING
@@ -594,6 +603,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir), same as wsc_tail.
     # Spec: docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a
     "ceremony.post_commit_tail":             "common_dir",
+    # push.outstanding — common_dir: the cadence-push primitive (DR-329). Decides
+    # whether the current branch is ahead of its upstream and, if so, pushes via
+    # the same push_with_retry machinery every other publisher uses. Keyed on
+    # git_common_dir because the handler derives its worktree via
+    # main_worktree_root(common_dir), same as ceremony.post_commit_tail above.
+    "push.outstanding":                      "common_dir",
     # ceremony.session_instructions — read-mostly render op; keyed on git_common_dir.
     # It reuses the SAME _resolve_branches call (branch_resolution.py, the surviving
     # engine of the retired ceremony.wsc_resolve op) over session-shape.json under
@@ -1439,7 +1454,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "priority.drain":                           "none",
     # plugin_health.forwarder_drift — "none": inspects the operator's OWN
     # settings-home/claude-klabauter install state (settings-home bin/, the retired
-    # ~/.claude/bin compat mirror, coordinator/bin/ via the claude-klabauter-root
+    # ~/.claude/bin compat mirror, coordinator/bin/ via the claude-klabauter-live-root
     # resolver, DoE-claude's own prompt-surface trees) — never the caller's
     # repo_root. The handler's own docstring says so explicitly: "repo_root is
     # accepted for handler-signature parity but IGNORED". Same "none" class as

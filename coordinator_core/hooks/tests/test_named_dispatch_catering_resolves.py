@@ -37,21 +37,24 @@ file alone (state/dispatch-briefs/2026-08-25-a-named-dispatch-keeps-its-
 report/C3.md), and the audit above already carries the verbatim capture
 this precondition step calls for.
 
-Negative-spec / a genuine second finding, not papered over (C3 body,
-"today neither fires... if fixing the key form does not restore the
-marker, that is a second defect and this chunk reports it"):
+AC5 correction (bug-backlog `2026-08-25-sidecar-provisioning-missed-never-
+fires-f49eb749c024.yaml`; `_resolve_sidecar_leg` in `cater_subagent_start.py`):
+the plan's AC5 row, as written, claims the miss marker should fire for "a
+named dispatch whose resolved type is genuinely off the roster." That is
+the WRONG population -- `compose_catering` runs for every SubagentStart, so
+a resolved-but-off-roster type is the majority of all dispatches, and
+firing the marker there would broadcast "Sidecar provisioning did not
+complete -- scaffold your own at the path your agent definition names" to
+types whose definitions name no such path. The correct population is a
+type that never resolved AT ALL (`agent_type` and `subagent_type` both
+falsy) -- the dispatch that genuinely lost a sidecar because resolution
+itself missed or raised, not because the roster said no.
 `test_named_dispatch_genuinely_off_roster_type_stays_silent_not_missed`
-demonstrates that fixing the key form (C2) does NOT make `_resolve_sidecar_
-leg` emit `sidecar_provisioning: missed` for a named dispatch whose
-correctly-resolved `subagent_type` is genuinely absent from `policy.
-report_sidecar`. That is structural, not a residual bug: `_resolve_sidecar_
-leg`'s own eligibility gate (`compose_catering`'s docstring, "expected miss,
-no diagnostic") takes the SAME silent branch for "never eligible" as it does
-for "eligible but the wrong lookup key" -- the two were indistinguishable
-before this chunk and remain indistinguishable after it. AC5 as stated in
-the plan ("the `sidecar_provisioning: missed` marker fires for a named
-dispatch whose resolved type is genuinely off the roster") is FALSE against
-the live code and is reported as such rather than asserted past.
+below pins the CORRECT behaviour for the majority (resolved, off-roster)
+population: it stays silent, matching the Agent-path hook's own
+`_is_report_sidecar_eligible` gate. The never-resolved population is
+covered separately by
+`test_named_dispatch_unresolved_type_gets_the_miss_marker`.
 """
 
 from __future__ import annotations
@@ -67,6 +70,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     OP_NAME,
     SIDECAR_MISS_MARKER,
     SIDECAR_PATH_MARKER_PREFIX,
+    _is_named_teammate_agent_id,
     compose_catering,
 )
 from coordinator_core.subagent_sandbox import engine as engine_mod
@@ -211,18 +215,134 @@ def test_named_dispatch_genuinely_off_roster_type_stays_silent_not_missed(git_re
 
     result = compose_catering(payload, cwd=str(git_repo))
 
-    # ACTUAL, MEASURED behaviour: `_resolve_sidecar_leg`'s eligibility gate
-    # (`agent_type/subagent_type in policy.report_sidecar`) takes the same
-    # silent branch whether the lookup never resolved a type at all (the
-    # key-form bug) or resolved one that is genuinely not on the roster.
-    # C2's fix does not and cannot change this -- the two cases are still
-    # indistinguishable to `_resolve_sidecar_leg` after the fix, exactly as
-    # before it. AC5's literal claim ("the sidecar_provisioning: missed
-    # marker fires for a named dispatch whose resolved type is genuinely off
-    # the roster") is FALSE against this measurement; reported here, not
-    # made to pass by weakening the assertion.
+    # CORRECT behaviour (AC5 fix): a type that resolved correctly via the
+    # back-pointer chain and is genuinely absent from `policy.report_sidecar`
+    # stays silent -- `compose_catering` runs for every SubagentStart, so
+    # this is the majority of all dispatches, and this matches the
+    # Agent-path hook's own `_is_report_sidecar_eligible` gate on the miss
+    # notice verbatim. The population that should hear about a lost sidecar
+    # is a type that never resolved at all, covered by
+    # `test_named_dispatch_unresolved_type_gets_the_miss_marker` below --
+    # not this one.
     assert SIDECAR_PATH_MARKER_PREFIX not in result
     assert SIDECAR_MISS_MARKER not in result
+
+
+def test_named_dispatch_eligible_type_with_no_backpointer_gets_the_miss_marker(
+    git_repo: Path,
+) -> None:
+    """AC5 fix, the population the backlog actually names: a NAMED dispatch
+    of an ELIGIBLE type (`REAL_RESOLVED_TYPE`, on the policy roster) whose
+    back-pointer row has not been written yet -- no `_write_backpointer`
+    call for this session at all, mirroring the real ordering hazard
+    (`test_back_pointer_not_yet_written_gets_the_miss_marker` pins the same
+    race through the actual op-relay path; this pins it directly against
+    `compose_catering`).
+
+    `resolve_effective_types` returns `agent_type` populated verbatim from
+    `payload["agent_type"]` (the teammate NAME, `REAL_TEAMMATE_NAME`) --
+    never a `report_sidecar` policy key -- and `subagent_type == ""` (no
+    back-pointer to read). The roster lookup below is structurally
+    incapable of matching either leg, so before the fix this silently
+    dropped an eligible dispatch's sidecar with no signal at all. This is
+    the regression this chunk closes."""
+    payload = _real_shaped_payload(str(git_repo))
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+
+
+def test_named_dispatch_with_separator_in_teammate_name_gets_the_miss_marker(
+    git_repo: Path,
+) -> None:
+    """Regression for the separator-name miss-marker hole (bug-backlog
+    `2026-08-25-separator-name-miss-marker-hole`): a named teammate whose
+    NAME contains a `/` (`feature/auth-review`, a natural name) presents a
+    subagent-side raw id `afeature/auth-review-aaaabbbbccccdddd`, which
+    `_canonical_agent_id` genuinely canonicalizes (via `resolve_subagent_
+    identity`) to `feature/auth-review@session-11111111` -- a shape
+    `engine._TEAMMATE_CANONICAL_RE` rejects (its charset excludes `/`).
+    Before the fix, `_is_named_teammate_agent_id` returned False for that
+    canonical id, so an unresolved `subagent_type` fell through to total
+    silence instead of the miss marker -- exactly the silence
+    `2c6783315a28325b10769d50ea1d9f3141c64bc7` was written to remove."""
+    raw_agent_id = "afeature/auth-review-aaaabbbbccccdddd"
+    payload = {
+        "agent_id": raw_agent_id,
+        "agent_type": "feature/auth-review",
+        "session_id": "11111111-0000-0000-0000-000000000000",
+        "cwd": str(git_repo),
+    }
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+
+
+@pytest.mark.parametrize(
+    "agent_id, expected",
+    [
+        ("staff-probe@session-11111111", True),
+        ("feature/auth-review@session-11111111", True),
+        ("docs/api-check@session-11111111", True),
+        ("a.dotted.name@session-11111111", True),
+        ("arev-counter-tests-f4498a5559849145", True),
+        ("0123456789abcdef0123456789abcdef", False),
+    ],
+)
+def test_is_named_teammate_agent_id_table(agent_id: str, expected: bool) -> None:
+    """Table-style pin over `_is_named_teammate_agent_id`'s two arms: the
+    permissive canonical-shape match (any non-empty name, any separator,
+    `@session-<suffix>`) and the raw subagent-side `a<name>-<16hex>` form.
+    A bare-hex unnamed id (no `@`, not `a<name>-<16hex>` shaped) must match
+    neither."""
+    assert _is_named_teammate_agent_id(agent_id) is expected
+
+
+def test_unnamed_dispatch_off_roster_type_stays_silent(git_repo: Path) -> None:
+    """Negative guard for the named-teammate predicate
+    (`_is_named_teammate_agent_id`): an UNNAMED dispatch -- bare-hex
+    `agent_id`, `agent_type` a genuine, resolved, off-roster policy key --
+    must stay fully silent. Without this guard, the named-form predicate
+    could rot into "any dispatch with an unresolved subagent_type" and
+    start broadcasting the miss notice to the majority (unnamed,
+    off-roster) population this fix is not supposed to touch."""
+    payload = {
+        "agent_id": "0123456789abcdef0123456789abcdef",
+        "agent_type": OFF_ROSTER_TYPE,
+        "session_id": REAL_SESSION_ID,
+        "cwd": str(git_repo),
+    }
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER not in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+
+
+def test_named_dispatch_unresolved_type_gets_the_miss_marker(git_repo: Path) -> None:
+    """AC5's resolver-exception arm: a payload carrying no `agent_type` and
+    no resolvable `agent_id` (so `resolve_effective_types` returns
+    `agent_type == subagent_type == ""`, the same shape `compose_catering`'s
+    own `except` arm produces on a resolver exception) -- distinct from the
+    named-teammate-unresolved leg above, which fires even though
+    `agent_type` IS populated (the teammate name). Both legs must surface
+    the miss marker; this pins the "nothing resolved at all" leg
+    specifically."""
+    payload = {
+        "agent_id": "",
+        "agent_type": "",
+        "session_id": REAL_SESSION_ID,
+        "cwd": str(git_repo),
+    }
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +388,7 @@ def test_bookkeeping_first_caters_the_real_named_dispatch(git_repo: Path) -> Non
     )
 
 
-def test_back_pointer_not_yet_written_is_a_silent_lookup_miss_not_an_error(git_repo: Path) -> None:
+def test_back_pointer_not_yet_written_gets_the_miss_marker(git_repo: Path) -> None:
     """The reverse order -- cater op dispatched BEFORE the bookkeeping leg
     writes the back-pointer for THIS SAME real-shaped payload. `_handler`'s
     own docstring (~lines 581-592) states it cannot verify its caller
@@ -277,18 +397,16 @@ def test_back_pointer_not_yet_written_is_a_silent_lookup_miss_not_an_error(git_r
     (this module's own vs. `track_dispatched_agents.py`'s "PostToolUse"
     self-description).
 
-    Observed: a silent lookup-miss (`no_advisory()`, `{}`) -- never an
-    error, never a crash, matching the fail-open contract every other arm
-    of this module holds. Whether `{}` (rather than the `sidecar_
-    provisioning: missed` diagnostic) is the RIGHT signal for this
-    population is NOT decided here -- `_handler` cannot see its own caller's
-    ordering from inside a single relayed op, and this chunk's remit is to
-    make the behaviour observable and stated, not to re-architect the
-    relay's ordering guarantee. Reported as an open cross-cutting question:
-    a named dispatch racing its own bookkeeping write currently gets NO
-    signal at all (neither offer nor miss notice), which is the same
-    "silence reads as nothing to recover from" gap AC5's off-roster case
-    also surfaces, for a different structural reason.
+    This is exactly the population the AC5 fix targets, not a separate
+    finding: a named dispatch (`agent_id` in the raw `a<name>-<16hex>`
+    shape) whose `subagent_type` has not resolved yet -- `agent_type` is
+    the teammate NAME, never a `report_sidecar` policy key, so the roster
+    lookup was always going to miss for it. Before the fix this raced
+    ordering produced total silence (`no_advisory()`, `{}`); now
+    `_resolve_sidecar_leg`'s named-teammate leg recognizes the unresolved
+    `subagent_type` and surfaces the miss notice instead, so a subagent
+    whose sidecar catering lost the ordering race is told, not left to
+    read silence as "nothing to recover from".
     """
     results = ipc.dispatch_ops_from_hook(
         [
@@ -302,7 +420,9 @@ def test_back_pointer_not_yet_written_is_a_silent_lookup_miss_not_an_error(git_r
     for result in results:
         assert not isinstance(result, ipc.HookDispatchError), result
 
-    assert results[0] == {}
+    context = _additional_context(results[0])
+    assert SIDECAR_MISS_MARKER in context
+    assert SIDECAR_PATH_MARKER_PREFIX not in context
 
 
 # ---------------------------------------------------------------------------

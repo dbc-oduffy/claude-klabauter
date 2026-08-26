@@ -143,11 +143,29 @@ def test_cc_invoke_delegate_to_gate_import_target_exists_live_and_mirror() -> No
     real source, not hardcoded, so a drift between C5's actual import and
     this gate's assumption is caught rather than silently checking the
     wrong target."""
-    cc_invoke_text = _CC_INVOKE.read_text(encoding="utf-8")
-    match = _DELEGATE_IMPORT_RE.search(cc_invoke_text)
+    # SEARCH THE SIBLING TOO. `_resolve_engine_root` and its nested
+    # `_delegate_to_gate` were moved out of cc_invoke.py into engine_bootstrap.py
+    # (see cc_invoke.py's own note: "every helper/constant EXCLUSIVE to it now
+    # live there, os+sys-only at module top, so a caller that needs only the
+    # bootstrap need not pay this module's own 27-module import cost"). This gate
+    # kept reading only cc_invoke.py and reported the relocation as "the import
+    # shape changed", which is the stale-gate failure AC13's sibling module
+    # already records once. Both files are the same bootstrap carve-out on the
+    # near side of the same no-import boundary; the claim is about the import's
+    # TARGET, not which of the two files houses it.
+    sources = [_CC_INVOKE, _CC_INVOKE.parent / "engine_bootstrap.py"]
+    match = None
+    searched = []
+    for source in sources:
+        if not source.is_file():
+            continue
+        searched.append(source)
+        match = _DELEGATE_IMPORT_RE.search(source.read_text(encoding="utf-8"))
+        if match is not None:
+            break
     assert match is not None, (
         f"could not find a 'from coordinator_core.<module> import "
-        f"coordinator_<x>_with_class' import in {_CC_INVOKE} -- "
+        f"coordinator_<x>_with_class' import in any of {searched} -- "
         "_delegate_to_gate's import shape changed; update this gate's regex "
         "alongside it."
     )

@@ -1,11 +1,11 @@
 """Tests for coordinator_core.ops.install_doe_claude_precommit_hook.
 
 Deliberately BEHAVIORAL where it matters: the hook body is executed via `sh`
-against stub gate scripts, not merely grepped for marker substrings — see
-`coordinator_core.ops.install_claude_klabauter_precommit_hook`'s own test-file
-docstring for why substring presence alone is an insufficient regression
-guard (a gate can be textually present but dead code after a stray trailing
-`exit 0`).
+against stub gate scripts, not merely grepped for marker substrings — the
+now-deleted `coordinator_core.ops.install_claude_klabauter_precommit_hook`'s own
+test-file docstring carried why substring presence alone is an insufficient
+regression guard (a gate can be textually present but dead code after a
+stray trailing `exit 0`).
 
 The highest-priority guard in this file is the exit-code-clamping suite:
 this hook must NEVER exit anything other than 0 or 1, even when the

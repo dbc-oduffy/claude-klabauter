@@ -12,7 +12,7 @@ NOT imported by the DoE-side trampoline. The trampoline lives at
 (`sync_flat_mirror`) into the standalone OSS `coordinator-claude` publish repo as
 `setup/name-personas.sh` -- a bootstrap-time script that runs BEFORE (and with no
 guarantee of) a `claude-klabauter` sibling clone, `coordinator_core`, or a
-`.claude-klabauter-root` machine-local pointer. A `from coordinator_core.ops.name_personas
+`.claude-klabauter-live-root` machine-local pointer. A `from coordinator_core.ops.name_personas
 import main` trampoline would resolve the engine root on a Claude-Central/DoE
 developer machine but raise/no-op for every OSS installer -- silently defeating the
 "customize persona names" install step for every real end user. This module exists

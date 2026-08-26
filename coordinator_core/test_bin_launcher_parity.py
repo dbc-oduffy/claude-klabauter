@@ -717,9 +717,6 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     "coordinator/bin/autonomous-verb.cmd": (
         "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
     ),
-    "coordinator/bin/install-claude-klabauter-precommit-hook.cmd": (
-        "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
-    ),
     # -- Orphaned launcher --------------------------------------------------
     # Targets `coordinator/bin/tests/run-fast-tests.py`, which does not exist
     # (the tests/ directory ships `run-full-tests.py` only). Regenerating

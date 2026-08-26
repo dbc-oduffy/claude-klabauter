@@ -56,7 +56,11 @@ _FAKE_SWEEP_RESULT = {
 _MIGRATED_FILES = [
     "baton-drift-sweep.py",
     "day-coverage-sweep.py",
-    "sweep-shipped-handoffs.py",
+    # sweep-shipped-handoffs.py was deleted with the killed archiver (648f2e4eb,
+    # "delete the killed archiver, sweep its callers") -- this roster is one of the
+    # callers that sweep missed, which is the A-KILLED-OP-IS-WHAT-IT-MUTATED-NOT-WHAT-
+    # IT-DID shape: the module went, its readers stayed, and nothing was red until
+    # someone reached for the surface.
     "reap-integrated-review-findings.py",
     "reap-orphaned-in-flight-handoffs.py",
     "reap-stale-subagent-sidecars.py",
@@ -279,9 +283,7 @@ class TestReapIntegratedReviewFindingsMismatchWarnsAndProceeds(unittest.TestCase
         ):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                rc = self.mod._reap_native(
-                    dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter",
-                )
+                rc = self.mod._reap_native(dry_run=True, commit_prefix="")
 
         self.assertEqual(rc, 0)
         self.assertIn(v["message"], stderr.getvalue())
@@ -294,9 +296,7 @@ class TestReapIntegratedReviewFindingsMismatchWarnsAndProceeds(unittest.TestCase
         ):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                rc = self.mod._reap_native(
-                    dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter",
-                )
+                rc = self.mod._reap_native(dry_run=True, commit_prefix="")
 
         self.assertEqual(rc, 0)
 

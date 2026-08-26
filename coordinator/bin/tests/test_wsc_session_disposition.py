@@ -1997,9 +1997,22 @@ class SessionClaimCliArgvTests(unittest.TestCase):
 class TestSessionIdentityImport(unittest.TestCase):
     """C1 (docs/plans/2026-08-20-wsc-identity-gates-key-on-the-deliverable.md):
     the plain `coordinator_core.workstream_complete.session_identity` import
-    resolves off this bin script, and `resolve_disposition` actually calls
-    into it (via `_note_session_deliverable_ids`) rather than the import
-    sitting dead."""
+    resolves off this bin script rather than sitting dead.
+
+    AMENDED 2026-08-25 (docs/plans/2026-08-25-the-close-ceremony-inside-the-
+    brightline.md, C1): this class used to prove liveness by asserting that
+    `resolve_disposition` CALLS the reader, via a diagnostic-only
+    `_note_session_deliverable_ids` at the top of every disposition
+    resolution. That call was a `git log --no-merges` full-history walk --
+    296.9ms measured, unbounded, growing with repo age -- run on the close
+    path purely to prove an import was wired, and by its own docstring it
+    could not change the returned disposition. It is gravestoned.
+
+    Liveness is now proved the way it should always have been: the import
+    binding is asserted directly (a test's job), and the reader's remaining
+    consumer is `_resolve_deliverable_id_join` on the detector_c leg, where
+    the value actually gates a decision and therefore earns its cost. The
+    close-path invariant that replaced the old call is pinned below."""
 
     def test_import_resolves_to_the_engine_leaf_module(self):
         self.assertIs(
@@ -2010,8 +2023,27 @@ class TestSessionIdentityImport(unittest.TestCase):
             ).session_deliverable_ids,
         )
 
-    def test_disposition_diagnostics_surface_a_resolved_deliverable_id(self):
+    def test_resolve_disposition_does_not_walk_history_for_a_diagnostic(self):
+        """The close-path invariant the gravestone created, pinned so it
+        cannot regress quietly.
+
+        `resolve_disposition` must not reach `session_deliverable_ids` at
+        all: that reader runs an unbounded `git log` from HEAD, and on the
+        close path ~50 concurrent sessions queue behind it. Reintroducing a
+        "cheap diagnostic" call here is exactly the regression this asserts
+        against -- the cost is the history walk, not the NOTE it produced.
+
+        Spying the module-level binding is deliberate: it catches ANY call
+        from this module, not merely a re-added helper of the same name.
+        """
         import tempfile
+
+        calls = []
+        real = wsc.session_deliverable_ids
+
+        def _spy(repo_root, session_id):
+            calls.append(session_id)
+            return real(repo_root, session_id)
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = _init_repo_with_history(Path(tmp))
@@ -2023,13 +2055,29 @@ class TestSessionIdentityImport(unittest.TestCase):
                 "-m",
                 "chunk work\n\nSession-Id: sid-dlv\nDeliverable-Id: dlv-c1-probe",
             )
-            result = wsc.resolve_disposition(repo, "sid-dlv")
-        self.assertTrue(
-            any("dlv-c1-probe" in line for line in result.diagnostics),
-            f"expected a Deliverable-Id NOTE in diagnostics, got: {result.diagnostics!r}",
+            with unittest.mock.patch.object(wsc, "session_deliverable_ids", _spy):
+                wsc.resolve_disposition(repo, "sid-dlv")
+
+        self.assertEqual(
+            calls,
+            [],
+            "resolve_disposition walked history via session_deliverable_ids; the "
+            "diagnostic-only call was gravestoned for costing 296.9ms of unbounded "
+            "`git log` on the close path (see the gravestone in "
+            "coordinator/bin/wsc-session-disposition.py)",
         )
 
-    def test_disposition_diagnostics_silent_when_no_deliverable_id_trailer(self):
+    def test_disposition_diagnostics_carry_no_deliverable_id_note(self):
+        """Retained deliberately, with its meaning restated.
+
+        It used to assert "the NOTE is absent when no trailer was found",
+        which distinguished two live behaviours. With the walk gravestoned
+        the NOTE is absent unconditionally, so this now pins that the close
+        path emits no Deliverable-Id diagnostic at all. Kept rather than
+        deleted because it is the assertion that goes red if someone
+        reintroduces the diagnostic against a repo that DOES carry a
+        trailer -- the case the sibling spy test covers from the other side.
+        """
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:

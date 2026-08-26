@@ -335,9 +335,22 @@ def test_write_cache_then_clear_delivers_failure_exactly_once(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_archive_sweeps_failure_surfaces_remedy_commands(tmp_path):
-    """A failure record naming one of the archive_sweeps sweep scripts must surface
-    that class's remedy commands as sub-bullets, once, after the failure bullets."""
+def test_archive_sweeps_failure_reports_the_failure_and_invents_no_remedy(tmp_path):
+    """A failure record still surfaces as a failure bullet — and carries NO remedy
+    sub-bullet, because `REMEDY_COMMANDS[ARCHIVE_SWEEPS]` is now empty.
+
+    This test used to assert `python3 coordinator/bin/sweep-shipped-handoffs.py`
+    appeared as a sub-bullet. That script was DELETED at `648f2e4eb` under the
+    brightline kill bar, and the same commit correctly emptied the remedy tuple —
+    but missed this file, so the assertion outlived the script it named by
+    pointing the reader at a remedy that cannot be run. Repointed rather than
+    repopulated: `housekeeping_liveness`'s own negative-spec says a class with no
+    on-demand CLI renders nothing and "do not invent commands to fill a gap", so
+    putting a command back to make this green would be the forbidden move, not
+    the fix. The rendering machinery itself is covered by
+    `test_remedy_sub_bullets_render_when_a_class_has_commands` below, which
+    supplies its own commands instead of borrowing a dead one.
+    """
     from coordinator_core.ops.ceremony import detached_spawn
 
     repo = _make_repo(tmp_path)
@@ -350,9 +363,23 @@ def test_archive_sweeps_failure_surfaces_remedy_commands(tmp_path):
 
     assert "## Housekeeping" in output
     assert "sweep-shipped-handoffs.py" in output
-    assert "python3 coordinator/bin/sweep-shipped-handoffs.py" in output
-    # Rendered once, not once per failure line.
-    assert output.count("python3 coordinator/bin/sweep-shipped-handoffs.py") == 1
+    assert "python3 coordinator/bin/sweep-shipped-handoffs.py" not in output
+
+
+def test_remedy_sub_bullets_render_when_a_class_has_commands(monkeypatch):
+    """The sub-bullet renderer, exercised without naming a real command.
+
+    Every entry in `REMEDY_COMMANDS` is an empty tuple today, so nothing in the
+    live map can prove this formatting still works — and the two tests that used
+    to prove it were doing so against a script that has since been deleted. A
+    supplied command keeps the mechanism covered without re-asserting a dead one.
+    """
+    from coordinator_core.ops.ceremony import housekeeping_liveness as hl
+
+    monkeypatch.setitem(mod.REMEDY_COMMANDS, hl.ARCHIVE_SWEEPS, ("python3 some/cli.py",))
+
+    assert mod._remedy_sub_bullets(hl.ARCHIVE_SWEEPS) == ["  - `python3 some/cli.py`"]
+    assert mod._remedy_sub_bullets(hl.ROADMAP_CALLOUT) == []
 
 
 def test_unrelated_failure_does_not_surface_archive_sweeps_remedy(tmp_path):
@@ -382,7 +409,11 @@ def test_stale_archive_sweeps_liveness_surfaces_remedy_sub_bullets(tmp_path):
     output = result["output"]
 
     assert "stale" in output
-    assert "python3 coordinator/bin/sweep-shipped-handoffs.py" in output
+    # No remedy sub-bullet: the archive_sweeps CLI was deleted at 648f2e4eb and its
+    # remedy tuple emptied with it. See
+    # test_archive_sweeps_failure_reports_the_failure_and_invents_no_remedy above
+    # for why this asserts absence rather than naming a replacement command.
+    assert "python3 coordinator/bin/sweep-shipped-handoffs.py" not in output
 
 
 def test_stale_class_with_no_remedy_renders_no_extra_commands(tmp_path):
@@ -1371,8 +1402,12 @@ def test_recent_commits_section_is_trimmed_not_protected_under_budget():
 # ---------------------------------------------------------------------------
 # CLI trampoline -- --invoker sweep-boot acceptance / --pinboard-only rejection.
 # Invokes coordinator/bin/regenerate-orientation-cache.py as a real subprocess
-# with CLAUDE_KLABAUTER_ROOT pinned to this checkout so it resolves coordinator_core
-# without any machine-local registry dependency.
+# with COORDINATOR_ENGINE_ROOT pinned to this checkout so it resolves
+# coordinator_core without any machine-local registry dependency. The pin used
+# to name CLAUDE_KLABAUTER_ROOT, which C14 (`fb1421af2`) stopped the engine-root gate
+# reading -- so it silently bought nothing and the child resolved ambiently,
+# which is the same pin-is-dead class as
+# state/bug-backlog/2026-08-25-fixture-env-dicts-still-pin-the-retired-claude-klabauter-live-root.
 # ---------------------------------------------------------------------------
 
 _CLI_SCRIPT = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "regenerate-orientation-cache.py"
@@ -1380,7 +1415,7 @@ _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_cli(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, CLAUDE_KLABAUTER_ROOT=str(_CLAUDE_KLABAUTER_ROOT))
+    env = dict(os.environ, COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT))
     return subprocess.run(
         [sys.executable, str(_CLI_SCRIPT), *args],
         cwd=str(repo),

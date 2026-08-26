@@ -2421,6 +2421,11 @@ def apply(
                 decisions=decisions,
                 repo_root=root,
                 title=title,
+                # The SAME id this apply run resolved and bound into
+                # `_session_identity` — passed explicitly because that
+                # binding is invisible to `core.resolve_session_id`, which
+                # brief()'s own handoff self-resolution goes through.
+                session_id=resolved_sid,
                 **(
                     {"explicit_deliverable_id": explicit_deliverable_id}
                     if explicit_deliverable_id is not None

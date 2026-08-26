@@ -48,7 +48,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import core, scope
+from coordinator_core.session import core, scope, touch_record
 from coordinator_core.testing import symlink_capability
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
@@ -87,6 +87,62 @@ def _make_repo(tmp_path):
 
 def _sdir(repo, sid):
     return Path(repo) / ".git" / "coordinator-sessions" / sid
+
+
+def _age_session_dir_records(sdir, epoch) -> None:
+    """C5 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
+    repointing-its-writers.md) widened ``liveness.newest_record_mtime`` to
+    scan EVERY regular file in a session dir (bar
+    ``_RECORD_MTIME_EXCLUDED_NAMES``) and take the freshest mtime, replacing
+    the old single-literal (``touched.txt``) mtime probe. A test that
+    stales only the touch-record sink while ``meta.json``/``started_at``/
+    ``head_at_start`` stay fresh (their mtime set by the very
+    ``core.update_meta_field`` call the test just made) therefore no
+    longer reads abandoned -- the freshest file in the dir wins regardless.
+    This ages every eligible file in ``sdir`` to ``epoch`` so the
+    ``dir_record`` signal is genuinely stale, matching production's actual
+    freshest-file-wins policy rather than the retired single-file one."""
+    for entry in Path(sdir).iterdir():
+        if entry.name == "em-session-id.txt" or not entry.is_file():
+            continue
+        os.utime(str(entry), (epoch, epoch))
+
+
+def _decode_events(record_path) -> list:
+    """C4 test helper: decode a `touch-record.jsonl` sink's LIVE file only
+    (no rotated-family expansion — every test fixture in this file is
+    small enough to never rotate), in on-disk order. Thin call-through to
+    `touch_record.decode_line`/`iter_complete_lines` -- no independent
+    parsing invented here."""
+    path = Path(record_path)
+    if not path.is_file():
+        return []
+    raw = path.read_bytes()
+    return [touch_record.decode_line(line) for line in touch_record.iter_complete_lines(raw)]
+
+
+def _write_touch_record(record_path, *, session_id, entries) -> None:
+    """C4 test helper: write a peer/agent `touch-record.jsonl` fixture
+    directly (bypassing `scope.touch()`) for tests that need an explicit
+    verb/timestamp/path sequence -- e.g. a pre-existing R event, or two
+    peers claiming the same path at different times. `entries` is an
+    iterable of ``(verb, path)`` or ``(verb, path, timestamp)`` tuples, in
+    write order. Thin call-through to `touch_record.append_event` -- no
+    independent line-encoding invented here."""
+    for entry in entries:
+        if len(entry) == 2:
+            verb, path = entry
+            timestamp = None
+        else:
+            verb, path, timestamp = entry
+        touch_record.append_event(
+            record_path,
+            session_id=session_id,
+            agent_id=None,
+            verb=verb,
+            path=path,
+            timestamp=timestamp,
+        )
 
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -138,26 +194,27 @@ def test_touch_noop_outside_git_repo(tmp_path):
 
 
 class TestTouchAppend:
+    """C4: `touch()` now writes `touch-record.jsonl` (C3's self-describing
+    record) via `touch_record.append_event`, not the bash-dialect
+    `touched.txt` -- see `touch()`'s own docstring for the writer flip and
+    AC17's dedup-read removal."""
+
     def test_appends_relative_path_and_creates_session_dir(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("s1", cwd=str(repo))
         scope.touch("s1", "src/foo.py", cwd=str(repo))
-        touched = _sdir(repo, "s1") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 1
-        verb, ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "src/foo.py")
-        assert ts is not None
+        record = _sdir(repo, "s1") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 1
+        assert (events[0].verb, events[0].path) == (touch_record.VERB_TOUCH, "src/foo.py")
 
     def test_creates_session_dir_on_first_touch_when_init_skipped(self, tmp_path):
         repo = _make_repo(tmp_path)
         # No core.init first — touch() must fail-safe init the session dir.
         scope.touch("s-lazy", "a/b.py", cwd=str(repo))
-        touched = _sdir(repo, "s-lazy") / "touched.txt"
-        assert touched.is_file()
-        paths = [
-            scope.parse_touch_event(ln)[2] for ln in touched.read_text().splitlines()
-        ]
+        record = _sdir(repo, "s-lazy") / "touch-record.jsonl"
+        assert record.is_file()
+        paths = [e.path for e in _decode_events(record)]
         assert "a/b.py" in paths
 
     def test_backfills_meta_json_when_dir_precreated_without_meta(self, tmp_path):
@@ -177,26 +234,29 @@ class TestTouchAppend:
         assert (sdir / "meta.json").is_file(), "meta.json must be backfilled on touch"
         assert core.read_meta_field(str(sdir), "session_id") == "s-precreated"
 
-    def test_line_exact_dedup(self, tmp_path):
-        """A path whose last event is already T is skipped on re-touch —
-        the event-aware counterpart of the old line-exact dedup (AC8)."""
+    def test_repeat_touch_no_dedup_read_but_last_verb_wins_at_read_time(self, tmp_path):
+        """C4/AC17: the pre-append dedup READ is gone -- a re-touch of the
+        same path always appends a fresh raw event (no skip), and it is the
+        READER's last-verb-wins projection (`touch_record.project_live_claims`),
+        not the writer, that collapses repeats to one live claim."""
         repo = _make_repo(tmp_path)
         core.init("s2", cwd=str(repo))
         scope.touch("s2", "src/foo.py", cwd=str(repo))
         scope.touch("s2", "src/foo.py", cwd=str(repo))
-        touched = _sdir(repo, "s2") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 1
-        assert scope.parse_touch_event(lines[0])[2] == "src/foo.py"
+        record = _sdir(repo, "s2") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 2  # both raw events land -- no dedup on write
+        assert all(e.path == "src/foo.py" for e in events)
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert list(projection.claims.keys()) == ["src/foo.py"]  # one live claim
 
     def test_dedup_is_full_line_not_substring(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("s3", cwd=str(repo))
         scope.touch("s3", "src/foo.py", cwd=str(repo))
-        scope.touch("s3", "src/foo", cwd=str(repo))  # substring — NOT a dup
-        touched = _sdir(repo, "s3") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        paths = [scope.parse_touch_event(ln)[2] for ln in lines]
+        scope.touch("s3", "src/foo", cwd=str(repo))  # substring — distinct path
+        record = _sdir(repo, "s3") / "touch-record.jsonl"
+        paths = [e.path for e in _decode_events(record)]
         assert paths == ["src/foo.py", "src/foo"]
 
     def test_updates_last_activity(self, tmp_path):
@@ -209,52 +269,46 @@ class TestTouchAppend:
 
 
 class TestTouchEventAware:
-    """P2 — touch()'s last-event dedup (AC8): a path whose last event is
-    already T is skipped; a path with no event at all, or whose last event
-    is R (released), gets a fresh T. A bare legacy line (no verb/timestamp)
-    parses as T (`parse_touch_event`'s fail-safe) and is treated the same as
-    a real T for dedup purposes."""
+    """C4/AC17: `touch()`'s pre-append dedup scan is REMOVED -- every call
+    appends a fresh raw T event, and the CLAIMED/RELEASED decision moves
+    entirely to the reader (`touch_record.project_live_claims`'s
+    last-verb-wins fold). These tests now pin the reader-side projection
+    rather than a writer-side skip."""
 
     def test_fresh_path_gets_a_t_event(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("s-fresh", cwd=str(repo))
         scope.touch("s-fresh", "src/new.py", cwd=str(repo))
-        touched = _sdir(repo, "s-fresh") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 1
-        verb, ts, path = scope.parse_touch_event(lines[0])
-        assert (verb, path) == ("T", "src/new.py")
-        assert ts is not None
+        record = _sdir(repo, "s-fresh") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 1
+        assert (events[0].verb, events[0].path) == (touch_record.VERB_TOUCH, "src/new.py")
 
-    def test_last_event_t_is_skipped(self, tmp_path):
+    def test_last_event_t_projects_claimed_after_repeat_touch(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("s-t", cwd=str(repo))
-        touched = _sdir(repo, "s-t") / "touched.txt"
-        touched.write_text(scope.format_touch_event("T", "src/foo.py") + "\n")
         scope.touch("s-t", "src/foo.py", cwd=str(repo))
-        assert len(touched.read_text().splitlines()) == 1
+        scope.touch("s-t", "src/foo.py", cwd=str(repo))
+        record = _sdir(repo, "s-t") / "touch-record.jsonl"
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "src/foo.py" in projection.claims
 
     def test_last_event_r_gets_a_new_t(self, tmp_path):
         """AC8's falsifying case: an edit after a release must not be
         silently unclaimed."""
         repo = _make_repo(tmp_path)
         core.init("s-r", cwd=str(repo))
-        touched = _sdir(repo, "s-r") / "touched.txt"
-        touched.write_text(scope.format_touch_event("R", "src/foo.py") + "\n")
+        record = _sdir(repo, "s-r") / "touch-record.jsonl"
+        touch_record.append_event(
+            record, session_id="s-r", agent_id=None,
+            verb=touch_record.VERB_RELEASE, path="src/foo.py",
+        )
         scope.touch("s-r", "src/foo.py", cwd=str(repo))
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 2
-        verb2, _ts2, path2 = scope.parse_touch_event(lines[1])
-        assert (verb2, path2) == ("T", "src/foo.py")
-
-    def test_bare_legacy_line_counts_as_t_and_is_skipped(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("s-legacy", cwd=str(repo))
-        touched = _sdir(repo, "s-legacy") / "touched.txt"
-        touched.write_text("src/foo.py\n")  # bare legacy line, no verb/timestamp
-        scope.touch("s-legacy", "src/foo.py", cwd=str(repo))
-        lines = touched.read_text().splitlines()
-        assert lines == ["src/foo.py"]  # unchanged — no new T appended
+        events = _decode_events(record)
+        assert len(events) == 2
+        assert (events[1].verb, events[1].path) == (touch_record.VERB_TOUCH, "src/foo.py")
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "src/foo.py" in projection.claims
 
 
 # ---------------------------------------------------------------------------
@@ -270,9 +324,8 @@ class TestTouchNormalization:
         target = repo / "src" / "new.py"
         target.write_text("y")  # untracked -> relpath branch
         scope.touch("s5", str(target), cwd=str(repo))
-        touched = _sdir(repo, "s5") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        paths = [scope.parse_touch_event(ln)[2] for ln in lines]
+        record = _sdir(repo, "s5") / "touch-record.jsonl"
+        paths = [e.path for e in _decode_events(record)]
         assert paths == ["src/new.py"]
         # crucially, NOT the absolute form
         assert not any(scope._is_absolute(p) for p in paths)
@@ -283,9 +336,8 @@ class TestTouchNormalization:
         # README.md is tracked -> git ls-files --full-name branch
         target = repo / "README.md"
         scope.touch("s6", str(target), cwd=str(repo))
-        touched = _sdir(repo, "s6") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert [scope.parse_touch_event(ln)[2] for ln in lines] == ["README.md"]
+        record = _sdir(repo, "s6") / "touch-record.jsonl"
+        assert [e.path for e in _decode_events(record)] == ["README.md"]
 
     def test_still_absolute_path_skipped_when_normalization_fails(self, tmp_path, monkeypatch):
         """Guard: if the path is STILL absolute after the
@@ -1589,16 +1641,16 @@ class TestComputeScope:
         core.init("other", cwd=str(repo))
         scope.touch("mine", "maybe-foreign.py", cwd=str(repo))
 
-        other_touched = _sdir(repo, "other") / "touched.txt"
-        other_touched.write_text("maybe-foreign.py\n")  # "other" actually owns it
-        orig_read_text = Path.read_text
+        other_record = _sdir(repo, "other") / "touch-record.jsonl"
+        scope.touch("other", "maybe-foreign.py", cwd=str(repo))  # "other" actually owns it
+        orig_read_bytes = Path.read_bytes
 
         def _boom(self, *a, **k):
-            if self == other_touched:
+            if self == other_record:
                 raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+            return orig_read_bytes(self, *a, **k)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(Path, "read_bytes", _boom)
         result = scope.compute_scope("mine", cwd=str(repo))
 
         assert "maybe-foreign.py" not in result.my_scope
@@ -1607,8 +1659,8 @@ class TestComputeScope:
 
     def test_unreadable_other_session_claims_never_widens_scope(self, tmp_path, monkeypatch):
         """Pin the invariant directly: computing scope while a sibling's
-        touched.txt is unreadable must never yield a WIDER my_scope than
-        computing it with that same sibling's touched.txt readable (and
+        touch record is unreadable must never yield a WIDER my_scope than
+        computing it with that same sibling's touch record readable (and
         empty, the most permissive possible content)."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1618,16 +1670,16 @@ class TestComputeScope:
         readable_result = scope.compute_scope("mine", cwd=str(repo))
         assert "candidate.py" in readable_result.my_scope  # sanity
 
-        other_touched = _sdir(repo, "other") / "touched.txt"
-        other_touched.write_text("")  # exists, so the read path is taken
-        orig_read_text = Path.read_text
+        other_record = _sdir(repo, "other") / "touch-record.jsonl"
+        other_record.write_text("")  # exists, so the read path is taken
+        orig_read_bytes = Path.read_bytes
 
         def _boom(self, *a, **k):
-            if self == other_touched:
+            if self == other_record:
                 raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+            return orig_read_bytes(self, *a, **k)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(Path, "read_bytes", _boom)
         unreadable_result = scope.compute_scope("mine", cwd=str(repo))
 
         assert set(unreadable_result.my_scope) <= set(readable_result.my_scope)
@@ -1788,6 +1840,95 @@ class TestComputeScope:
         assert "maybe_foreign.py" not in result.my_scope
         skipped_paths = {p for p, _owner in result.skipped}
         assert "maybe_foreign.py" in skipped_paths
+
+
+class TestC0AgentDirJsonlOnlyUnion:
+    """C0: `_read_touch_record_as_legacy_lines` is now a REAL union, and
+    every agent-dir branch that used to read `touched.txt` directly (the
+    `all_agent_dir_entries` pre-scan, the `touched_probe` recency/size race
+    gate, the `attr_agent_touched` attribution branch, and Step 3b's own
+    `agent_touched` peer-claim read) now routes through it. This fixture --
+    an agent dir carrying ONLY `touch-record.jsonl`, no `touched.txt` at all
+    -- proves those four branches read the new dialect too, not merely the
+    legacy one every other fixture in this file exercises."""
+
+    def _write_backptr_jsonl_only(self, base: Path, agent_id: str, em_sid: str, path: str) -> Path:
+        agent_dir = base / ".agents" / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
+        assert not (agent_dir / "touched.txt").exists()
+        _write_touch_record(
+            agent_dir / scope._TOUCH_RECORD_FILENAME,
+            session_id=em_sid,
+            entries=[(touch_record.VERB_TOUCH, path)],
+        )
+        return agent_dir
+
+    def test_step_3b_peer_claim_read_sees_jsonl_only_agent_dir(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+        base = Path(core.sessions_dir(cwd=str(repo)))
+
+        (repo / "shared.py").write_text("z")
+        self._write_backptr_jsonl_only(base, "agent-jsonl", "em-owner", "shared.py")
+        scope.touch("bystander", "shared.py", cwd=str(repo))
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "shared.py" not in result.my_scope
+        assert ("shared.py", "em-owner") in result.skipped
+
+    def test_attribution_branch_sees_jsonl_only_agent_dir(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+        base = Path(core.sessions_dir(cwd=str(repo)))
+
+        self._write_backptr_jsonl_only(base, "agent-jsonl-2", "em-owner", "attributed.py")
+        scope.touch("bystander", "attributed.py", cwd=str(repo))
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert "attributed.py" in result.attribution
+        assert result.attribution["attributed.py"].owner == "em-owner"
+        assert result.attribution["attributed.py"].claim_source == "agent"
+
+    def test_all_agent_dir_entries_pre_scan_reads_jsonl_only_agent_dir_without_error(
+        self, tmp_path
+    ):
+        """The pre-scan (`all_agent_dir_entries`) unions every agent_dir's
+        touch record via the same seam before the main Step 3b loop below
+        it runs -- exercise a jsonl-only agent dir through it directly and
+        confirm it neither errors nor loses a file-shaped claim from the
+        pre-scan's own dedup set (a directory-shaped legacy entry is a
+        separate, `touched.txt`-only concern -- `touch_record.encode_line`
+        canonicalizes via `posixpath.normpath`, which collapses a trailing
+        '/'  the same way the legacy dialect's directory marker never
+        survives a jsonl round-trip; out of this test's scope). The
+        end-to-end withhold this branch feeds is already pinned by
+        `test_step_3b_peer_claim_read_sees_jsonl_only_agent_dir` above."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        (repo / "solo.py").write_text("z")
+
+        agent_dir = self._write_backptr_jsonl_only(
+            base, "agent-jsonl-3", "em-owner", "solo.py"
+        )
+        scope.touch("bystander", "solo.py", cwd=str(repo))
+
+        # Direct call, mirroring what the pre-scan itself does per agent_dir.
+        pre_lines, pre_degraded = scope._read_agent_touch_record_as_legacy_lines(
+            agent_dir / scope._TOUCH_RECORD_FILENAME
+        )
+        assert pre_lines == ["solo.py"]
+        assert pre_degraded is False
+
+        # And the whole call still completes without error end to end.
+        result = scope.compute_scope("bystander", cwd=str(repo))
+        assert "solo.py" not in result.my_scope
 
     def test_unreadable_em_session_id_txt_fails_closed_not_soft_skip(
         self, tmp_path, monkeypatch
@@ -2249,29 +2390,37 @@ class TestComputeScopeLiveness:
         assert "dirty.py" not in result.my_scope
         assert ("dirty.py", "peer") in result.skipped
 
-    def test_unreadable_peer_touched_txt_still_fails_closed_regardless_of_liveness(
+    def test_unreadable_peer_touched_txt_still_fails_closed_for_a_live_peer(
         self, tmp_path, monkeypatch
     ):
+        """C4/AC16(a) narrows this test's original premise ("unreadable is
+        never assumed dead, regardless of liveness"): a peer AC16(a)'s
+        pre-read gate already proves DEAD is now skipped before any read
+        is even attempted, so there is no "unreadable" outcome left to
+        simulate for that peer any more -- see `compute_scope`'s Step 3
+        comment on the reorder. What survives is the LIVE-peer half: for a
+        peer NOT confirmed dead, an unreadable record still fails closed,
+        unconditionally."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        core.init("dead-peer", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
         (repo / "maybe-foreign.py").write_text("z")
         scope.touch("mine", "maybe-foreign.py", cwd=str(repo))
 
-        other_touched = _sdir(repo, "dead-peer") / "touched.txt"
-        other_touched.write_text("maybe-foreign.py\n")
-        orig_read_text = Path.read_text
+        other_record = _sdir(repo, "live-peer") / "touch-record.jsonl"
+        scope.touch("live-peer", "maybe-foreign.py", cwd=str(repo))
+        orig_read_bytes = Path.read_bytes
 
         def _read_boom(self, *a, **k):
-            if self == other_touched:
+            if self == other_record:
                 raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+            return orig_read_bytes(self, *a, **k)
 
-        monkeypatch.setattr(Path, "read_text", _read_boom)
-        # dead-peer is DEAD, yet the unreadable-claims fail-closed arm must
-        # still fire -- unreadable is never assumed dead.
+        monkeypatch.setattr(Path, "read_bytes", _read_boom)
         monkeypatch.setattr(
-            scope.liveness, "live_session_ids", lambda cwd=None: frozenset({"mine"})
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
         )
         result = scope.compute_scope("mine", cwd=str(repo))
 
@@ -2463,8 +2612,7 @@ class TestComputeScopeLiveness:
         core.update_meta_field(
             str(peer_sdir), "last_activity", "2000-01-01T00:00:00Z"
         )
-        peer_touched = peer_sdir / "touched.txt"
-        os.utime(str(peer_touched), (stale_epoch, stale_epoch))
+        _age_session_dir_records(peer_sdir, stale_epoch)
 
         result = scope.compute_scope("mine", cwd=str(repo))
 
@@ -2533,8 +2681,7 @@ class TestComputeScopeLiveness:
         core.update_meta_field(
             str(peer_sdir), "last_activity", "2000-01-01T00:00:00Z"
         )
-        peer_touched = peer_sdir / "touched.txt"
-        os.utime(str(peer_touched), (stale_epoch, stale_epoch))
+        _age_session_dir_records(peer_sdir, stale_epoch)
 
         # Sanity: the peer really does read abandoned in isolation -- the
         # test is pinning that an UNDETERMINED live_ids still withholds it.
@@ -2585,8 +2732,7 @@ class TestComputeScopeLiveness:
         core.update_meta_field(
             str(em_sdir), "last_activity", "2000-01-01T00:00:00Z"
         )
-        em_touched = em_sdir / "touched.txt"
-        os.utime(str(em_touched), (stale_epoch, stale_epoch))
+        _age_session_dir_records(em_sdir, stale_epoch)
 
         assert (
             scope.liveness.session_abandoned("em-owner", cwd=str(repo)) is True
@@ -2644,11 +2790,17 @@ class TestAttribution:
     def test_attribution_dead_peer_still_names_the_peer(
         self, tmp_path, monkeypatch
     ):
-        """AC1a — the whole point of the attribution/subtraction split: a
-        dead peer's claim is RELEASED from other_owner/skipped (the path
-        lands in my_scope, uncontested), but attribution must still name
-        the dead peer, with liveness "dead" — never silently dropped just
-        because the ownership gate released the path."""
+        """AC1a named this "attribution must still name a dead peer" --
+        C4/AC16(a) knowingly narrows that guarantee for the specific case
+        this test exercises. AC16(a)'s reorder skips a CONFIRMED-dead
+        peer's record read entirely (never opened/read/parsed, on the
+        `live_session_ids()` membership test alone) -- there is no longer
+        a per-path claim to attribute for that peer, by construction, not
+        by oversight (see `compute_scope`'s Step 3 comment on this exact
+        reorder). The subtraction-side guarantee (a dead peer's claim is
+        RELEASED, the path lands in my_scope uncontested) is unaffected --
+        only the attribution SIDE narrows, and only for a peer this call
+        can positively prove dead up front."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("dead-peer", cwd=str(repo))
@@ -2666,11 +2818,11 @@ class TestAttribution:
         skipped_paths = {p for p, _owner in result.skipped}
         assert "shared.py" not in skipped_paths
 
-        # Attribution side: STILL names the dead peer -- this is the whole
-        # point of the split (AC1a).
-        assert result.attribution["shared.py"] == scope.OwnerFact(
-            "dead-peer", "dead", "session"
-        )
+        # Attribution side (C4/AC16(a)): a CONFIRMED-dead peer's record is
+        # never read, so no per-path attribution for it survives -- this is
+        # the accepted, documented consequence of the reorder, not a silent
+        # drop (nothing in `other_owner`/`skipped` claims otherwise either).
+        assert "shared.py" not in result.attribution
 
     def test_attribution_peer_agent_via_dot_agents_backpointer(
         self, tmp_path, monkeypatch
@@ -2907,8 +3059,16 @@ class TestAC8DefensiveHistoricalNormalization:
         core.init("mine", cwd=str(poisoned_repo))
         core.init("peer", cwd=str(poisoned_repo))
         (poisoned_repo / "shared.py").write_text("z")
-        (_sdir(poisoned_repo, "mine") / "touched.txt").write_text("../shared.py\n")
-        (_sdir(poisoned_repo, "peer") / "touched.txt").write_text("../shared.py\n")
+        _write_touch_record(
+            _sdir(poisoned_repo, "mine") / "touch-record.jsonl",
+            session_id="mine",
+            entries=[(touch_record.VERB_TOUCH, "../shared.py")],
+        )
+        _write_touch_record(
+            _sdir(poisoned_repo, "peer") / "touch-record.jsonl",
+            session_id="peer",
+            entries=[(touch_record.VERB_TOUCH, "../shared.py")],
+        )
         poisoned_result = scope.compute_scope("mine", cwd=str(poisoned_repo))
 
         clean_dir = tmp_path / "clean-control"
@@ -2917,8 +3077,8 @@ class TestAC8DefensiveHistoricalNormalization:
         core.init("mine", cwd=str(clean_repo))
         core.init("peer", cwd=str(clean_repo))
         (clean_repo / "shared.py").write_text("z")
-        (_sdir(clean_repo, "mine") / "touched.txt").write_text("shared.py\n")
-        (_sdir(clean_repo, "peer") / "touched.txt").write_text("shared.py\n")
+        scope.touch("mine", "shared.py", cwd=str(clean_repo))
+        scope.touch("peer", "shared.py", cwd=str(clean_repo))
         clean_result = scope.compute_scope("mine", cwd=str(clean_repo))
 
         assert poisoned_result.my_scope == clean_result.my_scope
@@ -3006,8 +3166,12 @@ class TestAC8DefensiveHistoricalNormalization:
         core.init("mine", cwd=str(repo))
         core.init("peer", cwd=str(repo))
         (repo / "foo.py").write_text("z")  # dirty (untracked) — same real file
-        (_sdir(repo, "mine") / "touched.txt").write_text("foo.py\n")
-        (_sdir(repo, "peer") / "touched.txt").write_text("../../foo.py\n")
+        scope.touch("mine", "foo.py", cwd=str(repo))
+        _write_touch_record(
+            _sdir(repo, "peer") / "touch-record.jsonl",
+            session_id="peer",
+            entries=[(touch_record.VERB_TOUCH, "../../foo.py")],
+        )
 
         result = scope.compute_scope("mine", cwd=str(repo))
 
@@ -3200,6 +3364,71 @@ class TestClassifyTouchEntryAC1EndToEnd:
 # ---------------------------------------------------------------------------
 # archive()
 # ---------------------------------------------------------------------------
+
+
+class TestPostCutoverSelfClaimNeedsNoLegacyUnion:
+    """C8 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
+    repointing-its-writers.md) post-cutover invariant, replacing
+    ``TestAC21SelfClaimStaysVisibleUntilTheWriterMigrates`` BY NAME.
+
+    That class pinned a fixture where `self_claim` wrote ONLY a legacy
+    `touched.txt`, on the premise that `session/claims.py :: self_claim`
+    was still an old-dialect writer. It has not been since C6 (`self_claim`
+    now appends through `touch_record.append_event`, the same seam
+    `scope.touch()` uses) -- a fixture forcing a legacy-only `touched.txt`
+    out of `self_claim` no longer represents anything `self_claim` can
+    itself produce, so the old pin would now pass vacuously against a
+    hand-written fixture, not against the writer's own behaviour.
+
+    The replacement below asserts the two things that actually changed:
+    `self_claim` itself never touches the old dialect (AC9's "no [in-scope]
+    writer emits the old dialect" premise, proven directly rather than
+    inferred), and (AC4, C8 half) `compute_scope` sees a `self_claim` write
+    with NO `touched.txt` anywhere in the fixture at all -- only meaningful
+    now that the union-read no longer needs one to pass.
+    """
+
+    def test_self_claim_writes_only_the_jsonl_dialect(self, tmp_path, monkeypatch):
+        from coordinator_core.session import claims
+
+        repo = _make_repo(tmp_path)
+        core.init("sc1", cwd=str(repo))
+        target = repo / "edited_outside_hook.py"
+        target.write_text("y")
+
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sc1")
+        claims.self_claim(str(target), cwd=str(repo))
+
+        sdir = _sdir(repo, "sc1")
+        # The fact this chunk's brief asks to establish: self_claim, the
+        # writer the retired AC21 pin depended on, no longer emits the old
+        # bare-line dialect at all -- not "the union still covers it if it
+        # did", but "it never does".
+        assert not (sdir / "touched.txt").exists()
+        assert (sdir / scope._TOUCH_RECORD_FILENAME).is_file()
+
+    def test_self_claim_visible_via_compute_scope_with_no_touched_txt_anywhere(
+        self, tmp_path, monkeypatch
+    ):
+        from coordinator_core.session import claims
+
+        repo = _make_repo(tmp_path)
+        core.init("sc2", cwd=str(repo))
+        target = repo / "edited_outside_hook_2.py"
+        target.write_text("y")
+
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sc2")
+        claims.self_claim(str(target), cwd=str(repo))
+
+        sdir = _sdir(repo, "sc2")
+        assert not (sdir / "touched.txt").exists()
+
+        # AC4, C8 half: no `touched.txt` anywhere in this fixture (self or
+        # peer side) -- the self_claim write is visible to compute_scope
+        # through the jsonl seam alone.
+        result = scope.compute_scope("sc2", cwd=str(repo))
+        assert "edited_outside_hook_2.py" in result.my_scope
+        assert "edited_outside_hook_2.py" not in result.orphans
 
 
 class TestArchive:
@@ -3616,13 +3845,14 @@ class TestComputeScopeEventProjectionAC13:
 
         r_ts = datetime.now(timezone.utc) - timedelta(seconds=5)
         peer_sdir = _sdir(repo, "peer13a")
-        peer_lines = [
-            scope.format_touch_event(
-                "T", "reclaim.py", when=r_ts - timedelta(seconds=10)
-            ),
-            scope.format_touch_event("R", "reclaim.py", when=r_ts),
-        ]
-        (peer_sdir / "touched.txt").write_text("\n".join(peer_lines) + "\n")
+        _write_touch_record(
+            peer_sdir / "touch-record.jsonl",
+            session_id="peer13a",
+            entries=[
+                (touch_record.VERB_TOUCH, "reclaim.py", (r_ts - timedelta(seconds=10)).timestamp()),
+                (touch_record.VERB_RELEASE, "reclaim.py", r_ts.timestamp()),
+            ],
+        )
 
         (repo / "reclaim.py").write_text("z")  # dirty NOW, after the R above
 
@@ -3644,17 +3874,25 @@ class TestComputeScopeEventProjectionAC13:
 
         r_ts = datetime.now(timezone.utc) - timedelta(seconds=10)
         peer_sdir = _sdir(repo, "peer13b")
-        peer_lines = [
-            scope.format_touch_event(
-                "T", "publish.py", when=r_ts - timedelta(seconds=20)
-            ),
-            scope.format_touch_event("R", "publish.py", when=r_ts),
-        ]
-        (peer_sdir / "touched.txt").write_text("\n".join(peer_lines) + "\n")
+        # C7b: both sides write through the record seam. Step 1's legacy
+        # self-read and AC21's transitional union are gone, so a
+        # `touched.txt` fixture is no longer visible to `compute_scope` at
+        # all -- writing one here would make this test assert the reader's
+        # blindness rather than AC13(b)'s challenger rule.
+        _write_touch_record(
+            peer_sdir / scope._TOUCH_RECORD_FILENAME,
+            session_id="peer13b",
+            entries=[
+                ("T", "publish.py", (r_ts - timedelta(seconds=20)).timestamp()),
+                ("R", "publish.py", r_ts.timestamp()),
+            ],
+        )
 
         challenger_ts = r_ts + timedelta(seconds=5)  # post-dates the peer's R
-        (mine_sdir / "touched.txt").write_text(
-            scope.format_touch_event("T", "publish.py", when=challenger_ts) + "\n"
+        _write_touch_record(
+            mine_sdir / scope._TOUCH_RECORD_FILENAME,
+            session_id="mine13b",
+            entries=[("T", "publish.py", challenger_ts.timestamp())],
         )
         (repo / "publish.py").write_text("z")  # dirty now
 
@@ -3718,12 +3956,12 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rel1", ["foo.py"], cwd=str(repo))
 
-        touched = _sdir(repo, "s-rel1") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 2
-        verb, _ts, path = scope.parse_touch_event(lines[1])
-        assert (verb, path) == ("R", "foo.py")
-        assert "foo.py" not in scope.project_self_scope(lines)
+        record = _sdir(repo, "s-rel1") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 2
+        assert (events[1].verb, events[1].path) == (touch_record.VERB_RELEASE, "foo.py")
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "foo.py" not in projection.claims
 
     def test_still_dirty_path_is_retained(self, tmp_path):
         """AC2: a path never committed, still dirty, is not released."""
@@ -3735,10 +3973,11 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rel2", ["bar.py"], cwd=str(repo))
 
-        touched = _sdir(repo, "s-rel2") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 1  # unchanged -- no R appended
-        assert "bar.py" in scope.project_self_scope(lines)
+        record = _sdir(repo, "s-rel2") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 1  # unchanged -- no R appended
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "bar.py" in projection.claims
 
     def test_ac4_committed_in_earlier_hunk_still_carries_uncommitted_edits(
         self, tmp_path
@@ -3762,14 +4001,20 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rel4", ["hunked.py"], cwd=str(repo))
 
-        touched = _sdir(repo, "s-rel4") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert len(lines) == 1  # unchanged -- no R appended
-        assert "hunked.py" in scope.project_self_scope(lines)
+        record = _sdir(repo, "s-rel4") / "touch-record.jsonl"
+        events = _decode_events(record)
+        assert len(events) == 1  # unchanged -- no R appended
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "hunked.py" in projection.claims
 
-    def test_ac7_unreadable_touched_txt_leaves_file_byte_identical(
+    def test_ac7_unreadable_touch_record_leaves_file_byte_identical(
         self, tmp_path, monkeypatch
     ):
+        """C4: session-side release now reads the ``touch-record.jsonl``
+        sink via ``touch_record._read_stream_claims`` (``Path.read_bytes``),
+        not the retired ``touched.txt``/``Path.read_text`` seam -- an
+        unreadable sink must still leave it byte-identical (fail-safe
+        RETAIN)."""
         repo = _make_repo(tmp_path)
         core.init("s-rel7a", cwd=str(repo))
         (repo / "clean.py").write_text("x")
@@ -3779,20 +4024,21 @@ class TestReleaseCommittedClaims:
             ["git", "commit", "-q", "-m", "commit clean"], cwd=repo, check=True
         )
 
-        touched = _sdir(repo, "s-rel7a") / "touched.txt"
-        before = touched.read_bytes()
+        record = _sdir(repo, "s-rel7a") / "touch-record.jsonl"
+        before = record.read_bytes()
 
-        orig_read_text = Path.read_text
+        orig_read_bytes = Path.read_bytes
 
         def _boom(self, *a, **k):
-            if self == touched:
+            if self == record:
                 raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
+            return orig_read_bytes(self, *a, **k)
 
-        monkeypatch.setattr(Path, "read_text", _boom)
+        monkeypatch.setattr(Path, "read_bytes", _boom)
         scope.release_committed_claims("s-rel7a", ["clean.py"], cwd=str(repo))
+        monkeypatch.undo()
 
-        assert touched.read_bytes() == before
+        assert record.read_bytes() == before
 
     def test_ac7_git_command_failure_leaves_file_byte_identical(
         self, tmp_path, monkeypatch
@@ -3806,13 +4052,13 @@ class TestReleaseCommittedClaims:
             ["git", "commit", "-q", "-m", "commit clean2"], cwd=repo, check=True
         )
 
-        touched = _sdir(repo, "s-rel7b") / "touched.txt"
-        before = touched.read_bytes()
+        record = _sdir(repo, "s-rel7b") / "touch-record.jsonl"
+        before = record.read_bytes()
 
         monkeypatch.setattr(scope, "_git_output", lambda args, cwd=None: None)
         scope.release_committed_claims("s-rel7b", ["clean2.py"], cwd=str(repo))
 
-        assert touched.read_bytes() == before
+        assert record.read_bytes() == before
 
     def test_ac8_path_redirtied_between_commit_and_release_is_retained(
         self, tmp_path
@@ -3827,26 +4073,28 @@ class TestReleaseCommittedClaims:
         )
 
         scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
-        touched = _sdir(repo, "s-rel8") / "touched.txt"
-        after_first = touched.read_text().splitlines()
+        record = _sdir(repo, "s-rel8") / "touch-record.jsonl"
+        after_first = _decode_events(record)
         assert len(after_first) == 2
-        assert scope.parse_touch_event(after_first[1])[0] == "R"
+        assert after_first[1].verb == touch_record.VERB_RELEASE
 
         # Re-dirty AFTER the release, then re-claim it (mirrors touch()'s
         # own AC8: last event R -> a fresh edit gets a new T).
         (repo / "cycle.py").write_text("v2")
         scope.touch("s-rel8", "cycle.py", cwd=str(repo))
-        after_touch = touched.read_text().splitlines()
+        after_touch = _decode_events(record)
         assert len(after_touch) == 3  # fresh T appended post-release
-        assert "cycle.py" in scope.project_self_scope(after_touch)
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "cycle.py" in projection.claims
 
         # Try to release again while still dirty -- must retain, not
         # re-release.
         scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
 
-        after_second = touched.read_text().splitlines()
+        after_second = _decode_events(record)
         assert after_second == after_touch  # unchanged -- still dirty, retained
-        assert "cycle.py" in scope.project_self_scope(after_second)
+        projection2 = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "cycle.py" in projection2.claims
 
     def test_renamed_path_is_releasable(self, tmp_path):
         """Review: code-reviewer Finding 3 -- a real `git mv` + commit must
@@ -3874,9 +4122,9 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rename", ["new_name.py"], cwd=str(repo))
 
-        touched = _sdir(repo, "s-rename") / "touched.txt"
-        lines = touched.read_text().splitlines()
-        assert "new_name.py" not in scope.project_self_scope(lines)
+        record = _sdir(repo, "s-rename") / "touch-record.jsonl"
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "new_name.py" not in projection.claims
 
     def test_unparseable_porcelain_line_retains_whole_call_byte_identical(
         self, tmp_path, monkeypatch
@@ -3894,8 +4142,8 @@ class TestReleaseCommittedClaims:
             ["git", "commit", "-q", "-m", "commit committed"], cwd=repo, check=True
         )
 
-        touched = _sdir(repo, "s-malformed") / "touched.txt"
-        before = touched.read_bytes()
+        record = _sdir(repo, "s-malformed") / "touch-record.jsonl"
+        before = record.read_bytes()
 
         orig_git_output = scope._git_output
 
@@ -3910,7 +4158,7 @@ class TestReleaseCommittedClaims:
         monkeypatch.setattr(scope, "_git_output", _malformed_status)
         scope.release_committed_claims("s-malformed", ["committed.py"], cwd=str(repo))
 
-        assert touched.read_bytes() == before
+        assert record.read_bytes() == before
 
     def test_peer_agent_dir_not_back_pointed_at_sid_is_untouched(self, tmp_path):
         """The worst failure this helper could have: silently pruning a
@@ -3952,11 +4200,11 @@ class TestReleaseCommittedClaims:
         scope.touch("s-rel10", "untouched.py", cwd=str(repo))
         # Never committed -- stays dirty, so nothing is releasable this call.
 
-        touched = _sdir(repo, "s-rel10") / "touched.txt"
-        mtime_before = touched.stat().st_mtime_ns
+        record = _sdir(repo, "s-rel10") / "touch-record.jsonl"
+        mtime_before = record.stat().st_mtime_ns
 
         scope.release_committed_claims("s-rel10", ["untouched.py"], cwd=str(repo))
-        assert touched.stat().st_mtime_ns == mtime_before
+        assert record.stat().st_mtime_ns == mtime_before
 
 
 class TestCrossDialectClaimCancellation:

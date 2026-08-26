@@ -6,8 +6,12 @@ no-obfuscation holes named in
 Hole (a) -- ``_prefilter_mentions_commit`` was a bare ``"commit" in cmd``,
 so it short-circuited ``check()`` to ALLOW, before identity resolution ever
 ran, for committing ops whose names contain no ``commit`` substring at all
-(``session.boot_sweep``, ``distill.apply_disposal``, ``memo.send``,
-``ceremony.wsc_tail``). Pinned below: one denial case per op name.
+(``session.boot_sweep``, ``distill.apply_disposal``, ``memo.send``; a
+fourth, ``ceremony.wsc_tail``, was pinned here too until the op itself was
+killed 2026-08-23 -- see ``block_subagent_commit.py``'s own
+``_COMMITTING_OP_NAMES`` removal note -- and its denial case below removed
+with it, denying an unregistered op name being no longer a meaningful
+case). Pinned below: one denial case per surviving op name.
 
 Hole (b) -- the invoke-matcher required the ``<op>`` token IMMEDIATELY
 after ``coordinator_core.invoke``, so the documented ``--repo``-before-
@@ -105,16 +109,6 @@ def test_prefilter_admits_memo_send(monkeypatch):
     _denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke memo.send '{}'",
-    )
-
-
-def test_prefilter_admits_ceremony_wsc_tail(monkeypatch):
-    """``ceremony.wsc_tail`` goes straight to ``run_commit_pipeline`` --
-    contains no ``commit`` substring either.
-    """
-    _denies(
-        monkeypatch,
-        "python3 -m coordinator_core.invoke ceremony.wsc_tail '{}'",
     )
 
 
@@ -307,7 +301,11 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     "fleet.archive_release_accumulator",
     "fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings",
-    "fleet.archive_actioned_memos",
+    # "fleet.archive_actioned_memos" REMOVED -- op KILLED outright by PM
+    # ruling (ops/ceremony/tail_ops.py), module never existed under that
+    # path; a dead allowlist entry that made the archival caller census
+    # read as nine instead of eight. See guard.py's own
+    # _COMMITTING_OP_NAMES comment.
     "fleet.archive_completed_handoffs",
     "fleet.archive_paper_trail",
     "fleet.archive_queue_entry",

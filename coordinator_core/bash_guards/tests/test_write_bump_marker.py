@@ -78,13 +78,46 @@ def test_resolve_gitdir_no_repo_fails_open(tmp_path):
 
 
 def test_resolve_gitdir_missing_git_binary_fails_open(tmp_path, monkeypatch):
+    """A missing `git` can no longer produce a wrong verdict, because there is
+    no spawn left to fail.
+
+    This used to patch `subprocess.run` to raise and assert `None`. That
+    premise died with `d6e336ecb` (2026-08-16), which repointed
+    `resolve_gitdir` at `coordinator_core.git.repo_root.git_dir` -- "WALKS
+    ONLY -- never spawns". Patching `subprocess.run` now proves nothing: the
+    walk never reaches it, answers from the filesystem, and the assertion
+    failed on a function that had become STRICTLY BETTER under the brightline.
+
+    So the property worth pinning inverted. It is no longer "fails open when
+    git is absent" but "does not need git at all": with `subprocess.run`
+    booby-trapped to raise on any use, the walk still resolves the gitdir. If
+    a spawn is ever reintroduced on this path, this test fails loudly with the
+    OSError rather than going quietly green.
+    """
     root = _init_repo(tmp_path)
+    marker._GITDIR_MEMO.clear()
 
     def _raise(*_a, **_kw):
         raise OSError("no such binary")
 
     monkeypatch.setattr(subprocess, "run", _raise)
-    assert marker.resolve_gitdir(str(root)) is None
+    resolved = marker.resolve_gitdir(str(root))
+    assert resolved is not None
+    assert resolved.resolve() == (root / ".git").resolve()
+
+
+def test_resolve_gitdir_outside_any_repo_still_returns_none(tmp_path, monkeypatch):
+    """The fail-open half the test above used to carry, kept explicit: no
+    `.git` ancestor still means `None`, spawn or no spawn."""
+    scratch = tmp_path / "nowhere"
+    scratch.mkdir()
+    marker._GITDIR_MEMO.clear()
+
+    def _raise(*_a, **_kw):
+        raise OSError("no such binary")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    assert marker.resolve_gitdir(str(scratch)) is None
 
 
 def test_resolve_gitdir_worktree_resolves_to_file_backed_dotgit(tmp_path):

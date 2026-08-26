@@ -10,9 +10,18 @@ where a server can never come up. The claim this file pins is the one that
 made the difference: PASS is printed only when a server actually SERVED a
 request, never merely because a spawn was issued.
 
+The poll itself now runs in a CHILD process (`_verification_child_program`,
+eng-director F1) rather than in `start_warm_engine`'s own frame -- the
+installer's own interpreter has already imported `coordinator_core` from the
+unstamped live checkout, so a poll running in-process would deterministically
+time out regardless of which root the server was spawned against. These
+tests substitute that child process at its `subprocess.run` seam and drive
+`start_warm_engine` off the JSON line it prints, rather than patching a
+`time` module `start_warm_engine` no longer owns.
+
 NEGATIVE-SPEC:
   - Does NOT assert a real server can be spawned here -- that is dogfooding,
-    not a unit test; the spawn and dispatch seams are substituted.
+    not a unit test; the spawn and verification-child seams are substituted.
   - Does NOT assert the install fails when warmth cannot start: it must not.
     An optional performance feature never fails an install (the raising-seam
     case below).
@@ -21,8 +30,10 @@ NEGATIVE-SPEC:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,12 +61,18 @@ def setup_module_under_test():
     return _load_setup()
 
 
-def _patch_seams(monkeypatch, setup, *, served, spawn_exc=None, spawned=None):
-    """Substitute the two seams `start_warm_engine` imports lazily, by
-    installing them on the already-imported engine modules it imports FROM
-    (the function resolves them at call time, not at module import)."""
+def _patch_seams(monkeypatch, setup, engine_root, *, run_result=None, spawn_exc=None, spawned=None):
+    """Substitute the three seams `start_warm_engine` resolves lazily: the
+    published-root resolver, the spawn, and the verification child's own
+    `subprocess.run`."""
+    from coordinator_core.install import engine_root_for_install
     from coordinator_core.ops.ceremony import detached_spawn
-    from coordinator_core.warm import client
+
+    monkeypatch.setattr(
+        engine_root_for_install,
+        "resolve_engine_root_for_install",
+        lambda: SimpleNamespace(kind="published", root=engine_root, remediation=None),
+    )
 
     def fake_spawn(repo_root, script_path, args=None):
         if spawn_exc is not None:
@@ -65,72 +82,70 @@ def _patch_seams(monkeypatch, setup, *, served, spawn_exc=None, spawned=None):
         return True
 
     monkeypatch.setattr(detached_spawn, "spawn_detached", fake_spawn)
-    monkeypatch.setattr(client, "try_warm_dispatch", lambda msg: served)
-    # Substitute the module-global `time` in setup's own namespace rather than
-    # the stdlib module's attributes: patching `time.monotonic` process-wide
-    # would reach pytest's own timing for the duration of the test.
-    monkeypatch.setattr(setup, "time", _FakeClock(), raising=True)
+
+    def fake_run(cmd, **kwargs):
+        assert run_result is not None, "subprocess.run must not be reached past a spawn failure"
+        return run_result
+
+    monkeypatch.setattr(setup.subprocess, "run", fake_run)
 
 
-def test_pass_only_when_a_server_actually_served(monkeypatch, capsys, setup_module_under_test):
+def _run_result(stdout: str) -> SimpleNamespace:
+    return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+
+def test_pass_only_when_a_server_actually_served(monkeypatch, capsys, setup_module_under_test, tmp_path):
     setup = setup_module_under_test
+    engine_root = tmp_path / "engine-root"
+    resolved_file = engine_root / "coordinator_core" / "__init__.py"
     spawned: list = []
     _patch_seams(
         monkeypatch,
         setup,
-        served={"jsonrpc": "2.0", "id": 1, "result": {"ok": True}},
+        engine_root,
+        run_result=_run_result(json.dumps({"served": True, "coordinator_core_file": str(resolved_file)}) + "\n"),
         spawned=spawned,
     )
 
-    setup.start_warm_engine(Path("X:/engine-root"))
+    setup.start_warm_engine(tmp_path / "claude-klabauter-checkout")
 
     out = capsys.readouterr()
     assert "PASS [warm engine]" in out.out
     assert spawned, "a spawn must actually be issued"
 
 
-def test_unserved_ping_is_an_advisory_not_a_pass(monkeypatch, capsys, setup_module_under_test):
+def test_unserved_ping_is_an_advisory_not_a_pass(monkeypatch, capsys, setup_module_under_test, tmp_path):
     """The defect this whole step exists to prevent: reporting success off a
     spawn rather than off a served response."""
     setup = setup_module_under_test
-    _patch_seams(monkeypatch, setup, served=None)
+    engine_root = tmp_path / "engine-root"
+    _patch_seams(
+        monkeypatch,
+        setup,
+        engine_root,
+        run_result=_run_result(json.dumps({"served": False, "coordinator_core_file": None}) + "\n"),
+    )
 
-    setup.start_warm_engine(Path("X:/engine-root"))
+    setup.start_warm_engine(tmp_path / "claude-klabauter-checkout")
 
     out = capsys.readouterr()
     assert "PASS [warm engine]" not in out.out
     assert "[ADVISORY]" in out.err
 
 
-def test_a_failing_spawn_never_fails_the_install(monkeypatch, capsys, setup_module_under_test):
+def test_a_failing_spawn_never_fails_the_install(monkeypatch, capsys, setup_module_under_test, tmp_path):
     setup = setup_module_under_test
-    _patch_seams(monkeypatch, setup, served=None, spawn_exc=OSError("no such interpreter"))
+    engine_root = tmp_path / "engine-root"
+    _patch_seams(
+        monkeypatch,
+        setup,
+        engine_root,
+        run_result=None,
+        spawn_exc=OSError("no such interpreter"),
+    )
 
-    setup.start_warm_engine(Path("X:/engine-root"))  # must not raise
+    setup.start_warm_engine(tmp_path / "claude-klabauter-checkout")  # must not raise
 
     out = capsys.readouterr()
     assert "[ADVISORY]" in out.err
     assert "PASS [warm engine]" not in out.out
-
-
-class _FakeClock:
-    """Stands in for the `time` module inside `scripts/setup.py` only.
-
-    Reading 1 sets the deadline, reading 2 is inside it so the poll body
-    runs at least once (otherwise the served case could never be observed),
-    and reading 3 is far past it so an unserved case terminates instead of
-    spinning -- the deadline is a real bound, not a hope. `sleep` is a no-op
-    so an unserved case costs no wall-clock.
-    """
-
-    def __init__(self) -> None:
-        self._readings = iter([0.0, 1.0, 1000.0])
-
-    def monotonic(self) -> float:
-        try:
-            return next(self._readings)
-        except StopIteration:
-            return 9999.0
-
-    def sleep(self, _secs: float) -> None:
-        return None

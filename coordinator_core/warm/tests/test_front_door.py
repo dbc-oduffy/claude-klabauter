@@ -28,7 +28,7 @@ from typing import Any, List
 
 import pytest
 
-from coordinator_core.warm import front_door, skew
+from coordinator_core.warm import front_door, skew, supervisor
 
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="SO_EXCLUSIVEADDRUSE is Windows-only")
 
@@ -1387,3 +1387,525 @@ def test_every_thread_driven_test_in_this_module_records_and_asserts_on_errors()
         f"thread-driving test(s) with no recorded-and-asserted errors list "
         f"(AC11): {offenders!r} -- see this test's own docstring"
     )
+
+
+# ---------------------------------------------------------------------------
+# C9 (AC18/AC19) -- supervisor.py's skew-only watchdog thread self-evicts a
+# listener whose engine_token a publish has rotated past, closing the "held
+# until something contacts it" window instead of paying it per republish.
+# Exercised in THIS file (per the chunk's declared writes:) reusing the real
+# loopback-server harness this module already builds for C7's own supervisor-
+# shaped assembled-path tests above, rather than duplicating that harness in
+# test_supervisor.py.
+# ---------------------------------------------------------------------------
+
+
+def _supervisor_ctx(root: Path) -> "supervisor._ServerContext":
+    version_state = skew.ServerVersionState(root)
+    return supervisor._ServerContext(httpd=None, engine_root=root, version_state=version_state)
+
+
+def test_server_context_token_is_stale_false_when_token_matches(tmp_path: Path) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    assert ctx._token_is_stale() is False
+
+
+def test_server_context_token_is_stale_true_when_token_diverges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    monkeypatch.setattr(supervisor.skew, "compute_client_token", lambda r: "a-different-token")
+    assert ctx._token_is_stale() is True
+
+
+def test_server_context_token_is_stale_false_when_engine_token_is_none(tmp_path: Path) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    ctx.engine_token = None
+    assert ctx._token_is_stale() is False
+
+
+def test_server_context_token_is_stale_false_on_compute_client_token_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+
+    def _raise(_root):
+        raise RuntimeError("stat failed mid-publish")
+
+    monkeypatch.setattr(supervisor.skew, "compute_client_token", _raise)
+    assert ctx._token_is_stale() is False
+
+
+def test_supervisor_context_stop_wires_lifecycle_begin_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`supervisor._ServerContext.stop()` calls `lifecycle.begin_shutdown` with
+    this context's own `close_listener`/`in_flight`/`ctx_shutdown` -- asserted
+    via a monkeypatched `lifecycle.begin_shutdown` so this test never reaches
+    the real `os._exit` `begin_shutdown`'s own default `exit_fn` calls. Mirrors
+    `test_front_door_context_stop_wires_lifecycle_begin_shutdown` above."""
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+
+    calls = []
+    monkeypatch.setattr(supervisor.lifecycle, "begin_shutdown", lambda **kw: calls.append(kw) or True)
+
+    ctx.stop()
+
+    assert len(calls) == 1
+    assert calls[0]["close_listener"] == ctx.close_listener
+    assert calls[0]["in_flight_count"] is ctx.in_flight
+    assert calls[0]["ctx_shutdown"] == ctx.ctx_shutdown
+
+
+def test_skew_watchdog_tick_stops_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    stopped = []
+    monkeypatch.setattr(ctx, "_token_is_stale", lambda: True)
+    monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
+    ctx._skew_watchdog_tick()
+    assert stopped == [True]
+
+
+def test_skew_watchdog_tick_noop_when_not_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    stopped = []
+    monkeypatch.setattr(ctx, "_token_is_stale", lambda: False)
+    monkeypatch.setattr(ctx, "stop", lambda: stopped.append(True))
+    ctx._skew_watchdog_tick()
+    assert stopped == []
+
+
+def test_ctx_shutdown_sets_the_skew_watchdog_stop_event(tmp_path: Path) -> None:
+    """`ctx_shutdown` sets `_skew_watchdog_stop` as its own first action --
+    the identical wiring `warm.server._ServerContext._ctx_shutdown` uses for
+    its idle watchdog -- so a poll already in flight ends on the NEXT wait
+    rather than outliving the shutdown it lost the single-shot race to."""
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    assert not ctx._skew_watchdog_stop.is_set()
+    ctx.ctx_shutdown()
+    assert ctx._skew_watchdog_stop.is_set()
+
+
+def test_skew_watchdog_loop_ends_promptly_once_stop_event_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _supervisor_ctx(_stamped(tmp_path))
+    monkeypatch.setattr(supervisor, "_SKEW_WATCHDOG_POLL_SECS", 0.01)
+
+    errors: List[BaseException] = []
+    ticks: List[bool] = []
+    monkeypatch.setattr(ctx, "_skew_watchdog_tick", lambda: ticks.append(True))
+
+    def _run():
+        try:
+            ctx._skew_watchdog_loop()
+        except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
+            errors.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    ctx._skew_watchdog_stop.set()
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert ticks
+    assert errors == []
+
+
+def test_skew_watchdog_self_evicts_a_republished_listener_without_a_caller_ever_contacting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC18/AC19 end-to-end: a real bound listener, no `/hook` or `/health`
+    traffic of any kind, and a publish (`skew.write_engine_stamp` rewriting
+    the stamp this listener's `engine_token` was computed from) -- the
+    watchdog thread alone must reach `lifecycle.begin_shutdown` within a
+    bounded number of short polls. Regression for the measured-live
+    7h04m-stale, health-green-throughout gap this chunk closes (module
+    docstring). `lifecycle.begin_shutdown` is monkeypatched so this test
+    never reaches the real `os._exit` -- see the `stop()` wiring test above
+    for why that patch is required rather than optional here."""
+    from http.server import ThreadingHTTPServer
+
+    root = _stamped(tmp_path)
+    ctx = _supervisor_ctx(root)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), supervisor._make_handler(ctx))
+    ctx.httpd = httpd
+    monkeypatch.setattr(supervisor, "_SKEW_WATCHDOG_POLL_SECS", 0.02)
+
+    calls = []
+    monkeypatch.setattr(supervisor.lifecycle, "begin_shutdown", lambda **kw: calls.append(kw) or True)
+
+    errors: List[BaseException] = []
+
+    def _serve():
+        try:
+            httpd.serve_forever(poll_interval=0.02)
+        except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
+            errors.append(exc)
+
+    serve_thread = threading.Thread(target=_serve, daemon=True)
+    serve_thread.start()
+    watchdog_thread = threading.Thread(target=ctx._skew_watchdog_loop, daemon=True)
+    watchdog_thread.start()
+    try:
+        # THE PUBLISH: rewrite the stamp this listener's `engine_token` was
+        # self-stamped from at construction (`_compute_engine_token`) -- no
+        # request is ever sent to this listener, mirroring the measured
+        # incident's "GET /health returning 200 ok throughout" (no /hook
+        # traffic either) -- only the watchdog's own poll can notice.
+        skew.write_engine_stamp(root, "sha-after-republish")
+
+        deadline = time.monotonic() + 2.0
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert calls, "skew watchdog did not self-evict the republished listener in time"
+        assert calls[0]["close_listener"] == ctx.close_listener
+    finally:
+        ctx._skew_watchdog_stop.set()
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        serve_thread.join(timeout=5)
+        watchdog_thread.join(timeout=2)
+    assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# The dial counter -- AN-UNDIALED-HOOK-IS-NOT-A-PASSING-GUARD
+# ---------------------------------------------------------------------------
+#
+# THE SMELL THIS SECTION IS WRITTEN AGAINST. DoE's forwarder had five passing
+# tests and had never once forwarded a request: all five asserted a deny, and
+# deny was the only reachable outcome, so the suite could not tell "working"
+# from "never ran". A counter suite that only ever asserts zero has exactly
+# that shape. So `test_a_real_request_moves_the_counter_zero_to_one` is the
+# load-bearing test here, and the zero-reading tests are only trustworthy
+# BECAUSE it exists: a zero means something only once the instrument has been
+# observed to move.
+
+
+def _dial_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point `breadcrumb.svc_dir` at a tmp dir so the counter never writes
+    into the operator's real runtime base -- see this module's registration
+    in `test_warm_suite_does_not_litter_the_real_runtime_base.py`."""
+    svc = tmp_path / "svc"
+    svc.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(front_door.breadcrumb, "svc_dir", lambda root=None: svc)
+    return svc
+
+
+def test_absent_counter_file_is_not_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole discrimination: a door that never started must NOT read as a
+    door that was never dialled. `read_dial_counter` returns None, and None is
+    not `{"received": 0}`."""
+    _dial_env(tmp_path, monkeypatch)
+    assert front_door.read_dial_counter(None) is None
+
+
+def test_boot_flush_publishes_an_explicit_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A booted-but-never-dialled door reads as an explicit zero stamped with
+    `boot_at`/`boot_id` -- the reading that was silence before this existed."""
+    _dial_env(tmp_path, monkeypatch)
+    counter = front_door.DialCounter(engine_root=None)
+    assert counter.flush() is True
+
+    record = front_door.read_dial_counter(None)
+    assert record is not None
+    assert record["events"] == {}
+    assert record["last_received_at"] is None
+    assert record["boot_id"] == counter.boot_id
+    assert record["boot_at"]
+    assert record["schema"] == front_door.DIAL_COUNTER_SCHEMA
+
+
+def test_a_real_request_moves_the_counter_zero_to_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REQUIREMENT 7 -- prove the success path before trusting the zero.
+
+    A real loopback GET through a real elected, served socket must move
+    `received` 0 -> 1 and land on disk. Without this arm, every zero above is
+    the assertion of an instrument nobody has ever seen work.
+    """
+    svc = _dial_env(tmp_path, monkeypatch)
+    root = _stamped(tmp_path)
+    monkeypatch.setattr(front_door.skew, "compute_client_token", lambda r: "sha-dial-probe")
+
+    sock = front_door.elect_front_door(engine_root=root, port=0)
+    from http.server import ThreadingHTTPServer
+
+    class _NotYetBound:
+        pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound, bind_and_activate=False)
+    httpd.socket.close()
+    httpd.socket = sock
+    httpd.server_address = sock.getsockname()
+    ctx = front_door._FrontDoorContext(httpd=httpd, engine_root=None)
+    httpd.RequestHandlerClass = front_door._make_handler(ctx)
+    port = httpd.server_address[1]
+
+    ctx.dials.flush()
+    before = front_door.read_dial_counter(None)
+    assert before is not None and before["events"] == {}
+
+    errors: List[BaseException] = []
+
+    def _serve() -> None:
+        try:
+            httpd.serve_forever(poll_interval=0.02)
+        except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
+            errors.append(exc)
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://{front_door.bind_host()}:{port}{front_door.HEALTH_PATH}",
+            headers={front_door.HOOK_EVENT_HEADER: "PreToolUse"},
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            assert 200 <= resp.status < 300
+            resp.read()
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+    assert errors == []
+
+    after = front_door.read_dial_counter(None)
+    assert after is not None
+    assert after["events"]["PreToolUse"]["received"] == 1, (
+        "the counter did not move on a real request -- a zero from this "
+        "instrument would be meaningless"
+    )
+    assert after["last_received_at"]
+    assert after["tail"][-1]["event"] == "PreToolUse"
+    assert after["boot_id"] == before["boot_id"]
+    assert (svc / front_door.DIAL_COUNTER_FILENAME).exists()
+
+
+def test_an_unlabelled_arrival_is_never_filed_under_a_real_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An arrival with no `HOOK_EVENT_HEADER` must land in the reserved
+    `UNLABELLED_EVENT` bucket, NOT under a plausible event name and NOT under
+    its request path.
+
+    `doe-claude-a9` hit the severe form of this on their forwarder -- an
+    unparsable body defaulting to "PreToolUse" -- where the arrived-but-
+    unlabelled population disappears into the exact bucket being interrogated.
+    An earlier revision here had the weaker form: a path-inferred key shared a
+    namespace with header-supplied ones and nothing marked which was which.
+    A nonzero `PreToolUse` must mean the harness SAID `PreToolUse`.
+    """
+    _dial_env(tmp_path, monkeypatch)
+    root = _stamped(tmp_path)
+    monkeypatch.setattr(front_door.skew, "compute_client_token", lambda r: "sha-unlabelled")
+
+    sock = front_door.elect_front_door(engine_root=root, port=0)
+    from http.server import ThreadingHTTPServer
+
+    class _NotYetBound:
+        pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound, bind_and_activate=False)
+    httpd.socket.close()
+    httpd.socket = sock
+    httpd.server_address = sock.getsockname()
+    ctx = front_door._FrontDoorContext(httpd=httpd, engine_root=None)
+    httpd.RequestHandlerClass = front_door._make_handler(ctx)
+    port = httpd.server_address[1]
+    ctx.dials.flush()
+
+    errors: List[BaseException] = []
+
+    def _serve() -> None:
+        try:
+            httpd.serve_forever(poll_interval=0.02)
+        except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
+            errors.append(exc)
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        import urllib.request
+
+        # No HOOK_EVENT_HEADER at all -- the unlabelled arrival.
+        with urllib.request.urlopen(
+            f"http://{front_door.bind_host()}:{port}{front_door.HEALTH_PATH}", timeout=2.0
+        ) as resp:
+            resp.read()
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+    assert errors == []
+
+    record = front_door.read_dial_counter(None)
+    assert record is not None
+    events = record["events"]
+    assert front_door.UNLABELLED_EVENT in events
+    assert events[front_door.UNLABELLED_EVENT]["received"] == 1
+    assert "PreToolUse" not in events, "an unlabelled arrival was filed as a real event"
+    assert front_door.HEALTH_PATH not in events, "the path must not become an event key"
+    # The arrival is still fully visible -- counted, and tailed with its path.
+    assert record["tail"][-1]["path"] == front_door.HEALTH_PATH
+
+
+def test_counts_are_per_event_never_global(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`PreToolUse` inert while `SessionStart` carries traffic must NOT read
+    as "traffic exists" -- the failure a single global integer would hide."""
+    _dial_env(tmp_path, monkeypatch)
+    counter = front_door.DialCounter(engine_root=None)
+    counter.record(event="SessionStart", path="/hook/session")
+    counter.record(event="SessionStart", path="/hook/session")
+    counter.flush()
+
+    record = front_door.read_dial_counter(None)
+    assert record is not None
+    assert record["events"]["SessionStart"]["received"] == 2
+    assert "PreToolUse" not in record["events"]
+
+
+def test_received_and_dispatched_are_separate_diagnoses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Dialled but we rejected the shape" must be distinguishable from
+    "never dialled" -- only a pre-validation `received` separates them."""
+    _dial_env(tmp_path, monkeypatch)
+    counter = front_door.DialCounter(engine_root=None)
+    counter.record(event="PreToolUse", path="/hook/bash")
+    counter.flush()
+
+    record = front_door.read_dial_counter(None)
+    assert record is not None
+    slot = record["events"]["PreToolUse"]
+    assert slot["received"] == 1
+    assert slot["dispatched"] == 0
+
+
+def test_boot_id_makes_a_restart_not_a_decrement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counts are monotonic WITHIN a lifetime; a comparing caller compares
+    `(boot_id, count)` pairs, so a fresh door's lower count is legible as a
+    restart rather than as a lost increment."""
+    _dial_env(tmp_path, monkeypatch)
+    first = front_door.DialCounter(engine_root=None)
+    first.record(event="PreToolUse", path="/hook/bash")
+    first.flush()
+    before = front_door.read_dial_counter(None)
+
+    second = front_door.DialCounter(engine_root=None)
+    second.flush()
+    after = front_door.read_dial_counter(None)
+
+    assert before is not None and after is not None
+    assert after["boot_id"] != before["boot_id"]
+    assert after["events"] == {}
+    assert before["events"]["PreToolUse"]["received"] == 1
+
+
+def test_tail_is_bounded_and_names_which_variation_dialled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tail is what tells a caller varying one registration field at a
+    time WHICH variation dialled, and it must not grow without bound."""
+    _dial_env(tmp_path, monkeypatch)
+    counter = front_door.DialCounter(engine_root=None)
+    for i in range(front_door.DIAL_TAIL_MAX + 5):
+        counter.record(event="PreToolUse", path=f"/hook/variant-{i}")
+    counter.flush()
+
+    record = front_door.read_dial_counter(None)
+    assert record is not None
+    assert len(record["tail"]) == front_door.DIAL_TAIL_MAX
+    assert record["tail"][-1]["path"] == f"/hook/variant-{front_door.DIAL_TAIL_MAX + 4}"
+    assert record["events"]["PreToolUse"]["received"] == front_door.DIAL_TAIL_MAX + 5
+
+
+def test_the_counter_never_raises_into_the_request_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An instrument that can break the thing it measures is worse than no
+    instrument: a flush that cannot write must not propagate."""
+    _dial_env(tmp_path, monkeypatch)
+    counter = front_door.DialCounter(engine_root=None)
+
+    def _boom(*a: Any, **kw: Any) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(front_door, "_replace_with_retry", _boom)
+    counter.record(event="PreToolUse", path="/hook/bash")
+    assert counter.flush() is False
+    assert counter.events["PreToolUse"]["received"] == 1
+
+
+def test_there_is_no_http_read_surface_for_the_counter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NEGATIVE SPEC, asserted rather than documented: a read that is itself a
+    request cannot answer "did anything request", so the counter must be
+    readable ONLY off disk. Guards against a well-meaning `GET /dials` being
+    added later.
+
+    Asserted behaviourally against a live door rather than by grepping the
+    source: an earlier revision of this test grepped for the literal and
+    failed on this module's own explanatory comment, which is a test that
+    fails when the documentation is good. What matters is that no route
+    serves it, so that is what is probed.
+    """
+    _dial_env(tmp_path, monkeypatch)
+    root = _stamped(tmp_path)
+    monkeypatch.setattr(front_door.skew, "compute_client_token", lambda r: "sha-no-read-surface")
+
+    sock = front_door.elect_front_door(engine_root=root, port=0)
+    from http.server import ThreadingHTTPServer
+
+    class _NotYetBound:
+        pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound, bind_and_activate=False)
+    httpd.socket.close()
+    httpd.socket = sock
+    httpd.server_address = sock.getsockname()
+    ctx = front_door._FrontDoorContext(httpd=httpd, engine_root=None)
+    httpd.RequestHandlerClass = front_door._make_handler(ctx)
+    port = httpd.server_address[1]
+
+    errors: List[BaseException] = []
+
+    def _serve() -> None:
+        try:
+            httpd.serve_forever(poll_interval=0.02)
+        except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
+            errors.append(exc)
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        import urllib.error
+        import urllib.request
+
+        for probe in ("/dials", "/dial", "/counter", "/metrics"):
+            try:
+                urllib.request.urlopen(
+                    f"http://{front_door.bind_host()}:{port}{probe}", timeout=2.0
+                )
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 404, f"{probe} is served -- the counter must not have a route"
+            else:  # pragma: no cover -- a served probe is the failure
+                raise AssertionError(f"{probe} returned 2xx; the counter must be file-only")
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+    assert errors == []
+    assert callable(front_door.read_dial_counter)

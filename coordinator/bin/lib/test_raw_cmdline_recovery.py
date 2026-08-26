@@ -2,16 +2,24 @@
 `recover_windows_argv` helper.
 
 See coordinator/bin/lib/raw_cmdline_recovery.py module docstring for the
-caret-eating defect this helper recovers from. `os.name` is patched to
-exercise the Windows-only recovery path from a non-Windows test host — the
-actual cmd.exe caret behaviour cannot be exercised here (no Windows host in
-this environment); these tests hold the recovery function's own parse/
-fallback contract given a synthesized `%CMDCMDLINE%` capture file.
+caret-eating defect this helper recovers from. `_mod._host_is_nt` (a named
+platform seam, not the process-global `os.name`) is patched to exercise the
+Windows-only recovery path from a non-Windows test host — the actual
+cmd.exe caret behaviour cannot be exercised here (no Windows host in this
+environment); these tests hold the recovery function's own parse/fallback
+contract given a synthesized `%CMDCMDLINE%` capture file.
+
+Negative-spec: does NOT monkeypatch `os.name` — flipping that process-global
+makes every `pathlib.Path(...)` constructed afterwards in the same process
+(including this module's own `Path(raw_file)` read) pick `WindowsPath`,
+which then fails to find a real POSIX temp path. `_host_is_nt` isolates the
+Windows-only branch from that global, so no `Path`-pinning workaround is
+needed here either. See `_host_is_nt`'s own docstring in
+`raw_cmdline_recovery.py`.
 """
 from __future__ import annotations
 
 import os
-import pathlib
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -31,12 +39,6 @@ from raw_cmdline_recovery import (  # noqa: E402
 
 _LAUNCHER = "scoped-git-commit.cmd"
 
-#: The REAL host's `os.name`, read at import before any test monkeypatches it.
-#: `_patch_windows` needs to know which host it is faking Windows *from*; asking
-#: `os.name` inside the fixture answers "nt" unconditionally, because the fixture
-#: itself has just set it.
-_REAL_OS_NAME = os.name
-
 
 def _write_capture(tmp_path, text, monkeypatch):
     capture = tmp_path / "capture.tmp"
@@ -46,35 +48,13 @@ def _write_capture(tmp_path, text, monkeypatch):
 
 
 def _patch_windows(monkeypatch):
-    """Fake ``os.name == "nt"`` to exercise the Windows-only branch from a
-    POSIX test host. ``pathlib.Path`` itself picks ``WindowsPath`` vs.
-    ``PosixPath`` by re-checking ``os.name`` on every construction (not just
-    at import time), so patching ``os.name`` alone makes the module's own
-    ``Path(raw_file)`` calls try to interpret a real POSIX temp path as a
-    Windows one and fail to find it — an artifact of faking the platform
-    from the wrong host, not a real behaviour. Pinning the module's ``Path``
-    to ``pathlib.PosixPath`` here keeps the read working against this test
-    host's real filesystem while still exercising the ``os.name``-gated
-    recovery logic; real Windows never needs this pin (there, ``Path``
-    already resolves to ``WindowsPath`` correctly on its own).
-
-    NEGATIVE SPEC — the pin is conditional on the REAL host, and must stay so.
-    Applying it unconditionally breaks every test in this file on a Windows
-    host: Python 3.13 refuses to instantiate a ``PosixPath`` there
-    (``UnsupportedOperation: cannot instantiate 'PosixPath' on your system``),
-    so the pin that rescues a POSIX host is fatal on an ``nt`` one. This file
-    was authored on a POSIX host and silently went inert when the suite began
-    running on Windows — the same shape as the defect this module's own
-    plan corrects, one layer down. Gate on ``_REAL_OS_NAME``, never on
-    ``os.name`` (already faked by the line above).
-    """
-    monkeypatch.setattr(os, "name", "nt")
-    if _REAL_OS_NAME != "nt":
-        monkeypatch.setattr(_mod, "Path", pathlib.PosixPath)
+    """Fake `_host_is_nt() -> True` to exercise the Windows-only branch from
+    a POSIX test host, without touching `os.name` — see module docstring."""
+    monkeypatch.setattr(_mod, "_host_is_nt", lambda: True)
 
 
 def test_non_windows_returns_argv_unchanged(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(_mod, "_host_is_nt", lambda: False)
     _write_capture(tmp_path, 'cmd /c "scoped-git-commit.cmd -m "hi^!" -- a.txt"', monkeypatch)
     assert recover_windows_argv(["-m", "hi", "--", "a.txt"], _LAUNCHER) == [
         "-m", "hi", "--", "a.txt",

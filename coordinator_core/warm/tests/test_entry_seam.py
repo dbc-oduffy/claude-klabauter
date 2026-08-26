@@ -299,3 +299,58 @@ def test_try_warm_guard_dispatch_defaults_params_to_empty_dict(monkeypatch):
     try_warm_guard_dispatch("some.guard.op")
 
     assert captured[0]["params"] == {}
+
+
+# ---------------------------------------------------------------------------
+# AC5a closure -- "warm off" and "no door" exercised AS THEMSELVES, not
+# collapsed into the stubbed-None `try_warm_dispatch` case every test above
+# uses. `try_warm_dispatch` is left unstubbed in both: the real
+# `warm.client`/`warm.settings` chain is what has to produce the fall-open
+# result here.
+# ---------------------------------------------------------------------------
+
+
+def test_try_warm_guard_dispatch_falls_open_when_warm_is_genuinely_disabled(monkeypatch):
+    """"Warm off" as itself: `warm.settings.is_warm_enabled` resolves to
+    False via its real registry rung (`registry_get` monkeypatched as a
+    module attribute, the established seam -- see `test_warm_settings.py`),
+    with `warm.client.try_warm_dispatch` left completely unstubbed. The
+    "warm off" branch inside `_try_warm_dispatch_inner` is what actually
+    returns `None` here, not a fake.
+    """
+    from coordinator_core.warm import settings
+
+    monkeypatch.delenv(settings.ENV_VAR, raising=False)
+    monkeypatch.setattr(settings, "registry_get", lambda key: None)
+    settings._reset_for_test()
+    try:
+        outcome = try_warm_guard_dispatch("some.guard.op", {})
+    finally:
+        settings._reset_for_test()
+
+    assert outcome == WarmGuardOutcome(hit=False, response=None)
+
+
+def test_try_warm_guard_dispatch_falls_open_when_the_door_is_absent(monkeypatch):
+    """"No door" as itself: warmth reads as enabled, but the pipe/socket
+    endpoint for a fabricated engine token has no server ever bound to it,
+    so `warm.client._open_pipe` raises the real `FileNotFoundError` /
+    `ConnectionRefusedError` this primitive must fall open on --
+    `try_warm_dispatch` is left unstubbed.
+
+    `breadcrumb.should_spawn` is pinned to False so the FileNotFoundError
+    branch's own best-effort respawn (`client._spawn_once`) stays inert --
+    that debounce is a separate concern from the "no door" outcome this
+    test pins, and a real `spawn_detached()` has no place in this suite.
+    """
+    from coordinator_core.warm import breadcrumb, client
+
+    monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(client, "engine_token", lambda: "test-entry-seam-no-door-token")
+    monkeypatch.setattr(client, "_spawned_this_process", False)
+    monkeypatch.setattr(client, "_live_tree_cold", False)
+    monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: False)
+
+    outcome = try_warm_guard_dispatch("some.guard.op", {})
+
+    assert outcome == WarmGuardOutcome(hit=False, response=None)

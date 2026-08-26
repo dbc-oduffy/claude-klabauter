@@ -7,8 +7,8 @@ function calls (no subprocess) — loads bin/claude-klabauter-doctor-probe.py as
 via importlib for fast, isolated, monkeypatched execution.
 
 Probes under test:
-  claude-klabauter.root.pointer   — claude-klabauter-root pointer file present at
-                          <settings-home>/machine-local/.claude-klabauter-root and matches the
+  claude-klabauter.root.pointer   — claude-klabauter-live-root pointer file present at
+                          <settings-home>/machine-local/.claude-klabauter-live-root and matches the
                           resolved CLAUDE_KLABAUTER_ROOT; DEGRADED (not hard FAIL) on absence/mismatch.
   claude-klabauter.invoke.latency — measures a single coordinator_core.invoke round-trip against a
                           2000 ms budget; DEGRADED (not BROKEN) over budget or on timeout.
@@ -135,7 +135,7 @@ class TestRootPointerProbe:
             "claude-klabauter.root.pointer must carry required=False (WARN, not hard FAIL)"
         )
         assert isinstance(result.remediation, str) and len(result.remediation) > 0
-        assert "gen-claude-klabauter-root-pointer" in result.remediation, (
+        assert "gen-claude-klabauter-live-root-pointer" in result.remediation, (
             f"Remediation should point at the install-time writer, got: {result.remediation!r}"
         )
 
@@ -152,7 +152,7 @@ class TestRootPointerProbe:
 
         pointer_dir = tmp_path / "machine-local"
         pointer_dir.mkdir()
-        (pointer_dir / ".claude-klabauter-root").write_text(str(claude_klabauter_root))
+        (pointer_dir / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root))
 
         result = mod._run_probe_root_pointer(claude_klabauter_root)
 
@@ -179,7 +179,7 @@ class TestRootPointerProbe:
 
         pointer_dir = tmp_path / "machine-local"
         pointer_dir.mkdir()
-        (pointer_dir / ".claude-klabauter-root").write_text(str(other_root))
+        (pointer_dir / ".claude-klabauter-live-root").write_text(str(other_root))
 
         result = mod._run_probe_root_pointer(claude_klabauter_root)
 
@@ -202,7 +202,7 @@ class TestRootPointerProbe:
 
         pointer_dir = tmp_path / "machine-local"
         pointer_dir.mkdir()
-        (pointer_dir / ".claude-klabauter-root").write_text("/some/path")
+        (pointer_dir / ".claude-klabauter-live-root").write_text("/some/path")
 
         result = mod._run_probe_root_pointer(None)
 
@@ -302,7 +302,7 @@ class TestInvokeLatencyProbe:
             "claude-klabauter.invoke.latency must not emit BROKEN for a merely-slow round-trip"
         )
         assert result.required is False
-        assert "claude-klabauter-root pointer" in result.remediation
+        assert "claude-klabauter-live-root pointer" in result.remediation
 
     def test_latency_timeout_is_degraded_not_broken(
         self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path

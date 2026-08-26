@@ -22,10 +22,33 @@ a blank branch, and exit 0. Three agents read that as their working tree having
 been wiped; one proposed a `git stash pop` recovery over a 144-file older snapshot.
 A real `git status --porcelain` run at the same moment showed 697 modified paths.
 
+RECONCILED 2026-08-25 with the later ratified decision, which this guard predates.
+As first written, contract 1 named `cat`/`head`/`tail`/`ls` alongside the git verbs
+-- deliberately, and before the answerer could serve any of them. The DR-344 plan
+AC then wired exactly those four in (`sources_read.READ_VERBS`,
+`sources_listdir`), and that commit never touched this file, so two ratified
+artifacts disagreed with no reconciling line in either.
+
+The later decision wins, on a fact rather than on recency: the answerer holds no
+cache of any kind. It calls `read_text`/`listdir` live per invocation and raises
+`Unanswerable` on `OSError` instead of rendering empty (contract 2 below pins
+exactly that). An in-process `cat` therefore reads the same bytes, at the same
+instant, as a spawned one -- there is no window in which it can be stale that a
+subprocess would not have equally. What the guard was actually built for was not
+reading at all: it was a BATCHED payload that discarded a return code and rendered
+a failure as a clean tree. That is contract 3, and it stays pinned unchanged.
+
+The git verbs stay unanswerable, and not by inertia: `git status`/`diff`/`log`
+report index and worktree state that is derived, not read -- there is no
+cacheless-live-read argument to make for them, and none is offered here.
+
 The contracts asserted here:
-  1. The in-process ANSWER path serves read-only content search and nothing else.
-     A command whose answer is worktree or index state must fall through (`None`),
-     and no state-reading verb may be enrolled in the answerable vocabulary.
+  1. The in-process ANSWER path serves read-only content and directory reads, and
+     nothing else. A command whose answer is worktree or INDEX state must fall
+     through (`None`), and no such verb may be enrolled in the answerable
+     vocabulary. Pinned across every source class, not just the grep one -- the
+     2026-08-25 widening added `ReadSource`/`LsSource` beside `GrepSource`, and an
+     assertion naming only `GREP_FAMILY` stayed green straight through it.
   2. A file the search process cannot open refuses the whole answer. It is a hole
      in the result set, not an absence of matches, and under concurrent peers the
      holes land on the files being edited.
@@ -47,7 +70,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_inprocess_search as guard
-from coordinator_core.search import engine
+from coordinator_core.search import engine, sources_powershell, sources_read
 from coordinator_core.search.answer import answer, plan_for
 
 
@@ -63,12 +86,18 @@ MUTABLE_STATE_COMMANDS = (
     "git stash list",
     "git ls-files -m",
     "git log --oneline -5",
+    "find . -name '*.py'",
+    "wc -l coordinator_core/search/engine.py",
+)
+
+#: The four verbs the DR-344 plan AC enrolled, pinned POSITIVELY so a later
+#: re-narrowing is as visible as the widening was invisible. Membership here is
+#: the reconciliation in the module docstring, expressed where a test will say it.
+RATIFIED_ANSWERABLE_READS = (
     "cat coordinator_core/search/engine.py",
     "head -50 coordinator_core/search/engine.py",
     "tail -20 coordinator_core/search/engine.py",
     "ls coordinator_core",
-    "find . -name '*.py'",
-    "wc -l coordinator_core/search/engine.py",
 )
 
 
@@ -89,12 +118,42 @@ class TestOnlyReadOnlySearchIsAnswerable:
         }
         assert guard.check(payload) is None
 
-    def test_answerable_binaries_are_content_search_only(self):
-        """`GREP_FAMILY` is the entire set of leading binaries `plan_for` will
-        accept. Enrolling a verb that reports state -- `git`, `ls`, `stat` -- puts
-        that state on the substituted path, where a wrong answer is the only
-        answer the agent gets."""
+    @pytest.mark.parametrize("command", RATIFIED_ANSWERABLE_READS)
+    def test_ratified_read_verb_is_answerable(self, command):
+        """The other direction of the same pin. These four are answerable by
+        ratified decision (module docstring); a change that quietly removes one
+        from the vocabulary has to come here and say so."""
+        assert plan_for(command) is not None
+
+    def test_every_answerable_vocabulary_is_pinned_by_membership(self):
+        """The leading-binary vocabulary of EVERY source class `plan_for`
+        dispatches to, pinned by exact set equality.
+
+        Naming only `GREP_FAMILY` -- as this assertion originally did -- pins one
+        of four branches. `_plan_for_read`, `_plan_for_listdir` and
+        `_plan_for_powershell` each carry their own vocabulary, so a verb enrolled
+        in any of them reached the substituted path with this test still green.
+        Every set below is asserted, so the next widening is red by construction
+        wherever it lands.
+
+        The bar for adding a verb is the docstring's: the answer must be a live,
+        cacheless read, not derived state a peer can invalidate between the read
+        and the agent acting on it.
+        """
         assert set(engine.GREP_FAMILY) == {"grep", "egrep", "fgrep", "rg"}
+        assert set(sources_read.READ_VERBS) == {"cat", "head", "tail", "sed"}
+        assert set(sources_powershell._CONTENT_VERBS) == {
+            "get-content", "cat", "gc", "type",
+        }
+        assert set(sources_powershell._CHILDITEM_VERBS) == {
+            "get-childitem", "gci", "ls", "dir",
+        }
+        # `_plan_for_listdir` keys off the `ls` basename literally rather than a
+        # constant, so its vocabulary is asserted by behavior: `ls` in, and the
+        # sibling listing verbs the PowerShell dialect accepts staying out of bash.
+        assert plan_for("ls coordinator_core") is not None
+        for outside in ("dir coordinator_core", "gci coordinator_core"):
+            assert plan_for(outside) is None, outside
 
     def test_absorbed_pipeline_stages_read_no_state(self):
         """Downstream stages are pure functions over lines the search already

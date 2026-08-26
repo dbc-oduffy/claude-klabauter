@@ -76,12 +76,12 @@ def _fake_claude_klabauter_root(tmp_path, monkeypatch):
     Without this every fallback-branch test would see the file "missing"
     and silently fall through to the final "no probe available" return,
     masking the branch this suite exists to exercise."""
-    claude_klabauter_root = tmp_path / "fake-claude-klabauter-root"
+    claude_klabauter_root = tmp_path / "fake-claude-klabauter-live-root"
     (claude_klabauter_root / "coordinator" / "lib").mkdir(parents=True, exist_ok=True)
     (claude_klabauter_root / "coordinator" / "lib" / "coordinator_currency.py").write_text(
         "# stub — not sourced by port\n"
     )
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
     return claude_klabauter_root
 
 
@@ -356,7 +356,7 @@ def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path
     "Never raises" contract."""
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
-    repo = tmp_path / "case-unresolvable-claude-klabauter-root"
+    repo = tmp_path / "case-unresolvable-claude-klabauter-live-root"
     repo.mkdir()
     _init_git_repo(repo)
     _mark_onboarded(repo)
@@ -366,9 +366,15 @@ def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path
     from coordinator_core.ops import detect_onboarding_offer as _mod
 
     def _raise():
-        raise RuntimeError("coordinator_claude_klabauter_root: cannot resolve CLAUDE_KLABAUTER_ROOT")
+        raise RuntimeError(
+            "coordinator_engine_root: cannot resolve COORDINATOR_ENGINE_ROOT"
+        )
 
-    monkeypatch.setattr(_mod, "coordinator_claude_klabauter_root", _raise)
+    # The module imports `coordinator_engine_root`, not the retired
+    # `coordinator_claude_klabauter_root` name this patch used to target — patching a
+    # name the module does not bind raises AttributeError instead of
+    # exercising the degrade-to-silent branch.
+    monkeypatch.setattr(_mod, "coordinator_engine_root", _raise)
 
     out = detect_onboarding_offer(str(repo), str(plugin_root))
     assert out == ""

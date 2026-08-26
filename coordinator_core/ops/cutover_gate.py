@@ -1356,6 +1356,8 @@ def _git_cat_file_batch_check(root: Path, shas: Sequence[str]) -> dict[str, bool
     shas = list(shas)
     if not shas:
         return {}
+    from coordinator_core.win_portability import leaf_spawn_creationflags
+
     stdin_text = "\n".join(f"{sha}^{{commit}}" for sha in shas) + "\n"
     try:
         proc = subprocess.run(
@@ -1364,7 +1366,7 @@ def _git_cat_file_batch_check(root: Path, shas: Sequence[str]) -> dict[str, bool
             capture_output=True,
             text=True,
             timeout=60,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {sha: False for sha in shas}

@@ -587,7 +587,7 @@ def test_claude_klabauter_root_pointer_file_fast_path(
     # without ever invoking the subprocess-based machine-local ladder.
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
-    (settings_home / "machine-local" / ".claude-klabauter-root").write_text(
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(
         "/pointer/resolved/claude-klabauter\n", encoding="utf-8"
     )
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)

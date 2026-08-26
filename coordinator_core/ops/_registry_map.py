@@ -145,6 +145,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # writes-and-one-commit-th.md § C2) after the 2026-08-23 kill (K-050).
     # NOT a resurrection of the killed module — three-write shape only.
     "memo.send":                              "coordinator_core.ops.fleet.memo_send",
+    "memo.reconcile_outbox":                  "coordinator_core.ops.fleet.memo_reconcile_outbox",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
     "memo.list_outbox":                       "coordinator_core.ops.fleet.memo_list_outbox",
     "memo.blitz_buckets":                     "coordinator_core.ops.fleet.memo_blitz_buckets",
@@ -164,6 +165,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
     "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
+    "push.outstanding":                       "coordinator_core.ops.ceremony.push_outstanding",
     "ceremony.session_instructions":          "coordinator_core.ops.ceremony.session_instructions",
     "records.query":                          "coordinator_core.ops.records_query",
     "records.history":                        "coordinator_core.ops.record_history",

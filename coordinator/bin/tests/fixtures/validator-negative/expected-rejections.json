@@ -1,8 +1,8 @@
 {
   "_comment": "expected-rejections.json — W0 negative fixture index for ccos-1 regression net.\nEach fixture in this directory is a known-bad record that the validator rejects.\nThis is the AC5b oracle: the validator MUST reject every fixture listed here.\n\nHOW TO RUN (re-ported to Python 2026-07):\n  python3 -m pytest coordinator/bin/tests/test_validator_negative_corpus.py -q\n\nThe loader is coordinator/bin/tests/test_validator_negative_corpus.py, a re-port of the\nretired testNegativeCorpus(fixturesDir, schemasDir) from DoE-claude\ncoordinator/bin/lib/schema.js (deleted in 480ad8f8, \"D1: retire claude-klabauter oracle .js +\nbin/lib/*.js\", without a Python successor until this port). It drives this index against\ncoordinator_core.frontmatter.schema_validate.validate() / validate_memo_cross_fields().\nSee that module's docstring for the current known-gap list: completion-entry (c01-c05)\nhas no vendored Python schema, so those fixtures are marked xfail(strict=True) rather\nthan silently dropped.\n\nNOTE: The validator does NOT currently enforce additionalProperties/unknown-field constraints.\n  No negative fixture for that case is included — the current validator accepts unknown fields.\n  If unknown-field rejection is added, add a fixture and expected verdict here.\n\nNOTE: .json files are skipped by lint-frontmatter.js (see lint-frontmatter.js line ~217).\n  The r01-diff-loc-wrong-type.json fixture (review-trail number type) is NOT in this index\n  because lint-frontmatter.js never processes JSON files. Review-trail validation is tested\n  separately. The number type check IS covered by c05 (loe.agent_dispatches).\n\nNOTE: The bare-string \"number-or-null\" spec in completion-entry.yaml (chain_span_days) is\n  silently passed by checkType (unknown type tag passthrough). Only object-spec {type: number-or-null}\n  is enforced. c05 uses loe.agent_dispatches which uses the object-spec form.\n\nNOTE (C2, 2026-07-08): the c2-*.md fixtures in this directory are OUT OF SCOPE for this\n  index and testNegativeCorpus() — they are shape-VALID per schema.js (validateFrontmatter\n  accepts them; expect_ok would be true here, breaking this oracle's all-false invariant).\n  Their rejection is a write-time, filesystem/git-aware reachability check hosted in the\n  PreToolUse hook (coordinator/hooks/scripts/validate-frontmatter-schema.js), deliberately\n  NOT in schema.js (which stays filesystem/git-free by design). Their oracle lives in a\n  sibling index: coordinator/bin/tests/fixtures/validator-negative/c2-expected-reachability.json.\n  That hook has no Python port in this tree, so this index does not re-port c2 either.\n  Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C2",
   "generated_at": "2026-06-27",
-  "generator": "W0 executor (ccos-1 regression net); H-CROSS-EXEC-1/-2 fixtures added by C2 (2026-07-17, docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md); H-CROSS-9 fixtures added by C2b (2026-07-27, gate_dependency path-shaped rejection)",
-  "total_fixtures": 36,
+  "generator": "W0 executor (ccos-1 regression net); H-CROSS-EXEC-1/-2 fixtures added by C2 (2026-07-17, docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md); H-CROSS-9 fixtures added by C2b (2026-07-27, gate_dependency path-shaped rejection); H-CROSS-10 fixture (h23) indexed 2026-08-25 -- the fixture and its backing rule (_cf_ready_to_fire_no_unresolved_blocked_by, docs/plans/2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness.md AC6) both already existed on disk but the index entry was never added",
+  "total_fixtures": 37,
   "rules_covered": {
     "handoff_cross_field": [
       "H-CROSS-1",
@@ -16,6 +16,7 @@
       "H-CROSS-7c",
       "H-CROSS-8",
       "H-CROSS-9",
+      "H-CROSS-10",
       "H-CROSS-A3a-1",
       "H-CROSS-A3a-2",
       "H-CROSS-A3a-3",
@@ -406,6 +407,22 @@
             "field": "gate_dependency",
             "error": "gate_dependency looks like a file path (\"state/handoffs/2026-07-27-some-handoff.md\"), not a gate description",
             "hint": "gate_dependency is deprecated single-line prose, not a pointer to a file. If this names a baton/predecessor to wait on, put its slug in blocked_by. If it is advisory prose about the condition, put it in blocking_notes. Do not put tasks/, archive/, or .md paths in gate_dependency."
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "h23-ready-to-fire-unresolved-blocked-by.md",
+      "schema": "handoff",
+      "rule_covered": "H-CROSS-10: deployment_state=ready_to_fire must not have an unresolved blocked_by entry",
+      "expect_ok": false,
+      "current_validator_result": {
+        "ok": false,
+        "errors": [
+          {
+            "field": "blocked_by",
+            "error": "must be empty or fully cleared when deployment_state=ready_to_fire",
+            "hint": "A handoff cannot be ready_to_fire while blocked_by names an unresolved blocker. Either clear the blocker (moving it into no_longer_blocked_by / gate_cleared_by) or set deployment_state=awaiting_gate."
           }
         ]
       }

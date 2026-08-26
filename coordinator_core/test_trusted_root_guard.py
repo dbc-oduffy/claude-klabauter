@@ -140,8 +140,16 @@ def test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
+    # TOML literal string (single-quoted), not a basic (double-quoted) one:
+    # a Windows path's backslashes (`C:\Users\...`) are escape sequences in
+    # a basic string -- `\U` in particular is an invalid 8-hex-digit Unicode
+    # escape, so tomllib raises on load and `_load_toml` (which swallows
+    # parse errors, see machine_resolver.py) silently degrades to "no
+    # registry key", not "the value below". Literal strings process no
+    # escapes, matching test_doe_root_pointer.py's own `_write_registry`
+    # helper.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.doe_claude" = "{registry_root}"\n'
+        f"\"repos.doe_claude\" = '{registry_root}'\n"
     )
     durable_root = tmp_path / "from-durable"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(durable_root) + "\n")
@@ -165,8 +173,12 @@ def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
+    # TOML literal string (single-quoted) -- see the sibling
+    # test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors's
+    # comment above for why a basic (double-quoted) string breaks on a
+    # Windows path.
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = "{claude_klabauter_root}"\n'
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
     )
 
     home = tmp_path / "home"
@@ -177,12 +189,12 @@ def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
 
 
 def test_registry_repos_claude_klabauter_durable_pointer_file_fallback(tmp_path):
-    """Absent the registry key, the durable `.claude-klabauter-root` pointer file
+    """Absent the registry key, the durable `.claude-klabauter-live-root` pointer file
     under machine-local/ still resolves the anchor."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
-    (settings_home_dir / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home_dir / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
 
     home = tmp_path / "home"
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -377,7 +389,7 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     doe_root = tmp_path / "DoE-claude"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
     claude_klabauter_root = tmp_path / "claude-klabauter"
-    (settings_home_dir / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
+    (settings_home_dir / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
     with pytest.raises(UntrustedRootError):

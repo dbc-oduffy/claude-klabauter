@@ -1303,10 +1303,16 @@ def _is_transient_rename_failure(exc: OSError) -> bool:
     NEGATIVE SPEC). Any other `OSError` (real permission denial, a bad path,
     a different Windows error code) is NOT transient and must propagate
     immediately rather than being silently retried for up to
-    `_CUTOVER_RETRY_BUDGET_SECS`."""
+    `_CUTOVER_RETRY_BUDGET_SECS`.
+
+    The platform read goes through `junction._host_is_nt()`, never a bare
+    `os.name` — that seam is what lets a test reach this WinError-5 branch
+    without flipping the process-global `os.name`, which turns every
+    subsequently-constructed `Path` into a `WindowsPath` and plants a
+    backslash-named lock file at the repo root. See that name's docstring."""
     if not isinstance(exc, PermissionError):
         return False
-    if os.name != "nt":
+    if not junction._host_is_nt():
         # POSIX PermissionError is a real permission problem, never the
         # transient reader-handle shape this retries.
         return False

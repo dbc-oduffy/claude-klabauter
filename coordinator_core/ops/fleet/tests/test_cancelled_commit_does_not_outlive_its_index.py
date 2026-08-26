@@ -120,12 +120,23 @@ def test_a_child_that_died_between_check_and_kill_does_not_break_cleanup(exc):
 
 
 def _iter_private_index_sources():
-    """Engine modules that drive a private index — the failure class."""
+    """Engine modules that drive a private index — the failure class.
+
+    Gates on either the literal `GIT_INDEX_FILE` OR a mention of
+    `_make_git_env`, the fleet helper that sets it (`idx_path=` -> private
+    index). The literal-only gate missed modules that establish a private
+    index INDIRECTLY: `push_suggestion.py` imports and calls `_make_git_env`
+    but contains no `GIT_INDEX_FILE` literal of its own, so a future edit
+    adding `idx_path=` there would establish a genuine private index while
+    staying permanently invisible to this walk. Widening to the helper's own
+    name is coarser (it also admits shared-index-only callers like
+    `push_suggestion.py` today) but visible-and-noisy beats invisible.
+    """
     for path in sorted((ENGINE_ROOT / "coordinator_core").rglob("*.py")):
         if "tests" in path.parts or path.name.startswith("test_"):
             continue
         source = path.read_text(encoding="utf-8", errors="replace")
-        if "GIT_INDEX_FILE" not in source:
+        if "GIT_INDEX_FILE" not in source and "_make_git_env" not in source:
             continue
         try:
             yield path, ast.parse(source)
@@ -161,11 +172,66 @@ def _is_kill_call(node: ast.AST) -> bool:
 
 
 def _arg_literals(call: ast.Call) -> list[str]:
+    """String literals passed to a spawn call — direct AND list/tuple argv.
+
+    Argv-as-list is this engine's DOMINANT convention, not a corner case:
+    `git_native.py`'s own `_git(args, *, cwd, env)` and `boot_backstop.py`'s
+    `_git(worktree, args)` both take the whole git subcommand+argv as ONE
+    positional `ast.List` argument. A walk that only read direct positional
+    `ast.Constant` args (the original shape here) saw zero literals for every
+    call written this way and silently skipped it — no offender line, no
+    failure, just a blind spot. Exposed by `git_native.py::
+    commit_with_message_file_pathspec_scoped`, whose sole `_git([...], ...)`
+    call has "commit" sitting inside an `ast.List`, invisible to the old walk.
+    """
     out: list[str] = []
     for arg in call.args:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            out.append(arg.value)
+        out.extend(_leaf_literal_texts(arg))
+        if isinstance(arg, (ast.List, ast.Tuple)):
+            for elt in arg.elts:
+                out.extend(_leaf_literal_texts(elt))
     return out
+
+
+def _leaf_literal_texts(node: ast.AST) -> list[str]:
+    """A plain string constant, or an f-string's leading literal segment.
+
+    `--pathspec-from-file=<f>` is built as an f-string
+    (`f"--pathspec-from-file={pathspec_file}"`,
+    `git_native.py::commit_with_message_file_pathspec_scoped`) — the
+    interpolated suffix is unknowable statically, but its literal PREFIX is
+    an `ast.Constant` inside the `ast.JoinedStr.values` list and is enough to
+    match `_has_pathspec`'s `startswith("--pathspec-from-file=")` check. Not
+    reading it would make this exact demonstrated call site read as
+    pathspec-LESS the moment `_arg_literals` was widened to see it at all.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.JoinedStr) and node.values:
+        first = node.values[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return [first.value]
+    return []
+
+
+def _has_pathspec(lits: list[str]) -> bool:
+    """True when the collected argv literals carry ANY recognised pathspec form.
+
+    The bare `"--"` sentinel (`git commit -- <paths>`) is not the only one in
+    production use here: `--pathspec-from-file=<f>` and `--pathspec-file-nul`
+    exist specifically because argv-length limits make a trailing
+    `"--", *paths` list unsafe at scale (see `git_native.py::
+    commit_with_message_file_pathspec_scoped` and `add_paths_pathspec_file`).
+    Recognise both alongside the bare form — narrowing this back to `"--"`
+    alone reintroduces a false "pathspec-less" positive on every call site
+    written this way.
+    """
+    for lit in lits:
+        if lit == "--":
+            return True
+        if lit.startswith("--pathspec-from-file=") or lit == "--pathspec-file-nul":
+            return True
+    return False
 
 
 def _has_pathspec_less_commit(fn: ast.AST) -> bool:
@@ -200,7 +266,7 @@ def _has_pathspec_less_commit(fn: ast.AST) -> bool:
             return True
         if "commit" not in lits:
             continue
-        if not any(lit == "--" for lit in lits):
+        if not _has_pathspec(lits):
             return True
     return False
 
@@ -321,4 +387,114 @@ def test_both_fleet_seams_are_covered():
     assert seams == {"archive_and_commit", "rm_and_commit"}, (
         "the two fleet seams that actually committed the empty tree must both "
         "stay covered; found: " + (", ".join(sorted(seams)) or "none")
+    )
+
+
+# ---------------------------------------------------------------------------
+# What actually retired the mechanism, pinned so it cannot come back quietly
+# ---------------------------------------------------------------------------
+
+#: Spawn helpers used anywhere in this engine to start a git child.
+_SPAWN_NAMES = frozenset({
+    "create_subprocess_exec", "run", "Popen", "check_call", "check_output",
+    "call", "_git", "_run_git",
+})
+
+
+def _porcelain_commit_seams():
+    """Yield (path, lineno, has_pathspec) per porcelain `git commit` under a
+    private index.
+
+    Porcelain `git commit` is the ONLY form that runs the pre-commit hook, and
+    the hook window is the whole mechanism: git resolves `GIT_INDEX_FILE` AFTER
+    the hook returns, so an unlink landing inside it makes `write-tree` yield
+    the empty tree at rc=0. `commit-tree` is plumbing — it runs no hook and
+    takes an already-computed tree sha as an argument, so an index unlinked
+    after that sha exists cannot change what lands.
+    """
+    for path, tree in _iter_private_index_sources():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", "") or getattr(node.func, "id", "")
+            if name not in _SPAWN_NAMES:
+                continue
+            lits = _arg_literals(node)
+            if "commit" not in lits or "commit-tree" in lits:
+                continue
+            yield path, node.lineno, _has_pathspec(lits)
+
+
+def test_no_private_index_seam_runs_a_hook_running_commit_without_a_pathspec():
+    """The property that closed the empty-tree class — assert it, don't assume it.
+
+    All three firings ran a porcelain `git commit`. None of those call sites
+    survives in that form: the two fleet seams were rewritten to the
+    `write-tree` -> `commit-tree` -> `update-ref` CAS ladder (2026-08-23), and
+    `session.boot_sweep` was rebuilt onto the SHARED index, which nothing
+    unlinks. The one porcelain `git commit` left under a private index is
+    `distill_apply_disposal`'s, and it carries a trailing pathspec — the shape
+    a 2026-08-19 probe on git 2.55.0.windows.4 measured as harmless, because
+    with a pathspec git reads the worktree rather than the index.
+
+    So this is not defence-in-depth over a live hazard; it is the pin under a
+    hazard that is currently GONE, and whose absence is easy to undo by one
+    person swapping a `commit-tree` ladder back for a simpler `git commit`.
+    A new pathspec-less porcelain commit under a private index re-arms a bomb
+    that has already gone off three times.
+    """
+    offenders = [
+        f"{path.relative_to(ENGINE_ROOT).as_posix()}:{lineno}"
+        for path, lineno, has_pathspec in _porcelain_commit_seams()
+        if not has_pathspec
+    ]
+    assert not offenders, (
+        "porcelain `git commit` with NO trailing pathspec, under a private "
+        "index:\n  " + "\n  ".join(offenders)
+        + "\n\nThis is the exact shape behind 0a3462b72, fbfbd061d and "
+        "e3e0b857e. Porcelain `git commit` runs the pre-commit hook, and git "
+        "resolves GIT_INDEX_FILE only after the hook returns — so a "
+        "cancellation-driven unlink landing in that window makes write-tree "
+        "yield the empty tree at rc=0 and the pathspec-less commit deletes "
+        "every tracked file. Land via write-tree -> commit-tree -> update-ref "
+        "against an explicit, already-validated tree sha instead."
+    )
+
+
+def test_the_distill_seam_is_the_only_porcelain_commit_and_keeps_its_pathspec():
+    """Pins the surviving porcelain seams, so the walk cannot narrow to zero
+    and pass vacuously — and so any of them losing its pathspec fails loud here.
+
+    Widened 2026-08-25 (review of 501c426e1) from a single-seam pin to three:
+    fixing `_arg_literals`'s blindness to argv-as-list and `_has_pathspec`'s
+    blindness to `--pathspec-from-file=` (findings 1+2) made two more real
+    call sites visible for the first time — `git_native.py::
+    commit_with_message_file` (bare `"--"`) and `::
+    commit_with_message_file_pathspec_scoped` (`--pathspec-from-file=`, an
+    f-string, both dedup'd to one `git_native.py` entry below since the pin
+    keys on (module, has_pathspec) not line). Widening `_iter_private_index_
+    sources`'s module gate to also admit `_make_git_env` mentions (finding 3)
+    made a fourth visible — `push_suggestion.py`'s receiver-repo commit (bare
+    `"--"`), which is NOT actually under a private index (calls
+    `_make_git_env()` with no `idx_path=`) but is swept in by the coarser
+    module-level gate; harmless here because it carries a pathspec either way.
+    All three newly-visible seams were checked BEFORE this pin was widened:
+    every one carries a pathspec, so none is a live instance of the bug this
+    file exists to catch. If a seam was legitimately added, removed, or lost
+    its pathspec, update this pin deliberately rather than widening the walk
+    above."""
+    seams = {
+        (path.name, has_pathspec)
+        for path, _lineno, has_pathspec in _porcelain_commit_seams()
+    }
+    assert seams == {
+        ("distill_apply_disposal.py", True),
+        ("git_native.py", True),
+        ("push_suggestion.py", True),
+    }, (
+        "expected exactly the three known porcelain `git commit` seams "
+        "(distill_apply_disposal.py, git_native.py, push_suggestion.py), all "
+        f"WITH a pathspec. Found: {sorted(seams)}. "
+        "If a seam was legitimately added or removed, update this pin "
+        "deliberately rather than widening the walk above."
     )

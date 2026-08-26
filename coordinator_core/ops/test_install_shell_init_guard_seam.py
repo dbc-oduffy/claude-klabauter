@@ -26,6 +26,7 @@ Spec backlink: coordinator/commands/install.md § 3.5b.1 [DoE-claude repo]
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -270,7 +271,13 @@ def test_non_executable_guard_still_installs(capsys, monkeypatch, tmp_path, clau
     checkout — gating on one skipped the install on every clone, under a
     message that named a missing repo (bug fix, 2026-08-22)."""
     guard = claude_klabauter_clone / "bin" / "shell-init-guard.py"
-    assert not os.access(guard, os.X_OK)
+    # Precondition holds only where an execute bit exists to be absent from —
+    # Windows' os.access(X_OK) reports true for any readable file regardless
+    # of chmod, so there is no "non-executable" state to assert there. The
+    # behavioral assertions below (installed, never "skipped") are what this
+    # test actually guards, on every platform.
+    if sys.platform != "win32":
+        assert not os.access(guard, os.X_OK)
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")

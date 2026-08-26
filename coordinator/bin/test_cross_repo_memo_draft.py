@@ -415,7 +415,7 @@ def test_draft_creates_outbox_file() -> None:
         result = _run_dispatcher_in_repo(
             sender_repo,
             [
-                "draft", "test-c1-draft",
+                "draft", "test-c1-draft", "--kind", "fyi",
                 "--to", "claude-central-em",
                 "--title", "C1 draft test memo",
                 "--summary", "A test summary for the draft command",
@@ -507,7 +507,7 @@ def test_draft_collision_exits_2() -> None:
         result1 = _run_dispatcher_in_repo(
             sender_repo,
             [
-                "draft", "collision-topic",
+                "draft", "collision-topic", "--kind", "fyi",
                 "--to", "claude-central-em",
                 "--title", "Original memo title",
             ],
@@ -528,7 +528,7 @@ def test_draft_collision_exits_2() -> None:
         result2 = _run_dispatcher_in_repo(
             sender_repo,
             [
-                "draft", "collision-topic",
+                "draft", "collision-topic", "--kind", "fyi",
                 "--to", "claude-central-em",
                 "--title", "Different title — should not overwrite",
             ],
@@ -641,7 +641,7 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
 
         result = _run_dispatcher_in_repo(
             sender_repo,
-            ["draft", "sibling-recv", "--to", "example-retrieval-repo-em", "--title", "x"],
+            ["draft", "sibling-recv", "--to", "example-retrieval-repo-em", "--title", "x", "--kind", "fyi"],
             env=env,
         )
 
@@ -652,6 +652,83 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: " + (f"resolved sibling receiver should create the draft: {outbox_path}"))
 
+
+def test_draft_premise_check_advisory_fires_and_does_not_crash() -> None:
+    """A premise-bearing kind against a LOCAL receiver prints the advisory and exits 0.
+
+    Regression pin. `_print_premise_check_advisory` read a module constant
+    (`_PREMISE_BEARING_KINDS`) that was never defined, so every invocation
+    reaching that line died on NameError -- AFTER the draft file had already
+    been written. The operation succeeded and reported as a traceback, which is
+    the worst available shape: a caller under the report-don't-hand-author rule
+    reads it as "the CLI is unavailable", and the one thing that follows is
+    someone hand-writing into the sibling's tree -- exactly what this CLI exists
+    to prevent (CLAUDE.md, never hand-write a cross-repo memo).
+
+    Two assertions, because either alone would have stayed green through the
+    bug: exit 0 (the crash) AND the advisory text on stderr (the dead feature).
+    The advisory only fires for `ask`/`proposal` against a resolved local
+    receiver, per `_print_premise_check_advisory`'s docstring, so this test
+    supplies both conditions.
+    """
+    name = "test_draft_premise_check_advisory_fires_and_does_not_crash"
+
+    claude_klabauter_root = _resolve_test_claude_klabauter_root()
+    if claude_klabauter_root is None:
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.draft op")
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+        receiver_repo = os.path.join(tmpdir, "receiver_repo")
+        os.makedirs(receiver_repo, exist_ok=True)
+
+        mock_impl = _make_mock_machine_local_keys_and_get(
+            tmpdir, {"repos.example_retrieval_repo": receiver_repo}
+        )
+        _write_registry_toml(claude_home, {_repo_key_for("example-retrieval-repo-em"): receiver_repo, _repo_key_for("sender_repo-em"): sender_repo})
+        env = {
+            "MACHINE_LOCAL_IMPL": mock_impl,
+            "CLAUDE_HOME": claude_home,
+            "COORDINATOR_SETTINGS_HOME": claude_home,
+            # C14 closed the CLAUDE_KLABAUTER_ROOT dual-read window, and every test in
+            # this file that spawned the real CLI had been failing on it.
+            # CLAUDE_KLABAUTER_ROOT is kept alongside so these runs prove
+            # COORDINATOR_ENGINE_ROOT takes PRECEDENCE over a stale CLAUDE_KLABAUTER_ROOT
+            # -- which is what they demonstrate by passing with both set.
+            # It is NOT the retirement advisory under test: measured
+            # 2026-08-26, `_maybe_emit_engine_root_retired` emits nothing once
+            # COORDINATOR_ENGINE_ROOT resolves, so no assertion here could see
+            # it. An earlier version of this comment claimed the "refusal path
+            # stays exercised"; there is no refusal (the helper advises and
+            # returns None, never raising) and the advisory does not fire.
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
+            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
+        }
+
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            ["draft", "premise-pin", "--to", "example-retrieval-repo-em", "--title", "x", "--kind", "ask"],
+            env=env,
+        )
+
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{name}: premise-bearing draft should exit 0, got {result.returncode}. "
+                f"stderr: {result.stderr!r}"
+            )
+
+        if "Premise check (ask)" not in (result.stderr or ""):
+            raise AssertionError(
+                f"{name}: the premise-check advisory should fire for kind=ask against a "
+                f"resolved local receiver, but stderr carried none of it: {result.stderr!r}"
+            )
+
+        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "premise-pin.md")
+        if not os.path.isfile(outbox_path):
+            raise AssertionError(f"{name}: the draft should still be written: {outbox_path}")
 
 
 def _make_outbox_file(sender_repo: str, topic: str, content: str) -> str:

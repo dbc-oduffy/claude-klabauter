@@ -83,10 +83,29 @@ Negative-spec (hard-won):
     `git_native._git`.
   - `push_mode` (wsc-tail-sub-2s-invoke-budget DEC-1/F1) does NOT change
     stage/gate/commit semantics at all -- it ONLY gates whether
-    `push_with_retry()` runs inside this critical section. `scoped_git_
-    commit.py` never passes `push_mode`, so it always gets `"sync"` (today's
-    byte-for-byte contract) by construction; do not add a call site that
-    defaults it to anything else.
+    `push_with_retry()` runs inside this critical section.
+    RETIRED (DR-329 § 4, 2026-08-25, `docs/decisions/DR-329-push-runs-on-a-
+    cadence-not-on-every-commit.md`): this instruction used to bind
+    `scoped_git_commit.py` specifically ("never passes `push_mode`, so it
+    always gets `sync` by construction; do not add a call site that
+    defaults it to anything else") -- that caller was deleted outright by
+    PM ruling on 2026-08-23 (`docs/plans/2026-08-23-the-scoped-commit-
+    rebuilt-from-first-principles.md`, ledger K-045), and no successor
+    inherited its "never passes `push_mode`" contract. Every LIVE caller of
+    `run_commit_pipeline` is now governed by DR-329's disposition instead:
+    the six named cadence surfaces (`docs/decisions/DR-329-*.md` § 2) pass
+    `push_mode=PUSH_MODE_NEVER` at their own commit leg and instead call
+    `push_outstanding()` synchronously at their own checkpoint;
+    `close_out_and_stamp.py` (not itself a cadence surface) also passes
+    `push_mode=PUSH_MODE_NEVER` explicitly, deferring publication to
+    whichever cadence checkpoint runs next rather than owning a synchronous
+    push of its own. `push_mode`'s own default parameter value
+    (`PUSH_MODE_SYNC`) is UNCHANGED by this DR -- it is the explicit
+    call-site contract that changed, not the function signature -- so a
+    hypothetical new caller that omits `push_mode` still gets `"sync"` by
+    construction; DR-329 does not forbid that, it only requires every
+    NAMED existing caller above to pass `PUSH_MODE_NEVER` explicitly rather
+    than relying on the default.
   - A directory pathspec in `stage_paths` is refused BEFORE `explicit_stage()`
     ever runs (session fb5fa766, 2026-07-31 incident, closed 2026-07-31) --
     `commit_scoped()`'s own directory refusal, further down the pipeline,
@@ -131,6 +150,7 @@ from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_pat
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 
 #: Shared argv-safe path packer + its budget constant, both promoted
 #: (2026-08-15) to `git_native.py` -- the shared home, since `git_native.py`
@@ -142,6 +162,7 @@ from coordinator_core.ops.ceremony import git_native
 _chunk_paths = git_native._chunk_paths
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
+from coordinator_core.git.git_state import index_read_cache_scope
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -245,7 +266,7 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 #: the fix (a bare retry with backoff would be, which this pipeline does not
 #: implement here; see module docstring's push-with-retry scope). Every
 #: other classification (gh-push-protection, gh-size-limit, gh-lfs-quota,
-#: auth, gh-server-reject, network, unknown, empty-stderr) names a failure
+#: auth, gh-server-reject, network, spawn-error, unknown, empty-stderr) names a failure
 #: no rebase addresses, so none of them belong in THIS set -- which is a
 #: narrower question than whether `auto_push` re-sends them; it does re-send
 #: several. See `classify_error`'s docstring in
@@ -402,22 +423,6 @@ class StageOutcome:
     deletion_paths: List[str] = field(default_factory=list)
     missing_caller_paths: List[str] = field(default_factory=list)
     ignored_caller_paths: List[str] = field(default_factory=list)
-    #: Caller-supplied paths that landed in `missing_caller_paths` while ONE
-    #: OR BOTH of the two probes that rule out "this is actually a rename or
-    #: a deletion" (`git diff --cached --name-status --find-renames` for
-    #: `swept_rename`/`swept_delete`, `git ls-files --deleted` for
-    #: `worktree_deleted`) returned a non-ok `GitResult` -- i.e. the "genuinely
-    #: absent" classification was never actually TESTED for this path, only
-    #: defaulted to on a probe failure (see this function's own inline
-    #: comments at each probe: both degrade to "found nothing" on failure,
-    #: best-effort, never raising). A member of THIS set is always also a
-    #: member of `missing_caller_paths` -- never a separate bucket a caller
-    #: could miss by only reading one field -- it exists purely so a caller
-    #: rendering a decline reason (`scoped_git_commit._declined_paths`) can
-    #: tell "confirmed absent" from "absence merely assumed because a probe
-    #: could not answer" and word the reason honestly instead of asserting a
-    #: fact this function never verified.
-    unverifiable_missing_caller_paths: List[str] = field(default_factory=list)
 
 
 _MAX_DIAGNOSTIC_CHARS = 2000
@@ -429,8 +434,11 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
     """Reduce a raw git stdout/stderr blob to the part that names the failure.
 
     2026-08-10 fix (live incident: four consecutive `scoped-git-commit`
-    refusals reported nothing but CRLF line-ending warnings, hiding a
-    `detect-staged-rollback` pre-commit BLOCK that was the actual cause).
+    refusals reported nothing but CRLF line-ending warnings, hiding the
+    then-installed pre-commit gate's own BLOCK that was the actual cause --
+    that gate is deleted 2026-08-25, "the staged rollback gate dies without
+    blocking a commit"; the condensation logic below is generic to ANY
+    pre-commit hook's BLOCKED verdict, not specific to the deleted gate).
     Two properties of git's output defeat a naive head-truncation:
 
       - It leads with per-path advisory noise. `git add` on a batch of N
@@ -537,6 +545,50 @@ def _worktree_key(root: Path, p: str) -> str:
         return p
 
 
+def _path_is_scopeable(root: Path, p: str) -> bool:
+    """True iff `p` can be handed to a `git` pathspec under `cwd=root`
+    without git itself hard-failing on the PATH (independent of whether it
+    exists or is tracked).
+
+    Empirically confirmed (2026-08-26): `git status`/`git ls-files` with a
+    pathspec outside the worktree, or one whose containing directory does
+    not exist on disk at all, exits `rc=128` with `fatal: Invalid path
+    '...': No such file or directory` -- a property of the path string
+    itself, not an indeterminate answer about deletion state. Mirrors
+    `_worktree_key`'s own relativization attempts (a relative `p`, or an
+    absolute `p` that resolves under `root`, is scopeable; anything else is
+    not) so the two stay in lockstep -- a path this returns False for is
+    exactly the one `_worktree_key` would return unchanged for, which can
+    never match a git-reported name anyway.
+    """
+    candidate = Path(p)
+    if not candidate.is_absolute():
+        # A RELATIVE path can escape the worktree too (`../outside/x.md`),
+        # and git rejects it with the same rc=128 path-shape fatal as the
+        # absolute case -- confirmed 2026-08-26: "fatal: ../outside/x.md:
+        # '../outside/x.md' is outside repository". Normalise lexically
+        # rather than via `resolve()`: a path being probed for DELETION is
+        # routinely absent from disk, so containment must not depend on the
+        # target existing.
+        normalized = os.path.normpath(os.path.join(str(root), p))
+        try:
+            return os.path.commonpath([normalized, str(root)]) == os.path.normpath(str(root))
+        except ValueError:
+            # Different drive on Windows -- not under `root` by definition.
+            return False
+    for base in (root, root.resolve()):
+        try:
+            candidate.relative_to(base)
+            return True
+        except ValueError:
+            continue
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _diverging_paths_chunked(
     paths: Sequence[str],
     cwd: str,
@@ -578,47 +630,163 @@ def _diverging_paths_chunked(
     return diverged
 
 
-def _ls_files_deleted_chunked(root: Path, paths: Sequence[str]) -> Tuple[Set[str], bool]:
-    """Chunked `git_native.ls_files_deleted()` for `explicit_stage()`'s
-    unstaged-deletion classification probe, closing the same Windows argv-
-    length defect `_diverging_paths_chunked` closes, one call site over.
+class WorktreeDeletionProbeFailed(Exception):
+    """Raised by `_worktree_deleted_paths_chunked` when it cannot answer,
+    rather than degrading to the pre-fix "found nothing" guess.
 
-    `git ls-files --deleted -- <paths>` puts the caller's WHOLE batch on
-    argv (`git_native.ls_files_deleted`'s own docstring: "scoped to
-    `paths`, never called bare"). At percolate-publish scale this exceeded
-    the Windows `CreateProcess` cap, and the probe's failure was read as
-    "found nothing" -- degrading every genuinely-deleted caller path in the
-    batch to `missing-caller` and, via `rename_delete_probes_ok`, marking
-    every one of them `unverifiable_missing_caller_paths` (the "could not
-    be classified" defect this fix closes). Chunked exactly like the
-    divergence check: each chunk is an independent, pathspec-bounded
-    `ls_files_deleted()` call, and a path's membership in the returned set
-    comes from the ONE chunk it was placed in -- never a whole-batch
-    verdict merged across chunks.
+    2026-08-26 fix (docs/research/spike-verdicts/2026-08-26-one-porcelain-
+    v2-read-replaces-the-probe-suite.md): the probe this replaces
+    (`git ls-files --deleted`, chunked) silently degraded a failing chunk
+    to "no deletions found" and marked every caller path in it
+    `unverifiable_missing_caller_paths` -- a permissive guess a caller
+    could not tell apart from a genuine "confirmed absent" answer without
+    reading a second field. Fail-loud closes that: a chunk-level failure
+    (non-zero rc, timeout, a malformed/unrecognised v2 record, or a `u`
+    unmerged record) now raises instead of degrading, so `explicit_stage()`
+    refuses the call the same way its divergence check already does on
+    `DivergenceCheckFailed` -- see that `try`/`except` for the mirrored
+    shape.
+    """
 
-    Returns `(worktree_deleted, probe_ok)`. `probe_ok` is True only when
-    EVERY chunk answered (mirrors the pre-chunking scalar contract: the
-    caller's `rename_delete_probes_ok` gate must see this probe as
-    "answered" only when no chunk silently degraded to best-effort). A
-    failing chunk still contributes nothing to `worktree_deleted` for its
-    own paths (fail-closed toward the pre-fix "missing" bucket for exactly
-    those paths, same as the old scalar failure path did for the whole
-    batch) while chunks that DID answer keep their real membership answer
-    -- a genuine chunk-level `git` failure no longer taints paths that were
-    never in that chunk.
+
+def _worktree_deleted_paths_chunked(root: Path, paths: Sequence[str]) -> Set[str]:
+    """Chunked, path-scoped, fail-loud `git status --porcelain=v2 -z
+    --ignored -uall -- <paths>` read for `explicit_stage()`'s unstaged-
+    deletion classification probe -- the fail-loud replacement for the old
+    `git ls-files --deleted` probe (`WorktreeDeletionProbeFailed`'s own
+    docstring covers the incident this closes).
+
+    Returns the CWD-relative name set of every path in `paths` whose
+    worktree content is missing while its index still matches HEAD (a
+    plain `rm` never followed by `git rm`/`git add` -- the v2 record's `Y`
+    (worktree-vs-index) status is `D`). Chunked exactly like the divergence
+    check: each chunk is an independent, pathspec-bounded call, and a
+    path's membership comes from the ONE chunk it was placed in -- never a
+    whole-batch verdict merged across chunks.
+
+    Every record type this read can emit is explicitly dispatched by its
+    leading token (spike verdict § U3, confirmed against git
+    2.55.0.windows.4): `1` ordinary (space-delimited, path is the 9th
+    field), `2` rename/copy (path is the 10th field; its `<origPath>` is
+    the NEXT NUL-separated field, consumed and discarded here -- this
+    probe only answers deletion membership, and a renamed path is handled
+    by the separate, deliberately-unscoped `diff_cached_name_status`
+    read), `?` untracked and `!` ignored (path is everything after the
+    2-character prefix), `u` unmerged (raises -- a conflicted path has no
+    safe worktree-deletion answer), `#` header (skipped). Any OTHER
+    leading token raises rather than being silently skipped -- an
+    unrecognised record is exactly the "this probe cannot vouch for this
+    answer" case fail-loud exists to catch.
+
+    The absent-record door (spike verdict § U1): `git status` emits
+    NOTHING for a path that is either CLEAN-TRACKED or MATCHED-NOTHING (an
+    unmatched pathspec) -- both exit 0 with no record, and neither is a
+    deletion, so no record for a requested path in this probe's OWN chunk
+    is not itself an error. Every path with no record in its chunk is
+    still explicitly resolved via a batched `git ls-files -z` membership
+    check (`git_native.ls_files_scoped`) so this function never defaults
+    silence to a classification it never verified -- see that helper's own
+    docstring for why the check is needed at all despite neither outcome
+    changing this probe's answer (both are simply "not deleted").
+
+    A path OUTSIDE `root` (or whose containing directory does not exist on
+    disk at all) is excluded from every git call this function issues --
+    empirically confirmed (2026-08-26) that `git status`/`git ls-files`
+    both hard-fail (`fatal: Invalid path '...': No such file or directory`,
+    rc=128) on such a pathspec, which is a property of the PATH, not an
+    indeterminate answer about deletion state, and must not escalate the
+    whole chunk to `WorktreeDeletionProbeFailed` -- `_worktree_key` already
+    returns such a path unchanged (unresolvable under `root`), so it can
+    never legitimately match a git-reported name anyway; the caller's own
+    fallthrough to "missing" (see `explicit_stage`'s classification loop)
+    is the correct, unweakened answer for it, exactly as it was before this
+    fix (`test_explicit_stage_absolute_path_outside_worktree_is_missing`).
     """
     if not paths:
-        return set(), True
+        return set()
 
     deleted: Set[str] = set()
-    probe_ok = True
     for chunk in _chunk_paths(list(paths)):
-        result = git_native.ls_files_deleted(root, chunk)
-        if result.ok:
-            deleted.update(line for line in result.stdout.splitlines() if line)
-        else:
-            probe_ok = False
-    return deleted, probe_ok
+        scoped_chunk = [p for p in chunk if _path_is_scopeable(root, p)]
+        if not scoped_chunk:
+            continue
+        result = git_native.status_porcelain_v2_scoped(root, scoped_chunk)
+        if not result.ok:
+            raise WorktreeDeletionProbeFailed(
+                "_worktree_deleted_paths_chunked: `git status --porcelain=v2` "
+                f"failed or timed out (rc={result.returncode}) for {len(scoped_chunk)} "
+                "path(s) -- worktree-deletion classification indeterminate "
+                f"({condense_git_diagnostic(result.stderr) or condense_git_diagnostic(result.stdout) or 'no diagnostic output'})"
+            )
+
+        fields = result.stdout.split("\0")
+        if fields and fields[-1] == "":
+            fields = fields[:-1]
+
+        seen: Set[str] = set()
+        i = 0
+        while i < len(fields):
+            record = fields[i]
+            if not record:
+                i += 1
+                continue
+            token = record[0]
+            if token == "1":
+                parts = record.split(" ", 8)
+                if len(parts) < 9 or len(parts[1]) < 2:
+                    raise WorktreeDeletionProbeFailed(
+                        f"_worktree_deleted_paths_chunked: malformed ordinary "
+                        f"v2 record: {record!r}"
+                    )
+                path = parts[8]
+                seen.add(path)
+                if parts[1][1] == "D":
+                    deleted.add(path)
+                i += 1
+            elif token == "2":
+                parts = record.split(" ", 9)
+                if len(parts) < 10 or i + 1 >= len(fields):
+                    raise WorktreeDeletionProbeFailed(
+                        f"_worktree_deleted_paths_chunked: malformed rename "
+                        f"v2 record: {record!r}"
+                    )
+                seen.add(parts[9])
+                # `<origPath>` is the NEXT NUL field -- consumed, not used by
+                # this deletion-only probe (see this function's own
+                # docstring).
+                i += 2
+            elif token in ("?", "!"):
+                seen.add(record[2:])
+                i += 1
+            elif token == "u":
+                raise WorktreeDeletionProbeFailed(
+                    f"_worktree_deleted_paths_chunked: unmerged (conflict) "
+                    f"v2 record, no safe deletion answer: {record!r}"
+                )
+            elif token == "#":
+                i += 1
+            else:
+                raise WorktreeDeletionProbeFailed(
+                    f"_worktree_deleted_paths_chunked: unrecognised v2 record "
+                    f"leading token: {record!r}"
+                )
+
+        unresolved = [p for p in scoped_chunk if _worktree_key(root, p) not in seen]
+        if unresolved:
+            ls_result = git_native.ls_files_scoped(root, unresolved)
+            if not ls_result.ok:
+                raise WorktreeDeletionProbeFailed(
+                    "_worktree_deleted_paths_chunked: absent-record settling "
+                    f"`git ls-files` failed (rc={ls_result.returncode}) for "
+                    f"{len(unresolved)} path(s) "
+                    f"({condense_git_diagnostic(ls_result.stderr) or 'no diagnostic output'})"
+                )
+            # Every unresolved path is now settled as either CLEAN-TRACKED
+            # (present in this call's output) or MATCHED-NOTHING (absent) --
+            # neither is a deletion, so nothing further is added to
+            # `deleted` here; the call's sole purpose is to make sure the
+            # silence was actually resolved rather than merely assumed.
+    return deleted
 
 
 def _residue_paths_chunked(
@@ -627,7 +795,7 @@ def _residue_paths_chunked(
     """Chunked `git diff --cached --name-only -z -- <to_stage>` for
     `explicit_stage()`'s post-`git add`-failure residue reconciliation --
     same argv-length hazard `_diverging_paths_chunked` and
-    `_ls_files_deleted_chunked` close, one call site over (see
+    `_worktree_deleted_paths_chunked` close, one call site over (see
     `explicit_stage()`'s own "Residue reconciliation" comment for what this
     check protects and why `-z` is required).
 
@@ -657,6 +825,59 @@ def _residue_paths_chunked(
             if first_failure is None:
                 first_failure = result
     return residue, indeterminate, first_failure
+
+
+class WorktreeRootMissing(ValueError):
+    """`worktree_root` does not resolve to a directory on this host.
+
+    A caller error, deliberately raised rather than returned as a degraded
+    outcome. Filed 2026-08-25 by claude-klabauter-em (`state/bug-backlog/
+    2026-08-25-a-bad-worktree-root-reports-as-n-missing-768a39de52b3.yaml`):
+    handed a root that does not exist, `explicit_stage` classified EVERY
+    requested path `missing:<path>` and returned `exit_code=0`, so a
+    dispatched `git-commit-agent` read a root problem as a pathspec problem,
+    concluded the sanctioned route was unreachable, and fell back to a bare
+    `git commit` -- which skips `deletion_block_gate`, `dirty_tree_gate`,
+    `carry_gate` and `op_scope_coverage_gate`. Three commits landed that way
+    in one session and all three were CORRECT, which is why nothing announced
+    itself.
+
+    The observed cause is a path-dialect mismatch, not a typo: `/X/project-
+    claude-klabauter` (the MSYS/bash form) is accepted by the Bash tool, by `git`, and
+    by PowerShell's `Test-Path`, while `Path('/X/claude-klabauter').exists()`
+    is False and `Path('X:/claude-klabauter').exists()` is True. Agents that
+    reach this API from a bash context hand out the form their shell gave
+    them.
+
+    NEGATIVE SPEC -- do NOT resolve this by normalising the MSYS form into a
+    drive-letter path. That adds a path dialect to this function's contract,
+    puts the engine in the business of guessing which host spelling was
+    meant, and leaves the next unaccepted dialect failing the same silent
+    way. Rejecting at entry costs one `is_dir()` and cannot be misread.
+    `exit_code == 2` is NOT the right channel either: that means "a
+    caller-supplied path is genuinely missing -- degraded, not a hard
+    failure", and a missing root is neither about a path nor degraded.
+    """
+
+
+def _require_worktree_root(worktree_root: Union[str, Path]) -> Path:
+    """Resolve `worktree_root` to a Path, raising if it is not a directory.
+
+    Purpose: the single entry check both `explicit_stage` and
+    `run_commit_pipeline` run before any path under the root is classified,
+    so a bad root can never be reported as N missing pathspecs. See
+    `WorktreeRootMissing` for why this raises instead of returning.
+    """
+    root = Path(worktree_root)
+    if not root.is_dir():
+        raise WorktreeRootMissing(
+            "worktree_root does not exist: %r -- this is the ROOT, not a "
+            "pathspec, and no path under it was inspected. On Windows hosts "
+            "pass the drive-letter form (`X:/claude-klabauter`), never the "
+            "MSYS form (`/X/claude-klabauter`) that bash and git accept but "
+            "Python's pathlib does not." % (str(worktree_root),)
+        )
+    return root
 
 
 def explicit_stage(
@@ -847,7 +1068,10 @@ def explicit_stage(
     indeterminate `diverging_paths(..., fail_loud=True)` divergence check
     (`DivergenceCheckFailed`, caught internally and converted to
     `exit_code=-1` + a `failed` entry -- never propagated past this
-    function).
+    function) and an indeterminate worktree-deletion probe
+    (`WorktreeDeletionProbeFailed`, caught the same way -- see
+    `_worktree_deleted_paths_chunked`'s own docstring for the 2026-08-26 fix
+    that made this probe fail loud instead of degrading).
 
     Non-atomicity of `git add` on failure (empirically confirmed
     2026-07-31): a mixed `git add -- to_stage` batch is NOT atomic --
@@ -881,7 +1105,7 @@ def explicit_stage(
     `commit_gates.deletion_block_gate`'s Assertion-3 hard-fails a staged
     deletion whose message never declared it).
     """
-    root = Path(worktree_root)
+    root = _require_worktree_root(worktree_root)
     caller_paths = caller_paths or set()
 
     if not paths:
@@ -905,27 +1129,29 @@ def explicit_stage(
     # Unstaged-deletion set (defect A): tracked paths, scoped to this call's
     # own `paths`, whose worktree content is missing but whose index still
     # matches HEAD (a plain `rm`, never followed by `git rm`/`git add`).
-    # Distinct from `swept_delete` above -- see `git_native.ls_files_deleted`'s
-    # own docstring for why the staged and unstaged cases need two separate
-    # git reads. A failing/indeterminate probe degrades to "no unstaged
-    # deletions found" (fail-closed toward the PRE-FIX "missing" bucket,
-    # never toward fabricating a deletion this call cannot confirm).
-    worktree_deleted, worktree_deleted_probe_ok = _ls_files_deleted_chunked(root, paths)
-
-    # Whether the two probes that rule out "this missing path is actually a
-    # rename or deletion" (`diff_result`, `worktree_deleted_probe_ok` above)
-    # actually ANSWERED, rather than degrading to their empty best-effort
-    # default on failure. A caller path classified "genuinely absent" while
-    # this is False was never actually tested against a rename/deletion -- see
-    # `StageOutcome.unverifiable_missing_caller_paths`'s own docstring for
-    # why that distinction matters to a reason string rendered downstream.
-    rename_delete_probes_ok = diff_result.ok and worktree_deleted_probe_ok
+    # Distinct from `swept_delete` above -- see
+    # `_worktree_deleted_paths_chunked`'s own docstring for why the staged
+    # and unstaged cases need two separate git reads. 2026-08-26 fix: this
+    # probe is now fail-loud (`WorktreeDeletionProbeFailed`), never a
+    # silent "found nothing" degrade on failure -- caught immediately below
+    # and converted into a `StageOutcome` failure, mirroring the divergence
+    # check's own `try`/`except` shape a few lines down.
+    try:
+        worktree_deleted = _worktree_deleted_paths_chunked(root, paths)
+    except WorktreeDeletionProbeFailed as exc:
+        return StageOutcome(
+            exit_code=-1,
+            failed=[
+                f"explicit_stage: worktree-deletion probe indeterminate for "
+                f"{len(paths)} path(s) -- refusing to guess which are "
+                f"genuinely absent ({exc})"
+            ],
+        )
 
     existing: List[str] = []
     skipped: List[str] = []
     swept_renames: List[Tuple[str, str]] = []
     missing_caller_paths: List[str] = []
-    unverifiable_missing_caller_paths: List[str] = []
     already_staged_deletions: List[str] = []
     to_delete: List[str] = []
 
@@ -974,8 +1200,6 @@ def explicit_stage(
                 if p in caller_paths:
                     skipped.append(f"missing-caller:{p}")
                     missing_caller_paths.append(p)
-                    if not rename_delete_probes_ok:
-                        unverifiable_missing_caller_paths.append(p)
                 else:
                     skipped.append(f"missing:{p}")
             else:
@@ -990,8 +1214,6 @@ def explicit_stage(
         elif p in caller_paths:
             skipped.append(f"missing-caller:{p}")
             missing_caller_paths.append(p)
-            if not rename_delete_probes_ok:
-                unverifiable_missing_caller_paths.append(p)
         else:
             skipped.append(f"missing:{p}")
 
@@ -1080,7 +1302,6 @@ def explicit_stage(
             ],
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
-            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
         )
 
@@ -1128,7 +1349,6 @@ def explicit_stage(
             staged_paths=staged_paths,
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
-            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
             checked_paths=set(existing),
             diverged_paths=diverged,
@@ -1165,7 +1385,6 @@ def explicit_stage(
             staged_paths=staged_paths,
             swept_renames=swept_renames,
             missing_caller_paths=missing_caller_paths,
-            unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
             ignored_caller_paths=ignored_caller_paths,
             checked_paths=set(existing),
             diverged_paths=diverged,
@@ -1261,7 +1480,6 @@ def explicit_stage(
         staged_paths=staged_paths,
         swept_renames=swept_renames,
         missing_caller_paths=missing_caller_paths,
-        unverifiable_missing_caller_paths=unverifiable_missing_caller_paths,
         ignored_caller_paths=ignored_caller_paths,
         checked_paths=set(existing),
         diverged_paths=diverged,
@@ -2455,6 +2673,36 @@ class PushOutcome:
 #                               -- the push subprocess itself timed out, so its
 #                               true outcome was never observed. Distinct from
 #                               "not-attempted": a push WAS attempted here.
+#   "cadence-pending" (new,    | no counterpart                  | new member,
+#    C5, DR-329 AC9c)          |                                  | `wsc_tail`-owned
+#                               -- a commit made under the cadence regime
+#                               (`push_mode=PUSH_MODE_NEVER`) whose publish
+#                               obligation is deliberately deferred to a
+#                               NAMED future cadence checkpoint's own
+#                               `push_outstanding()` call, never to this
+#                               pipeline's own push leg. Distinct from
+#                               "not-attempted": that spelling is silent on
+#                               WHETHER anything will ever publish this
+#                               commit; "cadence-pending" asserts a
+#                               checkpoint will. Distinct from "deferred"
+#                               (the async post-commit-hook race window,
+#                               `compute_push_landed_gate`'s own docstring):
+#                               "deferred" means a detached push CHILD may
+#                               already be in flight and a re-check will
+#                               resolve it soon; "cadence-pending" means no
+#                               push has been attempted or started at all,
+#                               and none will be until the next checkpoint.
+#                               This pipeline itself never returns this
+#                               value -- `run_commit_pipeline` under
+#                               `push_mode=PUSH_MODE_NEVER` still reports
+#                               `PUSH_STATUS_NOT_ATTEMPTED` (unchanged, see
+#                               the module docstring's retired-instruction
+#                               note above) -- the cadence-aware surfaces
+#                               that KNOW a checkpoint will follow (`wsc_
+#                               tail.py` / `directives_commit_tail.py`) are
+#                               the ones that promote `not-attempted` to
+#                               this richer member at their own reporting
+#                               layer.
 #
 # `wsc_tail.py`'s `"unknown_resumed"` (any resumed/crash-recovered pass) has
 # NO counterpart in this canonical set -- it is preserved as its own member
@@ -2474,6 +2722,13 @@ PUSH_STATUS_NOT_ATTEMPTED = "not-attempted"
 #: reject). See `PushOutcome.unconfirmed`'s docstring for why this must not
 #: collapse into `push-failed`.
 PUSH_STATUS_UNCONFIRMED = "unconfirmed"
+#: C5 (2026-08-25, DR-329 AC9c) -- the canonical member for a commit whose
+#: publish obligation is deliberately deferred to a named future cadence
+#: checkpoint (see the mapping-table comment above for the full contract
+#: and how this differs from both `PUSH_STATUS_NOT_ATTEMPTED` and
+#: `compute_push_landed_gate`'s own `"deferred"` short-circuit). Never
+#: returned by `run_commit_pipeline` itself -- see the same comment.
+PUSH_STATUS_CADENCE_PENDING = "cadence-pending"
 
 
 def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
@@ -2681,6 +2936,157 @@ def _emit_push_policy_line(
         raise ValueError(f"_emit_push_policy_line: unknown kind {kind!r}")
 
 
+def _read_git_config_text(root: Path) -> str:
+    """Best-effort `.git/config` text for *root*'s COMMON dir, `""` on any
+    read failure -- never raises. Feeds `_remote_configured_locally` /
+    `_resolve_upstream_local` (C2b, `push_with_retry`'s local-half spawn
+    elimination): both only need PRESENCE of a section and two scalar keys,
+    not a faithful `configparser`-equivalent read, so a tolerant line-based
+    scan is sufficient here where `coordinator_core.git.remote_url` (module
+    docstring, "Derivation method") correctly declines to build one for the
+    URL-with-rewrites case. A `[include]`/`[includeIf]`-sourced remote or
+    upstream, or a quoted section name containing `\"`/`\\`, is NOT resolved
+    by this scan -- degrades to the same `push:no-remote`/unresolvable-
+    upstream decline paths `git`-backed reads would otherwise reach, never a
+    silent wrong answer.
+    """
+    try:
+        return (git_common_dir(root) / "config").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+_REMOTE_SECTION_RE = re.compile(r'(?im)^[ \t]*\[remote\s+"')
+
+
+def _remote_configured_locally(root: Path) -> bool:
+    """True iff `.git/config` declares at least one `[remote "..."]` section
+    -- the in-process equivalent of `git remote`'s "any output" check,
+    0 spawns (module docstring's `_read_git_config_text`).
+    """
+    return bool(_REMOTE_SECTION_RE.search(_read_git_config_text(root)))
+
+
+class _UpstreamInfo(Tuple[str, str, str]):
+    """`(abbrev, remote_name, ref_path)` -- `abbrev` matches what
+    `git rev-parse --abbrev-ref --symbolic-full-name @{u}` reports (e.g.
+    `"origin/main"`, the form `_rebase_onto_fetched_ref` and the
+    `remote_name = upstream_ref.split(...)` derivation both need),
+    `ref_path` is the refs/remotes path `_ref_sha_local` resolves
+    (`"refs/remotes/origin/main"`).
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, abbrev: str, remote_name: str, ref_path: str) -> "_UpstreamInfo":
+        return super().__new__(cls, (abbrev, remote_name, ref_path))
+
+    @property
+    def abbrev(self) -> str:
+        return self[0]
+
+    @property
+    def remote_name(self) -> str:
+        return self[1]
+
+    @property
+    def ref_path(self) -> str:
+        return self[2]
+
+
+#: NOT `(?i)`. The keyword `branch` is case-insensitive in git config, but a
+#: SUBSECTION name is case-sensitive -- `[branch "Main"]` and `[branch "main"]`
+#: are two distinct sections. An `(?i)` here spanned the interpolated name and
+#: would have resolved whichever section came first, naming the wrong upstream
+#: for one of two branches differing only in case: a confidently wrong answer,
+#: not the safe decline every other unparseable shape degrades to. The keyword's
+#: own case-insensitivity is kept by spelling it as a character class.
+#: NOT `(?i)`. The keyword `branch` is case-insensitive in git config, but a
+#: SUBSECTION name is case-sensitive -- `[branch "Main"]` and `[branch "main"]`
+#: are two distinct sections. An `(?i)` here spanned the interpolated name and
+#: would have resolved whichever section came first, naming the wrong upstream
+#: for one of two branches differing only in case: a confidently wrong answer,
+#: not the safe decline every other unparseable shape degrades to. The keyword's
+#: own case-insensitivity is kept by spelling it as a character class.
+_BRANCH_SECTION_RE_TEMPLATE = r'(?ms)^[ \t]*\[[bB][rR][aA][nN][cC][hH]\s+"{name}"\][ \t]*$(.*?)(?=^[ \t]*\[|\Z)'
+_BRANCH_REMOTE_KEY_RE = re.compile(r'(?im)^[ \t]*remote[ \t]*=[ \t]*(\S+)')
+_BRANCH_MERGE_KEY_RE = re.compile(r'(?im)^[ \t]*merge[ \t]*=[ \t]*(\S+)')
+
+
+def _resolve_upstream_local(root: Path, branch: str) -> Optional[_UpstreamInfo]:
+    """`(abbrev, remote_name, ref_path)` for *branch*'s configured upstream,
+    read straight from `.git/config`'s `[branch "<branch>"]` section --
+    0 spawns, the in-process equivalent of `git rev-parse --abbrev-ref
+    --symbolic-full-name @{u}`. `None` when `branch` has no configured
+    upstream (or the section/keys are unparseable by this tolerant scan --
+    see `_read_git_config_text`'s docstring), same "unresolvable" outcome
+    the spawning form reached via a non-zero `rev-parse`.
+    """
+    section_re = re.compile(_BRANCH_SECTION_RE_TEMPLATE.format(name=re.escape(branch)))
+    # LAST wins, at both levels, because that is what git does for a scalar key.
+    # A config carrying `[branch "x"]` twice -- hand-edited, or appended to
+    # rather than rewritten -- resolves under `@{u}` to the LAST `remote`/`merge`
+    # value, so taking the first block (or the first key within a block) reads a
+    # stale-but-well-formed value that nothing downstream can flag. That is a
+    # wrong answer rather than a safe decline, and a wrong answer is the one
+    # failure direction this in-process read is not allowed to have.
+    sections = list(section_re.finditer(_read_git_config_text(root)))
+    if not sections:
+        return None
+    section = sections[-1].group(1)
+    remote_matches = list(_BRANCH_REMOTE_KEY_RE.finditer(section))
+    merge_matches = list(_BRANCH_MERGE_KEY_RE.finditer(section))
+    remote_match = remote_matches[-1] if remote_matches else None
+    merge_match = merge_matches[-1] if merge_matches else None
+    if remote_match is None or merge_match is None:
+        return None
+    remote_name = remote_match.group(1)
+    merge_ref = merge_match.group(1)
+    if merge_ref.startswith(_HEADS_PREFIX_LOCAL):
+        branch_basename = merge_ref[len(_HEADS_PREFIX_LOCAL):]
+    else:
+        branch_basename = merge_ref.rsplit("/", 1)[-1]
+    if not remote_name or not branch_basename:
+        return None
+    return _UpstreamInfo(
+        f"{remote_name}/{branch_basename}",
+        remote_name,
+        f"refs/remotes/{remote_name}/{branch_basename}",
+    )
+
+
+_HEADS_PREFIX_LOCAL = "refs/heads/"
+
+
+def _ref_sha_local(root: Path, ref: str) -> Optional[str]:
+    """Resolve *ref* (e.g. `"refs/remotes/origin/main"`) to its sha with no
+    `git` spawn: the loose ref file first, `packed-refs` on a miss -- same
+    two-step resolution `coordinator_core.git.git_state.head_sha` uses for
+    HEAD's own symref target, applied here to a remote-tracking ref instead.
+    Read FRESH on every call (no memo), matching `git_state`'s own no-cache
+    negative-spec: a caller re-reading immediately after a `git fetch` needs
+    the post-fetch value, not a stale pre-fetch one.
+    """
+    common_dir = git_common_dir(root)
+    try:
+        content = (common_dir / ref).read_text(encoding="utf-8").strip()
+        if content:
+            return content
+    except OSError:
+        pass
+    try:
+        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in packed_text.splitlines():
+        if not line or line[0] in "#^":
+            continue
+        sha, _, ref_name = line.partition(" ")
+        if ref_name == ref:
+            return sha
+    return None
+
+
 def push_with_retry(
     worktree_root: Union[str, Path],
     *,
@@ -2749,8 +3155,7 @@ def push_with_retry(
     """
     root = Path(worktree_root)
 
-    remote_check = git_native.remote(root)
-    if not remote_check.stdout.strip():
+    if not _remote_configured_locally(root):
         return PushOutcome(exit_code=0, skipped=["push:no-remote"])
 
     branch = resolve_branch(str(root))
@@ -2782,14 +3187,10 @@ def push_with_retry(
     # upstream tracking ref, e.g. a genuine first push) is the explicit
     # "unknown" sentinel `PushOutcome.pushed_range`/`pushed_count` document.
     pre_push_upstream_sha: Optional[str] = None
-    pre_push_upstream_result = git_native.rev_parse_upstream(root)
-    if pre_push_upstream_result.ok and pre_push_upstream_result.stdout.strip():
-        pre_push_upstream_name = pre_push_upstream_result.stdout.strip()
-        pre_push_sha_result = git_native.rev_parse(root, pre_push_upstream_name)
-        if pre_push_sha_result.ok and pre_push_sha_result.stdout.strip():
-            pre_push_upstream_sha = pre_push_sha_result.stdout.strip()
+    upstream_info = _resolve_upstream_local(root, branch)
+    if upstream_info is not None:
+        pre_push_upstream_sha = _ref_sha_local(root, upstream_info.ref_path)
 
-    upstream_ref: Optional[str] = None
     last_reason = ""
     last_exit_code = 1
     # True only when the LAST thing that happened was a push subprocess
@@ -2831,17 +3232,13 @@ def push_with_retry(
         if not _is_push_reject(reason) or attempt == _PUSH_MAX_RETRIES - 1:
             break
 
-        if upstream_ref is None:
-            upstream_result = git_native.rev_parse_upstream(root)
-            if not upstream_result.ok or not upstream_result.stdout.strip():
-                last_reason = (
-                    f"git push: rejected and no upstream tracking ref resolvable ({reason})"
-                )
-                break
-            upstream_ref = upstream_result.stdout.strip()
+        if upstream_info is None:
+            last_reason = (
+                f"git push: rejected and no upstream tracking ref resolvable ({reason})"
+            )
+            break
 
-        remote_name = upstream_ref.split("/", 1)[0] if "/" in upstream_ref else "origin"
-        fetch_result = git_native.fetch(root, remote_name)
+        fetch_result = git_native.fetch(root, upstream_info.remote_name)
         if not fetch_result.ok:
             fetch_reason = condense_git_diagnostic(fetch_result.stderr) or "fetch failed"
             last_reason = f"git fetch: {fetch_reason}"
@@ -2851,12 +3248,13 @@ def push_with_retry(
         # AC7 rebase-retry range fix (see docstring above): re-point the
         # lower bound at the tip this fetch just observed, so a landed
         # retry's reported range excludes commits that reached the remote
-        # via someone else's push, not this call's.
-        refetched_sha_result = git_native.rev_parse(root, upstream_ref)
-        if refetched_sha_result.ok and refetched_sha_result.stdout.strip():
-            pre_push_upstream_sha = refetched_sha_result.stdout.strip()
+        # via someone else's push, not this call's. `_ref_sha_local` reads
+        # fresh (no memo) so this reflects the fetch that just ran.
+        refetched_sha = _ref_sha_local(root, upstream_info.ref_path)
+        if refetched_sha:
+            pre_push_upstream_sha = refetched_sha
 
-        rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(root, upstream_ref)
+        rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(root, upstream_info.abbrev)
         if rebase_exit_code != 0:
             last_reason = rebase_reason
             last_exit_code = rebase_exit_code
@@ -3245,6 +3643,242 @@ def _drain_pending_push_after_sync(worktree_root: Union[str, Path]) -> None:
         _LOG.debug("post-sync-push pending-push drain failed", exc_info=True)
 
 
+#: In-plane terminal-handoff-sweep cap (C4, docs/plans/2026-08-25-the-
+#: terminal-handoff-sweep-stops-being-an-op.md § C4) -- a cited literal
+#: mirroring `archive_terminal_handoffs._RECOMMENDED_CAP_CHOICE`, the SAME
+#: recommendation that module's own docstring makes for any caller of
+#: `plan_sweep`. `plan_sweep`'s own `cap` param is required with no
+#: unbounded default (C0's binding cap-axis decision) -- this call site's own
+#: choice of that value, not a second computation of it.
+#:
+#: Read through a function, not bound as a module-level constant: binding it
+#: eagerly is what forced `archive_terminal_handoffs` (and, through it,
+#: `asyncio`) to import on EVERY commit, whether or not the cadence gate below
+#: was even open. Measured 2026-08-26: asyncio ~29ms and the fleet module
+#: ~13ms of a ~88ms cold `import commit_pipeline`, on a path that awaits
+#: nothing unless the sweep actually runs.
+def _archive_sweep_cap() -> int:
+    from coordinator_core.ops.fleet import archive_terminal_handoffs
+
+    return archive_terminal_handoffs._RECOMMENDED_CAP_CHOICE
+
+#: How often the in-plane sweep is allowed to do corpus work, in seconds.
+#: The occasion is every ceremony commit; the JOB is due far less often than
+#: that. 15 minutes is chosen against what the sweep is for, not against a
+#: measurement: archiving a terminal handoff has no latency requirement at all
+#: -- nothing reads state/handoffs/ expecting a record to have already left --
+#: so the only cost of waiting is that the record sits one interval longer.
+#: The cost of NOT waiting is a corpus-sized classification pass on every
+#: commit across ~50 concurrent sessions.
+#: Lower it only with a named consumer that needs fresher archival than this.
+_ARCHIVE_SWEEP_INTERVAL_S: float = 15 * 60.0
+
+
+def _archive_sweep_marker(common_dir: Path) -> Path:
+    """Machine-local cadence marker for the in-plane sweep.
+
+    Under <common_dir>/coordinator-sessions/ -- the same git-common-dir-rooted
+    location as this sweep's own single-flight lock
+    (`archive_terminal_handoffs._sweep_lock_path`) and the claim-dir
+    convention, so a linked-worktree caller reads the same marker as the main
+    worktree.
+
+    NOT `housekeeping_liveness`, and the reason is load-bearing rather than
+    stylistic: that store's record lives under `state/`, and this fires on the
+    commit hot path. A hot-path write into the worktree leaves an untracked
+    file behind every ceremony commit -- caught here by seven
+    `_porcelain(repo) == []` assertions in test_commit_pipeline.py, which are
+    right. It is gitignored in THIS checkout, which is a property of this
+    repo's .gitignore and not of the mechanism. Under `.git/` the question
+    does not arise.
+
+    mtime IS the timestamp: no JSON, no format to parse, no unparseable-value
+    arm to degrade through.
+    """
+    return common_dir / "coordinator-sessions" / "archive-terminal-handoffs.cadence"
+
+
+def _archive_sweep_due(common_dir: Path, interval_s: float) -> bool:
+    """Is the in-plane sweep due to do corpus work again?
+
+    DEGRADES OPEN: a missing or unreadable marker returns True, and so does a
+    marker stamped in the future (a clock step, or a checkout carrying someone
+    else's mtime -- never a reason to stop archiving until it catches up). A
+    false True costs one extra run of the sweep; a false False disables
+    archival silently and indefinitely, which is the failure this repo has
+    just spent a whole plan on.
+    """
+    try:
+        age_s = time.time() - _archive_sweep_marker(common_dir).stat().st_mtime
+    except OSError:
+        return True
+    return age_s >= interval_s or age_s < 0
+
+
+def _stamp_archive_sweep(common_dir: Path) -> None:
+    """Record that the sweep just did its corpus pass.
+
+    Best-effort: a failed stamp means the next ceremony commit sweeps again,
+    which is the safe direction to fail in.
+    """
+    marker = _archive_sweep_marker(common_dir)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        os.utime(marker, None)
+    except OSError:
+        pass
+
+
+def _run_in_plane_archive_sweep(
+    worktree_root: Path, common_dir: Optional[Path]
+) -> Tuple[List[str], List[str]]:
+    """Classify + apply one terminal-handoff archival sweep IN-PROCESS, on the
+    ceremony's own commit hot path (C4, docs/plans/2026-08-25-the-terminal-
+    handoff-sweep-stops-being-an-op.md § C4 -- replaces the killed
+    `tail_ops.fire_archive_sweeps_detached`).
+
+    Composes `archive_terminal_handoffs.plan_sweep` (classification, every
+    exclusion rail -- live-claim, `shipped_in` resolvability, childlessness,
+    dest-conflict, worktree-dirty) and `.apply_sweep` (`os.replace` only, ZERO
+    git spawns) -- never re-implements either. Guarded by that module's own
+    `_acquire_sweep_lock`/`_release_sweep_lock` single-flight rail so this
+    leg and `fleet.archive_completed_handoffs`'s own act path never race the
+    same `os.replace` targets; a contended lock is a first-class non-error
+    skip (empty result), same as that op's own handler treats it, never a
+    raised exception.
+
+    Returns `(srcs, dsts)` -- repo-relative path lists, ONE entry per
+    successfully-applied move, in the SAME order -- for the caller to union
+    into `commit_paths` alongside `stage.swept_renames`'s own src/dst pair
+    (see `run_commit_pipeline`'s call site). A move `apply_sweep` reports as
+    `failed` contributes to NEITHER list -- its src still exists at the old
+    path and its dst was never created, so naming either half here would
+    hand `commit_scoped()` a pathspec entry with nothing real behind it.
+
+    CADENCE-GATED, not per-commit. The OCCASION is every ceremony commit; the
+    JOB is due every `_ARCHIVE_SWEEP_INTERVAL_S`. When the gate is closed this
+    returns `([], [])` having read nothing at all -- see the gate's own comment
+    for the measurement that motivated it. When it is open the sweep rides the
+    ceremony commit exactly as before, so "zero additional processes, zero
+    additional commits" is unchanged; what changed is how often the corpus work
+    happens, never how its results are delivered.
+
+    Non-fatal contract (module docstring "HARD CONSTRAINT" precedent,
+    inherited from `archive_and_commit`): NEVER raises. `common_dir is None`
+    (the pass's own git-common-dir resolution failed -- see
+    `_resolve_pass_common_dir`) and any exception from `plan_sweep`/
+    `apply_sweep` themselves both degrade to `([], [])` -- an archival
+    failure must never flip the ceremony's exit code, and a failed sweep
+    contributes no paths, leaving `commit_paths` exactly what it would have
+    been without this call.
+
+    Negative-spec:
+      - Does NOT spawn git -- `plan_sweep`'s own rails spawn `git status
+        --porcelain` (worktree-dirty) and `git cat-file --batch`
+        (`shipped_in`); `apply_sweep` spawns nothing. Neither is a NEW spawn
+        this call site adds -- both already run on the standalone op's own
+        act path (AC-3's "zero ADDITIONAL git processes", not zero total).
+      - Does NOT commit anything itself -- the caller folds the returned
+        paths into its own `commit_paths` and lands them on the SAME commit
+        it was already making (AC-3/AC-10).
+      - Does NOT re-implement `_common.py :: archive_and_commit` -- that
+        helper is untouched (AC-6) and stays the standalone op's own commit
+        mechanism, never this leg's.
+    """
+    if common_dir is None:
+        return [], []
+
+    # `plan_sweep` walks ABSOLUTE handoff paths and ids them against this root
+    # via `wire_paths.rel_id`, whose `relative_to` raises for a relative root.
+    # The raise is caught below, so a caller passing `.` loses the whole sweep
+    # to a logged warning while its commit still reports success -- the failure
+    # shape this leg exists to avoid. Resolving here costs nothing for the
+    # absolute callers and is a no-op when already resolved. Resolved BEFORE
+    # the cadence gate too: `liveness_path` rejects a relative root, and that
+    # rejection degrades the gate open, so a relative caller would silently
+    # keep paying the per-commit cost the gate exists to stop.
+    worktree_root = Path(worktree_root).resolve()
+
+    # Cadence gate, BEFORE any corpus work. `plan_sweep` costs what it costs
+    # whether or not there is anything to archive: it reads frontmatter for
+    # EVERY live handoff, builds the reverse-edge index over all of them,
+    # resolves live session ids, and probes a claim dir per candidate.
+    # Measured 2026-08-26 on a 237-record corpus: p50 31.2ms CPU / 79.0ms wall,
+    # max 78.1ms / 125.4ms -- and 0 records archived, because the cost scales
+    # with the corpus and the outcome scales with what is terminal. Every
+    # ceremony commit reached this line unconditionally, so the pass ran per
+    # commit for a job that is due per interval. AC-3/AC-7 could not see it:
+    # both measure processes and spawns ADDED, and this adds neither.
+    #
+    # The stamp is written after the sweep actually runs (below), never here --
+    # a gate that opens must not record a run that has not happened yet.
+    if not _archive_sweep_due(common_dir, _ARCHIVE_SWEEP_INTERVAL_S):
+        return [], []
+
+    # Deferred PAST the cadence gate, deliberately: `plan_sweep` is a coroutine,
+    # so reaching it at module scope pulled `asyncio` (and its `ssl`/`socket`
+    # subtree) plus the fleet module into every commit -- ~42ms of a ~88ms cold
+    # import, for a job that runs once per `_ARCHIVE_SWEEP_INTERVAL_S`. Below
+    # the gate, the interpreter pays it only on the commits that sweep.
+    import asyncio
+
+    from coordinator_core.ops.fleet import archive_terminal_handoffs
+
+    lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
+    if lock_path is None:
+        # Contended -- another instance (the standalone op's act path, or a
+        # concurrent ceremony) holds the sweep right now. First-class
+        # non-error skip, retained for the next sweep -- never an error that
+        # flips this ceremony's exit code.
+        return [], []
+
+    try:
+        try:
+            moves, _skipped = asyncio.run(
+                archive_terminal_handoffs.plan_sweep(
+                    worktree_root, common_dir, _archive_sweep_cap()
+                )
+            )
+        except Exception:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep plan_sweep failed "
+                "-- contributing no paths (non-fatal)", exc_info=True,
+            )
+            return [], []
+
+        # The classification pass ran to completion -- that IS the run this
+        # cadence gates, whether or not it found anything to move. Stamping
+        # only on a non-empty result would reopen the gate on every commit for
+        # exactly the corpus this sweep currently produces (0 moves against 237
+        # records), which is the case the gate exists for.
+        _stamp_archive_sweep(common_dir)
+
+        if not moves:
+            return [], []
+
+        try:
+            acted, _failed = archive_terminal_handoffs.apply_sweep(moves)
+        except Exception:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep apply_sweep failed "
+                "-- contributing no paths (non-fatal)", exc_info=True,
+            )
+            return [], []
+
+        acted_ids = {a["id"] for a in acted if a.get("archived")}
+        srcs: List[str] = []
+        dsts: List[str] = []
+        for move in moves:
+            if move.candidate_id not in acted_ids:
+                continue
+            srcs.append(_archive_sweep_rel_id(move.src, worktree_root))
+            dsts.append(_archive_sweep_rel_id(move.dst, worktree_root))
+        return srcs, dsts
+    finally:
+        archive_terminal_handoffs._release_sweep_lock(lock_path)
+
+
 def run_commit_pipeline(
     worktree_root: Union[str, Path],
     *,
@@ -3435,7 +4069,7 @@ def run_commit_pipeline(
     and a re-invocation re-ran the entire pipeline, producing a duplicate
     commit).
     """
-    root = Path(worktree_root)
+    root = _require_worktree_root(worktree_root)
     diagnostics: List[str] = []
     # C2 span bookkeeping (see `_COMPOSITION_SPAN_PRE_PUSH`/`_COMPOSITION_SPAN_
     # PUSH` above): one `composition_id` shared by both legs of THIS call, so
@@ -3599,7 +4233,6 @@ def run_commit_pipeline(
                 deletion_paths=remainder_stage.deletion_paths,
                 missing_caller_paths=remainder_stage.missing_caller_paths,
                 ignored_caller_paths=remainder_stage.ignored_caller_paths,
-                unverifiable_missing_caller_paths=remainder_stage.unverifiable_missing_caller_paths,
             )
         else:
             stage = explicit_stage(root, stage_paths, caller_paths)
@@ -3626,6 +4259,27 @@ def run_commit_pipeline(
 
         swept_srcs = [old for old, _new in stage.swept_renames]
         swept_dsts = [new for _old, new in stage.swept_renames]
+
+        # C4 (docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-
+        # an-op.md § C4): the in-plane terminal-handoff archival sweep runs
+        # HERE -- in the ceremony's own process, immediately before
+        # `commit_paths` is finalised below -- and its moved src/dst paths
+        # join `swept_srcs`/`swept_dsts` exactly like a caller-managed
+        # archival rename already does (`compute_commit_paths`'s own
+        # docstring: "Including swept src and dst folds a caller-managed
+        # archival rename into the commit atomically without widening the
+        # gate's inspection scope"). Every ceremony commit reaches this CALL,
+        # so there is no carrier to test for and no follow-up leg to
+        # disambiguate (AC-3/AC-10) -- but the call is cadence-gated inside
+        # and does corpus work only when the sweep is actually due; see
+        # `_run_in_plane_archive_sweep`. A gated, failed, or contended sweep
+        # contributes `([], [])` -- `commit_paths` is then byte-identical to
+        # what it would have been without this call.
+        archive_sweep_srcs, archive_sweep_dsts = _run_in_plane_archive_sweep(
+            root, common_dir
+        )
+        swept_srcs = swept_srcs + archive_sweep_srcs
+        swept_dsts = swept_dsts + archive_sweep_dsts
 
         # `gate_paths`/`commit_paths` derivation is UNCHANGED here --
         # `stage.staged_paths` already includes every deletion this call
@@ -3700,77 +4354,89 @@ def run_commit_pipeline(
             trailers=trailers,
         )
 
-        deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
-        # A `stage_patch`-covered path is scoped OUT of the dirty-tree gate,
-        # and only out of that one gate -- see this function's own commit
-        # message (subject "dirty-tree gate stops judging stage-patch-covered
-        # paths") for the full trace. The one-line version: this gate asks
-        # "can this call attribute the WORKTREE edit it is about to commit,"
-        # and a covered path's committed content never comes from the
-        # worktree at all -- `stage_from_patch()` commits a blob built in a
-        # process-private index seeded from `read-tree HEAD`, provenanced by
-        # construction. Do not "simplify" by dropping the exclusion or
-        # widening it to the other three gates below: they answer questions
-        # (message-declared deletions, carry, op scope) that stay valid for a
-        # covered path, and this gate's own question does not apply to one.
-        dirty_gate = dirty_tree_gate(root, [p for p in gate_paths if p not in patch_covered])
-        carry_outcome = carry_gate(root, gate_paths)
-        op_scope_outcome = op_scope_coverage_gate(root, gate_paths)
+        # C2 (docs/plans/2026-08-26-the-close-path-spends-its-last-known-
+        # levers.md): one `.git/index` parse serves every `read_index` call
+        # this block and the `commit()` call below make for the SAME
+        # resolved index path -- `dirty_tree_gate` (below),
+        # `git_native._v2_state_records_chunked`, and `_index_blobs`'s
+        # commit_scoped-side pre-snapshot. `_agree_branch_cas_refusal`'s own
+        # CURRENT re-observation passes `fresh=True` and is unaffected (see
+        # `index_read_cache_scope`'s own docstring) -- it must keep seeing
+        # a peer's mid-window write, which this scope does not change.
+        with index_read_cache_scope():
+            deletion_gate = deletion_block_gate(message, gate_paths, cwd=root)
+            # A `stage_patch`-covered path is scoped OUT of the dirty-tree gate,
+            # and only out of that one gate -- see this function's own commit
+            # message (subject "dirty-tree gate stops judging stage-patch-covered
+            # paths") for the full trace. The one-line version: this gate asks
+            # "can this call attribute the WORKTREE edit it is about to commit,"
+            # and a covered path's committed content never comes from the
+            # worktree at all -- `stage_from_patch()` commits a blob built in a
+            # process-private index seeded from `read-tree HEAD`, provenanced by
+            # construction. Do not "simplify" by dropping the exclusion or
+            # widening it to the other three gates below: they answer questions
+            # (message-declared deletions, carry, op scope) that stay valid for a
+            # covered path, and this gate's own question does not apply to one.
+            dirty_gate = dirty_tree_gate(root, [p for p in gate_paths if p not in patch_covered])
+            carry_outcome = carry_gate(root, gate_paths)
+            op_scope_outcome = op_scope_coverage_gate(root, gate_paths)
 
-        if not deletion_gate.passed:
-            diagnostics.extend(deletion_gate.diagnostics)
-        if not dirty_gate.passed:
-            diagnostics.append(
-                "dirty-tree gate: unattributable paths: " + ", ".join(dirty_gate.unattributable)
+            if not deletion_gate.passed:
+                diagnostics.extend(deletion_gate.diagnostics)
+            if not dirty_gate.passed:
+                diagnostics.append(
+                    "dirty-tree gate: unattributable paths: " + ", ".join(dirty_gate.unattributable)
+                )
+            if not carry_outcome.passed:
+                diagnostics.extend(carry_outcome.diagnostics)
+            if not op_scope_outcome.passed:
+                diagnostics.extend(op_scope_outcome.diagnostics)
+
+            if (
+                not deletion_gate.passed
+                or not dirty_gate.passed
+                or not carry_outcome.passed
+                or not op_scope_outcome.passed
+            ):
+                return PipelineResult(
+                    stage=stage,
+                    deletion_gate=deletion_gate,
+                    dirty_gate=dirty_gate,
+                    carry_gate=carry_outcome,
+                    op_scope_gate=op_scope_outcome,
+                    commit=None,
+                    push=None,
+                    committed_sha=None,
+                    pushed=False,
+                    commit_failed=True,
+                    integrity_breach=False,
+                    sha_unverified=False,
+                    push_status=PUSH_STATUS_NOT_ATTEMPTED,
+                    diagnostics=diagnostics,
+                )
+
+            # opro-01 C-01: stand the post-commit hook's own detached push down
+            # for this commit IFF this call will publish it synchronously below.
+            # Two publishers for one branch tip is what makes `integrity_breach`
+            # racy -- see `git_native._sole_publisher_env`. In `deferred`/`none`
+            # this call does NOT push, so the hook's push is the only one there
+            # is and suppressing it would strand the commit.
+            # `never` also suppresses, for the opposite reason: that caller is
+            # not authorized to publish this commit at all, so the hook standing
+            # down is the point rather than a stranding
+            # (§ `_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK`).
+            commit_outcome = commit(
+                root,
+                message=message,
+                commit_paths=commit_paths,
+                common_dir=common_dir,
+                deliverable_id=deliverable_id,
+                stage_patch=stage_patch,
+                attributed_session_id=attributed_session_id,
+                suppress_post_commit_auto_push=(
+                    push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK
+                ),
             )
-        if not carry_outcome.passed:
-            diagnostics.extend(carry_outcome.diagnostics)
-        if not op_scope_outcome.passed:
-            diagnostics.extend(op_scope_outcome.diagnostics)
-
-        if (
-            not deletion_gate.passed
-            or not dirty_gate.passed
-            or not carry_outcome.passed
-            or not op_scope_outcome.passed
-        ):
-            return PipelineResult(
-                stage=stage,
-                deletion_gate=deletion_gate,
-                dirty_gate=dirty_gate,
-                carry_gate=carry_outcome,
-                op_scope_gate=op_scope_outcome,
-                commit=None,
-                push=None,
-                committed_sha=None,
-                pushed=False,
-                commit_failed=True,
-                integrity_breach=False,
-                sha_unverified=False,
-                push_status=PUSH_STATUS_NOT_ATTEMPTED,
-                diagnostics=diagnostics,
-            )
-
-        # opro-01 C-01: stand the post-commit hook's own detached push down
-        # for this commit IFF this call will publish it synchronously below.
-        # Two publishers for one branch tip is what makes `integrity_breach`
-        # racy -- see `git_native._sole_publisher_env`. In `deferred`/`none`
-        # this call does NOT push, so the hook's push is the only one there
-        # is and suppressing it would strand the commit.
-        # `never` also suppresses, for the opposite reason: that caller is
-        # not authorized to publish this commit at all, so the hook standing
-        # down is the point rather than a stranding
-        # (§ `_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK`).
-        commit_outcome = commit(
-            root,
-            message=message,
-            commit_paths=commit_paths,
-            common_dir=common_dir,
-            deliverable_id=deliverable_id,
-            stage_patch=stage_patch,
-            attributed_session_id=attributed_session_id,
-            suppress_post_commit_auto_push=(push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK),
-        )
         if commit_outcome.exit_code != 0:
             if not commit_outcome.landed:
                 # Unchanged in every respect (W2, docs/plans/2026-08-08-a-

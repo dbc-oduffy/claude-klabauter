@@ -44,7 +44,7 @@ NEGATIVE SPEC:
   - Never reads `$LOCALAPPDATA`, `~/.cache`, or any literal — settings-home
     comes from `coordinator_core._settings_home.settings_home()` (reached
     only indirectly, through the two composed resolvers above).
-  - Never reads `.claude-klabauter-root`/`.claude-klabauter-root` pointer files
+  - Never reads `.claude-klabauter-root`/`.claude-klabauter-live-root` pointer files
     directly, and never shells out to `machine-local` — those are exactly
     the second-ladder regression this module's F3 finding closes.
   - Imports of `coordinator_core.engine_root` and `coordinator_core.warm.

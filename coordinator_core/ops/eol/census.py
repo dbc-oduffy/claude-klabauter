@@ -34,9 +34,12 @@ test_no_unbatched_per_item_git_spawn.py`):
      attribute, and flagging it is not a drift finding, it is noise. Mirrors
      `eol.repair`'s own "skip any file git reports dirty" rule (C3).
 
-Bytes end to end, no exception: every subprocess call omits `text=True`, both
-git commands read/write bytes explicitly (`input=<bytes>` for check-attr,
-raw `proc.stdout` bytes split on `b"\\x00"`), and file content is read via
+Bytes end to end, no exception: both git calls run through
+`coordinator_core.git.run` in BINARY mode -- `input=<bytes>` for check-attr
+(which implies it) and `binary=True` for status -- and read their records off
+`GitResult.stdout_bytes` split on `b"\\x00"`, never off the decoded
+`GitResult.stdout`, whose `errors="replace"` is the same lossiness this
+module exists to avoid. File content is read via
 `Path.read_bytes()` -- never `Path.read_text()` or `open(..., "r")`. A path
 byte string is decoded ONLY at the point it needs to become an OS path
 (`Path()` join) or a JSON-safe report field, using `errors="surrogateescape"`
@@ -108,8 +111,6 @@ Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § 
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -117,8 +118,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from coordinator_core.cartography._guard import PathEscapeError, path_guard
 from coordinator_core.git.ls_files_bytes import tracked_files_bytes
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
-from coordinator_core.win_portability import no_console_creationflags
 
 #: `check-attr` values that carry no LF/CRLF direction -- "unspecified" (no
 #: declaration at all) feeds declaration coverage; "set"/"unset" (the
@@ -142,31 +143,23 @@ def _check_attr_eol_text(root: Path, paths: Tuple[bytes, ...]) -> Dict[bytes, Di
     """
     if not paths:
         return {}
-    git_bin = shutil.which("git")
-    if git_bin is None:
-        return {}
     stdin_payload = b"\x00".join(paths) + b"\x00"
-    try:
-        proc = subprocess.run(
-            [git_bin, "-C", str(root), "check-attr", "eol", "text", "-z", "--stdin"],
-            input=stdin_payload,
-            capture_output=True,
-            timeout=30,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    # `input` puts the call in binary mode, so `stdout_bytes` carries git's
+    # `-z` records as written -- a decoded read would substitute U+FFFD on
+    # the very path bytes this census exists to compare.
+    attr_read = run_git(
+        ["-C", str(root), "check-attr", "eol", "text", "-z", "--stdin"],
+        input=stdin_payload,
+    )
+    if not attr_read.ok:
+        if not attr_read.timed_out and attr_read.returncode != 127:
+            print(
+                f"eol.census: git -C {root} check-attr eol text -z --stdin exited "
+                f"{attr_read.returncode}: {attr_read.stderr.strip()}",
+                file=sys.stderr,
+            )
         return {}
-    if proc.returncode != 0:
-        stderr = proc.stderr
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        print(
-            f"eol.census: git -C {root} check-attr eol text -z --stdin exited "
-            f"{proc.returncode}: {(stderr or '').strip()}",
-            file=sys.stderr,
-        )
-        return {}
-    tokens = [t for t in proc.stdout.split(b"\x00") if t]
+    tokens = [t for t in attr_read.stdout_bytes.split(b"\x00") if t]
     result: Dict[bytes, Dict[bytes, bytes]] = {}
     for i in range(0, len(tokens) - len(tokens) % 3, 3):
         path_b, attr_b, value_b = tokens[i], tokens[i + 1], tokens[i + 2]
@@ -199,22 +192,13 @@ def _dirty_paths(root: Path) -> Set[bytes]:
     repo-relative path bytes git reports as dirty (any status class,
     including both sides of a rename/copy record).
     """
-    git_bin = shutil.which("git")
-    if git_bin is None:
+    # `binary=True` for the same reason `_check_attr_eol_text` runs binary: a
+    # `-z` record set whose paths are decoded with `errors="replace"` no
+    # longer matches the path bytes the rest of this census keys on.
+    status = run_git(["-C", str(root), "status", "--porcelain", "-z"], binary=True)
+    if not status.ok:
         return set()
-    try:
-        proc = subprocess.run(
-            [git_bin, "-C", str(root), "status", "--porcelain", "-z"],
-            capture_output=True,
-            timeout=30,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
-    if proc.returncode != 0:
-        return set()
-    tokens = [t for t in proc.stdout.split(b"\x00") if t]
+    tokens = [t for t in status.stdout_bytes.split(b"\x00") if t]
     dirty: Set[bytes] = set()
     i = 0
     while i < len(tokens):

@@ -427,7 +427,7 @@ def build_work_state(
     # See AC13 / this module's own `_parse_fm_dict` docstring for the
     # identical discipline applied to `_extract_scope_paths`.
     from coordinator_core.ops.fleet._common import collect_live_handoff_paths
-    from coordinator_core.ops.handoff_reconcile import (
+    from coordinator_core.reconcile.handoff_corpus import (
         _collect_all_handoffs_for_gate_index,
     )
 

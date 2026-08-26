@@ -170,7 +170,7 @@ from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops.session.guard_concrete_path_citations import (
     WIN_DRIVE_RE,
     _ANCHOR_RES,
@@ -676,7 +676,7 @@ def _tracked_files(root: Path) -> List[str]:
         text=True,
         encoding="utf-8",
         check=True,
-        **no_console_creationflags(),
+        **leaf_spawn_creationflags(),
     ).stdout
     paths = [p for p in out.split("\0") if p]
     return [p for p in paths if not any(m in f"/{p}" for m in _EXCLUDE_DIR_MARKERS)]

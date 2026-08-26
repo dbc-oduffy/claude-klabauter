@@ -767,6 +767,31 @@ def test_explicit_stage_absolute_path_outside_worktree_is_missing(tmp_path):
     assert outcome.missing_caller_paths == [outsider]
 
 
+def test_explicit_stage_relative_path_outside_worktree_is_missing(tmp_path):
+    """The RELATIVE spelling of an out-of-worktree path classifies exactly
+    like the absolute one above.
+
+    Regression guard (2026-08-26): `git status`/`git ls-files` reject a
+    relative escaping pathspec with the same rc=128 path-shape fatal as the
+    absolute case ("fatal: ../elsewhere/README.md: ... is outside
+    repository"). When the deletion probe went fail-loud, only the absolute
+    spelling was filtered out ahead of git, so this one reached the probe
+    and raised -- refusing the whole call where its absolute twin still
+    returned `exit_code == 2`. Two spellings of the same path must not get
+    opposite dispositions.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    outsider = "../elsewhere/README.md"
+    outcome = explicit_stage(repo, [outsider], caller_paths={outsider})
+
+    assert outcome.exit_code == 2
+    assert outcome.missing_caller_paths == [outsider]
+
+
 def test_explicit_stage_genuinely_missing_generated_path_benign(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")
@@ -1023,6 +1048,35 @@ def test_explicit_stage_indeterminate_divergence_fails_loud_never_readds(tmp_pat
     # Nothing was staged/re-added -- the deliberately-staged hunk is exactly
     # as it was before this call.
     assert _staged_blob(repo, "docs/notes.md") == "STAGED HUNK\n"
+
+
+def test_explicit_stage_indeterminate_worktree_deletion_probe_fails_loud(tmp_path, monkeypatch):
+    """2026-08-26 fix: the unstaged-deletion classification probe
+    (`_worktree_deleted_paths_chunked`) must fail this call loud
+    (`StageOutcome.exit_code != 0`, populated `failed`) on a genuine `git
+    status` failure, never silently degrade to 'no unstaged deletions
+    found' the way the old `git ls-files --deleted` probe did -- the
+    defect docs/research/spike-verdicts/2026-08-26-one-porcelain-v2-read-
+    replaces-the-probe-suite.md closes."""
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/gone.md", "content")
+    _git(["add", "--", "docs/gone.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    (repo / "docs/gone.md").unlink()
+
+    def _boom(*args, **kwargs):
+        raise commit_pipeline_mod.WorktreeDeletionProbeFailed("simulated git status failure")
+
+    monkeypatch.setattr(commit_pipeline_mod, "_worktree_deleted_paths_chunked", _boom)
+
+    outcome = explicit_stage(repo, ["docs/gone.md"], caller_paths={"docs/gone.md"})
+
+    assert outcome.exit_code != 0
+    assert outcome.failed
+    assert "indeterminate" in outcome.failed[0].lower()
+    # Never fell through to "genuinely absent" and dropped the deletion.
+    assert outcome.missing_caller_paths == []
 
 
 # ---------------------------------------------------------------------------
@@ -2393,11 +2447,11 @@ def test_residue_paths_chunked_partial_chunk_failure_only_taints_that_chunk(monk
     assert other_paths <= residue, "every OTHER chunk's paths must still answer correctly"
 
 
-def test_ls_files_deleted_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
-    """`_ls_files_deleted_chunked()` (the unstaged-deletion classification
-    probe) never hands a single `ls_files_deleted()` call more than the
-    argv budget's worth of pathspec, and each path's deleted/not-deleted
-    answer matches a fake per-path oracle exactly."""
+def test_worktree_deleted_paths_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
+    """`_worktree_deleted_paths_chunked()` (the unstaged-deletion
+    classification probe) never hands a single `status_porcelain_v2_scoped()`
+    call more than the argv budget's worth of pathspec, and each path's
+    deleted/not-deleted answer matches a fake per-path oracle exactly."""
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
@@ -2406,34 +2460,35 @@ def test_ls_files_deleted_chunked_bounds_argv_and_preserves_per_path_answers(mon
 
     calls: list[list[str]] = []
 
-    def _fake_ls_files_deleted(cwd, paths):
+    def _fake_status_v2(cwd, paths):
         batch = list(paths)
         calls.append(batch)
-        matched = [p for p in batch if p in deleted_oracle]
-        return GitResult(returncode=0, stdout="\n".join(matched), stderr="")
+        records = []
+        for p in batch:
+            xy = "1 .D N... 100644 100644 100644 abc123 abc123" if p in deleted_oracle else "1 .. N... 100644 100644 100644 abc123 abc123"
+            records.append(f"{xy} {p}")
+        return GitResult(returncode=0, stdout="\0".join(records) + "\0", stderr="")
 
-    monkeypatch.setattr(git_native, "ls_files_deleted", _fake_ls_files_deleted)
+    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _fake_status_v2)
 
     budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
-    deleted, probe_ok = commit_pipeline_mod._ls_files_deleted_chunked(Path("/fake/root"), paths)
+    deleted = commit_pipeline_mod._worktree_deleted_paths_chunked(Path("/fake/root"), paths)
 
-    assert probe_ok is True
     assert deleted == deleted_oracle
-    assert len(calls) > 1, "2000 paths must not fit in a single ls-files-deleted chunk"
+    assert len(calls) > 1, "2000 paths must not fit in a single status-v2 chunk"
     for batch in calls:
         assert sum(len(p) + 1 for p in batch) <= budget
     seen = [p for batch in calls for p in batch]
     assert sorted(seen) == sorted(paths)
 
 
-def test_ls_files_deleted_chunked_partial_chunk_failure_only_taints_that_chunk(monkeypatch):
-    """The rename/deletion classification's fail-safe posture, at scale: a
-    genuine probe failure confined to ONE chunk must decline only that
-    chunk's own paths (via `probe_ok=False` -> `unverifiable_missing_
-    caller_paths`), never silently assume absence for paths a DIFFERENT,
-    successfully-answering chunk already confirmed as deleted -- the
-    'could not be classified... assumed, not confirmed' defect this fix
-    closes, reproduced at multi-chunk scale."""
+def test_worktree_deleted_paths_chunked_partial_chunk_failure_raises(monkeypatch):
+    """The unstaged-deletion probe's fail-loud posture, at scale: a genuine
+    probe failure confined to ONE chunk must raise `WorktreeDeletionProbeFailed`
+    rather than degrade that chunk's paths to a permissive 'not deleted'
+    guess -- the 2026-08-26 fix (docs/research/spike-verdicts/2026-08-26-
+    one-porcelain-v2-read-replaces-the-probe-suite.md) that replaces the
+    silent-degrade defect this test used to pin."""
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
@@ -2441,23 +2496,18 @@ def test_ls_files_deleted_chunked_partial_chunk_failure_only_taints_that_chunk(m
 
     calls: list[list[str]] = []
 
-    def _fake_ls_files_deleted(cwd, paths):
+    def _fake_status_v2(cwd, paths):
         batch = list(paths)
         calls.append(batch)
         if len(calls) == 1:
             return GitResult(returncode=1, stdout="", stderr="simulated chunk failure")
-        return GitResult(returncode=0, stdout="\n".join(batch), stderr="")
+        records = [f"1 .. N... 100644 100644 100644 abc123 abc123 {p}" for p in batch]
+        return GitResult(returncode=0, stdout="\0".join(records) + "\0", stderr="")
 
-    monkeypatch.setattr(git_native, "ls_files_deleted", _fake_ls_files_deleted)
+    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _fake_status_v2)
 
-    deleted, probe_ok = commit_pipeline_mod._ls_files_deleted_chunked(Path("/fake/root"), paths)
-
-    assert probe_ok is False
-    failed_chunk = set(calls[0])
-    for p in failed_chunk:
-        assert p not in deleted
-    other_paths = set(paths) - failed_chunk
-    assert other_paths <= deleted, "successfully-answered chunks must keep their real answer"
+    with pytest.raises(commit_pipeline_mod.WorktreeDeletionProbeFailed):
+        commit_pipeline_mod._worktree_deleted_paths_chunked(Path("/fake/root"), paths)
 
 
 def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_probe(
@@ -2465,9 +2515,9 @@ def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_pro
 ):
     """Integration proof for site 2 (the 'could not be classified' defect):
     a caller-named deletion in a batch large enough to span several
-    `ls_files_deleted()` chunks is still correctly staged as a deletion,
-    never declined as 'genuinely absent' merely because the probe's
-    pathspec no longer fits on one argv."""
+    `status_porcelain_v2_scoped()` chunks is still correctly staged as a
+    deletion, never declined as 'genuinely absent' merely because the
+    probe's pathspec no longer fits on one argv."""
     from coordinator_core.ops.ceremony import git_native
 
     repo = _init_repo(tmp_path)
@@ -2483,21 +2533,20 @@ def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_pro
     (repo / "docs/to-delete.md").unlink()
 
     calls: list[list[str]] = []
-    real = git_native.ls_files_deleted
+    real = git_native.status_porcelain_v2_scoped
 
     def _spy(cwd, paths):
         calls.append(list(paths))
         return real(cwd, paths)
 
-    monkeypatch.setattr(git_native, "ls_files_deleted", _spy)
+    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _spy)
 
     outcome = explicit_stage(repo, all_paths, caller_paths={"docs/to-delete.md"})
 
-    assert len(calls) > 1, "1200+ paths must not fit in a single ls-files-deleted chunk"
+    assert len(calls) > 1, "1200+ paths must not fit in a single status-v2 chunk"
     assert outcome.exit_code == 0
     assert "docs/to-delete.md" in outcome.deletion_paths
     assert "docs/to-delete.md" not in outcome.missing_caller_paths
-    assert "docs/to-delete.md" not in outcome.unverifiable_missing_caller_paths
 
 
 def test_explicit_stage_add_paths_chunked_at_scale_still_reconciles_partial_failure(
@@ -4146,11 +4195,23 @@ def test_push_with_retry_first_push_no_upstream_reports_unknown_not_zero(tmp_pat
     _git(["update-ref", "-d", "refs/remotes/origin/work/x"], repo)
     packed = repo / ".git" / "packed-refs"
     if packed.exists():
+        # Review: coordinator:code-reviewer -- exact ref-name match, not a
+        # substring test, so a sibling ref sharing this prefix (e.g.
+        # work/x2) can never be silently over-deleted by this scrub.
+        def _keeps(line: str) -> bool:
+            stripped = line.rstrip("\n")
+            if not stripped or stripped.startswith("#") or stripped.startswith("^"):
+                return True
+            parts = stripped.split(" ", 1)
+            if len(parts) != 2:
+                return True
+            return parts[1].strip() != "refs/remotes/origin/work/x"
+
         packed.write_text(
             "".join(
                 line
                 for line in packed.read_text(encoding="utf-8").splitlines(keepends=True)
-                if "refs/remotes/origin/work/x" not in line
+                if _keeps(line)
             ),
             encoding="utf-8",
         )

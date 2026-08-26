@@ -181,16 +181,51 @@ def report(sink: Path) -> Dict[str, Any]:
         else:
             current["end"] = row.get("t")
             current["samples"] += 1
+    # A run's duration is BOUNDED, never a point figure, and reporting it as
+    # one was a real defect: `(end - start)` spans first-down-sample to
+    # last-down-sample, so it silently excludes the whole unobserved interval
+    # on each side. A single-sample outage came out as 0.0 minutes -- a real
+    # outage rounding to no outage at all -- and a genuine 89s outage and a
+    # genuine 31s outage both printed ~30s at a 30s interval. Both figures were
+    # quoted cross-repo against a decision record before anyone noticed.
+    #
+    # What the samples actually establish for a run of k down samples spaced
+    # `interval` apart: down for AT LEAST (k-1)*interval (the observed span)
+    # and AT MOST (k+1)*interval (the last up sample before it through the
+    # first up sample after it). `interval` is derived from the median
+    # inter-sample delta rather than read from config, so a report over a sink
+    # someone sampled at a different rate is still described in its own terms.
+    deltas = sorted(
+        b - a
+        for a, b in zip(
+            [r.get("t", 0.0) for r in rows[:-1]], [r.get("t", 0.0) for r in rows[1:]]
+        )
+    )
+    interval = deltas[len(deltas) // 2] if deltas else 0.0
+    out["sample_interval_secs"] = round(interval, 3)
+
     out["outage_runs"] = [
         {
             "outcome": run["outcome"],
             "samples": run["samples"],
-            "minutes": round((run["end"] - run["start"]) / 60.0, 2),
+            "observed_span_secs": round(run["end"] - run["start"], 2),
+            "at_least_secs": round(max(0.0, (run["samples"] - 1) * interval), 2),
+            "at_most_secs": round((run["samples"] + 1) * interval, 2),
         }
         for run in runs
     ]
-    out["longest_outage_minutes"] = max(
-        (r["minutes"] for r in out["outage_runs"]), default=0.0
+    # Ranked on the UPPER bound: this figure answers "how long could the hook
+    # have been silently not firing", and the honest answer to that is the
+    # worst case the samples do not exclude.
+    out["longest_outage_at_most_secs"] = max(
+        (r["at_most_secs"] for r in out["outage_runs"]), default=0.0
+    )
+    out["outage_duration_caveat"] = (
+        "Durations are bounds, not measurements. A run of k down samples at "
+        "this interval establishes only that the listener was down for at "
+        "least (k-1)*interval and at most (k+1)*interval; the sampler cannot "
+        "see inside an interval. Quote the range or quote at_most_secs, never "
+        "observed_span_secs alone -- it is a lower bound and reads as a result."
     )
 
     probes = [r["probe_ms"] for r in rows if isinstance(r.get("probe_ms"), (int, float))]

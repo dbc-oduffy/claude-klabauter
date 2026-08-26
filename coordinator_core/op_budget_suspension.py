@@ -263,23 +263,14 @@ SUSPENSION_BAR_MS = 2000.0
 # The four `test.*` fixtures that breach by construction are also absent, and not
 # by carve-out: their max latencies (66-110ms) simply fit. A rule that needed an
 # exception for its own test fixtures would be the wrong rule.
-#
-# fleet.archive_completed_handoffs — REINSTATED 2026-08-25 (plan
-# docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md, C3), pruned
-# here in the same commit. This is NOT the old row tuned: C1a/C1b shipped a
-# from-scratch rebuild (`coordinator_core/ops/fleet/archive_terminal_handoffs.py`)
-# after C1b deleted both the old op and the module that carried this row's 26.1s
-# measurement. C5a then benched the NEW handler on the module path (never
-# dispatch, per its own AC-7 circularity note) at cap 150 over a 229-file live
-# corpus: worst of 5 samples, 93.750ms process time, 2 spawns — well inside the
-# 500ms brightline, not the 2000ms admission bar this table polices. Full method
-# and results: state/audits/2026-08-25-the-handoff-archive-op-earns-its-way-back.md
-# § C5a. `65bbe1323` (hooks.cater_subagent_start) is precedent for this
-# bookkeeping shape only, not for how this reinstatement earned its number.
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "session.boot_sweep": {
         "measured": {"max_ms": 30016.6, "p50_ms": 30010.8, "n": 8},
         "note": "8/8 ended in caller_timeout at 30s.",
+        "spinoff": None,
+    },
+    "fleet.archive_completed_handoffs": {
+        "measured": {"max_ms": 26111.9, "p50_ms": 26111.9, "n": 1},
         "spinoff": None,
     },
 }

@@ -22,19 +22,17 @@ Coverage:
 
   fleet two-phase wiring (generic two-phase helper -- (l)/(m)'s direct-wrapper tests were
   removed with archive_completed_plans/archive_completed_handoffs/sweep_actioned_memos
-  themselves, C2 2026-07-23 -- see fire_archive_sweeps_detached below):
+  themselves, C2 2026-07-23):
     (h) two_phase_no_candidates_short_circuits -- empty T1 preview -> no T3 call, empty result
     (i) two_phase_acts_on_preview_candidates   -- T1 candidates feed T3 candidate_ids verbatim
     (j) two_phase_preview_failure_short_circuits -- non-zero preview exit_code -> failed[], no T3
     (k) two_phase_handler_exception_is_caught  -- handler raising never propagates
 
-  fire_archive_sweeps_detached (C2, 2026-07-23 wsc-tail-slim-down -- replaces the retired
-  archive_completed_plans/archive_completed_handoffs/sweep_actioned_memos blocking wrappers):
-    (l) fire_archive_sweeps_detached_spawns_expected_clis -- exactly the expected per-class
-        CLIs are spawned, each with worktree_root as its repo_root arg; sweep-boot.py is
-        never among them
-    (m) fire_archive_sweeps_detached_records_spawn_failure -- a spawn_detached() False return
-        lands in failed[], not raised
+  fire_archive_sweeps_detached and its (l)/(m) coverage were DELETED (C4, docs/plans/
+  2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4) -- the detached-CLI
+  archival shape it implemented is replaced by an in-plane fold-in on the ceremony's own
+  commit (`commit_pipeline.run_commit_pipeline`'s `_run_in_plane_archive_sweep`), never a
+  spawned script. `_ARCHIVE_SWEEP_SCRIPTS` is deleted with it.
 
   coverage.gate and review_trail.write wrapper tests were removed along
   with their in-process wiring (coverage.gate: K-001, state/kill-ledger.md;
@@ -55,9 +53,8 @@ Coverage:
                                                                  degrades to failed[]
 
   fire_tracker_and_roadmap_detached (C5, 2026-07-23 wsc-tail-slim-down -- detached
-  replacement for the BLOCKING refresh_roadmap_callout call; mirrors
-  fire_archive_sweeps_detached's C2 shape; its tracker-CLI leg was retired
-  2026-08-14 along with `render-handoff-tracker.py`):
+  replacement for the BLOCKING refresh_roadmap_callout call; its tracker-CLI leg was
+  retired 2026-08-14 along with `render-handoff-tracker.py`):
     (aa) fire_tracker_and_roadmap_detached_spawns_per_roadmap_callout -- the
          roadmap-callout CLI fires once per distinct allowlist-valid roadmap_id
          found in consumed_handoff_paths
@@ -332,58 +329,6 @@ def test_two_phase_handler_exception_is_caught(tmp_path):
     assert result["skipped"] == []
     assert len(result["failed"]) == 1
     assert "fleet.fake_op: RuntimeError" in result["failed"][0]
-
-
-def test_fire_archive_sweeps_detached_spawns_expected_clis(tmp_path):
-    """C2: the retired blocking archive_completed_handoffs/sweep_actioned_memos
-    calls are replaced by detached CLI fires -- never the composite sweep-boot.py
-    (plan § C2 anti-scope: it also runs the unintegrated-findings reap, a tracked
-    git rm, out of scope for a call fired on every WSC pass). sweep-terminal-plans.py
-    was removed when fleet.archive_completed_plans was killed and rebuilt from
-    scratch (PM ruling 2026-08-23). sweep-actioned-memos.py was removed the same day
-    when fleet.archive_actioned_memos was killed outright (PM ruling, no replacement
-    op). sweep-shipped-handoffs.py itself was removed 2026-08-25 (C1b, docs/plans/
-    2026-08-25-the-handoff-auto-archive-comes-back-capped.md -- the op it fired,
-    fleet.archive_shipped_handoffs, was SUBSUMED into fleet.archive_completed_handoffs)
-    -- C4 of the same plan re-earned the seam with sweep-terminal-handoffs.py, the
-    sole current member of _ARCHIVE_SWEEP_SCRIPTS; this test now pins that single
-    detached fire rather than the empty-roster interregnum."""
-    worktree_root = tmp_path
-    spawned: list[tuple] = []
-
-    def _fake_spawn(repo_root, script_path, args):
-        spawned.append((repo_root, script_path, tuple(args)))
-        return True
-
-    with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
-        result = tail_ops.fire_archive_sweeps_detached(worktree_root)
-
-    repo_root_str = str(worktree_root)
-    expected_script = str(Path(worktree_root, "coordinator", "bin", "sweep-terminal-handoffs.py"))
-    assert mock_spawn.call_count == 1
-    assert spawned == [(repo_root_str, expected_script, (repo_root_str,))]
-    assert result == {"acted": ["detached_fire:sweep-terminal-handoffs.py"], "skipped": [], "failed": []}
-
-
-def test_fire_archive_sweeps_detached_records_spawn_failure(tmp_path):
-    """A `spawn_detached` False return for the sole current
-    `_ARCHIVE_SWEEP_SCRIPTS` member (`sweep-terminal-handoffs.py`, C4) is
-    recorded into `failed[]`, not silently dropped -- mirrors the loop body's
-    unchanged spawn-failure handling."""
-    worktree_root = tmp_path
-
-    def _fake_spawn(repo_root, script_path, args):
-        return False
-
-    with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
-        result = tail_ops.fire_archive_sweeps_detached(worktree_root)
-
-    assert mock_spawn.call_count == 1
-    assert result == {
-        "acted": [],
-        "skipped": [],
-        "failed": ["detached_fire:sweep-terminal-handoffs.py: spawn_detached returned False"],
-    }
 
 
 def test_unregistered_op_key_is_clean_failure(tmp_path):

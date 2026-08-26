@@ -35,14 +35,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.install.substrate import BYTE_COPIED_BIN_SOURCES
+
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
 
 #: Sources the installer delivers by byte copy to an extension-less, exec-bit
-#: POSIX path. Derived from the `wrapper_src` call sites — grep `wrapper_src`
-#: under `coordinator_core/install/` before adding a row, and add one whenever a
-#: new byte-copied exec target appears.
-_BYTE_COPIED_POSIX_EXEC_SOURCES = (
-    Path("coordinator") / "bin" / "claude-doe.py",
+#: POSIX path — read straight off the installer's own declaration
+#: (`substrate.BYTE_COPIED_BIN_SOURCES`, which `maximalist`'s Step 3.5b derives
+#: its `wrapper_src` from) rather than transcribed here, so a new byte-copied
+#: member reaches this guard with no edit in this file.
+_BYTE_COPIED_POSIX_EXEC_SOURCES = tuple(
+    Path(*rel) for rel in BYTE_COPIED_BIN_SOURCES.values()
 )
 
 
@@ -70,7 +73,7 @@ def test_the_wrapper_source_maximalist_installs_is_the_one_this_guard_checks():
     source = (_CLAUDE_KLABAUTER_ROOT / "coordinator_core" / "install" / "maximalist.py").read_text(
         encoding="utf-8"
     )
-    assert 'os.path.join(claude_klabauter_root, "coordinator", "bin", "claude-doe.py")' in source, (
+    assert 'os.path.join(claude_klabauter_root, *BYTE_COPIED_BIN_SOURCES["claude-doe"])' in source, (
         "maximalist's Step 3.5b no longer derives the claude-doe wrapper source the way "
         "this guard assumes — reconcile _BYTE_COPIED_POSIX_EXEC_SOURCES with the new "
         "derivation."

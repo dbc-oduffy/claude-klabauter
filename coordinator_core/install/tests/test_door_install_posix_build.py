@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 
 import pytest
@@ -66,7 +67,21 @@ def test_build_or_advise_returns_advisory_on_toolchain_miss(tmp_path, monkeypatc
     assert "coordinator:" not in result.advisory
 
 
-def test_build_or_advise_advisory_names_build_posix_script(tmp_path, monkeypatch):
+def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
+    """The advisory's named command must EXECUTE, not merely mention the
+    builder.
+
+    This test replaces one that asserted `"build_posix.py" in result.advisory`.
+    That assertion held while the advisory emitted
+    `python3 <abs path>/build_posix.py <root>` -- a command that dies on
+    `ImportError: attempted relative import with no known parent package`
+    before reaching its own argparse, because `build_posix.py` does
+    `from .build import write_sidecar` and a file-path invocation gives it no
+    package context. A cold-path remediation that cannot run is exactly what
+    the runnable-remediation rule exists to prevent, and a guard that checks
+    the spelling instead of the behaviour cannot fire on it. So: extract the
+    command from the advisory and run it.
+    """
     def _raise(requested):
         raise SystemExit("no compiler found")
 
@@ -77,8 +92,38 @@ def test_build_or_advise_advisory_names_build_posix_script(tmp_path, monkeypatch
 
     result = posix_install.build_or_advise(engine_root)
 
-    assert "build_posix.py" in result.advisory
     assert str(engine_root.resolve()) in result.advisory
+
+    marker = "build it later with: "
+    assert marker in result.advisory
+    command = result.advisory.split(marker, 1)[1].strip()
+    argv = command.split()
+    assert argv[0] == "python3"
+
+    # The execution check below proves "it runs"; these two prove "it is the
+    # module route". Both are needed: the defect that shipped green was a
+    # `.py` file path in the advisory, and a future edit could reintroduce one
+    # wrapped in something that still exits 0 on --help. The old test asserted
+    # only the spelling and the new one would have asserted only the running.
+    assert ".py" not in command, f"advisory must not name a file path: {command}"
+    assert argv[1:3] == ["-m", "coordinator_core.warm.door.build_posix"], argv
+    argv[0] = sys.executable
+
+    # `--help` exercises import + argparse construction, which is where the
+    # file-path spelling failed, without paying a real compile.
+    completed = subprocess.run(
+        [*argv[:-1], "--help"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(tmp_path),
+    )
+    assert completed.returncode == 0, (
+        "the advisory names a command that does not run:\n"
+        f"  command: {command}\n"
+        f"  stderr:  {completed.stderr}"
+    )
+    assert "engine_root" in completed.stdout
 
 
 def test_build_or_advise_builds_when_toolchain_present(tmp_path):

@@ -137,7 +137,7 @@ def _try_create(path: Path, payload: dict) -> bool:
     is closed immediately (Windows sharing-violation negative-spec above).
     """
     try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         return False
     except OSError:

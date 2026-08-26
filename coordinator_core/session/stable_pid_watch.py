@@ -33,13 +33,56 @@ own Layer-1 decision exactly, not a re-derivation:
   - ``stable_pid`` present with at least one witness -> Layer 1 engages ->
     not F0-exposed -> not a miss (regardless of whether the process is
     actually alive — aliveness is not this watch's question).
-  - No ``meta.json`` at all, but a ``touched.txt`` in the same dir (C4,
-    2026-08-22) -> a genuine session left no record whatsoever, so Layer 1
+  - No ``meta.json`` at all, but SOME other record file in the same dir
+    whose mtime is **within ``_NO_META_RECENCY_SECONDS``** (C4, 2026-08-22;
+    keying widened off the `touched.txt` literal onto
+    ``liveness.newest_record_mtime`` 2026-08-25, C5; recency-scoped
+    2026-08-26) -> a genuine session left no record whatsoever, so Layer 1
     provably never engaged -> MISS (reason ``no_meta_json``) — closes the
     gap where a session moved entirely out of "meta.json present,
     unstamped" into "no meta.json at all" would otherwise fall out of this
     watch's denominator and read CLEAN while the exposed population grows.
     A dir with NEITHER file is still not counted (unrelated hub debris).
+
+Why the ``no_meta_json`` branch is recency-scoped, and why the scope is
+NOT a softening of AC8 (measured 2026-08-26 on host `machine-b`, 375
+top-level dirs): unscoped, this branch counted **223** dirs and the probe
+read "223 of 226 sessions missing stable_pid capture — K-006 is live
+again". None of the 223 was a capture failure. Two systemic causes, both
+measured:
+
+  1. **The marker was planted retroactively.** ``touched.txt`` in **216**
+     of the 223 (the marker the branch keyed on before C5) has a
+     birth time of 2026-07-31 21:47 — one bulk event,
+     the C6 touch-corpus migration (``380b3e329``, "migrate the poisoned
+     touch corpus, once, behind a backup and a manifest"). The dirs
+     themselves were born across 2026-07-16..07-31 and hold no
+     ``started_at`` and no ``head_at_start``, so ``core.init`` never ran
+     in them. The premise this branch rests on — "touched.txt is this
+     repo's own signal that a session genuinely ran here" — is simply
+     false for a corpus a migration back-filled.
+  2. **The reaper biases the population it leaves behind.**
+     ``ops/session/reap.py::_reap_stale_sessions`` archives a dir whose
+     ``meta.json`` says 24h-idle, but a dir with no readable ``meta.json``
+     hits its ``fail-closed-to-keep`` arm and is **deferred forever**. So
+     the top-level hub converges, by construction, on "every no-meta dir
+     ever created, plus today's live sessions" — 223 fossils against 8
+     live sessions, all 8 of them armed. A ratio computed over that
+     population measures the reaper's retention rule, not capture health.
+
+C5's widening off the `touched.txt` literal makes the scope MORE load-
+bearing, not less: keying on any record file admits dirs the literal
+never reached, so the fossil corpus can only grow. Recency is the axis
+that separates the two populations; the marker's name never was.
+
+The threshold is ``ops/session/reap.py::_AGENT_STALE_SECONDS``' 24h,
+deliberately reused rather than re-picked: that is already this repo's
+answer to "how long before a record-bearing dir is no longer current",
+and a dir past it is one the reaper itself would have taken had
+it been reapable. A session that genuinely bootstraps without ``init``
+still appears in the denominator on the day it happens — which is when a
+regression is actionable — so AC8's gap stays closed for the live
+population it was written about.
 
 Cost constraint (cadence-path, non-negotiable per CLAUDE.md § Load norm): NO
 process spawns, NO corpus walk beyond the session dirs themselves. One
@@ -66,10 +109,18 @@ Spec backlink: state/kill-ledger.md § K-006; coordinator_core/session/liveness.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.session import core
+from coordinator_core.session import liveness
+
+# Mirrors ops/session/reap.py::_AGENT_STALE_SECONDS (24h). Not imported from
+# there: reap is an op module whose import pulls asyncio/shutil/the op
+# registry onto a cadence path that must stay a directory walk and a stat.
+# Kept as a named local with the backlink instead.
+_NO_META_RECENCY_SECONDS: int = 24 * 3600
 
 STATUS_MISS = "MISS"
 STATUS_CLEAN = "CLEAN"
@@ -124,21 +175,47 @@ def scan_stable_pid_misses(
 
     checked = 0
     misses: list[dict[str, str]] = []
+    now = time.time()
     for sdir in entries:
+        if sdir.name in liveness._NON_SESSION_DIR_NAMES:
+            # Latent gap surfaced by widening the meta-json-less branch below
+            # off the single `touched.txt` literal (C5, AC6): a known
+            # non-session infra dir (`logs`, `.commit-ledger`, ...) that
+            # happens to hold some unrelated file used to read as "not
+            # counted" only by luck (it never carried a file literally named
+            # `touched.txt`). Reusing `liveness`'s own denylist -- the same
+            # one `live_session_verdicts` filters the claim-liveness
+            # enumeration through -- keeps this cadence watch from mistaking
+            # a known infra dir for a meta-less session, without growing a
+            # second name list to keep in sync.
+            continue
         meta_path = sdir / "meta.json"
         if not meta_path.is_file():
             # No meta.json at all is normally not a session record (e.g. a
             # stray non-session subdirectory under the hub) — not counted.
-            # EXCEPT a dir carrying `touched.txt` (2026-08-22, C4,
+            # EXCEPT a dir carrying a record file (2026-08-22, C4,
             # docs/plans/2026-08-22-track-touched-files-pays-only-for-the-
-            # append.md): that file is this repo's own signal that a
-            # session genuinely ran here, so a meta.json-less dir bearing
-            # one is NOT "not a session record" — it is exactly the
-            # population this watch exists to keep visible. Conservatively
-            # counted as a miss (this module's own contract, see the
-            # "unreadable" branch below) rather than silently dropped from
-            # the denominator, which is the AC8 gap this branch closes.
-            if (sdir / "touched.txt").is_file():
+            # append.md; widened off the `touched.txt` literal 2026-08-25,
+            # C5, docs/plans/2026-08-25-the-legacy-touch-record-is-retired-
+            # by-repointing-its-writers.md § AC6): a record file is this
+            # repo's own signal that a session genuinely ran here, so a
+            # meta.json-less dir bearing one is NOT "not a session record"
+            # — it is exactly the population this watch exists to keep
+            # visible. Keyed on `liveness.newest_record_mtime` (the shared
+            # recency-policy helper, AC6) rather than the single `touched.txt`
+            # literal so a future record rename only DEFERS this signal,
+            # never DISABLES it. Conservatively counted as a miss (this
+            # module's own contract, see the "unreadable" branch below)
+            # rather than silently dropped from the denominator, which is
+            # the AC8 gap this branch closes.
+            # Recency-scoped (2026-08-26): only while that record file is
+            # newer than _NO_META_RECENCY_SECONDS. Unscoped, this branch
+            # counted a 223-dir fossil corpus a bulk migration back-filled
+            # and the reaper's fail-closed-to-keep arm can never remove —
+            # see this module's docstring for the measurement. Reuses the
+            # mtime `newest_record_mtime` already returns; no second stat.
+            record_mtime = liveness.newest_record_mtime(str(sdir))
+            if record_mtime is not None and (now - record_mtime) <= _NO_META_RECENCY_SECONDS:
                 checked += 1
                 misses.append({"session": sdir.name, "reason": "no_meta_json"})
             continue

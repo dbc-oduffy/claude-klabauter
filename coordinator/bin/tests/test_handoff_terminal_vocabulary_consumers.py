@@ -117,8 +117,21 @@ _CONSUMERS: list[tuple[str, bool]] = [
     ("coordinator/bin/test_close_origin_stub_on_ship.py", False),  # op result dict key "closed", not handoff deployment_state
     ("coordinator/bin/test_coordinator_queue_append_parity.py", False),  # debt/queue status enum, not handoff
     ("coordinator/bin/test_coordinator_queue_append.py", False),  # debt/queue status enum, not handoff
-    ("coordinator/bin/test_cross_repo_memo_c6.py", True),  # touches deployment_state, but only a non-terminal placeholder ("in_flight") on a different (memo-schema-rejection) axis
-    ("coordinator/bin/test_migrate_provenance_stamp.py", False),  # generic record fixture "status: closed", not a handoff
+    # Re-triaged 2026-08-25, NOT silently dropped: test_cross_repo_memo_c6.py was
+    # deleted in c07062c99 ("don't complain about this commit ffs"), part of a
+    # ~2800-line cross-repo-memo.py shrink that removed several memo test files
+    # wholesale. It was never a genuine terminal-vocabulary consumer — its
+    # `deployment_state` touch was only a non-terminal placeholder ("in_flight")
+    # on a different (memo-schema-rejection) axis — so no replacement coverage
+    # is owed here. Recover via `git show c07062c99~1:coordinator/bin/test_cross_repo_memo_c6.py`.
+    # Re-triaged 2026-08-25, NOT silently dropped: test_migrate_provenance_stamp.py
+    # went with its subject in 3d25072e8 ("fourteen entry points nothing invokes, and
+    # the rungs that launched them, go"), which deleted migrate-provenance-stamp.py
+    # and thirteen sibling entry points. Its row already read False, and that was
+    # accurate — the file contains no occurrence of deployment_state, "shipped" or
+    # "superseded" at all; its only status vocabulary was a generic record fixture
+    # ("status: closed"). No replacement coverage is owed. Recover via
+    # `git show 3d25072e8~1:coordinator/bin/test_migrate_provenance_stamp.py`.
     ("coordinator/bin/test_prune_closed_bugs.py", False),  # bug-backlog status, not handoff
     ("coordinator/bin/tests/test_archive_stamp_cli_chain_supersede_archive.py", False),  # argv-shape test; continued_into is a path param, not a vocabulary enumeration
     ("coordinator/bin/tests/test_doe_root_routing.py", False),  # queue status enum {open, closed, deferred}, not handoff

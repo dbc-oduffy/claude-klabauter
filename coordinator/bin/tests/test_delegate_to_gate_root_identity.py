@@ -140,7 +140,7 @@ def test_same_tree_short_circuit_returns_canonical_module_not_a_synthetic_copy(m
         pytest.skip("coordinator_core is not ambiently importable with a real __file__ in this env")
     canonical_root = str(Path(canonical.__file__).resolve().parents[1])
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", canonical_root)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", canonical_root)
     _mod._resolve_claude_klabauter_root()
 
     # No synthetic "_cc_engine_root_<digest>" module should exist for the

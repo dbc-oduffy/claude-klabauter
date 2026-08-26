@@ -185,7 +185,7 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     (claude_home / ".claude" / "bin").mkdir(parents=True)
 
     # `claude_klabauter_root` is a SEPARATE fixture tree from `coord_root` -- the
-    # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-root-pointer.py`)
+    # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-live-root-pointer.py`)
     # migrated wholesale to claude-klabauter in commit `b644d5a9` (2026-07-22),
     # so production code now resolves these two paths under
     # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the DoE clone's
@@ -198,14 +198,14 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
 
-    # gen-claude-klabauter-root-pointer.py is invoked as `python3 <path>` via a real
+    # gen-claude-klabauter-live-root-pointer.py is invoked as `python3 <path>` via a real
     # subprocess (Step 3.5a.1b, advisory, out of C13's scope) -- must be
     # valid Python, not a shell stub.
-    claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"
+    claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
     claude_klabauter_pointer.write_text(
         "import os, sys\n"
         'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
+        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
         'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
     )
 
@@ -361,7 +361,7 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
         "detect-existing-claude-home",
         "install-health-run",
         "gen-doe-root-pointer",
-        "gen-claude-klabauter-root-pointer.py",
+        "gen-claude-klabauter-live-root-pointer.py",
         "gen-claude-doe-shim",
         "gen-claude-doe-launcher",
         "gen-settings-hooks",
@@ -1501,7 +1501,7 @@ def test_seed_claude_klabauter_machine_local_absent_degrades_to_note(stub_env, m
     """(c) When machine-local cannot be resolved at all (no sibling CLI, no
     PATH fallback), the block must print a NOTE and continue -- never raise.
     `shutil.which` is faked to miss ONLY "machine-local" (delegating every
-    other lookup, e.g. gen-claude-klabauter-root-pointer.py's own python3/python probe,
+    other lookup, e.g. gen-claude-klabauter-live-root-pointer.py's own python3/python probe,
     to the real resolver) so this test isolates the seed block's own
     degrade-to-NOTE path from unrelated advisory phases elsewhere in the chain."""
     monkeypatch.setattr(_shared_module, "resolve_machine_local_cli", lambda plugin_root: None)
@@ -1718,17 +1718,17 @@ def test_env_var_propagated_to_subprocess_phase(stub_env, monkeypatch, tmp_path)
     # about the env var reaching a real subprocess, not about the mutation
     # guard itself.
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    # Rewrite the real subprocess-invoked phase (gen-claude-klabauter-root-pointer.py)
+    # Rewrite the real subprocess-invoked phase (gen-claude-klabauter-live-root-pointer.py)
     # to record the resolution-journal env var it inherits, proving it
     # reaches a subprocess phase's environment, not only in-process ones.
     seen_log = tmp_path / "journal-env-seen.log"
-    claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"
+    claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
     claude_klabauter_pointer.write_text(
         "import os, sys\n"
         f'with open({str(seen_log)!r}, "w") as f:\n'
         '    f.write(os.environ.get("COORDINATOR_INSTALL_RESOLUTION_JOURNAL", ""))\n'
         'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
+        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
         'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
     )
 

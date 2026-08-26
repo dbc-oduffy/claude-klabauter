@@ -118,12 +118,16 @@ def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch, tm
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     # Accepted, bounded non-hermeticity: this scans the live `coordinator/bin/`
-    # tree via CLAUDE_KLABAUTER_ROOT rather than a fixture. The assertions below are
-    # satisfied entirely from this test's own fixtures (ml_bin/ch_bin), so
-    # correctness doesn't depend on that directory's contents — only a
+    # tree via COORDINATOR_ENGINE_ROOT rather than a fixture. The assertions
+    # below are satisfied entirely from this test's own fixtures (ml_bin/ch_bin),
+    # so correctness doesn't depend on that directory's contents — only a
     # concurrent rename/delete under `coordinator/bin/` mid-scan is the narrow
     # failure mode this leaves open (see review finding 3 on this file's dispatch).
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1; deleted rather than left alone so an
+    # inherited ancestor-process value cannot reintroduce the retired-name
+    # advisory.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     ml_bin, ch_bin = _plugin_layered_sources(tmp_path)
     bin_dst = settings_home() / "bin"
@@ -161,12 +165,16 @@ def test_provisioning_is_idempotent_across_a_reinstall(monkeypatch, tmp_path):
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     # Accepted, bounded non-hermeticity: this scans the live `coordinator/bin/`
-    # tree via CLAUDE_KLABAUTER_ROOT rather than a fixture. The assertions below are
-    # satisfied entirely from this test's own fixtures (ml_bin/ch_bin), so
-    # correctness doesn't depend on that directory's contents — only a
+    # tree via COORDINATOR_ENGINE_ROOT rather than a fixture. The assertions
+    # below are satisfied entirely from this test's own fixtures (ml_bin/ch_bin),
+    # so correctness doesn't depend on that directory's contents — only a
     # concurrent rename/delete under `coordinator/bin/` mid-scan is the narrow
     # failure mode this leaves open (see review finding 3 on this file's dispatch).
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1; deleted rather than left alone so an
+    # inherited ancestor-process value cannot reintroduce the retired-name
+    # advisory.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     ml_bin, ch_bin = _plugin_layered_sources(tmp_path)
     bin_dst = settings_home() / "bin"

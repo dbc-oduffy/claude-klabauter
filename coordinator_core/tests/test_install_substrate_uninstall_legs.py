@@ -508,7 +508,7 @@ def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib=True):
 
     (setup_src / "hello.py").write_text("# stub percolated file\n", encoding="utf-8")
 
-    claude_klabauter_root = tmp_path / "claude-klabauter-root"
+    claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
     # C14 closed the dual-read window: CLAUDE_KLABAUTER_ROOT no longer answers Rung 1, so
     # pinning it here resolved nothing and fell through to this machine's real
     # registry ladder. Deleted rather than left set, so an inherited value cannot
@@ -685,7 +685,7 @@ def test_substrate_run_manifest_resolves_off_claude_klabauter_root_not_plugin_ro
     ``plugin_root/lib`` — this reconstructs a competing, WRONG manifest at
     ``plugin_root/lib`` (a booby-trapped ``SETUP_TEMPLATE_FILES`` naming a file
     that does not exist anywhere on disk) and asserts run() both succeeds AND
-    installs the claude-klabauter-root manifest's real content, never the booby-trapped
+    installs the claude-klabauter-live-root manifest's real content, never the booby-trapped
     one — a prior version of this test built an identical fixture to the
     success-path test above (``plugin_root/lib`` absent in both) and so could
     not fail for the regression it named; this seeds a distinguishable
@@ -850,7 +850,7 @@ def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, mo
     (plugin_root / "templates").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
 
-    claude_klabauter_root = tmp_path / "claude-klabauter-root"  # no coordinator/lib under it
+    claude_klabauter_root = tmp_path / "claude-klabauter-live-root"  # no coordinator/lib under it
     claude_klabauter_root.mkdir()
     # C14 closed the dual-read window: CLAUDE_KLABAUTER_ROOT no longer answers Rung 1, so
     # pinning it here resolved nothing and fell through to this machine's real
@@ -863,7 +863,7 @@ def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, mo
 
 
 def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monkeypatch, capsys):
-    """The `.cmd`-twin claude-klabauter-root repoint inside `_install_bin_resolvers`
+    """The `.cmd`-twin claude-klabauter-live-root repoint inside `_install_bin_resolvers`
     (~3349) calls the real `coordinator_engine_root_with_class()` a *second*
     time (the first is run()'s own dual-anchor precondition at ~2517) and
     converts a `RuntimeError` from it into `SubstrateFatalError`. `run()`'s
@@ -881,14 +881,14 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
     (plugin_root / "templates" / "setup").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
 
-    claude_klabauter_root = tmp_path / "claude-klabauter-root"
+    claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
     (claude_klabauter_root / "coordinator" / "lib" / "claude-home").mkdir(parents=True)
 
     # First call (run()'s own dual-anchor precondition at ~741) succeeds and
     # resolves claude_klabauter_root normally; the second call — inside
     # _install_bin_resolvers, for the agent-forwarder .cmd-twin source dir —
     # is made to fail, so the genuine wiring under test actually executes:
-    # claude-klabauter-root failure -> SubstrateFatalError inside _install_bin_resolvers
+    # claude-klabauter-live-root failure -> SubstrateFatalError inside _install_bin_resolvers
     # -> caught by run()'s except clause.
     calls = {"n": 0}
 

@@ -379,9 +379,13 @@ def test_oracle_post_commit_tail_resolves_named_ops():
     assert "handoff.close_origin_stub" in entry["lookups"]
 
 
-def test_oracle_tail_ops_resolves_review_trail_write():
-    entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/ceremony/tail_ops.py")
-    assert "review_trail.write" in entry["lookups"]
+# test_oracle_tail_ops_resolves_review_trail_write removed 2026-08-25: tail_ops.py's
+# in-process review_trail.write wiring was removed 2026-08-23 (PM ruling, kill
+# review_trail.write) and stays removed even though the op itself was later readmitted
+# from suspension the same day -- see tail_ops.py's module docstring "Negative-spec"
+# entry and its "review_trail_write ... is likewise not pre-imported here" residue
+# comment. Re-wiring is a separate decision from the op's readmission; no production
+# call site resolves "review_trail.write" via get_op_handler/dispatch_message today.
 
 
 def test_oracle_guard_roster_ops_resolves_ported_advisory_hook_names():

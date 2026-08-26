@@ -49,6 +49,15 @@ discharged by an inline call to the existing native port
 `ops/ceremony/tail_ops.py :: cs_release_artifact`, wired into
 `run_close_commit`'s route by a later chunk (C5), not rebuilt as a directive
 either; see `state/kill-ledger.md` for the original removal record.
+`run_close_commit_and_release_claims` (this module, C5) is the wired route:
+it wraps `run_close_commit` and releases BOTH claim mechanisms hard
+constraint 4 and AC5 separately require — the per-path `session/scope.py ::
+release_committed_claims` (hard constraint 4) and the governing-plan
+artifact claim via `cs_release_artifact` (AC5) — unconditionally, on both
+the success and failure exit of the wrapped commit call, per DR-358's
+failure-path ruling. A caller of this rebuilt close route should call
+`run_close_commit_and_release_claims`, never `run_close_commit` directly —
+the latter releases neither claim (see its own docstring).
 
 Consumes (orchestrates, reimplements none):
     coordinator/bin/emit-cadence.py -> build_emit_cadence_directive's
@@ -149,6 +158,7 @@ from typing import Any, Dict, Iterable, NamedTuple, Optional, Sequence, Set, Uni
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
+from coordinator_core.session import scope as session_scope
 from coordinator_core.warm import skew as _skew
 from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
 from coordinator_core.win_portability import no_console_creationflags
@@ -249,7 +259,11 @@ def _spawn_git(repo_root: "Union[Path, str, None]", args: list[str]) -> "tuple[i
     tightened here, where a new raise would change a caller's contract."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), *args],
+            # `--no-optional-locks`: this funnel is read-only by contract (see
+            # docstring), so nothing routed through it has cause to take the
+            # index lock or rewrite a 4.9MB / 35k-entry index on a tree ~50
+            # sessions write concurrently. Same shape `archive_stamp.py` uses.
+            ["git", "-C", str(repo_root), "--no-optional-locks", *args],
             capture_output=True,
             text=True,
             timeout=30,
@@ -1131,12 +1145,14 @@ def run_close_commit(
     that.
 
     Governing-plan claim release (`d-release-plan-claim`'s DR-358 ruling,
-    `ops/ceremony/tail_ops.py :: cs_release_artifact`) is NOT called here —
-    C5 wires that call at both the success and failure exits of this
-    route, in whatever caller wraps this function; this function's own
-    return is `run_commit_pipeline`'s `PipelineResult`, unmodified, so a
-    wrapping caller can inspect success/failure and call the release
-    itself.
+    `ops/ceremony/tail_ops.py :: cs_release_artifact`) is NOT called here,
+    nor is hard constraint 4's per-path `release_committed_claims` — both
+    are wired by `run_close_commit_and_release_claims` (this module, C5),
+    the wrapper that calls this function and releases both claims at both
+    its success and failure exits; this function's own return is
+    `run_commit_pipeline`'s `PipelineResult`, unmodified. A caller closing a
+    session should call `run_close_commit_and_release_claims`, not this
+    function directly.
 
     Imports `run_commit_pipeline`/`PUSH_MODE_NEVER` lazily (mirrors
     `_raise_on_review_enum_values`'s own lazy import above) — this module is
@@ -1165,6 +1181,204 @@ def run_close_commit(
     )
 
 
+def _release_committed_path_claims(
+    worktree_root: "Union[Path, str]", session_id: str, stage_paths: "Sequence[str]"
+) -> None:
+    """Hard constraint 4's per-route wiring of `session/scope.py ::
+    release_committed_claims` — the PATH-claim mechanism (`touched.txt` `R`
+    events), never wired automatically by `run_commit_pipeline`/`git_native.py`
+    (84 hand-wired call sites repo-wide, zero there — hard constraint 4's own
+    count). Mirrors `post_commit_tail.py ::
+    _commit_and_push_origin_stub_close`'s own call shape exactly (same
+    `session_scope.release_committed_claims(sid, paths, cwd=...)` call,
+    wrapped the same best-effort way): a release failure must never surface
+    as this route's own failure — the commit (or its absence) is the durable
+    outcome; a retained stale path-claim is the safe residue, same fail-safe
+    direction that call site's own comment documents. Skips entirely when
+    `session_id` is falsy — releasing under an unknown sid would be a guess
+    at authorship, the one thing this mechanism refuses to do (same posture
+    as the precedent it copies)."""
+    if not session_id:
+        return
+    try:
+        session_scope.release_committed_claims(
+            session_id, list(stage_paths), cwd=str(worktree_root)
+        )
+    except Exception:
+        pass
+
+
+def _release_governing_plan_claim(
+    worktree_root: "Union[Path, str]", governing_plan_slug: Optional[str]
+) -> None:
+    """AC5 / DR-358's `d-release-plan-claim` ruling: releases the
+    governing-plan ARTIFACT claim (a different mechanism entirely from
+    `_release_committed_path_claims` above — see this function's own module
+    docstring addendum) via the existing native port `ops/ceremony/
+    tail_ops.py :: cs_release_artifact(common_dir, "plan",
+    governing_plan_slug)` — the same call shape `session/claims.py`'s own
+    lifecycle-comment names for the (now-deleted) `wsc_tail.py` Step 6 call
+    site this rebuilds. No new directive is added (DR-358 rules this
+    in-process call sufficient — a `directives[]` entry would add dispatch/
+    argv overhead for a call that is itself in-process and best-effort).
+
+    Skips entirely when `governing_plan_slug` is falsy (no governing plan
+    was ever resolved for this session — nothing to release). Otherwise
+    best-effort throughout: `cs_release_artifact` itself never raises (a
+    missing claim dir, a not-the-holder result, and any `OSError` are all
+    clean no-ops per its own docstring), but resolving `common_dir` from
+    `worktree_root` can (a non-repo path, a permission error) — caught here
+    so a claim-release failure never surfaces as this route's own failure,
+    the same fail-safe direction `_release_committed_path_claims` takes for
+    the sibling mechanism."""
+    if not governing_plan_slug:
+        return
+    try:
+        from coordinator_core.lifecycle import git_common_dir
+        from coordinator_core.ops.ceremony.tail_ops import cs_release_artifact
+
+        common_dir = git_common_dir(Path(worktree_root))
+        cs_release_artifact(Path(common_dir), "plan", governing_plan_slug)
+    except Exception:
+        pass
+
+
+def run_close_commit_and_release_claims(
+    worktree_root: "Union[Path, str]",
+    *,
+    session_id: str,
+    subject: str,
+    prose: str = "",
+    deleted_paths: "Sequence[str]" = (),
+    kept_entries: "Sequence[str]" = (),
+    trailers: str = "",
+    stage_paths: "Sequence[str]" = (),
+    caller_paths: "Optional[Set[str]]" = None,
+    on_committed: "Optional[Any]" = None,
+    deliverable_id: Optional[str] = None,
+    attributed_session_id: Optional[str] = None,
+    governing_plan_slug: Optional[str] = None,
+) -> Any:
+    """C5's route: `run_close_commit` wrapped with BOTH claim-release
+    mechanisms hard constraint 4 and AC5 each require — two SEPARATE claim
+    classes, not one mechanism doing double duty (staff-eng review, finding
+    1; see this module's docstring for the full account):
+
+      (a) hard constraint 4 — the per-PATH commit-claim mechanism
+          (`_release_committed_path_claims`, `session/scope.py ::
+          release_committed_claims`), released for `stage_paths` (the same
+          pathspec this call just asked `run_close_commit` to stage/commit).
+      (b) AC5 — the governing-plan ARTIFACT claim
+          (`_release_governing_plan_claim`, `ops/ceremony/tail_ops.py ::
+          cs_release_artifact`), released for `governing_plan_slug` when one
+          is supplied.
+
+    Every caller of this rebuilt close route should call THIS function, not
+    `run_close_commit` directly — a caller reaching `run_close_commit` on
+    its own bypasses both releases silently (exactly the invisible-loss
+    failure mode `docs/plans/2026-08-11-claim-release-and-the-gate-that-
+    cannot-clear.md` names, and precisely why nothing else in this codebase
+    catches the omission — see hard constraint 4's own text).
+
+    Both releases fire in a `finally`, per DR-358's failure-path ruling
+    (`d-release-plan-claim` section): "release fires unconditionally when
+    the ceremony's close sequence completes its close-time work, whether the
+    commit step itself succeeded or failed" — a claim held by a session that
+    failed to commit is exactly as abandoned as one held by a session that
+    committed cleanly. This holds whether `run_close_commit` returns a
+    failed `PipelineResult` OR raises outright: the `finally` runs either
+    way, and a raise still propagates to this function's own caller
+    unchanged (this function adds no new exception class and swallows
+    nothing from `run_close_commit` itself — only the two release calls
+    themselves are individually best-effort, per their own docstrings).
+
+    Returns `run_close_commit`'s own `PipelineResult`, unmodified — this
+    function decides nothing about commit shape, message text, or push mode;
+    see `run_close_commit`'s own docstring and this module's Negative-spec
+    for what it does not do.
+    """
+    try:
+        return run_close_commit(
+            worktree_root,
+            session_id=session_id,
+            subject=subject,
+            prose=prose,
+            deleted_paths=deleted_paths,
+            kept_entries=kept_entries,
+            trailers=trailers,
+            stage_paths=stage_paths,
+            caller_paths=caller_paths,
+            on_committed=on_committed,
+            deliverable_id=deliverable_id,
+            attributed_session_id=attributed_session_id,
+        )
+    finally:
+        _release_committed_path_claims(worktree_root, session_id, stage_paths)
+        _release_governing_plan_claim(worktree_root, governing_plan_slug)
+
+
+# ---------------------------------------------------------------------------
+# Step 3.35 — d-push-outstanding — wires push_outstanding() (C4b, 2026-08-25,
+# docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md)
+# ---------------------------------------------------------------------------
+
+
+def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, Any]:
+    """The "separate, later step" `run_close_commit`'s own docstring names
+    ("A caller wanting a push does so as its own separate, later step; this
+    function never pushes") -- `run_close_commit` always calls
+    `run_commit_pipeline` at `push_mode=PUSH_MODE_NEVER` (hard constraints
+    5/6), and nothing else in this module's Step 3 push-confirmation tree
+    issues `git push` either (`compute_push_landed_gate`'s own docstring:
+    "Never issues `git push` itself"). This function is that missing
+    producer, wired to `coordinator_core.ops.ceremony.push_outstanding.
+    push_outstanding` -- the SAME primitive the C4-registered `push.
+    outstanding` op exposes to the four DoE-owned cadence surfaces (see that
+    module's own docstring); this call reaches it in-process, since both
+    caller and callee live in this repo.
+
+    Lazily imports (mirrors `run_close_commit`'s own lazy import of
+    `commit_pipeline` immediately above -- this module is on the assemble
+    hot path and `commit_pipeline`/`push_outstanding` pull in the op-registry
+    side effects of the full commit-gate stack with them).
+
+    Best-effort: any exception raised while resolving or pushing is folded
+    into the returned dict as `push_status: "push-failed"` rather than
+    propagating -- a push failure must never crash the close sequence past
+    the point where claim release has already run (`run_close_commit_and_
+    release_claims`'s own `finally`), the same fail-safe direction
+    `_release_committed_path_claims`/`_release_governing_plan_claim` take
+    for the sibling best-effort releases in this module.
+
+    Returns a flattened dict -- `push_status` (the canonical `commit_
+    pipeline.derive_push_status` vocabulary), `acted`, `skipped`, `failed`,
+    `unconfirmed` -- the same shape the `push.outstanding` op handler
+    returns to ITS callers, so a report reader sees one vocabulary
+    regardless of which caller reached this primitive.
+    """
+    from coordinator_core.ops.ceremony.commit_pipeline import derive_push_status
+    from coordinator_core.ops.ceremony.push_outstanding import push_outstanding
+
+    try:
+        outcome = push_outstanding(worktree_root)
+    except Exception as exc:  # noqa: BLE001 - best-effort, never crash the close sequence
+        return {
+            "push_status": "push-failed",
+            "acted": [],
+            "skipped": [],
+            "failed": [f"push_outstanding raised: {exc}"],
+            "unconfirmed": [],
+        }
+
+    return {
+        "push_status": derive_push_status(outcome),
+        "acted": list(outcome.acted),
+        "skipped": list(outcome.skipped),
+        "failed": list(outcome.failed),
+        "unconfirmed": list(outcome.unconfirmed),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Step 3 push-confirmation branch tree — d-verify-push-landed (read-only)
 # ---------------------------------------------------------------------------
@@ -1176,6 +1390,11 @@ class PushLandedGate(NamedTuple):
     unpushed_shas: tuple[str, ...]
     summary_line: str
     declined: bool = False
+    #: The publish obligation is a named future checkpoint's, not this
+    #: pass's. Never interchangeable with `declined` (policy refused, so
+    #: nothing ever publishes) or `deferred` (a detached child may already
+    #: be mid-flight) — see `compute_push_landed_gate`'s own docstring.
+    cadence_pending: bool = False
 
 
 def compute_push_landed_gate(
@@ -1207,6 +1426,22 @@ def compute_push_landed_gate(
       NOT apply the `deferred` arm's "check again shortly" guidance here —
       that is precisely the collapse this separate field exists to
       prevent.
+    - `push_status == "cadence-pending"`: the commit was made under the
+      cadence regime (`run_close_commit`'s `push_mode=PUSH_MODE_NEVER`) and
+      its publish obligation belongs to a NAMED future checkpoint's own
+      `push_outstanding()` call. Like `declined`, nothing is in flight, so
+      the `deferred` arm's "check again shortly" guidance is wrong here
+      too; unlike `declined`, something WILL publish it, so this is not a
+      branch-policy refusal either. Querying `origin/<branch>` would find
+      the commit unpushed and report a failure for what is the normal,
+      correct cadence outcome — so this short-circuits without querying.
+      Producer note: `commit_pipeline` itself never emits this value (see
+      its canonical-vocabulary comment) — `derive_push_status` reports
+      `"not-attempted"`, which is silent on whether anything will ever
+      publish. Only a surface that KNOWS a checkpoint follows may promote
+      it, which is why this arm keys on the richer member rather than on
+      `"not-attempted"`: treating every `"not-attempted"` as cadence-
+      pending would silently pass a commit nothing is going to publish.
 
     Never issues `git push` itself — per the SKILL, only the detached push
     (or sync mode) owns that; this function only reads `git log`/`git
@@ -1227,6 +1462,18 @@ def compute_push_landed_gate(
             unpushed_shas=(),
             summary_line="Pushed to remote: declined (branch policy — push intentionally not attempted)",
             declined=True,
+        )
+
+    if push_status == "cadence-pending":
+        return PushLandedGate(
+            pushed=None,
+            deferred=False,
+            unpushed_shas=(),
+            summary_line=(
+                "Pushed to remote: cadence-pending "
+                "(publish deferred to the next cadence checkpoint — nothing in flight)"
+            ),
+            cadence_pending=True,
         )
 
     try:

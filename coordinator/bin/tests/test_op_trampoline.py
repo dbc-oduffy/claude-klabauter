@@ -99,7 +99,7 @@ class TestResolveRepoRootOrExit(unittest.TestCase):
 
 class TestResolveClaudeKlabauterRootOrExit(unittest.TestCase):
     def test_success_returns_root_and_updates_sys_path(self):
-        fake_root = os.path.join(os.getcwd(), "fake-claude-klabauter-root")
+        fake_root = os.path.join(os.getcwd(), "fake-claude-klabauter-live-root")
         original_path = list(sys.path)
         try:
             with mock.patch.object(
@@ -113,7 +113,7 @@ class TestResolveClaudeKlabauterRootOrExit(unittest.TestCase):
             sys.path[:] = original_path
 
     def test_success_does_not_duplicate_already_present_root(self):
-        fake_root = os.path.join(os.getcwd(), "fake-claude-klabauter-root-2")
+        fake_root = os.path.join(os.getcwd(), "fake-claude-klabauter-live-root-2")
         original_path = list(sys.path)
         sys.path.insert(0, fake_root)
         try:

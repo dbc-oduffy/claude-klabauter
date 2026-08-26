@@ -1289,13 +1289,24 @@ def test_swap_in_new_venv_survives_reader_via_junction_retarget(tmp_path):
     assert build_dir.exists()
     assert junction.is_junction(venv_dir)
     assert junction.junction_target(venv_dir).resolve() == build_dir.resolve()
-    # The vacated old generation's reclaim was attempted WHILE the reader's
-    # handle was still open (inside the swap call above) and deferred, per
-    # the Windows sharing-violation path -- it is left in place under its
-    # own original name, exactly the shape _sweep_orphaned_swap_dirs
-    # reclaims on the next rebuild.
-    assert old_gen.exists()
-    assert (old_gen / "bin" / "python").read_text() == "old-interpreter"
+    # The vacated old generation's reclaim is attempted WHILE the reader's
+    # handle is still open (inside the swap call above), and its OUTCOME is
+    # platform-split by _swap_in_new_venv's own contract: reclaimed
+    # immediately on POSIX, deferred on Windows. Asserting the Windows arm
+    # unconditionally (as this test did when it was authored on the Windows
+    # side of 787336c88) makes it red on every POSIX box.
+    if os.name == "nt":
+        # Deferred: the sharing violation leaves the generation in place
+        # under its own original name, exactly the shape
+        # _sweep_orphaned_swap_dirs reclaims on the next rebuild.
+        assert old_gen.exists()
+        assert (old_gen / "bin" / "python").read_text() == "old-interpreter"
+    else:
+        # Reclaimed immediately: unlinking a file another process holds open
+        # is legal here, so the directory entry goes while the reader's fd
+        # keeps reading the old inode -- which the assertion above already
+        # proved it does.
+        assert not old_gen.exists()
 
 
 def test_swap_in_new_venv_restores_previous_junction_on_create_failure(tmp_path, monkeypatch):

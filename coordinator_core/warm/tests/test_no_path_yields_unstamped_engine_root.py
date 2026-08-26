@@ -205,7 +205,7 @@ def test_locator_axis_keeps_self_location_deliberately():
 
 
 # ---------------------------------------------------------------------------
-# Rung: pointer file (`.claude-klabauter-root` / `.claude-klabauter-root`) — cc_invoke's
+# Rung: pointer file (`.claude-klabauter-root` / `.claude-klabauter-live-root`) — cc_invoke's
 # Rung 1.5, the one documented direct-return exception. Safe only because the
 # published pointer is written by the same install pass that registers a
 # STAMPED mirror (C5's `_resolve_published_engine` is what makes that
@@ -268,7 +268,7 @@ def test_cwd_rung_cannot_resolve_an_unstamped_tree_via_the_structural_gate(
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_dir))
 
     _register_published(registry.ml_dir, published_root)
-    (registry.ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (registry.ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
     assert root == str(live_root)

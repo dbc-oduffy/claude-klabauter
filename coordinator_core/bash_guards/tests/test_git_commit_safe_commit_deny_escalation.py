@@ -410,7 +410,8 @@ def test_solo_bare_commit_dash_a_excluded_from_new_deny(tmp_path):
 
 def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path):
     """The new deny's message leads with the runnable trailing-pathspec
-    form and the scoped-git-commit fallback, matching the register the
+    form -- the whole remedy since DR-344 retired scoped-git-commit --
+    matching the register the
     compound-shape deny already uses (guard-messaging.md § Register)."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
@@ -419,7 +420,11 @@ def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path):
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "the subject" in reason
     assert "git commit -m" in reason and " -- <paths>" in reason
-    assert "scoped-git-commit" in reason
+    # No `scoped-git-commit` fallback any more -- deleted under DR-344
+    # (2026-08-23) along with `ceremony.scoped_git_commit`. See the sibling
+    # note in test_check_blanket_git_add.py; the runnable trailing-pathspec
+    # form above is now the whole remedy.
+    assert "scoped-git-commit" not in reason
 
 
 def test_solo_bare_commit_probe_failure_fails_open_never_denies(monkeypatch, tmp_path):
@@ -781,3 +786,79 @@ def test_solo_bare_commit_advisory_still_fires_through_the_real_dispatcher_under
     out = dispatch.evaluate_payload_json(payload)
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Sequencer states (merge/cherry-pick/revert) -- the one shape where every
+# deny branch's remediation is rejected by git itself, so a deny is a dead end.
+# state/bug-backlog/2026-08-26-the-bare-commit-guard-has-no-merge-head-carve-out.yaml
+# ---------------------------------------------------------------------------
+
+
+def _commit_on(repo, branch, name, content):
+    subprocess.run(["git", "checkout", "-q", "-B", branch], cwd=repo, check=True)
+    (repo / name).write_text(content)
+    subprocess.run(["git", "add", name], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", f"{branch}:{name}"], cwd=repo, check=True)
+
+
+def _repo_mid_merge(tmp_path):
+    """A repo stopped inside a conflicted merge: MERGE_HEAD present, index
+    non-empty, and no `git add` anywhere in the command under test."""
+    repo = _init_repo(tmp_path)
+    (repo / "base.txt").write_text("base")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+    _commit_on(repo, "main", "conflict.txt", "ours")
+    subprocess.run(["git", "checkout", "-q", "-b", "side", "HEAD~1"], cwd=repo, check=True)
+    (repo / "conflict.txt").write_text("theirs")
+    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "side"], cwd=repo, check=True)
+    merge = subprocess.run(["git", "merge", "main"], cwd=repo, capture_output=True, text=True)
+    assert merge.returncode != 0, "fixture must stop inside a conflicted merge"
+    subprocess.run(["git", "checkout", "--theirs", "--", "conflict.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True)
+    assert (repo / ".git" / "MERGE_HEAD").exists()
+    return repo
+
+
+def test_bare_commit_mid_merge_is_advisory_not_deny(tmp_path):
+    """The deny's own remediation (`git commit -m x -- <paths>`) exits 128
+    during a merge, so denying leaves no runnable route. Downgraded to an
+    advisory that names the verb which actually finishes the operation."""
+    repo = _repo_mid_merge(tmp_path)
+    cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
+    assert _verdict(cmd) == "advisory"
+
+
+def test_bare_commit_mid_merge_advisory_names_the_continue_verb(tmp_path):
+    """The whole point of the downgrade: the operator learns the route."""
+    repo = _repo_mid_merge(tmp_path)
+    cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
+    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    context = json.dumps(out["hookSpecificOutput"])
+    assert "git merge --continue" in context
+    assert "MERGE_HEAD" in context
+
+
+def test_the_denys_own_remediation_really_is_unrunnable_mid_merge(tmp_path):
+    """Pins the premise this carve-out rests on, rather than asserting it in
+    prose: if git ever starts accepting a scoped commit mid-merge, the deny
+    stops being a dead end and this whole branch should be reconsidered."""
+    repo = _repo_mid_merge(tmp_path)
+    scoped = subprocess.run(
+        ["git", "commit", "-m", "x", "--", "conflict.txt"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert scoped.returncode != 0
+    assert "partial commit" in (scoped.stderr + scoped.stdout).lower()
+
+
+def test_bare_commit_outside_any_sequencer_still_denies(tmp_path):
+    """The carve-out must not retire the guard for ordinary bare commits --
+    same command shape, same non-empty index, no MERGE_HEAD."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "foreign.txt")
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+    cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
+    assert _verdict(cmd) == "deny"

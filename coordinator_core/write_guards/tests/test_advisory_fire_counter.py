@@ -101,7 +101,7 @@ class TestFlippedGuardProducesOneRecord:
     def test_one_record_appended(self, tmp_path, monkeypatch):
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_guard()], []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -118,7 +118,7 @@ class TestFlippedGuardProducesOneRecord:
     def test_no_record_when_session_id_unresolvable(self, tmp_path, monkeypatch):
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_guard()], []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -136,7 +136,7 @@ class TestWriteFailureLeavesEnvelopeUnchanged:
         original_mode = session_dir.stat().st_mode
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_guard()], []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
         try:
@@ -290,7 +290,7 @@ class TestRecordAdvisoryFireCountMatchesReturnedAdvisories:
         ]
         monkeypatch.setattr(engine, "_discover_guards", lambda: (guards, []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 
@@ -315,7 +315,7 @@ class TestRecordAdvisoryFireCountMatchesReturnedAdvisories:
         ]
         monkeypatch.setattr(engine, "_discover_guards", lambda: (guards, []))
         monkeypatch.setattr(
-            "coordinator_core.guard_advisory_counter.resolve_git_root",
+            "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
             lambda cwd=None: str(tmp_path),
         )
 

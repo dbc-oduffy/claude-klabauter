@@ -310,14 +310,22 @@ def reset_gitdir_memo() -> None:
 
 
 def resolve_gitdir(cwd: Optional[str] = None) -> Optional[Path]:
-    """`git rev-parse --git-dir`, resolved to an absolute path.
+    """The repo's git-dir for `cwd`, resolved to an absolute path.
 
-    Fail-open: `None` on any spawn error, timeout, non-zero exit, or empty
-    output (no git binary, `cwd` not inside a git repo, ...). Never raises.
-    `git rev-parse --git-dir` may print a path RELATIVE to `cwd` (`.git`,
-    `../.git`, `../.git/worktrees/<name>`) -- resolved against `cwd` (or the
-    process's own cwd when `cwd` is `None`) so callers get a path usable
-    regardless of this process's own working directory. Deliberately mirrors
+    NO LONGER A SPAWN. This delegated to `git rev-parse --git-dir` until
+    `d6e336ecb` (2026-08-16) repointed it at
+    `coordinator_core.git.repo_root.git_dir`, which WALKS the filesystem and
+    spawns only as a last resort; `38ada515b` (2026-08-19) then removed the
+    residual fallback. The docstring described the old mechanism for ten days
+    afterwards, and a test asserting "returns None when the git binary is
+    missing" went red against a function that had simply stopped needing git
+    -- see `tests/test_write_bump_marker.py`'s own note.
+
+    Fail-open is unchanged in substance: `None` when nothing resolves (no
+    `.git` at or above `cwd`, empty answer, ...). Never raises. A relative
+    answer is still resolved against `cwd` (or the process's own cwd when
+    `cwd` is `None`) so callers get a path usable regardless of this
+    process's working directory. Deliberately mirrors
     `coordinator_core.git.commit_trailers._resolve_git_dir` and
     `coordinator_core.write_guards.block_subagent_plan_body_write._resolve_git_dir`
     rather than inventing a third variant of the same nine lines.

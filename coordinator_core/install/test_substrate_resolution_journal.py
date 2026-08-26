@@ -411,7 +411,7 @@ def test_install_bin_resolvers_journals_all_four_shaped_clauses(tmp_path, monkey
     for f, _exec_bit in substrate._CH_FAMILY_FILES:
         _write(ch_bin / f, f"ch-src::{f}\n")
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     substrate._install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
@@ -456,7 +456,7 @@ def test_install_bin_resolvers_check_only_never_journals(tmp_path, monkeypatch):
         _write(ch_bin / f, f"ch-src::{f}\n")
         _write(bin_dst / f, f"ch-src::{f}\n")
 
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     # check_only mode: agent-helper forwarders will be "absent" (stale) and
     # raise SubstrateFatalError from _write_agent_forwarder's check branch —

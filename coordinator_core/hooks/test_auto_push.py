@@ -10,13 +10,14 @@ Tests assert:
   - extract_first_err()'s Trace-preamble-skipping fallback chain.
   - main() always exits 0, even on push failure or an injected internal
     exception (auto-push must never block a commit).
-  - run_push_with_retry()'s retry policy: ref-lock retries to MAX_ATTEMPTS then
-    logs; non-fast-forward retries to MAX_ATTEMPTS too, but checks a
-    read-only fetch+ancestor "already superseded" test each attempt (XB-12) --
-    resolving immediately and logging nothing when the commit already reached
-    origin, and logging FAILED only once retries are exhausted with no
-    supersession found. COORDINATOR_AUTO_PUSH_NO_SLEEP=1 is set for all retry
-    tests so gh-transient's seconds-scale backoff is never actually paid.
+  - run_push_with_retry()'s retry policy: ref-lock retries (re-pushing) to
+    MAX_ATTEMPTS then logs; non-fast-forward issues push_once exactly ONCE and
+    instead polls a read-only fetch+ancestor "already superseded" test on each
+    remaining attempt's backoff (XB-12) -- resolving as soon as a poll confirms
+    the commit already reached origin and logging nothing, and logging FAILED
+    only once every poll is exhausted with no supersession found.
+    COORDINATOR_AUTO_PUSH_NO_SLEEP=1 is set for all retry tests so
+    gh-transient's seconds-scale backoff is never actually paid.
 
 No test performs a real `git push` or touches a real remote --
 subprocess/push_once and os.fork are monkeypatched throughout, and repo dirs
@@ -159,6 +160,11 @@ CLASSIFY_CASES = [
         "fatal: push exceeded 120s and was killed "
         "(Could not read from remote repository: timed out)\n",
     ),
+    (
+        "spawn-error",
+        "fatal: git push failed to spawn: FileNotFoundError: "
+        "[WinError 2] The system cannot find the file specified\n",
+    ),
 ]
 
 
@@ -215,6 +221,134 @@ def test_push_once_timeout_message_classifies_as_timeout():
         "(Could not read from remote repository: timed out)"
     )
     assert auto_push.classify_error(stderr_text) == "timeout"
+
+
+def test_classify_error_spawn_error_not_in_retryable_classes():
+    # "spawn-error" is a NEW label carved out of what used to classify as
+    # "unknown" (2026-08-25 FileNotFoundError cluster) -- it must stay out of
+    # _RETRYABLE_CLASSES so the retry/timing decision is unchanged, only the
+    # banner-facing label improves.
+    assert "spawn-error" not in auto_push._RETRYABLE_CLASSES
+
+
+def test_push_once_spawn_failure_classifies_as_spawn_error(tmp_path, monkeypatch):
+    # A git binary that cannot be exec'd raises OSError out of subprocess.run
+    # BEFORE any git stderr exists. push_once must synthesize a message that
+    # round-trips through classify_error as "spawn-error" rather than the
+    # "unknown" that made the 2026-08-25 cluster read as an unclassified git
+    # rejection.
+    monkeypatch.setattr(auto_push, "git_exe", lambda: "git")
+
+    def _raise(cmd, **kwargs):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(auto_push.subprocess, "run", _raise)
+
+    ok, stderr_text = auto_push.push_once(str(tmp_path), "work/some-branch", False, False)
+
+    assert ok is False
+    assert auto_push.classify_error(stderr_text) == "spawn-error"
+    assert "FileNotFoundError" in stderr_text
+
+
+def test_push_once_unresolvable_git_never_spawns(tmp_path, monkeypatch):
+    # When git is not on PATH at all, push_once must report -- not raise, and
+    # not attempt a spawn it already knows will fail with [WinError 2].
+    monkeypatch.setattr(auto_push, "git_exe", lambda: None)
+
+    def _must_not_run(cmd, **kwargs):
+        raise AssertionError(f"spawned despite unresolvable git: {cmd!r}")
+
+    monkeypatch.setattr(auto_push.subprocess, "run", _must_not_run)
+
+    ok, stderr_text = auto_push.push_once(str(tmp_path), "work/some-branch", False, False)
+
+    assert ok is False
+    assert auto_push.classify_error(stderr_text) == "spawn-error"
+
+
+def test_git_exe_resolves_once_per_process(monkeypatch):
+    # The whole point of the resolver: three git spawns in one hook process
+    # pay ONE PATH walk, and an unresolvable git is cached as such rather than
+    # re-walked per spawn.
+    calls = []
+
+    import shutil
+
+    def _counting_which(name, *args, **kwargs):
+        calls.append(name)
+        return "/usr/bin/git"
+
+    monkeypatch.setattr(shutil, "which", _counting_which)
+    monkeypatch.setattr(auto_push, "_GIT_EXE_CACHE", auto_push._GIT_EXE_UNRESOLVED)
+
+    assert auto_push.git_exe() == "/usr/bin/git"
+    assert auto_push.git_exe() == "/usr/bin/git"
+    assert calls == ["git"]
+
+
+def test_git_exe_falls_back_when_path_cannot_resolve_git(monkeypatch, tmp_path):
+    """PATH is the thing that failed, so a PATH walk cannot be the whole answer.
+
+    Regression for the 2026-08-25 cluster. Reproduced in a spike: a respawned
+    child whose inherited PATH carries no Git directory gets
+    `shutil.which("git") is None`, and every bare-`git` spawn raises the same
+    `[WinError 2]`. Resolving through PATH alone renames that failure without
+    preventing it -- the push still does not happen.
+    """
+    import shutil
+
+    fake_git = tmp_path / "Git" / "cmd" / "git.exe"
+    fake_git.parent.mkdir(parents=True)
+    fake_git.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(auto_push.os, "name", "nt")
+    monkeypatch.setenv("GIT_EXEC_PATH", "")
+    monkeypatch.setenv("ProgramW6432", str(tmp_path))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    # Registry rung must miss so the well-known rung is the one under test.
+    monkeypatch.setattr(auto_push, "_GIT_EXE_CACHE", auto_push._GIT_EXE_UNRESOLVED)
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_winreg(name, *args, **kwargs):
+        if name == "winreg":
+            raise ImportError("no registry in this test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_winreg)
+
+    assert auto_push.git_exe() == str(fake_git)
+
+
+def test_git_exe_prefers_git_exec_path_when_git_itself_supplied_it(monkeypatch, tmp_path):
+    """When git invoked us, GIT_EXEC_PATH names the very git that did.
+
+    Measured exported into a git-spawned subprocess, but NOT documented --
+    `githooks(5)` names only "GIT_DIR, GIT_WORK_TREE, etc." -- so this is a
+    first rung on evidence and never the only one.
+    """
+    import shutil
+
+    exec_dir = tmp_path / "libexec" / "git-core"
+    exec_dir.mkdir(parents=True)
+    (exec_dir / "git.exe").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(auto_push.os, "name", "nt")
+    # Forward slashes: git reports GIT_EXEC_PATH posix-style even on Windows.
+    monkeypatch.setenv("GIT_EXEC_PATH", str(exec_dir).replace("\\", "/"))
+    monkeypatch.setattr(auto_push, "_GIT_EXE_CACHE", auto_push._GIT_EXE_UNRESOLVED)
+
+    assert auto_push.git_exe() == str(exec_dir / "git.exe")
+
+
+def test_git_exe_off_path_is_a_noop_off_windows(monkeypatch):
+    """The ladder is Windows-only -- POSIX keeps PATH resolution as the answer."""
+    monkeypatch.setattr(auto_push.os, "name", "posix")
+    assert auto_push._git_exe_off_path() is None
 
 
 # ---------------------------------------------------------------------------
@@ -781,11 +915,10 @@ def test_run_push_with_retry_ref_lock_retries_to_max_then_logs(monkeypatch, tmp_
 
 def test_run_push_with_retry_non_fast_forward_exhausts_when_never_superseded(monkeypatch, tmp_path):
     # A genuine, still-diverged non-fast-forward: _is_ancestor never confirms
-    # our commit reached origin by any path, so this must retry to
-    # MAX_ATTEMPTS (checking supersession each time) and then fail loud --
-    # exactly as the old "does not retry" test asserted for attempt count 1,
-    # except XB-12 changed the retry count from 1 to MAX_ATTEMPTS because a
-    # non-fast-forward rejection is no longer assumed unrecoverable on sight.
+    # our commit reached origin by any path. push_once is issued exactly
+    # once (never re-pushed); the remaining attempts poll supersession on
+    # the existing backoff, and once every poll comes back negative this
+    # fails loud, logging after MAX_ATTEMPTS.
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
     monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
@@ -802,12 +935,19 @@ def test_run_push_with_retry_non_fast_forward_exhausts_when_never_superseded(mon
         ("rev-parse", "work/foo"): "abc123",
         ("fetch", "origin", "work/foo"): "",
     }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "_is_ancestor", lambda root, sha, ref: False)
+    ancestor_calls = {"n": 0}
+
+    def _fake_is_ancestor(root, sha, ref):
+        ancestor_calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(auto_push, "_is_ancestor", _fake_is_ancestor)
     monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
 
     auto_push.run_push_with_retry(repo_root, "work/foo")
 
-    assert call_count["n"] == auto_push.MAX_ATTEMPTS
+    assert call_count["n"] == 1
+    assert ancestor_calls["n"] == auto_push.MAX_ATTEMPTS
     log_path = tmp_path / ".git" / "push-failures.log"
     assert log_path.exists()
     content = log_path.read_text()
@@ -851,12 +991,12 @@ def test_run_push_with_retry_non_fast_forward_resolves_immediately_when_supersed
     assert "work/foo" in captured.err
 
 
-def test_run_push_with_retry_non_fast_forward_retries_then_resolves(monkeypatch, tmp_path, capsys):
-    # First attempt: not yet superseded (peer's push hasn't landed on origin
-    # from our vantage point yet). Second attempt: push_once still rejects,
-    # but the supersession check now confirms our commit reached origin by
-    # then -- must stop retrying immediately (not grind to MAX_ATTEMPTS) and
-    # must not log a failure.
+def test_run_push_with_retry_non_fast_forward_polls_then_resolves(monkeypatch, tmp_path, capsys):
+    # First supersession check (right after the sole push_once call): not yet
+    # superseded (peer's push hasn't landed on origin from our vantage point
+    # yet). Second check, on the next attempt's poll: confirms our commit
+    # reached origin -- must stop polling immediately (not grind to
+    # MAX_ATTEMPTS), must NOT re-issue push_once, and must not log a failure.
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
     monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
@@ -883,7 +1023,7 @@ def test_run_push_with_retry_non_fast_forward_retries_then_resolves(monkeypatch,
 
     auto_push.run_push_with_retry(repo_root, "work/foo")
 
-    assert call_count["n"] == 2
+    assert call_count["n"] == 1
     assert ancestor_calls["n"] == 2
     log_path = tmp_path / ".git" / "push-failures.log"
     assert not log_path.exists()
@@ -1671,6 +1811,65 @@ def test_push_once_spawns_no_powershell_even_on_windows_ssh(monkeypatch, tmp_pat
     assert not any("powershell" in part or part == "pwsh" for part in lowered)
 
 
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        pytest.param(
+            lambda root: auto_push.push_once(root, "work/some-branch", False, False),
+            id="push_once",
+        ),
+        pytest.param(
+            lambda root: auto_push._run_git(root, ["rev-parse", "HEAD"]),
+            id="_run_git",
+        ),
+        pytest.param(
+            lambda root: auto_push._is_ancestor(root, "HEAD", "refs/remotes/origin/x"),
+            id="_is_ancestor",
+        ),
+    ],
+)
+def test_resolved_git_rides_executable_and_never_argv0(invoke, tmp_path, monkeypatch):
+    # The split is load-bearing in BOTH directions and neither half is style.
+    #
+    # `executable=` is what actually fixes the 2026-08-25 [WinError 2] cluster:
+    # the binary is located once, off PATH if need be, instead of re-derived by
+    # a spawn whose PATH is the thing that failed.
+    #
+    # The literal `"git"` argv head is what keeps this module VISIBLE to
+    # `coordinator_core/tests/test_shared_git_runner.py`, whose detector keys on
+    # exactly that literal (`git/run.py`'s negative spec states the key). Moving
+    # the resolved path into argv[0] silently drops a git-spawning module out of
+    # that gate's inventory -- and both of its registers are shrink-only and at
+    # their ceilings, so nothing catches the drop but this assertion.
+    resolved = "/nowhere/bin/git-resolved"
+    monkeypatch.setattr(auto_push, "git_exe", lambda: resolved)
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["executable"] = kwargs.get("executable")
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(auto_push.subprocess, "run", _fake_run)
+
+    invoke(str(tmp_path))
+
+    assert captured["cmd"][0] == "git", (
+        "the resolved binary belongs in executable=, not argv[0] -- argv[0] is "
+        "what the shared-git-runner gate keys on"
+    )
+    assert captured["executable"] == resolved, (
+        "git_exe()'s resolution must reach subprocess.run, or the spawn falls "
+        "back to the PATH lookup that produced the [WinError 2] cluster"
+    )
+
+
 # The real `_peer_commit_within_window`, captured before the autouse fixture
 # below patches the module attribute -- tests that exercise the predicate
 # itself restore this via `monkeypatch.setattr`.
@@ -2419,6 +2618,205 @@ def test_hold_window_takes_over_stale_record_with_dead_holder_no_duplicate(monke
 
 
 # ---------------------------------------------------------------------------
+# Divergence gate (C4): a branch already diverged from its upstream defers
+# to the pending record instead of pushing into a guaranteed non-fast-
+# forward wall. Real git repos throughout (no `_run_git`/object-store
+# monkeypatching) -- the whole point of `_branch_diverged_no_spawn` is a
+# real spawn-free read of the real object store, so faking that store would
+# test nothing.
+# ---------------------------------------------------------------------------
+
+def _real_git(args: list[str], cwd: Path) -> None:
+    result = subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+
+
+def _init_divergence_repo(tmp_path: Path, branch: str) -> Path:
+    """A real work repo on `branch`, with a real bare `origin` remote, one
+    commit already pushed (so `refs/remotes/origin/<branch>` exists
+    locally). Returns the work repo root."""
+    bare = tmp_path / "bare.git"
+    work = tmp_path / "work"
+    _real_git(["init", "--bare", "-q", str(bare)], tmp_path)
+    _real_git(["init", "-q", str(work)], tmp_path)
+    _real_git(["config", "user.email", "auto-push-c4@example.com"], work)
+    _real_git(["config", "user.name", "auto-push-c4"], work)
+    _real_git(["config", "commit.gpgsign", "false"], work)
+    _real_git(["checkout", "-q", "-b", branch], work)
+    (work / "f.txt").write_text("one\n", encoding="utf-8")
+    _real_git(["add", "f.txt"], work)
+    _real_git(["commit", "-q", "-m", "c1"], work)
+    _real_git(["remote", "add", "origin", str(bare)], work)
+    _real_git(["push", "-q", "-u", "origin", branch], work)
+    return work
+
+
+def test_branch_diverged_no_spawn_ahead_only_is_false(tmp_path):
+    work = _init_divergence_repo(tmp_path, "work/c4-ahead")
+    (work / "f.txt").write_text("two\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "c2 (local only)"], work)
+
+    assert auto_push._branch_diverged_no_spawn(str(work), "work/c4-ahead") is False
+
+
+def test_branch_diverged_no_spawn_ahead_and_behind_is_true(tmp_path):
+    bare = tmp_path / "bare.git"
+    work = _init_divergence_repo(tmp_path, "work/c4-diverged")
+
+    # A peer clones the bare remote and pushes a commit `work`'s tracking ref
+    # doesn't know about yet.
+    peer = tmp_path / "peer"
+    _real_git(["clone", "-q", str(bare), str(peer)], tmp_path)
+    _real_git(["config", "user.email", "peer@example.com"], peer)
+    _real_git(["config", "user.name", "peer"], peer)
+    _real_git(["config", "commit.gpgsign", "false"], peer)
+    _real_git(["checkout", "-q", "work/c4-diverged"], peer)
+    (peer / "f.txt").write_text("peer\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "peer commit"], peer)
+    _real_git(["push", "-q", "origin", "work/c4-diverged"], peer)
+
+    # `work` learns about the peer's tip (updates its remote-tracking ref)
+    # but does NOT merge it -- then commits its own divergent history on top
+    # of the OLD base.
+    _real_git(["fetch", "-q", "origin"], work)
+    (work / "f.txt").write_text("mine\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "our own divergent commit"], work)
+
+    assert auto_push._branch_diverged_no_spawn(str(work), "work/c4-diverged") is True
+
+
+def test_branch_diverged_no_spawn_no_remote_tracking_ref_is_false(tmp_path):
+    work = tmp_path / "work"
+    _real_git(["init", "-q", str(work)], tmp_path)
+    _real_git(["config", "user.email", "auto-push-c4@example.com"], work)
+    _real_git(["config", "user.name", "auto-push-c4"], work)
+    _real_git(["config", "commit.gpgsign", "false"], work)
+    _real_git(["checkout", "-q", "-b", "work/c4-new"], work)
+    (work / "f.txt").write_text("one\n", encoding="utf-8")
+    _real_git(["add", "f.txt"], work)
+    _real_git(["commit", "-q", "-m", "c1"], work)
+
+    assert auto_push._branch_diverged_no_spawn(str(work), "work/c4-new") is False
+
+
+@pytest.mark.real_peer_predicate
+def test_hold_window_diverged_branch_defers_no_push_no_sleep(monkeypatch, tmp_path):
+    """AC12/AC13/AC14: on a diverged branch, `_hold_window` writes/updates
+    the pending record and returns False -- no sleep, no push, no resident
+    child -- and the divergence gate must be reached (and win) even though
+    `_shared_branch_live_count` is shared and `_peer_commit_within_window`
+    would otherwise bypass the hold."""
+    branch = "work/c4-diverged-hold"
+    bare = tmp_path / "bare.git"
+    work = _init_divergence_repo(tmp_path, branch)
+    peer = tmp_path / "peer"
+    _real_git(["clone", "-q", str(bare), str(peer)], tmp_path)
+    _real_git(["config", "user.email", "peer@example.com"], peer)
+    _real_git(["config", "user.name", "peer"], peer)
+    _real_git(["config", "commit.gpgsign", "false"], peer)
+    _real_git(["checkout", "-q", branch], peer)
+    (peer / "f.txt").write_text("peer\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "peer commit"], peer)
+    _real_git(["push", "-q", "origin", branch], peer)
+    _real_git(["fetch", "-q", "origin"], work)
+    (work / "f.txt").write_text("mine\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "our own divergent commit"], work)
+
+    repo_root = str(work)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, b: 2)
+
+    sleep_calls = {"n": 0}
+    monkeypatch.setattr(auto_push.time, "sleep", lambda s: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
+
+    result = auto_push._hold_window(repo_root, branch)
+
+    assert result is False, "diverged branch must defer, not push"
+    assert sleep_calls["n"] == 0, "diverged path must never sleep"
+    record = auto_push._read_pending_record(repo_root)
+    assert record is not None, "diverged commit must end with a live pending record naming it"
+    assert record["branch"] == branch
+
+
+@pytest.mark.real_peer_predicate
+def test_hold_window_diverged_branch_n_commits_yield_one_deferred_record(monkeypatch, tmp_path):
+    """N commits on a diverged branch yield one deferred publish (one
+    updated record), not N attempted pushes."""
+    branch = "work/c4-diverged-n"
+    bare = tmp_path / "bare.git"
+    work = _init_divergence_repo(tmp_path, branch)
+    peer = tmp_path / "peer"
+    _real_git(["clone", "-q", str(bare), str(peer)], tmp_path)
+    _real_git(["config", "user.email", "peer@example.com"], peer)
+    _real_git(["config", "user.name", "peer"], peer)
+    _real_git(["config", "commit.gpgsign", "false"], peer)
+    _real_git(["checkout", "-q", branch], peer)
+    (peer / "f.txt").write_text("peer\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "peer commit"], peer)
+    _real_git(["push", "-q", "origin", branch], peer)
+    _real_git(["fetch", "-q", "origin"], work)
+
+    repo_root = str(work)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, b: 2)
+    push_calls = {"n": 0}
+    monkeypatch.setattr(auto_push, "push_once", lambda *a, **k: push_calls.__setitem__("n", push_calls["n"] + 1) or (True, ""))
+    monkeypatch.setattr(auto_push.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must never sleep")))
+
+    for i in range(3):
+        (work / "f.txt").write_text(f"mine {i}\n", encoding="utf-8")
+        _real_git(["commit", "-q", "-am", f"our divergent commit {i}"], work)
+        assert auto_push._hold_window(repo_root, branch) is False
+
+    assert push_calls["n"] == 0, "no push must be issued while diverged"
+    record = auto_push._read_pending_record(repo_root)
+    assert record is not None
+
+
+@pytest.mark.real_peer_predicate
+def test_hold_window_diverged_record_survives_session_death(monkeypatch, tmp_path):
+    """The record `_hold_window` writes on the diverged path must still be
+    takeover-able by `drain_pending_push`/`boot_sweep` if this session dies
+    -- i.e. it carries the same shape (branch/sha/hold_until/holder_pid) a
+    dead-holder takeover already reads (see
+    `test_hold_window_takes_over_stale_record_with_dead_holder_no_duplicate`)."""
+    branch = "work/c4-diverged-crash"
+    bare = tmp_path / "bare.git"
+    work = _init_divergence_repo(tmp_path, branch)
+    peer = tmp_path / "peer"
+    _real_git(["clone", "-q", str(bare), str(peer)], tmp_path)
+    _real_git(["config", "user.email", "peer@example.com"], peer)
+    _real_git(["config", "user.name", "peer"], peer)
+    _real_git(["config", "commit.gpgsign", "false"], peer)
+    _real_git(["checkout", "-q", branch], peer)
+    (peer / "f.txt").write_text("peer\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "peer commit"], peer)
+    _real_git(["push", "-q", "origin", branch], peer)
+    _real_git(["fetch", "-q", "origin"], work)
+    (work / "f.txt").write_text("mine\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "our own divergent commit"], work)
+
+    repo_root = str(work)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, b: 2)
+    monkeypatch.setattr(auto_push.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must never sleep")))
+
+    assert auto_push._hold_window(repo_root, branch) is False
+
+    record = auto_push._read_pending_record(repo_root)
+    assert record is not None
+    assert record["branch"] == branch
+    assert isinstance(record["sha"], str) and record["sha"]
+    assert isinstance(record["hold_until"], (int, float))
+    assert record["holder_pid"] == os.getpid()
+    # A later takeover call (simulating this session's death) must find a
+    # non-stale-yet record here -- staleness is `_record_is_stale`'s own
+    # concern (dead pid or hold_until + grace elapsed), already covered by
+    # the pre-existing takeover test; this assertion pins that the record
+    # this path writes is not ALREADY stale the instant it lands.
+    assert auto_push._record_is_stale(record, time.time()) is False
+
+
+# ---------------------------------------------------------------------------
 # Wire-path: the pending-push record's own respawn must survive being
 # ACTUALLY EXECUTED, not merely argv-shape-asserted -- the same blind spot
 # named in the 2026-08-01 import regression (see the "actually imports"
@@ -2626,7 +3024,7 @@ def _commit_env(claude_klabauter_root: str, *, suppress: bool) -> dict:
     env = dict(os.environ)
     env.pop(auto_push._ENV_SYNC, None)
     env.pop(auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH, None)
-    env["CLAUDE_KLABAUTER_ROOT"] = claude_klabauter_root
+    env["COORDINATOR_ENGINE_ROOT"] = claude_klabauter_root
     env[auto_push._ENV_NO_SLEEP] = "1"
     if suppress:
         env[auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH] = "1"

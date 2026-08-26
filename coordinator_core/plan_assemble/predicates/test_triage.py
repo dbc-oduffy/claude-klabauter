@@ -382,7 +382,15 @@ def test_admission_absent_everything_resolves_unsized_no_error(tmp_path):
 
 def test_admission_resolves_execution_from_inbound_plan_frontmatter(tmp_path):
     """AC1: with no `--sizing-object`, the FK is resolved off the inbound
-    artifact's own frontmatter via the shared predicate."""
+    artifact's own frontmatter via the shared predicate.
+
+    DR-346 (2026-08-21) retired the corpus-walk `origin_plan_id` resolution
+    leg — execution now resolves only off a stamped `governing_plan`
+    repo-relative path (`sizing_disposition.compute_sizing_disposition`'s
+    own precedence), never off `origin_plan_id` alone, which reads
+    `unsized` (a stranding, PM-ratified, not a defect). This fixture
+    carries both so it keeps exercising a real inbound-frontmatter FK
+    resolution under the current contract."""
     plan_path = tmp_path / "docs" / "plans" / "2026-08-20-a.md"
     plan_path.parent.mkdir(parents=True)
     plan_path.write_text(
@@ -391,11 +399,14 @@ def test_admission_resolves_execution_from_inbound_plan_frontmatter(tmp_path):
     )
     context = _context(
         tmp_path,
-        plan_frontmatter={"origin_plan_id": "pln-a-123456"},
+        plan_frontmatter={
+            "origin_plan_id": "pln-a-123456",
+            "governing_plan": "docs/plans/2026-08-20-a.md",
+        },
     )
     result = triage.admission(context)
     assert result["value"] == "execution"
-    assert "pln-a-123456" in result["basis"]
+    assert "governing_plan=docs/plans/2026-08-20-a.md" in result["basis"]
     assert result["warning"] is None
 
 

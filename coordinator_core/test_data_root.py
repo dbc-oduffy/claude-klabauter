@@ -132,7 +132,7 @@ def test_colocated_root_points_at_coordinator_dir():
 
 
 @pytest.mark.parametrize("dir_name", ["docs", "schemas", "snippets", "templates"])
-def test_both_data_root_entrypoints_agree(dir_name):
+def test_both_data_root_entrypoints_agree(dir_name, monkeypatch):
     """The two `data_root()` entrypoints — this module's own, and the bin/lib
     twin (`coordinator/bin/lib/coordinator_data_root.py`) — MUST resolve to
     the SAME path for the same `dir_name` (see both modules' "MUST stay
@@ -143,7 +143,40 @@ def test_both_data_root_entrypoints_agree(dir_name):
     genuine, un-mocked base. Every other test in both suites monkeypatches
     `_colocated_root` away, which is exactly why the real base went untested
     and the divergence shipped unnoticed.
+
+    `REPO_DOE_CLAUDE`/`DOE_ROOT` are cleared here, deliberately: this module's
+    own docstring documents that its rung 2 delegates to
+    `coordinator_doe_root()`, whose DR-071 order checks the env override
+    BEFORE the codename-free ladder, while the bin/lib twin's rung 1.5
+    (`_cdr_codename_free_root()`) runs BEFORE it ever calls
+    `coordinator_registry.doe_root()` — see that module's own
+    `test_codename_free_ladder_wins_before_registry_rung_real_delegation`,
+    which pins the opposite order as intentional. So with the env override
+    set, the two entrypoints legitimately consult it at different ranks and
+    can diverge by design, not by the co-located-namespace bug this test
+    exists to catch. Clearing it isolates the property this test actually
+    pins (namespace parity) from that documented, separately-pinned
+    precedence divergence. Without this, the test is flaky-by-environment:
+    it only fails on a machine/session where the operator override happens
+    to be set (see REPO_DOE_CLAUDE being exported into every login shell per
+    coordinator_core/install/sandbox_check.py AC2).
     """
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("DOE_ROOT", raising=False)
+
+    # The quarantine's throwaway DoE stub (`_build_stub_doe_root` in
+    # coordinator_core/conftest.py) seeds only the registry manifest file —
+    # which incidentally creates `coordinator/schemas/` as a side effect —
+    # not the docs/snippets/templates directories this parametrization also
+    # covers. Minting the missing one here, inside the already-quarantined
+    # per-test stub, keeps that fixture's own seed list narrow (its docstring
+    # is explicit: "an explicit named tuple ... never a directory copy") while
+    # giving every parametrized dir_name, not just "schemas", something both
+    # entrypoints can actually agree on.
+    doe_for_seed = dr_mod._resolve_doe_root()
+    if doe_for_seed:
+        (Path(doe_for_seed) / "coordinator" / dir_name).mkdir(parents=True, exist_ok=True)
+
     if str(_BIN_LIB_DIR) not in sys.path:
         sys.path.insert(0, str(_BIN_LIB_DIR))
     import coordinator_data_root as cdr_mod  # noqa: PLC0415

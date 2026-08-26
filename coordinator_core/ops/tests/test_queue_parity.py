@@ -43,20 +43,26 @@ from typing import Optional
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import guard — fires ALL @register_op(...) side-effects including queue.append
-# and queue.promote. MUST precede all test functions.
+# Dispatchability guard — MUST precede all test functions.
 # Lesson: universal-registry-completeness-tests-ov — import coordinator_core.ops
-# FIRST, then assert non-empty registry BEFORE any per-op assertion.
+# FIRST, then guard the ops this module exercises BEFORE any per-op assertion.
+#
+# The guard is `resolves(...)`, not a non-empty `_REGISTRY`. Registration went
+# LAZY-ONLY on 2026-08-22 (docs/plans/2026-08-22-the-import-path-costs-nothing.md
+# § C3): importing `coordinator_core.ops` fires no `@register_op` decorator, so
+# `_REGISTRY` is legitimately EMPTY at this point and the old
+# `assert len(_REGISTRY) > 0` — written for eager mode — failed at COLLECTION,
+# taking this whole module down with a message ("all @register_op decorators
+# must have fired at module import time") stating a contract that had been
+# deliberately retired. `resolves()` is the lazy-mode equivalent and is exactly
+# what that plan's § C3 names as the correct assertion here; the empty-registry
+# read it excludes is this one.
 # ---------------------------------------------------------------------------
 import coordinator_core.ops  # noqa: F401 — kept so an import failure surfaces here; registers nothing (lazy-only since 2026-08-22)
 
 from coordinator_core.ipc import _REGISTRY  # noqa: F401 — retained for per-test reads
 from coordinator_core.ops._registry_map import resolves
 
-assert len(_REGISTRY) > 0, (
-    "registry is empty after 'import coordinator_core.ops' — "
-    "all @register_op decorators must have fired at module import time"
-)
 assert resolves("queue.append"), (
     "dispatchability guard failed: 'queue.append' not in _REGISTRY — "
     "coordinator_core.ops.queue_append is neither in OP_MODULE_MAP nor already registered"
@@ -1509,13 +1515,13 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
         import coordinator_core.ops.queue_promote as _qp_mod
 
         doe_root = tmp_path / "doe-claude-root"
-        claude_klabauter_root = tmp_path / "claude-klabauter-root"
+        claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
         doe_root.mkdir()
         claude_klabauter_root.mkdir()
         assert doe_root != claude_klabauter_root
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
-        monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
         monkeypatch.setattr(_qp_mod, "coordinator_doe_root", lambda: str(doe_root))
         monkeypatch.setattr(
             _qp_mod,

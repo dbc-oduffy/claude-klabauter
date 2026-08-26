@@ -89,7 +89,7 @@ class ShipVerdict:
 def _resolve_state_root() -> Optional[Path]:
     """Resolve ``<claude-klabauter-repo-root>/state`` for the leg-3 emission-snapshot read.
 
-    Delegates to the same canonical claude-klabauter-root resolver
+    Delegates to the same canonical claude-klabauter-live-root resolver
     ``coordinator_core.ops.emit.resolvers._resolve_central_state_root`` wraps
     (``coordinator_core.engine_root.coordinator_engine_root``) rather than hardcoding
     ``state/cockpit-emission.json`` relative to cwd. Returns None (never raises) on any

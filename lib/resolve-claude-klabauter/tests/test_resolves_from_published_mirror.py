@@ -3,16 +3,16 @@ coordinator/lib/resolve-claude-klabauter/tests/test_resolves_from_published_mirr
 
 Chunk C2 (docs/plans/2026-08-16-one-engine-for-the-whole-box.md): proves that
 a process whose LIVE-TREE rungs are unreachable — no ``CLAUDE_KLABAUTER_ROOT`` env var,
-no resolvable ``repos.claude_klabauter`` registry key, no ``.claude-klabauter-root``
+no resolvable ``repos.claude_klabauter`` registry key, no ``.claude-klabauter-live-root``
 sentinel — can still resolve and EXECUTE a real op sourced entirely from the
 published engine mirror (``repos.claude_klabauter``).
 
 "The files are published, therefore it resolves" is exactly the claim this
-row exists to refuse. Pointing ``CLAUDE_KLABAUTER_ROOT``/``.claude-klabauter-root`` AT the mirror
+row exists to refuse. Pointing ``CLAUDE_KLABAUTER_ROOT``/``.claude-klabauter-live-root`` AT the mirror
 would prove resolution but not unreachability — Rung 1 short-circuits before
 any gate runs. This test instead builds a synthetic settings-home whose
 registry carries ONLY ``repos.claude_klabauter`` (no ``claude_klabauter`` key,
-no ``.claude-klabauter-root`` file), points ``MACHINE_LOCAL_REGISTRY_DIR`` at it, and
+no ``.claude-klabauter-live-root`` file), points ``MACHINE_LOCAL_REGISTRY_DIR`` at it, and
 clears ``CLAUDE_KLABAUTER_ROOT``/``CLAUDE_PROJECT_DIR`` from the child env — so rungs
 1/1.5/2 all genuinely miss and only the published rung can answer. It then
 loads the MIRROR's own ``coordinator_core/claude_klabauter_root.py`` (never

@@ -74,6 +74,7 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 import cc_invoke as _mod  # noqa: E402  (import after path setup)
+import engine_bootstrap as _engine_bootstrap_mod  # noqa: E402  (import after path setup)
 
 _OP = "session.boot_sweep"
 
@@ -581,7 +582,7 @@ class TestRegistryReadTimeoutDistinguishedFromAbsentKey(unittest.TestCase):
             "  COORDINATOR_ENGINE_ROOT could not be resolved via any rung below.\n"
             "  Resolution ladder (in order):\n"
             "    1. COORDINATOR_ENGINE_ROOT environment variable\n"
-            "    2. <settings-home>/machine-local/.claude-klabauter-root pointer file\n"
+            "    2. <settings-home>/machine-local/.claude-klabauter-live-root pointer file\n"
             "    3. `machine-local get repos.claude_klabauter` registry entry\n"
             "    4. coordinator_core.invoke importable from the resolved root\n"
             "  Remediation: clone claude-klabauter as a sibling repo "
@@ -606,9 +607,11 @@ class TestRegistryReadTimeoutDistinguishedFromAbsentKey(unittest.TestCase):
         self,
     ) -> None:
         with unittest.mock.patch.object(
-            _mod, "_machine_local_get", side_effect=_mod._RegistryReadTimeout("registry timed out")
+            _engine_bootstrap_mod,
+            "_machine_local_get",
+            side_effect=_mod._RegistryReadTimeout("registry timed out"),
         ), unittest.mock.patch.object(
-            _mod, "_walk_up_to_checkout", return_value=None
+            _engine_bootstrap_mod, "_walk_up_to_checkout", return_value=None
         ), unittest.mock.patch.dict(_mod.os.environ, {}, clear=False):
             # Rung 1 reads the NEW name since the engine-root rename closed the dual-read
             # window; popping only the old one left an ambient COORDINATOR_ENGINE_ROOT

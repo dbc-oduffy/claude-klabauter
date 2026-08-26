@@ -842,8 +842,6 @@ class TestReviewedRangeOffer:
         )
 
     def test_ac1_symbolic_endpoint_offers_resolved_40_hex_range(self, tmp_path, monkeypatch):
-        import coordinator_core.ops.review_trail_write as review_trail_write
-
         left_sha = "a" * 40
         right_sha = "b" * 40
 
@@ -854,7 +852,7 @@ class TestReviewedRangeOffer:
                 return right_sha
             raise ValueError(f"unexpected token {token!r}")
 
-        monkeypatch.setattr(review_trail_write, "_resolve_ref_to_sha", fake_resolve)
+        monkeypatch.setattr(guard, "_resolve_ref_to_sha", fake_resolve)
 
         result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
         assert result is not None
@@ -880,10 +878,8 @@ class TestReviewedRangeOffer:
         assert "~1.." not in text
 
     def test_ac4_every_branch_is_an_advisory_never_a_deny_or_mutation(self, tmp_path, monkeypatch):
-        import coordinator_core.ops.review_trail_write as review_trail_write
-
         monkeypatch.setattr(
-            review_trail_write, "_resolve_ref_to_sha", lambda token, cwd: "d" * 40
+            guard, "_resolve_ref_to_sha", lambda token, cwd: "d" * 40
         )
         for value in ("a65e39850^..HEAD", "e" * 40, "working-tree:some/path"):
             fp = self._sidecar_path(tmp_path)
@@ -906,12 +902,10 @@ class TestReviewedRangeOffer:
     def test_ac6_resolver_failure_degrades_to_pre_existing_advisory_text(
         self, tmp_path, monkeypatch
     ):
-        import coordinator_core.ops.review_trail_write as review_trail_write
-
         def broken_resolve(token, cwd):
             raise RuntimeError("git binary not found")
 
-        monkeypatch.setattr(review_trail_write, "_resolve_ref_to_sha", broken_resolve)
+        monkeypatch.setattr(guard, "_resolve_ref_to_sha", broken_resolve)
 
         result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
         assert result is not None

@@ -149,6 +149,7 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.lifecycle_constants import (
@@ -674,19 +675,16 @@ def relocate_candidates(
     return moved, failed
 
 
-def _git(worktree: Path, args: List[str]) -> subprocess.CompletedProcess:
-    """The one subprocess seam this module uses for its two MUTATING git
-    calls (`add -A`, `commit`) — never a query.
-    `no_console_creationflags()` suppresses the Windows conhost popup a
-    child process otherwise allocates (this repo's first-class platform).
+def _git(worktree: Path, args: List[str]) -> GitResult:
+    """The one git seam this module uses for its two MUTATING git calls
+    (`add -A`, `commit`) — never a query.
+
+    A thin alias for the shared runner, which owns the console-popup
+    suppression this used to spell itself and supplies the bound this
+    function never carried at all. Callers read `.returncode`/`.stdout`/
+    `.stderr`, which `GitResult` and `CompletedProcess` share.
     """
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(worktree),
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+    return run_git(args, cwd=str(worktree))
 
 
 def _commit_relocations(worktree: Path, moved: List[dict]) -> dict:

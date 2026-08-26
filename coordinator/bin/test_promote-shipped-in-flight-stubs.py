@@ -9,7 +9,7 @@ propagation itself was not independently asserted anywhere in that diff. The
 ops-module layer (coordinator_core/ops/test_promote_shipped_in_flight_stubs.py)
 is well tested; this file closes the trampoline-layer gap.
 
-Hermeticity: fakes `cc_invoke._resolve_claude_klabauter_root` (seeded into
+Hermeticity: fakes `cc_invoke.require_dispatch_engine_on_path` (seeded into
 `sys.modules["cc_invoke"]` before import, mirroring
 test_close_origin_stub_on_ship.py's pattern) so no real engine-root
 resolution runs, and fakes
@@ -39,14 +39,14 @@ _ABSENT = object()
 
 
 def _install_fakes(op_main_fn):
-    """Seed sys.modules with a fake `cc_invoke` (so `_resolve_claude_klabauter_root`
+    """Seed sys.modules with a fake `cc_invoke` (so `require_dispatch_engine_on_path`
     never does real engine-root resolution) and a fake
     `coordinator_core.ops.promote_shipped_in_flight_stubs` (so `main()`'s
     return value is fully controlled). Returns the prior sys.modules entries
     for both names — hand them to `_restore_fakes` in a `finally`.
     """
     fake_cc_invoke = types.ModuleType("cc_invoke")
-    fake_cc_invoke._resolve_claude_klabauter_root = lambda: "/nonexistent/fake-claude-klabauter-root"
+    fake_cc_invoke.require_dispatch_engine_on_path = lambda: "/nonexistent/fake-claude-klabauter-live-root"
     prior_cc_invoke = sys.modules.get("cc_invoke", _ABSENT)
     sys.modules["cc_invoke"] = fake_cc_invoke
 

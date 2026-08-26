@@ -23,14 +23,18 @@ from __future__ import annotations
 import inspect
 import re
 
-# IMPORTANT: coordinator_core.ops MUST be imported before coordinator_core.ipc._REGISTRY
-# is read. Importing coordinator_core.ops triggers the register_op() side-effects that
-# populate _REGISTRY. Importing coordinator_core.ipc alone leaves _REGISTRY == {} and
-# makes any registry-size assertion vacuously green (the Staff Engineer F0 — the vacuous-pass hazard).
-import coordinator_core.ops  # noqa: F401 — import for register_op side-effects
+# IMPORTANT: coordinator_core.ops._eager_import_all() MUST run before coordinator_core.ipc._REGISTRY
+# is read. Since the 2026-08-22 lazy-ops-unconditional change, a bare `import
+# coordinator_core.ops` no longer triggers any register_op() side-effects — package-init
+# registers nothing at all. Only _eager_import_all() (or a targeted per-op import) populates
+# _REGISTRY. Skipping this leaves _REGISTRY == {} and makes any registry-size assertion
+# vacuously green (the Staff Engineer F0 — the vacuous-pass hazard).
+import coordinator_core.ops
 import coordinator_core.ops.fleet.memo_draft
 import coordinator_core.ops.fleet.memo_compose
 import coordinator_core.ipc
+
+coordinator_core.ops._eager_import_all()
 
 import pytest
 

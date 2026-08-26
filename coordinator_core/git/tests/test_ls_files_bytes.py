@@ -21,6 +21,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.git.ls_files import tracked_files
+from coordinator_core.git import ls_files_bytes
 from coordinator_core.git.ls_files_bytes import (
     _tracked_files_bytes_cached,
     tracked_files_bytes,
@@ -96,15 +97,16 @@ def test_one_spawn_per_root_pathspec_pair(repo: Path, monkeypatch: pytest.Monkey
     """The lru_cache contract AC3's three-spawn budget rests on."""
     _tracked_files_bytes_cached.cache_clear()
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_run_git = ls_files_bytes.run_git
 
-    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(list(argv))
-        return real_run(argv, *args, **kwargs)
+    def counting_run_git(args, *rest, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return real_run_git(args, *rest, **kwargs)
 
-    monkeypatch.setattr(
-        "coordinator_core.git.ls_files_bytes.subprocess.run", counting_run
-    )
+    # The observed seam is `run_git`, not `subprocess.run`: this module spawns
+    # through `coordinator_core.git.run` now, and the budget these tests pin is
+    # one SPAWN per (root, pathspec) -- one run_git call is exactly one spawn.
+    monkeypatch.setattr(ls_files_bytes, "run_git", counting_run_git)
     tracked_files_bytes(repo)
     tracked_files_bytes(repo)
     tracked_files_bytes(repo)
@@ -117,19 +119,19 @@ def test_argv_convention_matches_the_sibling_module(
     _tracked_files_bytes_cached.cache_clear()
     seen_argv: list[str] = []
     seen_kwargs: dict[str, object] = {}
-    real_run = subprocess.run
+    real_run_git = ls_files_bytes.run_git
 
-    def capturing_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
-        seen_argv.extend(str(a) for a in argv)
+    def capturing_run_git(args, *rest, **kwargs):  # type: ignore[no-untyped-def]
+        seen_argv.extend(str(a) for a in args)
         seen_kwargs.update(kwargs)
-        return real_run(argv, *args, **kwargs)
+        return real_run_git(args, *rest, **kwargs)
 
-    monkeypatch.setattr(
-        "coordinator_core.git.ls_files_bytes.subprocess.run", capturing_run
-    )
+    monkeypatch.setattr(ls_files_bytes, "run_git", capturing_run_git)
     tracked_files_bytes(repo, "*.py")
 
-    assert seen_argv[1:] == [
+    # No leading "git": `run_git` takes the subcommand and its arguments, and
+    # owns the binary itself.
+    assert seen_argv == [
         "-C",
         str(Path(repo).resolve()),
         "ls-files",
@@ -137,12 +139,13 @@ def test_argv_convention_matches_the_sibling_module(
         "--",
         "*.py",
     ]
-    assert "text" not in seen_kwargs and seen_kwargs.get("encoding") is None, (
-        "a text-mode subprocess would translate newlines and defeat the "
-        "byte-exactness this module exists for"
+    assert seen_kwargs.get("binary") is True, (
+        "without binary=True this module reads GitResult.stdout, which decodes "
+        "with errors='replace' and defeats the byte-exactness it exists for"
     )
-    assert seen_kwargs.get("stdin") is subprocess.DEVNULL
-    assert seen_kwargs.get("timeout") == 10
+    # No `timeout=`: the bound is `run.LOCAL_PLUMBING_BUDGET_SECS`, and a
+    # module-private number here is exactly what test_shared_git_runner exists
+    # to stop growing back.
 
 
 def test_use_cache_false_sees_files_added_after_the_first_cached_call(
@@ -179,15 +182,16 @@ def test_use_cache_false_never_populates_or_reads_the_cache(
     cached call for the same (repo_root, pathspec)."""
     _tracked_files_bytes_cached.cache_clear()
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_run_git = ls_files_bytes.run_git
 
-    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(list(argv))
-        return real_run(argv, *args, **kwargs)
+    def counting_run_git(args, *rest, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return real_run_git(args, *rest, **kwargs)
 
-    monkeypatch.setattr(
-        "coordinator_core.git.ls_files_bytes.subprocess.run", counting_run
-    )
+    # The observed seam is `run_git`, not `subprocess.run`: this module spawns
+    # through `coordinator_core.git.run` now, and the budget these tests pin is
+    # one SPAWN per (root, pathspec) -- one run_git call is exactly one spawn.
+    monkeypatch.setattr(ls_files_bytes, "run_git", counting_run_git)
     tracked_files_bytes(repo, use_cache=False)
     tracked_files_bytes(repo, use_cache=False)
     tracked_files_bytes(repo, use_cache=False)

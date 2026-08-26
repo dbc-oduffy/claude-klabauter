@@ -409,7 +409,7 @@ def _js_normalize(repo_root: Path) -> Tuple[int, str, str]:
         )
     env = {
         **os.environ,
-        "CLAUDE_KLABAUTER_ROOT": str(repo_root / "__fake_claude_klabauter_nonexistent"),
+        "COORDINATOR_ENGINE_ROOT": str(repo_root / "__fake_claude_klabauter_nonexistent"),
         # PYTHONSAFEPATH=1: prevents '' (cwd) from being prepended to sys.path so
         # `import coordinator_core.client` fails in the seamPresent() check even when
         # pytest is invoked from inside the project directory.  Requires Python ≥ 3.11.

@@ -11,6 +11,7 @@ fixture then remove exactly one real thing and assert the report flips.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -21,7 +22,10 @@ from coordinator_core.install.settings_home_report import (
     expected_forwarders,
     format_report_lines,
 )
-from coordinator_core.install.substrate import _AGENT_FORWARDER_MARKER
+from coordinator_core.install.substrate import (
+    _AGENT_FORWARDER_MARKER,
+    BYTE_COPIED_BIN_SOURCES,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -31,7 +35,7 @@ _FOREIGN_MARKER = "from _resolve_claude_klabauter import exec_cli"
 def _populate_full_settings_home(root: Path) -> Path:
     sh = root / ".coordinator-claude-settings"
     (sh / "machine-local").mkdir(parents=True)
-    (sh / "machine-local" / ".claude-klabauter-root").write_text("x")
+    (sh / "machine-local" / ".claude-klabauter-live-root").write_text("x")
     (sh / "bin").mkdir()
     (sh / "bin" / "_resolve_claude_klabauter.py").write_text("x")
     (sh / "coordinator-whoami").mkdir()
@@ -242,6 +246,97 @@ def test_door_owned_check_does_not_cover_unrelated_corrupt_forwarders(
 
     assert other in report.forwarder_unverified
     assert other not in report.forwarder_door_owned
+    assert not report.complete
+
+
+_BYTE_COPIED_NAME = "claude-doe"
+
+_byte_copied_is_a_forwarder_slot = pytest.mark.skipif(
+    os.name == "nt",
+    reason="claude-doe is excluded from the Windows forwarder set "
+    "(substrate._AGENT_HELPER_RESERVED_NAMES) -- the byte-copy arm has no slot there",
+)
+
+
+def _land_byte_copied_member(sh: Path, claude_klabauter_root: Path, *, body: bytes | None = None) -> None:
+    """Overwrite the byte-copied member's slot the way the installer leaves
+    it: the wrapper SOURCE's own bytes, copied through the
+    `~/.local/bin/claude-doe` symlink onto the settings-home file
+    (`maximalist` Step 3.5b + `ops.install_claude_doe_wrapper`)."""
+    src = claude_klabauter_root.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
+    (sh / "bin" / _BYTE_COPIED_NAME).write_bytes(src.read_bytes() if body is None else body)
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_byte_copied_member_matching_this_roots_source_counts_present(
+    tmp_path: Path, claude_klabauter_root: Path
+) -> None:
+    """machine-b, 2026-08-26: every install run ended
+    `FAIL bin/ forwarders: 383/384 verified -- body not this root's: claude-doe`,
+    with a remediation ("re-run scripts/setup.py") that reproduced it exactly.
+    The install was correct: `claude-doe` is delivered by BYTE COPY, so its
+    body can never carry the generated trampoline's marker. Bytes identical to
+    this root's source ARE the verification for that delivery shape.
+    """
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+    _land_byte_copied_member(sh, claude_klabauter_root)
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert _BYTE_COPIED_NAME not in report.forwarder_unverified
+    assert report.forwarder_byte_copied == [_BYTE_COPIED_NAME]
+    assert report.forwarder_present == report.forwarder_expected
+    assert report.complete
+    assert any(
+        "byte-copied" in line and _BYTE_COPIED_NAME in line
+        for line in format_report_lines(report)
+    )
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_byte_copied_member_diverging_from_this_roots_source_is_unverified(
+    tmp_path: Path, claude_klabauter_root: Path
+) -> None:
+    """The other arm -- the real signal this check exists for. A byte copy
+    landed by a DIFFERENT engine root (or a truncated/edited one) diverges
+    from this root's source bytes and must still report unverified, exactly
+    as a foreign-root trampoline does. Byte-copy delivery buys a different
+    oracle, never an exemption.
+    """
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+    src = claude_klabauter_root.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
+    _land_byte_copied_member(sh, claude_klabauter_root, body=src.read_bytes() + b"\n# another root's copy\n")
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert report.forwarder_byte_copied == []
+    assert _BYTE_COPIED_NAME in report.forwarder_unverified
+    assert not report.complete
+    assert any(
+        "body not this root's" in line and _BYTE_COPIED_NAME in line
+        for line in format_report_lines(report)
+    )
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_byte_copy_arm_is_scoped_to_the_declared_member(
+    tmp_path: Path, claude_klabauter_root: Path
+) -> None:
+    """Scoped by NAME, like `_is_door_owned_forwarder_slot`: an unrelated
+    slot holding the wrapper's bytes is a corruption, not a byte-copied
+    member, and must fail verification."""
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+    other = next(n for n in sorted(expected_forwarders(claude_klabauter_root)) if n != _BYTE_COPIED_NAME)
+    src = claude_klabauter_root.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
+    (sh / "bin" / other).write_bytes(src.read_bytes())
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert other in report.forwarder_unverified
+    assert other not in report.forwarder_byte_copied
     assert not report.complete
 
 

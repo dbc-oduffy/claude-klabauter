@@ -80,6 +80,8 @@ class TestOccupiedMintPathIsNeverAnOrigin:
     """The half that corrupted provenance: whoever occupies the mint path, its
     frontmatter must not reach `origin_handoff`/`origin_handoff_id`."""
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_own_prior_attempt_is_not_adopted_as_origin(self, tmp_path):
         _occupy_mint_path(tmp_path)
 
@@ -88,6 +90,8 @@ class TestOccupiedMintPathIsNeverAnOrigin:
         assert lineage["origin_handoff"] is None
         assert lineage["origin_handoff_id"] is None
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_peer_session_artifact_is_not_adopted_as_origin_either(self, tmp_path):
         """A same-slug baton belonging to ANOTHER session is not this run's
         residue -- but it is not an origin either. The decline routes to a
@@ -104,6 +108,8 @@ class TestBareSlugReplayConvergesOntoOnePath:
     """The half that minted a second baton: re-running the identical bare-slug
     call must re-use this run's own prior output."""
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_own_prior_attempt_is_adopted_as_output_path(self, tmp_path):
         prior = _occupy_mint_path(tmp_path)
 
@@ -113,6 +119,8 @@ class TestBareSlugReplayConvergesOntoOnePath:
         assert Path(lineage["output_path"]).as_posix() == _mint_rel()
         assert (tmp_path / lineage["output_path"]).resolve() == prior.resolve()
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_first_run_is_unchanged(self, tmp_path):
         """Nothing on disk at the mint path: the pre-existing fresh-mint shape,
         byte-identical to before this fix."""
@@ -121,6 +129,8 @@ class TestBareSlugReplayConvergesOntoOnePath:
         assert lineage["adopted_mint_path"] is None
         assert Path(lineage["output_path"]).as_posix() == _mint_rel()
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_peer_session_artifact_is_not_adopted_as_output(self, tmp_path):
         """Declining to adopt still costs a second file -- but never one
         authored OVER a peer's baton."""
@@ -131,6 +141,8 @@ class TestBareSlugReplayConvergesOntoOnePath:
         assert lineage["adopted_mint_path"] is None
         assert Path(lineage["output_path"]).as_posix() != _mint_rel()
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_different_kind_at_the_same_slug_is_not_adopted(self, tmp_path):
         """A `handoff` and a `spinoff` briefed from one slug collide on a name
         and are different artifacts; adopting across kinds authors one over the
@@ -165,6 +177,8 @@ class TestBareSlugReplayConvergesOntoOnePath:
 
         assert ba._adopt_prior_attempt_mint_path(_mint_rel(), tmp_path, "spinoff") is None
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_continued_prior_attempt_is_not_adopted(self, tmp_path):
         """A completed link in a longer chain is not a prior attempt's
         output."""
@@ -181,6 +195,8 @@ class TestAdoptedReplayEmitsASatisfiedD1:
     SKIPPED d1, and the write-over-input backstop must not refuse the one shape
     whose entire purpose is to not write."""
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_d1_is_already_satisfied_and_the_backstop_stays_silent(self, tmp_path):
         _occupy_mint_path(tmp_path)
         lineage = ba.resolve_lineage("spinoff", _SLUG, tmp_path)

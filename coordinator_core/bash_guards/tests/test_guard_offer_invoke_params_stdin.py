@@ -128,6 +128,20 @@ def test_rewrite_keeps_flags_after_the_payload_and_places_heredoc_before_a_pipe(
     assert first_line.index("<<'CCJSON'") < first_line.index("| tail -5")
 
 
+#: The two tests below spawn a REAL `python3 -m coordinator_core.invoke`, so
+#: they need the build-stamp carve-out spelled on the command line. Dispatch
+#: from an unstamped tree has been refused with JSON-RPC `-32005` since
+#: `6f3988bc3` (2026-08-21), and `coordinator_core/conftest.py :: pytest_
+#: configure` opts the suite in via `ipc.allow_unstamped_dispatch()` -- but
+#: IN-PROCESS ONLY, deliberately not through the environment, so that a
+#: subprocess cannot silently inherit it. That is exactly right, and it is
+#: also why these two spawned children never got the opt-in: the refusal
+#: envelope replaced `{"ok": true}`, and the tests died on `KeyError: 'ok'`.
+#: The rewrite under test was never broken -- bash parsed it and the child
+#: started every time. Spell the flag here rather than widening the conftest.
+_UNSTAMPED = " --allow-unstamped-dispatch"
+
+
 def test_rewritten_command_is_valid_shell_and_reaches_the_op():
     """End-to-end: run the rewrite the guard produced. Asserts the two halves
     together -- bash accepts the command AND the engine's `--params-file -`
@@ -135,8 +149,8 @@ def test_rewritten_command_is_valid_shell_and_reaches_the_op():
     scope-`none` (no repo resolution) and has no side effects."""
     payload = json.dumps({"note": "C1's half (build, not harden)"})
     cmd = (
-        "%s -m coordinator_core.invoke ping '%s' --bare"
-        % (shlex.quote(sys.executable), payload)
+        "%s -m coordinator_core.invoke ping '%s'%s --bare"
+        % (shlex.quote(sys.executable), payload, _UNSTAMPED)
     )
     verdict = check_offer_invoke_params_stdin(cmd)
     assert verdict is not None
@@ -168,8 +182,8 @@ def test_rewritten_command_is_valid_shell_for_and_semicolon_and_background(tail)
     process holding it (including a backgrounded one) has exited."""
     payload = json.dumps({"note": "C1's half (build, not harden)"})
     cmd = (
-        "%s -m coordinator_core.invoke ping '%s'%s"
-        % (shlex.quote(sys.executable), payload, tail)
+        "%s -m coordinator_core.invoke ping '%s'%s%s"
+        % (shlex.quote(sys.executable), payload, _UNSTAMPED, tail)
     )
     verdict = check_offer_invoke_params_stdin(cmd)
     assert verdict is not None

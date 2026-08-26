@@ -3087,16 +3087,38 @@ def test_decisions_template_free_value_keys_equal_union_of_module_constants(monk
     pre-fill from data this SAME run already resolved rather than a
     hand-copied list or a phantom key absent from every submodule's
     constant — see `test_decisions_template_prefills_*` above for the
-    positive assertions on those three."""
+    positive assertions on those three.
+
+    C10/AC14 added a THIRD category the original two-way split did not
+    know about: a static SHAPE default, carried by a submodule's own
+    static-default constant rather than resolved from this run's data.
+    `lessons` is the first — AC14 requires `_LESSON_REQUIRED_KEYS` be
+    discoverable from the template instead of only by round-tripping a
+    `ValueError` out of `apply`, which means the template has to ship the
+    shape. Those keys are asserted EQUAL to the submodule-derived default
+    rather than skipped: a bare `continue` here would let a prefill drift
+    to any value at all and still pass. Sourced from
+    `wsc._free_value_key_static_defaults()`, the same derivation
+    `build_decisions_template` itself uses, never a list restated here —
+    the AC3 discipline this test exists to enforce applies to its own
+    fixtures too."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
 
     template = decision_object["preflight"]["decisions_template"]
+    static_defaults = wsc._free_value_key_static_defaults()
     free_value_keys_in_template = set(template.keys()) - jp_ids
     assert free_value_keys_in_template == _expected_free_value_keys()
     for key in free_value_keys_in_template:
         if key in wsc.DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS:
+            continue
+        if key in static_defaults:
+            assert template[key] == static_defaults[key], (
+                f"free-value key {key!r} carries a static shape default, but the "
+                "template's value has drifted from the submodule constant it is "
+                "derived from"
+            )
             continue
         assert template[key] is None
 

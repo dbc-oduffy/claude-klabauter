@@ -214,10 +214,10 @@ def test_no_hardcoded_absolute_literal_outside_the_docstring():
 
 
 # ---------------------------------------------------------------------------
-# Fresh install — all four gates present, reachable, in registry order
+# Fresh install — all three gates present, reachable, in registry order
 # ---------------------------------------------------------------------------
 
-def test_fresh_install_writes_all_four_gates_and_sets_exec_bit(tmp_path, monkeypatch, capsys):
+def test_fresh_install_writes_all_three_gates_and_sets_exec_bit(tmp_path, monkeypatch, capsys):
     meta = _make_meta_repo(tmp_path, monkeypatch)
     fake_bin = tmp_path / "fakebin"
     monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
@@ -240,7 +240,7 @@ def test_fresh_install_writes_all_four_gates_and_sets_exec_bit(tmp_path, monkeyp
     assert "installed" in capsys.readouterr().err
 
 
-def test_fresh_install_all_four_gates_actually_execute_in_order(tmp_path, monkeypatch):
+def test_fresh_install_all_three_gates_actually_execute_in_order(tmp_path, monkeypatch):
     """Textual presence is not enough (that's exactly what the dead-code-
     after-exit-0 bug would still pass) — run the emitted hook and check
     every gate actually ran, in registry order."""
@@ -256,7 +256,7 @@ def test_fresh_install_all_four_gates_actually_execute_in_order(tmp_path, monkey
     assert ran_order == [g.filename for g in _GATE_REGISTRY]
 
 
-def test_idempotent_when_all_four_markers_present(tmp_path, monkeypatch, capsys):
+def test_idempotent_when_all_three_markers_present(tmp_path, monkeypatch, capsys):
     meta = _make_meta_repo(tmp_path, monkeypatch)
     fake_bin = tmp_path / "fakebin"
     monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
@@ -283,7 +283,7 @@ def test_missing_gate_script_blocks_loudly_and_stops_the_chain(tmp_path, monkeyp
     assert main([str(meta)]) == 0
 
     # Gate 2 (illegal-path) is second in registry order; delete its script so
-    # gates 3-4 (which would otherwise run after it) must NOT execute either.
+    # gate 3 (which would otherwise run after it) must NOT execute either.
     missing_gate = _GATE_REGISTRY[1]
     (fake_bin / missing_gate.filename).unlink()
 
@@ -1215,7 +1215,7 @@ def test_hook_always_exits_0_or_1_across_every_branch(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Fifth gate — detect-staged-rollback, registered 2026-07-29
+# Version-stamp currency across a pre-clamp install
 # ---------------------------------------------------------------------------
 
 def test_preexisting_v1_hook_with_raw_exit_dollar_question_is_refreshed(tmp_path, monkeypatch):
@@ -1274,32 +1274,41 @@ def test_preexisting_v1_hook_with_raw_exit_dollar_question_is_refreshed(tmp_path
     assert f"# gate-version: {gate.version}" in refreshed
 
 
-def test_staged_rollback_gate_is_registered_with_its_own_override():
-    """2026-08-21, PM ruling: the gate script's own check 1 (exact-blob
-    rollback) was KILLED — see coordinator_core.ops.detect_staged_rollback's
-    module docstring. This registry entry's override key was repointed to
-    the sole surviving check's key (mass deletion); the old
-    COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK key is dead (no code
-    anywhere reads it any more) and this assertion previously pinned it,
-    GREEN on a key that blanket-suppressed the mass-deletion tripwire at the
-    hook level — see the bug this row filed against that defect."""
-    gate = next((g for g in _GATE_REGISTRY if g.marker == "detect-staged-rollback"), None)
-    assert gate is not None, "detect-staged-rollback must be registered in _GATE_REGISTRY"
-    assert gate.filename == "detect-staged-rollback.py"
-    assert gate.kind == "python"
-    assert gate.override_env == "COORDINATOR_OVERRIDE_PRECOMMIT_MASS_DELETION"
+def test_detect_staged_rollback_is_not_registered():
+    """2026-08-25, peer session doe-claude-33 / PM ruling on their side:
+    "Drop the gate. Do NOT keep a minimal op alive for us." This module
+    installs `~/.claude`'s hook (Claude Central / the meta-repo), not
+    DoE-claude's own tree -- DoE-claude has no pre-commit hook at all and
+    never has. Regression guard: `detect-staged-rollback` must never be
+    reintroduced into `_GATE_REGISTRY` by analogy with a future gate."""
+    assert all(g.marker != "detect-staged-rollback" for g in _GATE_REGISTRY)
 
 
-def test_staged_rollback_gate_runs_as_part_of_a_fresh_install(tmp_path, monkeypatch):
-    meta = _make_meta_repo(tmp_path, monkeypatch)
-    fake_bin = tmp_path / "fakebin"
-    monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
-    _write_stub_gates(fake_bin)
-    assert main([str(meta)]) == 0
-
-    result = _run_hook(_hook_path(meta), meta)
-    assert result.returncode == 0
-    assert "RAN:detect-staged-rollback.py" in result.stdout
+def test_gate_registry_other_entries_are_byte_unchanged():
+    """The three surviving `_GATE_REGISTRY` entries must be untouched by the
+    2026-08-25 removal of `detect-staged-rollback` — asserted per entry, not
+    by the suite passing (dispatch brief C2)."""
+    by_marker = {g.marker: g for g in _GATE_REGISTRY}
+    expected = {
+        "check-no-illegal-paths": ("check-no-illegal-paths.py", "python", "illegal-path",
+                                    "COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS", 2),
+        "coordinator-precommit-foreign-platform-check": (
+            "coordinator-precommit-foreign-platform-check", "python", "foreign-platform-path",
+            "COORDINATOR_OVERRIDE_PRECOMMIT_PLATFORM_PATHS", 2,
+        ),
+        "coordinator-precommit-settings-tracking-check": (
+            "coordinator-precommit-settings-tracking-check", "python", "settings-tracking",
+            "COORDINATOR_OVERRIDE_PRECOMMIT_SETTINGS_TRACKING", 2,
+        ),
+    }
+    assert set(by_marker) == set(expected)
+    for marker, (filename, kind, label, override_env, version) in expected.items():
+        gate = by_marker[marker]
+        assert gate.filename == filename
+        assert gate.kind == kind
+        assert gate.label == label
+        assert gate.override_env == override_env
+        assert gate.version == version
 
 
 def test_absent_gate_marker_is_appended_at_current_version(tmp_path, monkeypatch, capsys):
@@ -1327,3 +1336,87 @@ def test_absent_gate_marker_is_appended_at_current_version(tmp_path, monkeypatch
     assert result.returncode == 0
     assert "RAN:fake-versioned-gate.py" in result.stdout
     assert "custom hook, no coordinator gates yet" in result.stdout
+
+# ---------------------------------------------------------------------------
+# 2026-08-25: a gate named only in a COMMENT must not count as installed.
+# ---------------------------------------------------------------------------
+
+
+def _solo_gate() -> "_mod._Gate":
+    return _mod._Gate(
+        marker="fake-solo-gate",
+        filename="fake-solo-gate.py",
+        kind="python",
+        label="fake solo gate",
+        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_FAKE_SOLO_GATE",
+        version=1,
+    )
+
+
+def test_comment_only_marker_does_not_suppress_the_gate(tmp_path, monkeypatch, capsys):
+    """A marker mentioned only in a COMMENT used to make its gate
+    un-installable FOREVER: `marker in existing_text` was True, so it fell out
+    of `missing_gates` (never appended) and out of `stale_gates` too (no
+    locatable region, so `_gate_is_stale` correctly declines to guess),
+    leaving a registry entry that could never reach the hook.
+
+    Observed live on `~/.claude`'s pre-commit, whose header comment records
+    that a hand-written `check-no-illegal-paths.sh` was removed -- that
+    sentence alone kept the `check-no-illegal-paths` gate off the hook on
+    every reinstall. Found by peer session doe-claude-5a, 2026-08-25.
+    """
+    meta = _make_meta_repo(tmp_path, monkeypatch)
+    fake_bin = tmp_path / "fakebin"
+    monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
+    _write_stub_gates(fake_bin)
+
+    gate = _solo_gate()
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    (fake_bin / gate.filename).write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "_GATE_REGISTRY", [gate])
+
+    hook = _hook_path(meta)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        "#!/bin/sh\n# A prior hand-written fake-solo-gate check was removed here.\nexit 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    assert main([str(meta)]) == 0
+    after = hook.read_text(encoding="utf-8")
+    assert "# --- Gate: fake solo gate (fake-solo-gate) ---" in after, (
+        "a comment-only mention of the marker suppressed the gate -- the "
+        "registry entry can never reach the hook"
+    )
+    assert "appended gate(s)" in capsys.readouterr().err
+
+
+def test_marker_on_a_real_command_line_is_still_left_alone(tmp_path, monkeypatch, capsys):
+    """Negative-spec half of the fix above: presence on a NON-comment line
+    still counts as installed, so a legacy hand-authored hook that references
+    the marker inside a script PATH is left alone rather than appended to."""
+    meta = _make_meta_repo(tmp_path, monkeypatch)
+    fake_bin = tmp_path / "fakebin"
+    monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
+    _write_stub_gates(fake_bin)
+
+    gate = _solo_gate()
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    (fake_bin / gate.filename).write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "_GATE_REGISTRY", [gate])
+
+    hook = _hook_path(meta)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        '#!/bin/sh\nsh "$(dirname "$0")/fake-solo-gate.py" || exit 1\nexit 0\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    assert main([str(meta)]) == 0
+    after = hook.read_text(encoding="utf-8")
+    assert "# --- Gate: fake solo gate (fake-solo-gate) ---" not in after, (
+        "a hand-authored hook referencing the marker on a real command line "
+        "must be left alone, not appended to"
+    )

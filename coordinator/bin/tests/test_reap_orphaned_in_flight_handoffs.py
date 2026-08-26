@@ -213,9 +213,8 @@ def test_shipped_orphan_candidate_p3_zero_completions_returns_none(tmp_path):
     h1 = _write_handoff(str(handoffs_dir), "a.md", status="consumed", deployment_state="in_flight", consumed_by="s1")
 
     mod._claim_holder = lambda path, repo_root="": "s1"
-    mod._run_query_cli = lambda query_cli, where, fmt: ""  # zero completion entries
-
-    result = mod._shipped_orphan_candidate("s1", h1, str(handoffs_dir), str(tmp_path))
+    # Empty completion index -> zero entries authored by this session.
+    result = mod._shipped_orphan_candidate("s1", h1, str(handoffs_dir), str(tmp_path), {})
     assert result is None, "P3 (zero completion entries) must fail closed to None"
 
 
@@ -227,14 +226,9 @@ def test_shipped_orphan_candidate_success_returns_commits_list(tmp_path):
 
     mod._claim_holder = lambda path, repo_root="": "s1"
 
-    def fake_run_query_cli(query_cli, where, fmt):
-        if fmt == "paths":
-            return "some/completion.md\n"
-        return '[{"frontmatter": {"commits": ["sha1", "sha2"]}}]'
+    index = {"s1": [{"frontmatter": {"commits": ["sha1", "sha2"]}}]}
 
-    mod._run_query_cli = fake_run_query_cli
-
-    result = mod._shipped_orphan_candidate("s1", h1, str(handoffs_dir), str(tmp_path))
+    result = mod._shipped_orphan_candidate("s1", h1, str(handoffs_dir), str(tmp_path), index)
     assert result == ["sha1", "sha2"]
 
 
@@ -267,7 +261,17 @@ def _fake_stamp_shipped_in(path, sha):
         fh.write("\n".join(out) + "\n")
 
 
-def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=None):
+def _patch_completion_index(mod, index):
+    """Wire the one-shot completion-log index (P3's oracle) to a literal dict.
+
+    Replaces the retired `_run_query_cli` monkeypatch: P3 no longer spawns
+    `query-completions.py` twice per orphan -- it reads a single index built
+    once per run, keyed by `authored_by`. Tests supply that index directly."""
+    mod._resolve_completion_index = lambda: (lambda repo_root: dict(index))
+
+
+def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=None,
+                  implemented_plan_index=None):
     """Wire the module's resolver-trampoline functions to fakes so main()
     runs without touching the engine root or spawning any non-git subprocess.
 
@@ -296,9 +300,23 @@ def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=Non
     )
     mod._resolve_session_live = lambda: (lambda holder, cwd=None: session_live_map.get(holder, False))
     mod._resolve_canonical_kind = lambda: (lambda kind: kind)
+    # Default: empty completion index -> every ship-check fails closed at P3,
+    # which is exactly what each pre-existing release-path case below assumed
+    # when it stubbed `_run_query_cli` to return "".
+    _patch_completion_index(mod, {})
+    # Governed-plan pre-check: default empty index -> no orphan is governed by
+    # an implemented plan, so every pre-existing case below keeps its original
+    # release/ship disposition unchanged.
+    mod._resolve_implemented_plan_index = lambda: (
+        lambda worktree: dict(implemented_plan_index or {})
+    )
     mod._claim_holder = lambda path, repo_root="": claim_holder_map.get(path, "")
     mod._handoff_id_archived_twin = lambda handoff_id, repo_root: ""
-    mod._has_live_children_exit_code = lambda path, repo_root=None: 1  # childless -> proceed to release
+    # childless -> proceed to release. `main()` resolves the whole fall-through
+    # set through the batched form (ONE corpus pass); the singular wrapper
+    # delegates to it and stays stubbed for direct-call tests.
+    mod._has_live_children_exit_code = lambda path, repo_root=None: 1
+    mod._has_live_children_exit_codes = lambda paths, repo_root=None: {p: 1 for p in paths}
     mod._run_archive_stamp_cli = lambda args: (True, "")
 
 
@@ -322,14 +340,10 @@ def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, monk
         claim_holder_map={h1: "dead1", h2: "dead2"},
     )
 
-    def fake_run_query_cli(query_cli, where, fmt):
-        session_id = where.split("=", 1)[1]
-        commits = {"dead1": ["sha-a1"], "dead2": ["sha-b1", "sha-b2"]}[session_id]
-        if fmt == "paths":
-            return "some/completion.md\n"
-        return f'[{{"frontmatter": {{"commits": {commits!r}}}}}]'.replace("'", '"')
-
-    mod._run_query_cli = fake_run_query_cli
+    _patch_completion_index(mod, {
+        "dead1": [{"frontmatter": {"commits": ["sha-a1"]}}],
+        "dead2": [{"frontmatter": {"commits": ["sha-b1", "sha-b2"]}}],
+    })
 
     git_log_calls = []
     other_git_calls = []
@@ -413,12 +427,7 @@ def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path, 
         claim_holder_map={h1: "dead1"},
     )
 
-    def fake_run_query_cli(query_cli, where, fmt):
-        if fmt == "paths":
-            return "some/completion.md\n"
-        return '[{"frontmatter": {"commits": ["sha-vanished"]}}]'
-
-    mod._run_query_cli = fake_run_query_cli
+    _patch_completion_index(mod, {"dead1": [{"frontmatter": {"commits": ["sha-vanished"]}}]})
 
     class FakeResult:
         def __init__(self, returncode, stdout):
@@ -493,9 +502,9 @@ def test_has_live_children_exit_code_calls_op_in_process_zero_spawns(monkeypatch
 
     calls = []
 
-    async def fake_handler(params, repo_root=None):
-        calls.append((params, repo_root))
-        return {"referenced": True, "children": ["x"], "live_session_count": 0, "exit_code": 0}
+    async def fake_handler(candidates, repo_root=None):
+        calls.append((list(candidates), repo_root))
+        return {c: 0 for c in candidates}
 
     def fake_git_common_dir(cwd=None):
         return "/fake/common/.git"
@@ -509,10 +518,49 @@ def test_has_live_children_exit_code_calls_op_in_process_zero_spawns(monkeypatch
 
     assert rc == 0
     assert spawned == [], f"expected zero subprocess.run calls, got {spawned}"
+    # ONE call for the whole set, whatever its size -- the singular wrapper is a
+    # one-element case of the batched form, not a separate route.
     assert len(calls) == 1
-    params, repo_root = calls[0]
-    assert params == {"candidate": "/fake/state/handoffs/x.md"}
+    candidates, repo_root = calls[0]
+    assert candidates == ["/fake/state/handoffs/x.md"]
     assert Path(repo_root) == Path("/fake/common/.git")
+
+
+def test_has_live_children_exit_codes_batches_every_candidate_into_one_call(monkeypatch):
+    """The whole fall-through set is answered by ONE corpus pass -- asking per
+    orphan is what cost 36,638 _read_meta calls."""
+    mod = _load_module()
+
+    calls = []
+
+    async def fake_handler(candidates, repo_root=None):
+        calls.append(list(candidates))
+        return {c: 1 for c in candidates}
+
+    mod._resolve_handoff_has_live_children = lambda: (fake_handler, lambda cwd=None: "/fake/common/.git")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not spawn")))
+
+    paths = [f"/fake/state/handoffs/{n}.md" for n in "abcde"]
+    codes = mod._has_live_children_exit_codes(paths, "/fake/worktree")
+
+    assert codes == {p: 1 for p in paths}
+    assert len(calls) == 1, f"expected one batched call, got {len(calls)}: {calls}"
+    assert calls[0] == paths
+
+
+def test_has_live_children_exit_codes_fails_closed_on_handler_error(monkeypatch):
+    """Any failure yields 2 (indeterminate) for every path -- never 1, which
+    would read as safe-to-release."""
+    mod = _load_module()
+
+    async def boom(candidates, repo_root=None):
+        raise RuntimeError("op exploded")
+
+    mod._resolve_handoff_has_live_children = lambda: (boom, lambda cwd=None: "/fake/common/.git")
+
+    paths = ["/fake/state/handoffs/a.md", "/fake/state/handoffs/b.md"]
+    assert mod._has_live_children_exit_codes(paths, "/fake/worktree") == {p: 2 for p in paths}
 
 
 def test_has_live_children_exit_code_fails_closed_on_unresolvable_common_dir():
@@ -558,3 +606,149 @@ if __name__ == "__main__":
             failures += 1
             print(f"FAIL {name}: {exc}")
     sys.exit(1 if failures else 0)
+
+
+# ===========================================================================
+# Governed-plan pre-check -- release is the wrong verb for an orphan whose
+# governing plan is already stamped `implemented`. See the module docstring's
+# "Governed-plan guard" section.
+# ===========================================================================
+def _release_only_env(mod, tmp_path, monkeypatch):
+    """Wire the git/query doubles so the ship-check (P1-P4) always fails
+    closed, leaving the release fall-through as the only live path -- which
+    is exactly where the governed-plan pre-check sits."""
+    class FakeResult:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return FakeResult(0, str(tmp_path) + "\n")
+        return FakeResult(1, "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    _patch_completion_index(mod, {})
+
+
+def test_main_skips_release_when_governing_plan_is_implemented(tmp_path, monkeypatch):
+    """An orphan joining an implemented plan is SKIPPED, not released --
+    releasing it would re-advertise shipped work as a live pickup target,
+    and `_unclaim` refuses the write anyway."""
+    mod = _load_module()
+
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    h1 = _write_handoff(
+        str(handoffs_dir), "shipped-plan.md", status="consumed",
+        deployment_state="in_flight", consumed_by="dead1", deliverable_id="dlv-abc",
+    )
+
+    _patch_common(
+        mod,
+        repo_root=str(tmp_path),
+        session_live_map={"dead1": False},
+        claim_holder_map={h1: "dead1"},
+        implemented_plan_index={
+            "dlv-abc": {"path": "docs/plans/p.md", "title": "A shipped plan"}
+        },
+    )
+    _release_only_env(mod, tmp_path, monkeypatch)
+
+    stamped = []
+    mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or (True, ""))
+
+    assert mod.main([]) == 0
+    assert stamped == [], (
+        f"a handoff under an implemented plan must not be written at all: {stamped!r}"
+    )
+
+
+def test_main_releases_when_governing_plan_is_not_implemented(tmp_path, monkeypatch):
+    """Unchanged behaviour: no implemented plan carries this deliverable_id,
+    so the orphan still returns to the pool."""
+    mod = _load_module()
+
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    h1 = _write_handoff(
+        str(handoffs_dir), "live-plan.md", status="consumed",
+        deployment_state="in_flight", consumed_by="dead1", deliverable_id="dlv-other",
+    )
+
+    _patch_common(
+        mod,
+        repo_root=str(tmp_path),
+        session_live_map={"dead1": False},
+        claim_holder_map={h1: "dead1"},
+        implemented_plan_index={
+            "dlv-abc": {"path": "docs/plans/p.md", "title": "A shipped plan"}
+        },
+    )
+    _release_only_env(mod, tmp_path, monkeypatch)
+
+    stamped = []
+    mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or (True, ""))
+
+    assert mod.main([]) == 0
+    assert [args[0] for args in stamped] == ["unconsume-handoff"], stamped
+
+
+def test_main_spinoff_kind_is_exempt_from_the_governed_plan_precheck(tmp_path, monkeypatch):
+    """Mirrors `_unclaim`'s own kind exemption: a `kind: spinoff` record's
+    deliverable_id is an inherited id, not a true join onto the plan it
+    matches, so the pre-check must not fire and the release proceeds."""
+    mod = _load_module()
+
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    h1 = _write_handoff(
+        str(handoffs_dir), "spinoff.md", status="consumed",
+        deployment_state="in_flight", consumed_by="dead1", kind="spinoff",
+        deliverable_id="dlv-abc",
+    )
+
+    _patch_common(
+        mod,
+        repo_root=str(tmp_path),
+        session_live_map={"dead1": False},
+        claim_holder_map={h1: "dead1"},
+        implemented_plan_index={
+            "dlv-abc": {"path": "docs/plans/p.md", "title": "A shipped plan"}
+        },
+    )
+    _release_only_env(mod, tmp_path, monkeypatch)
+
+    stamped = []
+    mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or (True, ""))
+
+    assert mod.main([]) == 0
+    assert [args[0] for args in stamped] == ["unconsume-handoff"], stamped
+
+
+def test_main_builds_no_corpus_indexes_when_there_are_no_orphans(tmp_path, monkeypatch):
+    """Pay-for-use: the completion index (109ms) and implemented-plan index
+    (78ms) each read a whole corpus, and neither is consulted unless an orphan
+    reaches its gate. A clean corpus -- the steady state once the backlog is
+    drained -- must not pay 187ms to answer nothing."""
+    mod = _load_module()
+
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    _write_handoff(str(handoffs_dir), "active.md", status="active", deployment_state="ready_to_fire")
+
+    _patch_common(mod, repo_root=str(tmp_path))
+
+    built = []
+    mod._resolve_completion_index = lambda: (lambda repo_root: built.append("completion") or {})
+    mod._resolve_implemented_plan_index = lambda: (lambda worktree: built.append("plans") or {})
+
+    class FakeResult:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: FakeResult(0, str(tmp_path) + "\n"))
+
+    assert mod.main([]) == 0
+    assert built == [], f"no orphans -> neither corpus index should be built, got {built}"

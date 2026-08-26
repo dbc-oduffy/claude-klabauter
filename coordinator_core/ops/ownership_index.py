@@ -20,7 +20,7 @@ Data flow (claim-store-first, never claimed_by-frontmatter-first):
   claims.list_claims_by_session_checked(sid) (authoritative: session ->
   handoff-class basenames, plus an `errors` arm distinguishing "genuinely
   owns nothing" from "the claim store could not be resolved", e.g. an
-  unresolvable cwd) -> `handoff_reconcile._collect_all_handoffs_for_gate_index`
+  unresolvable cwd) -> `handoff_corpus._collect_all_handoffs_for_gate_index`
   (the ONE shared live+archive walk over the handoff corpus — this module
   adds no second traversal) -> a basename->(path, frontmatter) join built
   from that call's `_path`-bearing output -> this index.
@@ -38,7 +38,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from coordinator_core.ops.handoff_reconcile import _collect_all_handoffs_for_gate_index
+from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
 from coordinator_core.session import claims
 
 _LOG = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ _HANDOFF_CLAIM_CLASS = "handoff-claims"
 
 def _basename_index(worktree_root: Path) -> "Tuple[Dict[str, Tuple[Path, dict]], List[str]]":
     """basename -> (path, frontmatter) built from the ONE shared walk over the
-    live+archived handoff corpus (`handoff_reconcile._collect_all_handoffs_for_
+    live+archived handoff corpus (`handoff_corpus._collect_all_handoffs_for_
     gate_index` — spans `state/handoffs/` + `archive/handoffs/` +
     `archive/completed/`). No second traversal happens here: every entry that
     function returns already carries `_path`, so this is a pure re-keying pass,

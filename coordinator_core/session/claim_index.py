@@ -162,16 +162,26 @@ from __future__ import annotations
 import dataclasses
 import os
 import time
-from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Sequence
 
-from coordinator_core.session import core
+from coordinator_core.session import core, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
-#: Hard wall-clock cap on one rebuild() walk. Measured full rebuild on this
-#: tree (1012 touched.txt files, 9040 event lines): 37.9ms — ~13x inside
-#: this cap. Exceeding it aborts the walk rather than blocking the commit
-#: path; see module docstring's Staleness rule.
+#: C4 (AC18) — re-keyed from a wall-clock cap to a PROCESS-TIME cap. The
+#: original ``time.monotonic()`` deadline fires under ordinary machine load
+#: (50-70 concurrent sessions is this repo's load norm, not the peak — see
+#: CLAUDE.md § Load norm) even when THIS rebuild's own CPU cost is trivial —
+#: a wall-clock cap conflates "this walk is slow" with "the box is busy",
+#: and this repo's own rule is that wall clock measures peer load, never
+#: cost. ``time.process_time()`` only advances while this process is
+#: actually executing, so a scheduler-preempted rebuild on a loaded box no
+#: longer degrades to UNANSWERABLE purely because of contention it did not
+#: cause. The name is kept (not renamed) because it is a public module
+#: constant several tests reference by this name; the docstring and the two
+#: call sites below are what actually changed. See AC18's dispatch note for
+#: the measured C0 figure (541.48ms at 50 peers x 5000 lines/peer) this cap
+#: exists to catch.
 REBUILD_WALL_CLOCK_CAP_SECS = 0.5
 
 #: Sentinel returned by lookup() for a path an (aborted or unresolvable)
@@ -199,7 +209,29 @@ ABORT_CAUSE_CAP_EXCEEDED = "cap_exceeded"
 ABORT_CAUSE_IO_ERROR = "io_error"
 
 _AGENTS_SUBDIR = ".agents"
-_TOUCHED_FILENAME = "touched.txt"
+#: C4 — the substrate this module walks flips from the bash-dialect
+#: ``touched.txt`` to C3's self-describing record. AC7: this module reads
+#: the SAME seam ``scope.compute_scope`` reads (``touch_record``'s family +
+#: decode primitives), with no independent path-construction or line-dialect
+#: parsing of its own left in this file.
+#:
+#: NEGATIVE SPEC — what a path's ABSENCE from this index does NOT mean
+#: (2026-08-26, ``state/audits/2026-08-26-touch-ledger-coverage-and-the-
+#: published-dialect-split.md``). Absence is NOT evidence that no session
+#: authored the path. This module reads ONE dialect and carries no legacy
+#: union, unlike ``bash_guards/dispatch_checks.py`` and
+#: ``scope.py :: compute_scope`` Step 1, which both union the old
+#: ``touched.txt`` deliberately. Three live classes of authored-but-absent
+#: path: a claim written by ``claims.py :: atomic_dedup_append``
+#: (``self_claim``, still legacy-dialect at HEAD — C7c never landed); any
+#: file written by a shell redirect, heredoc, or spawned third-party CLI,
+#: which no writer observes at all; and — whenever the mirror is percolated
+#: with a reader ahead of its writer — every Edit/Write-authored path in the
+#: fleet. That third class was live for hours on 2026-08-26 and produced a
+#: fully-populated ``complete: True`` answer while omitting the caller's own
+#: work. Do NOT read a missing entry as "unclaimed"; read it as "this index
+#: cannot say".
+_TOUCHED_FILENAME = "touch-record.jsonl"
 
 
 def _normalize_key(path: str) -> str:
@@ -315,98 +347,32 @@ class _IndexState:
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
 
 
-def _read_lines_discard_torn_tail(path: str) -> tuple:
-    """Read ``path`` as text and split it into complete lines, discarding a
-    torn (no trailing newline) final fragment rather than parsing it.
+def _read_stream_claims(sink_path: str) -> tuple:
+    """C4 (AC7) — the seam read: one claimant's on-disk family (the live
+    ``touch-record.jsonl`` plus zero or more rotated siblings), decoded and
+    folded to ITS OWN last-verb-wins claim map via
+    ``touch_record._read_stream_claims`` — the exact primitive
+    ``scope.compute_scope`` now reads through too (C4's Step 3/3b). No
+    independent path-construction, family discovery, or line-dialect parse
+    is done in this module any more; this is a thin call-through.
 
-    Used on every substrate read (``touched.txt``) — a reader that opens
-    the file while a writer is mid-append (no lock is ever taken — see
-    module docstring) may observe an incomplete last line. That fragment is
-    silently dropped on THIS read, never repaired; a subsequent read after
-    the writer finishes sees it whole.
-
-    Returns ``(lines, read_ok)`` rather than raising or silently returning
-    ``[]`` on failure — a bare ``[]`` return is indistinguishable from a
-    genuinely empty ``touched.txt`` to ``rebuild()``'s caller, which
-    previously made an unreadable claimant file resolve identically to "no
-    claims from this claimant" (bug backlog
-    ``2026-08-11-an-io-error-reading-a-touched-txt-body-i-18abf7c6f3be``,
-    P3). A tuple keeps this a plain, import-free return shape matching
-    ``_agent_owner_sid``'s and ``_enumerate_touched_files``'s own
-    ``(value, complete)`` convention in this module, so ``rebuild()`` reads
-    all three the same way rather than special-casing this one.
-
-    ``FileNotFoundError`` is NOT a read failure: a claimant directory whose
-    ``touched.txt`` has not been created yet (or was raced away between
-    ``_enumerate_touched_files``'s enumeration pass and this content read)
-    is the ordinary "no claims yet" state, not a substrate failure — this
-    needs its own branch because ``FileNotFoundError`` is an ``OSError``
-    subclass and would otherwise be swallowed by the broader ``except
-    OSError`` below.
+    Returns ``(claims_by_path, read_ok)`` — ``read_ok`` mirrors this
+    module's pre-existing ``(value, complete)`` convention (see
+    ``_agent_owner_sid``/``_enumerate_touched_files``): ``False`` iff
+    ``touch_record``'s own degrade flag fired (an unreadable family member,
+    or a complete line that failed to decode — AC6's typed signal), matching
+    the bug-backlog concern the deleted ``_read_lines_discard_torn_tail``
+    docstring named (an unreadable claimant file must never resolve
+    identically to "no claims from this claimant"). A torn/unterminated
+    trailing line is never a degrade signal here either — ``touch_record``
+    already drops it before it reaches decode.
     """
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            raw = fh.read()
-    except FileNotFoundError:
-        return [], True
-    except OSError:
-        return [], False
-    if not raw:
-        return [], True
-    if not raw.endswith("\n"):
-        cut = raw.rfind("\n")
-        raw = raw[: cut + 1] if cut >= 0 else ""
-    return [line for line in raw.split("\n") if line != ""], True
-
-
-def _last_verb_per_path(lines: List[str]) -> Dict[str, Tuple[str, Optional[datetime]]]:
-    """Scan one claimant's raw ``touched.txt`` lines and keep, per path, the
-    ``(verb, timestamp)`` of its LAST event in file order (append-only log
-    -> file order IS chronological order; no cross-file timestamp
-    comparison is needed).
-
-    WIDENED (C1d, ``state/audits/2026-08-13-edit-recency-spike.md`` finding
-    3) from a bare ``verb`` to ``(verb, timestamp)`` — the timestamp was
-    already being parsed off every line and thrown away one line before it
-    reached a caller. Carrying it costs zero additional I/O (same files,
-    same walk, same parse) and is what lets ``rebuild()`` /``lookup()``
-    answer the AC1d recency-of-EDIT question without a second read pass.
-    ``timestamp`` is ``None`` when the line's timestamp field does not
-    parse via ``datetime.fromisoformat``, OR parses but is NAIVE (no
-    ``tzinfo`` — rejected in lockstep with
-    ``coordinator_core.session.scope.parse_touch_event``, this module's
-    sibling parser of the same on-disk format, which also treats a naive
-    timestamp as unparseable) — either way, unknown time, never treated as
-    "recent" by a caller of this data.
-
-    A line that does not match ``'<T|R> <timestamp> <path>'`` (via
-    ``str.split(None, 2)``, so a path containing a space is never split)
-    is skipped rather than guessed at — this is a NEW reader with no
-    legacy bare-path-line compatibility obligation, unlike
-    ``coordinator_core.session.scope.parse_touch_event``.
-    """
-    last: Dict[str, Tuple[str, Optional[datetime]]] = {}
-    for line in lines:
-        parts = line.split(None, 2)
-        if len(parts) != 3:
-            continue
-        verb, ts_str, path = parts
-        if verb not in ("T", "R"):
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_str)
-        except ValueError:
-            ts = None
-        else:
-            if ts.tzinfo is None:
-                # Review: coordinator:code-reviewer P3 — kept in lockstep
-                # with scope.parse_touch_event, which also rejects a naive
-                # (no-tzinfo) timestamp as unparseable. Treated identically
-                # to a ValueError here: ts=None, same as any other
-                # malformed/legacy timestamp this module already handles.
-                ts = None
-        last[_normalize_key(path)] = (verb, ts)
-    return last
+    # AC21 -- the transitional legacy-sink branch this module used to carry
+    # (deleted by C7b): `touch()` no longer writes the old ``touched.txt``
+    # dialect once its writer migrates (C7c), so every enumerated sink is
+    # read through the seam unconditionally.
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    return claims, not degraded
 
 
 def _agent_owner_sid(agent_dir_path: str) -> tuple:
@@ -471,7 +437,11 @@ def _enumerate_touched_files(base: str) -> tuple:
         if not is_dir:
             continue
         touched_path = os.path.join(entry.path, _TOUCHED_FILENAME)
-        if os.path.isfile(touched_path):
+        # C4: a claimant with no LIVE file but a rotated-away sibling (C2's
+        # rotation, AC17) still has real claims on disk -- the live-file-
+        # only `isfile` check would silently drop them. `discover_family`
+        # is a cheap `glob` + `exists`, not a content read.
+        if os.path.isfile(touched_path) or touch_record.discover_family(touched_path):
             pairs.append((touched_path, entry.name))
 
     agents_base = os.path.join(base, _AGENTS_SUBDIR)
@@ -488,7 +458,7 @@ def _enumerate_touched_files(base: str) -> tuple:
         if not owner_sid:
             continue
         touched_path = os.path.join(agent_entry.path, _TOUCHED_FILENAME)
-        if os.path.isfile(touched_path):
+        if os.path.isfile(touched_path) or touch_record.discover_family(touched_path):
             pairs.append((touched_path, owner_sid))
 
     return pairs, complete
@@ -523,34 +493,44 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         state = _IndexState(claims={}, complete=False, abort_cause=ABORT_CAUSE_EMPTY_BASE)
         return state
 
-    deadline = time.monotonic() + REBUILD_WALL_CLOCK_CAP_SECS
+    # AC18 — process-time deadline, not wall-clock (see the constant's own
+    # docstring for why).
+    process_deadline = time.process_time() + REBUILD_WALL_CLOCK_CAP_SECS
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
     touched_pairs, complete = _enumerate_touched_files(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
 
     for touched_path, claimant_sid in touched_pairs:
-        if time.monotonic() > deadline:
+        if time.process_time() > process_deadline:
             complete = False
             if abort_cause is None:
                 abort_cause = ABORT_CAUSE_CAP_EXCEEDED
             break
-        content_lines, content_read_ok = _read_lines_discard_torn_tail(touched_path)
+        stream_claims, content_read_ok = _read_stream_claims(touched_path)
         if not content_read_ok:
             complete = False
             if abort_cause is None:
                 abort_cause = ABORT_CAUSE_IO_ERROR
             continue
-        last_verb = _last_verb_per_path(content_lines)
-        for path, (verb, ts) in last_verb.items():
-            if verb == "T":
+        for path, event in stream_claims.items():
+            if event.verb == touch_record.VERB_TOUCH:
                 claims.setdefault(path, set()).add(claimant_sid)
-                if ts is not None:
-                    edit_ts.setdefault(path, {})[claimant_sid] = ts
-            else:  # "R" — a release only ever removes the claimant from the
-                # aggregate bucket. A same-file re-claim after a release
+                # AC21: a legacy line with no parseable timestamp arrives as
+                # `timestamp=0.0` ("unknown time"). `edit_ts`'s own contract
+                # (see `_IndexState`) is that such a claimant is ABSENT from
+                # this mapping while still present in `claims` -- recording
+                # it as a 1970 instant would make an active claimant read as
+                # the stalest on the box.
+                if event.timestamp > 0:
+                    edit_ts.setdefault(path, {})[claimant_sid] = datetime.fromtimestamp(
+                        event.timestamp, tz=timezone.utc
+                    )
+            else:  # RELEASE — a release only ever removes the claimant from
+                # the aggregate bucket. A same-file re-claim after a release
                 # can't reach this branch: this per-file scan already
-                # collapsed to one verb per path (see _last_verb_per_path).
+                # collapsed to one verb per path (touch_record's own
+                # last-verb-wins fold).
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
 
@@ -701,6 +681,12 @@ def commit_set(
     ``.agents/<aid>/em-session-id.txt`` back-pointers to the owning session, so
     a path an agent touched on this session's behalf is already claimed BY this
     session in the index.
+
+    ``complete`` attests that the WALK finished (no cap, no IO abort) — never
+    that the answer covers everything the session wrote. See
+    ``_TOUCHED_FILENAME``'s negative spec for the three live classes of
+    authored-but-absent path. A caller that reports "these are your files"
+    off a ``complete=True`` answer is overstating what this returns.
 
     Last-event-wins is likewise already applied (``_last_verb_per_path``): a
     path this session touched and then RELEASED is absent from ``claims``, so

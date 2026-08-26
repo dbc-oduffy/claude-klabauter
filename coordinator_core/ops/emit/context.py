@@ -14,7 +14,7 @@ IS a valid directory, the slug is ``local/<basename>`` (air-gapped / local-only 
 stay observable).  Only an UNDERIVABLE ``repo_root`` (None or non-existent directory)
 raises — that is the corruption/aliasing case.  ``coordinator_root`` is irrelevant for
 attribution — it resolves via ``resolve_coordinator_root()`` to the LIVE post-W4.2-cutover
-coordinator script/lib clone (``<claude-klabauter-root>/coordinator`` on a current install; the
+coordinator script/lib clone (``<claude-klabauter-live-root>/coordinator`` on a current install; the
 DoE-claude clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
 ``resolvers.resolve_coordinator_root``'s docstring).
 
@@ -222,7 +222,7 @@ class EmitContext:
                              so linked-worktree emissions root at the shared main worktree.
         coordinator_root   — the live post-W4.2-cutover coordinator script/lib clone,
                              resolved via ``resolve_coordinator_root()`` (rung 2:
-                             ``<claude-klabauter-root>/coordinator`` on a current install; the
+                             ``<claude-klabauter-live-root>/coordinator`` on a current install; the
                              DoE-claude clone's ``coordinator/bin`` is empty post-migration
                              and is never consulted — see that function's docstring).
                              NOT the emitting repo; do NOT use for slug attribution.

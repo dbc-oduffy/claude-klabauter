@@ -305,6 +305,74 @@ def resolve_explicit_predecessor_edge_deliverable_id(
     return dlvr_id
 
 
+def resolve_session_chain_deliverable_id(
+    read_frontmatter_field,
+    chain_artifact_path: "str | None",
+) -> "str | None":
+    """Session-chain discovery tier — carries `deliverable_id` off the
+    handoff THIS session already holds a claim on, so an artifact authored
+    into a live chain joins it instead of minting a second id from its own
+    title.
+
+    The defect this closes (2026-08-25, filed from two independent chains
+    the same day): every other tier in this module answers "was an id
+    HANDED to me" — explicit flag, env, cited sizing, explicit predecessor
+    edge. None of them answers "does the chain I am authoring into ALREADY
+    have one". So two artifacts of one deliverable, scaffolded under two
+    titles with no id passed, mint two ids off two title slugs, silently,
+    each scaffolder doing the locally-normal thing; the split only surfaces
+    at a deliverable-level rollup, by which point it is in shared history
+    and unrepairable in place.
+
+    ``chain_artifact_path`` is a caller-resolved path (this module's
+    standing contract — every tier takes already-resolved paths), namely
+    the handoff the running session holds in its DURABLE claim ledger.
+    Resolving WHICH handoff that is belongs to the caller, which reuses
+    `baton_assemble._resolve_held_handoff_for_session` rather than
+    re-deriving the lookup.
+
+    Gate, deliberately unlike `resolve_session_state_parent_deliverable_id`
+    above: that tier rejects a held claim whose `kind` is not a roadmap
+    stub, because it answers a DESCENT question ("is this plan a child of
+    that stub"), and holding a claim is not evidence of descent. This tier
+    answers a narrower CO-MEMBERSHIP question ("what chain is this session
+    authoring into"), for which the session's own held handoff claim is the
+    engine's own answer everywhere else — `baton-assemble` self-resolves a
+    handoff's predecessor from exactly this ledger. So no `kind` gate: the
+    held handoff's `deliverable_id`, when it has one, is the chain id.
+
+    Omit-rather-than-guess: no path, an unreadable file, or an absent/
+    `null`/blank `deliverable_id` all return `None` and the caller falls
+    through to mint. NEVER raises — one candidate value, no second rung to
+    disagree with, nothing for a raise to protect (same posture the two
+    tiers above state).
+
+    Negative-spec: does NOT fire for a `kind: spinoff` baton. A spinoff
+    mints its own id by PM ruling (2026-08-05) — the caller, which is the
+    only place that knows the doc_type being scaffolded, is what enforces
+    that; this function has no doc_type to gate on and must not grow one.
+    """
+    if not chain_artifact_path or not os.path.isfile(chain_artifact_path):
+        return None
+
+    dlvr_id = read_frontmatter_field(chain_artifact_path, "deliverable_id")
+    if not dlvr_id:
+        print(
+            "deliverable_carry: session-chain tier — session-held handoff "
+            f"'{chain_artifact_path}' carries no deliverable_id "
+            "(absent/null/blank) — falling through to mint",
+            file=sys.stderr,
+        )
+        return None
+
+    print(
+        "deliverable_carry: session-chain tier — session-held handoff "
+        f"'{chain_artifact_path}' carries deliverable_id {dlvr_id!r} — carrying",
+        file=sys.stderr,
+    )
+    return dlvr_id
+
+
 def resolve_deliverable_and_initiative(
     read_frontmatter_field,
     mint,

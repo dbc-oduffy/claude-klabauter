@@ -105,17 +105,15 @@ Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § 
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core.cartography._guard import path_guard
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.eol.census import census as _census
 from coordinator_core.ops.eol.census import _require_worktree_toplevel
-from coordinator_core.win_portability import no_console_creationflags
 
 #: Cap on how many non-dirty candidates a single `repair()` invocation will
 #: attempt, bounding the runtime this op holds the warm engine's
@@ -175,34 +173,25 @@ def _index_blobs(root: Path, rels: List[str]) -> Dict[str, Optional[bytes]]:
     """
     if not rels:
         return {}
-    git_bin = shutil.which("git")
-    if git_bin is None:
-        return {r: None for r in rels}
     stdin_payload = b"".join(
         f":{r}\n".encode("utf-8", errors="surrogateescape") for r in rels
     )
-    try:
-        proc = subprocess.run(
-            [git_bin, "-C", str(root), "cat-file", "--batch"],
-            input=stdin_payload,
-            capture_output=True,
-            timeout=30,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {r: None for r in rels}
-    if proc.returncode != 0:
-        stderr = proc.stderr
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        print(
-            f"eol.repair: git -C {root} cat-file --batch exited "
-            f"{proc.returncode}: {(stderr or '').strip()}",
-            file=sys.stderr,
-        )
+    # `input` puts the call in binary mode, which is mandatory here rather
+    # than merely preferable: the blob bodies below are compared byte for
+    # byte against what is on disk, and text mode would both decode them
+    # lossily and universal-newline-translate the CRLF this module reads
+    # `cat-file --batch` specifically to measure.
+    batch = run_git(["-C", str(root), "cat-file", "--batch"], input=stdin_payload)
+    if not batch.ok:
+        if not batch.timed_out and batch.returncode != 127:
+            print(
+                f"eol.repair: git -C {root} cat-file --batch exited "
+                f"{batch.returncode}: {batch.stderr.strip()}",
+                file=sys.stderr,
+            )
         return {r: None for r in rels}
 
-    out = proc.stdout
+    out = batch.stdout_bytes
     pos = 0
     result: Dict[str, Optional[bytes]] = {}
     try:

@@ -585,8 +585,8 @@ def test_deny_reason_offers_resolved_absolute_path_form(monkeypatch):
     result = guard.check(payload)
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "<claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py" in reason
-    assert "python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py" in reason
+    assert "<claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py" in reason
+    assert "python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py" in reason
     # Retired forms are no longer offered.
     assert "  bin/coordinator-doc-new --type review-findings ...\n" not in reason
     assert "bash /abs/path/to/coordinator-doc-new" not in reason

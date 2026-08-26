@@ -207,7 +207,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _claude_klabauter_root_pointer_file() -> Optional[str]:
-    """Rung-1.5 fast path: read ``<settings-home>/machine-local/.claude-klabauter-root``
+    """Rung-1.5 fast path: read ``<settings-home>/machine-local/.claude-klabauter-live-root``
     directly, no subprocess spawn.
 
     Review: code-reviewer (P2) — the oracle (coordinator-claude-klabauter-root.sh, rung
@@ -218,7 +218,7 @@ def _claude_klabauter_root_pointer_file() -> Optional[str]:
     plain file read (no subprocess), falling through to rung 2 on absence.
     """
     try:
-        ptr = machine_local_dir() / ".claude-klabauter-root"
+        ptr = machine_local_dir() / ".claude-klabauter-live-root"
         if ptr.is_file():
             val = ptr.read_text(encoding="utf-8").strip()
             if val:

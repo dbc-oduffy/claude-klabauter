@@ -481,6 +481,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #
     # Spec backlink: coordinator_core/ops/spec_backlink_resolve.py handler docstrings
     "spec_backlink.rewrite": OpClass.MUTATING,
+    # decision_record.mint_id / decision_record.release_id — MUTATING: both create
+    # or delete a reservation marker file under state/decision-record-reservations/
+    # (coordinator_core/ops/decision_record_mint.py).
+    # Affirmation rationale (five-question checklist, both ops):
+    #   1. Does it write, delete, or reorder any state file, queue, or git object?  YES.
+    #      mint_id creates a reservation marker (os.open O_CREAT|O_EXCL|O_WRONLY);
+    #      release_id deletes one (os.unlink). mint_id's TTL sweep also deletes
+    #      any stale reservation files it encounters along the way.
+    #   2. Does it write into rag's relational store?                                No.
+    #   3. Does it open any file for write (including sentinel creation)?            YES.
+    #   4. Does it mutate shared mutable state outside its own module?               YES.
+    #      Reservation files are visible to every session sharing this tree
+    #      (CLAUDE.md § Engineering Defaults — "parallel agents share one tree").
+    #   5. Does it produce side effects observable across process boundaries?        YES.
+    #
+    # Spec backlink: coordinator_core/ops/decision_record_mint.py module docstring
+    "decision_record.mint_id": OpClass.MUTATING,
+    "decision_record.release_id": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # fleet.* DR-218 review-trail-findings-reap sub-family — two ops, both
     # classified MUTATING (DR-218 D2/D2a delete-specific five-bound affirmed
@@ -1583,6 +1601,33 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C7
     "memo.draft": OpClass.MUTATING,
     "memo.compose": OpClass.MUTATING,
+    # DR-208 five-question affirmation (memo.reconcile_outbox, citing
+    # ops/fleet/memo_reconcile_outbox.py):
+    #   1. Writes/deletes/reorders any state file, queue, or git object?     YES.
+    #      Every already-delivered entry (frontmatter `status:` not "draft") is
+    #      MOVED out of the CALLING repo's own state/memo-outbox/ into that same
+    #      tree's sent/ subdirectory. Never a delete, never a clobber (an existing
+    #      sent/<name> is skipped), never a receiver repo's inbox — the same
+    #      own-tree confinement memo.draft/memo.compose carry above.
+    #   2. Writes into rag's relational store?                              No.
+    #      Moves coordinator outbox substrate only; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?          YES.
+    #      os.replace(path, sent_dir / path.name), plus the sent/ mkdir that
+    #      precedes the first move.
+    #   4. Mutates shared mutable state outside its own module?             YES.
+    #      state/memo-outbox/ is the queue the workday-start surface, the pickup
+    #      skill, and a handoff's undelivered-drafts line all read as work depth —
+    #      the very readers whose over-count this op exists to correct.
+    #   5. Persistent state changes observable across process boundaries?   YES.
+    #      The moved paths are what the same repo's subsequent memo.list_outbox
+    #      invocations enumerate, and the op returns them for the CALLER to commit
+    #      (it commits nothing itself — module docstring, Negative-spec).
+    # Classified MUTATING for the ordinary reason memo.draft/memo.compose are — it
+    # writes — not for a cross-tree reason: this op never leaves the calling repo,
+    # so the DR-214-send-class D2 seven-bound (memo.send's alone) does not apply.
+    # Spec: state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-after-a-send.yaml
+    "memo.reconcile_outbox": OpClass.MUTATING,
     # DR-208 five-question affirmation (memo.list_outbox, citing
     # ops/fleet/memo_list_outbox.py) — COMPUTE_ONLY, structural sibling to
     # memo.list (distinct data source: CALLING repo's own state/memo-outbox/
@@ -1977,6 +2022,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "ceremony.post_commit_tail": OpClass.MUTATING,
     # ceremony.session_instructions — COMPUTE_ONLY: EM-facing instruction-set render op.
     # Renders branch_resolution's already-computed node classification into a pruned,
+    # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
+    # is a zero-spawn read, but the act half is an outward-facing publish.
+    "push.outstanding": OpClass.MUTATING,
     # ordered, EM-facing instruction set. Read-mostly: no mutation, no tail, no commit,
     # no durable write of its own — it renders off an already-resolved context. Handler:
     # ops/ceremony/session_instructions.py.

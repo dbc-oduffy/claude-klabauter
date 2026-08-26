@@ -610,7 +610,8 @@ def test_skip_when_claude_klabauter_root_unresolvable(tmp_path: Path, monkeypatc
     """Claude-Klabauter-root resolution now lives in `plugin_health.oracle_surface`
     (see that module's own docstring — this is the single definition
     `bin_inventory_gate.py` also consumes), so the unresolvable-root case is
-    patched at ITS `coordinator_claude_klabauter_root` import, not on `fr` directly."""
+    patched at ITS `coordinator_engine_root` import, not on `fr` directly.
+    C14 renamed `coordinator_claude_klabauter_root` to `coordinator_engine_root`."""
     doe_root = tmp_path / "doe"
     doe_root.mkdir()
 
@@ -619,7 +620,7 @@ def test_skip_when_claude_klabauter_root_unresolvable(tmp_path: Path, monkeypatc
 
     import coordinator_core.plugin_health.oracle_surface as oracle_surface
 
-    monkeypatch.setattr(oracle_surface, "coordinator_claude_klabauter_root", _raise)
+    monkeypatch.setattr(oracle_surface, "coordinator_engine_root", _raise)
 
     result = fr.check_fleet_reachability(doe_root=doe_root)
 

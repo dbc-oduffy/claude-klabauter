@@ -162,6 +162,7 @@ HARD_DENY_NAMES = [
     "block_consumed_handoff_edit",
     "block_derived_global_doctrine_write",
     "block_disarm_marker_sentinel_write",
+    "block_duplicate_decision_record_id",
     "block_goals_log_hand_write",
     "block_home_dir_memo_delivery",
     "block_illegal_filename",

@@ -1,5 +1,13 @@
 # coordinator → example-retrieval-repo producer contract (frozen)
 
+> **RETIREMENT NOTICE (2026-08-26) — `coverage.gate` is dead.** K-001 (`55e64be13`,
+> 2026-08-16) deleted `coordinator_core/ops/coverage_gate.py` and every consumer of the
+> review-coverage verdict. The method now returns JSON-RPC `-32601` (method not found),
+> verified against the stamped engine. **Every mention of `coverage.gate` below — the
+> § 0 summary, the § 1.2 op table, § 1.3, and the transport notes — describes a surface
+> that no longer dispatches**, and is retained as the historical wire record only.
+> `handoff.has_live_children` and `ping` are unaffected by this notice.
+
 > **STALE AS OF 2026-08-23 — the emission artifact this contract is built around no longer exists.**
 > `state/cockpit-emission.json`, `artifact.emit`, `emit.cadence` and `emission.publish` were deleted
 > (DR-351). Every clause below that names the emission as an authoritative surface, a schema_version
@@ -149,7 +157,7 @@ rebuildable read-model over that disk-truth, plus the query surface built over i
 > is now a tombstone stub that unconditionally raises `NotImplementedError` (see
 > `lifecycle.py:254-264`, "Retired by C3 — UDS transport removed").
 >
-> **The ops themselves are still live logic** — `coverage.gate` and
+> **The ops themselves are still live logic** — ~~`coverage.gate`~~ (RETIRED 2026-08-16, K-001) and
 > `handoff.has_live_children` (§ 1.3, § 1.4) did not go away; only the socket/JSON-RPC
 > transport wrapping them did. rag invokes them **command-type**, one spawn per call:
 >
@@ -231,7 +239,7 @@ rag **observes**; it does not mutate. From `coordinator_core/ops/__init__.py`:
 | op | classification | rag may call? |
 |----|----------------|---------------|
 | ~~`ping`~~ | ~~read-only (health)~~ **[SUPERSEDED by DR-215 — retired]** | no — op no longer exists; there is no resident daemon to ping |
-| `coverage.gate` | read-only (compute) | yes — coverage-verdict source (command-type, see § 1.1) |
+| `coverage.gate` | **RETIRED — returns `-32601`** | **no — killed by K-001 (2026-08-16); see the retirement notice at the top and § 1.3** |
 | `handoff.has_live_children` | read-only (query) | yes — handoff-lineage source (command-type, see § 1.1) |
 | `artifact.emit` | **MUTATING** (writes `cockpit-emission.json`) | **no** |
 | `backlog.record` | **MUTATING** (backlog-history recorder) | **no** |
@@ -244,10 +252,17 @@ rag **observes**; it does not mutate. From `coordinator_core/ops/__init__.py`:
 op. Claude-klabauter owns emission; rag consumes the emitted disk-truth. rag's only writes are to its
 own store.
 
-### 1.3 `coverage.gate` — coverage-verdict source
+### 1.3 `coverage.gate` — coverage-verdict source — **RETIRED, DOES NOT DISPATCH**
 
-Source of truth: `coordinator_core/ops/coverage_gate.py` (do not paraphrase; the module
-docstring is the frozen wire contract).
+**This op was killed by K-001 (2026-08-16, `55e64be13`, "the review-coverage verdict and every
+consumer of it are removed"). `coordinator_core/ops/coverage_gate.py` no longer exists, and
+`coverage.gate` returns JSON-RPC `-32601` (method not found) — verified 2026-08-26 against the
+stamped engine.** The params and response shape below are retained as the historical wire record
+only; nothing serves them. A consumer still calling this method gets an error envelope, not a
+verdict.
+
+Source of truth (historical): `coordinator_core/ops/coverage_gate.py`, deleted by K-001. The
+frozen wire contract it carried died with it; the tables below are not a live specification.
 
 **method:** `"coverage.gate"`
 

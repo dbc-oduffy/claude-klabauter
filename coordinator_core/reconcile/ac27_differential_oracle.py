@@ -91,7 +91,7 @@ from coordinator_core.ops.ceremony.git_native import (  # noqa: E402
     cat_file_batch,
     cat_file_batch_objects,
 )
-from coordinator_core.ops.handoff_reconcile import (  # noqa: E402
+from coordinator_core.reconcile.handoff_corpus import (  # noqa: E402
     _AWAITING_GATE_STATE,
     _collect_all_handoffs_for_gate_index,
     _collect_open_handoffs,

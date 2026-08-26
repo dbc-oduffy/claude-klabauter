@@ -84,7 +84,10 @@ from pathlib import Path
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import records_query
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 
 
 class UnsupportedRecordTypeError(ValueError):
@@ -595,7 +598,7 @@ def _is_git_worktree(root: Path) -> bool:
             cwd=str(root),
             capture_output=True,
             check=False,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         return False

@@ -792,7 +792,13 @@ class TestMemoOffersDeny:
         )
         assert result is not None
         reason = _assert_advisory_shape(result)
-        assert "cross-repo-memo --to" in reason
+        assert "cross-repo-memo draft" in reason
+        assert "cross-repo-memo send" in reason
+        # The one-shot flag form this line used to pin was RETIRED from the CLI
+        # (argparse rejects it outright). A guard that catches a hand-rolled memo
+        # and then offers a command that errors is worse than one that says nothing,
+        # so the retired shape is pinned ABSENT rather than left untested.
+        assert "--topic" not in reason
 
 
 class TestRoutingMismatchDeny:

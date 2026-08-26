@@ -14,6 +14,8 @@ docstring for the full narrative and its own defense-in-depth coverage.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from coordinator_core import pyresolve
@@ -285,6 +287,15 @@ def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch, capsys):
     monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: None)
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: False)
     monkeypatch.setattr(pyresolve, "_which", lambda name: "/usr/bin/python3" if name == "python3" else None)
+    # main() -> _prepend_path() does an intentionally-unguarded os.environ["PATH"]
+    # write (see that function's own docstring): safe by contract only because
+    # its sole real caller is this module's own subprocess-spawned __main__, which
+    # exits right after. This test calls main() in-process, outside that contract,
+    # so it must isolate PATH itself rather than lean on a guarantee that only
+    # holds for the spawned-process caller. A same-value setenv is enough to make
+    # monkeypatch snapshot and restore PATH on teardown regardless of main()'s own
+    # direct write in between.
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
 
     rc = pyresolve.main(["--print-bin"])
     assert rc == 0

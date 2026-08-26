@@ -111,7 +111,6 @@ import datetime
 import functools
 import os
 import re
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -435,7 +434,17 @@ def registry_value(key: str, flat: dict) -> Optional[str]:
 
 
 def _hostname_short() -> Optional[str]:
-    """Return the short (domain-stripped) local hostname, or None on failure."""
+    """Return the short (domain-stripped) local hostname, or None on failure.
+
+    `socket` is imported HERE, not at module scope. It costs ~4.3ms to import
+    (it pulls `selectors` and `select` with it), this module is on the commit
+    hot path via `doe_root_pointer`, and `compute_machine` resolves
+    `$COORDINATOR_MACHINE` and the settings file BEFORE it ever asks for a
+    hostname -- so the eager import was paid by every op and consumed by
+    almost none.
+    """
+    import socket
+
     try:
         h = socket.gethostname()
     except OSError:

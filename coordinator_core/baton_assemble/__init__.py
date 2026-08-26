@@ -233,7 +233,7 @@ from coordinator_core.resolve_coordinator_clone import (
     resolve_content_root,
 )
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
-from coordinator_core.session.scope import project_self_scope
+from coordinator_core.session.touch_record import project_live_claims
 from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
@@ -1108,22 +1108,25 @@ def _normalize_repo_relative_path(path: str) -> str:
 
 def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
     """Disk-derived case-c attribution probe: partitions the current dirty
-    set into `mine` (this session's own edits, per its `touched.txt`) and a
-    `residue` count (everything else -- may be a sibling session's, may be
-    unrelated cruft; this probe does not attempt to attribute residue, only
-    to STOP over-claiming it as "mine").
+    set into `mine` (this session's own edits, per its live touch-record
+    claims -- `coordinator_core.session.touch_record.project_live_claims`,
+    the C3 read seam) and a `residue` count (everything else -- may be a
+    sibling session's, may be unrelated cruft; this probe does not attempt
+    to attribute residue, only to STOP over-claiming it as "mine").
 
     Returns one of two shapes:
       - `{"degraded": False, "mine": [<repo-relative paths>, ...], "residue_count": <int>}`
       - `{"degraded": True, "evidence": "<why the probe could not run>"}`
 
     Degrades to `degraded=True` -- never to `mine=[]` -- on any of: no
-    resolvable session id, a missing/unreadable `touched.txt`, or a failing/
-    erroring `git status` call. `_build_judgment_points` falls back to
-    TODAY's unconditional emission on `degraded=True`; collapsing a probe
-    FAILURE into `mine=[]` would silently resolve `d1` with no ask at all,
-    which is the exact failure mode this module must never introduce (a
-    failure to compute must never silently resolve `d1`)."""
+    resolvable session id, a degraded touch-record projection (unreadable
+    family member or a malformed line -- see `project_live_claims`'s own
+    Failure posture), or a failing/erroring `git status` call.
+    `_build_judgment_points` falls back to TODAY's unconditional emission on
+    `degraded=True`; collapsing a probe FAILURE into `mine=[]` would
+    silently resolve `d1` with no ask at all, which is the exact failure
+    mode this module must never introduce (a failure to compute must never
+    silently resolve `d1`)."""
     session_id = _resolve_current_session_id()
     if not session_id:
         return {
@@ -1146,20 +1149,19 @@ def _compute_dirty_tree_attribution(root: Path) -> dict[str, Any]:
             ),
         }
 
-    touched_path = common_dir / "coordinator-sessions" / session_id / "touched.txt"
-    try:
-        touched_text = touched_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    sink_path = common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+    projection = project_live_claims(sink_path, cwd=str(root))
+    if projection.degraded:
         return {
             "degraded": True,
             "evidence": (
-                f"dirty-tree attribution probe: could not read {touched_path} "
-                f"({exc!r}) -- falling back to an unconditional ask."
+                f"dirty-tree attribution probe: touch-record projection for "
+                f"{sink_path} degraded ({'; '.join(projection.degrade_reasons)}) "
+                "-- falling back to an unconditional ask."
             ),
         }
     touched = {
-        _normalize_repo_relative_path(path)
-        for path in project_self_scope(touched_text.splitlines())
+        _normalize_repo_relative_path(path) for path in projection.claims
     }
 
     try:
@@ -1225,15 +1227,18 @@ def _dirty_tree_case_c_evidence(attribution: dict[str, Any]) -> str:
         listing += f", and {remainder} more"
     return (
         f"coordinator_core.ops.dirty_tree_gate's porcelain read found {len(mine)} "
-        f"dirty path(s) matching this session's own touched.txt: {listing}. "
+        f"dirty path(s) matching this session's own touch record: {listing}. "
         f"{residue_count} additional dirty path(s) are NOT in this session's "
-        "touched.txt (unattributed residue -- not this ask; see "
+        "touch record (unattributed residue -- not this ask; see "
         "coordinator_core.ops.dirty_tree_gate for that classification)."
     )
 
 
 def _adopt_prior_attempt_scaffold_path(
-    predecessor: str, predecessor_id: Optional[str], root: Path
+    predecessor: str,
+    predecessor_id: Optional[str],
+    root: Path,
+    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """The path of THE SOLE LIVE `state/handoffs/*.md` FILE NAMING THIS
     PREDECESSOR AS ITS OWN `predecessor:` AND CARRYING THIS RUN'S OWN
@@ -1391,7 +1396,7 @@ def _adopt_prior_attempt_scaffold_path(
     if not claimed_or_shipped_at_path(str(pred_path)):
         return None
 
-    current_session = _resolve_current_session_id()
+    current_session = session_id or _resolve_current_session_id()
     if not current_session:
         return None
 
@@ -1443,7 +1448,7 @@ def _adopt_prior_attempt_scaffold_path(
 
 
 def _adopt_prior_attempt_mint_path(
-    mint_path: str, root: Path, kind: str
+    mint_path: str, root: Path, kind: str, session_id: Optional[str] = None
 ) -> Optional[str]:
     """Non-None when the bare-slug MINT TARGET `mint_path` is already occupied
     by THIS run's own prior attempt -- the path is then re-used as
@@ -1521,7 +1526,7 @@ def _adopt_prior_attempt_mint_path(
         return None
     if (_fm_field(fm, "continued_into") or "").strip() not in ("", "none", "null", "~"):
         return None
-    current_session = _resolve_current_session_id()
+    current_session = session_id or _resolve_current_session_id()
     if not current_session:
         return None
     if (_fm_field(fm, "authoring_session") or "").strip() != current_session:
@@ -2043,8 +2048,18 @@ def resolve_lineage(
     explicit_deliverable_id: Optional[str] = None,
     *,
     excise_rung: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve the `kind`-selected parent-discovery order into a lineage dict.
+
+    `session_id`, when supplied, is the caller's ALREADY-RESOLVED id, passed
+    through to the two prior-attempt adoption predicates below in place of
+    their ambient environment read. `apply()` binds its resolved id into
+    `apply_base.session_identity`'s per-var ContextVars, which
+    `core.resolve_session_id` does not read -- so an explicit `--session-id`
+    was invisible to those authorship gates, which then compared a candidate's
+    `authoring_session` against whatever id happened to be in THIS PROCESS's
+    environment. A caller with no id of its own keeps the ambient read.
 
     handoff: plan -> predecessor -> mint. Companion id `predecessor_id` is
         read off the SAME file the `predecessor` field names (never a
@@ -2193,7 +2208,9 @@ def resolve_lineage(
             # `handoff.author_fork`'s own claim-ledger self-resolution (the
             # session's ACTUAL held baton) exactly as it does on a first run.
             fm = ""
-            _adopted_mint_path = _adopt_prior_attempt_mint_path(artifact_path, root, kind)
+            _adopted_mint_path = _adopt_prior_attempt_mint_path(
+                artifact_path, root, kind, session_id
+            )
         elif _artifact_fm_path.is_file():
             fm = _read_frontmatter(_artifact_fm_path)
             _artifact_frontmatter_abs_path = _artifact_fm_path
@@ -2796,7 +2813,8 @@ def resolve_lineage(
                 # evidence classes never compete; see
                 # `_adopt_prior_attempt_scaffold_path`.
                 _adopted = _adopt_prior_attempt_scaffold_path(
-                    lineage["predecessor"], lineage.get("predecessor_id"), root
+                    lineage["predecessor"], lineage.get("predecessor_id"), root,
+                    session_id,
                 )
                 if _adopted:
                     lineage["output_path"] = _adopted
@@ -4203,7 +4221,7 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
 
 
 def _resolve_held_handoff_for_session(
-    root: Path, *, allow_standalone: bool = False
+    root: Path, *, allow_standalone: bool = False, session_id: Optional[str] = None
 ) -> tuple[Optional[str], list[str], bool]:
     """Self-resolves kind="handoff"'s predecessor(s) from the CURRENT
     session's own DURABLE claim ledger, for the `brief`/`apply` calling
@@ -4388,7 +4406,18 @@ def _resolve_held_handoff_for_session(
         list_claims_by_session,
     )
 
-    session_id = resolve_current_session_id(root)
+    # `session_id`, when the caller supplies it, is an ALREADY-RESOLVED id
+    # and is used verbatim — this module's standing contract (every tier
+    # takes resolved inputs rather than re-deriving them). Re-deriving here
+    # is what broke `apply --session-id <id>`: apply() resolves the id, binds
+    # it into `apply_base.session_identity`'s per-var ContextVars, and calls
+    # brief() inside that scope — but `core.resolve_session_id` reads its own
+    # override ContextVar and then `os.environ`, neither of which that scope
+    # touches. The two identity mechanisms never meet, so an explicit
+    # --session-id resolved to nothing here and the caller was told no
+    # session was resolvable while holding one in its hand. Callers with no
+    # id of their own keep the ambient resolution below, unchanged.
+    session_id = session_id or resolve_current_session_id(root)
     if not session_id:
         raise ValueError(
             "baton_assemble: kind='handoff' with no artifact-path supplied, but no "
@@ -4653,6 +4682,7 @@ def brief(
     repo_root: Optional[Path] = None,
     title: Optional[str] = None,
     explicit_deliverable_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> BriefResult:
     """`brief <kind> [artifact-path] [--decisions <json>] [--title <text>]
     [--deliverable-id <id>]` -- the single-shot decision-object computation
@@ -4866,7 +4896,9 @@ def brief(
     _brief_ledger_degraded: Optional[bool] = None
     if not artifact_path and kind == "handoff":
         resolved_predecessor, additional_predecessor_paths, _brief_ledger_degraded = (
-            _resolve_held_handoff_for_session(root, allow_standalone=True)
+            _resolve_held_handoff_for_session(
+                root, allow_standalone=True, session_id=session_id
+            )
         )
         if resolved_predecessor is None:
             # 2026-08-03 break-class fix: a memo-pickup session legitimately
@@ -4894,6 +4926,7 @@ def brief(
             title=title,
             explicit_deliverable_id=explicit_deliverable_id,
             excise_rung=_excise_rung,
+            session_id=session_id,
         )
     except DivergentDeliverableIdError as _divergence_exc:
         # Actionable, not terminal. The refusal to auto-pick is UNCHANGED --

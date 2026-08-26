@@ -86,6 +86,7 @@ Negative-spec:
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -102,6 +103,7 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     check_repo_root,
     main_worktree_root,
+    parse_frontmatter_field,
     parse_frontmatter_status,
     rel_id,
     validate_params,
@@ -134,8 +136,7 @@ def _derive_yyyy_mm(fname: str) -> Optional[str]:
 
 def _extract_title(path: Path) -> Optional[str]:
     """Return the 'title' field from YAML frontmatter, or None if absent/unreadable."""
-    meta = _read_meta(str(path))
-    return meta.get("title") if meta else None
+    return parse_frontmatter_field(path, "title")
 
 
 def _read_plan_fk(path: Path) -> Optional[str]:
@@ -144,11 +145,50 @@ def _read_plan_fk(path: Path) -> Optional[str]:
     Read-only — this function never writes or infers anything about the
     referenced plan; it only extracts the pointer itself.
     """
-    meta = _read_meta(str(path))
-    if not meta:
+    plan_fk = parse_frontmatter_field(path, "plan")
+    if plan_fk in (None, "", "null", "~"):
         return None
-    plan_fk = meta.get("plan")
-    return plan_fk if plan_fk else None
+    return plan_fk
+
+
+#: Where an archived plan lands. Plans archive as SPECS, month-nested -- hence
+#: the basename probe below rather than a literal path join.
+_ARCHIVE_PLANS_SUBDIRS = (("archive", "specs"), ("archive", "plans"))
+
+
+def _resolve_plan_fk(worktree_root: Path, plan_fk: str) -> Optional[Path]:
+    """Resolve a sizing's `plan:` FK live-then-archive, or None.
+
+    The FK is spelled `docs/plans/<id>.md` in every sizing that carries one,
+    but a shipped plan is moved to `archive/specs/<month>/<id>.md` and no
+    mechanism rewrites the citation -- the FK is archive-agnostic by design,
+    exactly as `coordinator_core.ops._sizing_citation` already documents for
+    the sizings direction of the same pointer. Resolving it literally makes
+    every shipped plan read as DANGLING, which the refusal gate below then
+    treats as "refuse in place": measured on this corpus, 37 of 41 otherwise-
+    movable terminal sizings were held by plans that had simply been archived.
+
+    Mirrors `_sizing_citation._archive_sizings_fallback`'s discipline: live
+    always wins, the archive probe fires only on a miss, and an ambiguous
+    multi-match is treated exactly like no match rather than guessed at.
+    """
+    direct = worktree_root / plan_fk
+    if direct.is_file():
+        return direct
+    basename = os.path.basename(plan_fk.replace("\\", "/"))
+    if not basename:
+        return None
+    bare = worktree_root / "docs" / "plans" / basename
+    if bare.is_file():
+        return bare
+    for subdir in _ARCHIVE_PLANS_SUBDIRS:
+        archive_root = worktree_root.joinpath(*subdir)
+        if not archive_root.is_dir():
+            continue
+        matches = sorted(p for p in archive_root.rglob(basename) if p.is_file())
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def _forward_plan_refusal_reason(
@@ -166,17 +206,12 @@ def _forward_plan_refusal_reason(
     it and never concludes anything about it beyond "terminal or not, right
     now" for the purpose of this refusal.
     """
-    plan_path = worktree_root / plan_fk
-    if not plan_path.is_file():
-        # Try resolving relative to docs/plans/ when the FK is a bare filename.
-        candidate = worktree_root / "docs" / "plans" / plan_fk
-        if candidate.is_file():
-            plan_path = candidate
-        else:
-            return (
-                f"{_REASON_FORWARD_PLAN_NOT_TERMINAL}: plan FK {plan_fk!r} "
-                f"could not be resolved to a file"
-            )
+    plan_path = _resolve_plan_fk(worktree_root, plan_fk)
+    if plan_path is None:
+        return (
+            f"{_REASON_FORWARD_PLAN_NOT_TERMINAL}: plan FK {plan_fk!r} "
+            f"could not be resolved to a file, live or archived"
+        )
 
     plan_status = parse_frontmatter_status(plan_path)
     if plan_status not in PLAN_TERMINAL_STATUS:

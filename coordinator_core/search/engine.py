@@ -954,6 +954,14 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                 for filename in sorted(files):
                     shown = (os.path.join(target, filename) if relative == "."
                              else os.path.join(target, relative, filename))
+                    # The DISPLAYED path is grep's output, not a filesystem path,
+                    # and grep prints `/` on every host including Git-for-Windows.
+                    # Emitting `.\pkg\mod.py` here makes the substituted answer
+                    # differ textually from the command it replaced, on the one
+                    # field callers most often paste, split, or re-grep. No-op
+                    # where `os.sep` is already `/`; the path actually opened
+                    # below is unchanged.
+                    shown = shown.replace(os.sep, "/")
                     if not scan(os.path.join(root, filename), shown):
                         stop = True
                         break

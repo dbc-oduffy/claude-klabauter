@@ -112,7 +112,7 @@ model `cc_invoke.py`'s `[sys.executable, "-m", "coordinator_core.invoke",
 ...]` already uses at 13+ DoE call sites — `full_test_cmd:` follows the
 established fleet standard rather than inventing a second one.
 
-A `PYTHONPATH=<claude-klabauter-root>` source trampoline (running the module
+A `PYTHONPATH=<claude-klabauter-live-root>` source trampoline (running the module
 straight out of claude-klabauter's working tree, unpackaged) also works and is
 permitted under the tri-plane boundary — it reaches claude-klabauter's *source*,
 never its *environment*. It is not, however, the shape DEC-11 specifies,

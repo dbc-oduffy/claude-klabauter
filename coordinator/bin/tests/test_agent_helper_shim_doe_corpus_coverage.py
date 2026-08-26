@@ -364,7 +364,7 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
     bin_dst.mkdir(parents=True)
 
     prior = os.environ.get("CLAUDE_KLABAUTER_ROOT")
-    os.environ["CLAUDE_KLABAUTER_ROOT"] = str(_CLAUDE_KLABAUTER_ROOT)
+    os.environ["COORDINATOR_ENGINE_ROOT"] = str(_CLAUDE_KLABAUTER_ROOT)
     try:
         _install_bin_resolvers(
             ml_bin, ch_bin, bin_dst, False,
@@ -374,7 +374,7 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
         if prior is None:
             os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
         else:
-            os.environ["CLAUDE_KLABAUTER_ROOT"] = prior
+            os.environ["COORDINATOR_ENGINE_ROOT"] = prior
 
     return bin_dst
 

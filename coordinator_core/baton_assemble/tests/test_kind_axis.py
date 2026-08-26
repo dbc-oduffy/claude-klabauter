@@ -126,6 +126,8 @@ class TestPickupOfUnstampedLegacyBatonUnaffected:
     handoff, addressed explicitly by the operator, must succeed exactly as
     it did before this axis existed."""
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_brief_admits_operator_named_unstamped_legacy_baton(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "handoffs" / "legacy.md"
         target.parent.mkdir(parents=True, exist_ok=True)

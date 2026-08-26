@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -221,6 +222,65 @@ class TestRealWarmHit:
         assert outcome.hit is True
         assert "error" not in outcome.response
         assert "permissionDecision" not in outcome.response["result"]
+
+
+class TestEagerRegistrationEntry:
+    """AC (governing spec): "The op has an eager import/registration entry -- a new
+    op that is present-but-dead registers as absent to `try_warm_guard_dispatch` and
+    reads identically to never having been built."
+
+    Every OTHER test in this file reaches the op through this file's own top-level
+    `from coordinator_core.ops import warm_guard_evaluate` (module import above),
+    which runs `@register_op` as an import side effect. If the `_EAGER_OP_MODULES`
+    entry for this op in `coordinator_core/ops/__init__.py` were missing,
+    misspelled, or pointed at the wrong module path, every test above would still
+    pass -- none of them drives registration through that list, so none of them
+    can see the entry break.
+
+    This test discriminates because it does the opposite: it evicts the handler
+    this file's own top-level import already registered (from `ipc._REGISTRY`) and
+    forgets the import itself (from `sys.modules`), then drives registration ONLY
+    through the real, unmodified `coordinator_core.ops._eager_import_all()` -- the
+    same path a fresh-process caller (or `ipc`'s registry-miss fallback) uses.
+    `_eager_import_all()` imports each `(module_path, note)` pair in
+    `_EAGER_OP_MODULES` via `importlib.import_module`, which returns a cached
+    module from `sys.modules` without re-running its top level -- that is why the
+    `sys.modules` eviction above is load-bearing, not optional. Nothing else
+    repopulates `_REGISTRY` for this op once evicted. So: if `_EAGER_OP_MODULES`
+    did not correctly name this module, `_eager_import_all()` would never reimport
+    it, `register_op` would never fire again, and the assertion below would see
+    `None` and fail.
+
+    The assertion reads `ipc._REGISTRY` directly rather than calling
+    `ipc.get_op_handler()`: `get_op_handler` has its own registry-miss lazy-import
+    fallback (`_lazy_import_and_lookup`) that resolves an op module by naming
+    convention independently of `_EAGER_OP_MODULES`, and manually breaking the
+    real `_EAGER_OP_MODULES` entry during authoring showed `get_op_handler` still
+    finding the handler through that fallback -- i.e. it does NOT discriminate
+    here. `ipc._REGISTRY` has no such fallback; it reflects only what
+    `register_op` has actually populated, which is exactly what
+    `_eager_import_all()` is being tested to have done.
+    """
+
+    def test_registration_survives_only_through_the_eager_entry(self, monkeypatch):
+        from coordinator_core import ipc, ops
+
+        monkeypatch.delitem(ipc._REGISTRY, "warm_guard.evaluate", raising=False)
+        monkeypatch.delitem(
+            sys.modules, "coordinator_core.ops.warm_guard_evaluate", raising=False
+        )
+
+        ops._eager_import_all()
+
+        # `ipc.get_op_handler` is deliberately NOT used for the assertion: it has
+        # its own registry-miss lazy-import fallback (`_lazy_import_and_lookup`,
+        # keyed off the op name by convention) that would silently re-discover
+        # this module even with a broken/missing `_EAGER_OP_MODULES` entry --
+        # confirmed by manually breaking that entry and observing
+        # `get_op_handler` still resolve the handler. Reading `ipc._REGISTRY`
+        # directly is the only check that is actually gated on
+        # `_eager_import_all()` having done the registering.
+        assert ipc._REGISTRY.get("warm_guard.evaluate") is not None
 
 
 class TestColdPathUnchanged:

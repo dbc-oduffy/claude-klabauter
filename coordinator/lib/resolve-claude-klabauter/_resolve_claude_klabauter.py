@@ -5,7 +5,7 @@ formerly-inline-per-forwarder body.
 
 Every emitted bin forwarder used to carry its own copy (~50 lines) of the
 registry-then-sentinel resolution ladder that locates
-``<claude-klabauter-root>/coordinator/bin/`` and validates it before exec'ing into a
+``<claude-klabauter-live-root>/coordinator/bin/`` and validates it before exec'ing into a
 target CLI there. With the forwarder SET now derived from a directory
 listing (rather than a hand-maintained ~10-entry tuple — see
 ``substrate.py``'s ``_derive_agent_helper_names``), that duplication would
@@ -25,7 +25,7 @@ incomplete checkout vs. stale/partial migration).
 Deliberately does NOT carry the ``_cc_trusted``/``.doe-root`` trust-prefix
 dance the prior template never carried either — this seam's trust posture
 differs from ``cc-root-source-guard``: ``registry.local.toml`` and
-``.claude-klabauter-root`` are per-machine, gitignored, operator-authored config under
+``.claude-klabauter-live-root`` are per-machine, gitignored, operator-authored config under
 the operator's own settings-home, not a harness-supplied value an external
 actor can steer. What this module DOES check — because a typo'd or stale
 config value is a real, non-adversarial failure mode, not a trust boundary —
@@ -173,7 +173,7 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
     miss, not a hit (never overwrites a value already resolved from the
     other file).
 
-    Rung 2 (fallback): .claude-klabauter-root sentinel — honored when the registry key
+    Rung 2 (fallback): .claude-klabauter-live-root sentinel — honored when the registry key
     above is absent or the file itself is missing.
 
     Raises ClaudeKlabauterResolutionError (with a fail-loud, distinct message) when:
@@ -202,7 +202,7 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
             claude_klabauter_root = flat
 
     if not claude_klabauter_root:
-        sentinel_path = ml_dir / ".claude-klabauter-root"
+        sentinel_path = ml_dir / ".claude-klabauter-live-root"
         try:
             with open(sentinel_path, "r", encoding="utf-8") as f:
                 claude_klabauter_root = f.read().rstrip("\r\n")
@@ -215,7 +215,7 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
         raise ClaudeKlabauterResolutionError(
             "ERROR: cannot resolve claude-klabauter — set it via 'machine-local set "
             f"repos.claude_klabauter <path>' (writes {ml_dir}/registry.local.toml), "
-            f"or write the path to {ml_dir}/.claude-klabauter-root, or register a published "
+            f"or write the path to {ml_dir}/.claude-klabauter-live-root, or register a published "
             "engine mirror via 'machine-local set repos.claude_klabauter <path>'\n"
         )
 
@@ -228,14 +228,14 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
         raise ClaudeKlabauterResolutionError(
             f"ERROR: resolved claude-klabauter root '{claude_klabauter_root}' contains a "
             f"'..' traversal segment — refusing; fix {ml_dir}/registry.local.toml "
-            f"or {ml_dir}/.claude-klabauter-root\n"
+            f"or {ml_dir}/.claude-klabauter-live-root\n"
         )
 
     if not os.path.isdir(claude_klabauter_root):
         raise ClaudeKlabauterResolutionError(
             f"ERROR: resolved claude-klabauter root '{claude_klabauter_root}' does not exist "
             "on disk — re-run 'machine-local set repos.claude_klabauter <path>' or fix "
-            f"{ml_dir}/.claude-klabauter-root\n"
+            f"{ml_dir}/.claude-klabauter-live-root\n"
         )
 
     return claude_klabauter_root
@@ -704,7 +704,7 @@ def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
          CONFIRMED not-the-source-tree session, not an undeterminable one)
          -> ``(published, RESOLUTION_RESOLVED_ENGINE)``.
       2. Otherwise today's existing ladder (``_resolve_claude_klabauter_root``:
-         registry key -> ``.claude-klabauter-root`` sentinel) -> if it resolves,
+         registry key -> ``.claude-klabauter-live-root`` sentinel) -> if it resolves,
          ``(root, RESOLUTION_LIVE_WORKING_TREE)``.
       3. Otherwise, if a published engine is registered/usable ->
          ``(published, RESOLUTION_RESOLVED_ENGINE)``.
@@ -887,10 +887,10 @@ def _validate_bin_dir(claude_klabauter_root: str) -> str:
 
 
 def resolve_claude_klabauter_bin_dir() -> str:
-    """Resolve, validate, and return ``<claude-klabauter-root>/coordinator/bin``.
+    """Resolve, validate, and return ``<claude-klabauter-live-root>/coordinator/bin``.
 
-    The coordinator-owned CLIs live at ``<claude-klabauter-root>/coordinator/bin``, NOT
-    ``<claude-klabauter-root>/bin`` (that top-level bin/ is a different, unrelated
+    The coordinator-owned CLIs live at ``<claude-klabauter-live-root>/coordinator/bin``, NOT
+    ``<claude-klabauter-live-root>/bin`` (that top-level bin/ is a different, unrelated
     claude-klabauter directory with its own entries).
 
     Byte-identical to its pre-C4b behaviour: resolves the root via the
@@ -1011,7 +1011,7 @@ def _resolve_publisher_root() -> str:
 
 
 def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
-    """Resolve ``<claude-klabauter-root>/coordinator/bin/<target>`` and run it,
+    """Resolve ``<claude-klabauter-live-root>/coordinator/bin/<target>`` and run it,
     forwarding *argv* (defaults to ``sys.argv[1:]``).
 
     POSIX: ``os.execv``s into ``sys.executable`` with *target_path* as its

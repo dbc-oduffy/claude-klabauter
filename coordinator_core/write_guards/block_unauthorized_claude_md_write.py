@@ -515,7 +515,7 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     # button, told not to press it" shape closed here. Kept, not deleted --
     # its own test coverage
     # (`TestDenyTextNamesAlternativeAndOverride::test_grant_cli_*`) still
-    # pins the claude-klabauter-root resolution/fallback/shell-safety logic on its
+    # pins the claude-klabauter-live-root resolution/fallback/shell-safety logic on its
     # own merits, independent of whether any guard message renders it.
 
 

@@ -759,34 +759,33 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         advisory = _advisory_text(
             _hso(dispatch_checks.check_git_commit_safe_commit_advise('git commit -m "fix the thing"', "s"))
         )
-        assert "scoped-git-commit" in advisory
+        assert "git add" in advisory
         assert "fix the thing" in advisory
 
     def test_the_divergence_case_surface_it_names_is_actually_invocable(self):
-        """The advisory must name a CLI that EXISTS on the entrypoint surface
-        a caller can reach, not an op id.
+        """The advisory must name a mechanism a caller can reach directly,
+        not an op id and not a deleted forwarder.
 
-        `ceremony.scoped_git_commit` — which this advisory named for its first
-        few hours of life — is a registered op with no bin artifact, and the
-        settings-home forwarder set is derived from a scan of
-        `coordinator/bin/`. Naming a dotted op id reads to a caller exactly
-        like naming nothing (doe-claude-em, 2026-07-29: "an op named in
-        doctrine with no reachable entrypoint reads to a caller exactly like
-        no mechanism at all"). This asserts against the artifact whose
-        presence is what makes the forwarder generate at all.
+        `ceremony.scoped_git_commit` — which this advisory named for its
+        first few hours of life — is a registered op with no bin artifact
+        (doe-claude-em, 2026-07-29: "an op named in doctrine with no
+        reachable entrypoint reads to a caller exactly like no mechanism at
+        all"). Its bin-side counterpart, `coordinator/bin/scoped-git-commit`,
+        was itself killed 2026-08-23 (DR-344 process-budget kill bar,
+        `coordinator-safe-commit.py::usage`'s own "killed 2026-08-23
+        (DR-344), no replacement built yet" text) -- so naming that CLI now
+        reads the same way a dotted op id always did: nothing a caller can
+        actually run. The offer this guard prints must therefore stay
+        plain `git`, which needs no forwarder and cannot be killed out from
+        under it.
         """
         advisory = _advisory_text(
             _hso(dispatch_checks.check_git_commit_safe_commit_advise('git commit -m "s"', "s"))
         )
-        repo_root = pathlib.Path(dispatch_checks.__file__).resolve().parents[2]
-        entrypoint = repo_root / "coordinator" / "bin" / "scoped-git-commit"
-        assert "scoped-git-commit" in advisory
-        assert entrypoint.exists(), (
-            "the advisory names scoped-git-commit but %s does not exist, so no "
-            "settings-home forwarder can be derived for it" % entrypoint
-        )
-        # The ops namespace is not a caller-reachable surface, so a dotted op
-        # id must never stand in as the offer.
+        assert "git add" in advisory and "git commit" in advisory
+        # Neither the killed bin forwarder nor the ops-namespace id (never a
+        # caller-reachable surface) may stand in as the offer.
+        assert "scoped-git-commit" not in advisory
         assert "ceremony.scoped_git_commit" not in advisory
 
     def test_bundled_short_flag_subject_is_carried(self):
@@ -810,7 +809,6 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         assert "rewrites whatever commit is at HEAD" not in advisory
         assert "git notes add -f -m" not in advisory
         assert "git add -- <paths> && git commit -m" in advisory
-        assert "scoped-git-commit" in advisory
 
 class TestMultiprobeBannerRewriteMessageAccuracy:
     def test_recognized_probes_rewrite_and_advisory_names_the_facts_batched(self):

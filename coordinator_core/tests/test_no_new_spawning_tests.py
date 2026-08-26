@@ -1314,8 +1314,9 @@ def _all_reports() -> list[FileSpawnReport]:
 # `test_no_grandfather_clause_is_reintroduced` exists to catch.
 #
 # Why blanket rather than a heaviness threshold: the per-commit tier does not
-# run the test suite. This repo's pre-commit hook runs one gate
-# (detect-staged-rollback) and no pytest at all, so moving a test onto the
+# run the test suite. At authorship this repo's pre-commit hook ran one gate
+# (detect-staged-rollback, since deleted 2026-08-25 -- claude-klabauter ends with no
+# pre-commit hook) and no pytest at all, so moving a test onto the
 # cadence suite reschedules it -- it does not stop it running and costs no
 # coverage. There was no tradeoff to tune, and so no threshold to pick.
 # ---------------------------------------------------------------------------
@@ -2354,28 +2355,50 @@ def test_class_level_marker_does_not_rescue_a_sibling_module_level_function(
     )
 
 
-def test_class_level_marker_does_not_rescue_a_fixture_mediated_spawn() -> None:
-    """The real, in-repo counterpart to
-    `test_class_level_marker_does_not_rescue_a_non_test_method`:
-    `session/tests/test_ensure_meta.py` carries the identical class-level
-    `spawns_process`/`cadence` decorator this fix now recognises, but its
-    spawners (`_init_repo`, the `repo` fixture) sit at MODULE level and are
-    reached by its `test_*` methods only through pytest fixture INJECTION,
-    which this collector's `generic_calls` walk cannot see. Deliberately
-    NOT resolved (see module docstring's 'A THIRD declared form' section,
-    closing paragraph) -- this file must stay red under the module-level
-    form requirement, still naming both non-test spawners, so a future
-    widening of fixture resolution does not silently regress this pin."""
-    relpath = "coordinator_core/session/tests/test_ensure_meta.py"
-    full_path = REPO_ROOT / relpath
-    assert full_path.is_file(), f"expected file missing: {relpath}"
-    report = _analyze_file(full_path, relpath)
-    reason = _rule4_missing_cadence(full_path, relpath, report)
+def test_class_level_marker_does_not_rescue_a_fixture_mediated_spawn(
+    tmp_path: Path,
+) -> None:
+    """A class-level `spawns_process`/`cadence` decorator covers the methods
+    pytest collects under that class -- it must NOT be read as covering
+    MODULE-level spawners (`_init_repo`, a `repo` fixture) that those methods
+    reach only through pytest fixture INJECTION, which this collector's
+    `generic_calls` walk cannot see. Deliberately NOT resolved (see module
+    docstring's 'A THIRD declared form' section, closing paragraph): the file
+    still needs the module-level form, and Rule 4 must keep naming both
+    non-test spawners so a future widening of fixture resolution does not
+    silently regress this pin.
+
+    NEGATIVE SPEC: this specimen is synthetic on purpose. It was previously
+    pinned against the live `coordinator_core/session/tests/test_ensure_meta.py`,
+    which required that in-repo file to stay a standing Rule 4 violation
+    forever -- the corpus rule demanded a fix the pin forbade. A shape this
+    rule is ABOUT is never pinned to a file the same suite also polices.
+    """
+    module = tmp_path / "test_fixture_mediated_spawn.py"
+    module.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "def _init_repo(repo):\n"
+        "    subprocess.run(['git', 'init'], cwd=repo)\n"
+        "@pytest.fixture()\n"
+        "def repo(tmp_path):\n"
+        "    subprocess.run(['git', 'init'], cwd=tmp_path)\n"
+        "    return tmp_path\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "class TestThing:\n"
+        "    def test_uses_the_fixture(self, repo):\n"
+        "        assert repo\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        report = _analyze_file(module, "test_fixture_mediated_spawn.py")
+        reason = _rule4_missing_cadence(module, "test_fixture_mediated_spawn.py", report)
     assert reason is not None, (
-        "test_ensure_meta.py's class-level marker must NOT be read as "
-        "covering its module-level, fixture-mediated spawners -- if this "
-        "is None, fixture-injection reachability started being resolved "
-        "and this pin (and the docstring section it backs) needs revisiting"
+        "a class-level marker must NOT be read as covering module-level, "
+        "fixture-mediated spawners -- if this is None, fixture-injection "
+        "reachability started being resolved and this pin (and the docstring "
+        "section it backs) needs revisiting"
     )
     assert "_init_repo" in reason and "repo" in reason, reason
 

@@ -210,12 +210,20 @@ def test_repo_root_resolution_failure_exits_1_without_routing(monkeypatch):
     prior_cc_invoke = _install_fake_cc_invoke(_route)
     out, err = io.StringIO(), io.StringIO()
 
-    def _boom_run(*args, **kwargs):
-        raise OSError("simulated: git not found")
+    def _boom_resolve(explicit_root=None):
+        # Property under test is repo-root resolution FAILING (the checked
+        # resolver's own UNRESOLVED-with-no-root shape: `resolve_checked_
+        # repo_root` never raises — see its own docstring — it returns
+        # `(None, verdict)` when `_show_toplevel()` finds no git root), not
+        # WHERE that failure is detected. The subject no longer imports
+        # `subprocess` directly (it delegates to `repo_identity.
+        # resolve_checked_repo_root`), so pin the seam the subject actually
+        # calls rather than a `subprocess.run` call that no longer exists.
+        return None, {"verdict": "UNRESOLVED", "message": "simulated: no git root"}
 
     try:
         subject = _load_subject_fresh()
-        monkeypatch.setattr(subject.subprocess, "run", _boom_run)
+        monkeypatch.setattr(subject, "resolve_checked_repo_root", _boom_resolve)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             with pytest.raises(SystemExit) as exc_info:
                 subject.main([])

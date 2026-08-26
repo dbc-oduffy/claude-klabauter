@@ -174,7 +174,10 @@ from coordinator_core.git.repo_root import git_dir, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 
 # ---------------------------------------------------------------------------
 # Constants — mirror bash oracle literals
@@ -545,7 +548,7 @@ def _delete_path(target: Path) -> bool:
             ["rm", "-rf", str(target)],
             timeout=_DELETE_TIMEOUT_SECS,
             capture_output=True,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
         if result.returncode != 0:
             return False
@@ -780,7 +783,7 @@ def _is_untracked(repo_root: Path, path: Path) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", rel],
             capture_output=True, timeout=10,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
         if r.returncode == 0:
             return False  # tracked
@@ -907,7 +910,7 @@ def _is_inside_git_work_tree(repo_root: Path) -> bool:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "--is-inside-work-tree"],
             capture_output=True, text=True, timeout=10,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

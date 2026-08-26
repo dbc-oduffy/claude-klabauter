@@ -36,10 +36,12 @@ _ABSENT = object()
 
 
 def _install_fake_cc_invoke(route_fn):
-    """Seed sys.modules["cc_invoke"] with a fake module exposing `route` and
-    `_resolve_claude_klabauter_root`. Must run BEFORE the subject module is imported —
-    `cutover-cli` does `import cc_invoke; from cc_invoke import
-    _resolve_claude_klabauter_root`, both of which resolve against sys.modules first.
+    """Seed sys.modules["cc_invoke"] with a fake module exposing `route`,
+    `_resolve_claude_klabauter_root`, and `require_dispatch_engine_on_path`. Must run
+    BEFORE the subject module is imported — `cutover-cli` does `import
+    cc_invoke; from cc_invoke import _resolve_claude_klabauter_root,
+    require_dispatch_engine_on_path`, both of which resolve against
+    sys.modules first.
 
     Returns the prior sys.modules entry (or `_ABSENT`) — hand it to
     `_restore_cc_invoke` in a `finally`.
@@ -47,13 +49,14 @@ def _install_fake_cc_invoke(route_fn):
     Negative spec: `sys.modules["cc_invoke"]` is process-global, and 30+
     `coordinator/bin/` scripts import `cc_invoke` by bare name. A fake left
     installed past the test that seeded it makes every later such import in the
-    same worker resolve against a module carrying only these two attributes;
+    same worker resolve against a module carrying only these attributes;
     the missing name surfaces as an ImportError at the victim's fixture setup,
     which pytest reports as an ERROR in an unrelated file. Never install
     without a paired restore."""
     fake = types.ModuleType("cc_invoke")
     fake.route = route_fn
     fake._resolve_claude_klabauter_root = lambda: "/fake/claude-klabauter/root"
+    fake.require_dispatch_engine_on_path = lambda: "/fake/claude-klabauter/root"
     prior = sys.modules.get("cc_invoke", _ABSENT)
     sys.modules["cc_invoke"] = fake
     return prior

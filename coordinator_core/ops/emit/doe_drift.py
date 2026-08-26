@@ -51,7 +51,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+)
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -502,7 +505,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
             check=False,
             timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
             env=scoped_git_env(),
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
         if rev_parse.returncode == 0:
             deref_sha = rev_parse.stdout.strip()

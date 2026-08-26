@@ -1348,29 +1348,40 @@ def is_coincidence_prone_detection(match_facts: dict[str, Any]) -> bool:
     )
 
 
-def _note_session_deliverable_ids(repo_root: Path, sid: str, diagnostics: list[str]) -> None:
-    """Consumes C1's shared leaf reader
-    (`coordinator_core.workstream_complete.session_identity
-    .session_deliverable_ids`) and appends a diagnostic NOTE naming the
-    `Deliverable-Id` value(s), if any, this session's own commit trailers
-    carry — DIAGNOSTIC ONLY, never a control signal here. C3 (this plan's own
-    later chunk) is where a `deliverable_id` join actually gates a rung of
-    disposition resolution; this call proves the plain import is wired and
-    live ahead of that, without changing `resolve_disposition`'s own
-    returned disposition."""
-    result = session_deliverable_ids(repo_root, sid)
-    if not result.ok:
-        diagnostics.append(
-            f"NOTE: could not resolve this session's own commit-trailer Deliverable-Id(s): "
-            f"{result.reason}"
-        )
-        return
-    if not result.deliverable_ids:
-        return
-    ids = ", ".join(sorted(result.deliverable_ids))
-    diagnostics.append(
-        f"NOTE: this session's own commits carry Deliverable-Id trailer value(s): {ids}"
-    )
+# GRAVESTONE: `_note_session_deliverable_ids` (removed 2026-08-25).
+#
+# It called `session_deliverable_ids` unconditionally at the top of
+# `resolve_disposition` and appended a NOTE naming this session's own
+# `Deliverable-Id` trailer values. Its own docstring described it as
+# "DIAGNOSTIC ONLY, never a control signal here", running "without changing
+# `resolve_disposition`'s own returned disposition", and existing to "prove
+# the plain import is wired and live".
+#
+# WHY IT WENT: that reader runs `git log --no-merges` from HEAD with no
+# `--since`, no `-n`, and no pathspec -- a full-history walk measured at
+# 296.9ms of process time on this repo, and one that grows with repo age
+# forever, on every machine. Measured across a real `brief()`, it was the
+# ONLY `session_deliverable_ids` call the close path reached, and roughly a
+# fifth of the entire gate path's cost. A call that by its own contract
+# cannot change what the ceremony decides is not worth an unbounded walk on
+# a path ~50 concurrent sessions queue behind.
+#   -> docs/plans/2026-08-25-the-close-ceremony-inside-the-brightline.md, C1
+#   -> state/audits/2026-08-25-close-ceremony-gate-path-caller-census.md
+#
+# WHAT DISCHARGES ITS REQUIREMENT NOW (the job did not vanish with the code):
+# proving the import is wired and live is a test's job, and the test already
+# exists -- `TestSessionIdentityImport ::
+# test_import_resolves_to_the_engine_leaf_module` in
+# `coordinator/bin/tests/test_wsc_session_disposition.py` asserts the bound
+# name IS the engine leaf function. The runtime call was redundant with it.
+#
+# NEGATIVE SPEC -- do not reintroduce this as a "cheap" diagnostic. There is
+# no cheap shape: the cost is the unbounded history walk, not the NOTE. If an
+# operator needs this session's Deliverable-Id values, resolve them from the
+# already-computed disposition record rather than re-walking history here.
+# The reader itself stays live and is still called from
+# `_resolve_deliverable_id_join` (detector_c), where the value DOES gate a
+# decision and therefore earns its cost.
 
 
 def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
@@ -1456,7 +1467,6 @@ def resolve_disposition(repo_root: Path, sid: str) -> "DispositionResolution":
     free-text `diagnostics` below, which stay prose for a human reader and
     are never a control signal (see `DispositionResolution`)."""
     diagnostics: list[str] = []
-    _note_session_deliverable_ids(repo_root, sid, diagnostics)
 
     override = os.environ.get("WSC_DISPOSITION", "").strip()
     override_norm = override.lower()

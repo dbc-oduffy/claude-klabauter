@@ -73,11 +73,15 @@ def test_every_live_bin_inventory_entry_lands_in_a_real_install(monkeypatch, tmp
     for f, _exec_bit in _CH_FAMILY_FILES:
         _write(ch_bin / f, f"ch-source-content::{f}\n")
 
-    # CLAUDE_KLABAUTER_ROOT points at THIS real checkout -- `_derive_agent_helper_target_map`
+    # COORDINATOR_ENGINE_ROOT points at THIS real checkout -- `_derive_agent_helper_target_map`
     # (called inside `_install_bin_resolvers`) scans the real `coordinator/bin/`,
     # exactly the tree `bin-inventory.json` was seeded from, matching
     # `test_bin_family_freshness.py`'s own precedent for this same reason.
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_REPO_ROOT))
+    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1; deleted rather than left alone so
+    # an inherited ancestor-process value cannot reintroduce the
+    # retired-name advisory.
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
 
     forwarder_candidates = set(_derive_agent_helper_target_map(_REPO_ROOT / "coordinator" / "bin"))
     assert forwarder_candidates, (

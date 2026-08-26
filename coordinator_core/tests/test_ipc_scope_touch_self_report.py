@@ -19,7 +19,7 @@ Test list (brief-pinned, numbered to match the dispatch brief's own list):
   5. test_path_outside_repo_and_absent_from_disk_are_skipped
   6. test_recording_failure_is_fail_open
   7. test_no_resolvable_session_no_claim_op_still_succeeds
-  8. test_repeat_identical_declaration_does_not_perturb_mtime
+  8. test_repeat_identical_declaration_still_resolves_to_one_owned_path
   9. test_handler_declaring_nothing_behaves_exactly_as_before
 
 2026-08-04 REQUIRES_CHANGES rework (staff-eng review
@@ -53,7 +53,7 @@ import pytest
 import coordinator_core.ipc as ipc
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (queue.append / queue.promote)
 from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS_KEY
-from coordinator_core.session import core, scope, liveness
+from coordinator_core.session import core, scope, liveness, touch_record
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 
 # Declared, not excused: this file's `_scope_touch_paths` self-report contract is
@@ -86,11 +86,24 @@ def _sdir(repo, sid):
     return Path(repo) / ".git" / "coordinator-sessions" / sid
 
 
-def _touched_lines(repo, sid):
-    p = _sdir(repo, sid) / "touched.txt"
+def _touched_events(repo, sid):
+    """Decode `touch-record.jsonl`'s LIVE file only (no rotated-family
+    expansion — every fixture in this module is small enough to never
+    rotate), in on-disk order. Thin call-through to `touch_record.decode_line`
+    / `iter_complete_lines`, mirroring `session/tests/test_scope.py::
+    _decode_events` — no independent parsing invented here.
+
+    `scope.touch()` writes the new `touch-record.jsonl` dialect (C4, the
+    writer flip); this test module's own read side previously parsed the
+    retired `touched.txt` bash dialect directly, which no live writer in
+    this repo still produces — see
+    docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-its-writers.md.
+    """
+    p = _sdir(repo, sid) / "touch-record.jsonl"
     if not p.is_file():
         return []
-    return [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln]
+    raw = p.read_bytes()
+    return [touch_record.decode_line(line) for line in touch_record.iter_complete_lines(raw)]
 
 
 class _RegistryScope:
@@ -149,10 +162,9 @@ def test_declared_path_records_touch_for_exactly_that_path(tmp_path, monkeypatch
         d = _dispatch("test.declare", {}, origin_worktree=repo)
 
     assert "error" not in d
-    lines = _touched_lines(repo, "sid-1")
-    assert len(lines) == 1
-    verb, _ts, path = scope.parse_touch_event(lines[0])
-    assert (verb, path) == ("T", "written.yaml")
+    events = _touched_events(repo, "sid-1")
+    assert len(events) == 1
+    assert (events[0].verb, events[0].path) == (touch_record.VERB_TOUCH, "written.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +231,10 @@ def test_live_peer_claim_is_not_stolen_by_a_declaration(tmp_path, monkeypatch):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
 
-    # Our own declaration only ever wrote into OUR OWN touched.txt.
-    my_lines = _touched_lines(repo, "sid-4")
-    assert len(my_lines) == 1
-    assert scope.parse_touch_event(my_lines[0])[2] == "shared.py"
+    # Our own declaration only ever wrote into OUR OWN touch-record.jsonl.
+    my_events = _touched_events(repo, "sid-4")
+    assert len(my_events) == 1
+    assert my_events[0].path == "shared.py"
 
     # The peer's own claim is untouched, and still wins ownership: our own
     # compute_offer excludes the path as peer-owned rather than adopting it.
@@ -255,7 +267,7 @@ def test_path_outside_repo_and_absent_from_disk_are_skipped(tmp_path, monkeypatc
     ):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
-    assert _touched_lines(repo, "sid-5") == []
+    assert _touched_events(repo, "sid-5") == []
 
 
 # ---------------------------------------------------------------------------
@@ -301,16 +313,30 @@ def test_no_resolvable_session_no_claim_op_still_succeeds(tmp_path, monkeypatch)
     assert "error" not in d
     assert d["result"] == {"ok": True}
     assert not (Path(repo) / ".git" / "coordinator-sessions").is_dir() or not any(
-        (Path(repo) / ".git" / "coordinator-sessions").glob("*/touched.txt")
+        (Path(repo) / ".git" / "coordinator-sessions").glob("*/touch-record.jsonl")
     )
 
 
 # ---------------------------------------------------------------------------
-# 8. A repeat identical declaration does not perturb touched.txt's mtime.
+# 8. A repeat identical declaration still resolves to exactly one owned path.
+#
+# Pre-dialect-migration, `scope.touch()` ran an event-aware dedup-scan-then-
+# append (skip if the last event for this path was already T), so a repeat
+# identical declaration never touched `touched.txt`'s mtime at all. C4/AC17
+# (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md, landed ahead of
+# this chunk) deliberately REMOVES that dedup read: `touch_record.append_
+# event`'s single atomic append now always appends, and the reader's own
+# last-verb-wins projection (`touch_record.project_live_claims` /
+# `_read_stream_claims`) makes the identical CLAIMED decision at read time
+# instead — a redundant T on an already-T path is harmless (idempotent under
+# last-verb-wins), not silently absorbed at write time any more. This test
+# now pins the READ-time invariant the redesign actually promises (exactly
+# one owned path survives the fold) rather than the retired write-time
+# mtime-stability invariant, which is no longer this system's contract.
 # ---------------------------------------------------------------------------
 
 
-def test_repeat_identical_declaration_does_not_perturb_mtime(tmp_path, monkeypatch):
+def test_repeat_identical_declaration_still_resolves_to_one_owned_path(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     (repo / "written.yaml").write_text("z")
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-8")
@@ -319,13 +345,11 @@ def test_repeat_identical_declaration_does_not_perturb_mtime(tmp_path, monkeypat
 
     with _RegistryScope({"test.declare": _handler_declaring([str(repo / "written.yaml")])}):
         _dispatch("test.declare", {}, origin_worktree=repo, id_=1)
-        touched = _sdir(repo, "sid-8") / "touched.txt"
-        mtime_1 = touched.stat().st_mtime_ns
         _dispatch("test.declare", {}, origin_worktree=repo, id_=2)
-        mtime_2 = touched.stat().st_mtime_ns
 
-    assert mtime_1 == mtime_2
-    assert len(_touched_lines(repo, "sid-8")) == 1
+    offer = compute_offer("sid-8", cwd=str(repo))
+    assert offer["safe_paths"].count("written.yaml") == 1
+    assert "written.yaml" not in offer["orphans"]
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +366,9 @@ def test_handler_declaring_nothing_behaves_exactly_as_before(tmp_path, monkeypat
 
     assert "error" not in d
     assert d["result"] == {"ok": True}
-    assert not (Path(repo) / ".git" / "coordinator-sessions" / "sid-9" / "touched.txt").is_file()
+    assert not (
+        Path(repo) / ".git" / "coordinator-sessions" / "sid-9" / "touch-record.jsonl"
+    ).is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +439,9 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     assert "error" not in d
 
     # B's own claim is untouched.
-    my_lines = _touched_lines(repo_b, "sid-bnative")
-    assert len(my_lines) == 1
-    assert scope.parse_touch_event(my_lines[0])[2] == "shared.yaml"
+    my_events = _touched_events(repo_b, "sid-bnative")
+    assert len(my_events) == 1
+    assert my_events[0].path == "shared.yaml"
 
     # No phantom session dir for the caller's sid was ever materialized in B.
     assert not (repo_b / ".git" / "coordinator-sessions" / "sid-caller").exists()
@@ -457,7 +483,7 @@ def test_declared_directory_is_rejected_not_recorded(tmp_path, monkeypatch, capl
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
 
-    assert _touched_lines(repo, "sid-11") == []
+    assert _touched_events(repo, "sid-11") == []
     offer = compute_offer("sid-11", cwd=str(repo))
     assert "state/lessons" not in offer["safe_paths"]
     assert any(
@@ -488,8 +514,8 @@ def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
 
-    lines = _touched_lines(repo, "sid-12")
-    assert len(lines) == ipc._MAX_DECLARED_TOUCH_PATHS
+    events = _touched_events(repo, "sid-12")
+    assert len(events) == ipc._MAX_DECLARED_TOUCH_PATHS
     assert any(
         "exceeding the cap" in rec.message for rec in caplog.records
         if rec.levelno == logging.WARNING
@@ -574,7 +600,7 @@ def test_real_queue_promote_cross_repo_write_is_skipped_and_surfaced(
     assert out_path.is_file()
 
     # NOT recorded as a claim — outbox is outside the caller's own repo.
-    assert _touched_lines(repo, "sid-14") == []
+    assert _touched_events(repo, "sid-14") == []
 
     # The skip is observable.
     assert any(

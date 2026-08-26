@@ -39,6 +39,25 @@ SKIP_DIR_NAMES = {
     "venv",
     "node_modules",
     ".eggs",
+    # `.percolate/round-manifest.json` is DEST-SIDE round bookkeeping, not
+    # shipped payload: no source tree contains a `.percolate/` path at all
+    # (`git ls-files`, zero hits), no row's sync copies it, and it is written
+    # AFTER the content-transform sweep finishes -- so it records the
+    # PRE-rename source paths of everything the round published. On a repo
+    # whose source legitimately carries a codename in a filename, and whose
+    # basename_rename table correctly renames it on the way out, the manifest
+    # still names the original, and this checker then failed the round on a
+    # leak that does not exist in any published byte.
+    #
+    # Same class, and the same reasoning, as the publish-staging entry
+    # documented immediately below: a checker that scans what never ships
+    # fails the round on bytes that never ship. Kept here rather than in the
+    # engine's `STRUCTURAL_NEVER_PUBLISHED_PREFIXES`
+    # (`coordinator_core/percolate/surface.py`), which already classifies
+    # `.percolate` exactly this way -- that tuple governs the transform sweep
+    # and the unscanned-published check, and this script walks the tree
+    # itself, so the two lists have to agree by hand.
+    ".percolate",
 }
 
 SKIP_SUFFIXES = {".pyc", ".pyo"}
@@ -64,6 +83,26 @@ SKIP_SUFFIXES = {".pyc", ".pyo"}
 #: `SKIP_DIR_NAMES` filtering below already slices `p.split("/")[:-1])` for
 #: exactly this reason, so a genuine shipped payload file whose basename
 #: happens to contain `publish-staging-` is still scanned.
+#:
+#: THE SKIP IS CONDITIONAL ON THE PATH BEING UNTRACKED. Everything above
+#: rests on one premise -- "these bytes never ship" -- and that premise
+#: holds only while the staging directory is untracked scratch. Once a path
+#: is in the index it IS the published payload, whatever its directory is
+#: named, and skipping it means the gate declines to look at exactly the
+#: bytes it exists to vet. Measured 2026-08-26 on a PUBLIC remote: one
+#: accidental blanket `git add` put 4045 pre-transform source files under
+#: `.coordinator_core.publish-staging-4f5zkrth/` onto `origin/candidate`,
+#: carrying 15 codename-bearing filenames and 588 codename + 50 persona +
+#: 17 operator-identity content findings -- while this checker reported
+#: exit 0, 4620 files scanned, because it had unconditionally declined to
+#: walk them. `.gitignore`'s `*publish-staging-*/` entry (added the same
+#: day) stops the NEXT one being addable; this is what lets the gate SEE
+#: one that already landed, which no ignore rule can undo.
+#:
+#: `.percolate` above is deliberately NOT conditional in the same way: it
+#: is legitimately tracked dest-side bookkeeping under a fixed, known name,
+#: and its exclusion turns on WHAT it records (pre-rename source paths),
+#: never on whether it is committed.
 PUBLISH_STAGING_DIR_RE = re.compile(r"publish-staging-")
 
 # Portable console suppression for every git subprocess this harness spawns.
@@ -78,11 +117,25 @@ def repo_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2]
 
 
-def _git_files(root: pathlib.Path) -> list[str] | None:
+def _git_files(root: pathlib.Path) -> list[tuple[str, bool]] | None:
+    """`(repo-relative POSIX path, is_tracked)` per candidate file, or None
+    when this tree is not a usable git repo.
+
+    `-t` is what makes the tracked flag free: it prefixes each entry with a
+    one-character status tag, so ONE spawn answers both "what is here" and
+    "what is in the index". A second `ls-files --cached` call would instead
+    double the process count of every check script in the harness, and
+    process creation -- not the query -- is the cost git justifies per use.
+
+    Tag vocabulary: `?` is the only untracked one (`--others`). `H`, `S`,
+    `M`, `R`, `C`, and `K` all denote an indexed path, so the test is
+    against `?` rather than for `H` -- an unanticipated tag then falls
+    toward TRACKED, i.e. toward more scanning, never less.
+    """
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--cached", "--others",
-             "--exclude-standard", "-z"],
+             "--exclude-standard", "-t", "-z"],
             capture_output=True,
             text=True,
             creationflags=NO_WINDOW,
@@ -91,7 +144,18 @@ def _git_files(root: pathlib.Path) -> list[str] | None:
         return None
     if result.returncode != 0:
         return None
-    return [p for p in result.stdout.split("\0") if p]
+    entries: list[tuple[str, bool]] = []
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        tag, _, path = record.partition(" ")
+        if not path:
+            # No tag prefix at all -- a git that ignored `-t`. Take the whole
+            # record as the path and assume tracked (fail toward scanning).
+            entries.append((record, True))
+            continue
+        entries.append((path, tag != "?"))
+    return entries
 
 
 def _parse_gitignore_fallback_patterns(root: pathlib.Path) -> tuple[set[str], list[str]]:
@@ -165,17 +229,46 @@ def _walk_files(root: pathlib.Path) -> list[str]:
     return sorted(found)
 
 
+def _is_publish_staging_path(path: str) -> bool:
+    """True when a DIRECTORY component of `path` is a publish-staging mint."""
+    return any(PUBLISH_STAGING_DIR_RE.search(part) for part in path.split("/")[:-1])
+
+
+def tracked_publish_staging_paths(root: pathlib.Path | None = None) -> list[str]:
+    """Every INDEXED path sitting under a publish-staging directory.
+
+    A non-empty result is by construction a defect: staging directories are
+    mint-time scratch (§ `PUBLISH_STAGING_DIR_RE`) that only a blanket
+    `git add` can sweep into the index, and their contents are PRE-transform
+    source bytes then published as payload. `check-no-staging-leftovers.py`
+    turns this into a verdict; the enumeration lives here so the staging
+    pattern keeps exactly one definition in this harness.
+
+    Empty on a non-git tree -- nothing can be tracked without an index.
+    """
+    root = root or repo_root()
+    entries = _git_files(root)
+    if entries is None:
+        return []
+    return sorted(
+        p for p, tracked in entries
+        if tracked and _is_publish_staging_path(p) and not p.startswith(".git/")
+    )
+
+
 def repo_files(root: pathlib.Path | None = None) -> list[str]:
     """Repo-relative POSIX paths of every candidate file, git-aware with a walk fallback."""
     root = root or repo_root()
-    paths = _git_files(root)
-    if paths is None:
-        paths = _walk_files(root)
+    entries = _git_files(root)
+    if entries is None:
+        # No index to consult, so nothing here can be tracked, and the
+        # staging skip's "never ships" premise holds unconditionally.
+        entries = [(p, False) for p in _walk_files(root)]
     cleaned = {
-        p for p in paths
+        p for p, tracked in entries
         if not p.startswith(".git/")
         and not any(part in SKIP_DIR_NAMES for part in p.split("/")[:-1])
-        and not any(PUBLISH_STAGING_DIR_RE.search(part) for part in p.split("/")[:-1])
+        and not (_is_publish_staging_path(p) and not tracked)
         and not p.endswith(tuple(SKIP_SUFFIXES))
     }
     return sorted(cleaned)

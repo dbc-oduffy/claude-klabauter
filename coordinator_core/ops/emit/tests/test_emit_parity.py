@@ -594,7 +594,7 @@ def test_golden_fixture_is_present_and_shaped():
     golden = load_golden()
     assert golden["schema_version"], "golden missing schema_version"
     assert "malformed_records" in golden
-    assert isinstance(golden["routine_signals"], list) and len(golden["routine_signals"]) == 6
+    assert isinstance(golden["routine_signals"], list) and len(golden["routine_signals"]) == 7
 
 
 def test_map_covers_every_envelope_array_and_malformed_bucket():

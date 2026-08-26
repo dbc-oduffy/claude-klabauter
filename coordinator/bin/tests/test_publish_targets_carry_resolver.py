@@ -1,17 +1,19 @@
 """test_publish_targets_carry_resolver.py — C1
 (docs/plans/2026-08-16-one-engine-for-the-whole-box.md): asserts the publish
 allowlist in `setup/publish-targets.portable` carries `coordinator_core/
-claude_klabauter_root.py` and every file under `coordinator/lib/resolve-claude-klabauter/` — the
+engine_root.py` and every file under `coordinator/lib/resolve-claude-klabauter/` — the
 two paths `_load_shim()` needs on a repointed session, whose absence raises
 its "broken or partial claude-klabauter checkout" RuntimeError.
 
 Verified against the LIVE file at dispatch time (2026-08-16): both paths are
 already carried, and have been since `3897f3076` / `2b9e319aa` (2026-08-10) —
-`coordinator_core/claude_klabauter_root.py` as a top-level entry on the `claude-klabauter`
-row, `resolve-claude-klabauter` as a top-level directory entry on both `claude-klabauter-lib`
-and `claude-klabauter-coordinator-lib`. This test parses the manifest fresh on
-every run (never string-matches the file, so a future edit that drops either
-entry fails loud here) rather than asserting a snapshot.
+`coordinator_core/claude_klabauter_root.py` (renamed to `engine_root.py` by the
+engine-root rename, C16/DR-344, 2026-08-20/21) as a top-level entry on the
+`claude-klabauter` row, `resolve-claude-klabauter` as a top-level directory entry on
+both `claude-klabauter-lib` and `claude-klabauter-coordinator-lib`. This test
+parses the manifest fresh on every run (never string-matches the file, so a
+future edit that drops either entry fails loud here) rather than asserting a
+snapshot.
 
 The plan's own AC1 draws the line this test does NOT cross: "a publish round
 lands them in the mirror. Verified against the mirror's tracked file set, not
@@ -46,7 +48,7 @@ _FIELD_ALLOWLIST = 6
 
 #: The two paths C1 must find covered, repo-root-relative, POSIX-separated.
 _MUST_BE_CARRIED = (
-    "coordinator_core/claude_klabauter_root.py",
+    "coordinator_core/engine_root.py",
     "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py",
 )
 

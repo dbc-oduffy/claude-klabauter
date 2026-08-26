@@ -57,9 +57,6 @@ under-fires still holds the line it does see:
     is what the collector keys on. A shell string is separately forbidden by
     the shell-out carve-out list, so this is a gap in two gates at once
     rather than an escape hatch in one.
-  - A git binary reached through a variable (`git_exe = shutil.which("git")`,
-    `[git_exe, "status"]`) is invisible: the first element is not the
-    literal `"git"`.
   - Cross-MODULE indirection is invisible. A module importing another
     module's private `_run_git` is not counted here; the DEFINING module
     already is, and counting the importer too would double-charge one defect.
@@ -121,6 +118,28 @@ _SPAWN_API_NAMES: frozenset[str] = frozenset(attr for _module, attr in _SPAWN_TA
 #: The seam itself. Exempt by name, not by pattern -- see the negative spec.
 _PRIMITIVE_MODULE = "coordinator_core/git/run.py"
 
+#: Modules that must NEVER migrate onto the seam, and are therefore exempt
+#: rather than grandfathered. The distinction is the whole point: a
+#: grandfathered row says "has not migrated yet" and is expected to shrink
+#: away; a row here says "migrating would BREAK this module", so it is not
+#: debt and must not be counted as any.
+#:
+#: `remove-claude-klabauter-precommit-hook.py` removes an installed `.git/hooks/
+#: pre-commit` gate chain, and its ratified negative spec is that it never
+#: imports `coordinator_core` at all -- it has to keep running after the
+#: installer op module and its CLI trampoline are deleted, which is the
+#: precise failure it exists to route around
+#: (`docs/plans/2026-08-25-the-staged-rollback-gate-dies-without-blocking-a-
+#: commit.md` C1, DR-359). Importing `git.run` to satisfy this gate would
+#: hand the remover the dependency whose absence is its reason to exist.
+#:
+#: An entry here is NOT free: `test_contract_exempt_modules_still_declare_
+#: their_standalone_contract` fails the moment the docstring stops saying so,
+#: which is what stops this from becoming a second, softer register.
+_CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
+    {"coordinator/bin/remove-claude-klabauter-precommit-hook.py"}
+)
+
 #: Same roots the amplification gate scans, plus `coordinator/lib`: the G7
 #: census found the identical defect on both sides of the core/CLI seam
 #: (`percolate-round.py`'s inherited 600 and `workday_ceremony_lib.py :: git()`'s
@@ -153,8 +172,62 @@ def _leaf_name(func: ast.expr) -> "str | None":
     return None
 
 
-def _carries_git_argv(expr: ast.expr) -> bool:
-    """True if `expr` contains a `["git", ...]` (or tuple) literal anywhere.
+def _is_which_git(node: ast.AST) -> bool:
+    """True for a `shutil.which("git")` call (however `which` is imported)."""
+    return (
+        isinstance(node, ast.Call)
+        and _leaf_name(node.func) == "which"
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "git"
+    )
+
+
+def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
+    """Names in this module bound to a RESOLVED git binary path.
+
+    The blind spot this closes, found 2026-08-25: a module that writes
+    `git_bin = shutil.which("git")` and then spawns `[git_bin, "-C", ...]`
+    carries no literal `"git"` head, so the head-matching below saw nothing
+    and the module spawned git entirely outside this gate's inventory. Five
+    modules were in that state when it was found (`git/ls_files.py`,
+    `git/ls_files_bytes.py`, `ops/eol/census.py`, `ops/eol/repair.py`,
+    `ops/normalize_env.py`), all since migrated onto `run_git` -- which is
+    why no register row was needed for any of them, and why this detector
+    must stay: nothing else would have said so.
+
+    Two binding shapes, both seen in that set: assignment straight from
+    `which("git")`, and assignment from a module-local zero-argument function
+    that wraps one (`auto_push.git_exe()`'s shape). Deliberately NOT a
+    name-pattern match on `git_bin`/`git_exe` -- a register this gate freezes
+    must key on what a module DOES, not on what it named a variable."""
+    resolver_funcs = {
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_which_git(c) for c in ast.walk(fn))
+    }
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        resolved_here = any(_is_which_git(c) for c in ast.walk(value)) or (
+            isinstance(value, ast.Call) and _leaf_name(value.func) in resolver_funcs
+        )
+        if not resolved_here:
+            continue
+        names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return frozenset(names)
+
+
+def _carries_git_argv(expr: ast.expr, resolved_names: "frozenset[str]" = frozenset()) -> bool:
+    """True if `expr` contains an argv whose HEAD is git -- either the
+    `["git", ...]` (or tuple) literal, or a name `resolved_names` says holds
+    a resolved git binary path.
 
     Walks rather than matching the node directly, because the argv is
     routinely a composition: `["git", "-C", root] + args`, `["git", *args]`,
@@ -163,6 +236,8 @@ def _carries_git_argv(expr: ast.expr) -> bool:
         if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
             head = node.elts[0]
             if isinstance(head, ast.Constant) and head.value == "git":
+                return True
+            if isinstance(head, ast.Name) and head.id in resolved_names:
                 return True
     return False
 
@@ -252,12 +327,13 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
     tree = ast.parse(source)
     enclosing = _enclosing_names(tree)
     generics = _generic_runner_names(tree)
+    resolved_names = _resolved_git_names(tree)
 
     def is_git_spawn(call: ast.Call) -> bool:
         name = _leaf_name(call.func)
         if name is None or (name not in _SPAWN_API_NAMES and name not in generics):
             return False
-        return any(_carries_git_argv(argv) for argv in _argv_exprs(call))
+        return any(_carries_git_argv(argv, resolved_names) for argv in _argv_exprs(call))
 
     sites = {
         GitSpawnSite(module=relpath, enclosing=enclosing.get(id(node), "<module>"))
@@ -332,7 +408,11 @@ def _scope_files() -> list:
                 # (a symlinked tree) still needs a stable key; fall back to
                 # the root-relative one `discover_source_files` returned.
                 relpath = f"{root_name}/{pathlib.PurePosixPath(rel).as_posix()}"
-            if is_test_tree_site(relpath) or relpath == _PRIMITIVE_MODULE:
+            if (
+                is_test_tree_site(relpath)
+                or relpath == _PRIMITIVE_MODULE
+                or relpath in _CONTRACT_EXEMPT_MODULES
+            ):
                 continue
             if path.resolve() == _THIS_FILE:
                 raise RuntimeError(
@@ -438,7 +518,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/spinoff-deliverable-and-commit.py",
         "coordinator/bin/standup.py",
         "coordinator/bin/test-fixtures/check-workstream-complete-deletion-blocks/run-smoke.py",
-        "coordinator/bin/workday-complete-reconcile.py",
         "coordinator/bin/workday-complete-step1-validate.py",
         "coordinator/bin/workday-complete-step9-append-changelog.py",
         "coordinator/bin/workday-start-advisory-counters.py",
@@ -469,7 +548,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/dag.py",
         "coordinator_core/diff_scoped_tests.py",
         "coordinator_core/distill/delete_guard.py",
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
         "coordinator_core/frontmatter/schema_validate.py",
         "coordinator_core/git/divergence.py",
         "coordinator_core/git/repo_root.py",
@@ -479,7 +557,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/hooks/day_branch_assert.py",
         "coordinator_core/hooks/example_retrieval_repo_detect.py",
         "coordinator_core/hooks/subagent_fabrication_check.py",
-        "coordinator_core/hooks/track_touched_files.py",
         "coordinator_core/install/clone_sibling_repo.py",
         "coordinator_core/install/first_run.py",
         "coordinator_core/install/prereq_probe.py",
@@ -511,7 +588,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/cutover_gate.py",
         "coordinator_core/ops/detect_changed_dependency_manifests.py",
         "coordinator_core/ops/detect_project_runtime.py",
-        "coordinator_core/ops/detect_staged_rollback.py",
         "coordinator_core/ops/dirty_tree_gate.py",
         "coordinator_core/ops/doc_staleness.py",
         "coordinator_core/ops/dod_floor_ratchet.py",
@@ -583,7 +659,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/reconcile/ac27_differential_oracle.py",
         "coordinator_core/reconcile/commit_reality.py",
         "coordinator_core/review_assemble/residue.py",
-        "coordinator_core/session/core.py",
         "coordinator_core/session/scope.py",
         "coordinator_core/session/shape.py",
         "coordinator_core/session_attribution.py",
@@ -622,7 +697,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/bash_guards/dispatch_checks.py", "_run_git(timeout)"),
         ("coordinator_core/dag.py", "_git_history_is_complete(timeout_s)"),
         ("coordinator_core/dag.py", "build_git_history_cache(timeout_s)"),
-        ("coordinator_core/execute_plan_assemble/close_out_and_stamp.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/git/divergence.py", "_run_git(timeout)"),
         ("coordinator_core/git/repo_root.py", "_TIMEOUT_SECS"),
         ("coordinator_core/git_scope.py", "FOREIGN_REPO_GIT_TIMEOUT_SECONDS"),
@@ -685,8 +759,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 204
-_PINNED_DIAL_CEILING = 69
+_PINNED_RUNNER_CEILING = 198
+_PINNED_DIAL_CEILING = 68
 
 
 def _runner_message(sites: list) -> str:
@@ -772,6 +846,77 @@ def test_every_grandfathered_dial_still_bounds_a_git_spawn():
         "(and lower _PINNED_DIAL_CEILING to match):\n"
         + "\n".join(f"  {module}: {name}" for module, name in dead)
     )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            'import shutil, subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def probe(root):\n'
+            '    git_bin = shutil.which("git")\n'
+            '    return subprocess.run([git_bin, "-C", root, "status"], timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="assigned-straight-from-which",
+        ),
+        pytest.param(
+            'import shutil, subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def git_exe():\n'
+            '    return shutil.which("git")\n'
+            'def probe(root):\n'
+            '    resolved = git_exe()\n'
+            '    return subprocess.run([resolved, "-C", root, "status"], timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="assigned-from-a-local-resolver",
+        ),
+    ],
+)
+def test_collector_sees_a_which_resolved_argv_head(source):
+    """The blind spot, pinned. A module resolving git through
+    `shutil.which("git")` and spawning `[git_bin, ...]` carries no literal
+    `"git"` head; before 2026-08-25 the collector saw nothing and the module
+    spawned git wholly outside this register. Five modules were in that state
+    when it was found, and the only reason none of them needed a row is that
+    all five were migrated onto `run_git` in the same change -- which this
+    gate could not have demanded, because it could not see them.
+
+    Both binding shapes are pinned because both were live in that set: the
+    direct `which` assignment, and the local zero-arg resolver
+    (`hooks/auto_push.py :: git_exe`). The dial half rides along and is
+    asserted here too: a dial only counts as a GIT dial when its module
+    spawns git, so a collector blind to the spawn was equally blind to the
+    module constant bounding it.
+    """
+    sites, dials = _collect_module("fake/probe.py", source)
+
+    assert [s.enclosing for s in sites] == ["probe"]
+    assert dials == [("fake/probe.py", "_PROBE_TIMEOUT_SECS")]
+
+
+def test_contract_exempt_modules_still_declare_their_standalone_contract():
+    """Self-invalidation for the exemption list, the same rule the two
+    registers get. An exemption whose reason has quietly gone away is worse
+    than no exemption: it is a standing, reviewed-looking permission for a
+    module that could now migrate like any other. The reason here is a
+    RATIFIED negative spec in the module's own docstring, so that is what is
+    checked -- if someone deletes the "never imports coordinator_core" line,
+    the exemption dies with it and the module owes a migration.
+    """
+    for relpath in sorted(_CONTRACT_EXEMPT_MODULES):
+        path = _REPO_ROOT / relpath
+        assert path.is_file(), (
+            f"_CONTRACT_EXEMPT_MODULES names {relpath}, which no longer exists "
+            "-- delete the row"
+        )
+        source = path.read_text(encoding="utf-8", errors="replace")
+        docstring = ast.get_docstring(ast.parse(source)) or ""
+        assert "coordinator_core" in docstring and "Never imports" in docstring, (
+            f"{relpath} is exempt from the shared-git-runner seam BECAUSE its "
+            "docstring ratifies a standalone contract (\"Never imports "
+            "coordinator_core...\"). That declaration is gone, so the exemption "
+            "has no basis: either restore it, or drop the row and migrate the "
+            "module onto coordinator_core.git.run like any other."
+        )
 
 
 def test_the_collector_is_not_vacuous():

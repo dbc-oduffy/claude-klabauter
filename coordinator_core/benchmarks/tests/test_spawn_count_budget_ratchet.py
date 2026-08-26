@@ -7,12 +7,9 @@ to what the code currently costs. Without a ratchet, a `spawn_count_budget`
 entry is prose a reviewer might notice drift past, not a mechanism -- exactly
 the failure the page names (`spawns_per_gap_date`, `per_batch`) for the two
 rows already deleted/renamed on 2026-08-15/16. This module is the enforcement
-half for the rows that survived that audit, plus the pre-existing
-`ceremony.scoped_git_commit` row (the original worked example the manifest's
-own `_rationale` cites, governed here too so the completeness pin below sees
-the whole `spawn_count_budget` class, not just the audited set) -- see
-`_SPAWN_COUNT_HIGH_WATER` below for the current, authoritative row count
-rather than a number restated here that would drift out from under it --
+half for the rows that survived that audit -- see `_SPAWN_COUNT_HIGH_WATER`
+below for the current, authoritative row count rather than a number restated
+here that would drift out from under it --
 mirroring the worked example at
 `coordinator_core/tests/test_ipc_per_request_state.py::test_op_timeout_overrides_never_ratchet_upward`
 / `test_timeout_high_water_table_covers_every_override`, generalized from a
@@ -45,17 +42,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # both `budget-manifest.json` and their own dedicated test files at the time
 # this module was written) -- both rows are correspondingly absent here, not
 # left dangling with no manifest entry to ratchet against.
-# `ceremony.scoped_git_commit`'s green_path/directory_pathspec_expansion marks
-# were raised 12->17 and 13->18 on 2026-08-18 (opro-01). The argument this
-# table exists to force: the +5 is the agree-branch CAS reading its
-# index/HEAD blob pair twice by construction (a compare-and-swap needs both
-# the capture and the re-read immediately before `git add`) plus one
-# `interpret-trailers --in-place`. Five real spawns doing named,
-# correctness-bearing work, landed after the 2026-08-11 figure without
-# moving the budget, and unnoticed because the enforcing module carries
-# `pytest.mark.cadence`. A raise here is still a raise: it is defensible
-# only because nothing among the five is reducible, not because the count
-# moved.
+# `ceremony.scoped_git_commit`'s row was RETIRED on 2026-08-25 along with its
+# fourteen ceilings, because the op it budgeted no longer exists: killed at
+# K-045 / `c07062c99`, handler and registration removed. A budget for a
+# subject that cannot run reads as governed coverage while governing nothing,
+# which is the exact failure this module's docstring cites for the two rows
+# deleted on 2026-08-15/16. Note the orphan pin below did NOT catch it: that
+# check greps the test tree for the row's subject, and the dead op's name
+# still appears in guard-message tests (`test_deny_message_accuracy.py`), so
+# it stayed green on a false negative its own docstring predicts. Found by
+# hand instead.
 _BASELINE_REASON = (
     "Pre-existing baseline mark predating this fix; no per-row rationale "
     "was captured when spawn-count ratcheting was first added to this table."
@@ -71,148 +67,6 @@ _BASELINE_REASON = (
 # here. Lowering a value never touches `reason`, so it stays frictionless --
 # only adding a new key or row requires authoring one.
 _SPAWN_COUNT_HIGH_WATER = {
-    "ceremony.scoped_git_commit": {
-        "green_path": {
-            "ceiling": 19,
-            "reason": (
-                "Raised 12->17 on 2026-08-18 (opro-01): the CAS re-read of "
-                "index/HEAD plus one interpret-trailers call are five real, "
-                "correctness-bearing spawns landed after the 2026-08-11 "
-                "baseline -- see module docstring. Raised 17->19 on "
-                "2026-08-21: NEWLY-COUNTED PRE-EXISTING COST, not growth. "
-                "`323aafaf8` added `_mode_delta_paths_chunked()` (one "
-                "`git diff --cached --raw` per `commit_scoped()`) and "
-                "`82dc080eb` added `_reject_stale_index_paths()` (two "
-                "batched `diff` calls per `_handler()`); both are "
-                "unconditional, both are break-class fixes, and neither "
-                "moved the manifest in its own commit. Seam figure measured "
-                "stable 8/8 in a single-process loop plus repeated pytest "
-                "runs. Verdict supplied by the op's owner (session b6cb0c6b) "
-                "as a budget raise rather than a kill candidate."
-            ),
-        },
-        "refusal_path_unanswerable": {
-            "ceiling": 0,
-            "reason": (
-                "Floor of 0: the refusal path returns before any git spawn "
-                "by construction, so this ceiling has never moved and needs "
-                "no re-baseline argument."
-            ),
-        },
-        "directory_pathspec_expansion": {
-            "ceiling": 20,
-            "reason": (
-                "Raised 13->18 alongside green_path on 2026-08-18 (opro-01) "
-                "for the same CAS re-read plus interpret-trailers spawns -- "
-                "see green_path's reason above. Raised 18->20 on 2026-08-21 "
-                "for the same newly-counted pre-existing cost as green_path "
-                "17->19: the two unconditional `_git`-routed spawns added by "
-                "`323aafaf8` and `82dc080eb` land on EVERY shape, not just "
-                "the green path, so all four seam figures moved together."
-            ),
-        },
-        "push_raced_path": {
-            "ceiling": 22,
-            "reason": (
-                "Pre-existing mark, not touched by the 2026-08-18 CAS raise "
-                "documented above; no session-local rationale is recorded "
-                "for that earlier value. Raised 20->22 on 2026-08-21 for the "
-                "same newly-counted pre-existing cost as green_path 17->19 "
-                "-- `323aafaf8` and `82dc080eb` add unconditional spawns to "
-                "every shape; see green_path's reason above."
-            ),
-        },
-        "pending_drain_superseded": {
-            "ceiling": 25,
-            "reason": (
-                "New shape first measured 2026-08-19 (opro-03 C6): a due "
-                "pending-push record draining into a superseded "
-                "non-fast-forward push. Entered at its measured value, not a "
-                "raise -- it budgets a path no prior shape reached. Raised "
-                "23->25 on 2026-08-21 for the same newly-counted "
-                "pre-existing cost as green_path 17->19; see that reason."
-            ),
-        },
-        "deferred_diverged_detach": {
-            "ceiling": 20,
-            "reason": (
-                "Entered 2026-08-21 at its measured value, not a raise -- it "
-                "budgets the diverged-path detach shape that reaches "
-                "`auto_push._detach_and_run`, which no prior shape counted. "
-                "Landed in the manifest by `56c76107e` without a mark here, "
-                "leaving the completeness pin red until this row; that "
-                "half-pair is the third of the same shape recorded on "
-                "2026-08-21. Seam figure, stable per the op owner "
-                "(session b6cb0c6b)."
-            ),
-        },
-        # The three `op_total_*` marks below entered the manifest on
-        # 2026-08-19 (opro-03 C6, 46bab79e52ca) without a row here, which
-        # left `test_spawn_count_high_water_table_covers_every_override` red
-        # -- the completeness pin doing exactly its job, on a module the fast
-        # tier does not run. They are the WHOLE-OP `subprocess.run` counts,
-        # deliberately larger than the same shape's seam figure: the seam
-        # (`git_native._git`) is routing-narrow and cannot observe the push
-        # drain, claim release, `git/divergence.py`, or `git/repo_root.py`.
-        # Each enters at its measured value; none is a raise of an existing
-        # mark, because no `op_total_*` mark existed before.
-        "op_total_green_path": {
-            "ceiling": 23,
-            "reason": (
-                "Entered 2026-08-19 at its first measured value (opro-03 "
-                "C6). Whole-op count against green_path's seam figure of 17; "
-                "the gap is the six spawns the seam is structurally unable "
-                "to see."
-            ),
-        },
-        "op_total_directory_pathspec_expansion": {
-            "ceiling": 24,
-            "reason": (
-                "Entered 2026-08-19 at its first measured value (opro-03 "
-                "C6). green_path's whole-op figure plus the one extra "
-                "pathspec-scoped `git status --porcelain` that shape adds."
-            ),
-        },
-        "op_total_push_raced_path": {
-            "ceiling": 28,
-            "reason": (
-                "Entered 2026-08-19 at its first measured value (opro-03 "
-                "C6). Whole-op count against push_raced_path's seam figure "
-                "of 20."
-            ),
-        },
-        "op_total_pending_drain_superseded": {
-            "ceiling": 39,
-            "reason": (
-                "Entered 2026-08-19 at its first measured value (opro-03 "
-                "C6). The largest whole-op figure of the four shapes because "
-                "this is the only one whose drain actually pushes: it pays "
-                "`push_once`, the `_is_superseded` fetch and ancestor test, "
-                "and the cockpit-contract publish leg on top of the commit."
-            ),
-        },
-        "op_total_deferred_diverged_detach": {
-            "ceiling": 26,
-            "reason": (
-                "Entered 2026-08-21 at its measured HEAD value, not a raise. "
-                "Whole-op count for the diverged-path detach shape against "
-                "`deferred_diverged_detach`'s seam figure of 20. Landed by "
-                "`56c76107e` without a mark here, red on the completeness "
-                "pin until this row. RE-BANK WHEN IT DROPS: a pending "
-                "`porcelain=v2` state-read consolidation in "
-                "`ops/ceremony/git_native.py` + `git/divergence.py` folds "
-                "two chunked spawns into one v2 read and is expected to "
-                "reduce every `op_total_*` key here by exactly 1 (this one "
-                "to 25), seam keys unchanged. That is a REDUCTION, so it "
-                "cannot red this ratchet (`live <= ceiling`); bank it when "
-                "the consolidation lands rather than leaving the ceiling "
-                "loose. Deliberately cites the mechanism and not the session "
-                "holding it: a governed table must not assert what an "
-                "uncommitted session will do, and re-banking should be "
-                "triggered by observing the code change."
-            ),
-        },
-    },
     "changelog.cited_in_range_count": {
         "n_tokens": {"ceiling": 1, "reason": _BASELINE_REASON},
         "no_tokens": {

@@ -97,6 +97,10 @@ from typing import List, Optional
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.reap import _today_compact
 from coordinator_core.session.liveness import session_live
+from coordinator_core.session.scope import (
+    _TOUCH_RECORD_FILENAME,
+    _read_agent_touch_record_as_legacy_lines,
+)
 
 _AGE_THRESHOLD_SECONDS = 24 * 3600
 _DEFAULT_AUDIT_PATH = "state/audits/2026-08-14-orphan-agent-dir-reap.md"
@@ -121,12 +125,27 @@ def _read_owner_id(agent_dir: Path) -> Optional[str]:
 
 
 def _read_touched_paths(agent_dir: Path) -> List[str]:
-    touched_file = agent_dir / "touched.txt"
+    """Return the bare repo-relative paths this agent dir's touch record names.
+
+    C2 — reads through `session.scope._read_agent_touch_record_as_legacy_lines`,
+    the C0 seam's agent-dir-dialect counterpart, rather than parsing a sibling
+    `touched.txt` directly. That adapter unions the `touch-record.jsonl` family
+    with a sibling `touched.txt` (legacy first) and renders every surviving line
+    in the bare-path dialect this reader already expects — no verb/timestamp
+    prefix to strip, unlike the session-keyed seam's dialect. A degraded read
+    (an unreadable/malformed family member) is treated the same as the prior
+    bare OSError catch: silence ([]), matching R3's own existing safe
+    direction (an empty touched-paths list simply clears the "still dirty"
+    rail, it never widens candidacy).
+    """
+    sink_path = agent_dir / _TOUCH_RECORD_FILENAME
     try:
-        text = touched_file.read_text(encoding="utf-8")
-    except OSError:
+        lines, degraded = _read_agent_touch_record_as_legacy_lines(sink_path)
+    except Exception:
         return []
-    return [line.strip() for line in text.splitlines() if line.strip()]
+    if degraded:
+        return []
+    return [line.strip() for line in lines if line.strip()]
 
 
 def _dirty_paths(repo_root: Path) -> set:

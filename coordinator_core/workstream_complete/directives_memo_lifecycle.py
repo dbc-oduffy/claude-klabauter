@@ -167,7 +167,13 @@ def _directive(
 def _run_git(repo_root: Path, args: list[str]) -> Optional[subprocess.CompletedProcess]:
     try:
         return subprocess.run(
-            ["git", "-C", str(repo_root), *args],
+            # `--no-optional-locks`: every caller here is read-only (`log`,
+            # `status`, `merge-base`), and without this `git status` takes the
+            # index lock and rewrites a 4.9MB / 35k-entry index as a side
+            # effect of being asked a question. On a tree ~50 sessions write
+            # concurrently that lock is contended, which is both the cost and
+            # its variance. Same shape `archive_stamp.py` already uses.
+            ["git", "-C", str(repo_root), "--no-optional-locks", *args],
             capture_output=True,
             text=True,
             timeout=30,

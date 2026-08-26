@@ -107,6 +107,62 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 
+def _resolved_sid() -> Optional[str]:
+    """Session id for a telemetry row, or None.
+
+    A CPU sample that cannot be joined to a session cannot be ranked within one,
+    which is what made the sink unable to answer "what does fire #1 of a session
+    cost" in process time -- see `ipc._telemetry_sid`, the same resolve at the
+    other four dispatch sites. Never raises: a null sid costs a row's
+    joinability, a raise would cost the caller's dispatch.
+    """
+    try:
+        from coordinator_core.session.core import resolve_session_id
+
+        return resolve_session_id() or None
+    except Exception:
+        return None
+
+
+def _record_dispatch_process_time(msg: dict, t_start: float, process_start: float) -> None:
+    """Append one process-time sample for this module's cold dispatch branch.
+
+    The brightline is stated in process time and spawn count, never wall clock,
+    so an op whose only entry point is this module cannot be read against that
+    budget at all until a sample lands here. Delegates every append-discipline
+    concern -- kill switch, route stamping, repo-key resolution, one atomic
+    append, never raises -- to `ipc.record_op_process_time`, exactly as the
+    other four dispatch sites do; nothing about the sink's shape is re-derived.
+
+    Never raises, and never delays the response: a telemetry failure on this
+    path costs one missing row, never the caller's envelope. Imports are
+    function-local because this runs only on the cold branch -- a warm hit
+    returns before reaching it and must not pay for `ipc`'s import closure.
+    """
+    try:
+        import time as _time
+
+        from coordinator_core.ipc import (
+            MEASUREMENT_SCOPE_PROCESS_WIDE,
+            record_op_process_time,
+            resolve_caller_cwd,
+            resolve_request_repo,
+        )
+
+        method = msg.get("method") if isinstance(msg, dict) else None
+        record_op_process_time(
+            op=method if isinstance(method, str) else "<unknown>",
+            process_ms=(_time.process_time() - process_start) * 1000.0,
+            measurement_scope=MEASUREMENT_SCOPE_PROCESS_WIDE,
+            source_path="invoke_cli",
+            t_start=t_start,
+            repo_root=resolve_request_repo(msg) or resolve_caller_cwd(msg),
+            sid=_resolved_sid(),
+        )
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -554,15 +610,31 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     true, and carrying zero information, because neither form does
     #     anything on a "none"-scoped op. DoE nearly planned against that line.
     #     See docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md.
+    #     Scoped to DISPATCHABLE ops only. `OP_KEY_SCOPE.get(op, "none")` is the
+    #     right default for a registered-but-unclassified op (see
+    #     `ipc.py`'s own absent-means-none rule), but it also answered for ops
+    #     that do not exist: an UNDISPATCHABLE name got a refusal naming a
+    #     scope nobody had assigned it, and "Omit --repo for this op" routed
+    #     the caller from that specific-sounding error to a bare -32601 Method
+    #     not found. The two errors contradicted each other and neither said
+    #     the true thing, which is that the op is not there. Observed
+    #     2026-08-26 on `push.outstanding`, registered in claude-klabauter and absent
+    #     from the published engine the forwarder actually dispatches to
+    #     (doe-claude-94, state/bug-backlog/2026-08-26-quick-wrap-step-1-has-
+    #     no-working-commit-863135e32339.yaml). An unknown op now falls
+    #     through to dispatch, which answers Method-not-found honestly.
     if args.repo is not None and args.op not in WORKTREE_SCOPED_OPS:
-        from coordinator_core.op_scopes import OP_KEY_SCOPE
-        op_scope = OP_KEY_SCOPE.get(args.op, "none")
-        _fatal_stderr(
-            f"--repo is meaningless for op {args.op!r} (scope={op_scope!r}): this op "
-            f"accesses no repo-specific state and never reads repo_root, so --repo "
-            f"would silently no-op. Omit --repo for this op. See "
-            f"docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md."
-        )
+        from coordinator_core.ops._registry_map import resolves as _op_resolves
+
+        if _op_resolves(args.op):
+            from coordinator_core.op_scopes import OP_KEY_SCOPE
+            op_scope = OP_KEY_SCOPE.get(args.op, "none")
+            _fatal_stderr(
+                f"--repo is meaningless for op {args.op!r} (scope={op_scope!r}): this op "
+                f"accesses no repo-specific state and never reads repo_root, so --repo "
+                f"would silently no-op. Omit --repo for this op. See "
+                f"docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md."
+            )
 
     # 4. Resolve repo_root — ONLY for worktree-scoped ops; fail-loud if unresolvable (AC-5).
     #    For all other scopes (none, central) repo_root stays None — git is never invoked.
@@ -708,12 +780,36 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                             "retrying will not clear this. For deliberate manual "
                             "testing, pass --allow-unstamped-dispatch."
                         )
+                    # A WAIT THIS LONG IS A DEFECT REPORT, NOT A DIAGNOSIS.
+                    # An earlier version of this block said "retry in a moment";
+                    # four sessions read that as seconds, retried twice, and
+                    # concluded the fault was permanent (2026-08-25/26). The
+                    # first correction merely told the truth about the delay --
+                    # "it takes MINUTES" -- which is the "the box was busy"
+                    # answer CLAUDE.md forbids: it made an over-budget path read
+                    # as normal operation and invited the operator to absorb it.
+                    #
+                    # Both framings were wrong for the same reason. Reaching the
+                    # engine is budgeted in HUNDREDS OF MILLISECONDS; anything
+                    # that turns into a multi-minute wait is over the brightline
+                    # by orders of magnitude and is a P0, not a cadence. Say that,
+                    # and do not instruct anyone to wait it out.
+                    #
+                    # Negative-spec: no ETA, no countdown, no "wait N minutes".
+                    # Boot time is load-dependent and unobservable from here, and
+                    # any interval printed is one the operator can satisfy and
+                    # then draw the same wrong conclusion from.
                     _fatal_stderr(
                         "warm dispatch unavailable and cold fallback is "
-                        "disabled (no live ops without warm). A respawn was "
-                        "already triggered on the way out of this call -- "
-                        "retry in a moment. For deliberate manual testing, "
-                        "pass --allow-unstamped-dispatch."
+                        "disabled (no live ops without warm). THIS IS A DEFECT, "
+                        "not a queue: reaching the engine is budgeted in "
+                        "hundreds of milliseconds, so an unreachable warm server "
+                        "is over budget by orders of magnitude however busy the "
+                        "box is. A respawn was triggered on the way out of this "
+                        "call; an immediate retry is expected to fail, and two "
+                        "fast refusals are not evidence of a permanent fault. "
+                        "Report it rather than waiting it out. For deliberate "
+                        "manual testing, pass --allow-unstamped-dispatch."
                     )
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
@@ -741,6 +837,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         # back — provenance is not cheapness. What belongs at module scope on
         # this path is what a warm hit executes, and nothing else.
         import asyncio
+        import time as _time
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -828,10 +925,29 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         # exception-to-JSON-RPC-error contract — the leak this fixes does not
         # get a pass just because that path is not expected to be reachable.
         _handler_stdout = io.StringIO()
+        # The fifth dispatch entry point, and until now the only uninstrumented
+        # one: `ipc.py` samples process time at `one_shot_cli` and `hook_batch`,
+        # `warm/server.py` at `accept_thread` and `pool_worker`, and this branch
+        # at none of them. Measured 2026-08-25 over a 24h window: every
+        # `handoff.reconcile_open` and `write_surface.emit_manifest` row in the
+        # sink arrives through here, so the ops furthest over the wall-clock bar
+        # were the ops with no CPU sample at all — a brightline stated in
+        # process time cannot be read against the ops that most need it.
+        #
+        # PROCESS_WIDE, not PER_OP_PROCESS: this branch is reached BOTH by the
+        # standalone CLI process (where the delta would be this op's own CPU)
+        # and by `invoke.from_argv` running on a REUSED ThreadPoolExecutor
+        # thread inside the resident warm server (see the long comment below),
+        # where sibling threads share one `time.process_time()` clock. The label
+        # must hold for both callers, and under-claiming a sample's scope costs
+        # a reader confidence while over-claiming costs them a wrong conclusion.
+        _pt_t_start = _time.time()
+        _pt_process_start = _time.process_time()
         try:
             with contextlib.redirect_stdout(_handler_stdout):
                 response = loop.run_until_complete(dispatch_message(msg))
         finally:
+            _record_dispatch_process_time(msg, _pt_t_start, _pt_process_start)
             loop.close()
             asyncio.set_event_loop(None)
         _captured = _handler_stdout.getvalue()

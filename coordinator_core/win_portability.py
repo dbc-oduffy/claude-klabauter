@@ -120,6 +120,7 @@ __all__ = [
     "split_path",
     "no_console_creationflags",
     "no_console_passthrough_kwargs",
+    "leaf_spawn_creationflags",
     "same_path",
     "run_forwarding",
 ]
@@ -385,6 +386,60 @@ def no_console_creationflags() -> dict:
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
+def leaf_spawn_creationflags() -> dict:
+    """Kwargs mapping to splat into ``subprocess.run`` / ``subprocess.Popen``
+    as ``**leaf_spawn_creationflags()`` for a spawn that is a true LEAF --
+    the caller knows nothing further will ever be spawned from the child,
+    so the child needs no console at all, not merely a windowless one.
+
+    POSIX: returns ``{}``, mirroring ``no_console_creationflags()``.
+
+    Windows: returns ``{"creationflags": <DETACHED_PROCESS>}``.
+    ``DETACHED_PROCESS`` gives the child NO console object whatsoever
+    (stronger than ``CREATE_NO_WINDOW``, which still allocates a windowless
+    one) -- the correct choice for a spawn this process never expects to
+    have a further console-subsystem descendant.
+
+    SUBTREE HAZARD, not optional reading: a ``DETACHED_PROCESS`` child has
+    no console AT ALL, so if that child itself later spawns any
+    console-subsystem process (``cmd.exe``, a bare Python interpreter
+    without its own suppression, `git.exe`, ...), THAT grandchild allocates
+    its own fresh, VISIBLE console -- there is no windowless console for it
+    to inherit the way there is under ``no_console_creationflags()``'s
+    ``CREATE_NO_WINDOW``. This primitive is for a proven LEAF spawn only --
+    a process with no further descendants of its own. A spawn that fans out
+    further must use ``no_console_creationflags()`` instead, precisely so
+    the windowless console propagates down the whole subtree.
+
+    NAMED SITES THAT MUST NEVER MIGRATE onto this primitive:
+    ``spawn-hidden.py :: _NO_WINDOW`` and ``auto_push.py ::
+    _windows_detached_flags`` -- both already carry their own, deliberately
+    different, hand-tuned creation-flag composition for reasons specific to
+    each site (see each site's own docstring), and neither is a "just use
+    the shared leaf helper" candidate: migrating either one onto
+    ``DETACHED_PROCESS`` reintroduces the exact subtree-console-storm defect
+    ``_windows_detached_flags`` itself was created to fix (see that
+    function's own docstring measurement: 6 visible ``conhost.exe`` windows
+    across 3 spawns before ``DETACHED_PROCESS`` was dropped there).
+
+    ``import subprocess`` is function-local, not module-scope, for the same
+    bootstrap-safety reason ``no_console_creationflags()`` documents: this
+    module promises stdlib-only (``os``, ``pathlib``) at import time.
+    """
+    if not _is_windows():
+        return {}
+
+    import subprocess
+
+    # getattr with a fallback, not a bare attribute access -- same
+    # monkeypatch-seam reason `no_console_creationflags()` documents:
+    # `DETACHED_PROCESS` only exists on `subprocess` when the REAL host is
+    # Windows, and `_is_windows()` is this module's documented patchable
+    # seam, so a test exercising this branch on a real POSIX host must not
+    # raise `AttributeError` reaching for a Windows-only constant.
+    return {"creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)}
+
+
 def no_console_passthrough_kwargs() -> dict:
     """Kwargs mapping for a spawn that must suppress the console popup AND
     still let the child's output reach this process's stdout/stderr.
@@ -566,7 +621,47 @@ def run_forwarding(argv: Sequence[str], *, stdout: object = None, stderr: object
             if key != "creationflags":
                 run_kwargs.setdefault(key, value)
 
-    proc = subprocess.run(argv, **run_kwargs)
+    # RESIDUAL ARM, closed 2026-08-25. Reached when the caller wires no stdio at
+    # all AND `no_console_passthrough_kwargs()` contributed no fds either, which
+    # happens precisely when `sys.stdout`/`sys.stderr` are themselves fileno-less
+    # — the capture-buffer caller `workday_complete.apply._invoke_cli_main`
+    # creates exactly that. `run_kwargs` then carries `creationflags` and no
+    # stream key, so CPython omits `STARTF_USESTDHANDLES` and the child's output
+    # goes into the window-less console and is lost.
+    #
+    # Capture-and-forward rather than DEVNULL, matching this function's own stated
+    # preference and what it already does for every other fileno-less target: the
+    # output reaches whatever `sys.stdout`/`sys.stderr` currently are, capture
+    # buffer included, instead of being discarded. Surfaced by
+    # `test_no_output_swallowing_no_console_spawn.py` once that gate learned to
+    # resolve alias splats — this site was invisible to it before.
+    if "creationflags" in run_kwargs and not any(
+        key in run_kwargs for key in ("stdin", "stdout", "stderr", "capture_output")
+    ):
+        # Function-local, like this function's own `import subprocess` above and
+        # for the same reason: this module's docstring promises stdlib-only
+        # `os`/`pathlib` at import time, safe to import before the venv exists.
+        import sys as _sys
+
+        run_kwargs["stdout"] = subprocess.PIPE
+        run_kwargs["stderr"] = subprocess.PIPE
+        run_kwargs.setdefault("text", True)
+        if forward_stdout is None:
+            forward_stdout = _sys.stdout
+        if forward_stderr is None:
+            forward_stderr = _sys.stderr
+
+    # popup-intentional-last-resort -- NOT a popup exemption in spirit: this call
+    # provably wires stdio, but does so by BUILDING `run_kwargs` above rather than
+    # by spelling a literal `stdout=`/`stderr=` kwarg here, and the swallowing gate
+    # is static-AST-only by design. The block immediately above is the proof, and it
+    # is unconditional: on any path where `creationflags` is present and no stream
+    # key is, this function installs PIPEs and forwards them. Tagging is the honest
+    # disposition -- the alternative is teaching an AST gate to interpret dict
+    # mutation, which is how a static gate starts lying about dynamic code.
+    proc = subprocess.run(  # popup-intentional-last-resort
+        argv, **run_kwargs
+    )
 
     if forward_stdout is not None and proc.stdout:
         forward_stdout.write(proc.stdout)

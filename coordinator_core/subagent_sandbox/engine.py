@@ -429,14 +429,20 @@ def resolve_git_root(cwd: Optional[str] = None) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
-    """Port of ``resolve_subagent_identity`` + the F4 session_id-absent fallback.
+    """Named-teammate leg DELEGATES to ``session.identity.resolve_subagent_identity``;
+    the other two legs stay local format predicates.
 
-    Accepts three forms, all returned unchanged — this function is a format
-    predicate, not a transform:
+    Accepts three input forms:
 
-    (a) bare-hex unnamed-agent ids (``^[a-f0-9]{12,}$``);
-    (b) subagent-side raw named-teammate ids (``^a.+-[a-f0-9]{16}$``);
-    (c) EM-side canonical teammate ids (``<name>@session-<short>``).
+    (a) bare-hex unnamed-agent ids (``^[a-f0-9]{12,}$``) — returned unchanged,
+        a local format predicate (byte-identical to ``resolve_subagent_identity``'s
+        own leg (a), so delegating here would change nothing but the call site);
+    (b) subagent-side raw named-teammate ids (``^a.+-[a-f0-9]{16}$``) —
+        DELEGATED (see below);
+    (c) EM-side canonical teammate ids (``<name>@session-<short>``) — returned
+        unchanged; a form ``resolve_subagent_identity`` does not itself accept
+        (its own leg (b) only recognizes the raw ``a<name>-<16hex>`` shape), so
+        this leg cannot be folded into the delegation and stays local.
 
     (c) is the form a NAMED dispatch actually presents on this path, and the
     form ``.agents/<agent_id>/`` is keyed by — see ``_TEAMMATE_CANONICAL_RE``
@@ -454,12 +460,30 @@ def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
     ``resolve_effective_types`` still deliberately leaves unset. Tightening it
     remains a separate decision.
 
-    For the named forms the back-pointer dir is normally keyed by a
-    session_id-resolved value; when ``session_id`` is absent from the payload,
-    the reference hook falls back to keying on the RAW ``agent_id`` itself
-    (lines 118-126) — a distinct leg from the session_id-present resolution,
-    ported verbatim here (the Staff Engineer F4). Returns ``""`` if the raw id matches no
-    accepted form.
+    Leg (b) — the named-teammate leg — now DELEGATES to
+    ``session.identity.resolve_subagent_identity`` for the session_id-PRESENT
+    case, so the raw ``a<name>-<16hex>`` form resolves to the EM-side
+    canonical ``<name>@session-<short>`` id (matching form (c) above) instead
+    of being returned unchanged as a bare format predicate. This keeps the
+    three lockstep surfaces (``build_canonical_agent_id``, the grammar, and
+    ``hooks/track_dispatched_agents.py``'s ``^[A-Za-z0-9_.-]+@session-`` value
+    guard) satisfied by construction rather than by a second, drifting copy of
+    the same transform.
+
+    The two resolvers' contracts DIFFER on the session_id-absent/short leg,
+    and that difference is deliberate, not a bug to reconcile:
+    ``resolve_subagent_identity`` requires ``len(session_id) >= 8`` and
+    otherwise fails closed to ``""``, but this engine's OWN contract for that
+    case is the Staff Engineer F4 fallback — key on the raw ``agent_id`` itself rather
+    than produce no id at all, because ``resolve_effective_types`` treats an
+    empty ``agent_id`` as EM-class in the disarm direction
+    (``bash_guards/_blanket_disarm.py :: _is_em_caller``), which is a real
+    fail-open for a named subagent whose payload happens to lack (or
+    truncate) ``session_id``. So: delegate when the delegate can answer
+    (session_id present and long enough), and retain the F4 raw-id fallback
+    verbatim — never ``""`` — when it cannot. This makes the engine's
+    contract deliberately WIDER than ``session/identity.py``'s here, by
+    design, not by omission.
 
     All three legs use ``fullmatch``, never ``match``. Python's ``$`` (outside
     ``re.MULTILINE``) also matches immediately before a single trailing
@@ -470,15 +494,35 @@ def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
     Same gap, same fix, same reasoning as
     ``coordinator_core.session.identity._format_ok`` (review: code-reviewer
     nit); closed here for the same reason, and flagged by the review of the
-    commit that added the canonical leg.
+    commit that added the canonical leg. ``resolve_subagent_identity`` itself
+    also uses ``fullmatch`` (its own docstring names the same gap), so
+    delegating leg (b) to it does not reopen this.
     """
     if _TEAMMATE_CANONICAL_RE.fullmatch(raw_agent_id):
         return raw_agent_id
     if _NAMED_TEAMMATE_RE.fullmatch(raw_agent_id):
-        if session_id:
-            return raw_agent_id
-        # session_id-absent named-teammate fallback (the Staff Engineer F4): key on the
-        # raw agent_id itself rather than a session_id-resolved value.
+        # Function-local import to avoid a module-level
+        # subagent_sandbox.engine <-> session.identity import cycle:
+        # session/identity.py already imports resolve_effective_types FROM
+        # this module, function-locally, for the identical reason. This
+        # mirrors the same deferred-import discipline used at
+        # dispatch/provision.py:218 (there: resolve_roster, a different
+        # symbol, same hot-path/import-budget shape) -- a module-level
+        # import here would drag session.identity's import closure into
+        # this module's own on every import, for the same reason that site
+        # documents. Neither this module nor session/identity.py may hoist
+        # this particular import to module level without first extracting
+        # the shared resolver into a leaf module both import -- that
+        # extraction is out of scope here.
+        from coordinator_core.session.identity import resolve_subagent_identity
+
+        resolved = resolve_subagent_identity(raw_agent_id, session_id or "")
+        if resolved:
+            return resolved
+        # the Staff Engineer F4 (session_id absent or shorter than 8 chars):
+        # resolve_subagent_identity fails closed to "" here, but this
+        # engine's contract is deliberately wider -- key on the raw
+        # agent_id itself rather than return no id at all (see docstring).
         return raw_agent_id
     if _BARE_HEX_RE.fullmatch(raw_agent_id):
         return raw_agent_id

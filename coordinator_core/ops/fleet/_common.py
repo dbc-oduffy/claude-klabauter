@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     import asyncio
 
 from coordinator_core.dag import _read_meta, invalidate_git_history_cache
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.git_state import head_sha as _read_head_sha
 from coordinator_core.lifecycle import git_common_dir
@@ -255,13 +256,24 @@ async def _empty_private_index_breach(
     worktree_root: Path,
     env: dict,
     caller: str,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """Refuse a pathspec-less commit whose private index would commit NOTHING.
 
-    Returns None when the index is safe to commit, or a reason string naming
-    the breach — callers route that string into their existing commit-failure
-    path (reverse the disk moves, report every item failed) rather than
-    committing.
+    Returns `(None, tree_sha)` when the index is safe to commit, or
+    `(reason, None)` naming the breach — callers route that reason into their
+    existing commit-failure path (reverse the disk moves, report every item
+    failed) rather than committing.
+
+    THE TREE SHA IS RETURNED, NOT DISCARDED, AND CALLERS MUST COMMIT *THAT*
+    TREE (2026-08-25). This check computes the very sha `commit-tree` needs,
+    and both call sites used to throw it away and spawn a second, identical
+    `git write-tree` three lines later — a measured, duplicated spawn per
+    batch commit on every archival and reap route. Handing it back removes
+    that spawn AND narrows this guard's own time-of-check/time-of-use window
+    to zero for the tree specifically: the tree that gets committed is now
+    byte-identically the tree this function verified is non-empty, where
+    before it was a re-read that could in principle differ. Do NOT
+    "restore symmetry" by re-spawning `write-tree` in a caller.
 
     WHY THIS EXISTS — the incident of 2026-08-18 (`fbfbd061d`), which committed
     a tree of `4b825dc…` and thereby deleted all 26,264 files in the repo on a
@@ -328,7 +340,7 @@ async def _empty_private_index_breach(
         return (
             "private-index-unreadable: git write-tree failed — %s"
             % stderr.decode(errors="replace").strip()
-        )
+        ), None
 
     tree_sha = out.decode(errors="replace").strip()
     if tree_sha == EMPTY_TREE_SHA:
@@ -343,8 +355,8 @@ async def _empty_private_index_breach(
             "EMPTY TREE (%s), meaning the private index holds zero entries — "
             "committing it with no pathspec would delete every tracked file. "
             "Refused; nothing was committed." % EMPTY_TREE_SHA
-        )
-    return None
+        ), None
+    return None, tree_sha
 
 
 def _kill_orphaned_commit(
@@ -618,7 +630,16 @@ def _replay_post_commit_hook(worktree_root: Union[str, Path]) -> None:
     try:
         from coordinator_core.hooks import auto_push
 
-        auto_push.main(["--repo-root", str(worktree_root)])
+        # `--no-claim-release`: both archival commit seams in this module
+        # release their own claims immediately after this replay, with the
+        # paths they already know. Without the flag `_release_claims_for_head`
+        # re-derives the identical path set with a `git show` and releases it a
+        # second time -- the double release its own docstring says cannot
+        # happen, because that guarantee rests on `_ENV_SUPPRESS_FOR_SYNC_PUSH`,
+        # which this path must not set (it would stand the push down too).
+        # Measured 2026-08-25: two spawns, `git show` + `git status`, for a job
+        # already done.
+        auto_push.main(["--repo-root", str(worktree_root), "--no-claim-release"])
     except Exception:  # noqa: BLE001 — a landed commit must not fail on hook replay
         pass
 
@@ -1064,6 +1085,25 @@ def handoff_archive_dest(worktree_root: Path, handoff_path: Path) -> Path:
 # Frontmatter-status helper (reuses dag._read_meta cached parse)
 # ---------------------------------------------------------------------------
 
+def parse_frontmatter_field(path: Path, key: str) -> Optional[str]:
+    """Return `key`'s value from YAML frontmatter, or None if absent/unreadable.
+
+    The fence-tolerant primitive every field reader in this package routes
+    through. `parse_frontmatter_status` is `key="status"`; see its docstring
+    for the caching contract and for why the unfenced fallback exists.
+    """
+    meta = _read_meta(str(path))
+    if meta:
+        return meta.get(key)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if text.startswith("---"):
+        return None
+    return read_fm_field_unquoted(text[:4096], key)
+
+
 def parse_frontmatter_status(path: Path) -> Optional[str]:
     """Return the 'status' value from YAML frontmatter, or None if absent/unreadable.
 
@@ -1072,9 +1112,24 @@ def parse_frontmatter_status(path: Path) -> Optional[str]:
     TOCTOU between stat and read.  I/O cost: one file read per cache miss.
 
     Returns None gracefully on any I/O or parse error (dag._read_meta contract).
+
+    UNFENCED FALLBACK: `_read_meta` parses MARKDOWN frontmatter and returns `{}`
+    for any file that does not open with a `---` fence. Sizing-objects are bare
+    YAML documents with no fence, so every one of them read as `status: None` —
+    which made `fleet.archive_terminal_sizings` a permanent no-op that reported
+    a clean zero-candidate sweep while 81 terminal records accumulated in
+    `state/sizings/` (measured on this corpus, 2026-08-26). The fence-tolerant
+    read below is the same one `session_facts._read_frontmatter_status` already
+    used to count those 81 correctly; the two readers disagreeing is what hid
+    the defect, since the surface that REPORTS the backlog and the op that
+    CLEARS it did not share a status reader.
+
+    NEGATIVE SPEC: the fallback fires only when there is no fence to parse. A
+    fenced file's status still comes from `_read_meta` alone -- including a
+    fenced file whose frontmatter genuinely carries no `status:` -- so nothing
+    changes for plans, handoffs, or any other markdown record.
     """
-    meta = _read_meta(str(path))
-    return meta.get("status") if meta else None
+    return parse_frontmatter_field(path, "status")
 
 
 def _mkdir_and_track_created(dst_parent: Path) -> List[Path]:
@@ -2038,7 +2093,7 @@ async def archive_and_commit(
         # would delete every tracked file rather than commit nothing. See
         # `_empty_private_index_breach` for the 2026-08-18 incident and for why
         # the no-pathspec form above is correct and must stay.
-        index_breach = await _empty_private_index_breach(
+        index_breach, tree_sha = await _empty_private_index_breach(
             worktree_root, base_env, "archive_and_commit"
         )
         if index_breach is not None:
@@ -2053,86 +2108,75 @@ async def archive_and_commit(
             # HEAD no longer points at `old_head`, refusing rather than
             # reverting. Same shape as
             # `ops.ceremony.git_native._commit_scoped_private_index`'s
-            # ladder branch. +2 spawns over the prior single `git commit`
-            # (write-tree, commit-tree, update-ref vs. one commit) --
-            # accepted cost of atomicity, not a place to add more.
-            write_tree_proc = await asyncio.create_subprocess_exec(
-                "git", "write-tree",
+            # ladder branch. Net +1 spawn over the prior single `git commit`,
+            # not +2: `write-tree` is `_empty_private_index_breach`'s own,
+            # reused rather than re-spawned (2026-08-25) -- that guard already
+            # computes this exact tree sha and used to throw it away, so only
+            # `commit-tree` and `update-ref` are additional. The accepted cost
+            # of atomicity, and not a place to add more.
+            # Message on stdin, not `-m`: it now carries the trailers the
+            # hookless ladder would otherwise drop. See
+            # `_message_with_hookless_trailers`.
+            message = _message_with_hookless_trailers(
+                subject,
+                worktree_root,
+                [str(m.dst) for m in moves if m.candidate_id in acted_ids],
+            )
+            commit_tree_proc = await asyncio.create_subprocess_exec(
+                "git", "commit-tree", tree_sha, "-p", old_head,
                 cwd=str(worktree_root),
                 env=base_env,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            commit_proc = write_tree_proc
-            wt_out, wt_stderr = await write_tree_proc.communicate()
-            if write_tree_proc.returncode != 0:
-                commit_rc = write_tree_proc.returncode
-                err_msg = wt_stderr.decode(errors="replace").strip() or "write-tree-failed"
+            # Publish the child to the `finally:` BEFORE awaiting it — see
+            # `_kill_orphaned_commit`. `commit-tree` is plumbing (runs no
+            # hooks), so this window is far shorter than the old `git
+            # commit` await, but still a real subprocess to guard.
+            commit_proc = commit_tree_proc
+            ct_out, ct_stderr = await commit_tree_proc.communicate(
+                message.encode("utf-8")
+            )
+            if commit_tree_proc.returncode != 0:
+                commit_rc = commit_tree_proc.returncode
+                err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
             else:
-                tree_sha = wt_out.decode(errors="replace").strip()
-                # Message on stdin, not `-m`: it now carries the trailers the
-                # hookless ladder would otherwise drop. See
-                # `_message_with_hookless_trailers`.
-                message = _message_with_hookless_trailers(
-                    subject,
-                    worktree_root,
-                    [str(m.dst) for m in moves if m.candidate_id in acted_ids],
-                )
-                commit_tree_proc = await asyncio.create_subprocess_exec(
-                    "git", "commit-tree", tree_sha, "-p", old_head,
+                new_sha = ct_out.decode(errors="replace").strip()
+                # NOT env-scoped: update-ref moves the real branch ref,
+                # which lives in the shared git-dir regardless of which
+                # private index built the tree it now points at.
+                update_ref_proc = await asyncio.create_subprocess_exec(
+                    "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
                     cwd=str(worktree_root),
-                    env=base_env,
-                    stdin=asyncio.subprocess.PIPE,
+                    # `_make_git_env()` with NO idx_path: update-ref must
+                    # not inherit the private index, but it must still run
+                    # inside this module's hardened allowlist rather than
+                    # the ambient `os.environ` — an inherited GIT_DIR /
+                    # GIT_COMMON_DIR would move a ref in a different
+                    # git-dir than the one commit-tree just wrote into.
+                    # Same env the commit-failure restore path builds.
+                    env=_make_git_env(),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                # Publish the child to the `finally:` BEFORE awaiting it — see
-                # `_kill_orphaned_commit`. `commit-tree` is plumbing (runs no
-                # hooks), so this window is far shorter than the old `git
-                # commit` await, but still a real subprocess to guard.
-                commit_proc = commit_tree_proc
-                ct_out, ct_stderr = await commit_tree_proc.communicate(
-                    message.encode("utf-8")
-                )
-                if commit_tree_proc.returncode != 0:
-                    commit_rc = commit_tree_proc.returncode
-                    err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
-                else:
-                    new_sha = ct_out.decode(errors="replace").strip()
-                    # NOT env-scoped: update-ref moves the real branch ref,
-                    # which lives in the shared git-dir regardless of which
-                    # private index built the tree it now points at.
-                    update_ref_proc = await asyncio.create_subprocess_exec(
-                        "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
-                        cwd=str(worktree_root),
-                        # `_make_git_env()` with NO idx_path: update-ref must
-                        # not inherit the private index, but it must still run
-                        # inside this module's hardened allowlist rather than
-                        # the ambient `os.environ` — an inherited GIT_DIR /
-                        # GIT_COMMON_DIR would move a ref in a different
-                        # git-dir than the one commit-tree just wrote into.
-                        # Same env the commit-failure restore path builds.
-                        env=_make_git_env(),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
+                commit_proc = update_ref_proc
+                _ur_out, ur_stderr = await update_ref_proc.communicate()
+                commit_rc = update_ref_proc.returncode
+                if commit_rc != 0:
+                    err_msg = (
+                        "compare-and-swap failed -- HEAD moved concurrently "
+                        f"since {old_head} was captured; refusing to land a "
+                        "commit built against a stale parent (a retry needs "
+                        "a tree rebuilt against the new HEAD). "
+                        f"{ur_stderr.decode(errors='replace').strip()}"
                     )
-                    commit_proc = update_ref_proc
-                    _ur_out, ur_stderr = await update_ref_proc.communicate()
-                    commit_rc = update_ref_proc.returncode
-                    if commit_rc != 0:
-                        err_msg = (
-                            "compare-and-swap failed -- HEAD moved concurrently "
-                            f"since {old_head} was captured; refusing to land a "
-                            "commit built against a stale parent (a retry needs "
-                            "a tree rebuilt against the new HEAD). "
-                            f"{ur_stderr.decode(errors='replace').strip()}"
-                        )
-                    else:
-                        err_msg = ""
-                        # The commit is landed; replay the `post-commit` hook
-                        # the replaced `git commit` used to fire. See
-                        # `_replay_post_commit_hook`.
-                        _replay_post_commit_hook(worktree_root)
+                else:
+                    err_msg = ""
+                    # The commit is landed; replay the `post-commit` hook
+                    # the replaced `git commit` used to fire. See
+                    # `_replay_post_commit_hook`.
+                    _replay_post_commit_hook(worktree_root)
 
         if commit_rc != 0:
             _LOG.error(
@@ -2498,7 +2542,7 @@ async def rm_and_commit(
         # Empty-private-index refusal MUST precede the commit — same reasoning
         # as archive_and_commit's: no pathspec means an empty index deletes the
         # repo rather than committing nothing. See `_empty_private_index_breach`.
-        index_breach = await _empty_private_index_breach(
+        index_breach, tree_sha = await _empty_private_index_breach(
             worktree_root, base_env, "rm_and_commit"
         )
         if index_breach is not None:
@@ -2508,81 +2552,70 @@ async def rm_and_commit(
             # block for the full rationale. write-tree + commit-tree -p
             # <old_head> + a 4-arg `update-ref` refuses atomically on a
             # concurrent commit instead of silently reverting it.
-            write_tree_proc = await asyncio.create_subprocess_exec(
-                "git", "write-tree",
+            # write-tree is `_empty_private_index_breach`'s own, reused rather than
+            # re-spawned (2026-08-25): that guard already computes this exact tree
+            # sha and used to throw it away. See its docstring.
+            # Message on stdin, not `-m` — see archive_and_commit's
+            # identical block and `_message_with_hookless_trailers`. The
+            # reaped paths are already deleted from disk here, so tier-0
+            # artifact resolution finds nothing and the resolver falls
+            # through to its session-keyed tiers; passing them anyway
+            # keeps both call sites' argument shape identical.
+            message = _message_with_hookless_trailers(
+                subject,
+                worktree_root,
+                [str(p) for p in paths if _rel_id(p) in reaped_ids],
+            )
+            commit_tree_proc = await asyncio.create_subprocess_exec(
+                "git", "commit-tree", tree_sha, "-p", old_head,
                 cwd=str(worktree_root),
                 env=base_env,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            commit_proc = write_tree_proc
-            wt_out, wt_stderr = await write_tree_proc.communicate()
-            if write_tree_proc.returncode != 0:
-                commit_rc = write_tree_proc.returncode
-                err_msg = wt_stderr.decode(errors="replace").strip() or "write-tree-failed"
+            # Publish the child to the `finally:` BEFORE awaiting it — see
+            # `_kill_orphaned_commit`.
+            commit_proc = commit_tree_proc
+            ct_out, ct_stderr = await commit_tree_proc.communicate(
+                message.encode("utf-8")
+            )
+            if commit_tree_proc.returncode != 0:
+                commit_rc = commit_tree_proc.returncode
+                err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
             else:
-                tree_sha = wt_out.decode(errors="replace").strip()
-                # Message on stdin, not `-m` — see archive_and_commit's
-                # identical block and `_message_with_hookless_trailers`. The
-                # reaped paths are already deleted from disk here, so tier-0
-                # artifact resolution finds nothing and the resolver falls
-                # through to its session-keyed tiers; passing them anyway
-                # keeps both call sites' argument shape identical.
-                message = _message_with_hookless_trailers(
-                    subject,
-                    worktree_root,
-                    [str(p) for p in paths if _rel_id(p) in reaped_ids],
-                )
-                commit_tree_proc = await asyncio.create_subprocess_exec(
-                    "git", "commit-tree", tree_sha, "-p", old_head,
+                new_sha = ct_out.decode(errors="replace").strip()
+                update_ref_proc = await asyncio.create_subprocess_exec(
+                    "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
                     cwd=str(worktree_root),
-                    env=base_env,
-                    stdin=asyncio.subprocess.PIPE,
+                    # `_make_git_env()` with NO idx_path: update-ref must
+                    # not inherit the private index, but it must still run
+                    # inside this module's hardened allowlist rather than
+                    # the ambient `os.environ` — an inherited GIT_DIR /
+                    # GIT_COMMON_DIR would move a ref in a different
+                    # git-dir than the one commit-tree just wrote into.
+                    # Same env the commit-failure restore path builds.
+                    env=_make_git_env(),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                # Publish the child to the `finally:` BEFORE awaiting it — see
-                # `_kill_orphaned_commit`.
-                commit_proc = commit_tree_proc
-                ct_out, ct_stderr = await commit_tree_proc.communicate(
-                    message.encode("utf-8")
-                )
-                if commit_tree_proc.returncode != 0:
-                    commit_rc = commit_tree_proc.returncode
-                    err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
-                else:
-                    new_sha = ct_out.decode(errors="replace").strip()
-                    update_ref_proc = await asyncio.create_subprocess_exec(
-                        "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
-                        cwd=str(worktree_root),
-                        # `_make_git_env()` with NO idx_path: update-ref must
-                        # not inherit the private index, but it must still run
-                        # inside this module's hardened allowlist rather than
-                        # the ambient `os.environ` — an inherited GIT_DIR /
-                        # GIT_COMMON_DIR would move a ref in a different
-                        # git-dir than the one commit-tree just wrote into.
-                        # Same env the commit-failure restore path builds.
-                        env=_make_git_env(),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
+                commit_proc = update_ref_proc
+                _ur_out, ur_stderr = await update_ref_proc.communicate()
+                commit_rc = update_ref_proc.returncode
+                if commit_rc != 0:
+                    err_msg = (
+                        "compare-and-swap failed -- HEAD moved concurrently "
+                        f"since {old_head} was captured; refusing to land a "
+                        "commit built against a stale parent (a retry needs "
+                        "a tree rebuilt against the new HEAD). "
+                        f"{ur_stderr.decode(errors='replace').strip()}"
                     )
-                    commit_proc = update_ref_proc
-                    _ur_out, ur_stderr = await update_ref_proc.communicate()
-                    commit_rc = update_ref_proc.returncode
-                    if commit_rc != 0:
-                        err_msg = (
-                            "compare-and-swap failed -- HEAD moved concurrently "
-                            f"since {old_head} was captured; refusing to land a "
-                            "commit built against a stale parent (a retry needs "
-                            "a tree rebuilt against the new HEAD). "
-                            f"{ur_stderr.decode(errors='replace').strip()}"
-                        )
-                    else:
-                        err_msg = ""
-                        # The commit is landed; replay the `post-commit` hook
-                        # the replaced `git commit` used to fire. See
-                        # `_replay_post_commit_hook`.
-                        _replay_post_commit_hook(worktree_root)
+                else:
+                    err_msg = ""
+                    # The commit is landed; replay the `post-commit` hook
+                    # the replaced `git commit` used to fire. See
+                    # `_replay_post_commit_hook`.
+                    _replay_post_commit_hook(worktree_root)
 
         if commit_rc != 0:
             _LOG.error(

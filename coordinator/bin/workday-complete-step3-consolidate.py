@@ -51,6 +51,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 # Locate the shared module via realpath (always the true bin/lib, survives symlinked
 # invocation) but compute PLUGIN_ROOT from the non-resolved __file__ so the lib-discovery
@@ -314,62 +315,80 @@ def main(argv: list[str]) -> int:
                         return 3
     _out(f"[step3] reconcile: {reconcile_status}")
 
-    # Step 3.6 — push current branch
-    push_status = ""
-    # Re-resolve immediately before the force-with-lease/plain-push decision —
-    # the reconcile step above (rebase/merge, possibly conflict-laden) can take
-    # arbitrarily long since the last read, and a peer session going live in
-    # that window must not be invisible to the gate.
-    rewrite_verdict, rewrite_ok = _resolve_rewrite_verdict()
+    # Step 3.6 — push current branch, via push_outstanding() (C4b, AC8): the
+    # canonical primitive the C4-registered `push.outstanding` op wraps for
+    # every cadence surface (coordinator_core.ops.ceremony.push_outstanding).
+    # The plan's own anti-scope forbids new hand-rolled `git push` call
+    # sites, so this delegates entirely to `push_outstanding()` rather than
+    # re-implementing push-with-retry/branch_gate here the way the prior
+    # hand-rolled `_git_stream("push", "--force-with-lease", ...)` retry
+    # ladder did. `push_summary` (not `push_status`) is this script's own
+    # local variable name deliberately -- `push_status` is
+    # `commit_pipeline.py`'s canonical vocabulary
+    # (pushed/push-failed/declined/no-remote/not-attempted/unconfirmed) and
+    # this script's own strings ("ok"/"skipped (--no-push)"/etc.) are not
+    # that vocabulary, so a later name-based sweep must not mistake this for
+    # a fourth spelling of it (F8).
+    push_summary = ""
     if no_push:
-        push_status = "skipped (--no-push)"
+        push_summary = "skipped (--no-push)"
     elif dry_run:
+        rewrite_verdict, rewrite_ok = _resolve_rewrite_verdict()
         if rewrite_ok:
-            _err(f"[step3] DRY-RUN: would push origin/{current_branch} --force-with-lease")
+            _err(
+                f"[step3] DRY-RUN: would push origin/{current_branch} "
+                "with --force-with-lease (reconcile rewrote history)"
+            )
         else:
             _err(
                 f"[step3] DRY-RUN: would push origin/{current_branch} "
-                f"(rewrite refused: {rewrite_verdict.reason})"
+                f"via push_outstanding() (rewrite refused: {rewrite_verdict.reason})"
             )
-        push_status = "skipped (--dry-run)"
-    elif not rewrite_ok:
-        _err(
-            f"[step3] pushing to origin/{current_branch} "
-            f"(history rewrite refused: {rewrite_verdict.reason})..."
-        )
-        if _git_stream("push", "origin", current_branch) == 0:
-            push_status = "ok"
-        else:
-            _err(
-                "[step3] push rejected (history rewrite refused — no rebase/force retry). "
-                "PM must resolve before continuing."
-            )
-            return 4
+        push_summary = "skipped (--dry-run)"
     else:
-        _err(f"[step3] pushing to origin/{current_branch}...")
-        if _git_stream("push", "--force-with-lease", "origin", current_branch) == 0:
-            push_status = "ok"
-        else:
-            _err("[step3] push rejected; fetching and rebasing, then retrying...")
-            _git_stream("fetch", "origin")
-            if not wc.git_ok("rev-parse", "--verify", f"origin/{current_branch}"):
-                _err("[step3] remote branch absent — attempting plain push...")
-                if _git_stream("push", "--force-with-lease", "origin", current_branch) == 0:
-                    push_status = "retried-ok"
-                else:
-                    _err("[step3] push rejected twice. PM must resolve before continuing.")
-                    return 4
-            elif _git_stream("rebase", f"origin/{current_branch}") == 0:
-                if _git_stream("push", "--force-with-lease", "origin", current_branch) == 0:
-                    push_status = "retried-ok"
-                else:
-                    _err("[step3] push rejected twice. PM must resolve before continuing.")
-                    return 4
-            else:
-                _git_stream("rebase", "--abort")
-                _err("[step3] push-retry rebase failed. PM must resolve before continuing.")
+        rewrite_verdict, rewrite_ok = _resolve_rewrite_verdict()
+        if rewrite_ok:
+            _err(
+                f"[step3] reconcile rewrote history -- pushing to "
+                f"origin/{current_branch} with --force-with-lease"
+            )
+            if _git_stream("push", "--force-with-lease", "origin", current_branch) != 0:
+                _err(
+                    "[step3] force-with-lease push failed -- the remote moved since the "
+                    "last fetch, or the push was refused. PM must resolve before continuing."
+                )
                 return 4
-    _out(f"[step3] push: {push_status}")
+            push_summary = "ok (force-with-lease, after history rewrite)"
+        else:
+            _err(f"[step3] pushing to origin/{current_branch} via push_outstanding()...")
+            from coordinator_core.ops.ceremony.push_outstanding import push_outstanding
+
+            outcome = push_outstanding(Path(os.getcwd()))
+            for note in (
+                list(outcome.skipped) + list(outcome.failed) + list(outcome.unconfirmed)
+            ):
+                _err(f"[step3] push_outstanding: {note}")
+
+            if outcome.failed or outcome.unconfirmed:
+                _err(
+                    "[step3] push failed via push_outstanding(). "
+                    "PM must resolve before continuing."
+                )
+                return 4
+            if "push:nothing-outstanding" in outcome.skipped:
+                push_summary = "ok (nothing outstanding)"
+            elif "push" in outcome.acted:
+                push_summary = "ok"
+            elif "push:no-remote" in outcome.skipped:
+                push_summary = "ok (no-remote)"
+            elif (
+                "push:branch-policy" in outcome.skipped
+                or "push:branch-unresolvable" in outcome.skipped
+            ):
+                push_summary = "ok (declined by branch policy)"
+            else:
+                push_summary = "ok"
+    _out(f"[step3] push: {push_summary}")
 
     # Step 3.7 — delete merged sibling branches
     deleted_count = 0

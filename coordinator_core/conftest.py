@@ -497,6 +497,49 @@ def _reset_foreign_repo_probe_memo():
     reset_foreign_repo_probe_memo()
 
 
+@pytest.fixture(autouse=True)
+def _reset_engine_root_process_state():
+    """Give every test a cold ``engine_root`` module state.
+
+    ``coordinator_engine_root`` memoizes its Rung 1.5/Rung 2 answer process-scope
+    on ``_registry_mtime_pair``, and the sibling gate/shim/advisory caches in the
+    same module are interpreter-lifetime too. That is right for a hook process
+    that resolves once and exits, and wrong for a suite where nearly every test
+    points ``COORDINATOR_SETTINGS_HOME`` at its own registry-less ``tmp_path`` --
+    those all collapse to the SAME memo key, so the first test to resolve a root
+    answers for every later test in the worker.
+
+    Measured 2026-08-25 rather than assumed: ``tests/test_two_axis_env_export.py``
+    and ``ops/test_render_template_tree.py`` both pass alone and both fail in the
+    tier, and ``test_engine_root.py``'s own fall-through case was served a stale
+    pointer value by an earlier test in its file. Order-dependence, not a resolver
+    defect -- the module already ships every one of these as a named reset seam.
+
+    Same shape and same reason as ``_reset_foreign_repo_probe_memo`` above, and
+    unconditional for the same reason: this is process state, not home state.
+    """
+    from coordinator_core import engine_root
+
+    def _cold() -> None:
+        for seam in (
+            "_reset_root_memo",
+            "_reset_gate_memo",
+            "_reset_shim_cache",
+            "_reset_skew_advisory",
+            "_reset_engine_root_env_advisories",
+            "_reset_locator_axis_advisories",
+        ):
+            # Resolved by name, not imported: a seam renamed or retired upstream
+            # should not turn every test in the suite into a collection error.
+            fn = getattr(engine_root, seam, None)
+            if fn is not None:
+                fn()
+
+    _cold()
+    yield
+    _cold()
+
+
 # ---------------------------------------------------------------------------
 # probe-spray counter quarantine (2026-08-03 xdist cross-worker contamination)
 # ---------------------------------------------------------------------------

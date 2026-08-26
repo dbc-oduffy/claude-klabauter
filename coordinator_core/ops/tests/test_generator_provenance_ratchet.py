@@ -138,6 +138,12 @@ def entries_past_review_by(baseline_entries: dict, today: datetime.date) -> list
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.real_home  # live-tree oracle: derive_unresolved_writers resolves
+# the real claude-klabauter root via the machine-local registry
+# (coordinator/lib/resolve-claude-klabauter) -- under the suite's default home-
+# quarantine fixture that registry key is unresolvable and every call fails
+# closed with ClaudeKlabauterResolutionError before this gate's own subset check ever
+# runs. Read-only against the live tree, so the standard opt-out applies.
 def test_unresolved_set_is_a_subset_of_the_baseline():
     """Catches regrowth and the fix-one-break-one swap: a swap keeps the
     population count flat but changes module-path membership, which this

@@ -1824,7 +1824,7 @@ def _resolve_claude_home(claude_home_env: Optional[str]) -> Path:
 
 
 def _this_claude_klabauter_root() -> Path:
-    """Self-relative claude-klabauter-root resolution for probe_p23 — this module lives
+    """Self-relative claude-klabauter-live-root resolution for probe_p23 — this module lives
     at `<claude_klabauter_root>/coordinator_core/plugin_health/sentinel.py`, so a
     running instance of this probe suite already IS inside the claude-klabauter
     checkout whose wrapper source it needs to read. Deliberately NOT

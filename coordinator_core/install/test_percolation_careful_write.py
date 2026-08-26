@@ -23,6 +23,7 @@ import shutil
 
 import pytest
 
+from coordinator_core.git.run import GitResult
 from coordinator_core.install import substrate
 from coordinator_core.install._shared import atomic_write_bytes
 from coordinator_core.install.substrate import (
@@ -33,6 +34,8 @@ from coordinator_core.install.substrate import (
     _percolation_and_path_steps,
     _resolve_directory_tracked_set,
 )
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SETUP_TEMPLATE_FILES = ["publish_sync.py", ".percolate-identity.example"]
 _SETUP_TEMPLATE_HOOK_FILES = [
@@ -100,8 +103,29 @@ def test_resolve_directory_tracked_set_empty_when_not_a_repo(tmp_path):
     assert tracked == frozenset()
 
 
-def test_resolve_directory_tracked_set_none_when_git_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+@pytest.mark.parametrize(
+    "unprobeable",
+    [
+        pytest.param(GitResult(returncode=127, stdout="", stderr="", timed_out=False),
+                     id="git-never-spawned"),
+        pytest.param(GitResult(returncode=-1, stdout="", stderr="", timed_out=True),
+                     id="probe-timed-out"),
+    ],
+)
+def test_resolve_directory_tracked_set_none_when_git_unavailable(
+    tmp_path, monkeypatch, unprobeable
+):
+    """The degrade contract, asserted at the seam that now carries it.
+
+    This used to patch `shutil.which` to None; `_resolve_directory_tracked_set`
+    no longer resolves the binary itself, so that patch stopped simulating
+    anything and the probe reached real git, exited 128, and read as
+    "not a repo" -- the frozenset() answer that licenses a force-overwrite.
+    The REQUIREMENT is unchanged and is what matters: a probe that could not
+    run must be None, never an empty set. `run_git` spells those two cases
+    `returncode == 127` (never spawned: no git, bad cwd) and `timed_out`, and
+    both are pinned here."""
+    monkeypatch.setattr(substrate, "run_git", lambda *a, **k: unprobeable)
     dest = tmp_path / "setup"
     dest.mkdir()
 
@@ -113,13 +137,15 @@ def test_resolve_directory_tracked_set_one_spawn_per_directory(tmp_path, monkeyp
     _init_tracking_repo(dest, ["publish_sync.py", "percolate-hooks/README.md"])
 
     calls = []
-    real_run = substrate.subprocess.run
+    real_run_git = substrate.run_git
 
-    def _counting_run(argv, **kwargs):
-        calls.append(argv)
-        return real_run(argv, **kwargs)
+    def _counting_run_git(args, *rest, **kwargs):
+        calls.append(list(args))
+        return real_run_git(args, *rest, **kwargs)
 
-    monkeypatch.setattr(substrate.subprocess, "run", _counting_run)
+    # Counted at `run_git` rather than `subprocess.run`: one run_git call is
+    # one spawn, and this probe reaches git only through that seam now.
+    monkeypatch.setattr(substrate, "run_git", _counting_run_git)
 
     _resolve_directory_tracked_set(dest)
 
@@ -553,7 +579,16 @@ def test_percolation_no_git_stale_overwrite_refuses_but_reports(tmp_path, monkey
     stale = setup_dest / "publish_sync.py"
     stale.write_text("stale content\n", encoding="utf-8")
 
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    # "No git on PATH" is `run_git` never spawning -- returncode 127. Patching
+    # `shutil.which` no longer expresses it: `_resolve_directory_tracked_set`
+    # does not resolve the binary itself any more, so that patch would let the
+    # probe reach real git, exit 128, and read as "not a repo" -- which
+    # LICENSES the overwrite this test exists to see refused.
+    monkeypatch.setattr(
+        substrate,
+        "run_git",
+        lambda *a, **k: GitResult(returncode=127, stdout="", stderr="", timed_out=False),
+    )
 
     bin_dst = install_base / "bin"
     _percolation_and_path_steps(

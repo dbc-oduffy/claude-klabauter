@@ -16,7 +16,8 @@ pure-`.py`-with-`.cmd` shape end to end.
 Invocation: in an INTERACTIVE shell on a machine where C1 install-time PATH
 provisioning has run, this CLI is bareword-reachable on PATH — no interpreter
 prefix, no full $HOME/... path needed:
-  cross-repo-memo --to <receiver-em> --topic <slug> --title "<one-line>" --body-file <path>
+  cross-repo-memo draft <slug> --to <receiver-em> --title "<one-line>"
+  cross-repo-memo send <slug>
 That guarantee is scoped to post-install interactive shells: rc-file
 provisioning (.zshrc / .bashrc) does not cover CI, non-interactive `sh -c`
 invocations, or any shell that hasn't sourced the provisioned rc file. AUTHORED
@@ -2086,6 +2087,21 @@ _OUTBOX_REQUIRED_FIELDS = ("title", "from", "to", "created", "status", "delivery
 # jamming the receiver's lifecycle wrappers at stamp time.
 _VALID_KINDS = ("ask", "consult", "fyi", "proposal")
 
+# The kinds that assert a premise about the RECEIVER's tree state, and so earn
+# the premise-check advisory. `fyi`/`consult` are deliberately excluded: they
+# assert nothing checkable about the receiver's clone, and nagging on them is
+# noise (offers-not-nags). This set is the executable half of
+# `_print_premise_check_advisory`'s docstring, which has always specified
+# exactly this rule ("Fires only when kind is 'ask' or 'proposal' ... fyi/
+# consult are silently skipped") — the constant it reads was never defined, so
+# every invocation reaching that line died on NameError AFTER the draft was
+# already written. The draft landing while the CLI exits on a traceback is the
+# worst shape available: the operation succeeded and reported as a crash, and a
+# caller told to report-don't-hand-author reads it as "the CLI is unavailable"
+# — the one condition under which someone hand-writes into a sibling's tree,
+# which is precisely what this CLI exists to prevent.
+_PREMISE_BEARING_KINDS = frozenset({"ask", "proposal"})
+
 # scoped_to sub-field keys, flattened for this CLI's internal representation
 # (scoped_to_artifact / scoped_to_version / scoped_to_sha / scoped_to_seam) —
 # `_parse_outbox_file` accepts BOTH the flat `scoped_to_artifact: "..."`
@@ -2248,7 +2264,7 @@ def _print_route_mutation_failure_reasons(exc: BaseException) -> None:
 
 
 def _cmd_draft(args: argparse.Namespace) -> int:
-    """Handle: cross-repo-memo draft <topic> --to <em> --title <line> [--summary] [--kind] [--in-reply-to]
+    """Handle: cross-repo-memo draft <topic> --to <em> --title <line> --kind <k> [--summary] [--in-reply-to]
 
     A8 strangler cutover: thin invoke-and-render trampoline onto claude-klabauter's
     `memo.draft` op (dry_run:false, classify_receiver:true) — the engine owns
@@ -2734,6 +2750,89 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reconcile(args: argparse.Namespace) -> int:
+    """Handle: cross-repo-memo reconcile [--apply]
+
+    Thin invoke-and-render trampoline onto claude-klabauter's `memo.reconcile_outbox`
+    op. Default is a preview; `--apply` performs the moves.
+
+    WHY THIS VERB EXISTS. `send` moves its own draft to `sent/`, so the outbox
+    depth is honest for anything that went out that way — and wrong for
+    everything that reached its receiver by another route (out-of-band
+    delivery, a hand-written inbox file, a send whose receipt leg failed).
+    Those leave a stale local copy that looks exactly like a live draft in
+    `list`, and the depth is read as a work queue. This reconciles it.
+
+    Prints the moved paths and their pathspec: the op deliberately does not
+    commit (state/memo-outbox/ is a corpus other sessions read live), so the
+    caller commits the batch it chose to move.
+    """
+    sender_root = _current_repo_root()
+    if sender_root is None:
+        print(
+            "cross-repo-memo reconcile: must be invoked from inside a git repo "
+            "(sender). Current cwd is not a git working tree.",
+            file=sys.stderr,
+        )
+        return 2
+
+    apply_ = bool(getattr(args, "apply", False))
+
+    def legacy_reconcile() -> None:
+        """Fail-loud legacy stub — mirrors _cmd_list.legacy_list_outbox."""
+        raise RuntimeError(
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
+            "coordinator_core.invoke not importable) — there is no direct-write "
+            "fallback. Install/configure the claude-klabauter engine to reconcile the outbox."
+        )
+
+    try:
+        result = cc_invoke.route_mutation(
+            "memo.reconcile_outbox",
+            {"dry_run": not apply_},
+            sender_root,
+            legacy_reconcile,
+        )
+    except RuntimeError as exc:
+        print(f"cross-repo-memo reconcile: {exc}", file=sys.stderr)
+        _print_route_mutation_failure_reasons(exc)
+        return 1
+
+    if not isinstance(result, dict):
+        print(
+            "cross-repo-memo reconcile: claude-klabauter reported success but returned no "
+            "envelope — aborting.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not apply_:
+        candidates = result.get("candidates") or []
+        movable = [c for c in candidates if c.get("disposition") == "move"]
+        for c in candidates:
+            print(f"{c.get('disposition'):7} {c.get('status') or '-':22} {c.get('filename')}")
+        print(
+            f"{len(movable)} of {len(candidates)} entries already delivered — "
+            f"re-run with --apply to move them to sent/."
+        )
+        return 0
+
+    acted = result.get("acted") or []
+    skipped = result.get("skipped") or []
+    for a in acted:
+        print(f"moved   {a.get('filename')}")
+    for s in skipped:
+        print(f"skipped {s.get('filename')}: {s.get('note')}", file=sys.stderr)
+    if acted:
+        print(
+            "Commit the batch: git commit -- state/memo-outbox/ "
+            "(the op moves; it deliberately does not commit)."
+        )
+    else:
+        print("nothing to reconcile")
+    return 0
+
+
 def _cmd_discard(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo discard <topic>
 
@@ -3087,7 +3186,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 # Verbs that trigger subcommand dispatch (not legacy flag-only path).
-_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "discard", "send"})
+_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "discard", "reconcile", "send"})
 
 # Verbs that plausibly name "close/action an inbound memo" intent — this tool
 # has no such verb (it only sends OUTBOUND memos), so these get a pointer at
@@ -3178,7 +3277,7 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
         cross-repo-memo — manage outbound cross-repo memo drafts between EM working trees.
 
         DRAFT LIFECYCLE (canonical multi-line workflow):
-          1. draft   <topic> --to <em> --title "<line>" [--summary <s>] [--kind <k>]
+          1. draft   <topic> --to <em> --title "<line>" --kind <k> [--summary <s>]
                      [--in-reply-to <inbound-memo>]
                      Stage a draft in state/memo-outbox/<topic>.md; prints the path.
           2. compose <topic>
@@ -3186,6 +3285,9 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
              list    Enumerate outbox drafts with age (>24h marked stale).
              discard <topic>
                      Remove an outbox draft without sending.
+             reconcile [--apply]
+                     Move already-delivered entries (status != draft) to
+                     sent/, so `list`'s depth counts work rather than files.
           3. send    <topic>
                      Deliver the staged draft to its `to:` receiver and land
                      the sender-side receipt. If the claude-klabauter engine is
@@ -3225,7 +3327,10 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     draft_p.add_argument("--to", required=True, metavar="RECEIVER_EM_ID", help="Receiver-EM identifier")
     draft_p.add_argument("--title", required=True, metavar="ONE_LINE", help="One-line memo title")
     draft_p.add_argument("--summary", metavar="TEXT", default=None, help=f"One-line tl;dr (≤{_SUMMARY_MAX_CHARS} chars)")
-    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), default=None, help="Memo kind (ask | consult | fyi | proposal)")
+    # REQUIRED, matching `send`'s own gate on the same field: a kindless
+    # draft is an artifact this CLI's own send verb refuses. See
+    # memo_draft.py::_validate_draft_params for the full note.
+    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), required=True, help="REQUIRED. Memo kind (ask | consult | fyi | proposal)")
     draft_p.add_argument(
         "--in-reply-to", metavar="MEMO", default=None,
         help="OPTIONAL. Basename (or path — normalized to basename) of the "
@@ -3257,6 +3362,16 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     subparsers.add_parser(
         "list",
         help="List outbox drafts in the sender repo with age (marks >24h stale)",
+    )
+
+    # reconcile subparser (handler is _cmd_reconcile)
+    reconcile_p = subparsers.add_parser(
+        "reconcile",
+        help="Move already-delivered outbox entries to sent/ so the depth is a work queue",
+    )
+    reconcile_p.add_argument(
+        "--apply", action="store_true", default=False,
+        help="Perform the moves (default is a preview)",
     )
 
     # discard subparser (handler is _cmd_discard)
@@ -3416,6 +3531,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args)
         elif verb == "discard":
             return _cmd_discard(args)
+        elif verb == "reconcile":
+            return _cmd_reconcile(args)
         elif verb == "compose":
             return _cmd_compose(args)
         elif verb == "send":

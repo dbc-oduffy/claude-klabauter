@@ -35,6 +35,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import coordinator_core.workstream_complete as wsc
 
 _SID = "4839fcc4-7544-4ca6-bb5f-2cf0977e4620"
@@ -151,6 +153,8 @@ def test_name_filter_non_json_entries_are_ignored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_floor_kwargs_open_count_bounded_by_own_records_not_corpus_size(monkeypatch, tmp_path):
     """The scan-cost claim, proven directly: with 300 foreign-session decoys
     on disk plus this session's own 2 records, `_resolve_review_brightline_
@@ -185,6 +189,8 @@ def test_floor_kwargs_open_count_bounded_by_own_records_not_corpus_size(monkeypa
     assert result["session_start_sha"] == "cccccccccccccccccccccccccccccccccccccccc"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_floor_kwargs_short_id_collision_still_filtered_by_field_after_open(monkeypatch, tmp_path):
     """Two files share this session's `-{sid[:8]}` filename segment, but one
     of them actually belongs to a DIFFERENT full session id that happens to
@@ -213,6 +219,8 @@ def test_floor_kwargs_short_id_collision_still_filtered_by_field_after_open(monk
     assert tips == ["aaaaaaa"]
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_floor_kwargs_zero_own_records_among_decoys_returns_none(monkeypatch, tmp_path):
     """A large foreign-session corpus and zero records of this session's own
     — the ordinary AC2 single-close path — must still resolve `None` (the

@@ -163,6 +163,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -839,20 +840,30 @@ def _write_claude_doe_argv_stub(sandbox: str) -> str:
     inherited, and exits 0 without launching anything — AC2 asserts what the
     shim PASSES to claude-doe, and must never start a real session to find out.
 
-    The shebang is a baked ``sys.executable``, not ``/usr/bin/env python3``:
-    the probe's whole point is a cold PATH, and a stub that resolved its own
-    interpreter through that PATH would be testing the sandbox's PATH rather
-    than the shim.
+    The interpreter is a baked ``sys.executable``, not ``/usr/bin/env
+    python3``: the probe's whole point is a cold PATH, and a stub that
+    resolved its own interpreter through that PATH would be testing the
+    sandbox's PATH rather than the shim. The shebang line itself stays
+    ``#!/bin/sh`` — a shebang is parsed by the kernel with no shell-style
+    quote stripping, so a baked ``sys.executable`` containing a space (a
+    routine shape on Windows) would split into a garbage interpreter path
+    right there; ``exec``ing the quoted interpreter from inside `/bin/sh`
+    keeps the baked path intact.
     """
     stub_bin = os.path.join(sandbox, "ac2-cold-shell-bin")
     os.makedirs(stub_bin, exist_ok=True)
-    stub = os.path.join(stub_bin, "claude-doe")
-    Path(stub).write_text(
-        f"#!{sys.executable}\n"
+    body = os.path.join(stub_bin, "claude-doe-body.py")
+    Path(body).write_text(
         "import os, sys\n"
         f"for _a in sys.argv[1:]:\n"
         f"    print({_AC2_STUB_ARG_PREFIX!r} + _a)\n"
         f"print({_AC2_STUB_ENV_PREFIX!r} + os.environ.get('REPO_DOE_CLAUDE', ''))\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    stub = os.path.join(stub_bin, "claude-doe")
+    Path(stub).write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(body)} \"$@\"\n",
         encoding="utf-8",
         newline="\n",
     )

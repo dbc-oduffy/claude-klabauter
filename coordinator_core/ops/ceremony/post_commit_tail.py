@@ -185,7 +185,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import get_op_handler, register_op
-from coordinator_core.ops.ceremony import consumed_handoff_stamp, tail_ops
+from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.handoff_children import blocked_by_dependents
 from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_MODE_SYNC,
@@ -974,16 +974,6 @@ class PostCommitTailOutcome:
     gate_cascade_clear_result: dict = field(
         default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
     )
-    #: C4 (docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md
-    #: § C4) — the detached archive-sweep fire (`tail_ops.
-    #: fire_archive_sweeps_detached`), wired into this WSC tail so
-    #: `sweep-terminal-handoffs.py` re-earns an in-plane call site.
-    #: `TailResult`-shaped `{acted, skipped, failed}`, recording only the
-    #: SPAWN attempt outcome — see `fire_archive_sweeps_detached`'s own
-    #: docstring.
-    archive_sweeps_result: dict = field(
-        default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
-    )
 
 
 async def run(
@@ -1025,15 +1015,14 @@ async def run(
     is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, so existing
     callers that predate C3 need no call-site change either.
 
-    All five steps run unconditionally in sequence -- a stamp+ship exception
-    propagates BEFORE origin-stub close, the deliverable cascade, the
-    gate-cascade-clear fan-out, or the detached archive-sweep fire ever run
-    (matches the pre-extraction inline sequencing exactly: a crash mid-stamp
-    on the fresh pass must leave the origin stub untouched, recovered only on
-    the AC18-resumed re-invoke). An origin-stub-close failure, a
-    deliverable-cascade failure, a gate-cascade-clear failure, or an
-    archive-sweep spawn failure, by contrast, is caught and soft-failed
-    inside its own step -- none of the four propagates past this function.
+    All four steps run unconditionally in sequence -- a stamp+ship exception
+    propagates BEFORE origin-stub close, the deliverable cascade, or the
+    gate-cascade-clear fan-out ever run (matches the pre-extraction inline
+    sequencing exactly: a crash mid-stamp on the fresh pass must leave the
+    origin stub untouched, recovered only on the AC18-resumed re-invoke). An
+    origin-stub-close failure, a deliverable-cascade failure, or a gate-
+    cascade-clear failure, by contrast, is caught and soft-failed inside its
+    own helper -- none of the three propagates past this function.
     """
     with _measure(timing, "stamp_and_ship"):
         stamp_outcome = await consumed_handoff_stamp.post_commit_stamp_and_ship(
@@ -1089,37 +1078,11 @@ async def run(
         resolved_gate_cascade_clear_handler,
     )
 
-    # C4 (docs/plans/2026-08-25-the-handoff-auto-archive-comes-back-capped.md
-    # § C4): fire the detached archive-sweep CLI (sweep-terminal-handoffs.py,
-    # cap=150, owned by that CLI itself — never passed here, see module's own
-    # chunk body). `fire_archive_sweeps_detached` is itself a synchronous,
-    # non-blocking spawn (`detached_spawn.spawn_detached` — effectively 0ms)
-    # that records only the SPAWN attempt outcome, never the eventual
-    # archival result; a spawn failure is captured into `failed` below
-    # exactly like every other leg here and must never raise or extend this
-    # ceremony's own budget. NOT wrapped in `_measure()` — same rationale as
-    # the deliverable-cascade/gate-cascade-clear legs above (module docstring
-    # "Timing-span preservation"): this trigger predates neither's pinned
-    # `_TailTiming` step-name contract and must not widen it.
-    try:
-        archive_sweeps_result = tail_ops.fire_archive_sweeps_detached(worktree_root)
-    except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
-        _LOG.warning(
-            "post_commit_tail: fire_archive_sweeps_detached raised %s: %s",
-            type(exc).__name__, exc,
-        )
-        archive_sweeps_result = {
-            "acted": [],
-            "skipped": [],
-            "failed": [f"archive_sweeps:detached_fire: {exc}"],
-        }
-
     return PostCommitTailOutcome(
         stamp_outcome=stamp_outcome,
         origin_stub_result=origin_stub_result,
         deliverable_cascade_result=deliverable_cascade_result,
         gate_cascade_clear_result=gate_cascade_clear_result,
-        archive_sweeps_result=archive_sweeps_result,
     )
 
 
@@ -1154,7 +1117,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns `{exit_code, stamped, empty_consumed_set, follow_up_committed_sha,
     follow_up_committed_shas, follow_up_pushed, origin_stub_close,
-    deliverable_cascade, gate_cascade_clear, archive_sweeps}` on success
+    deliverable_cascade, gate_cascade_clear}` on success
     (`follow_up_committed_shas` carries every follow-up commit the stamp leg
     landed -- one per `deliverable_id` in the stamped set, so a multi-baton
     close reports all of them rather than only the tip named by
@@ -1210,13 +1173,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         or bool(outcome.deliverable_cascade_result.get("failed"))
         or bool(outcome.gate_cascade_clear_result.get("failed"))
     )
-    # archive_sweeps_result is deliberately EXCLUDED from has_failure: the
-    # dispatch brief requires its failure "must NEVER fail the ceremony" --
-    # unlike the other three soft-failed legs above (each already reported
-    # via exit_code:2 before this leg existed), a sweep that cannot spawn
-    # (e.g. no `coordinator/bin/` in a synthetic/test worktree) must not flip
-    # this op's own exit_code. `archive_sweeps_result["failed"]` remains
-    # visible in the reply's `archive_sweeps` field for observability.
 
     return {
         "exit_code": 2 if has_failure else 0,
@@ -1228,5 +1184,4 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "origin_stub_close": outcome.origin_stub_result,
         "deliverable_cascade": outcome.deliverable_cascade_result,
         "gate_cascade_clear": outcome.gate_cascade_clear_result,
-        "archive_sweeps": outcome.archive_sweeps_result,
     }

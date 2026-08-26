@@ -227,7 +227,7 @@ class ListSchemasTests(unittest.TestCase):
         import types
 
         fake_cc_invoke = types.ModuleType("cc_invoke")
-        fake_cc_invoke._resolve_claude_klabauter_root = lambda: "/fake/claude-klabauter/root"
+        fake_cc_invoke.require_dispatch_engine_on_path = lambda: "/fake/claude-klabauter/root"
 
         fake_records_query_ops = types.ModuleType(
             "coordinator_core.ops.records_query"
@@ -271,7 +271,7 @@ class ListSchemasTests(unittest.TestCase):
         def _raise():
             raise RuntimeError("CLAUDE_KLABAUTER_ROOT not set")
 
-        fake_cc_invoke._resolve_claude_klabauter_root = _raise
+        fake_cc_invoke.require_dispatch_engine_on_path = _raise
 
         orig = sys.modules.get("cc_invoke")
         sys.modules["cc_invoke"] = fake_cc_invoke
@@ -289,7 +289,7 @@ class ListSchemasTests(unittest.TestCase):
         import types
 
         fake_cc_invoke = types.ModuleType("cc_invoke")
-        fake_cc_invoke._resolve_claude_klabauter_root = lambda: "/fake/claude-klabauter/root"
+        fake_cc_invoke.require_dispatch_engine_on_path = lambda: "/fake/claude-klabauter/root"
 
         orig_cc_invoke = sys.modules.get("cc_invoke")
         orig_ops_records_query = sys.modules.get("coordinator_core.ops.records_query")

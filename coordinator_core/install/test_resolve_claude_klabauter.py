@@ -78,7 +78,7 @@ def test_missing_both_registry_and_sentinel_raises_distinct_message(tmp_path: Pa
 def test_traversal_segment_rejected(tmp_path: Path, monkeypatch):
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
-    (ml_dir / ".claude-klabauter-root").write_text(str(tmp_path / "some" / ".." / "claude-klabauter"), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(tmp_path / "some" / ".." / "claude-klabauter"), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="traversal segment"):
@@ -88,7 +88,7 @@ def test_traversal_segment_rejected(tmp_path: Path, monkeypatch):
 def test_root_does_not_exist_rejected(tmp_path: Path, monkeypatch):
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
-    (ml_dir / ".claude-klabauter-root").write_text(str(tmp_path / "nonexistent-claude-klabauter"), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(tmp_path / "nonexistent-claude-klabauter"), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="does not exist"):
@@ -100,7 +100,7 @@ def test_root_resolved_but_coordinator_bin_missing_distinct_message(tmp_path: Pa
     ml_dir.mkdir()
     incomplete_root = tmp_path / "incomplete-claude-klabauter"
     incomplete_root.mkdir()
-    (ml_dir / ".claude-klabauter-root").write_text(str(incomplete_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(incomplete_root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="has no coordinator/bin/ directory") as excinfo:
@@ -113,7 +113,7 @@ def test_coordinator_bin_present_but_sentinel_absent_distinct_message(tmp_path: 
     ml_dir.mkdir()
     stale_root = tmp_path / "stale-claude-klabauter"
     (stale_root / "coordinator" / "bin").mkdir(parents=True)
-    (ml_dir / ".claude-klabauter-root").write_text(str(stale_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(stale_root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="stale or partial claude-klabauter migration") as excinfo:
@@ -136,7 +136,7 @@ def test_sentinel_appearing_mid_rename_resolves_instead_of_raising(tmp_path: Pat
     ml_dir.mkdir()
     root = tmp_path / "mid-rename-claude-klabauter"
     (root / "coordinator" / "bin").mkdir(parents=True)
-    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     sentinel_py = root / "coordinator" / "bin" / "archive-stamp-cli.py"
@@ -168,7 +168,7 @@ def test_sentinel_absent_across_reprobe_still_raises(tmp_path: Path, monkeypatch
     ml_dir.mkdir()
     root = tmp_path / "genuinely-absent-claude-klabauter"
     (root / "coordinator" / "bin").mkdir(parents=True)
-    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     monkeypatch.setattr(resolve_claude_klabauter.time, "sleep", lambda seconds: None)
@@ -192,7 +192,7 @@ def test_present_sentinel_never_pays_the_retry_sleep(tmp_path: Path, monkeypatch
     ml_dir.mkdir()
     root = tmp_path / "happy-path-claude-klabauter"
     _make_claude_klabauter_fixture(root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     slept: list = []
@@ -207,7 +207,7 @@ def test_non_executable_sentinel_rejected(tmp_path: Path, monkeypatch):
     ml_dir.mkdir()
     root = tmp_path / "non-exec-sentinel-claude-klabauter"
     _make_claude_klabauter_fixture(root, sentinel_executable=False)
-    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="stale or partial claude-klabauter migration"):
@@ -219,11 +219,11 @@ def test_valid_fixture_resolves_bin_dir(tmp_path: Path, monkeypatch):
     ml_dir.mkdir()
     root = tmp_path / "valid-claude-klabauter"
     _make_claude_klabauter_fixture(root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     # `resolve_claude_klabauter_bin_dir` returns `claude_klabauter_root + "/coordinator/bin"`
-    # where `claude_klabauter_root` is read back verbatim from `.claude-klabauter-root` --
+    # where `claude_klabauter_root` is read back verbatim from `.claude-klabauter-live-root` --
     # i.e. it carries whatever separators `str(root)` used when the
     # fixture wrote that file (native, backslash on Windows), not a
     # normalized form. Compare backslash-insensitively rather than assume
@@ -239,7 +239,7 @@ def test_registry_rung_wins_over_sentinel(tmp_path: Path, monkeypatch):
     (ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{registry_root}\'\n', encoding="utf-8"
     )
-    (ml_dir / ".claude-klabauter-root").write_text(str(tmp_path / "sentinel-claude-klabauter-nonexistent"), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(tmp_path / "sentinel-claude-klabauter-nonexistent"), encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir().replace("\\", "/") == registry_root.as_posix() + "/coordinator/bin"
@@ -514,7 +514,7 @@ def test_live_tree_wins_when_session_is_the_source_tree(tmp_path: Path, monkeypa
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -544,7 +544,7 @@ def test_published_wins_when_session_is_not_the_source_tree(tmp_path: Path, monk
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -576,7 +576,7 @@ def test_structural_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -614,7 +614,7 @@ def test_absent_engine_target_does_not_divert_even_when_session_confirmed_differ
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -643,7 +643,7 @@ def test_no_klabauter_byte_identical_to_today(tmp_path: Path, monkeypatch):
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-root").write_text(str(live_root), encoding="utf-8")
+    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
@@ -673,7 +673,7 @@ def test_klabauter_only_resolves_published_engine(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
-    # No repos.claude_klabauter, no .claude-klabauter-root sentinel -- the
+    # No repos.claude_klabauter, no .claude-klabauter-live-root sentinel -- the
     # klabauter-only consumer-machine case.
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(published_root)

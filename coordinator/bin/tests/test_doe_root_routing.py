@@ -251,12 +251,38 @@ def test_project_scope_unaffected(tmp_path):
 
 
 def _make_cold_env(tmpdir: str) -> dict[str, str]:
-    """Return a minimal env dict with MACHINE_LOCAL_IMPL → stub (no repos.doe_claude).
+    """Return a minimal env dict that neutralizes EVERY rung of doe_root()'s
+    resolution ladder (coordinator_registry.py :: doe_root), not just
+    DOE_ROOT/REPO_DOE_CLAUDE/MACHINE_LOCAL_IMPL.
+
+    Verified defect (2026-08-26): the previous version of this helper only
+    neutralized rungs 1a/1b (via patch.dict clear=True) and rung 2 (via the
+    MACHINE_LOCAL_IMPL stub below). Rungs 3-4 (the `.doe-root` pointer file,
+    read via `_mp_doe_root_pointer_rung()` ->
+    `coordinator/lib/read_doe_root_pointer.py`) and rungs 5-6 (marketplace
+    cache / flat plugin layout, via `_mp_marketplace_cache_rung()` /
+    `_mp_flat_layout_probe_rung()`) all resolve `${CLAUDE_HOME:-$HOME}` (and,
+    for the pointer rung, `${settings-home}` too) directly from the *real*
+    process environment/passwd database — clearing os.environ does not blank
+    HOME on POSIX (os.path.expanduser("~") falls back to the pwd entry), and
+    a real `~/.claude/.doe-root` pointer on the operator's box resolved to a
+    live peer-repo checkout, causing this test suite to write real files into
+    that peer repo's live outbox/queue on every "cold" run.
+
+    Fix: point CLAUDE_HOME, COORDINATOR_SETTINGS_HOME, and
+    MACHINE_LOCAL_REGISTRY_DIR at nonexistent/empty subdirectories of the
+    pytest tmpdir. Every rung above resolves its home/settings-home/registry
+    dir through these exact seams (`machine_local_impl_resolve.claude_home()`
+    / `.settings_home()`, `read_doe_root_pointer._resolve_settings_home()`),
+    so redirecting them here sandboxes the pointer file, marketplace-cache,
+    and flat-layout probes, and the in-process registry.toml read, all at
+    once — no per-rung monkeypatch needed for these four.
 
     DOE_ROOT and CLAUDE_KLABAUTER_ROOT are intentionally absent from the returned dict.
     Pass this as `os.environ` replacement so no parent-env leakage occurs.
     MACHINE_LOCAL_IMPL is the test-isolation knob shared by coordinator_registry
-    (_registry_machine_local_get) and both CLIs, so one stub covers all callers.
+    (_registry_machine_local_get) and both CLIs, so one stub covers all callers
+    that still fall through to the subprocess rung.
     """
     ml_impl = os.path.join(tmpdir, "_machine_local_stub.py")
     with open(ml_impl, "w", encoding="utf-8") as fh:
@@ -268,7 +294,80 @@ def _make_cold_env(tmpdir: str) -> dict[str, str]:
             "    print('')\n"
             "sys.exit(0)\n"
         )
-    return {"MACHINE_LOCAL_IMPL": ml_impl}
+    cold_home = os.path.join(tmpdir, "_cold_claude_home")  # deliberately absent
+    cold_settings_home = os.path.join(tmpdir, "_cold_settings_home")  # deliberately absent
+    cold_registry_dir = os.path.join(tmpdir, "_cold_registry_dir")
+    os.makedirs(cold_registry_dir, exist_ok=True)
+    return {
+        "MACHINE_LOCAL_IMPL": ml_impl,
+        "CLAUDE_HOME": cold_home,
+        "COORDINATOR_SETTINGS_HOME": cold_settings_home,
+        "MACHINE_LOCAL_REGISTRY_DIR": cold_registry_dir,
+    }
+
+
+def _assert_cold_env_doe_root_unresolvable(cold_env: dict[str, str]) -> None:
+    """Prove the cold env is genuinely cold before invoking a CLI under it.
+
+    A cold-path test that silently stops being cold (e.g. a new resolver
+    rung added later that reads yet another unneutralized env/pointer seam)
+    must fail loud here rather than pass by accident while writing to a real
+    peer repo.
+    """
+    with unittest.mock.patch.dict(os.environ, cold_env, clear=True):
+        try:
+            resolved = _reg.doe_root()
+        except _reg._DoeUnresolvable:
+            return
+    raise AssertionError(
+        f"cold env must not resolve doe_root(); got {resolved!r} — a resolver "
+        "rung is leaking through _make_cold_env's neutralization"
+    )
+
+
+def _resolvable_doe_lessons_outbox() -> str | None:
+    """Return the REAL, ambient doe_root()'s lessons-outbox dir, or None.
+
+    Used only to assert cold-path tests write nothing there — never to
+    write. Resolved under the *real* environment (no mocking), mirroring
+    what a non-cold invocation on this host would resolve to.
+    """
+    try:
+        return os.path.join(_reg.doe_root(), "state", "lessons-outbox")
+    except Exception:
+        return None
+
+
+def _resolvable_claude_klabauter_improvement_queue() -> str | None:
+    """Return the REAL, ambient claude_klabauter_root()'s improvement-queue dir, or None."""
+    try:
+        root = _queue_cli._claude_klabauter_root()
+    except Exception:
+        return None
+    return os.path.join(root, "state", "improvement-queue") if root else None
+
+
+def _assert_no_stray_files(before: dict[str, set[str]], after: dict[str, set[str]]) -> None:
+    """Assert no NEW file appeared in any tracked real-world directory.
+
+    `before`/`after` map directory path -> set of file basenames present at
+    that snapshot time (missing directories map to an empty set). Do not
+    hardcode any specific peer-repo path — directories that fail to resolve
+    on this host are skipped cleanly via the None-returning resolvers above.
+    """
+    for _dir, _before_names in before.items():
+        _after_names = after.get(_dir, set())
+        _new = _after_names - _before_names
+        assert not _new, f"cold-path must write NO files; found new entries in {_dir}: {_new}"
+
+
+def _snapshot_dir(path: str | None) -> tuple[str | None, set[str]]:
+    if not path or not os.path.isdir(path):
+        return path, set()
+    try:
+        return path, set(os.listdir(path))
+    except OSError:
+        return path, set()
 
 
 _FAKE_LESSON_SCHEMA = {
@@ -291,6 +390,7 @@ def _run_cold_lesson(tmpdir: str) -> tuple[int, str]:
     (return_code, captured_stderr).
     """
     cold_env = _make_cold_env(tmpdir)
+    _assert_cold_env_doe_root_unresolvable(cold_env)
     captured_err = io.StringIO()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -330,17 +430,49 @@ def test_lesson_promote_cold_exits_nonzero(tmp_path):
 
 
 def test_lesson_promote_cold_warn_to_stderr(tmp_path):
-    """Cold path: WARN message on stderr mentioning DOE_ROOT."""
+    """Cold path: WARN message on stderr naming a real remediation.
+
+    Verified defect (2026-08-26): a fully-cold env (neither DOE_ROOT nor the
+    dispatch engine root resolvable) now hits the engine-root gate
+    (`require_dispatch_engine_on_path()`, called at the top of `main()`)
+    BEFORE `_outbox_root()`'s own DOE_ROOT-specific check is ever reached,
+    so the WARN this produces names claude-klabauter's own unresolvable-root
+    remediation, not DOE_ROOT specifically. Both are legitimate "cold"
+    causes; this assertion checks the WARN names ONE resolvable-root
+    remediation (repos.doe_claude or repos.claude_klabauter), not a specific
+    one, since which rung fails first is an implementation detail of
+    resolution order, not part of the AC2-cold contract (WARN + non-zero
+    exit + nothing written).
+    """
     _, err = _run_cold_lesson(str(tmp_path))
     assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
-    assert "DOE_ROOT" in err, "cold-path WARN must mention DOE_ROOT"
+    assert "DOE_ROOT" in err or "claude_klabauter" in err or "claude-klabauter" in err, (
+        "cold-path WARN must name a real remediation (DOE_ROOT or claude-klabauter root)"
+    )
 
 
 def test_lesson_promote_cold_no_file_written(tmp_path):
-    """Cold path: no file written (neither DoE nor claude-klabauter path)."""
+    """Cold path: no file written (neither DoE nor claude-klabauter path), asserted
+    against BOTH the sandbox tmp_path AND the real, ambient
+    lessons-outbox directory this host would otherwise resolve to.
+
+    A bare `tmp_path.rglob("*.yaml") == []` check is vacuously true even
+    while the write lands in a real peer repo's live outbox — see this
+    file's `_make_cold_env` docstring for the incident this reproduces.
+    `_resolvable_doe_lessons_outbox()` resolves under the REAL (unmocked)
+    environment, mirroring what a non-cold invocation on this host would
+    target, and skips cleanly (empty snapshot) if it does not resolve.
+    """
+    real_outbox = _resolvable_doe_lessons_outbox()
+    _, before_names = _snapshot_dir(real_outbox)
     _run_cold_lesson(str(tmp_path))
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"cold-path must write NO files; found: {written}"
+    _, after_names = _snapshot_dir(real_outbox)
+    _assert_no_stray_files(
+        {real_outbox: before_names} if real_outbox else {},
+        {real_outbox: after_names} if real_outbox else {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +501,7 @@ def _run_cold_queue(tmpdir: str) -> str:
     Returns captured_stderr. main() returns None on graceful paths.
     """
     cold_env = _make_cold_env(tmpdir)
+    _assert_cold_env_doe_root_unresolvable(cold_env)
     captured_err = io.StringIO()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -410,23 +543,42 @@ def _run_cold_queue(tmpdir: str) -> str:
 
 
 def test_queue_append_cold_warn_to_stderr(tmp_path):
-    """Cold central invocation: WARN message on stderr (CLAUDE_KLABAUTER_ROOT unresolvable).
+    """Cold central invocation: WARN message on stderr (engine root unresolvable).
 
     Rewired (DR-236, 2026-07-25): queue-append's central-scope write routes to
-    CLAUDE_KLABAUTER_ROOT, not DOE_ROOT — see test_central_improvement_queue_under_doe's
-    docstring above. The CLI's own WARN text confirms this: "CLAUDE_KLABAUTER_ROOT
-    unresolvable — skipping central write: ...".
+    the engine root, not DOE_ROOT — see test_central_improvement_queue_under_doe's
+    docstring above. The CLI's own WARN text confirms this: "the engine root
+    unresolvable — skipping central write: ...". The prefix said CLAUDE_KLABAUTER_ROOT
+    until the engine-root rename (C16/DR-344) retired that variable name from
+    operator-facing prose (54e4b87c0, 2fd1b988f).
     """
     err = _run_cold_queue(str(tmp_path))
     assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
-    assert "CLAUDE_KLABAUTER_ROOT" in err, "cold-path WARN must mention CLAUDE_KLABAUTER_ROOT"
+    assert "engine root unresolvable" in err, "cold-path WARN must mention the engine root"
+    # Two assertions, two distinct regressions: the line above covers the WARN
+    # prefix, this one the Remediation block. Reword the prefix and only the
+    # first fails; drop the env var from the remediation and only this one does.
+    # The token is what an operator has to act on, so it is the worse of the
+    # two to lose silently.
+    assert "COORDINATOR_ENGINE_ROOT" in err, "cold-path WARN must name the engine-root env var"
 
 
 def test_queue_append_cold_no_file_written(tmp_path):
-    """Cold central invocation: no file written anywhere."""
+    """Cold central invocation: no file written anywhere, asserted against
+    BOTH the sandbox tmp_path AND the real, ambient improvement-queue
+    directory this host would otherwise resolve to — see
+    test_lesson_promote_cold_no_file_written's docstring for why a bare
+    tmp_path-only check is vacuous."""
+    real_queue = _resolvable_claude_klabauter_improvement_queue()
+    _, before_names = _snapshot_dir(real_queue)
     _run_cold_queue(str(tmp_path))
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"cold-path must write NO files; found: {written}"
+    _, after_names = _snapshot_dir(real_queue)
+    _assert_no_stray_files(
+        {real_queue: before_names} if real_queue else {},
+        {real_queue: after_names} if real_queue else {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -537,17 +689,23 @@ def _run_native_skip_queue() -> str:
 
 
 def test_queue_append_native_skip_warns_doe_root():
-    """Native skipped:true → 'warn:' + 'CLAUDE_KLABAUTER_ROOT' on stderr.
+    """Native skipped:true → 'warn:' + 'the engine root' on stderr.
 
     Rewired (DR-236, 2026-07-25): see test_queue_append_cold_warn_to_stderr's
-    docstring — queue-append's central-scope WARN prefix names CLAUDE_KLABAUTER_ROOT, not
-    DOE_ROOT (the fixture's own `reason` string, "doe root unresolvable", is
-    test-authored filler text passed through verbatim by the native op's skip
-    envelope — it does not make the CLI's own WARN prefix DOE_ROOT-flavored).
+    docstring — queue-append's central-scope WARN prefix names the engine
+    root, not DOE_ROOT (the fixture's own `reason` string, "doe root
+    unresolvable", is test-authored filler text passed through verbatim by
+    the native op's skip envelope — it does not make the CLI's own WARN
+    prefix DOE_ROOT-flavored). The prefix said CLAUDE_KLABAUTER_ROOT until the
+    engine-root rename (C16/DR-344) retired that variable name from
+    operator-facing prose (54e4b87c0, 2fd1b988f).
     """
     err = _run_native_skip_queue()
     assert "warn:" in err, "must emit 'warn:' to stderr"
-    assert "CLAUDE_KLABAUTER_ROOT" in err, "WARN must mention CLAUDE_KLABAUTER_ROOT"
+    assert "engine root unresolvable" in err, "WARN must mention the engine root"
+    # See test_queue_append_cold_warn_to_stderr: prefix and remediation token
+    # fail on different regressions, so both are asserted.
+    assert "COORDINATOR_ENGINE_ROOT" in err, "WARN must name the engine-root env var"
 
 
 def test_queue_append_native_skip_no_file_written(tmp_path):

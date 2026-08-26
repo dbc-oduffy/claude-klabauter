@@ -47,6 +47,7 @@ _SIBLING_CALL_RE = re.compile(r'_sibling\(\s*["\']([^"\']+)["\']\s*\)')
 _EXPECTED_CALL_SITES = {
     "workday-start-health-probes.py": {
         "coordinator-ceremony-hook.py",
+        "klabauter-channel.py",
         "stitch-observer-sidecar.py",
     },
     "workweek-complete-drift-guards.py": {

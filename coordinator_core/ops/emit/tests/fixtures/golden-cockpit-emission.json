@@ -647,6 +647,26 @@
         "derivation": "rolled_up",
         "entity_anchor": null
       }
+    },
+    {
+      "kind": "deep_spawn_worklist",
+      "repo": "fixture-owner/fixture-repo",
+      "coordinator_root_path": ".",
+      "inputs": {},
+      "threshold": "unknown: baseline missing, or first run (no prior baseline to diff against); stale: baseline generated_at >=14 days old; quiet: no new sites since last run; regrowth: new sites since last run (overdue)",
+      "computed_state": "unknown",
+      "overdue": false,
+      "observed_at": "2026-07-06T15:54:47Z",
+      "computed_as_of": "2026-07-06T15:54:47Z",
+      "provenance": {
+        "source_kind": "coordinator_artifact",
+        "repo": "fixture-owner/fixture-repo",
+        "ref": null,
+        "path": "",
+        "observed_at": "2026-07-06T15:54:47Z",
+        "derivation": "rolled_up",
+        "entity_anchor": null
+      }
     }
   ],
   "goals_current": [

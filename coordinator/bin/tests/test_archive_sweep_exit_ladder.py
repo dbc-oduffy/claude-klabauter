@@ -3,9 +3,13 @@
 on `exit_code == 2`.
 
 Defect this closes (C11, plan 2026-08-20-a-refusal-cannot-exit-zero): each of
-sweep-actioned-memos.py and prune-closed-bugs.py (sweep-terminal-plans.py's
-own coverage was removed when fleet.archive_completed_plans was killed and
-rebuilt from scratch — PM ruling 2026-08-23) checked `act_exit == 2`
+sweep-terminal-plans.py, sweep-actioned-memos.py, and prune-closed-bugs.py
+(sweep-terminal-plans.py's own coverage was removed when
+fleet.archive_completed_plans was killed and rebuilt from scratch — PM
+ruling 2026-08-23; sweep-actioned-memos.py's coverage was retired the same
+way when fleet.archive_actioned_memos was killed outright, no replacement
+op — K-052, state/kill-ledger.md, landed c07062c99 — only
+prune-closed-bugs.py's coverage below is live) checked `act_exit == 2`
 (DETERMINATE-PARTIAL) and nothing else on the ACT
 call's exit_code, so `exit_code == 1` -- the op's setup-error shape
 (state/lessons/2026-07-14-destructive-engine-ops-must-fail-closed-a5fa9ceef812.yaml's
@@ -72,26 +76,16 @@ class _RouteStub:
         return {"acted": [], "exit_code": self._act_exit_code}
 
 
-class SweepActionedMemosExitLadderTest(unittest.TestCase):
-    def setUp(self):
-        self.mod = _load_module("sweep-actioned-memos.py", "sweep_actioned_memos_c11_test")
-        self.mod._resolve_repo_root = lambda positional: "/fake-repo"
-        self.stamped = []
-        self.mod._stamp_archive_sweeps_liveness = lambda repo_root: self.stamped.append(repo_root)
-
-    def test_act_exit_1_refuses_non_zero_and_no_stamp(self):
-        stub = _RouteStub(1)
-        _install_route(self, self.mod, stub)
-        rc = self.mod.main([])
-        self.assertNotEqual(rc, 0)
-        self.assertEqual(self.stamped, [])
-
-    def test_act_exit_2_still_stamps_and_exits_zero(self):
-        stub = _RouteStub(2)
-        _install_route(self, self.mod, stub)
-        rc = self.mod.main([])
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.stamped, ["/fake-repo"])
+# SweepActionedMemosExitLadderTest retired 2026-08-25: sweep-actioned-memos.py
+# (and fleet.archive_actioned_memos, the op it fired) was killed outright the
+# same day this file's own docstring was last touched -- K-052,
+# state/kill-ledger.md, landed c07062c99, no replacement op. Kill means kill
+# forever here; do not resurrect the subject to make this class importable
+# again. Recover the retired class body with
+# `git show c07062c99^:coordinator/bin/tests/test_archive_sweep_exit_ladder.py`
+# if the exit-ladder shape it covered ever needs re-reading. Row retired, not
+# dropped silently. PruneClosedBugsExitLadderTest below is the surviving,
+# still-live coverage.
 
 
 class PruneClosedBugsExitLadderTest(unittest.TestCase):

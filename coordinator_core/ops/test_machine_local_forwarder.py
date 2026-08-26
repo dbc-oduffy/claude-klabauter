@@ -21,7 +21,15 @@ def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
     real.write_text("#!/bin/sh\necho hi\n")
     real.chmod(0o755)
 
-    monkeypatch.setattr(os, "access", lambda path, mode: str(path) == str(real))
+    # `bare_forwarder.forward` resolves via `win_portability.is_executable`
+    # (stat-based exec-bit / PATHEXT check) rather than `os.access` -- the
+    # 2026-08 cutover named in `is_executable`'s own docstring (os.access(X_OK)
+    # silently degrades to existence-only on Windows, which this replaces).
+    # Patch the predicate `forward` actually calls, not the superseded one.
+    monkeypatch.setattr(
+        "coordinator_core.bare_forwarder.is_executable",
+        lambda path: str(path) == str(real),
+    )
 
     captured = {}
 
@@ -49,7 +57,7 @@ def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
 
 def test_exits_127_when_real_binary_absent(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    monkeypatch.setattr(os, "access", lambda path, mode: False)
+    monkeypatch.setattr("coordinator_core.bare_forwarder.is_executable", lambda path: False)
 
     with pytest.raises(SystemExit) as exc_info:
         mlf.main([])
@@ -63,12 +71,23 @@ def test_exits_127_when_real_binary_absent(tmp_path, monkeypatch, capsys):
 def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # `home_dir()`'s fallback is `Path.home()`, which reads USERPROFILE on
+    # Windows and ignores HOME entirely (`_settings_home.py`'s own
+    # `home_dir` docstring: "already honours USERPROFILE" -- HOME is a
+    # POSIX-only rung there). Setting env HOME alone leaves this test
+    # resolving against the real machine's actual home dir on Windows, not
+    # tmp_path. Patch the resolver `forward` actually calls so the fallback
+    # is exercised identically on every platform.
+    monkeypatch.setattr("coordinator_core.bare_forwarder.home_dir", lambda: tmp_path)
     real = tmp_path / ".claude" / "bin" / "machine-local"
     real.parent.mkdir(parents=True)
     real.write_text("#!/bin/sh\n")
     real.chmod(0o755)
 
-    monkeypatch.setattr(os, "access", lambda path, mode: str(path) == str(real))
+    monkeypatch.setattr(
+        "coordinator_core.bare_forwarder.is_executable",
+        lambda path: str(path) == str(real),
+    )
 
     def fake_execv(path, args):
         raise SystemExit(0)

@@ -28,6 +28,8 @@ from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist a
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.bash_guards import _helpers
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _CMD = "sed -n 1,10p README.md"
 
 

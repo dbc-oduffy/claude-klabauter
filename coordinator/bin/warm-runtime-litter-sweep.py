@@ -55,6 +55,11 @@ import json
 import os
 import shutil
 import sys
+
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from pathlib import Path
 
 _EXIT_OK = 0
@@ -110,6 +115,7 @@ def _names_a_live_server(record: dict | None) -> bool:
     stored_epoch_str = str(stored_epoch) if stored_epoch is not None else ""
 
     try:
+        require_dispatch_engine_on_path()
         from coordinator_core.session.core import stable_pid_alive
     except Exception:
         return True

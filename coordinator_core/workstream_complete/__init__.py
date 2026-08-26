@@ -2690,7 +2690,11 @@ def _run_git_read_only(args: list[str], cwd: Path) -> Optional[str]:
     module."""
     try:
         proc = subprocess.run(
-            ["git", *args],
+            # `--no-optional-locks`: read-only by this helper's own contract,
+            # so nothing here has cause to take the index lock or rewrite a
+            # 4.9MB / 35k-entry index on a tree ~50 sessions write
+            # concurrently. Same shape `archive_stamp.py` already uses.
+            ["git", "--no-optional-locks", *args],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -2782,7 +2786,9 @@ def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
     if not session_id:
         return None
     try:
-        commits = _resolve_session_commits_primitive(root, session_id)
+        commits = _resolve_session_commits_primitive(
+            root, session_id, sha_only=True
+        )
     except (ValueError, RuntimeError):
         return None
     return [c["sha"] for c in commits]

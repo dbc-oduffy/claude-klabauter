@@ -113,6 +113,21 @@ CLOSED PORTING GAPS:
     had already been renamed ``.sh``->``.py`` DoE-side, and this install's
     ``~/.claude`` plugin mirror had an empty ``bin/`` besides. See
     ``commit_tripwires.py``'s own module docstring for the full writeup.
+  - (2026-08-25, plan docs/plans/2026-08-25-the-touched-files-record-gets-
+    a-designed-shape.md, C7b) ``_rm_peer_claim_of``'s AC21 transitional
+    union-read (touch-record.jsonl UNION legacy ``touched.txt``) was deleted
+    on the premise that ``touch()`` no longer writes the old dialect once
+    its writer migrates (C7c). C7c never landed --
+    ``coordinator_core.session.claims :: self_claim`` still appends the old
+    ``touched.txt`` dialect -- so that premise was false, and the union is
+    RESTORED (mirrors the same restoration applied to
+    ``scope.py :: compute_scope`` Step 1 at 58420b380): this function reads
+    ``coordinator_core.session.touch_record.project_live_claims`` against
+    ``touch-record.jsonl`` and, if a sibling ``touched.txt`` exists, unions
+    in ``coordinator_core.session.scope.project_self_scope`` over it,
+    fail-closed (contests the target) on any read/projection failure on
+    either seam. Stays until a chunk migrates ``self_claim`` off the old
+    dialect (verified at HEAD) and deletes the union.
 """
 
 from __future__ import annotations
@@ -2934,30 +2949,11 @@ def check_destructive_rm(
     return None
 
 
-def _touch_event_path_no_import(line: str) -> str:
-    """Local, import-free copy of `scope.parse_touch_event`'s path-field
-    extraction only (verb/timestamp are irrelevant to the CLAIMED-membership
-    fallback that calls this -- every survivor is treated as claimed either
-    way). Exists so `_rm_peer_claim_of`'s outermost fallback (``scope``
-    itself unimportable) needs no import of the very module that failed to
-    import -- see Review: code-reviewer Finding 1 on the caller.
-    """
-    stripped = line.rstrip("\n")
-    parts = stripped.split(None, 2)
-    if len(parts) == 1:
-        return parts[0]
-    if len(parts) != 3:
-        return stripped
-    verb, ts_str, path = parts
-    if verb not in ("T", "R"):
-        return stripped
-    try:
-        ts = datetime.fromisoformat(ts_str)
-    except ValueError:
-        return stripped
-    if ts.tzinfo is None:
-        return stripped
-    return path
+#: Sentinel distinguishing "the recency probe itself failed" (fail-CLOSED --
+#: treat as within-window/contested) from "the probe ran cleanly and found
+#: no eligible record" (``None`` -- genuinely unclaimed, `continue`). Used
+#: only by ``_rm_peer_claim_of``'s mtime backstop below.
+_UNKNOWN_MTIME = object()
 
 
 def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
@@ -3035,30 +3031,6 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
         live_sids = frozenset()
         live_ok = False
 
-    # Review: code-reviewer (Finding 1, Finding 4) -- hoisted above the
-    # per-sid loop (matching the liveness/resolve_session_id imports' actual
-    # posture, fixing Finding 4's inaccurate "same posture" comment that used
-    # to sit on a per-sid import below). Hoisting also separates the two
-    # failure modes Finding 1 flagged as conflated: an ImportError on `scope`
-    # itself is caught HERE, once, and degrades every sid to the raw-line
-    # fallback below (parse_touch_event unavailable -> can't parse, so fall
-    # back to treating every survivor as claimed); a per-sid *projection*
-    # failure (`_collect_peer_path_mtimes`/`project_peer_claims` raising on
-    # a particular touched.txt) is caught separately per-sid, where
-    # `parse_touch_event` -- already imported and known-good here -- is used
-    # for the fallback instead of a raw-line match, so the fallback stays
-    # fail-CLOSED even once event lines exist (see the per-sid try/except
-    # below).
-    try:
-        from coordinator_core.session.scope import (
-            _collect_peer_path_mtimes,
-            parse_touch_event,
-            project_peer_claims,
-        )
-        scope_ok = True
-    except Exception:
-        scope_ok = False
-
     # Review: code-reviewer (Finding 4) -- hoisted once per call rather than
     # per-sid (bash re-reads epoch per sid); skew is sub-millisecond across
     # the loop, far below the 30-minute backstop window -- intentional.
@@ -3090,74 +3062,75 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
             # through to the touched.txt path-match below (no mtime check).
         else:
             # Degradation backstop: sid unseen by canonical liveness.
-            touched = os.path.join(sid_dir, "touched.txt")
-            if not os.path.isfile(touched):
-                continue
+            # AC6/C5 -- repointed onto `liveness.newest_record_mtime`, the
+            # single shared recency policy (C3 brief), rather than a
+            # hardcoded `touched.txt` isfile+mtime probe. Post-cutover, a
+            # session writing only `touch-record.jsonl` (no `touched.txt`)
+            # must still be found live by this backstop -- the old literal
+            # probe treated that sid as UNCLAIMED (fail-open on this
+            # destructive guard), which is the C7b failure class arriving
+            # from an mtime probe instead of a content read.
+            #
+            # Lazy, per-call import, mirroring the `live_ok` guard above: an
+            # ImportError (or any other exception) here must degrade
+            # fail-CLOSED -- fall through as contested -- never silently
+            # `continue` past a genuine live peer because the session
+            # package failed to import.
             try:
-                mtime = os.path.getmtime(touched)
-            except OSError:
-                # Same touched.txt race: deleted/rotated out between the
-                # isfile check and here -- nothing to stamp a liveness
-                # window on, so degrade to unclaimed for this sid.
-                continue
-            if now - mtime > 1800:
-                continue
+                from coordinator_core.session.liveness import newest_record_mtime
 
-        touched = os.path.join(sid_dir, "touched.txt")
-        if not os.path.isfile(touched):
-            continue
-        try:
-            with open(touched, "r", encoding="utf-8", errors="replace") as fh:
-                lines = fh.read().splitlines()
-        except OSError:
-            # touched.txt vanished/rotated between the isfile check above
-            # and this open (race with the peer session finishing) -- no
-            # claim survives to contest, so this sid degrades to unclaimed
-            # rather than blocking on a file that no longer exists.
-            continue
-
-        # Review: repointed through scope.py's event-log-aware peer
-        # projection (P3) rather than a bare-line membership test -- a
-        # legacy bare-path line still projects CLAIMED (P1's fail-safe), so
-        # this is behaviour-identical on today's corpus (no writer emits
-        # T/R events yet); it stops silently under-matching once a writer
-        # does. This function is fail-CLOSED for the destructive guard, so
-        # a per-sid projection failure here (or `scope` being unimportable
-        # at all, per `scope_ok` above) must still contest every survivor --
-        # never degrade to "skip this sid" (fail-open). The fallback parses
-        # the PATH FIELD out of each raw line via `parse_touch_event` (Review:
-        # code-reviewer Finding 1) rather than matching on the raw
-        # verb+timestamp+path line itself: once any line carries a verb
-        # prefix, `tgt_rel` (a bare repo-relative path) never equals or
-        # prefix-matches that raw string, so the old raw-line fallback
-        # silently stopped matching real claims -- the fail-OPEN regression
-        # this fix closes. `parse_touch_event`'s own fail-safe treats any
-        # line it cannot parse as CLAIMED ('T', None, <line>), matching the
-        # "unknown time = CLAIMED" posture used throughout `scope.py`.
-        nonblank_lines = [ln for ln in lines if ln]
-        peer_claimed_paths: set = set()
-        if scope_ok:
-            try:
-                peer_path_mtimes = _collect_peer_path_mtimes(nonblank_lines, root)
-                peer_claimed_paths = set(
-                    project_peer_claims(nonblank_lines, peer_path_mtimes)
-                )
+                mtime = newest_record_mtime(sid_dir)
             except Exception:
-                peer_claimed_paths = {
-                    parse_touch_event(ln)[2] for ln in nonblank_lines
-                }
-        else:
-            # `scope` itself failed to import (see `scope_ok` above) --
-            # `parse_touch_event` is not available here, so this uses the
-            # local, import-free path-field parser instead, keeping this
-            # outermost fallback distinguishable from (and independent of)
-            # the per-sid projection-failure fallback above, which DOES have
-            # a good `parse_touch_event` to call.
-            peer_claimed_paths = {
-                _touch_event_path_no_import(ln) for ln in nonblank_lines
-            }
+                mtime = _UNKNOWN_MTIME
+            if mtime is None:
+                continue
+            if mtime is not _UNKNOWN_MTIME and now - mtime > 1800:
+                continue
 
-        for opath in peer_claimed_paths:
+        # AC21 -- TRANSITIONAL, and RESTORED here after C7b deleted it a wave
+        # early on the stated premise that "`touch()` no longer writes the
+        # old dialect once its writer migrates (C7c)". C7c never landed --
+        # `coordinator_core.session.claims :: self_claim` still appends this
+        # session's `touched.txt` via `atomic_dedup_append` at two sites --
+        # so that premise is false here too (mirrors the restoration applied
+        # to `scope.py :: compute_scope` Step 1 at 58420b380). A peer whose
+        # claims arrived only through `self_claim` projects to zero claims
+        # via the jsonl seam alone, which silently allowed a destructive
+        # command against that peer's claimed path.
+        #
+        # This stays until a chunk migrates that writer off the old dialect
+        # (verified at HEAD, not assumed from a stale premise) and deletes
+        # this union.
+        new_claimed_paths: set = set()
+        new_seam_degraded = False
+        try:
+            from coordinator_core.session.touch_record import project_live_claims
+
+            touch_record_path = os.path.join(sid_dir, "touch-record.jsonl")
+            projection = project_live_claims(touch_record_path, cwd=root)
+            new_claimed_paths = set(projection.claims.keys())
+            new_seam_degraded = projection.degraded
+        except Exception:
+            new_seam_degraded = True
+
+        # Legacy union: any exception reading/projecting the legacy file
+        # fails CLOSED (never narrows below what the jsonl seam already
+        # found) -- this is a destructive guard, so a legacy read failure
+        # must never shrink `new_claimed_paths`.
+        legacy_touched = os.path.join(sid_dir, "touched.txt")
+        if os.path.isfile(legacy_touched):
+            try:
+                from coordinator_core.session.scope import project_self_scope
+
+                with open(legacy_touched, "r", encoding="utf-8", errors="replace") as fh:
+                    legacy_lines = [ln for ln in fh.read().splitlines() if ln]
+                new_claimed_paths |= project_self_scope(legacy_lines)
+            except Exception:
+                new_seam_degraded = True
+
+        if new_seam_degraded:
+            return sid
+        for opath in new_claimed_paths:
             if opath.startswith(tgt_rel + "/") or tgt_rel.startswith(opath + "/") or opath == tgt_rel:
                 return sid
     return ""
@@ -4548,7 +4521,7 @@ def check_blanket_git_add(
         "(SC-DR-014). Matched: %s\n\n"
         "Use instead:\n"
         "  git add -- path/to/file\n"
-        "  scoped-git-commit -m <subject> -- path/to/file"
+        "  git commit -m <subject> -- path/to/file"
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)
@@ -5599,8 +5572,8 @@ def check_validate_commit(
                             "BLOCKED (strict scope): %s is staged but not in "
                             "this session's touch list — likely owned by %s.\n\n"
                             "Unstage it (git restore --staged %s) or, if it "
-                            "genuinely belongs to this session's work, add it "
-                            "to touched.txt first." % (staged_file, owner_sentence, staged_file)
+                            "genuinely belongs to this session's work, record it "
+                            "as touched first." % (staged_file, owner_sentence, staged_file)
                         )
 
                     warnings.append(
@@ -6050,7 +6023,10 @@ def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:
         impl,
         impl_sig,
         os.environ.get("MACHINE_LOCAL_IMPL", ""),
-        os.environ.get("CLAUDE_HOME", ""),
+        # USERPROFILE is the Windows rung, not a nicety: PowerShell and cmd.exe
+        # never set HOME or CLAUDE_HOME, so a bare read degrades to "" on every
+        # Windows host and two different machines hash to the same cache key.
+        os.environ.get("CLAUDE_HOME", os.environ.get("USERPROFILE", "")),
         os.environ.get("COORDINATOR_SETTINGS_HOME", ""),
         os.environ.get("COORDINATOR_PYTHON", ""),
     ]
@@ -8026,11 +8002,8 @@ def check_git_commit_safe_commit_advise(
             ) and i + 1 < len(seg_tokens):
                 subject = seg_tokens[i + 1]
                 break
-        # `subject_operand` is interpolated into the remediation at
-        # most once (the `git add ... && git commit` suggestion below) --
-        # the `scoped-git-commit` suggestion reuses the SAME `-m` argument
-        # by reference ("same subject") rather than re-printing it, so the
-        # subject text itself never appears twice in one advisory.
+        # `subject_operand` is interpolated into the `git add ... && git
+        # commit` remediation below.
         subject_operand = shlex.quote(subject) if subject else '"<subject>"'
         # `--amend` reaching here always carries no `--only` and no explicit
         # pathspec (both exit earlier via `_bt_commit_has_explicit_pathspec`),
@@ -8079,10 +8052,7 @@ def check_git_commit_safe_commit_advise(
                         "command's own 'git add' — a peer's staged work would be "
                         "swept under your subject.\n\n"
                         "Use instead:\n"
-                        "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
-                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-                        "instead:\n"
-                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        "  git add -- <paths> && git commit -m %s -- <paths>"
                         % (subject_operand,)
                     )
                 )
@@ -8099,10 +8069,7 @@ def check_git_commit_safe_commit_advise(
                         "content this command cannot prove is its own, on a "
                         "shared branch a peer's.\n\n"
                         "Use instead:\n"
-                        "  git commit -m %s -- <paths>\n\n"
-                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-                        "instead:\n"
-                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        "  git commit -m %s -- <paths>"
                         % (subject_operand,)
                     )
                 )
@@ -8119,10 +8086,7 @@ def check_git_commit_safe_commit_advise(
                         "index — a peer's un-staged edits would be swept under "
                         "your subject too.\n\n"
                         "Use instead:\n"
-                        "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
-                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-                        "instead:\n"
-                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        "  git add -- <paths> && git commit -m %s -- <paths>"
                         % (subject_operand,)
                     )
                 )
@@ -8136,10 +8100,7 @@ def check_git_commit_safe_commit_advise(
                     "Advisory: this 'git commit' names no scope — commits "
                     "whatever is staged, including a peer's concurrent work.\n\n"
                     "Use instead:\n"
-                    "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
-                    "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-                    "instead:\n"
-                    "  scoped-git-commit -m <same subject> -- <paths>"
+                    "  git add -- <paths> && git commit -m %s -- <paths>"
                     % (subject_operand,)
                 )
             )

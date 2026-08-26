@@ -400,7 +400,22 @@ def _is_windows_shell() -> bool:
 
 
 def _run(argv, **kwargs) -> subprocess.CompletedProcess:
+    """Console-suppressed `subprocess.run`, capturing by default.
+
+    The capture default is load-bearing, not tidiness: `no_console_creationflags()`
+    allocates a window-less console, and with NO std-stream kwarg CPython omits
+    `STARTF_USESTDHANDLES` (`Popen._get_handles` returns all -1 when stdin, stdout and
+    stderr are every one of them None), so the child binds its handles to that console
+    and everything it prints is lost. Both callers here read only `returncode`, so
+    nothing reached an operator before this default either — capturing makes the child's
+    own diagnostic available to the failure paths instead of discarding it.
+
+    A caller that genuinely wants passthrough passes its own `stdout=`/`stderr=` and
+    overrides this; it must pass SOMETHING, and that is the point.
+    """
     kwargs.setdefault("timeout", 60)
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
     return subprocess.run(argv, **no_console_creationflags(), **kwargs)
 
 
@@ -757,8 +772,15 @@ def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
 def _create_venv(base_py: str, venv_dir: Path) -> None:
     proc = _run([base_py, "-m", "venv", str(venv_dir)], timeout=VENV_CREATE_SECS)
     if proc.returncode != 0:
+        # `_run` captures, so the interpreter's own reason for refusing is available
+        # here rather than discarded into a window-less console. Last line only: venv
+        # failures are usually one line, and the exit code alone has sent more than one
+        # reader hunting for a cause that was right there.
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        suffix = f" -- {detail[-1]}" if detail else ""
         raise EnsureVenvError(
-            f"[ensure-coordinator-venv] ERROR: venv creation failed (exit {proc.returncode})."
+            f"[ensure-coordinator-venv] ERROR: venv creation failed "
+            f"(exit {proc.returncode}){suffix}"
         )
 
 

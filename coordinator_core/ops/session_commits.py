@@ -82,6 +82,14 @@ Negative-spec (hard-won):
     latter raises (mirrors `ceremony.chunk_commits`'s AC6 discipline).
   - Does NOT migrate any existing caller onto itself — see "NOT in this
     chunk" above; that is C5.
+
+C1 (docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md
+§ C1): `resolve_session_commits` gained a `sha_only=True` path that issues
+neither `--raw` nor `--numstat` and skips the diff-payload parser entirely,
+for `workstream_complete._session_owned_shas` — which only ever read
+`c["sha"]` off the full-data return and threw the rest away. ADDITIVE: the
+default (`sha_only=False`) return is byte-identical to before this
+parameter existed.
 """
 
 from __future__ import annotations
@@ -108,7 +116,11 @@ _HEADER_SENTINEL = "\x02"
 
 
 def resolve_session_commits(
-    repo_root: Path, session_id: str, commit_range: Optional[str] = None
+    repo_root: Path,
+    session_id: str,
+    commit_range: Optional[str] = None,
+    *,
+    sha_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return this session's attributed commits, oldest-first, from ONE git
     invocation.
@@ -124,6 +136,14 @@ def resolve_session_commits(
                         no revision argument, i.e. git's own default walk
                         from HEAD over the current branch (mirrors
                         `_session_owned_shas`'s un-ranged form).
+        sha_only:      ADDITIVE. When True, the `git log` invocation omits
+                        `--raw`/`--numstat` entirely and the diff-payload
+                        parser below is skipped — for a caller that only
+                        needs the attributed sha list (e.g.
+                        `workstream_complete._session_owned_shas`) and
+                        previously threw the whole parsed diff payload away.
+                        When False (default), behavior is byte-identical to
+                        before this parameter existed — see AC2.
 
     Returns:
         A list of, oldest-first:
@@ -158,6 +178,10 @@ def resolve_session_commits(
         `[]` when `session_id` is attributable but matched zero commits —
         a real, representable answer, never conflated with a git failure.
 
+        When `sha_only=True`, each dict is `{"sha": str}` only — no
+        `subject`/`committer_epoch`/`touched_paths`/`added`/`deleted`/
+        `files` keys, since none of that data was requested from git.
+
     Raises:
         ValueError: `session_id` is blank.
         RuntimeError: the underlying `git log` invocation failed (non-zero
@@ -171,14 +195,10 @@ def resolve_session_commits(
             "the query to every commit in the repo"
         )
 
-    args = [
-        "log",
-        "--reverse",
-        f"--grep=^Session-Id: {sid}",
-        "--raw",
-        "--numstat",
-        f"--format={_HEADER_SENTINEL}%H{_FIELD_SEP}%ct{_FIELD_SEP}%s",
-    ]
+    args = ["log", "--reverse", f"--grep=^Session-Id: {sid}"]
+    if not sha_only:
+        args.extend(["--raw", "--numstat"])
+    args.append(f"--format={_HEADER_SENTINEL}%H{_FIELD_SEP}%ct{_FIELD_SEP}%s")
     if commit_range:
         args.append(commit_range)
 
@@ -188,6 +208,17 @@ def resolve_session_commits(
             f"session.commits: git log failed for session_id={sid!r} "
             f"(exit {result.returncode}): {result.stderr.strip()}"
         )
+
+    if sha_only:
+        shas: List[Dict[str, Any]] = []
+        for line in result.stdout.splitlines():
+            if not line.startswith(_HEADER_SENTINEL):
+                continue
+            sha, sep, _rest = line[len(_HEADER_SENTINEL):].partition(_FIELD_SEP)
+            if not sep:
+                continue
+            shas.append({"sha": sha})
+        return shas
 
     commits: List[Dict[str, Any]] = []
     current: Optional[Dict[str, Any]] = None

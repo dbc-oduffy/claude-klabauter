@@ -2,8 +2,11 @@
 
 Spawn-count regression for `close_out_and_stamp.py::_dispatch_ledger_delivered`
 (legacy Dispatch Ledger fallback oracle), following the exact-equality
-`spawn_count_budget` template `coordinator_core/benchmarks/budget-manifest.json`'s
-`overrides["ceremony.scoped_git_commit"]` entry already carries.
+`spawn_count_budget` convention every row in
+`coordinator_core/benchmarks/budget-manifest.json` carries -- an exact-count
+ceiling per call shape, not a latency figure (see `ceremony.wsc_tail`'s row
+for a live worked example; the row this docstring used to cite,
+`overrides["ceremony.scoped_git_commit"]`, was deleted at K-045).
 
 WHY A SPAWN COUNT, NOT A LATENCY FIGURE: this repo runs 50-70 concurrent LLM
 sessions at any given moment (CLAUDE.md's "Load norm" section) -- a wall-clock
@@ -55,6 +58,13 @@ def _manifest_spawn_budget() -> dict:
 
 
 def _count_git_calls(fn):
+    """Patches the real `subprocess` module's own `run` attribute -- not a
+    per-module copy -- so this still sees every spawn regardless of which
+    module reaches it: `_dispatch_ledger_delivered`'s two sites now route
+    through `coordinator_core.git.run.run_git`, which does its own
+    function-local `import subprocess` (G7's shared-runner migration), so a
+    patch scoped to `coas.subprocess` (the pre-migration target) would miss
+    both calls entirely."""
     calls = {"n": 0}
     orig = subprocess.run
 
@@ -63,11 +73,11 @@ def _count_git_calls(fn):
             calls["n"] += 1
         return orig(cmd, *a, **kw)
 
-    coas.subprocess.run = _counting_run
+    subprocess.run = _counting_run
     try:
         result = fn()
     finally:
-        coas.subprocess.run = orig
+        subprocess.run = orig
     return result, calls["n"]
 
 

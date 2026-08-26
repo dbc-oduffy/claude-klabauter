@@ -25,6 +25,8 @@ import pytest
 
 from coordinator_core.session import core
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _init_repo(repo: Path) -> None:
     repo.mkdir(parents=True, exist_ok=True)

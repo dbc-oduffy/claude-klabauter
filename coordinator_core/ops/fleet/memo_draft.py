@@ -388,8 +388,10 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
 def _validate_draft_params(params: dict):
     """Validate memo.draft params; return an 11-tuple or a build_setup_error_result dict.
 
-    Required: dry_run (bool), topic (slug), to (str), title (str).
-    Optional: summary, kind (validated against the DR-214/D2-6 enum when present),
+    Required: dry_run (bool), topic (slug), to (str), title (str), kind
+    (validated against the DR-214/D2-6 enum; required since 2026-08-25 to
+    match memo.send's own gate — see the inline note at the check).
+    Optional: summary,
     scoped_to (validated via presence-triggered completeness, see _validate_scoped_to),
     classify_receiver (bool, default False — see _classify_receiver_for_draft),
     in_reply_to (str, optional — normalized to a bare basename via
@@ -461,12 +463,27 @@ def _validate_draft_params(params: dict):
     # somewhere recoverable (AC1, AC2).
     summary_cap_advisory = validate_explicit_summary("draft", summary)
 
+    # `kind` is REQUIRED here, matching memo.send's own gate on the same
+    # field. Drafting without it mints an artifact this op's own send verb
+    # will refuse — nine such drafts had to be backfilled by hand
+    # (state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-
+    # after-a-send.yaml). Defaulting to `ask` is the wrong half to give: the
+    # reader-side `ask` default exists for RECEIVED memos that predate the
+    # field, and ask/proposal are premise-bearing, so a silently-mislabelled
+    # fyi buys a real sender-side premise check it never needed.
     kind: Optional[str] = params.get("kind") or None
-    if kind is not None and kind not in _VALID_KINDS:
+    if kind is None:
+        return build_setup_error_result(
+            _MODE, dry_run,
+            f"memo.draft: kind is required (one of: {', '.join(_VALID_KINDS)}). "
+            f"memo.send refuses a draft without it, so a kindless draft can "
+            f"never be delivered.",
+        )
+    if kind not in _VALID_KINDS:
         return build_setup_error_result(
             _MODE, dry_run,
             f"memo.draft: kind {kind!r} is not a valid enum value "
-            f"(must be one of: {', '.join(_VALID_KINDS)}; absent is also valid).",
+            f"(must be one of: {', '.join(_VALID_KINDS)}).",
         )
 
     scoped_to = params.get("scoped_to")
@@ -671,7 +688,9 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         summary (str, optional):  tl;dr ≤120 chars; left empty-string when absent
                                    (filled in / re-derived by memo.compose once
                                    a body exists — footgun #4).
-        kind    (str, optional):  ask | consult | fyi | proposal; absent is valid.
+        kind    (str, REQUIRED):  ask | consult | fyi | proposal. Gated here
+                                  as well as at send, so `draft` cannot mint
+                                  an artifact `send` will refuse.
         scoped_to (dict, optional): {artifact, exactly one of version|sha, seam} —
                                     nested mapping, round-trips as YAML (mirrors
                                     memo.send). Presence-triggered completeness:

@@ -45,6 +45,27 @@ import types
 # CONSUMES_MANIFEST script barewords (completion-family) that assembler may
 # dispatch. See docs/plans/2026-08-19-directives-name-an-op-not-a-cli.md
 # § The discriminator for the mixed end state.
+#
+# 2026-08-25: removed six phantom rows (present here, absent from the
+# assembler's own CONSUMES_MANIFEST — the oracle these entries are meant to
+# mirror), all residue of the 2026-08-23 kill pass (`c07062c99`):
+#   - "emit-cadence" (workday_complete, workstream_complete, workweek_complete)
+#     — killed outright, state/kill-ledger.md K-056; DR-351
+#     ("the emission is deleted, not halted" — PM: "I don't think we should
+#     have an emit at all. Cut it."). Never resurrect.
+#   - "wsc-tail" (workstream_complete) — state/kill-ledger.md K-046
+#     (`ceremony.wsc_tail`), REBUILD CANDIDATE, not yet rebuilt.
+#   - "reconcile-completion-commits" (workstream_complete) —
+#     state/kill-ledger.md K-054 (`completion.reconcile_commits`), REBUILD
+#     CANDIDATE, not yet rebuilt.
+#   - "session-claim-cli" (workstream_complete) — the CLI itself
+#     (`coordinator/bin/session-claim-cli.py`) is alive and directly
+#     callable, but the workstream_complete DIRECTIVE that used to name it
+#     (d-release-plan-claim / d-archive-session-claim) was removed as part of
+#     the same K-046 wsc_tail kill — `directives_commit_tail.py`'s own
+#     "Step 3.5 ... REMOVED" comment records this. workstream_complete no
+#     longer EMITS this bareword; the script surviving elsewhere does not
+#     make it dispatchable through this seam.
 ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.MappingProxyType({
     # Completion family (C7, plan § The discriminator for the mixed end
     # state) — script barewords, each a literal member of the named
@@ -69,19 +90,16 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "check-weekly-staleness",
         "goal-close-day",
         "coordinator-ceremony-hook",
-        "emit-cadence",
     }),
     "workstream_complete": frozenset({
         "wsc-coverage-gate-runner",
         "check-workstream-complete-deletion-blocks",
         "wsc-close",
-        "wsc-tail",
         "coordinator-lesson-add",
         "coordinator-queue-append",
         "archive-stamp-cli",
         "coordinator-harvest-deferrals",
         "coordinator-complete-entry",
-        "reconcile-completion-commits",
         "coordinator-fold-execution-record",
         "regenerate-orientation-cache",
         "check-machine-local-regeneratability",
@@ -90,8 +108,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "fan-out-integrator",
         "scan_unresolved_ubt_records",
         "classify-dispatch-shape",
-        "session-claim-cli",
-        "emit-cadence",
     }),
     "workweek_complete": frozenset({
         "list-week-changelog",
@@ -116,7 +132,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "workweek-complete-close",
         "check-version-consistency",
         "coordinator-ceremony-hook",
-        "emit-cadence",
         "workweek-complete-doc-staleness",
         "workweek-complete-doc-verify",
         "tier-u-grant-cli",

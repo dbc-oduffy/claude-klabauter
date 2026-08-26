@@ -273,3 +273,82 @@ def test_run_probe_invalid_samples_counted_not_raised(mock_time_invocation):
     level1 = result["level_results"][0]
     assert level1["n"] == 0
     assert level1["invalid_count"] == 2
+    # A zero-sample level must name its cause. Reporting n=0 with aborted=False
+    # and no reason reads as a clean run that measured nothing -- which is how a
+    # tree whose every `invoke` child exits rc=1 (no engine build stamp, cold
+    # fallback disabled) produced an empty result with no diagnosis on
+    # 2026-08-26.
+    assert level1["no_valid_samples"] is True
+    assert "boom" in level1["first_invalid_reason"]
+
+
+@mock.patch("coordinator_core.benchmarks.concurrency_probe.time_invocation")
+def test_run_probe_valid_level_carries_no_no_valid_samples_flag(mock_time_invocation):
+    """The loud-zero keys are scoped to the failed-measurement branch: a level
+    that took real samples must not grow a `no_valid_samples` key a consumer
+    could read as False-meaning-checked on the summary path."""
+    mock_time_invocation.return_value = 7.5
+    reader = mock.Mock(
+        return_value=MachineState(readable=True, free_ram_gb=10.0, cpu_percent=10.0, process_count=50)
+    )
+
+    result = run_probe(
+        op="ping",
+        params_json="{}",
+        repo=None,
+        levels=[1],
+        n_per_level=2,
+        machine_state_reader=reader,
+        physical_cores=8,
+        usable_ram_gb=16.0,
+    )
+
+    level1 = result["level_results"][0]
+    assert level1["n"] == 2
+    assert "no_valid_samples" not in level1
+    # A clean level carries no reason key at all -- absent, not None.
+    assert "first_invalid_reason" not in level1
+
+
+@mock.patch("coordinator_core.benchmarks.concurrency_probe.time_invocation")
+def test_run_probe_mixed_level_still_surfaces_the_invalid_reason(mock_time_invocation):
+    """A level with SOME valid samples still reports why the others died.
+
+    `first_invalid_reason` is captured whenever any sample invalidates, but it
+    used to reach the summary only on the all-invalid branch -- so a level that
+    lost two children out of ten published a p50 with a bare `invalid_count`
+    and no cause. That is the same silent-zero shape one level up: the data was
+    on the dataclass and never surfaced.
+    """
+    from coordinator_core.benchmarks.timer import BenchmarkSampleInvalid
+
+    calls = {"n": 0}
+
+    def _flaky(op, params_json, repo):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise BenchmarkSampleInvalid("ping", 1, "boom")
+        return 7.5
+
+    mock_time_invocation.side_effect = _flaky
+    reader = mock.Mock(
+        return_value=MachineState(readable=True, free_ram_gb=10.0, cpu_percent=10.0, process_count=50)
+    )
+
+    result = run_probe(
+        op="ping",
+        params_json="{}",
+        repo=None,
+        levels=[1],
+        n_per_level=3,
+        machine_state_reader=reader,
+        physical_cores=8,
+        usable_ram_gb=16.0,
+    )
+
+    level1 = result["level_results"][0]
+    assert level1["n"] == 2, level1
+    assert level1["invalid_count"] == 1
+    assert "boom" in level1["first_invalid_reason"]
+    # Still a real measurement, so it is NOT the failed-measurement branch.
+    assert "no_valid_samples" not in level1

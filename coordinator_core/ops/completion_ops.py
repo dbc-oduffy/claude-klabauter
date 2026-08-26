@@ -293,7 +293,7 @@ def _canonicalize_stored_shas(
     if not candidates:
         return full_set, warnings
 
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
     def _warn_all() -> Tuple[Set[str], List[str]]:
         return full_set, [f"rev-parse failed for {sha} — treating as unmatched" for sha in candidates]
@@ -308,7 +308,7 @@ def _canonicalize_stored_shas(
             check=False,
             cwd=str(worktree_root),
             timeout=120,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return _warn_all()

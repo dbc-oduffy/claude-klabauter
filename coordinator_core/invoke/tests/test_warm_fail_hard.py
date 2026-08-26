@@ -20,6 +20,7 @@ automatically at that test's own teardown.
 
 from __future__ import annotations
 
+import re
 import pytest
 
 import coordinator_core.ipc as ipc
@@ -98,10 +99,24 @@ def test_permanent_cold_reason_replaces_the_retry_advice(monkeypatch, tmp_path):
     assert "--allow-unstamped-dispatch" in stderr
 
 
-def test_transient_miss_keeps_the_retry_advice(monkeypatch, tmp_path):
-    """The other side of the same branch: with no permanent reason recorded,
-    the miss IS transient (server booting, busy, skew-evicted), a respawn is
-    already in flight, and "retry in a moment" is the correct remediation."""
+def test_transient_miss_names_the_defect_rather_than_a_wait(monkeypatch, tmp_path):
+    """The other side of the same branch: with no permanent reason recorded the
+    miss IS transient and a respawn is in flight -- but the advice must say how
+    long that actually takes.
+
+    WHY THIS ASSERTION CHANGED TWICE. It first pinned the words "retry in a
+    moment"; four sessions read that as seconds and concluded the fault was
+    permanent. The first correction pinned "MINUTES" instead -- and that was
+    WORSE, for two reasons. It was not a measurement: the +0s/+30s/+4min
+    samples behind it were the intervals a human CHOSE to retry at, so all the
+    +4min point establishes is that the server was up by then. Nobody has ever
+    measured this box's boot time. And stating it as a fact made an
+    over-budget path read as the designed cadence -- the "the box was busy"
+    answer CLAUDE.md forbids.
+
+    Reaching the engine is budgeted in hundreds of milliseconds. A wait long
+    enough to notice is a P0, so the message must name it as a defect and must
+    NOT instruct anyone to wait it out. That is what this now pins."""
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
 
     stdout, stderr, code = _run(
@@ -109,7 +124,28 @@ def test_transient_miss_keeps_the_retry_advice(monkeypatch, tmp_path):
     )
 
     assert code != 0
-    assert "retry in a moment" in stderr
+    assert "warm dispatch unavailable" in stderr
+    assert "THIS IS A DEFECT" in stderr, "an over-budget path must not read as a queue"
+    assert "immediate retry is expected to fail" in stderr
+    # Both phrasings that caused a misdiagnosis, pinned absent so neither returns.
+    assert "retry in a moment" not in stderr
+    assert "MINUTES" not in stderr, "unmeasured, and it made a P0 read as cadence"
+
+
+def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
+    """Order of magnitude, never a number this process cannot observe.
+
+    Boot time is load-dependent and nothing here measures it. A specific ETA
+    would be the same defect as "a moment" with more decimal places -- an
+    operator who is told 90 seconds and waits 90 seconds draws exactly the
+    wrong conclusion again."""
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
+    stdout, stderr, code = _run(
+        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+    )
+
+    assert not re.search(r"[0-9]+ *(s|sec|second|m|min|minute)[a-z]*", stderr), stderr
 
 
 def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):

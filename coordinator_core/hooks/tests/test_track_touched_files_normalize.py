@@ -2,7 +2,9 @@
 coordinator_core.hooks.tests.test_track_touched_files_normalize — coverage
 for session.scope.normalize_touch_path's absolute-path handling (imported into
 track_touched_files as `normalize_touch_path`; the module no longer carries
-its own parallel `_normalize_path` implementation).
+its own parallel `_normalize_path` implementation), AND (C7, AC3) for
+`session.touch_record.encode_line`'s own OutOfWorktreePath containment check
+now that this hook's writes route through it.
 
 Spec backlink: DoE security-audit 2026-07-31 (coordinatorsecurity-audit-worker
 -1671c577.md) — Writer 1 finding: on POSIX, os.path.relpath's only exception
@@ -17,6 +19,12 @@ therefore exercised here by SIMULATING the ValueError os.path.relpath raises
 in that case, not by a live cross-drive repro. Untested on a real Windows
 box; flagging this per the P0 multi-OS mandate rather than claiming live
 verification.
+
+C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+its-writers.md): the handler's own sink is now `touch-record.jsonl`, the
+self-describing dialect `session.touch_record` owns; every case in this file
+that reads back written entries decodes them via `touch_record.decode_line`
+rather than the retired `scope.parse_touch_event` bare-line format.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import scope as touch_scope
 from coordinator_core.session import core as session_core
+from coordinator_core.session import touch_record
+
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -49,6 +59,19 @@ def _make_repo(tmp_path):
     subprocess.run(["git", "add", "."], cwd=tmp_path)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
     return tmp_path
+
+
+def _decoded_paths(sink_path: Path) -> list[str]:
+    """Read a `touch-record.jsonl` sink and return every decoded entry's
+    `path` field, in file order. Fails loudly (via `decode_line`) on a
+    malformed line — these tests exercise only well-formed writes."""
+    if not sink_path.exists():
+        return []
+    events = [
+        touch_record.decode_line(line)
+        for line in touch_record.iter_complete_lines(sink_path.read_bytes())
+    ]
+    return [event.path for event in events]
 
 
 class TestNormalizeTouchPathIsolatedUnit:
@@ -139,29 +162,22 @@ class TestHandlerEndToEndCommonDirScopedRoot:
         }
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
-        touched_file = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
+        touch_record_sink = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
         )
-        assert touched_file.exists(), "handler did not create the session touched.txt"
-        lines = [
-            line
-            for line in touched_file.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
-        assert lines, "handler wrote no entries to touched.txt"
+        assert touch_record_sink.exists(), "handler did not create the session touch-record.jsonl"
 
-        # Path hygiene applies to the EXTRACTED path, not the whole (now
-        # timestamped) event line — parse_touch_event(line)[2] treatment per
-        # docs/plans/2026-08-03-track-touched-files-emits-t-events.md § C2.
-        entries = [touch_scope.parse_touch_event(line)[2] for line in lines]
+        entries = _decoded_paths(touch_record_sink)
+        assert entries, "handler wrote no entries to touch-record.jsonl"
+
         for entry in entries:
             assert not entry.startswith("../"), (
-                f"touched.txt entry {entry!r} carries a '../' prefix — the "
+                f"touch-record.jsonl entry {entry!r} carries a '../' prefix — the "
                 "handler was handed the common_dir as git_root and computed "
                 "relpath(file_path, <repo>/.git) instead of the worktree root"
             )
             assert not (entry.startswith("/") or re.match(r"^[A-Za-z]:", entry)), (
-                f"touched.txt entry {entry!r} is absolute, not repo-relative"
+                f"touch-record.jsonl entry {entry!r} is absolute, not repo-relative"
             )
         assert "src/new.py" in entries
 
@@ -251,14 +267,10 @@ class TestHandlerNormalizeTouchPathRootWiring:
             "`root=` keyword to normalize_touch_path"
         )
 
-        touched_file = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
+        touch_record_sink = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
         )
-        entries = [
-            touch_scope.parse_touch_event(line)[2]
-            for line in touched_file.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
+        entries = _decoded_paths(touch_record_sink)
         assert "src/new.py" in entries
 
 
@@ -352,15 +364,73 @@ class TestHandlerZeroSpawnFastArmAtCaller:
             "handler failed to supply `root=`"
         )
 
-        touched_file = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
+        touch_record_sink = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
         )
-        entries = [
-            touch_scope.parse_touch_event(line)[2]
-            for line in touched_file.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
+        entries = _decoded_paths(touch_record_sink)
         assert "README.md" in entries
         for entry in entries:
             assert not entry.startswith("../")
             assert not (entry.startswith("/") or re.match(r"^[A-Za-z]:", entry))
+
+
+class TestAC3OutOfWorktreePathReachableThroughHandler:
+    """AC3: with `normalize_touch_path` no longer the only thing holding the
+    out-of-worktree invariant, `touch_record.encode_line`'s own
+    `OutOfWorktreePath` containment check (touch_record.py AC23) becomes
+    reachable through this hook's write path — a second, independent layer,
+    not merely a documented intention.
+
+    Proven, not merely noted: `ttf.normalize_touch_path` is monkeypatched to
+    return an absolute path that slips past the handler's own `if not
+    file_path_norm: return` guard (which only checks for falsy/None, not
+    absoluteness — the handler trusts `normalize_touch_path` to have already
+    excluded that case). This simulates a defect in `normalize_touch_path`
+    to exercise the SECOND layer directly, proving it is live at this call
+    site rather than merely present in `touch_record.py`'s own unit tests.
+    """
+
+    def test_absolute_normalized_path_is_rejected_by_encode_line_not_written(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        target = repo / "README.md"
+        common_dir = git_common_dir(repo)  # production shape: <repo>/.git
+
+        def _return_absolute(*args, **kwargs):
+            return "/etc/passwd"
+
+        monkeypatch.setattr(ttf, "normalize_touch_path", _return_absolute)
+
+        params = {
+            "session_id": "outofworktree00001",
+            "tool_name": "Edit",
+            "file_path": str(target),
+        }
+
+        # Must not raise: OutOfWorktreePath is caught and swallowed by
+        # `_append_touch_record`'s silent-failure contract (this hook must
+        # never block or error-propagate to the tool call).
+        asyncio.run(ttf._handler(params, repo_root=common_dir))
+
+        touch_record_sink = (
+            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+        )
+        entries = _decoded_paths(touch_record_sink)
+        assert entries == [], (
+            "an out-of-worktree (absolute) path reached encode_line and was "
+            "rejected (AC23) -- it must never land in touch-record.jsonl"
+        )
+
+    def test_encode_line_itself_raises_for_an_absolute_path(self):
+        """Direct, module-level confirmation of the exception this call site
+        relies on catching — not a substitute for the handler-level proof
+        above, which is what shows the exception is actually REACHABLE
+        through this hook rather than merely defined."""
+        with pytest.raises(touch_record.OutOfWorktreePath):
+            touch_record.encode_line(
+                session_id="s1",
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path="/etc/passwd",
+            )

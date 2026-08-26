@@ -122,7 +122,6 @@ import datetime
 import difflib
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -135,7 +134,6 @@ import coordinator_core.archive_stamp as archive_stamp
 from coordinator_core.execute_plan_assemble.row_spans import (  # noqa: F401 -- re-exported
     _CODED,
     _COMMIT_REQUIRED_DISPOSITIONS,
-    _GIT_TIMEOUT_SECS,
     _OPEN,
     _ROW_KEY_LINE_RE,
     _all_spine_ids,
@@ -170,6 +168,7 @@ from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, LockTimeout, Mutate
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
 from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_NEVER,
     PUSH_STATUS_NOT_ATTEMPTED,
     run_commit_pipeline,
 )
@@ -399,18 +398,14 @@ def _batch_git_cat_file_check(
     result: dict[str, Optional[str]] = {sha: None for sha in shas}
     if not shas:
         return result
-    try:
-        proc = subprocess.run(
-            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
-            cwd=str(repo_root),
-            input="\n".join(shas) + "\n",
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_GIT_TIMEOUT_SECS,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except subprocess.TimeoutExpired:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=str(repo_root),
+        input=("\n".join(shas) + "\n").encode("utf-8"),
+    )
+    if proc.timed_out:
         return result
     out_lines = (proc.stdout or "").splitlines()
     for sha, line in zip(shas, out_lines):
@@ -2316,6 +2311,17 @@ def close_out_and_stamp(
             subject=subject,
             stage_paths=stage_paths,
             caller_paths=set(stage_paths),
+            # DR-329 § 7 (docs/decisions/DR-329-push-runs-on-a-cadence-not-
+            # on-every-commit.md): this call site is not one of the six
+            # named cadence surfaces, so it no longer owns a synchronous
+            # push at all -- publication is deferred to whichever cadence
+            # checkpoint (`workday-complete`, `workstream-complete`, ...)
+            # runs next and calls `push_outstanding()` itself. Explicit,
+            # never by omission (C5, AC5/AC6) -- an omitted `push_mode`
+            # here would silently regress back to `PUSH_MODE_SYNC`, exactly
+            # the failure `test_close_out_and_stamp_publishes.py`'s
+            # `TestPublishBoundaryHistoricalRedProof` pins against.
+            push_mode=PUSH_MODE_NEVER,
         )
         commit_result = {
             "committed_sha": pipeline_result.committed_sha,

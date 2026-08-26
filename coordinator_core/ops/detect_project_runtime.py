@@ -48,7 +48,7 @@ from __future__ import annotations
 import glob
 import os
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import leaf_spawn_creationflags
 import sys
 from typing import List
 
@@ -115,7 +115,7 @@ def _is_inside_git_worktree(cwd: str) -> bool:
             cwd=cwd,
             capture_output=True,
             timeout=5,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _is_inside_git_worktree: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -131,7 +131,7 @@ def _tracked_env_files_present(cwd: str) -> bool:
             capture_output=True,
             text=True,
             timeout=10,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _tracked_env_files_present: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

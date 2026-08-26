@@ -8,10 +8,11 @@ under ``tmp_path`` — no process is spawned, and the real
 """
 
 import os
+from datetime import datetime
 
 import pytest
 
-from coordinator_core.session import claim_index
+from coordinator_core.session import claim_index, touch_record
 
 
 def _write(path, content):
@@ -20,18 +21,41 @@ def _write(path, content):
         fh.write(content)
 
 
+def _touch_line(verb, path, when="2026-08-08T10:00:00.000000Z"):
+    return f"{verb} {when} {path}"
+
+
+def _append_fixture_line(sink, session_id, agent_id, line):
+    """Parse one `_touch_line`-produced OLD-dialect string
+    (``'<verb> <iso8601> <path>'``) and append it as a NEW-dialect
+    ``touch-record.jsonl`` event via ``touch_record.append_event``.
+
+    C7b: this module's reader no longer reads ``touched.txt`` at all (the
+    AC21 transitional union-read and its enumeration arm are deleted), so
+    every fixture writer in this file must emit the seam's own dialect.
+    Parsing `_touch_line`'s pre-existing textual shape here (rather than
+    reworking every call site below) keeps every test body byte-identical
+    to before this chunk landed.
+    """
+    verb, ts_str, path = line.split(None, 2)
+    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    touch_record.append_event(
+        sink, session_id=session_id, agent_id=agent_id, verb=verb, path=path, timestamp=ts
+    )
+
+
 def _session_touched(base, sid, lines):
-    _write(os.path.join(str(base), sid, "touched.txt"), "\n".join(lines) + "\n")
+    sink = os.path.join(str(base), sid, "touch-record.jsonl")
+    for line in lines:
+        _append_fixture_line(sink, sid, None, line)
 
 
 def _agent_touched(base, agent_id, owner_sid, lines):
     agent_dir = os.path.join(str(base), ".agents", agent_id)
-    _write(os.path.join(agent_dir, "touched.txt"), "\n".join(lines) + "\n")
+    sink = os.path.join(agent_dir, "touch-record.jsonl")
+    for line in lines:
+        _append_fixture_line(sink, owner_sid, agent_id, line)
     _write(os.path.join(agent_dir, "em-session-id.txt"), owner_sid + "\n")
-
-
-def _touch_line(verb, path, when="2026-08-08T10:00:00.000000Z"):
-    return f"{verb} {when} {path}"
 
 
 # ---------------------------------------------------------------------------
@@ -79,16 +103,22 @@ def test_rebuild_returns_in_memory_state_only(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_torn_trailing_line_in_touched_txt_is_discarded(tmp_path):
+def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
     base = str(tmp_path)
     # A complete claim line, then a torn (no trailing newline) fragment
-    # simulating a reader that caught a concurrent writer mid-append.
+    # simulating a reader that caught a concurrent writer mid-append --
+    # C7b: exercised against the NEW `touch-record.jsonl` dialect, the only
+    # one this module reads any more.
+    complete_line = touch_record.encode_line(
+        session_id="sess-a", agent_id=None, verb="T", path="complete.py",
+        timestamp=1723107600.0,
+    ).decode("utf-8")
     torn = (
-        _touch_line("T", "complete.py")
-        + "\n"
-        + "T 2026-08-08T10:00:01.000000Z partial-wr"
+        complete_line
+        + '{"v":1,"verb":"T","ts":1723107601.0,"sid":"sess-a",'
+        '"agent":null,"path":"partial-wr"'
     )
-    _write(os.path.join(base, "sess-a", "touched.txt"), torn)
+    _write(os.path.join(base, "sess-a", "touch-record.jsonl"), torn)
 
     result = claim_index.lookup(["complete.py", "partial-wr"], sessions_dir=base)
 
@@ -121,9 +151,10 @@ def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
 
     # Organic append: same session dir, same file, no os.utime anywhere --
     # exactly what scope.py::touch does for a 2nd-and-later claim.
-    touched_path = os.path.join(base, "sess-a", "touched.txt")
-    with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write(_touch_line("T", "other.py") + "\n")
+    touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
+    touch_record.append_event(
+        touched_path, session_id="sess-a", agent_id=None, verb="T", path="other.py"
+    )
 
     second = claim_index.lookup(["other.py"], sessions_dir=base)
     assert second == {"other.py": ["sess-a"]}
@@ -224,28 +255,35 @@ def test_lookup_permission_error_reading_agent_backpointer_is_unanswerable(
     assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
-def test_lookup_permission_error_reading_touched_txt_body_is_unanswerable(
+def test_lookup_permission_error_reading_touch_record_body_is_unanswerable(
     tmp_path, monkeypatch
 ):
     """Bug backlog
     2026-08-11-an-io-error-reading-a-touched-txt-body-i-18abf7c6f3be (P3):
-    an OSError raised while reading a claimant's touched.txt CONTENT
-    (as opposed to enumerating it) must surface as UNANSWERABLE for the
-    path that claimant would have claimed, never silently collapse to
-    "unclaimed" -- that is the one answer that authorizes a write over a
-    live peer."""
+    an OSError raised while reading a claimant's record CONTENT (as opposed
+    to enumerating it) must surface as UNANSWERABLE for the path that
+    claimant would have claimed, never silently collapse to "unclaimed" --
+    that is the one answer that authorizes a write over a live peer.
+
+    C7b: ``touch_record._read_stream_claims`` reads via
+    ``pathlib.Path.read_bytes``, not ``builtins.open`` -- patched
+    accordingly (the pre-C7b version of this test patched ``open``, which
+    is why it targeted ``touched.txt``, read by this module's own retired
+    line-oriented reader)."""
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
-    touched_path = os.path.join(base, "sess-a", "touched.txt")
+    touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
 
-    real_open = open
+    from pathlib import Path
 
-    def fake_open(path, *args, **kwargs):
-        if os.path.abspath(str(path)) == os.path.abspath(touched_path):
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if os.path.abspath(str(self)) == os.path.abspath(touched_path):
             raise PermissionError("simulated I/O error reading body")
-        return real_open(path, *args, **kwargs)
+        return real_read_bytes(self)
 
-    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
 
     result = claim_index.lookup(["foo.py"], sessions_dir=base)
 
@@ -259,8 +297,16 @@ def test_torn_tail_content_read_still_reports_complete(tmp_path):
     a normal read outcome, not an IO error -- the walk must still report
     complete=True, abort_cause=None."""
     base = str(tmp_path)
-    torn = _touch_line("T", "complete.py") + "\n" + "T 2026-08-08T10:00:01.000000Z partial"
-    _write(os.path.join(base, "sess-a", "touched.txt"), torn)
+    complete_line = touch_record.encode_line(
+        session_id="sess-a", agent_id=None, verb="T", path="complete.py",
+        timestamp=1723107600.0,
+    ).decode("utf-8")
+    torn = (
+        complete_line
+        + '{"v":1,"verb":"T","ts":1723107601.0,"sid":"sess-a",'
+        '"agent":null,"path":"partial"'
+    )
+    _write(os.path.join(base, "sess-a", "touch-record.jsonl"), torn)
 
     state = claim_index.rebuild(sessions_dir=base)
 
@@ -268,11 +314,11 @@ def test_torn_tail_content_read_still_reports_complete(tmp_path):
     assert state.abort_cause is None
 
 
-def test_empty_touched_txt_still_reports_complete(tmp_path):
-    """Regression guard on invariant 2: a genuinely empty touched.txt is not
+def test_empty_touch_record_still_reports_complete(tmp_path):
+    """Regression guard on invariant 2: a genuinely empty record file is not
     an IO error."""
     base = str(tmp_path)
-    _write(os.path.join(base, "sess-a", "touched.txt"), "")
+    _write(os.path.join(base, "sess-a", "touch-record.jsonl"), "")
 
     state = claim_index.rebuild(sessions_dir=base)
 
@@ -281,21 +327,24 @@ def test_empty_touched_txt_still_reports_complete(tmp_path):
     assert state.claims == {}
 
 
-def test_missing_touched_txt_still_reports_complete(tmp_path):
+def test_missing_touch_record_still_reports_complete(tmp_path):
     """Regression guard on invariant 3: FileNotFoundError reading a
-    claimant's touched.txt content is not an IO error -- it means no claims
-    yet from that claimant, not a substrate failure."""
+    claimant's record content is not an IO error -- it means no claims yet
+    from that claimant, not a substrate failure."""
     base = str(tmp_path)
     os.makedirs(os.path.join(base, "sess-a"), exist_ok=True)
-    touched_path = os.path.join(base, "sess-a", "touched.txt")
+    touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
     # Create then remove so _enumerate_touched_files sees it as a file at
     # enumeration time but the content read below hits FileNotFoundError.
     _write(touched_path, "")
     os.remove(touched_path)
 
-    lines, read_ok = claim_index._read_lines_discard_torn_tail(touched_path)
+    # C4 retired `_read_lines_discard_torn_tail`; the property it pinned now
+    # lives on the seam read -- an absent file is "no claims from this
+    # claimant", never a substrate failure.
+    claims, read_ok = claim_index._read_stream_claims(touched_path)
 
-    assert lines == []
+    assert claims == {}
     assert read_ok is True
 
 
@@ -307,7 +356,7 @@ def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monke
     _agent_touched(base, "agent-1", "sess-owner", [_touch_line("T", "x.py")])
     backptr = os.path.join(base, ".agents", "agent-1", "em-session-id.txt")
     _session_touched(base, "sess-z", [_touch_line("T", "y.py")])
-    content_path = os.path.join(base, "sess-z", "touched.txt")
+    content_path = os.path.join(base, "sess-z", "touch-record.jsonl")
 
     real_open = open
 
@@ -315,11 +364,20 @@ def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monke
         p = os.path.abspath(str(path))
         if p == os.path.abspath(backptr):
             raise PermissionError("simulated enumeration-time I/O error")
-        if p == os.path.abspath(content_path):
-            raise PermissionError("simulated content-read I/O error")
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr("builtins.open", fake_open)
+
+    from pathlib import Path
+
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if os.path.abspath(str(self)) == os.path.abspath(content_path):
+            raise PermissionError("simulated content-read I/O error")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
 
     state = claim_index.rebuild(sessions_dir=base)
 
@@ -362,7 +420,7 @@ def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path, monke
 def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base(
     tmp_path, monkeypatch
 ):
-    """Drives the cap-exceeded abort by patching ``time.monotonic`` (per the
+    """Drives the cap-exceeded abort by patching ``time.process_time`` (per the
     worked construction in
     ``state/subagent-share/31106a01-e326-4ab8-a033-b4aa5d757cbd/
     repro-partial-positive-fail-open.py``), NOT by zeroing
@@ -377,7 +435,9 @@ def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base
 
     # sess-a sorts first; consume it, then trip the deadline before sess-b.
     ticks = iter([0.0, 0.0, 10_000.0] + [10_000.0] * 64)
-    monkeypatch.setattr(claim_index.time, "monotonic", lambda: next(ticks))
+    # AC18 re-keyed the cap from wall clock to process time; same
+    # construction, driven through the instrument the module now reads.
+    monkeypatch.setattr(claim_index.time, "process_time", lambda: next(ticks))
 
     state = claim_index.rebuild(sessions_dir=base)
 
@@ -584,18 +644,13 @@ def test_lookup_edit_ts_removed_on_release(tmp_path):
     assert result.edit_ts.get("foo.py") is None
 
 
-def test_lookup_edit_ts_ignores_unparseable_timestamp(tmp_path):
-    base = str(tmp_path)
-    # A legacy bare-path line has no timestamp at all and is skipped by this
-    # module's reader entirely (no legacy-compat obligation, per
-    # _last_verb_per_path's own docstring) -- so it contributes no claim and
-    # no edit_ts entry, distinct from a malformed-but-3-token line.
-    _session_touched(base, "sess-a", ["foo.py"])
-
-    result = claim_index.lookup(["foo.py"], sessions_dir=base)
-
-    assert result["foo.py"] == []
-    assert result.edit_ts.get("foo.py") is None
+# `test_lookup_edit_ts_ignores_unparseable_timestamp` removed by C7b: it
+# pinned a bare-path legacy `touched.txt` line (no verb, no timestamp) being
+# skipped by this module's OLD reader. That scenario has no counterpart in
+# the new `touch-record.jsonl` dialect this module now reads exclusively --
+# `touch_record.encode_line`/`decode_line` require every field, so a "bare
+# path, unknown time" event cannot be constructed or fed through the seam at
+# all. See this chunk's own report for the C7b AC21-deletion writeup.
 
 
 if __name__ == "__main__":
@@ -851,3 +906,16 @@ def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
     result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
 
     assert result.peers == {}
+
+
+# `test_unmigrated_writer_claim_is_still_seen_during_the_cutover` and
+# `test_old_format_record_is_not_a_malformed_new_format_record` removed by
+# C7b: both pinned the AC21 transitional union-read (touch-record.jsonl
+# UNION legacy touched.txt) that this chunk deletes by name and in full --
+# `_read_stream_claims`/`_enumerate_touched_files` no longer look at
+# `touched.txt` at all, so "an unmigrated claimant's legacy file is still
+# seen" and "old bytes don't read as corrupt" are no longer properties this
+# module has (or needs -- C7c deletes the legacy WRITER too). See this
+# chunk's own report for the AC21-deletion writeup; no replacement pin is
+# owed, mirroring C5's removal of the peer-release tests in
+# test_scope.py (scope.py module docstring, `release_committed_claims`).

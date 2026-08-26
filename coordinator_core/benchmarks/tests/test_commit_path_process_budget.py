@@ -32,21 +32,21 @@ of the shape, not a literal reproduction of the live-tree number -- a reader
 extrapolating this pin to the ~1000-file case should expect a materially
 larger number, not this one.
 
-TWO NAMED EXCLUSIONS, both REPORTED alongside the passing number, never in
-place of it (AC1's own requirement):
+ONE NAMED EXCLUSION, REPORTED alongside the passing number, never in place
+of it (AC1's own requirement):
 
-  1. GATE HISTORY WALK (AC1) -- `docs/research/spike-verdicts/2026-08-21-
-     staged-rollback-verdict-within-budget.md` (C5, `7984bb0119fb`,
-     not-viable): no cheaper query shape reaches budget without narrowing
-     detection, and detection stays whole (§ The budget the gate cannot
-     meet). This file measures the gate's OWN process time in isolation
-     (`_measure_gate_alone`, same read-only trampoline C4's own pin uses,
-     against an equivalently-staged snapshot) and subtracts it from the
-     full-commit total to produce the AC1-comparable number; the raw,
-     un-excluded total is asserted and reported too, so the exclusion is
-     never a way to make a red number look green.
+  (The GATE HISTORY WALK exclusion this section used to describe --
+  `_measure_gate_alone`, subtracting the pre-commit rollback-detector gate's
+  own process time from the full-commit total -- no longer applies: that
+  gate (`coordinator_core.ops.detect_staged_rollback`) and its installer are
+  deleted, 2026-08-25, "the staged rollback gate dies without blocking a
+  commit"; claude-klabauter ends with no pre-commit hook. This fixture no longer
+  installs one, so the full-commit total has nothing left to exclude on that
+  axis -- see `docs/research/spike-verdicts/2026-08-21-staged-rollback-
+  verdict-within-budget.md` for the now-historical record of why that gate's
+  own cost could not be cut further while it existed.)
 
-  2. DETACHED AUTO-PUSH SUBTREE (C2's remit, this file's design call per the
+  1. DETACHED AUTO-PUSH SUBTREE (C2's remit, this file's design call per the
      C3 task body: "Whichever C3 picks, state it in AC1 and AC5"). C2's own
      disposition recommends mechanism (b) -- "the harness-side direct-child
      measurement... NOT CREATE_BREAKAWAY_FROM_JOB" -- over (a), because
@@ -123,14 +123,19 @@ session's in-flight edit to `coordinator_core/ops/detect_staged_rollback.py`
 (a `NameError` from a partially-applied cut). Engine content there was
 verified equivalent to `HEAD` (publish-time identifier renames only).
 
-WHY THE RATCHET IS NOT YET THE FINAL PIN. The exact-blob rollback check --
-the term AC1 names as its exclusion, and the term C5 priced at 1184ms and
-returned `not-viable` on -- is being DELETED under a PM ruling by C16 of
-`docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor
-.md` (check 2, the mass-deletion tripwire, is NOT cut). When that lands, the
-excluded term this file subtracts largely ceases to exist and every number
-above moves. Re-measure and lower the ratchet then; do not treat today's
-figure as the budget C3 was asked to pin.
+WHY THE RATCHET IS NOT YET THE FINAL PIN (historical numbers above, superseded
+2026-08-25). The exact-blob rollback check -- the term AC1 named as its
+exclusion, and the term C5 priced at 1184ms and returned `not-viable` on --
+was DELETED under a PM ruling by C16 of `docs/plans/2026-08-21-the-cli
+-bootstrap-tax-dies-at-the-interpreter-floor.md` (check 2, the mass-deletion
+tripwire, was NOT cut). The whole gate module (`detect_staged_rollback.py`)
+and its installer were then deleted outright, 2026-08-25 ("the staged
+rollback gate dies without blocking a commit"), so the excluded term this
+file used to subtract no longer applies at all -- this fixture no longer
+installs a pre-commit hook, and the numbers above are a historical record of
+the measurement, not the current shape. Re-measure and lower the ratchet on
+the next pass through this file; do not treat today's figure as the budget
+C3 was asked to pin.
 
 Spec backlink: docs/plans/2026-08-21-a-commit-stops-paying-for-thirty-
 processes.md, C3. AC1/AC2/AC5/AC6 (C5's viability verdict) are what this
@@ -231,7 +236,6 @@ deletes a file, so it never trips the mass-deletion tripwire -- this pin
 measures the ordinary (clean-verdict) commit path, not a blocked one."""
 
 _BIN_DIR = Path(__file__).resolve().parents[2].parent / "coordinator" / "bin"
-_DETECT_ROLLBACK = _BIN_DIR / "detect-staged-rollback.py"
 _PREPARE_COMMIT_MSG = _BIN_DIR / "coordinator-prepare-commit-msg.py"
 _AUTO_PUSH = _BIN_DIR / "coordinator-auto-push.py"
 
@@ -271,7 +275,7 @@ def _env(**overrides) -> dict:
     explicit `COORDINATOR_ENGINE_ROOT` (Rung 1 of `cc_invoke`'s resolution
     ladder), required because this suite's `coordinator_core/conftest.py`
     autouse fixture quarantines HOME/USERPROFILE, so nothing under a
-    spawned child's real machine-local registry or `.claude-klabauter-root` pointer
+    spawned child's real machine-local registry or `.claude-klabauter-live-root` pointer
     is reachable -- same shape as `test_detect_staged_rollback_spawn_
     budget.py::_env`.
     """
@@ -307,10 +311,12 @@ def _install_hook(repo: Path, hook_name: str, script: Path, forward_args: bool) 
 def _build_fixture_repo(tmp_path: Path) -> Path:
     """A realistic staged working tree (§ Resolved): `N_TRACKED_FILES` files,
     each with `N_HISTORY_REVISIONS` prior commits, on a `work/*` branch, with
-    all three hooks installed and a local bare `origin` already tracking that
-    branch (so the post-commit hook's sync push is a real, bounded,
-    no-network fast-forward -- see module docstring's DETACHED AUTO-PUSH
-    SUBTREE exclusion section).
+    the surviving two hooks installed (pre-commit is gone -- the gate it ran,
+    `detect_staged_rollback`, and its installer are deleted, 2026-08-25;
+    claude-klabauter ends with no pre-commit hook) and a local bare `origin` already
+    tracking that branch (so the post-commit hook's sync push is a real,
+    bounded, no-network fast-forward -- see module docstring's DETACHED
+    AUTO-PUSH SUBTREE exclusion section).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -330,7 +336,6 @@ def _build_fixture_repo(tmp_path: Path) -> Path:
     _git(repo, "remote", "add", "origin", str(bare))
     _git(repo, "push", "-q", "-u", "origin", "work/machine-a/c3-budget-fixture")
 
-    _install_hook(repo, "pre-commit", _DETECT_ROLLBACK, forward_args=False)
     _install_hook(repo, "prepare-commit-msg", _PREPARE_COMMIT_MSG, forward_args=True)
     _install_hook(repo, "post-commit", _AUTO_PUSH, forward_args=True)
     return repo
@@ -394,51 +399,31 @@ def _measure_driver_residue(tmp_path: Path, repo: Path, env: dict) -> dict:
     return result
 
 
-def _measure_gate_alone(repo: Path, env: dict) -> dict:
-    """Isolates the gate's (`detect-staged-rollback`) own process time
-    against an equivalently-staged snapshot -- same read-only trampoline C4's
-    own pin measures, never mutating the repo (module docstring's own
-    "Read-and-report only" note), so it is safe to batch k times against one
-    staged snapshot without re-staging between calls.
-    """
-    for i in range(N_MODIFIED_PER_COMMIT):
-        (repo / f"f{i:03d}.txt").write_text(
-            f"gate-calibration snapshot file {i} -- never historical\n", encoding="utf-8"
-        )
-    _git(repo, "add", "-A", env=env)
-    result = batched_process_time_ms(
-        [sys.executable, str(_DETECT_ROLLBACK), str(repo)], k=K_INVOCATIONS, cwd=str(repo), env=env
-    )
-    assert result["rc"] == 0, (
-        f"gate calibration must be a clean verdict (a blocked run costs "
-        f"differently, § Corrections 5): {result!r}"
-    )
-    _git(repo, "reset", "-q", "--hard", "HEAD", env=env)
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Two numbers, not one -- see module docstring's "WHAT THIS FILE PINS".
 # The RATCHET is the regression lock (green today). The AC TARGET is the
 # budget the plan was written to reach (red today, `designed_red`).
 # ---------------------------------------------------------------------------
 
-#: AC1-comparable ratchet: full-commit process time, MINUS driver residue,
-#: MINUS the gate's own (named-excluded) history-walk time. Derived from the
-#: measured 1177.7ms (module docstring) with a 25% headroom band -- process
-#: time drifts under the 50-70 concurrent sessions this box carries, and a
-#: ratchet that fires on peer load trains everyone to ignore it. Lower this
-#: whenever a cut lands; it is a floor, never a budget.
+#: AC1-comparable ratchet: full-commit process time, MINUS driver residue.
+#: Historically also excluded the pre-commit rollback gate's own
+#: (named-excluded) history-walk time; that gate and its installer are
+#: deleted (2026-08-25) and this fixture no longer installs it, so there is
+#: nothing left on that axis to exclude -- see module docstring. Derived from
+#: the historical measured 1177.7ms (module docstring) with a 25% headroom
+#: band -- process time drifts under the 50-70 concurrent sessions this box
+#: carries, and a ratchet that fires on peer load trains everyone to ignore
+#: it. Lower this whenever a cut lands; it is a floor, never a budget.
 AC1_PROCESS_TIME_RATCHET_MS = 1475.0
 
-#: AC2-comparable ratchet: full-commit spawn count, MINUS driver residue only
-#: (the gate's own processes are NOT excluded here -- see module docstring:
-#: AC2 excludes driver residue and the detached subtree, not the gate's fixed
-#: process count, which does not scale with history depth the way its TIME
-#: does). Conhost processes are COUNTED, per AC2's own instruction -- a
+#: AC2-comparable ratchet: full-commit spawn count, MINUS driver residue
+#: only (see module docstring: AC2 excludes driver residue and the detached
+#: subtree). Conhost processes are COUNTED, per AC2's own instruction -- a
 #: submission that hits a lower number by dropping CREATE_NO_WINDOW has
-#: failed this pin, not passed it. Measured 37.625; +1 covers the retry-shaped
-#: variance a spawn count actually has, which is far tighter than time's.
+#: failed this pin, not passed it. Measured (historically, with the
+#: since-deleted pre-commit gate installed) 37.625; +1 covers the
+#: retry-shaped variance a spawn count actually has, which is far tighter
+#: than time's.
 AC2_SPAWN_COUNT_RATCHET = 38.625
 
 #: The plan's own AC1: everything on the commit path except the gate's history
@@ -463,7 +448,6 @@ def commit_path_measurement(tmp_path_factory):
     env = _env(COORDINATOR_AUTO_PUSH_SYNC="1")
 
     residue = _measure_driver_residue(tmp_path, repo, env)
-    gate_alone = _measure_gate_alone(repo, env)
 
     driver = tmp_path / "driver_commit.py"
     counter = tmp_path / "commit_counter.txt"
@@ -476,16 +460,16 @@ def commit_path_measurement(tmp_path_factory):
         f"push that fails is not the shape this pin measures): {full!r}"
     )
 
-    ac1_ms = full["process_time_ms"] - residue["process_time_ms"] - gate_alone["process_time_ms"]
+    ac1_ms = full["process_time_ms"] - residue["process_time_ms"]
     ac2_procs = full["procs_per_call"] - residue["procs_per_call"]
     detail = (
         f"raw full-commit total: {full['process_time_ms']}ms / "
         f"{full['procs_per_call']} procs (k={K_INVOCATIONS}). "
         f"driver residue (excluded, both axes): {residue['process_time_ms']}ms / "
         f"{residue['procs_per_call']} procs. "
-        f"gate history-walk (AC1 time exclusion only, NOT excluded from AC2's "
-        f"spawn count -- see module docstring): {gate_alone['process_time_ms']}ms / "
-        f"{gate_alone['procs_per_call']} procs. "
+        f"no gate history-walk term (the pre-commit rollback gate and its "
+        f"installer are deleted, 2026-08-25 -- this fixture installs no "
+        f"pre-commit hook, so there is nothing left to exclude on that axis). "
         f"AC1-comparable: {ac1_ms}ms. AC2-comparable: {ac2_procs} procs."
     )
     return {"ac1_ms": ac1_ms, "ac2_procs": ac2_procs, "detail": detail}
@@ -497,13 +481,13 @@ def test_commit_path_does_not_regress(commit_path_measurement):
     """
     m = commit_path_measurement
     assert m["ac1_ms"] <= AC1_PROCESS_TIME_RATCHET_MS, (
-        f"commit path (gate history-walk and driver residue excluded, both "
-        f"named per AC1/AC5) regressed past the "
+        f"commit path (driver residue excluded per AC5; no pre-commit gate "
+        f"to exclude, see module docstring) regressed past the "
         f"{AC1_PROCESS_TIME_RATCHET_MS}ms ratchet: {m['detail']}"
     )
     assert m["ac2_procs"] <= AC2_SPAWN_COUNT_RATCHET, (
-        f"commit path (driver residue excluded per AC5; gate processes and "
-        f"conhost processes are COUNTED, not excluded, per AC2) regressed past "
+        f"commit path (driver residue excluded per AC5; conhost processes "
+        f"are COUNTED, not excluded, per AC2) regressed past "
         f"the {AC2_SPAWN_COUNT_RATCHET}-process ratchet: {m['detail']}"
     )
 
@@ -576,7 +560,6 @@ def commit_path_measurement_darwin(tmp_path_factory):
     env = _env(COORDINATOR_AUTO_PUSH_SYNC="1")
 
     residue = _measure_driver_residue(tmp_path, repo, env)
-    gate_alone = _measure_gate_alone(repo, env)
 
     driver = tmp_path / "driver_commit.py"
     counter = tmp_path / "commit_counter.txt"
@@ -593,8 +576,8 @@ def commit_path_measurement_darwin(tmp_path_factory):
         f"full commit-path spawn-count measurement must exit 0: {full_procs!r}"
     )
 
-    ac1_p50_ms = full_quantiles["p50_ms"] - residue["process_time_ms"] - gate_alone["process_time_ms"]
-    ac1_p90_ms = full_quantiles["p90_ms"] - residue["process_time_ms"] - gate_alone["process_time_ms"]
+    ac1_p50_ms = full_quantiles["p50_ms"] - residue["process_time_ms"]
+    ac1_p90_ms = full_quantiles["p90_ms"] - residue["process_time_ms"]
     ac2_procs = full_procs["procs_per_call"] - residue["procs_per_call"]
     detail = (
         f"full-commit quantiles: n={full_quantiles['n']} k={full_quantiles['k']} "
@@ -603,8 +586,9 @@ def commit_path_measurement_darwin(tmp_path_factory):
         f"full-commit spawn count (k={full_procs['k']}): {full_procs['procs_per_call']} procs. "
         f"driver residue (excluded, both axes): {residue['process_time_ms']}ms / "
         f"{residue['procs_per_call']} procs. "
-        f"gate history-walk (AC1-analog time exclusion only): "
-        f"{gate_alone['process_time_ms']}ms / {gate_alone['procs_per_call']} procs. "
+        f"no gate history-walk term (the pre-commit rollback gate and its "
+        f"installer are deleted, 2026-08-25 -- this fixture installs no "
+        f"pre-commit hook). "
         f"AC1-analog: p50={ac1_p50_ms}ms p90={ac1_p90_ms}ms. AC2-analog: {ac2_procs} procs."
     )
     return {"ac1_p50_ms": ac1_p50_ms, "ac1_p90_ms": ac1_p90_ms, "ac2_procs": ac2_procs, "detail": detail}
@@ -617,14 +601,13 @@ def test_commit_path_darwin_does_not_regress(commit_path_measurement_darwin):
     """
     m = commit_path_measurement_darwin
     assert m["ac1_p90_ms"] <= AC1_DARWIN_PROCESS_TIME_RATCHET_MS, (
-        f"macOS commit path (gate history-walk and driver residue excluded) "
-        f"regressed past the {AC1_DARWIN_PROCESS_TIME_RATCHET_MS}ms ratchet: "
-        f"{m['detail']}"
+        f"macOS commit path (driver residue excluded; no pre-commit gate to "
+        f"exclude, see module docstring) regressed past the "
+        f"{AC1_DARWIN_PROCESS_TIME_RATCHET_MS}ms ratchet: {m['detail']}"
     )
     assert m["ac2_procs"] <= AC2_DARWIN_SPAWN_COUNT_RATCHET, (
-        f"macOS commit path (driver residue excluded; gate processes counted) "
-        f"regressed past the {AC2_DARWIN_SPAWN_COUNT_RATCHET}-process ratchet: "
-        f"{m['detail']}"
+        f"macOS commit path (driver residue excluded) regressed past the "
+        f"{AC2_DARWIN_SPAWN_COUNT_RATCHET}-process ratchet: {m['detail']}"
     )
 
 

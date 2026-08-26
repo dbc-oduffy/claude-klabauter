@@ -236,3 +236,175 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     assert entries[0]["op"] == "ping"
     assert entries[0]["measurement_scope"] == "per_op_process"
     assert entries[0]["source_path"] == "one_shot_cli"
+
+def test_process_time_rows_carry_a_session_id(tmp_path, monkeypatch):
+    """A process-time row must be joinable to the session that produced it.
+
+    Regression, 2026-08-25. Every `process_time`-kind row in the live sink
+    carried `sid: null` -- 2,108 of 2,108 for `hooks.track_touched_files` --
+    because none of the four `record_op_process_time` call sites passed one,
+    while the wall-clock rows beside them did. A CPU sample that cannot be
+    joined to a session cannot be ranked within one, so the sink could not
+    answer "what does fire #1 of a session cost" in process time at all, and
+    an audit that needed exactly that had to fall back to wall clock.
+    """
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-under-test")
+    from coordinator_core.ipc import _telemetry_sid
+
+    assert _telemetry_sid() == "sid-under-test"
+
+
+def test_telemetry_sid_never_raises(monkeypatch):
+    """Telemetry must never break dispatch -- a null sid beats a raise."""
+    import coordinator_core.session.core as _core
+
+    def _boom(*a, **kw):
+        raise RuntimeError("resolution exploded")
+
+    monkeypatch.setattr(_core, "resolve_session_id", _boom)
+    from coordinator_core.ipc import _telemetry_sid
+
+    assert _telemetry_sid() is None
+
+
+def test_invoke_cli_dispatch_records_a_process_time_row(tmp_path, monkeypatch):
+    """The `coordinator_core.invoke` CLI branch samples process time too.
+
+    Regression, 2026-08-25. Four dispatch sites sampled process time -- two in
+    `warm/server.py`, two in `ipc.py` -- and this module's own cold branch,
+    which is a fifth, sampled none. Measured over a 24h window of the live
+    sink: every `handoff.reconcile_open` and `write_surface.emit_manifest` row
+    arrived through here, so the ops furthest over the wall-clock bar were
+    precisely the ops carrying no CPU sample at all. A budget stated in process
+    time cannot be read against an op that never emits one.
+    """
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-invoke-cli")
+
+    from coordinator_core.invoke.__main__ import _record_dispatch_process_time
+
+    _record_dispatch_process_time(
+        {"jsonrpc": "2.0", "method": "ping", "params": {"cwd": str(tmp_path)}},
+        1000.0,
+        0.0,
+    )
+
+    entries = [e for e in _read_entries(_sink(common_dir)) if e.get("kind") == "process_time"]
+    assert len(entries) == 1
+    assert entries[0]["op"] == "ping"
+    assert entries[0]["source_path"] == "invoke_cli"
+    # PROCESS_WIDE, never PER_OP_PROCESS: this branch is also reached by
+    # `invoke.from_argv` on a REUSED warm-server executor thread, where sibling
+    # threads share one `time.process_time()` clock. Under-claiming a sample's
+    # scope costs a reader confidence; over-claiming costs them a conclusion.
+    assert entries[0]["measurement_scope"] == "process_wide"
+    assert entries[0]["sid"] == "sid-invoke-cli"
+    assert "elapsed_ms" not in entries[0]
+
+
+def test_invoke_cli_process_time_never_breaks_dispatch(tmp_path, monkeypatch):
+    """Telemetry failure on the CLI path costs a row, never the envelope."""
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.git_common_dir",
+        lambda repo_root: (_ for _ in ()).throw(RuntimeError("no common dir")),
+    )
+
+    from coordinator_core.invoke.__main__ import _record_dispatch_process_time
+
+    _record_dispatch_process_time({"method": "ping"}, 1.0, 0.0)
+    _record_dispatch_process_time({}, 1.0, 0.0)
+    _record_dispatch_process_time(None, 1.0, 0.0)  # type: ignore[arg-type]
+
+
+def test_invoke_cli_cold_branch_still_calls_the_recorder():
+    """Pins the CALL, not just the helper.
+
+    The helper passing its own unit test proves nothing if a future edit to the
+    dispatch block drops the call -- which is exactly how this entry point came
+    to be the uninstrumented one. Asserted on source text because driving the
+    real branch needs a full argv/warm-client bootstrap this suite does not own.
+    """
+    from pathlib import Path
+
+    import coordinator_core.invoke.__main__ as invoke_main
+
+    source = Path(invoke_main.__file__).read_text(encoding="utf-8")
+    finally_block = source.split("response = loop.run_until_complete(dispatch_message(msg))")[1]
+    finally_block = finally_block.split("_captured = _handler_stdout.getvalue()")[0]
+    assert "_record_dispatch_process_time(" in finally_block
+    assert "loop.close()" in finally_block
+
+
+# --- C1 caller-provenance stamp (2026-08-25-reconcile-open-comes-back-under-the-bar) ---
+
+
+def test_caller_module_reports_the_calling_test_module():
+    """Called directly (no dispatch chokepoint in between), `caller_module()`
+    must name THIS test module -- it is not itself skipped, since it is not
+    `coordinator_core.ipc`/`coordinator_core.telemetry.op_latency`/`asyncio`."""
+    from coordinator_core.telemetry.op_latency import caller_module
+
+    assert caller_module() == __name__
+
+
+def test_caller_module_skips_the_ipc_dispatch_chokepoint(tmp_path, monkeypatch):
+    """A row recorded via `ipc.dispatch_message` must attribute to the module
+    that called `dispatch_message`, never to `coordinator_core.ipc` itself --
+    the whole point `_CALLER_SKIP_PREFIXES` exists to enforce."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
+
+    msg = {
+        "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {},
+        "_origin_worktree": str(tmp_path),
+    }
+    asyncio.run(ipc.dispatch_message(msg))
+
+    entries = _read_entries(_sink(common_dir))
+    started = [e for e in entries if e.get("kind") == "started"]
+    complete = [e for e in entries if e.get("kind") == "complete"]
+    assert len(started) == 1
+    assert len(complete) == 1
+    # This test module is the true caller of dispatch_message (via
+    # asyncio.run, which interposes asyncio.* frames the walk must skip).
+    assert started[0]["caller"] == __name__
+    assert complete[0]["caller"] == __name__
+    # Same corr_id, same caller -- resolved once, not re-walked per row.
+    assert started[0]["corr_id"] == complete[0]["corr_id"]
+
+
+def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path, monkeypatch):
+    """`caller` is purely additive -- an explicit value round-trips, and
+    omitting it (pre-C1 callers) never raises and defaults to null."""
+    from coordinator_core.telemetry.op_latency import record_op_latency, record_op_started
+
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+
+    record_op_started(
+        op="ping", t_start=1.0, corr_id="corr-caller-1", repo_root=tmp_path,
+        caller="coordinator_core.ops.check_auto_reconcile",
+    )
+    record_op_latency(
+        op="ping", t_start=1.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path,
+        corr_id="corr-caller-1",
+    )
+
+    entries = _read_entries(_sink(common_dir))
+    assert entries[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    # Omitted on the second call -- defaults to None, never raises.
+    assert entries[1]["caller"] is None
+
+
+def test_caller_module_never_raises_at_the_top_of_the_stack(monkeypatch):
+    """Defensive per the module's never-breaks-dispatch contract: a
+    `sys._getframe` failure degrades to `None`, never a raised exception."""
+    from coordinator_core.telemetry import op_latency
+
+    def _boom(_depth):
+        raise ValueError("no frame")
+
+    monkeypatch.setattr(op_latency.sys, "_getframe", _boom)
+    assert op_latency.caller_module() is None

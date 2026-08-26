@@ -139,6 +139,62 @@ def test_git_aware_walk_excludes_publish_staging_dir(tmp_path):
     assert "README.md" in paths
 
 
+def test_tracked_publish_staging_dir_is_scanned_and_flagged(tmp_path):
+    """The staging skip's premise is "these bytes never ship", and that holds
+    only while the directory is UNTRACKED. Once a blanket `git add` puts it
+    in the index it IS the published payload -- pre-transform source bytes,
+    at that -- and a checker that still declines to walk it reports green
+    over exactly the content it exists to vet.
+
+    Measured 2026-08-26: 4045 such files reached a PUBLIC remote under
+    `.coordinator_core.publish-staging-4f5zkrth/` while the identity check
+    reported exit 0 / 4620 files scanned. Sibling spec: the test above, which
+    pins that an UNtracked staging dir is still skipped -- both halves are
+    load-bearing and each is the other's negative spec."""
+    module = _load_repo_module()
+    root = tmp_path
+    import subprocess
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run(
+        ["git", "-C", str(root), "init", "-q"], check=True, creationflags=creationflags,
+    )
+    (root / "README.md").write_text("hello\n", encoding="utf-8")
+    staging_dir = root / ".coordinator_core.publish-staging-4f5zkrth"
+    staging_dir.mkdir()
+    codename_dirname = "mak" + "ima"
+    leaked = staging_dir / f"{codename_dirname}-notes.txt"
+    leaked.write_text("pre-transform source\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(root), "add", "-A", "-f"], check=True, creationflags=creationflags,
+    )
+
+    paths = module.repo_files(root)
+    rel = f".coordinator_core.publish-staging-4f5zkrth/{codename_dirname}-notes.txt"
+    assert rel in paths, (
+        "a TRACKED publish-staging path is published payload and must be scanned; "
+        f"the checker skipped it: {paths}"
+    )
+    assert module.tracked_publish_staging_paths(root) == [rel]
+
+
+def test_untracked_publish_staging_dir_is_absent_from_the_tracked_enumeration(tmp_path):
+    """Negative spec for `tracked_publish_staging_paths`: untracked staging
+    scratch is the NORMAL mid-publish state and must not fail the round."""
+    module = _load_repo_module()
+    root = tmp_path
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(root), "init", "-q"], check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    staging_dir = root / ".bin.publish-staging-gr7j6dpy"
+    staging_dir.mkdir()
+    (staging_dir / "scratch.txt").write_text("scratch\n", encoding="utf-8")
+    assert module.tracked_publish_staging_paths(root) == []
+
+
 def test_basename_containing_publish_staging_is_still_included(tmp_path):
     """Negative spec (§ module docstring's `SKIP_DIR_NAMES` discipline): a
     genuinely shipped FILE whose own basename contains `publish-staging-`

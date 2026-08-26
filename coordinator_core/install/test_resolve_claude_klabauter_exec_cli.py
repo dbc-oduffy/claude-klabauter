@@ -243,7 +243,7 @@ def _invoke_posix_subprocess(
     ml_dir.mkdir(parents=True)
 
     if resolution_ok:
-        claude_klabauter_root = tmp_path / "claude-klabauter-root"
+        claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
         coord_bin = claude_klabauter_root / "coordinator" / "bin"
         coord_bin.mkdir(parents=True)
         _write_sentinel(coord_bin)
@@ -361,7 +361,7 @@ def test_posix_forwarder_execs_no_shebang_no_exec_bit_target_via_real_subprocess
         tmp_path, ["a", "b c"], target_body=body, resolution_ok=True, target_mode=0o644,
     )
 
-    fixture_path = tmp_path / "claude-klabauter-root" / "coordinator" / "bin" / _FIXTURE_TARGET_NAME
+    fixture_path = tmp_path / "claude-klabauter-live-root" / "coordinator" / "bin" / _FIXTURE_TARGET_NAME
     mode = fixture_path.stat().st_mode
     assert not (mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)), "fixture must carry no exec bit"
     assert fixture_path.read_bytes()[:2] != b"#!", "fixture must carry no shebang"
@@ -394,7 +394,7 @@ def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
         tmp_path, [], target_body="print(1)\n", resolution_ok=True, target_mode=0o000,
     )
 
-    fixture_path = tmp_path / "claude-klabauter-root" / "coordinator" / "bin" / _FIXTURE_TARGET_NAME
+    fixture_path = tmp_path / "claude-klabauter-live-root" / "coordinator" / "bin" / _FIXTURE_TARGET_NAME
     mode = fixture_path.stat().st_mode
     assert not (mode & (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)), "fixture must carry no read permission"
 

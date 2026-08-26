@@ -1979,6 +1979,8 @@ def _batch_resolve_commits(worktree: Path, tokens: List[str]) -> Dict[str, Optio
     """
     if not tokens:
         return {}
+    from coordinator_core.win_portability import leaf_spawn_creationflags
+
     stdin_text = "\n".join(f"{tok}^{{commit}}" for tok in tokens) + "\n"
     try:
         result = subprocess.run(
@@ -1987,7 +1989,7 @@ def _batch_resolve_commits(worktree: Path, tokens: List[str]) -> Dict[str, Optio
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {tok: None for tok in tokens}

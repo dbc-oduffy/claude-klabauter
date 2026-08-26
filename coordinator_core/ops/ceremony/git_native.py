@@ -878,12 +878,14 @@ def cat_file_batch_objects(
     """
     if not objects:
         return {}
+    from coordinator_core.win_portability import leaf_spawn_creationflags
+
     stdin_bytes = ("\n".join(objects) + "\n").encode("utf-8")
     proc = subprocess.run(
         ["git", "-C", str(repo_root), "cat-file", "--batch"],
         input=stdin_bytes,
         capture_output=True,
-        **no_console_creationflags(),
+        **leaf_spawn_creationflags(),
     )
     stdout = proc.stdout
     results: Dict[str, Optional[str]] = {}
@@ -959,6 +961,71 @@ def ls_files_deleted(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
     if not paths:
         return GitResult(returncode=0, stdout="", stderr="")
     return _git(["ls-files", "--deleted", "--", *paths], cwd=cwd)
+
+
+def ls_files_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+    """`git ls-files -z -- <paths>` -- the INDEX-TRACKED subset of *paths*,
+    NUL-separated.
+
+    Purpose: `commit_pipeline._worktree_deleted_paths_chunked`'s absent-
+    record settling step. `git status --porcelain=v2` emits NOTHING for a
+    path that is either CLEAN-TRACKED or MATCHED-NOTHING (a pathspec that
+    matched no path at all) -- the two silences are indistinguishable from
+    the status read alone (docs/research/spike-verdicts/2026-08-26-one-
+    porcelain-v2-read-replaces-the-probe-suite.md § U1). This settles the
+    question in-process, one batched call, never per path: a path present
+    in this call's output is tracked (CLEAN-TRACKED, since it produced no
+    status record); a path absent from it was never in the index at all
+    (MATCHED-NOTHING).
+
+    Scoped to `paths` (never called bare) -- an unscoped `git ls-files`
+    lists the WHOLE index, unrelated to what the caller is resolving.
+    Empty `paths` returns immediately with an empty, `ok=True` result.
+    """
+    if not paths:
+        return GitResult(returncode=0, stdout="", stderr="")
+    return _git(["ls-files", "-z", "--", *paths], cwd=cwd)
+
+
+def status_porcelain_v2_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+    """`git status --porcelain=v2 -z --ignored -uall -- <paths>` -- the full
+    v2 classification beneath an explicit pathspec, NUL-separated.
+
+    Purpose: `commit_pipeline._worktree_deleted_paths_chunked`'s single
+    fail-loud read, replacing the old `git ls-files --deleted` probe that
+    degraded to a permissive "found nothing" guess on failure (see that
+    function's own docstring for the incident this closes). `-z` for the
+    same C-quoting reason `status_porcelain_scoped` documents above;
+    `--ignored -uall` so an ignored or untracked path is reported
+    explicitly (its own `!`/`?` record) rather than folded into a
+    directory summary or silently omitted.
+
+    `--no-optional-locks`: read-only call, no reason to contend for
+    `.git/index.lock` on a shared worktree, same as every other read in
+    this module.
+
+    Negative-spec: does NOT parse its own output -- the v2 record format
+    (leading-token dispatch: `1` ordinary, `2` rename with its `<origPath>`
+    as the NEXT NUL field, `?` untracked, `!` ignored, `u` unmerged, `#`
+    header) is the caller's to read; see `docs/research/spike-verdicts/
+    2026-08-26-one-porcelain-v2-read-replaces-the-probe-suite.md` for the
+    confirmed shapes on git 2.55.0.windows.4.
+    """
+    if not paths:
+        return GitResult(returncode=0, stdout="", stderr="")
+    return _git(
+        [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--ignored",
+            "-uall",
+            "--",
+            *paths,
+        ],
+        cwd=cwd,
+    )
 
 
 def reset_paths(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
@@ -1309,12 +1376,57 @@ def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitR
         pathspec_file.unlink(missing_ok=True)
 
 
+#: Env var `coordinator.bin.lib.git_hook_install.ensure_prepare_commit_msg_
+#: hook` wires as ITS OWN `skip_env` (C2, docs/dispatch-briefs/2026-08-25-
+#: the-engine-commits-without-re-entering-itself/C2.md) -- deliberately a
+#: DIFFERENT name from `_AUTO_PUSH_SUPPRESS_ENV` (C1's post-commit sentinel):
+#: the two hooks skip on different facts, and folding them into one flag
+#: would be the "skip all hooks" generalization `_shim_body`'s own docstring
+#: forbids. Set ONLY by `_trailer_sentinel_env()`, below, and ONLY at the one
+#: call site inside `commit_scoped`'s agree branch that follows `_apply_
+#: trailers` returning with no error -- see that function's docstring for
+#: why nowhere else may set this (AC12: the lying-sentinel defence is that
+#: this is the sentinel's one and only setter, pinned by
+#: `test_trailer_sentinel_has_exactly_one_setter`).
+_TRAILERS_ALREADY_APPLIED_ENV = "COORDINATOR_TRAILERS_ALREADY_APPLIED"
+
+
+def _trailer_sentinel_env() -> Dict[str, str]:
+    """Per-call env addition asserting "the trailers are ALREADY on this
+    commit message" to the installed `prepare-commit-msg` shim's `skip_env`
+    guard (AC2) -- never inferred by the hook re-reading `COMMIT_EDITMSG`
+    (the file read this sentinel exists to avoid paying for).
+
+    Callable ONLY from `commit_scoped`'s agree branch, ONLY immediately
+    after `_apply_trailers` returns `None` (no error) -- at that point "the
+    trailers are on this message" is a fact this code just established, not
+    merely intended, which is exactly what AC2 requires the sentinel to
+    mean. Tying this to `compose_message` or to pipeline entry would assert
+    "the engine ran" instead, the failure AC2 and the anti-scope both name.
+
+    Finding 4 (same plan): an env var set on a `git commit` invocation is
+    inherited by every descendant of that commit's process, not only the
+    hook it is aimed at. Harmless here -- the sentinel's one consumer
+    (`ensure_prepare_commit_msg_hook`'s `skip_env` guard) only ever means
+    "do not re-derive trailers I have no reason to recompute"; no descendant
+    process attaches correctness-bearing meaning to its presence.
+
+    Merged into the SAME per-call env dict `_sole_publisher_env` builds for
+    this commit -- never a second, independent `env=` kwarg passed to `_git`,
+    and never an `os.environ` mutation (`_sole_publisher_env`'s own
+    docstring names why: a warm engine would turn a process-global write
+    into a cross-request leak).
+    """
+    return {_TRAILERS_ALREADY_APPLIED_ENV: "1"}
+
+
 def commit_with_message_file_pathspec_scoped(
     cwd: Union[str, Path],
     msg_file: Union[str, Path],
     paths: Sequence[str],
     *,
     suppress_post_commit_auto_push: bool = False,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> GitResult:
     """`git commit -F <msg_file> --pathspec-from-file=<f>` — the
     percolate-publish-scale-safe sibling of `commit_with_message_file()`
@@ -1334,14 +1446,23 @@ def commit_with_message_file_pathspec_scoped(
     unlike `git diff --cached --name-only --pathspec-from-file=<f>`, which
     is a usage error (see `_diverging_paths_chunked()`'s own docstring for
     why THAT call stays chunked instead).
+
+    `extra_env` (C2) -- an additional per-call env mapping merged into
+    whatever `_sole_publisher_env` builds, never a second independent `env=`
+    passed to `_git`. `commit_scoped`'s agree branch is the sole caller that
+    supplies it, with `_trailer_sentinel_env()` -- see that function's own
+    docstring for why nowhere else may.
     """
     root = Path(cwd)
     pathspec_file = _write_pathspec_file(root, paths)
     try:
+        env = _sole_publisher_env(suppress_post_commit_auto_push)
+        if extra_env:
+            env = {**(env if env is not None else os.environ), **extra_env}
         return _git(
             ["commit", "-F", str(msg_file), f"--pathspec-from-file={pathspec_file}"],
             cwd=root,
-            env=_sole_publisher_env(suppress_post_commit_auto_push),
+            env=env,
         )
     finally:
         pathspec_file.unlink(missing_ok=True)
@@ -1755,7 +1876,7 @@ def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Option
     return None
 
 
-def _index_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
+def _index_blobs(root: Path, paths: Sequence[str], *, fresh: bool = False) -> Dict[str, object]:
     """Return `{path: index-blob-sha}` for `paths`, read via
     `coordinator_core.git.git_state.read_index` -- SPAWN-FREE (C2,
     2026-08-21, docs/plans/2026-08-16-one-engine-for-the-whole-box.md;
@@ -1803,11 +1924,21 @@ def _index_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
     spawn, `read_index` takes no per-call argv at all (it parses the whole
     on-disk index file once), so the Windows `CreateProcess` argv-length
     hazard chunking existed to avoid does not apply to this read.
+
+    `fresh` (C2, 2026-08-26,
+    docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md):
+    forwarded verbatim to `read_index`. `_agree_branch_cas_refusal`'s
+    CURRENT re-observation passes `fresh=True` -- it exists to observe a
+    peer touching the index at a specific instant, so it must never be
+    served from `index_read_cache_scope()`'s within-call cache (see that
+    function's own docstring and AC3 of the plan above). Every other caller
+    leaves this at its default `False` and may be served from the cache
+    when one is open.
     """
     if not paths:
         return {}
     try:
-        snapshot = read_index(root)
+        snapshot = read_index(root, fresh=fresh)
     except IndexParseError:
         return {p: _GIT_READ_FAILED for p in paths}
     index_by_normalized = {_normalize_path_key(p): entry for p, entry in snapshot.items()}
@@ -1949,7 +2080,10 @@ def _agree_branch_cas_refusal(
     change was observed -- there is no observation here, only an inability
     to key the path at all.
     """
-    current_index_blobs = _index_blobs(root, path_list)
+    # fresh=True (C2): this call exists to observe the index at THIS
+    # instant, never a within-call cache's stale look -- see `_index_blobs`'s
+    # own `fresh` docstring and this module's AC3.
+    current_index_blobs = _index_blobs(root, path_list, fresh=True)
     moved: List[str] = []
     unkeyable: List[str] = []
     for p in path_list:
@@ -2485,6 +2619,7 @@ def _assemble_commit_tree_input(
     head_spine: Optional[Dict[str, Dict[str, Tuple[int, str]]]],
     worktree_blobs: Optional[Dict[str, str]] = None,
     supplied_blobs: Optional[Dict[str, str]] = None,
+    index_file_absent: bool = False,
 ) -> Tuple[Dict[str, _TreeEntry], Set[str]]:
     """Pure function from `_resolve_content_sources`'s output to
     `{path: (mode, sha)}` plus an explicit ABSENT set -- the tree-input
@@ -2525,6 +2660,22 @@ def _assemble_commit_tree_input(
     tree-input dict and the ABSENT set would make the deletion vanish with
     no spawn count or `git fsck` symptom to catch it.
 
+    `index_file_absent` -- the staged-deletion inference above is sound
+    ONLY when `.git/index` actually exists and simply does not list the
+    path. When the index FILE is missing entirely (`read_index` returns an
+    empty snapshot with `stat_identity is None` -- its one documented
+    empty-result case), every `_SOURCE_STAGED` path is absent from the
+    snapshot for a reason that has nothing to do with staging, and reading
+    that as "the caller staged a deletion" commits a deletion of every
+    path the caller asked to COMMIT -- returning rc=0 with the content
+    gone (P1 69ce1cdfd). Under this flag a staged path with no index entry
+    therefore falls back to its HEAD spine entry (mode AND sha, verbatim),
+    which is what the retired `read-tree HEAD`-seeded private index
+    resolved for the same path (DR-272 § 3.4 drift-2). A path with no
+    entry in the index or HEAD has no committable content anywhere and
+    raises rather than resolving to a deletion by default. `False` (the
+    default) reproduces prior behaviour exactly.
+
     `mode_only_paths` (AC15's "must not appear in the exclusion report")
     is deliberately NOT a parameter here -- every `mode_only_paths` member
     resolves `_SOURCE_STAGED` like any other staged path and is committed
@@ -2563,7 +2714,7 @@ def _assemble_commit_tree_input(
             _refuse(path, "index_snapshot")
         return None
 
-    def _spine_mode(path: str) -> Optional[int]:
+    def _spine_entry(path: str) -> Optional[Tuple[int, str]]:
         norm = _normalize_path_key(path)
         if "/" in norm:
             dirpath, name = norm.rsplit("/", 1)
@@ -2574,11 +2725,15 @@ def _assemble_commit_tree_input(
             return None
         entry = entries.get(name)
         if entry is not None:
-            return entry[0]
+            return entry
         name_cf = name.casefold()
         if any(k.casefold() == name_cf for k in entries):
             _refuse(path, "head_spine")
         return None
+
+    def _spine_mode(path: str) -> Optional[int]:
+        entry = _spine_entry(path)
+        return None if entry is None else entry[0]
 
     def _resolved_mode(path: str, index_entry: Optional[IndexEntry]) -> str:
         if index_entry is not None:
@@ -2595,6 +2750,20 @@ def _assemble_commit_tree_input(
         if source == _SOURCE_STAGED:
             index_entry = _index_entry(path)
             if index_entry is None:
+                if index_file_absent:
+                    spine_entry = _spine_entry(path)
+                    if spine_entry is None:
+                        raise ValueError(
+                            "_assemble_commit_tree_input: staged-source path "
+                            f"{path!r} has no index entry (the index FILE is "
+                            "absent) and no HEAD tree entry either -- refusing "
+                            "to resolve it to a deletion, which would commit "
+                            "rc=0 with the path the caller asked to commit "
+                            "removed from the tree"
+                        )
+                    spine_mode, spine_sha = spine_entry
+                    tree_input[path] = (f"{spine_mode:06o}", spine_sha)
+                    continue
                 absent.add(path)
                 continue
             tree_input[path] = (f"{index_entry.mode:06o}", index_entry.sha)
@@ -2802,6 +2971,7 @@ def _commit_scoped_private_index(
             head_spine=head_spine,
             worktree_blobs=worktree_blobs,
             supplied_blobs=supplied_blobs,
+            index_file_absent=index_snapshot.stat_identity is None,
         )
     except ValueError as exc:
         return GitResult(
@@ -2913,13 +3083,38 @@ def _commit_scoped_private_index(
             # private index by construction, and this branch never wants
             # that resurrection (see `_assemble_commit_tree_input`'s own
             # docstring on the staged-deletion trap it exists to close).
-            # ONE spawn for the whole set, never per-path.
+            # ONE spawn for the whole set, never per-path -- and the pathspec
+            # rides a FILE, never argv. This is the SIXTH argv-length site on
+            # this commit path, missed by the sweep `add_paths_pathspec_file`'s
+            # docstring calls "the last of the five": `absent` is unbounded,
+            # and one real publish round to the klabauter mirror carried 4045
+            # of them / 333,668 argv characters against Windows' 32767-char
+            # CreateProcess cap. It dies as `[WinError 206] The filename or
+            # extension is too long`, which reaches the operator as a bare
+            # commit-failure -- `_git()` converts OSError to a returncode=-1
+            # GitResult whose stderr is the COMMAND, since git never ran and
+            # produced no message of its own. Every publish round to that
+            # mirror failed this way until those paths were cleared.
+            #
+            # `--pathspec-from-file=<f>` rather than chunked argv batches, for
+            # the same reason `add_paths_pathspec_file` and
+            # `commit_with_message_file_pathspec_scoped` use it and
+            # `_diverging_paths_chunked` cannot: `git rm` accepts the flag
+            # (empirically verified against this machine's git 2.55.0.windows.4,
+            # `git rm -h`), so one call still covers the whole set and the
+            # one-spawn promise above survives intact. Newline-delimited via
+            # the module's own `_write_pathspec_file`, on its stated premise
+            # that no path this module commits carries a literal newline.
             if absent:
-                rm_result = _git(
-                    ["rm", "--cached", "-q", "--", *sorted(absent)],
-                    cwd=root,
-                    env=private_env,
-                )
+                pathspec_file = _write_pathspec_file(root, sorted(absent))
+                try:
+                    rm_result = _git(
+                        ["rm", "--cached", "-q", f"--pathspec-from-file={pathspec_file}"],
+                        cwd=root,
+                        env=private_env,
+                    )
+                finally:
+                    pathspec_file.unlink(missing_ok=True)
                 if not rm_result.ok:
                     return rm_result
 
@@ -2993,15 +3188,22 @@ def _commit_scoped_private_index(
     # included" would be a false exclusion warning on every ordinary
     # re-mode commit. See `mode_only_paths`' own docstring parameter above.
     excluded_paths = [p for p in staged_paths if p not in (mode_only_paths or set())]
+    # Which version replaced the excluded worktree edit is not always the
+    # staged one: with the index FILE absent there was no staged version to
+    # commit, and `_assemble_commit_tree_input`'s `index_file_absent` arm
+    # resolved these paths off HEAD instead. Naming the index there states
+    # the opposite of what happened, and reads as reassurance (P1
+    # 69ce1cdfd, item 3).
+    substitute = "HEAD" if index_snapshot.stat_identity is None else "staged (index)"
     return GitResult(
         returncode=0,
         stdout=new_sha,
         stderr=(
             (
                 "commit_scoped: worktree edits to %s were NOT included -- "
-                "the staged (index) version was committed instead (private-"
+                "the %s version was committed instead (private-"
                 "index branch; see GitResult.worktree_excluded)"
-                % (", ".join(excluded_paths),)
+                % (", ".join(excluded_paths), substitute)
             )
             if excluded_paths
             else ""
@@ -3118,13 +3320,28 @@ def commit_scoped(
            moments earlier). Only once the CAS passes does `git add --
            paths` then `git commit -F msg_file -- paths` run. Retains
            SC-DR-008's race protection across the stage->commit window; this
-           is the overwhelming-majority path and stays this cheap. When
-           `deliverable_id` is truthy, this branch NOW mutates `msg_file` in
-           place before `git add`/`git commit` run (see `deliverable_id`
-           below) -- prior to C7a (docs/plans/2026-08-10-a-commit-trailer-
-           that-names-the-session.md) this branch never opened or mutated
-           `msg_file` at all, relying entirely on the `prepare-commit-msg`
-           hook that fires on `git commit` to compute trailers on its own.
+           is the overwhelming-majority path and stays this cheap. This
+           branch mutates `msg_file` in place before `git add`/`git commit`
+           run, UNCONDITIONALLY -- `compute_missing_trailer_args` +
+           `_apply_trailers` are called on every agree-branch commit, not
+           only when a caller passes `deliverable_id` (that parameter only
+           FOLDS AN EXPLICIT VALUE INTO the already-computed `trailer_args`;
+           see the call site's own comment). Prior to C7a (docs/plans/
+           2026-08-10-a-commit-trailer-that-names-the-session.md) this branch
+           never opened `msg_file` at all and relied entirely on the
+           `prepare-commit-msg` hook; AC18 (2026-08-14, cross-repo memo
+           `2026-08-14-doe-claude-em-scoped-git-commit-drops-session-id-
+           trailer.md`) ended that reliance after a hook non-fire landed a
+           commit with no `Session-Id:` at all, silently.
+
+           STALE-PROSE CORRECTION, 2026-08-25: this paragraph described the
+           C7a state ("when `deliverable_id` is truthy") for eleven days
+           after AC18 made the call unconditional, and a staff-eng reviewer
+           read it and concluded the hook is what attaches trailers on this
+           branch -- the exact inverted belief AC18 exists to refute. The
+           consequence is not academic: a plan was nearly rewritten to keep
+           a hook alive that the engine no longer needs. Whoever changes the
+           call site changes this paragraph in the same commit.
          - Divergence -> PRIVATE-INDEX branch (`_commit_scoped_private_
            index`): builds the commit tree under a throwaway index copy so
            the shared index is never touched, preserves each diverged
@@ -3544,6 +3761,15 @@ def commit_scoped(
         if interpret_result is not None:
             return interpret_result
 
+        # C2 (docs/dispatch-briefs/2026-08-25-the-engine-commits-without-
+        # re-entering-itself/C2.md): `_apply_trailers` just returned `None`
+        # above -- the trailers ARE on `msg_file` now, a fact this code just
+        # established, not merely intended. Set the sentinel HERE, never at
+        # pipeline entry and never keyed to `compose_message`, so `prepare-
+        # commit-msg`'s installed shim can skip its own `COMMIT_EDITMSG`
+        # re-read (the interpreter start AC2 exists to avoid paying for).
+        trailer_sentinel_env = _trailer_sentinel_env()
+
         # `add_paths_pathspec_file()`/`commit_with_message_file_pathspec_
         # scoped()`, NOT `add_paths()`/`commit_with_message_file()` -- this
         # is the agree branch's own percolate-publish-scale argv-length fix
@@ -3563,6 +3789,7 @@ def commit_scoped(
             msg_file,
             path_list,
             suppress_post_commit_auto_push=suppress_post_commit_auto_push,
+            extra_env=trailer_sentinel_env,
         )
 
     diverged_set = set(diverged)

@@ -1513,7 +1513,7 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
                 # nothing else in the message classifies -- a templated
                 # NAME example is graded HARNESS_CAPABILITY (the same
                 # honest, UNVERIFIABLE-by-default probe path already used
-                # for `<claude-klabauter-root>`-style templates elsewhere), never a
+                # for `<claude-klabauter-live-root>`-style templates elsewhere), never a
                 # false DEAD (an unresolvable basename) or a hard failure.
                 for window in _cue_windows(text):
                     for m in _BACKTICK_RE.finditer(window):

@@ -62,7 +62,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from coordinator_core.win_portability import no_console_creationflags, same_path
+from coordinator_core.win_portability import (
+    leaf_spawn_creationflags,
+    no_console_creationflags,
+    same_path,
+)
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -251,7 +255,7 @@ def _sha_exists(sha: str, cwd: Optional[str] = None) -> bool:
             capture_output=True,
             text=True,
             cwd=cwd,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         print(f"skip: _sha_exists: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -272,7 +276,7 @@ def _commit_distance(sha: str, cwd: Optional[str] = None) -> int:
             capture_output=True,
             text=True,
             cwd=cwd,
-            **no_console_creationflags(),
+            **leaf_spawn_creationflags(),
         )
     except OSError:
         print(f"skip: _commit_distance: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)

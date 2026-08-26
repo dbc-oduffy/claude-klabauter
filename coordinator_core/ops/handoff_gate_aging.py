@@ -151,7 +151,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core.dag import _read_meta
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops._git_root_util import git_root
-from coordinator_core.ops.handoff_reconcile import _collect_all_handoffs_for_gate_index
+from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
 from coordinator_core.ops.handoff_transition import _read_gate_evidence_resolved
 from coordinator_core.reconcile.gate_eval import evaluate_gate_triage
 

@@ -298,6 +298,7 @@ import ast
 import dataclasses
 import pathlib
 import re
+from typing import Callable
 
 import pytest
 
@@ -354,7 +355,16 @@ _GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin")
 #: `test_the_one_hop_horizon_is_published_where_this_gate_is_cited` holds the citers to saying so.
 #: Widening past one hop was declined on measurement (32% TP in the deep tail, no static
 #: discriminator separating true from false positives at any depth); a separate ADVISORY
-#: deeper-reachability collector is the open successor, never a quiet edit to this predicate.
+#: deeper-reachability collector covers what this gate cannot --
+#: `coordinator_core/tests/test_deep_per_item_spawn_worklist.py`. Its published precision is
+#: 33%/75%/83% at depths 2/3/4 (n=12 per stratum, single unblinded judge, wide overlapping
+#: intervals -- read as an order-of-magnitude sanity check, not a floor). It runs at
+#: `@pytest.mark.cadence`, never fast tier: a full run is ~60-80s process time, roughly two
+#: orders over the 500ms brightline, so it is offline-advisory only and never gating.
+#:
+#: Public (no leading underscore) unlike its module-private siblings below: that successor
+#: instrument (`coordinator_core/tests/test_deep_per_item_spawn_worklist.py`) names this
+#: constant as the thing it updates, which requires it importable.
 COVERAGE_HORIZON = (
     "one-hop by construction: a per-item spawn more than one call hop from its loop is invisible "
     "to this gate, by design and without an exemption. Green means no new one-hop site, never "
@@ -366,10 +376,11 @@ COVERAGE_HORIZON = (
 #: cited. A new citer that omits the marker fails this gate; the fix is one qualifying clause in
 #: the citing doc, never an entry dropped from here.
 #:
-#: CLAUDE.md is the other live citer and is NOT here yet: it is PM-gated doctrine (the
-#: doctrine-surface guard blocks an EM edit), and its qualifying clause is queued as an ask rather
-#: than written unilaterally. Add it the moment that clause lands -- an unlisted citer is the same
-#: silent overclaim this register exists to stop.
+#: CLAUDE.md is the other live citer and is deliberately NOT here. It cites this gate without the
+#: qualifier; the clause was put to the PM on 2026-08-25 and DECLINED -- always-loaded doctrine
+#: stays terse, and the horizon is published in this module and in the wiki instead. So its absence
+#: is a ruling, not an omission: do not add it back without a new PM decision, and do not read
+#: CLAUDE.md's unqualified sentence as the gate's actual coverage.
 _HORIZON_CITERS: tuple[str, ...] = ("docs/wiki/cost-budgets-and-the-kill-disposition.md",)
 
 #: The marker every citer must carry. The shortest phrase that cannot be written by accident and
@@ -3321,21 +3332,36 @@ def _spawn_linenos(spawn_sites) -> set[int]:
 
 
 def find_unbatched_per_item_spawns(
-    roots: tuple[pathlib.Path, ...], index: _FuncIndex | None = None
+    roots: tuple[pathlib.Path, ...],
+    index: _FuncIndex | None = None,
+    index_transform: Callable[[_FuncIndex], _FuncIndex] | None = None,
 ) -> list[AmpSite]:
     """Core collector. Walk `roots` (via the shared `discover_source_files` traversal),
     restricted to the high-precision stratum (callee directly contains a spawn, one hop),
     applying all three structural discriminators and all six detection routes described in
     the module docstring.
 
-    `index`, when provided, lets a caller reuse one repo-wide `_FuncIndex` across multiple
-    calls (e.g. G2's standing assertion and its `designed_red` worklist sharing one build) --
-    when omitted, a fresh index is built over the same `roots`, which is what every self-test
-    below does.
+    `index`, when provided, lets a caller reuse a pre-built `_FuncIndex` instead of building
+    one here -- when omitted, a fresh index is built over the same `roots`, which is what
+    every self-test below does.
+
+    `index_transform`, when provided, is applied to the index this function builds from its
+    own single parse of its own `_FileRecord`s (this plan's deep-reachability collector is
+    the first real caller, widening a `base` index built and parsed exactly once) -- the
+    visited `ast.Call` nodes and the transformed index's nodes therefore always come from the
+    SAME parse, which is what makes the cross-parse configuration a caller-supplied `index`
+    could previously construct unreachable through this parameter: `index_transform` always
+    runs against this function's OWN single-parse build over `roots`, never against a
+    caller-supplied `index` -- there is no argument through which a foreign-parse index can
+    reach the discriminators when `index_transform` is used. `index_transform` had no
+    callers until this use, which is why the cross-parse unsoundness it forecloses was never
+    observed in practice.
     """
     files = _discover_scope_files(roots)
     records = _load_file_records(files)
-    if index is None:
+    if index_transform is not None:
+        index = index_transform(_build_func_index(records))
+    elif index is None:
         index = _build_func_index(records)
 
     #: Discriminator 8 resolves argv0 inside the CALLEE's module, which is not the module being
@@ -4272,20 +4298,30 @@ def test_the_one_hop_horizon_is_published_where_this_gate_is_cited():
     doctrine surface citing this file as an enforcement mechanism must say that green here means
     "no new one-hop site", not "no per-item spawn sites exist".
 
-    A prose fix alone decays -- the next edit of CLAUDE.md drops the qualifier and nothing
-    notices. This assertion is the artifact that stops it, and it is deliberately a completeness
-    pin over a CLOSED citer list rather than a repo-wide scan: a new doctrine surface citing the
-    gate is a human decision, and the register is where that decision gets recorded."""
+    A prose fix alone decays -- the next edit drops the qualifier and nothing notices. This
+    assertion is the artifact that stops it, and it is deliberately a completeness pin over a
+    CLOSED citer list rather than a repo-wide scan: a new doctrine surface citing the gate is a
+    human decision, and the register is where that decision gets recorded.
+
+    SCOPED TO THE CITING BLOCK, not the file. A whole-file substring check passes while the citing
+    bullet quietly loses its qualifier and the marker survives in some unrelated section -- the
+    green-that-measures-nothing shape `state/lessons/2026-08-19-a-suppressor-pin-can-pass-
+    vacuously.md` was written about, in this same file's history. So the marker must appear in a
+    blank-line-delimited block that itself names this gate. The block unit is coarse -- a markdown
+    bullet LIST carries no blank lines, so a block can be several adjacent bullets wide -- and that
+    coarseness is the accepted residual. Mutation-checked at land: marker unfindable, citer stops
+    citing, and marker moved out of the citing block each go RED."""
     missing: list[str] = []
     for rel in _HORIZON_CITERS:
         path = _REPO_ROOT / rel
         if not path.is_file():
             missing.append(f"{rel} -- listed citer does not exist")
             continue
-        text = path.read_text(encoding="utf-8")
-        if _THIS_FILE.name not in text:
+        blocks = re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))
+        citing = [block for block in blocks if _THIS_FILE.name in block]
+        if not citing:
             missing.append(f"{rel} -- no longer cites this gate; drop it from _HORIZON_CITERS")
-        elif _HORIZON_MARKER not in text:
+        elif not any(_HORIZON_MARKER in block for block in citing):
             missing.append(f"{rel} -- cites this gate without naming the {_HORIZON_MARKER} horizon")
     assert not missing, (
         "the gate's coverage horizon is not published where the gate is cited:\n"
@@ -6454,6 +6490,85 @@ def test_deep_tail_not_flagged(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert violations == []
+
+
+def _index_transform_fixture(tmp_path):
+    fixture = tmp_path / "transform_target.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'add', p], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    return fixture
+
+
+def test_index_transform_none_is_byte_identical_to_today(tmp_path):
+    """AC9.1: `index_transform=None` (the default) returns exactly what the untransformed call
+    returns today -- the no-regression pin for this chunk's whole change."""
+    _index_transform_fixture(tmp_path)
+    baseline = find_unbatched_per_item_spawns((tmp_path,))
+    explicit_none = find_unbatched_per_item_spawns((tmp_path,), index_transform=None)
+    assert explicit_none == baseline
+    assert len(baseline) == 1
+
+
+def test_index_transform_identity_matches_untransformed_key_set(tmp_path):
+    """AC9.2: an identity `index_transform` returns the identical key set to the untransformed
+    call -- the positive leg this plan's later widened-index use builds on."""
+    _index_transform_fixture(tmp_path)
+    baseline = find_unbatched_per_item_spawns((tmp_path,))
+    identity_transformed = find_unbatched_per_item_spawns(
+        (tmp_path,), index_transform=lambda idx: idx
+    )
+    assert {(v.path, v.lineno) for v in identity_transformed} == {
+        (v.path, v.lineno) for v in baseline
+    }
+
+
+def test_index_transform_forecloses_the_cross_parse_configuration(tmp_path):
+    """AC9.3: pins that the cross-parse configuration this chunk replaces is UNREACHABLE
+    through the public signature. The unsound predecessor shape let a caller hand in an
+    `index` built from a DIFFERENT parse than the `ast.Call` nodes being visited -- measured
+    on the live gate as 31 reported sites where the sound collector reports 26 (5 spurious,
+    none lost). `index_transform` closes this by construction: it is always applied to the
+    index this function builds from its OWN single parse of its OWN records (see the
+    `elif index is None` branch in `find_unbatched_per_item_spawns`), never to a
+    caller-supplied `index` -- so there is no argument through which a foreign-parse index
+    can reach the discriminators. This test does not re-assert the 26-vs-31 divergence (the
+    transform shape makes it unconstructible, so there is nothing left to measure) -- it pins
+    that passing BOTH `index` and `index_transform` together still resolves against the
+    self-built index, not the caller-supplied one, which is the property that keeps the
+    configuration unreachable. A future signature change that lets `index_transform` see a
+    caller-supplied `index` reopens exactly this cross-parse hole and must fail this test
+    loudly."""
+    _index_transform_fixture(tmp_path)
+
+    foreign_index = _build_func_index([])  # built from a different (empty) parse
+
+    seen_index_identity = []
+
+    def _capturing_transform(idx):
+        seen_index_identity.append(idx)
+        return idx
+
+    result_with_foreign_index_also_passed = find_unbatched_per_item_spawns(
+        (tmp_path,), index=foreign_index, index_transform=_capturing_transform
+    )
+
+    assert len(seen_index_identity) == 1
+    assert seen_index_identity[0] is not foreign_index, (
+        "index_transform was applied to the caller-supplied `index` instead of a fresh "
+        "self-built index -- this reopens the cross-parse configuration AC9.3 exists to "
+        "foreclose: the visited ast.Call nodes and the index nodes would no longer share "
+        "one parse."
+    )
+    baseline = find_unbatched_per_item_spawns((tmp_path,))
+    assert {(v.path, v.lineno) for v in result_with_foreign_index_also_passed} == {
+        (v.path, v.lineno) for v in baseline
+    }
 
 
 def test_gate_ignores_test_tree_paths(tmp_path):

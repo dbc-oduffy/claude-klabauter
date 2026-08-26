@@ -272,6 +272,12 @@ def test_send_delivers_staged_draft() -> None:
                 "--to", "claude-central-em",
                 "--title", "Roundtrip send test memo",
                 "--summary", "A test summary for the send roundtrip",
+                # --kind is REQUIRED in practice even though `draft` treats it as
+                # optional: memo.send refuses a draft without it ("draft is missing
+                # required field 'kind'"). Omitting it made this test assert a
+                # workflow the op cannot complete. The draft/send asymmetry is filed
+                # separately -- a draft you cannot send is a trap, not a default.
+                "--kind", "fyi",
             ],
             env=env,
         )
@@ -418,3 +424,57 @@ def test_send_has_no_legacy_oneshot_flags() -> None:
     leaked_send = forbidden & send_flags
     if leaked_send:
         raise AssertionError(f"{name}: 'send' subparser should take only TOPIC, found flags: {leaked_send}")
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — partial delivery (receiver committed, sender-side receipt commit
+# failed) exits 1, not 0. Review: coordinator:code-reviewer (P2) — the
+# `sender_committed is False` branch in `_cmd_send` had zero coverage.
+#
+# Honestly reconstructing this state end-to-end would mean making the
+# sender-side receipt commit fail (e.g. a corrupted .git) AFTER the receiver
+# commit already landed, inside the real `memo.send` op — not reachable
+# through this CLI's own surface. The seam actually available is
+# `cc_invoke.route_mutation`'s return envelope, which `_cmd_send` reads via
+# plain dict lookups (`acted[0]["sender_committed"]`, `["id"]`,
+# `["sender_commit_stderr"]`) and never mutates — monkeypatching what that
+# call returns is exercising `_cmd_send`'s own contract with its one
+# dependency, not faking arithmetic the CLI is supposed to compute itself.
+# This is an in-process unit test (module loaded via SourceFileLoader, same
+# pattern as Test 4 above), not a subprocess dispatch like Tests 1-3.
+# ---------------------------------------------------------------------------
+
+def test_send_partial_delivery_exits_1() -> None:
+    name = "test_send_partial_delivery_exits_1"
+
+    import argparse
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    loader = SourceFileLoader("cross_repo_memo_partial", _script_path())
+    spec = importlib.util.spec_from_loader("cross_repo_memo_partial", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+
+    mod._current_repo_root = lambda: "/fake/sender/repo"
+    mod._warn_if_unregistered_sender = lambda: None
+
+    def _fake_route_mutation(op, params, sender_root, legacy_send):
+        return {
+            "exit_code": 0,
+            "acted": [
+                {
+                    "id": "/fake/receiver/repo/cross-repo/inbox/2026-08-25-roundtrip-topic.md",
+                    "sender_committed": False,
+                    "sender_commit_stderr": "fatal: unable to write new index file",
+                }
+            ],
+        }
+
+    mod.cc_invoke.route_mutation = _fake_route_mutation
+
+    args = argparse.Namespace(topic="roundtrip-topic")
+    rc = mod._cmd_send(args)
+
+    if rc != 1:
+        raise AssertionError(f"{name}: sender_committed=False should exit 1, got {rc}")

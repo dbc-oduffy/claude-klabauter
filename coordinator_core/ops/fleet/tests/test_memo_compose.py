@@ -72,6 +72,9 @@ def _draft_first(tmp_path, topic="some-topic", **overrides) -> Path:
         "topic": topic,
         "to": "example-retrieval-repo-em",
         "title": "A draft memo",
+        # `kind` is required by memo.draft (it matches memo.send's own gate);
+        # a params dict without it never reaches the behaviour under test.
+        "kind": "fyi",
     }
     params.update(overrides)
     result = _run(_memo_draft(params, repo_root=common_dir))

@@ -3,7 +3,7 @@
 docs/plans/2026-08-17-machine-first-install-surface.md § C5: today the
 settings home (``~/.coordinator-claude-settings``) is populated *emergently*
 -- ``bin/`` forwarders, ``.percolate-identity``, the machine-local registry,
-and ``machine-local/.claude-klabauter-root`` each land via their own install step, with
+and ``machine-local/.claude-klabauter-live-root`` each land via their own install step, with
 no single verified statement that the settings home is complete. This module
 is that statement: it enumerates what a correct settings home contains and
 checks presence, not intent, so ``scripts/setup.py``'s report line and the
@@ -13,9 +13,11 @@ share one oracle instead of two that can drift apart.
 A forwarder COUNTS only when its body is the one this claude-klabauter root's
 installer writes (`forwarder_body_is_ours`) OR, for exactly the
 `coordinator-invoke` slot, when the native warm-engine door has legitimately
-claimed that bare name instead (`_is_door_owned_forwarder_slot`) -- see that
-function's own docstring for why this is a distinct, verified state and not
-a suppression of the check. Settings-home `bin/` is one directory every
+claimed that bare name instead (`_is_door_owned_forwarder_slot`) OR, for a
+member the installer delivers by BYTE COPY rather than as a generated
+trampoline, when the installed bytes are this root's source file's bytes
+(`_byte_copied_body_matches_source`) -- see each function's own docstring for
+why these are distinct, verified states and not a suppression of the check. Settings-home `bin/` is one directory every
 engine root on the box installs into: a run rooted at the published mirror
 lands its own forwarder set there, prunes the names its tree does not carry,
 and leaves bodies importing `_resolve_claude_klabauter`. An existence-only
@@ -34,7 +36,7 @@ Input, not invention -- state precedence explicitly. DoE-claude
   while a machine-local interpreter pin still names it -- claude-klabauter installs it
   only under ``--allow-venv-fallback``. See ``_FIXED_MEMBERS``.
 - ``coordinator-claude coordinator/docs/install/AGENT.md`` § Fail-loud
-  claude-klabauter resolution names ``<settings-home>/machine-local/.claude-klabauter-root`` as
+  claude-klabauter resolution names ``<settings-home>/machine-local/.claude-klabauter-live-root`` as
   the rung-2 pointer file a downstream repo's chain-walker reads.
 
 DoE's declaration is authoritative for those six members' PURPOSE; this
@@ -67,6 +69,7 @@ from coordinator_core.install.door_install import BARE_FORWARDER_NAME, is_door_i
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
     _RM_FAMILY_FILES,
+    BYTE_COPIED_BIN_SOURCES,
     _derive_agent_helper_target_map,
 )
 from coordinator_core.machine_resolver import registry_get
@@ -143,8 +146,8 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        "machine-local/.claude-klabauter-root (fail-loud rung-2 pointer)",
-        "machine-local/.claude-klabauter-root",
+        "machine-local/.claude-klabauter-live-root (fail-loud rung-2 pointer)",
+        "machine-local/.claude-klabauter-live-root",
         "file",
         "DoE docs/install/AGENT.md § Fail-loud claude-klabauter resolution, rung 2",
         True,
@@ -185,6 +188,7 @@ class SettingsHomeReport:
     forwarder_missing: list[str] = field(default_factory=list)
     forwarder_unverified: list[str] = field(default_factory=list)
     forwarder_door_owned: list[str] = field(default_factory=list)
+    forwarder_byte_copied: list[str] = field(default_factory=list)
     forwarder_derivation_error: str | None = None
 
     @property
@@ -245,6 +249,46 @@ def forwarder_body_is_ours(path: Path, target: str) -> bool:
     except (OSError, UnicodeDecodeError):
         return False
     return _AGENT_FORWARDER_MARKER in text and f'exec_cli("{target}")' in text
+
+
+def _byte_copied_body_matches_source(
+    installed_name: str, path: Path, claude_klabauter_root: Path
+) -> bool:
+    """True iff `installed_name` is a BYTE-COPIED bin member
+    (`substrate.BYTE_COPIED_BIN_SOURCES`) and the installed file's bytes are
+    exactly THIS claude-klabauter root's source file's bytes.
+
+    Why a second verification arm and not a suppression: `forwarder_body_is_ours`
+    verifies the shape of a GENERATED trampoline -- the marker line plus the
+    `exec_cli("<target>")` call. A byte copy carries neither and can never carry
+    them: the delivery mechanism is `shutil.copyfile` of the source file, so the
+    installed body IS the source. `claude-doe` is that shape on POSIX -- the
+    forwarder loop writes a trampoline at `<settings-home>/bin/claude-doe`, then
+    `install-claude-doe-wrapper.py` copies the wrapper source onto
+    `~/.local/bin/claude-doe`, which `maximalist`'s Step 3.5b has made a symlink
+    ONTO that same settings-home file, so the source bytes are the final body on
+    every completed install. The marker check therefore reported one permanent
+    `body not this root's` on every run -- a FAIL whose remediation ("re-run
+    scripts/setup.py") reproduced it exactly.
+
+    Same discipline as `_is_door_owned_forwarder_slot`: a NAMED member in a
+    KNOWN-different delivery shape gets its own positive verification, never a
+    pass-by-default. The comparison is against this root's source file, so the
+    real signal the check exists for survives -- a byte copy landed by a
+    DIFFERENT engine root diverges from these bytes and still reports
+    unverified, exactly as a foreign-root trampoline does.
+
+    Derived from the installer's own data, not a hand-list here: the mapping is
+    `maximalist`'s own `wrapper_src` source of truth.
+    """
+    rel = BYTE_COPIED_BIN_SOURCES.get(installed_name)
+    if rel is None:
+        return False
+    src = claude_klabauter_root.joinpath(*rel)
+    try:
+        return src.read_bytes() == path.read_bytes()
+    except OSError:
+        return False
 
 
 def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path) -> bool:
@@ -351,6 +395,7 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     missing: list[str] = []
     unverified: list[str] = []
     door_owned: list[str] = []
+    byte_copied: list[str] = []
     present_count = 0
     for installed_name, target in sorted(expected.items()):
         path = bin_dir / installed_name
@@ -358,6 +403,9 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
             missing.append(installed_name)
             continue
         if forwarder_body_is_ours(path, target):
+            present_count += 1
+        elif _byte_copied_body_matches_source(installed_name, path, claude_klabauter_root):
+            byte_copied.append(installed_name)
             present_count += 1
         elif _is_door_owned_forwarder_slot(installed_name, path, bin_dir):
             door_owned.append(installed_name)
@@ -368,6 +416,7 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     report.forwarder_missing = missing
     report.forwarder_unverified = unverified
     report.forwarder_door_owned = door_owned
+    report.forwarder_byte_copied = byte_copied
     return report
 
 
@@ -400,6 +449,7 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             ("missing", report.forwarder_missing),
             ("body not this root's", report.forwarder_unverified),
             ("door-owned", report.forwarder_door_owned),
+            ("byte-copied (bytes match this root's source)", report.forwarder_byte_copied),
         ):
             if not names:
                 continue

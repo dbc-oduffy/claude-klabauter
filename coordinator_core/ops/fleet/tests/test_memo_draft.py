@@ -80,6 +80,9 @@ def _base_params(**overrides) -> dict:
         "topic": "some-topic",
         "to": "example-retrieval-repo-em",
         "title": "A draft memo",
+        # `kind` is required by memo.draft (it matches memo.send's own gate);
+        # a params dict without it never reaches the behaviour under test.
+        "kind": "fyi",
     }
     params.update(overrides)
     return params
@@ -155,6 +158,17 @@ class TestValidateDraftParams:
         result = _validate_draft_params(params)
         assert result["exit_code"] == 1
 
+    def test_missing_kind_is_setup_error(self):
+        """`kind` is gated here as well as at send, so `draft` cannot mint an
+        artifact `send` will refuse — the trap that produced nine
+        undeliverable drafts before 2026-08-25."""
+        params = _base_params()
+        del params["kind"]
+        result = _validate_draft_params(params)
+        assert result["exit_code"] == 1
+        # The reason text is logged daemon-side, never echoed on the frozen
+        # envelope (build_setup_error_result) — exit_code is the observable.
+
     def test_invalid_kind(self):
         result = _validate_draft_params(_base_params(kind="not-a-kind"))
         assert result["exit_code"] == 1
@@ -182,7 +196,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, summary=long_summary))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", long_summary,
-            None, None, False, None, None, None, result[11],
+            "fyi", None, False, None, None, None, result[11],
         )
         advisory = result[11]
         assert advisory is not None
@@ -195,7 +209,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, summary=at_cap_summary))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", at_cap_summary,
-            None, None, False, None, None, None, None,
+            "fyi", None, False, None, None, None, None,
         )
 
 
@@ -266,7 +280,7 @@ class TestScopedToValidation:
         scoped_to = {"artifact": "coordinator_core", "version": "1.2.3", "seam": "memo_draft"}
         result = _validate_draft_params(_base_params(scoped_to=scoped_to))
         assert result == (
-            True, "some-topic", "example-retrieval-repo-em", "A draft memo", None, None, scoped_to, False,
+            True, "some-topic", "example-retrieval-repo-em", "A draft memo", None, "fyi", scoped_to, False,
             None, None, None, None,
         )
 
@@ -1035,7 +1049,7 @@ class TestSpaceParam:
     def test_omitted_space_is_none(self):
         result = _validate_draft_params(_base_params(dry_run=False))
         assert result == (
-            False, "some-topic", "example-retrieval-repo-em", "A draft memo", None, None, None, False,
+            False, "some-topic", "example-retrieval-repo-em", "A draft memo", None, "fyi", None, False,
             None, None, None, None,
         )
 

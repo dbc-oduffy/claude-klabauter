@@ -21,7 +21,7 @@ anchors:
      machine-local registry key ``repos.claude_klabauter``, the same anchor
      ``coordinator_core.engine_root.coordinator_engine_root()`` resolves for
      in-process callers), with the durable ``<settings-home>/machine-local/
-     .claude-klabauter-root`` pointer file retained as a fallback rung. Absence of the
+     .claude-klabauter-live-root`` pointer file retained as a fallback rung. Absence of the
      ``repos.claude_klabauter`` key degrades cleanly to "this anchor
      contributes nothing" — it never raises and never widens trust on its
      own; claude-klabauter's own bin scripts (and every consolidated caller in this
@@ -185,7 +185,7 @@ def _claude_klabauter_root(env: dict) -> str:
     stays subprocess-free like ``_doe_root``, so a missing/absent registry
     key degrades to "" rather than raising or shelling out):
         1. registry ``repos.claude_klabauter``               (canonical anchor)
-        2. <settings-home>/machine-local/.claude-klabauter-root       (durable file mirror)
+        2. <settings-home>/machine-local/.claude-klabauter-live-root       (durable file mirror)
     Returns "" if neither rung resolves — the caller (``is_trusted``) treats
     an empty claude-klabauter root as "this anchor contributes nothing," never as an
     error.
@@ -199,7 +199,7 @@ def _claude_klabauter_root(env: dict) -> str:
             content = registry_value
 
     if not content and settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-root")
+        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-live-root")
         try:
             with open(durable, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -356,14 +356,14 @@ def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:
         rungs.append(("registry repos.claude_klabauter", "<skipped: settings-home dir resolved empty>"))
 
     if settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-root")
+        durable = os.path.join(settings_home_dir, "machine-local", ".claude-klabauter-live-root")
         try:
             with open(durable, "r", encoding="utf-8") as f:
                 rungs.append((f"file {durable}", f.read().rstrip("\n") or "<absent>"))
         except OSError:
             rungs.append((f"file {durable}", "<absent>"))
     else:
-        rungs.append(("<settings-home>/machine-local/.claude-klabauter-root", "<skipped: settings-home dir resolved empty>"))
+        rungs.append(("<settings-home>/machine-local/.claude-klabauter-live-root", "<skipped: settings-home dir resolved empty>"))
 
     return rungs
 

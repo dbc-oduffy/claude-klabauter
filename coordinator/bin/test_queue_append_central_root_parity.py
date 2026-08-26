@@ -64,7 +64,7 @@ import importlib.util
 import os
 import sys
 
-_FAKE_CLAUDE_KLABAUTER_ROOT = "/tmp/queue-append-central-root-parity-fake-claude-klabauter-root"
+_FAKE_CLAUDE_KLABAUTER_ROOT = "/tmp/queue-append-central-root-parity-fake-claude-klabauter-live-root"
 _FAKE_DIGEST12 = "0123456789ab"
 
 
@@ -134,7 +134,7 @@ def test_central_root_parity() -> None:
     prior_claude_klabauter_root = os.environ.get("CLAUDE_KLABAUTER_ROOT")
     prior_engine_root = os.environ.get("COORDINATOR_ENGINE_ROOT")
     prior_output_root = os.environ.get("QUEUE_APPEND_OUTPUT_ROOT")
-    os.environ["CLAUDE_KLABAUTER_ROOT"] = _FAKE_CLAUDE_KLABAUTER_ROOT
+    os.environ["COORDINATOR_ENGINE_ROOT"] = _FAKE_CLAUDE_KLABAUTER_ROOT
     os.environ["COORDINATOR_ENGINE_ROOT"] = _FAKE_CLAUDE_KLABAUTER_ROOT
     os.environ.pop("QUEUE_APPEND_OUTPUT_ROOT", None)
     try:
@@ -169,7 +169,7 @@ def test_central_root_parity() -> None:
         if prior_claude_klabauter_root is None:
             os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
         else:
-            os.environ["CLAUDE_KLABAUTER_ROOT"] = prior_claude_klabauter_root
+            os.environ["COORDINATOR_ENGINE_ROOT"] = prior_claude_klabauter_root
         if prior_engine_root is None:
             os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
         else:

@@ -107,17 +107,28 @@ def test_keepset_prefix_match_coordinator_claude(tmp_path):
 
 
 def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path, capsys, monkeypatch):
+    """`_resolve_registry_keys` reads `merged_flat_registry()` in-process
+    (zero-spawn cutover) rather than shelling out to `machine-local keys` --
+    there is no `machine-local` binary-presence check left to warn about, so
+    an absent/empty registry degrades silently to "no private codenames to
+    check", not a "machine-local not found" WARNING (that message belonged
+    to the pre-cutover subprocess path and no longer exists in production).
+    Patch the registry read directly (rather than starving PATH/HOME) so
+    this test's "empty registry" case does not depend on what machine-local
+    binaries or registry files happen to exist on the box running it.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.ops.check_registry_codename_leak._merged_flat_registry",
+        lambda: {},
+    )
     d = tmp_path / "pos"
     d.mkdir()
     (d / "notes.md").write_text("project_zolithane leak here.\n")
     env = _env()
     env.pop("COORDINATOR_CODENAME_REGISTRY_KEYS", None)
-    env["PATH"] = "/usr/bin:/bin"
-    env["HOME"] = "/nonexistent-home-for-test"
     rc = main([str(d)], env=env)
     assert rc == 0
     captured = capsys.readouterr()
-    assert "WARNING: machine-local not found" in captured.err
     assert "no private codenames to check" in captured.err
 
 

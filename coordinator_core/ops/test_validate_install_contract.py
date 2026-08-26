@@ -538,7 +538,7 @@ def test_point6_dependency_root_requires_both_flag_and_env(tmp_path, capsys):
             "dependency_id": "claude-klabauter",
             "discovery": {"candidates": ["../claude-klabauter"]},
             "default": "../claude-klabauter",
-            "override": {"flag": "--claude-klabauter-root"},  # env missing
+            "override": {"flag": "--claude-klabauter-live-root"},  # env missing
         }
     ]
     path = _write_manifest(tmp_path, manifest)
@@ -559,7 +559,7 @@ def test_point6_dependency_root_with_both_flag_and_env_passes(tmp_path, capsys):
             "dependency_id": "claude-klabauter",
             "discovery": {"candidates": ["../claude-klabauter"]},
             "default": "../claude-klabauter",
-            "override": {"flag": "--claude-klabauter-root", "env": "CLAUDE_KLABAUTER_ROOT"},
+            "override": {"flag": "--claude-klabauter-live-root", "env": "CLAUDE_KLABAUTER_ROOT"},
         }
     ]
     path = _write_manifest(tmp_path, manifest)

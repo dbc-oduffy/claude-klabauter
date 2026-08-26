@@ -48,6 +48,7 @@ from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.session import claims as session_claims
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session import shape as session_shape
+from coordinator_core.session.touch_record import append_event
 
 # Real-git spawn is load-bearing: the CLI smoke tests round-trip a real
 # subprocess against baton_assemble's own trampoline, and apply_base runner
@@ -2022,7 +2023,7 @@ class TestSuccessorDerivationSurvivesPredecessorArchival:
         # repos.claude_klabauter on its own -- it would otherwise fail loud
         # with "repos.claude_klabauter is not set" regardless of the real
         # machine's actual registration.
-        env["CLAUDE_KLABAUTER_ROOT"] = str(repo_root_here)
+        env["COORDINATOR_ENGINE_ROOT"] = str(repo_root_here)
         no_console = {"creationflags": getattr(sp, "CREATE_NO_WINDOW", 0)}
         result = sp.run(
             [sys.executable, str(cli), "--type", "handoff", "--out", out_value],
@@ -2611,7 +2612,12 @@ class TestDecisionsShapeValidation:
     def test_valid_shaped_decisions_reaches_apply(self, tmp_path, monkeypatch):
         captured = {}
 
-        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None, decisions=None, title=None):
+        # Mirrors `ba_apply.apply`'s full keyword-only signature, including
+        # `explicit_deliverable_id` (added 2026-08-15 so a spinoff fork can CARRY
+        # an id rather than re-mint) — a fake that omits a real parameter does not
+        # stand in for the function, it raises TypeError at the call site.
+        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None,
+                        decisions=None, title=None, explicit_deliverable_id=None):
             captured["decisions"] = decisions
             return ba_apply.APPLY_EXIT_OK, {"landed": []}
 
@@ -2661,7 +2667,12 @@ class TestDecisionsValueKeyEquivalence:
     def test_value_keyed_decisions_reaches_apply_normalized_to_disposition(self, monkeypatch):
         captured = {}
 
-        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None, decisions=None, title=None):
+        # Mirrors `ba_apply.apply`'s full keyword-only signature, including
+        # `explicit_deliverable_id` (added 2026-08-15 so a spinoff fork can CARRY
+        # an id rather than re-mint) — a fake that omits a real parameter does not
+        # stand in for the function, it raises TypeError at the call site.
+        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None,
+                        decisions=None, title=None, explicit_deliverable_id=None):
             captured["decisions"] = decisions
             return ba_apply.APPLY_EXIT_OK, {"landed": []}
 
@@ -2721,7 +2732,8 @@ class TestMainDeliverableIdFlagThreading:
     ):
         captured = {}
 
-        def _fake_brief(kind, artifact_path, decisions, *, title=None, explicit_deliverable_id=None):
+        def _fake_brief(kind, artifact_path, decisions, *, title=None,
+                        explicit_deliverable_id=None, session_id=None):
             captured["explicit_deliverable_id"] = explicit_deliverable_id
             return ba.BriefResult({"artifact": {}, "directives": [], "judgment_points": []}, ba.EXIT_OK)
 
@@ -2740,7 +2752,7 @@ class TestMainDeliverableIdFlagThreading:
         # unchanged when the flag is not supplied.
         captured = {}
 
-        def _fake_brief(kind, artifact_path, decisions, *, title=None):
+        def _fake_brief(kind, artifact_path, decisions, *, title=None, session_id=None):
             captured["called"] = True
             return ba.BriefResult({"artifact": {}, "directives": [], "judgment_points": []}, ba.EXIT_OK)
 
@@ -2768,7 +2780,7 @@ class TestTrailingPositionalBecomesTitle:
     def test_trailing_bare_token_after_artifact_path_becomes_title_on_brief(self, tmp_path, monkeypatch):
         captured = {}
 
-        def _fake_brief(kind, artifact_path, decisions, *, title=None):
+        def _fake_brief(kind, artifact_path, decisions, *, title=None, session_id=None):
             captured["title"] = title
             return ba.BriefResult({"artifact": {}, "directives": [], "judgment_points": []}, ba.EXIT_OK)
 
@@ -2782,7 +2794,12 @@ class TestTrailingPositionalBecomesTitle:
     def test_trailing_bare_token_after_artifact_path_becomes_title_on_apply(self, monkeypatch):
         captured = {}
 
-        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None, decisions=None, title=None):
+        # Mirrors `ba_apply.apply`'s full keyword-only signature, including
+        # `explicit_deliverable_id` (added 2026-08-15 so a spinoff fork can CARRY
+        # an id rather than re-mint) — a fake that omits a real parameter does not
+        # stand in for the function, it raises TypeError at the call site.
+        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None,
+                        decisions=None, title=None, explicit_deliverable_id=None):
             captured["title"] = title
             return ba_apply.APPLY_EXIT_OK, {"landed": []}
 
@@ -3234,7 +3251,11 @@ class TestApplyUsesNormalizedArtifactPathForCommitAndBasename:
     def _run_apply(self, tmp_path, monkeypatch, artifact_path, kind="handoff"):
         captured: dict[str, Any] = {}
 
-        def _fake_execute_directives(directives, judgment_points, repo_root, *, decisions=None):
+        # Mirrors `ba_apply._execute_directives`'s full signature, including the
+        # `composition_budget` apply() now threads through so the budget's
+        # lifetime is the apply run's.
+        def _fake_execute_directives(directives, judgment_points, repo_root, *,
+                                     decisions=None, composition_budget=None):
             return ba_apply.APPLY_EXIT_OK, {"landed": ["d1"]}
 
         def _fake_scoped_commit(repo_root, artifact_rel_path, kind_, basename, landed):
@@ -3321,13 +3342,21 @@ class TestApplyUsesNormalizedArtifactPathForCommitAndBasename:
         `artifact_path` parameter rather than raising."""
         captured: dict[str, Any] = {}
 
-        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None, title=None):
+        # `session_id` mirrors brief()'s real signature — apply() forwards the id
+        # it resolved, since brief()'s handoff self-resolution cannot see the
+        # ContextVar binding apply() makes.
+        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None,
+                        title=None, session_id=None):
             class _FakeBriefResult:
                 decision_object = {"directives": [], "judgment_points": [], "artifact": "not-a-dict"}
 
             return _FakeBriefResult()
 
-        def _fake_execute_directives(directives, judgment_points, repo_root, *, decisions=None):
+        # Mirrors `ba_apply._execute_directives`'s full signature, including the
+        # `composition_budget` apply() now threads through so the budget's
+        # lifetime is the apply run's.
+        def _fake_execute_directives(directives, judgment_points, repo_root, *,
+                                     decisions=None, composition_budget=None):
             return ba_apply.APPLY_EXIT_OK, {"landed": []}
 
         def _fake_scoped_commit(repo_root, artifact_rel_path, kind_, basename, landed):
@@ -3835,7 +3864,17 @@ class TestDispatchHandoffAuthorFork:
         directives = [
             {
                 "id": "d3",
-                "cli": "handoff.author_fork",
+                # `op`, not `cli`: `handoff.author_fork` is in
+                # `_OP_MIGRATED_VERBS`, and `_execute_directives` refuses an
+                # op-migrated verb carried on a `cli` key ("carry a 'cli' key
+                # for an op-migrated verb; emit 'op'"), which is a transport
+                # refusal BEFORE any handler runs — not the partial-mutation
+                # contract this test exists to pin. `_build_directives` still
+                # emits `cli` and `apply()` rewrites it via
+                # `_migrate_op_named_directives`; a test entering at
+                # `_execute_directives` is downstream of that rewrite and must
+                # supply the post-migration shape itself.
+                "op": "handoff.author_fork",
                 "args": ["", "", "sess-x", "", "", "state/handoffs/x.md"],
                 "depends_on": None,
                 "already_satisfied": False,
@@ -4713,7 +4752,11 @@ class TestD1CompensatorEndToEnd:
     than the compensator function in isolation."""
 
     def _fake_brief_with_directives(self, rel: str, directives: list[dict]):
-        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None, title=None):
+        # `session_id` mirrors brief()'s real signature — apply() forwards the id
+        # it resolved, since brief()'s handoff self-resolution cannot see the
+        # ContextVar binding apply() makes.
+        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None,
+                        title=None, session_id=None):
             class _FakeBriefResult:
                 decision_object = {
                     "directives": directives,
@@ -6120,18 +6163,34 @@ class TestDirtyTreeCaseCConditionalEmission:
 
 class TestComputeDirtyTreeAttribution:
     """Real git-repo/disk coverage of `_compute_dirty_tree_attribution` --
-    the three degradation paths plus the Windows path-normalization case."""
+    now onto the C3 read seam (`project_live_claims` against
+    `touch-record.jsonl`) rather than a direct `touched.txt` parse --
+    covering the degradation paths plus the Windows path-normalization
+    case."""
+
+    @pytest.fixture(autouse=True)
+    def _session_always_live(self, monkeypatch):
+        # This probe only ever reads THIS session's own claims -- never a
+        # peer's -- so the liveness half of `project_live_claims` is fixed
+        # True here exactly as `test_touch_record.py` fixes it for claim-
+        # projection-logic-only coverage, per that module's own doc note.
+        monkeypatch.setattr(
+            "coordinator_core.session.touch_record.session_live",
+            lambda sid, cwd=None: True,
+        )
 
     def _clear_session_env(self, monkeypatch):
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
-    def _touched_path(self, repo: Path, session_id: str) -> Path:
+    def _touch_record_path(self, repo: Path, session_id: str) -> Path:
         common_dir = ba.git_common_dir(repo)
-        touched = common_dir / "coordinator-sessions" / session_id / "touched.txt"
-        touched.parent.mkdir(parents=True, exist_ok=True)
-        return touched
+        return common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+
+    def _write_touch(self, repo: Path, session_id: str, path: str) -> None:
+        sink = self._touch_record_path(repo, session_id)
+        append_event(sink, session_id=session_id, agent_id=None, verb="T", path=path)
 
     def test_no_resolvable_session_id_degrades(self, tmp_path, monkeypatch):
         self._clear_session_env(monkeypatch)
@@ -6140,21 +6199,24 @@ class TestComputeDirtyTreeAttribution:
         assert result["degraded"] is True
         assert "session id" in result["evidence"]
 
-    def test_missing_touched_file_degrades(self, tmp_path, monkeypatch):
+    def test_missing_touch_record_is_empty_not_degraded(self, tmp_path, monkeypatch):
+        """A session with no `touch-record.jsonl` ever written is a
+        legitimate "nothing claimed yet" -- never a probe failure -- per
+        `project_live_claims`'s own Failure posture (module docstring):
+        a missing sink file is not data loss, unlike an unreadable one."""
         self._clear_session_env(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-missing-touched")
         _init_repo(tmp_path)
-        # No touched.txt ever written for this session id.
+        # No touch-record.jsonl ever written for this session id.
         result = ba._compute_dirty_tree_attribution(tmp_path)
-        assert result["degraded"] is True
-        assert "touched.txt" in result["evidence"]
+        assert result["degraded"] is False
+        assert result["mine"] == []
 
     def test_git_status_failure_degrades(self, tmp_path, monkeypatch):
         self._clear_session_env(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-git-fail")
         _init_repo(tmp_path)
-        touched = self._touched_path(tmp_path, "sess-git-fail")
-        touched.write_text("some/file.txt\n", encoding="utf-8")
+        self._write_touch(tmp_path, "sess-git-fail", "some/file.txt")
 
         real_run = ba.subprocess.run
 
@@ -6179,8 +6241,7 @@ class TestComputeDirtyTreeAttribution:
         self._clear_session_env(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-real")
         _init_repo(tmp_path)
-        touched = self._touched_path(tmp_path, "sess-real")
-        touched.write_text("mine.txt\n", encoding="utf-8")
+        self._write_touch(tmp_path, "sess-real", "mine.txt")
         (tmp_path / "mine.txt").write_text("this session's own edit\n", encoding="utf-8")
         (tmp_path / "peer.txt").write_text("a sibling session's edit\n", encoding="utf-8")
 
@@ -6192,24 +6253,19 @@ class TestComputeDirtyTreeAttribution:
     def test_windows_backslash_touched_entries_intersect_forward_slash_porcelain(
         self, tmp_path, monkeypatch
     ):
-        """Case-teeth for the Windows path-normalization requirement: a
-        `touched.txt` entry written with backslash separators must still
-        intersect against `git status --porcelain`'s forward-slash path for
-        the SAME file -- a naive string-set intersection silently produces
-        an EMPTY `mine` set here, which is the exact false-negative this
-        change must not introduce."""
+        """Case-teeth for the Windows path-normalization requirement: an
+        already-canonicalized touch-record entry (forward-slash, per
+        `encode_line`'s own `canonicalize_relative_path` normalization) must
+        still intersect against `git status --porcelain`'s forward-slash
+        path for the SAME file through `_compute_dirty_tree_attribution`'s
+        belt-and-suspenders `_normalize_repo_relative_path` second layer --
+        a naive string-set intersection silently produces an EMPTY `mine`
+        set here, which is the exact false-negative this change must not
+        introduce."""
         self._clear_session_env(monkeypatch)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-windows")
         _init_repo(tmp_path)
-        touched = self._touched_path(tmp_path, "sess-windows")
-        # Backslash-separated entry -- as a Windows-authored touched.txt line
-        # could carry, defensively, even though track_touched_files already
-        # normalizes to forward slashes on write. Built via str.join (not a
-        # literal backslash-separated path string) so this fixture never
-        # reads as a hardcoded machine path to the concrete-path-citation
-        # guard.
-        backslash = chr(92)
-        touched.write_text(backslash.join(["sub", "dir", "file.txt"]) + "\n", encoding="utf-8")
+        self._write_touch(tmp_path, "sess-windows", "sub/dir/file.txt")
         (tmp_path / "sub" / "dir").mkdir(parents=True)
         (tmp_path / "sub" / "dir" / "file.txt").write_text("content\n", encoding="utf-8")
 
@@ -6225,15 +6281,25 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
     (existing suite's `tmp_path` fixtures are plain directories, so this is
     the only place the real wiring is exercised)."""
 
+    @pytest.fixture(autouse=True)
+    def _session_always_live(self, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.touch_record.session_live",
+            lambda sid, cwd=None: True,
+        )
+
     def test_brief_emits_case_c_only_when_this_session_owns_dirty_paths(self, tmp_path, monkeypatch):
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-brief")
         _init_repo(tmp_path)
-        touched = ba.git_common_dir(tmp_path) / "coordinator-sessions" / "sess-brief" / "touched.txt"
-        touched.parent.mkdir(parents=True, exist_ok=True)
-        touched.write_text("state/handoffs/h1.md\n", encoding="utf-8")
+        touch_record = (
+            ba.git_common_dir(tmp_path) / "coordinator-sessions" / "sess-brief" / "touch-record.jsonl"
+        )
+        append_event(
+            touch_record, session_id="sess-brief", agent_id=None, verb="T", path="state/handoffs/h1.md"
+        )
 
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "h1.md",
@@ -6249,16 +6315,27 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-brief-clean")
         _init_repo(tmp_path)
-        touched = ba.git_common_dir(tmp_path) / "coordinator-sessions" / "sess-brief-clean" / "touched.txt"
-        touched.parent.mkdir(parents=True, exist_ok=True)
-        touched.write_text("some/unrelated/path.txt\n", encoding="utf-8")
+        touch_record = (
+            ba.git_common_dir(tmp_path)
+            / "coordinator-sessions"
+            / "sess-brief-clean"
+            / "touch-record.jsonl"
+        )
+        append_event(
+            touch_record,
+            session_id="sess-brief-clean",
+            agent_id=None,
+            verb="T",
+            path="some/unrelated/path.txt",
+        )
 
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "h1.md",
             ['deliverable_id: DEL-1', 'predecessor: "none"'],
         )
-        # h1.md itself is untracked/dirty here but NOT in touched.txt --
-        # this session did not (per its own bookkeeping) author it.
+        # h1.md itself is untracked/dirty here but NOT in this session's
+        # touch record -- this session did not (per its own bookkeeping)
+        # author it.
         decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
         assert "j-dirty-tree-case-c" not in jp_ids
@@ -6787,7 +6864,11 @@ class TestC5AbortD6LeavesPlanClaimIntact:
             },
         ]
 
-        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None, title=None):
+        # `session_id` mirrors brief()'s real signature — apply() forwards the id
+        # it resolved, since brief()'s handoff self-resolution cannot see the
+        # ContextVar binding apply() makes.
+        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None,
+                        title=None, session_id=None):
             class _FakeBriefResult:
                 decision_object = {
                     "directives": directives,

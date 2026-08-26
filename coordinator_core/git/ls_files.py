@@ -43,14 +43,12 @@ enumerator spawn" (2026-08-05), propagating the norm already stated at
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple, Union
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 __all__ = ["tracked_files"]
 
@@ -73,30 +71,18 @@ def tracked_files(repo_root: Union[str, Path], pathspec: str = ".") -> Tuple[str
 
 @lru_cache(maxsize=None)
 def _tracked_files_cached(repo_root: str, pathspec: str) -> Tuple[str, ...]:
-    git_bin = shutil.which("git")
-    if git_bin is None:
+    result = run_git(["-C", repo_root, "ls-files", "-z", "--", pathspec])
+    if not result.ok:
+        # `run_git` folds an absent git and a timeout onto returncode 127/-1
+        # rather than raising, so the three degrade cases this module has
+        # always treated alike (no git, spawn failed, not a repo) still reach
+        # the same empty tuple through one branch instead of three.
+        if not result.timed_out and result.returncode != 127:
+            print(
+                f"git.ls_files: git -C {repo_root} ls-files -- {pathspec!r} exited "
+                f"{result.returncode} (treating as not-a-repo / no matches): "
+                f"{result.stderr.strip()}",
+                file=sys.stderr,
+            )
         return ()
-    try:
-        proc = subprocess.run(
-            [git_bin, "-C", repo_root, "ls-files", "-z", "--", pathspec],
-            capture_output=True,
-            timeout=10,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ()
-    if proc.returncode != 0:
-        stderr = proc.stderr
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        print(
-            f"git.ls_files: git -C {repo_root} ls-files -- {pathspec!r} exited "
-            f"{proc.returncode} (treating as not-a-repo / no matches): "
-            f"{(stderr or '').strip()}",
-            file=sys.stderr,
-        )
-        return ()
-    raw = proc.stdout
-    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
-    return tuple(entry for entry in text.split("\x00") if entry)
+    return tuple(entry for entry in result.stdout.split("\x00") if entry)

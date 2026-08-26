@@ -1563,7 +1563,6 @@ def _coordinator_root_from_settings_home() -> "Path | None":
     # sibling-dir rung; a resolver-machinery failure is printed to stderr
     # before falling through, so it is visible without being fatal.
     try:
-        from coordinator_core._settings_home import settings_home
 
         sentinel = settings_home() / "machine-local" / ".doe-root"
     except Exception as exc:
@@ -2229,6 +2228,28 @@ def register_claude_klabauter_root(
     # about a key that was never actually written would be noise anyway.
     pending_advisories: list = []
 
+    # Bound unconditionally ahead of the identity chain, not just in the arm
+    # that computes it. NEGATIVE SPEC: never move this into a branch. The
+    # published claude-klabauter mirror rewrites the private identity token
+    # to the public one (percolate-store.yaml, `claude-klabauter-scripts`),
+    # which COLLAPSES the two arms below onto one literal: the first arm
+    # then wins, the second never runs, and the read at the tail of this
+    # function (`provision_stamped_engine`) raises UnboundLocalError on the
+    # mirror while passing here. That crash took out the whole DoE install
+    # leg once already (cross-repo/inbox/2026-08-26-doe-claude-em-engine-
+    # setup-unboundlocal.md); the short-circuit in this file's own copy is
+    # what hid it. Pin: coordinator_core/percolate/tests/
+    # test_published_setup_identity_dispatch.py.
+    #
+    # Say it plainly for whoever debugs a published install: the whole
+    # `elif` arm below is DEAD in every claude-klabauter payload -- its
+    # klabauter-root discovery, its `engine.target: "candidate"`, and its
+    # publish-mirror track_ref advisory never fire there. That is correct,
+    # not a degradation: a published klabauter tree can never identify as
+    # claude-klabauter, so the arm has no legitimate case to serve on the
+    # mirror. Do not go looking for why discovery "isn't working" in a DoE
+    # install; the first arm is the one that runs, and it is the right one.
+    discovered_klabauter: str | None = None
     identity = resolve_repo_identity(repo_root)
     if identity == "claude-klabauter":
         # Review: staff-eng 2026-08-16 C8 Finding 13 — "installing
@@ -2928,6 +2949,42 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     return hard_failure
 
 
+def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Make plain `claude` resolve the LIVE coordinator clone, not a copy of it.
+
+    `install_claude_doe_launcher_chain` above gives `claude-doe` a live surface
+    via `--plugin-dir`. This gives plain `claude` the same one, by pointing the
+    installed-plugin record at the clone instead of a cache copy -- see
+    `coordinator_core.install.live_plugin_registration` for the shape, the
+    measurement, and why it is not a symlink.
+
+    ADVISORY, matching every sibling phase in this block: a box whose plugin
+    record cannot be read still has a working `claude-doe`, so this prints and
+    returns rather than failing the install.
+    """
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    live_plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    if live_plugin_root is None:
+        print("SKIP [plugin] no live plugin root resolved — plain `claude` unchanged")
+        return
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    try:
+        from coordinator_core.install.live_plugin_registration import (
+            assert_live_plugin_registration,
+            format_report,
+        )
+        from coordinator_core._settings_home import settings_home
+
+        report = assert_live_plugin_registration(Path.home() / ".claude", live_plugin_root)
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [plugin] live plugin registration skipped ({type(exc).__name__}: {exc})")
+        return
+    for line in format_report(report):
+        print(line)
+
+
 def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) -> None:
     """Best-effort install-chain step: PERMANENTLY A NO-OP as of 2026-08-25
     ("the staged rollback gate dies without blocking a commit"). Used to wire
@@ -2963,6 +3020,60 @@ def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) ->
             file=sys.stderr,
         )
         print(f"  Re-run manually: {engine_py} {cli} {repo_root}", file=sys.stderr)
+        # Non-fatal: setup must still complete even if this step failed.
+
+
+def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
+    """Best-effort install-chain step: lands the coordinator LFS pre-push gate
+    at `.git/hooks/pre-push`, so the ~267ms / ~20-spawn stock git-lfs shim
+    stops firing on every push of a repo that tracks zero LFS files.
+
+    This step is the whole reason the gate survives a re-clone. `.git/hooks/`
+    is untracked per-clone state, so without an installer the optimisation
+    exists only on whichever box someone hand-installed it. Spec backlink:
+    chunk C8 of `docs/plans/2026-08-25-push-re-homes-onto-the-cadence-
+    surfaces.md`, discharging AC7's "the disposition survives re-clone"
+    clause; decision record DR-223's `pre-push` row.
+
+    ADVISORY, non-fatal, mirroring `install_precommit_hook`/`run_health_probe`
+    — a setup run must never abort over a push-path optimisation. Note the
+    shape is borrowed, not the call: `install_precommit_hook`'s own CLI
+    trampoline was deleted 2026-08-25 and that function is now a pure
+    advisory skip.
+
+    In-process, not a subprocess: the installer is a plain import off the
+    engine this script has already verified importable, so this step costs no
+    interpreter start (§ The brightline — an interpreter start ahead of
+    warmth is break-class).
+    """
+    print()
+    print("--- Install: LFS pre-push gate ---")
+
+    try:
+        from coordinator_core.ops.install_lfs_pre_push_hook import install as _install_gate
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"[ADVISORY] LFS pre-push gate installer not importable ({exc}) — skipping.", file=sys.stderr)
+        return
+
+    hooks_dir = repo_root / ".git" / "hooks"
+    if not (repo_root / ".git").is_dir():
+        print("[ADVISORY] no .git directory at the repo root — skipping LFS pre-push gate.")
+        return
+
+    try:
+        code, message = _install_gate(hooks_dir)
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"[ADVISORY] LFS pre-push gate install raised ({exc}) — push path unchanged.", file=sys.stderr)
+        return
+
+    if not args.agent_mode and message:
+        print(message)
+    if code != 0:
+        print(
+            "[ADVISORY] LFS pre-push gate install reported a non-zero exit — the stock "
+            "git-lfs shim may still be on the push path.",
+            file=sys.stderr,
+        )
         # Non-fatal: setup must still complete even if this step failed.
 
 
@@ -3967,7 +4078,9 @@ def main(argv: list[str]) -> int:
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         migrate_whoami_pin_off_venv(repo_root, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
+        install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)

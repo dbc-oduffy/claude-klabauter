@@ -50,11 +50,10 @@ on SessionStart; those hooks are already naked Python outside this doc's scope.
 is what actually execs on every `git commit`.** The distinction matters because it is easy to
 conflate "generates/validates a commit-time artifact" with "runs on every commit":
 
-- The four class (b) sites (`install_meta_repo_precommit_hook.py` `main()`,
+- The three class (b) sites (`install_meta_repo_precommit_hook.py` `main()`,
   `install_publish_repo_precommit_hook.py`'s `_FRESH_HOOK_TEMPLATE`, `edit_live_hook.py`
-  `cmd_commit()`, `install_claude_klabauter_precommit_hook.py` `_gate_block()`/`_hook_body()`) run at
-  **install-time or hook-edit-time** — fresh install, or an operator running the `edit-hook` CLI
-  subcommand — never on a user's ordinary `git commit`. `cmd_commit()`
+  `cmd_commit()`) run at **install-time or hook-edit-time** — fresh install, or an operator
+  running the `edit-hook` CLI subcommand — never on a user's ordinary `git commit`. `cmd_commit()`
   in particular is a subcommand name of the edit-hook CLI, not literal `git commit` invocation;
   don't let the name imply per-commit execution.
 - What DOES run on every `git commit` is the **generated hook file itself** — a `#!/bin/sh` shim
@@ -75,7 +74,6 @@ is an optional verification-only tool. See the per-site table below.
 | `install/first_run.py` `_install_homebrew()` | (a) | bash-specific (`curl \| bash` as-published) | No — install-time |
 | `install/substrate.py` `_fnm_step()` | (a) | bash-specific (`curl \| bash` as-published) | No — install-time |
 | `ops/install_meta_repo_precommit_hook.py` `main()` | (b) | POSIX-sh generic (assembles `#!/bin/sh` shim text; no subprocess spawn itself) | No — fresh-install-time; its *output* is the hot-path artifact (see above) |
-| `ops/install_claude_klabauter_precommit_hook.py` `_gate_block()`/`_hook_body()` | (b) | POSIX-sh generic (assembles `#!/bin/sh` shim text; per-gate interpreter-invocation line `"$_py" "$_gate_script"`; no subprocess spawn itself) | No — install/append-time; its *output* is the hot-path artifact. Candidate resolution is NOT part of this site — `_py` is a baked `sys.executable` path resolved in Python at install time (C17), never walked in the emitted shell text |
 | `ops/install_publish_repo_precommit_hook.py` `_FRESH_HOOK_TEMPLATE` (in `main()`) | (b) | POSIX-sh generic (shim-body constant; no subprocess spawn itself) | No — install-time; its *output* is the hot-path artifact (see above) |
 | `ops/edit_live_hook.py` `cmd_commit()` | (b) | POSIX-shell generic (`sh -n` validation, narrowed from bash) | No — operator-invoked edit-hook CLI subcommand, not literal `git commit` |
 | `install/first_run.py` `_bash_version_ok()` | (d) | bash-specific (interpreter self-probe) | No — install-time |
@@ -143,7 +141,7 @@ Sites:
 - `coordinator_core/ops/install_meta_repo_precommit_hook.py` `main()` (~:190, fresh-install `#!/bin/sh` shim-body generation)
 - `coordinator_core/ops/install_publish_repo_precommit_hook.py` `_FRESH_HOOK_TEMPLATE` (~:64, shim-body constant rendered in `main()`)
 - `coordinator_core/ops/edit_live_hook.py` `cmd_commit()` (~:227, `sh -n` validation before an atomic live-hook swap — narrowed from `bash -n` to `sh -n` at execute)
-- `coordinator_core/ops/install_claude_klabauter_precommit_hook.py` `_gate_block()`/`_hook_body()` (~:339, assembles the `#!/bin/sh` shim's per-gate interpreter-invocation line `"$_py" "$_gate_script"`; scoped to that invocation line ONLY — candidate resolution for `$_py` is a baked `sys.executable` path resolved in Python at install time, C17, never a shell PATH walk)
+- `coordinator_core/ops/install_lfs_pre_push_hook.py` `_HOOK_TEMPLATE` (the `#!/bin/sh` **`pre-push`** LFS-gate body, rendered by `install()`; tracked source of truth so the gate survives a re-clone — C8/AC7, DR-223's `pre-push` row)
 
 ## (c) bash-as-required-parser — RESOLVED/retired 2026-07-22, no site remains
 
@@ -258,11 +256,10 @@ unpinned-digest bootstrap".
 Class (c) is omitted below — it resolved to zero sites (see above) and has
 no entries to seed.
 
-Three `Sites:` bullets above are NOT represented as entries because they name
+Two `Sites:` bullets above are NOT represented as entries because they name
 no AST-detectable spawn call — `install_meta_repo_precommit_hook.py`
-`main()`, `install_publish_repo_precommit_hook.py`'s `_FRESH_HOOK_TEMPLATE`
-(rendered in `main()`), and `install_claude_klabauter_precommit_hook.py`
-`_gate_block()`/`_hook_body()` all only assemble `#!/bin/sh` hook-body
+`main()` and `install_publish_repo_precommit_hook.py`'s `_FRESH_HOOK_TEMPLATE`
+(rendered in `main()`) only assemble `#!/bin/sh` hook-body
 *text*; git execs that text as a separate process at hook-invocation time,
 not as a Python subprocess call this module makes. `edit_live_hook.py`
 `cmd_commit()` is the one class-(b) site with a real subprocess call and is

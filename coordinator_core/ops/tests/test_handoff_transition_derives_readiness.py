@@ -51,13 +51,20 @@ def _blocker(handoff_id: str, deployment_state: str) -> dict:
 
 @pytest.fixture
 def corpus(monkeypatch):
-    """Pin the gate index the helper walks, so no test reads live state/."""
+    """Pin the gate index the helper walks, so no test reads live state/.
+
+    Patches the walker on `reconcile.handoff_corpus`, its defining module —
+    NOT on a module that merely re-exports it. `_derive_and_stamp_readiness`
+    imports the name function-locally at call time, so only a rebind on the
+    defining module is observed; patching a re-exporting namespace rebinds a
+    name nothing reads and silently unpins the corpus.
+    """
 
     def _install(records):
-        import coordinator_core.ops.handoff_reconcile as hr
+        import coordinator_core.reconcile.handoff_corpus as hc
 
         monkeypatch.setattr(
-            hr,
+            hc,
             "_collect_all_handoffs_for_gate_index",
             lambda _worktree: (records, []),
         )

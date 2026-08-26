@@ -122,14 +122,30 @@ _SPAWN_CALL_NAMES = _SPAWN_NAMES_BY_MODULE["subprocess"]
 
 _EXEMPTION_TAG = "# popup-intentional-last-resort"
 
-#: A splat callee/name is recognised as carrying the suppression primitive's
-#: signal if its identifier is shaped like `no_console_creationflags` itself
-#: or one of its documented thin wrappers (`_no_console_kw`,
-#: `_no_console_kwargs`, `_no_console_window`, `cc_invoke._no_console_kw`,
-#: ...). Matched by identifier shape, not by resolving the callee's actual
-#: implementation -- consistent with this module's static-AST-only design.
+#: A splat callee/name is recognised as carrying a suppression primitive's
+#: signal if its identifier is shaped like one of the TWO primitives
+#: `win_portability` ships, or one of their documented thin wrappers
+#: (`_no_console_kw`, `_no_console_kwargs`, `_no_console_window`,
+#: `cc_invoke._no_console_kw`, ...). Matched by identifier shape, not by
+#: resolving the callee's actual implementation -- consistent with this
+#: module's static-AST-only design.
+#:
+#: `leaf_spawn`-shaped identifiers resolve here because
+#: `leaf_spawn_creationflags()` (DETACHED_PROCESS) is a suppression route in
+#: exactly the sense this gate polices: the child gets no console, so it
+#: cannot flash a window. It is NOT interchangeable with
+#: `no_console_creationflags()` -- a detached child's console-subsystem
+#: DESCENDANTS each allocate their own VISIBLE console, which is why the
+#: primitive is for proven-leaf spawns only. That distinction is adjudicated
+#: by `test_leaf_spawn_creationflags.py`, which owns the leaf primitive's
+#: three axes; this gate stays value-blind and asks only whether SOME
+#: suppression is wired at all. Both questions have to be asked, and neither
+#: gate answers the other's.
+_SUPPRESSION_IDENTIFIER_PREFIXES = ("no_console", "leaf_spawn")
+
+
 def _is_no_console_shaped(identifier: str) -> bool:
-    return identifier.lstrip("_").startswith("no_console")
+    return identifier.lstrip("_").startswith(_SUPPRESSION_IDENTIFIER_PREFIXES)
 
 
 def _call_func_name(node: ast.expr) -> str | None:
@@ -720,8 +736,8 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
     # prepare-commit-msg hook spawning git from the console-less Bash-tool
     # parent, is the highest-value site in this population and is now fully
     # suppressed at all three of its spawns.
-    "coordinator/bin": 110,
-    "coordinator/lib": 13,
+    "coordinator/bin": 93,
+    "coordinator/lib": 10,
     "coordinator/scripts": 2,
     # `coordinator/tests` is deliberately ABSENT (was present, removed on
     # review 2026-08-21). Every path under a `tests/` directory is filtered by

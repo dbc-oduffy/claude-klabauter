@@ -1925,7 +1925,8 @@ def test_ownership_scope_exception_denies(monkeypatch):
 def test_ac16_deny_message_names_sanctioned_route_for_git_commit_agent(monkeypatch):
     result = _gca_denies(monkeypatch, "git commit -m x")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "scoped-git-commit" in reason
+    assert "git commit -m <subj> -- <path>..." in reason
+    assert "scoped-git-commit" not in reason
     assert "subagents may not commit" not in reason
 
 
@@ -1934,7 +1935,7 @@ def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeyp
     payload-triple.md`): the message must name the ownership-scope leg
     (`_assert_paths_in_session_scope`) alongside the argv-shape leg
     (`_pathspec_element_is_sweeping`'s reject-list) -- an agent that already
-    used the prescribed `scoped-git-commit` form and is denied on the scope
+    used the prescribed pathspec form and is denied on the scope
     leg must be told to check scope, not sent back to re-try argv variants.
     A future edit that silently reverts this to argv-shape-only prose must
     fail this test.
@@ -1943,15 +1944,49 @@ def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeyp
     `_GIT_COMMIT_AGENT_LEG_MESSAGES`), so the single combined "both legs"
     sentence this test originally pinned no longer exists -- naming both
     legs in every message is exactly what let a compound-command denial
-    claim a pathspec-scope cause. `git commit -m x` matches no
-    `scoped-git-commit` invocation at all, so what it must name is the
+    claim a pathspec-scope cause. `git commit -m x` carries no `--`-separated
+    pathspec at all, so what it must name is the
     absent pathspec plus the route that supplies one, and it must say
     explicitly that path scope was NOT the thing that denied.
+
+    2026-08-25 repoint (claude-klabauter-37, cross-session): the prescribed
+    form named here was `scoped-git-commit`, whose op is RETIRED and whose
+    surviving settings-home launcher fails helper-missing (exit 127) -- see
+    `coordinator/snippets/scoped-commit-route.md`, which says outright never
+    to route a ceremony commit through those launchers. A remediation that
+    cannot run is worse than none (`docs/wiki/guard-messaging.md` § Register),
+    and a denied agent had no runnable sanctioned route left. The DETECTION
+    legs still match `scoped-git-commit` (the binary may still be invoked and
+    must be caught); only the remediation prose moved.
     """
     result = _gca_denies(monkeypatch, "git commit -m x")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "scoped-git-commit -m <subj> -- <path>..." in reason
+    assert "git commit -m <subj> -- <path>..." in reason
     assert "path scope was never checked" in reason
+
+
+def test_deny_prose_never_routes_to_the_retired_scoped_git_commit_launcher():
+    """Never-regrow pin. `ceremony.scoped_git_commit` is retired and the
+    surviving `scoped-git-commit` launchers under the settings-home `bin/`
+    fail with a helper-missing error (exit 127), not the `-32006` the
+    kill-switch contract prescribes -- `coordinator/snippets/scoped-commit-
+    route.md` says never to route a ceremony commit through them, and
+    `coordinator/agents/git-commit-agent.md` names the live route instead.
+
+    Scoped deliberately to the agent-facing REMEDIATION constants, not to the
+    module: the matchers must keep naming the binary so an invocation of it is
+    still detected. Widening this to the whole file would forbid the detection
+    the guard exists to do.
+    """
+    for name, text in (
+        ("_GIT_COMMIT_AGENT_DENY_REASON", guard._GIT_COMMIT_AGENT_DENY_REASON),
+    ) + tuple(
+        (leg, msg) for leg, msg in guard._GIT_COMMIT_AGENT_LEG_MESSAGES.items()
+    ):
+        assert "scoped-git-commit" not in text, (
+            "%s routes a denied agent to the retired scoped-git-commit "
+            "launcher, which cannot run" % name
+        )
 
 
 def test_ac16_deny_message_unchanged_for_other_types(monkeypatch):

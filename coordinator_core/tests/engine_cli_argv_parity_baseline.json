@@ -51,6 +51,14 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/backlog_grind_assemble/readers_mise.py",
+      "directive_id": "d-mise-unify-batons",
+      "cli": "unify-batons",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/backlog_grind_assemble/verifier.py",
       "directive_id": "",
       "cli": "dispatch-haiku-verifier",
@@ -62,6 +70,22 @@
       "module": "coordinator_core/baton_assemble/__init__.py",
       "directive_id": "d1",
       "cli": "coordinator-doc-new",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/baton_assemble/__init__.py",
+      "directive_id": "d1b",
+      "cli": "baton-stamp-carried-ids",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/baton_assemble/__init__.py",
+      "directive_id": "d1c",
+      "cli": "baton-stamp-carried-ids",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -86,6 +110,14 @@
       "module": "coordinator_core/baton_assemble/__init__.py",
       "directive_id": "d7",
       "cli": "handoff-carry-gate",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/baton_assemble/apply.py",
+      "directive_id": "",
+      "cli": "baton-stamp-carried-ids",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -126,14 +158,6 @@
       "module": "coordinator_core/ceremony_common/tail.py",
       "directive_id": "",
       "cli": "coordinator-ceremony-hook",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/ceremony_common/tail.py",
-      "directive_id": "",
-      "cli": "emit-cadence",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -212,17 +236,6 @@
     },
     {
       "module": "coordinator_core/merge_assemble/__init__.py",
-      "directive_id": "d4",
-      "cli": "merge-gate-and-pr",
-      "unresolved": false,
-      "unaccepted": [],
-      "undeclared_required": [
-        "--release-notes",
-        "--ship-verdict"
-      ]
-    },
-    {
-      "module": "coordinator_core/merge_assemble/__init__.py",
       "directive_id": "d5",
       "cli": "portability-sweep",
       "unresolved": true,
@@ -249,6 +262,22 @@
       "module": "coordinator_core/merge_assemble/__init__.py",
       "directive_id": "d8",
       "cli": "orphan-branch-sweep",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/merge_assemble/__init__.py",
+      "directive_id": "d_grant_handback",
+      "cli": "tier-u-grant",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/merge_assemble/__init__.py",
+      "directive_id": "d_grant_write",
+      "cli": "tier-u-grant",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -382,6 +411,30 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/quick_wrap_assemble/__init__.py",
+      "directive_id": "d2",
+      "cli": "coordinator-fold-execution-record",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/roadmap_planning_assemble/__init__.py",
+      "directive_id": "",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/sprint_planning_assemble/__init__.py",
+      "directive_id": "",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/workday_complete/apply.py",
       "directive_id": "",
       "cli": "",
@@ -433,6 +486,22 @@
       "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
       "directive_id": "",
       "cli": "coordinator-lesson-add",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
+      "directive_id": "",
+      "cli": "coordinator-queue-append",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
+      "directive_id": "d-attest-review-verified",
+      "cli": "archive-stamp-cli",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

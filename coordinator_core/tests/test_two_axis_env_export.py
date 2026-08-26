@@ -55,6 +55,40 @@ def cc_invoke():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _force_the_registry_read_through_the_stubbed_path(monkeypatch):
+    """Neutralise `_locator_env_export`'s IN-PROCESS registry read.
+
+    Every locator test below stubs `cc_invoke._machine_local_get`, but that is
+    the FALLBACK. `_locator_env_export` calls `_machine_local_get_in_process`
+    first and only falls through on its miss -- and that reader resolves the
+    REAL machine-local registry, memoized for the interpreter's life in
+    `cc_invoke._IN_PROCESS_REGISTRY_MEMO`.
+
+    So the stub was reached only while the primary happened to miss. Alone,
+    under the quarantined HOME, it does; in the tier, once any earlier test in
+    the worker warms that memo with this box's real `repos.claude_klabauter`, the
+    primary answers `X:/claude-klabauter` and the stub is never called at all --
+    which is exactly how these four failed: a `KeyError: 'key'` from a spy that
+    never ran, a locator reading the real repo instead of `/src/checkout`, and
+    the locator present in an env the test had arranged to be unresolvable.
+    Order-dependent, and nothing to do with the engine-root memos.
+
+    Forcing the primary to a miss makes every test here exercise the fallback it
+    actually patches, deterministically and regardless of what ran first. The
+    in-process reader's own behaviour is not this module's subject -- it is the
+    spawn-avoidance optimisation, covered where it is introduced.
+    """
+    if str(_CC_INVOKE_LIB) not in sys.path:
+        sys.path.insert(0, str(_CC_INVOKE_LIB))
+    import cc_invoke as mod
+
+    mod._IN_PROCESS_REGISTRY_MEMO.clear()
+    monkeypatch.setattr(mod, "_machine_local_get_in_process", lambda key: None)
+    yield
+    mod._IN_PROCESS_REGISTRY_MEMO.clear()
+
+
 # --- the two axes are two variables ----------------------------------------
 
 def test_the_two_axes_use_distinct_variable_names():

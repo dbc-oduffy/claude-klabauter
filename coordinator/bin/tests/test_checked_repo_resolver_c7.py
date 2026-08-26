@@ -182,16 +182,17 @@ class TestGoalCloseDayMismatchRefuses(_WriterMismatchRefusesMixin, unittest.Test
         return ["--decisions", "{}"]
 
 
-class TestPrioritySetMismatchRefuses(_WriterMismatchRefusesMixin, unittest.TestCase):
-    filename = "priority-set.py"
-    modname = "priority_set_cli_c7"
-
-    def _argv(self) -> list[str]:
-        return [
-            "--target-id", "some-target",
-            "--target-kind", "handoff",
-            "--priority", "medium",
-        ]
+# RETIRED 2026-08-25: `TestPrioritySetMismatchRefuses`. C7 (2026-08-11) classified
+# priority-set.py as a WRITER that must refuse on MISMATCH; C18 (2026-08-20,
+# state/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C18.md, DR-277 EM
+# decision D5) later REMOVED that gate outright, because `priority.set` is
+# scope="none" and resolves its ledger write centrally rather than from
+# `cwd_repo_root` -- a MISMATCH there has nothing to advise on. The two contracts
+# are in direct contradiction and C18 is the later decision, so this class is
+# retired rather than reconciled. Its replacement already exists and is green:
+# `tests/test_priority_set_no_cwd_gate.py`, which pins the gate's ABSENCE.
+# `set-goal-kr-status.py` below is explicitly outside C18's scope (see its
+# Anti-scope) and keeps its refusal.
 
 
 class TestSetGoalKrStatusMismatchRefuses(_WriterMismatchRefusesMixin, unittest.TestCase):

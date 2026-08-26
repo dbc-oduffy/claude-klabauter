@@ -312,7 +312,7 @@ def sweep_backlog_grind_assemble(monkeypatch: Any) -> PhantomSweepResult:
         lambda: {
             "settings_home": "/fake/settings-home",
             "claude_klabauter_bin": "/fake/settings-home/bin",
-            "claude_klabauter_root": "/fake/claude-klabauter-root",
+            "claude_klabauter_root": "/fake/claude-klabauter-live-root",
             "doe_root": "/fake/doe-root",
         },
     )

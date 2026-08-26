@@ -43,7 +43,7 @@ Negative-spec:
       /workweek-complete, does NOT read the atlas — health-ledger.md only.
     - Does NOT resolve state root via the shared coordinator_state_root seam
       module (none exists yet in claude-klabauter — queued:
-      state/improvement-queue/2026-07-06-claude-klabauter-root-shared-helper-extraction.yaml).
+      state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extraction.yaml).
       Self-contains the DR-047/stop-the-rot Rule-5 default-branch resolution
       (bare `coordinator_state_root()`, no --central/--subject/--artifact):
       meta-repo cwd (git root == CLAUDE_HOME) routes to the engine root/state;

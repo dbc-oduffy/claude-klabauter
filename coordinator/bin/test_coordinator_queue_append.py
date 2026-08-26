@@ -693,7 +693,7 @@ def test_schema_load_fails_loud_via_env_override() -> None:
             _debt_backlog_required_args(),
             env={
                 "QUEUE_APPEND_OUTPUT_ROOT": tmpdir,
-                "CLAUDE_KLABAUTER_ROOT": bad_claude_klabauter_root,
+                "COORDINATOR_ENGINE_ROOT": bad_claude_klabauter_root,
                 # Without this the child resolves coordinator_core through an
                 # editable install's meta-path pin and the seam is never
                 # absent -- see _seam_absence_env's docstring.
@@ -851,7 +851,7 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
         env = {
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root_dir,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root_dir,
         }
         # Do NOT set QUEUE_APPEND_OUTPUT_ROOT — that would override the central redirect.
 
@@ -928,7 +928,7 @@ def test_project_scope_still_writes_cwd_relative() -> None:
         if init.returncode != 0:
             raise AssertionError(f"{name}: " + (f"git init failed: {init.stderr!r}"))
             return
-        env = {"CLAUDE_HOME": claude_home_dir, "CLAUDE_KLABAUTER_ROOT": fake_claude_klabauter_root}
+        env = {"CLAUDE_HOME": claude_home_dir, "COORDINATOR_ENGINE_ROOT": fake_claude_klabauter_root}
         if _DOE_ROOT_FOR_TESTS:
             env["DOE_ROOT"] = _DOE_ROOT_FOR_TESTS
 
@@ -2321,7 +2321,7 @@ def test_routing_seam_absent_uses_legacy() -> None:
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": "",
                 # Without this the child resolves coordinator_core through an
                 # editable install's meta-path pin and the seam is never
@@ -2376,7 +2376,7 @@ def test_routing_seam_present_uses_native() -> None:
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": "",
             },
             cwd=git_root,
@@ -2460,7 +2460,7 @@ def test_native_provenance_parity() -> None:
         result = _run_cli(
             _debt_backlog_required_args() + ["--created-by-agent", "test-agent-em"],
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": expected_session_id,
             },
             cwd=git_root,
@@ -2533,7 +2533,7 @@ def test_native_queue_scope_param_threading() -> None:
         result = _run_cli(
             _improvement_queue_required_args(["--queue-scope", "central"]),
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": "",
             },
             cwd=git_root,
@@ -2586,7 +2586,7 @@ def test_skipped_envelope_emits_warn_no_path() -> None:
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "CLAUDE_CODE_SESSION_ID": "",
             },
             cwd=git_root,
@@ -2645,7 +2645,7 @@ def test_output_root_bypass_skips_native() -> None:
         result = _run_cli(
             _debt_backlog_required_args(),
             env={
-                "CLAUDE_KLABAUTER_ROOT": claude_klabauter_dir,
+                "COORDINATOR_ENGINE_ROOT": claude_klabauter_dir,
                 "QUEUE_APPEND_OUTPUT_ROOT": output_root,
                 "CLAUDE_CODE_SESSION_ID": "",
             },

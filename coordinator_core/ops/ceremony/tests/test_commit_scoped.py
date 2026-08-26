@@ -327,6 +327,56 @@ def test_private_index_seeding_succeeds_when_shared_index_file_is_absent(tmp_pat
     assert _committed_content_at_head(repo, "file.txt") == "HEAD content\n"
 
 
+def test_absent_shared_index_never_deletes_the_scoped_path_it_was_asked_to_commit(tmp_path):
+    """P1 69ce1cdfd: with ``.git/index`` gone, every ``_SOURCE_STAGED`` path
+    read as absent from the (empty) index snapshot, which
+    ``_assemble_commit_tree_input`` classified as a STAGED DELETION -- so a
+    scoped commit of ``file.txt`` returned ``ok=True`` having removed
+    ``file.txt`` from the tree while leaving every unnamed path intact.
+
+    The scoped shape is the point, and is what this test adds over
+    ``test_private_index_seeding_succeeds_when_shared_index_file_is_absent``
+    above: the surviving ``other.txt`` is why no "the tree came out empty"
+    heuristic catches this damage class.
+    """
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("HEAD content\n", encoding="utf-8")
+    (repo / "other.txt").write_text("other content\n", encoding="utf-8")
+    _git(["add", "--", "file.txt", "other.txt"], repo)
+    _git(["commit", "-q", "-m", "seed both paths"], repo)
+    git_dir = Path(_git(["rev-parse", "--absolute-git-dir"], repo).stdout.strip())
+    (git_dir / "index").unlink()
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native._commit_scoped_private_index(["file.txt"], [], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert _committed_content_at_head(repo, "file.txt") == "HEAD content\n"
+    assert _committed_content_at_head(repo, "other.txt") == "other content\n"
+    assert "the HEAD version was committed instead" in result.stderr
+    assert "staged (index)" not in result.stderr
+
+
+def test_absent_shared_index_refuses_a_path_absent_from_head_too(tmp_path):
+    """The HEAD fall-back above resolves content, never a guess: a path with
+    no index entry (index file gone) AND no HEAD tree entry has no
+    committable content anywhere, so the assembler refuses loud rather than
+    resolving it to a deletion by default.
+    """
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("HEAD content\n", encoding="utf-8")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "seed file.txt"], repo)
+    git_dir = Path(_git(["rev-parse", "--absolute-git-dir"], repo).stdout.strip())
+    (git_dir / "index").unlink()
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native._commit_scoped_private_index(["nope.txt"], [], msg_file, repo)
+
+    assert result.ok is False
+    assert "no HEAD tree entry" in result.stderr
+
+
 def test_red_proof_committing_from_shared_index_absorbs_peer_file(tmp_path):
     """Red-proof for the above two tests: forcing a plain `git commit -F
     msg` (no pathspec, straight from the SHARED index -- what a broken
@@ -415,20 +465,42 @@ def test_cas_failure_on_concurrent_head_move_fails_loud(tmp_path, monkeypatch):
     msg_file = _write_msg(tmp_path)
 
     real_git_fn = git_native._git
+    real_rewrite_fn = git_native._rewrite_head_spine
     landed = {"done": False}
+
+    def _land_peer_commit():
+        """A real concurrent peer commit races into the window between this
+        module building the commit object and landing it via `cas_ref`.
+        """
+        if landed["done"]:
+            return
+        landed["done"] = True
+        (repo / "peer_race.txt").write_text("race\n", encoding="utf-8")
+        _git(["add", "--", "peer_race.txt"], repo)
+        _git(["commit", "-q", "-m", "peer race commit"], repo)
 
     def _racing_git(args, **kwargs):
         result = real_git_fn(args, **kwargs)
-        if not landed["done"] and list(args[:1]) == ["commit-tree"]:
-            landed["done"] = True
-            # A real concurrent peer commit races into the window between
-            # this module's commit-tree and its update-ref.
-            (repo / "peer_race.txt").write_text("race\n", encoding="utf-8")
-            _git(["add", "--", "peer_race.txt"], repo)
-            _git(["commit", "-q", "-m", "peer race commit"], repo)
+        if list(args[:1]) == ["commit-tree"]:
+            _land_peer_commit()
         return result
 
+    def _racing_rewrite(*args, **kwargs):
+        result = real_rewrite_fn(*args, **kwargs)
+        _land_peer_commit()
+        return result
+
+    # BOTH arms are hooked deliberately. The `commit-tree` spawn this test
+    # originally raced against is gone from the in-process arm (C8b,
+    # docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md), so keying
+    # the race solely on it left this test asserting a CAS that was never
+    # given anything to detect -- no peer commit ever landed, and the green
+    # `result.ok` it then saw read as a code defect (mis-cited as one in P1
+    # 69ce1cdfd's evidence). `_rewrite_head_spine` is the in-process arm's
+    # equivalent window: it returns immediately before the commit object is
+    # built and handed to `cas_ref`.
     monkeypatch.setattr(git_native, "_git", _racing_git)
+    monkeypatch.setattr(git_native, "_rewrite_head_spine", _racing_rewrite)
 
     head_before_call = _git(["rev-parse", "HEAD"], repo).stdout.strip()
     result = git_native.commit_scoped(["file.txt"], msg_file, repo)
@@ -1371,3 +1443,70 @@ def test_attributed_session_id_none_is_byte_identical_to_default(tmp_path, monke
     assert result.ok, result.stderr
     sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
     assert _trailer_lines(repo, sha, "Session-Id:") == [f"Session-Id: {_SESSION_A}"]
+
+
+#: Long enough that a few hundred of these blow past Windows' 32767-char
+#: CreateProcess cap when splatted onto one argv, while staying well inside
+#: MAX_PATH for the on-disk fixture. The real incident carried 4045 paths /
+#: 333,668 characters; this reproduces the SHAPE at a fixture-sized cost.
+_LONG_STEM = "a-deliberately-long-published-payload-basename-for-argv-length"
+
+
+def _seed_many_deletions(repo: Path, count: int) -> list[str]:
+    """Commit *count* long-named files, then delete them from disk and stage
+    the deletions -- the `absent` shape `_assemble_commit_tree_input`
+    produces (a staged deletion with no index entry left to resolve)."""
+    rels = [f"deep/{_LONG_STEM}-{i:04d}.txt" for i in range(count)]
+    (repo / "deep").mkdir()
+    for rel in rels:
+        (repo / rel).write_text("payload\n", encoding="utf-8")
+    _git(["add", "--", "deep"], repo)
+    _git(["commit", "-q", "-m", "seed the deletion set"], repo)
+    for rel in rels:
+        (repo / rel).unlink()
+    _git(["add", "-A", "--", "deep"], repo)
+    return rels
+
+
+def test_private_index_untracks_an_absent_set_too_large_for_one_argv(tmp_path):
+    """Regression, 2026-08-26: the private-index branch un-staged its
+    `absent` set with `git rm --cached -- <paths>`, every path on argv.
+    Windows' CreateProcess caps a command line at 32767 characters and this
+    set is unbounded -- one real percolate-publish round carried 4045 absent
+    paths (333,668 characters) and died on `[WinError 206] The filename or
+    extension is too long`, which `_git()` reports as a returncode=-1
+    GitResult whose stderr is the COMMAND (git never ran, so there is no git
+    message to show). It read as a bare commit-failure and broke EVERY
+    publish round to that mirror until the paths were cleared by hand.
+
+    `add_paths_pathspec_file`'s docstring called its own change "the last of
+    the five argv-length sites this repo's commit path had" -- this was a
+    sixth, on a branch that sweep did not reach.
+
+    The brand-new `fresh/` subdirectory is load-bearing, not decoration: it
+    is what forces `_commit_via_head_spine` to decline (a spine rewrite
+    cannot synthesize a directory level absent from HEAD's tree), so the
+    ladder below it -- the branch carrying the `git rm --cached` -- actually
+    runs. Without it the fast path absorbs the whole commit and this test
+    passes against the defect.
+
+    Red-proofed by restoring `["rm", "--cached", "-q", "--", *sorted(absent)]`:
+    fails on Windows with the WinError 206 shape above.
+    """
+    repo = real_git_repo(tmp_path)
+    rels = _seed_many_deletions(repo, 520)
+    assert sum(len(rel) + 3 for rel in rels) > 32767, "fixture no longer exceeds the argv cap"
+
+    (repo / "fresh").mkdir()
+    (repo / "fresh" / "new.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "--", "fresh/new.txt"], repo)
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native._commit_scoped_private_index(
+        [*rels, "fresh/new.txt"], [], msg_file, repo
+    )
+
+    assert result.ok, result.stderr
+    survivors = _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.splitlines()
+    assert not [line for line in survivors if line.startswith("deep/")]
+    assert "fresh/new.txt" in survivors

@@ -61,18 +61,22 @@ _WIRED_PRODUCERS = {
 #: `_WIRED_PRODUCERS` rather than folded in, because `_WIRED_PRODUCERS` is
 #: also the set `test_every_wired_producer_references_record_ledger_entry`
 #: checks for a `record_ledger_entry` reference, and these producers don't
-#: have one: `scoped_git_commit.py` carries its own duplicate
-#: `_ledger_kind_and_weight` and calls `commit_ledger.resolve_owner`/
-#: `commit_ledger.store` inline instead. Measured live on 2026-08-19: this
-#: is the file where a module-level `commit_ledger` import was actually
-#: introduced and actually de-registered `ceremony.scoped_git_commit`,
-#: `session.boot_sweep` and `session.sweep_consumed_handoffs` at once --
-#: `test_producers_never_import_commit_ledger_at_module_level` scans the
+#: have one. Measured live on 2026-08-19: `scoped_git_commit.py` was the
+#: file where a module-level `commit_ledger` import was actually introduced
+#: and actually de-registered `ceremony.scoped_git_commit`, `session.
+#: boot_sweep` and `session.sweep_consumed_handoffs` at once --
+#: `test_producers_never_import_commit_ledger_at_module_level` scanned the
 #: UNION of this set and `_WIRED_PRODUCERS` so that incident's own module
-#: stays covered. Do not merge this back into `_WIRED_PRODUCERS`.
-_DIRECT_COMMIT_LEDGER_IMPORTERS = {
-    "ops/ceremony/scoped_git_commit.py",
-}
+#: stayed covered.
+#:
+#: `scoped_git_commit.py` itself is gone -- killed outright (K-045,
+#: `state/kill-ledger.md`, landed `c07062c99`, PM ruling: kill means kill
+#: forever, no resurrection). Recover the pre-kill text with `git show
+#: c07062c99^:coordinator_core/ops/ceremony/scoped_git_commit.py` if the
+#: 2026-08-19 incident shape ever needs re-reading. Row retired, not
+#: dropped silently; do not re-add the filename here. Do not merge this set
+#: back into `_WIRED_PRODUCERS`.
+_DIRECT_COMMIT_LEDGER_IMPORTERS: set[str] = set()
 
 _EXEMPT_PRODUCERS = {
     "benchmarks/op_fixtures.py": (
@@ -96,6 +100,23 @@ _EXEMPT_PRODUCERS = {
         "brief named. Found by this chunk's own mechanism sweep but out of "
         "scope to wire here -- left unwired and flagged for a follow-up "
         "sweep rather than silently widened past this chunk's brief scope."
+    ),
+    "ops/session/boot_backstop.py": (
+        "NEW producer (`_commit_relocations`), found 2026-08-25 -- commits "
+        "into the recovery worktree, not this repo's own tree. The file is "
+        "under active concurrent edit by another dispatched session on this "
+        "branch; wiring the ledger means touching that live surface mid-edit. "
+        "Left unwired and flagged for a follow-up sweep rather than raced "
+        "against a peer's in-flight change."
+    ),
+    "percolate/round.py": (
+        "NEW producer (`step_commit`), found 2026-08-25 -- commits into "
+        "`context.dest_repo_root`, a SIBLING repo mirror, not this repo's "
+        "own tree; whether a ledger meant to track this repo's commits "
+        "should also record a commit landed in a different repo's history "
+        "is an open design question, not a mechanical wiring gap. The file "
+        "is also under active concurrent edit by another dispatched session "
+        "on this branch. Left unwired and flagged for a follow-up sweep."
     ),
 }
 

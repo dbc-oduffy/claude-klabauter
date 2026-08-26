@@ -82,7 +82,7 @@ def test_lib_path_missing_successor_file_returns_none(tmp_path, monkeypatch):
 
     claude_klabauter_root = tmp_path / "claude-klabauter"
     claude_klabauter_root.mkdir()
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(claude_klabauter_root))
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
 
     result = _liveness._lib_path()
 

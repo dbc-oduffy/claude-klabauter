@@ -70,10 +70,16 @@ _EXCLUDED_BASENAME_PATTERNS = (
     re.compile(r".*_test\.py$"),
     re.compile(r"^conftest\.py$"),
     re.compile(r".*\.test\.js$"),
+    # `scratch_*.py` -- self-declared throwaway probes (e.g.
+    # `scratch_check_forwarders.py`'s own header: "Not part of the
+    # deliverable -- safe to delete"), same non-source class as the
+    # `state/**` residue file-index.md's own "Non-system paths" section
+    # already carves out. Added 2026-08-26.
+    re.compile(r"^scratch_.*\.py$"),
 )
 
 #: Path-prefix directories the recorded input filter excludes outright.
-_EXCLUDED_DIR_PREFIXES = ("archive/", "tasks/", "dist/", "pip/")
+_EXCLUDED_DIR_PREFIXES = ("archive/", "tasks/", "dist/", "pip/", "docs/research/")
 
 #: Rules 2-9, 11, 12 — literal, hardcoded from file-index.md:26-36. Rule 1
 #: (state/**, not a system) and rule 10 (<pkg> table) are handled specially

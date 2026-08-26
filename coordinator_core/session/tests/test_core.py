@@ -1083,7 +1083,11 @@ class TestInit:
         sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-1"
         assert (sdir / "started_at").is_file()
         assert (sdir / "head_at_start").is_file()
-        assert (sdir / "touched.txt").is_file()
+        # `touched.txt` is no longer created here (C5, docs/plans/2026-08-25-
+        # the-legacy-touch-record-is-retired-by-repointing-its-writers.md §
+        # AC6) -- `started_at`/`head_at_start` already discharge the "some
+        # record file exists" role for `liveness.newest_record_mtime`.
+        assert not (sdir / "touched.txt").is_file()
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["session_id"] == "test-sid-1"
         assert meta["goal"] == "ship it"

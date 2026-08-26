@@ -60,8 +60,10 @@ stays unmodified.
 
 Homed here (NOT `coordinator_core/archival.py`): `ops/handoff_reconcile.py`
 imports `reverse_membership` FROM archival.py, so composing
-`_collect_all_handoffs_for_gate_index` (which lives in `handoff_reconcile.py`)
-from inside archival.py would be an import cycle. Separately, archival.py's
+`_collect_all_handoffs_for_gate_index` (which lives in
+`coordinator_core/reconcile/handoff_corpus.py`, C2a-extracted out of
+`handoff_reconcile.py`) from inside archival.py would still risk an import
+cycle via that shared lineage. Separately, archival.py's
 negative-spec states "Does NOT scan the filesystem directly — callers supply
 the dag_index"; `_collect_all_handoffs_for_gate_index` scans the filesystem.
 Placing this resolver in archival.py would either break the import graph or
@@ -69,8 +71,9 @@ silently vacate that negative-spec — it lives here instead, sibling to
 `_handoff_has_live_children`.
 
 Composes, does not reinvent: `_collect_all_handoffs_for_gate_index`
-(ops/handoff_reconcile.py, the shared live+archive/handoffs+archive/completed
-walker) for the corpus, and `_is_terminal_or_archived_child`
+(coordinator_core/reconcile/handoff_corpus.py, the shared live+archive/
+handoffs+archive/completed walker) for the corpus, and
+`_is_terminal_or_archived_child`
 (coordinator_core.archival, imported at module top level — see below) for the
 "live" predicate, which carries two hard-won bug fixes (2026-07-09
 positive-classification-only exclusion; 2026-07-17 a `consumed` child with
@@ -83,7 +86,9 @@ from the exact same fields.
 
 IMPORT DISCIPLINE: `_collect_all_handoffs_for_gate_index` is imported
 FUNCTION-LOCALLY inside `blocked_by_dependents`, not at module
-top level.  `_EAGER_OP_MODULES` (`coordinator_core/ops/__init__.py`) imports
+top level (now sourced from `coordinator_core.reconcile.handoff_corpus`,
+C2a-extracted out of `handoff_reconcile.py` — see module docstring above).
+`_EAGER_OP_MODULES` (`coordinator_core/ops/__init__.py`) imports
 `handoff_children` at slot 120 and `handoff_reconcile` at slot 236 — NOT
 wrapped in a swallow-and-continue try/except-pass (that shape was explicitly
 REJECTED there, 2026-07-21): every catch prints the real module name +
@@ -111,8 +116,9 @@ Adapter note: `collect_live_handoff_paths` (ops/fleet/_common.py), which
 `_collect_all_handoffs_for_gate_index` calls for the live-set half of its
 walk, RAISES `OSError` on an unreadable `state/handoffs/` rather than
 returning it via its `scan_errors` list — none of `_collect_all_handoffs_for_
-gate_index`'s own existing call sites catch this (see `handoff_reconcile.py`'s
-`_collect_open_handoffs` and its `reconcile_open` call site, both bare).
+gate_index`'s own existing call sites catch this (see
+`handoff_corpus._collect_open_handoffs` and `handoff_reconcile.py`'s
+`reconcile_open` call site, both bare).
 `blocked_by_dependents` catches this `OSError` explicitly and folds it into
 `scan_errors` itself, so an unreadable live subtree fails closed to
 `"indeterminate"` here rather than raising past this resolver.
@@ -140,7 +146,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from coordinator_core.archival import _is_terminal_or_archived_child, reverse_membership
-from coordinator_core.dag import ARCHIVAL_EDGE_KINDS, CONTINUATION_EDGE_KINDS, _read_meta
+from coordinator_core.dag import (
+    ARCHIVAL_EDGE_KINDS,
+    CONTINUATION_EDGE_KINDS,
+    _read_meta,
+    build_reverse_edge_index,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops._path_guard import contained_path
@@ -287,6 +298,116 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
 # ---------------------------------------------------------------------------
 # Op handler
 # ---------------------------------------------------------------------------
+
+
+async def has_live_children_many(
+    candidates: List[str],
+    repo_root: Optional[Path] = None,
+    *,
+    edge_kinds: Optional[Set[str]] = None,
+) -> Dict[str, int]:
+    """``{candidate: exit_code}`` for many candidates over ONE corpus pass.
+
+    Same question, same guards, same verdicts as ``handoff.has_live_children``
+    below — this exists because that op is target-independent right up to its
+    final comparison, so asking it N times pays N x M frontmatter reads to
+    answer something that needs M. It enumerates the handoff corpus and reads
+    every node's edges once PER CALL, and `_FRONTMATTER_CACHE` does not save
+    it: that cache memoises PARSING while every `_read_meta` still re-reads
+    and re-hashes the bytes, deliberately, to close the stamp-read/content-read
+    TOCTOU window. The cost is the asking, so the fix is to ask once.
+
+    Measured caller: `reap-orphaned-in-flight-handoffs.py` spent 3.1s of a
+    3.1s run here — 36,638 `_read_meta` calls for 19 orphans against ~950
+    handoffs — with DR-344's bar at 500ms for the whole script.
+
+    Not a new mechanism: `dag.build_reverse_edge_index` /
+    `_referenced_by_indexed` already exist for exactly this shape and are
+    already in production behind `fleet.archive_terminal_handoffs` (which hit
+    the same wall at 96,534 opens / 21.5s). This routes the per-orphan caller
+    onto them via `reverse_membership`'s own `index=` parameter, so the
+    terminal-and-archived child exclusion still runs afterwards, unchanged and
+    shared by both branches — the indexed and unindexed paths cannot answer
+    differently.
+
+    Fail-closed exactly as the singular op: a corpus that cannot be fully
+    enumerated, an empty live set, a candidate escaping
+    state/handoffs//archive/handoffs/, a candidate absent from disk, or a
+    `reverse_membership` failure all yield 2 (indeterminate) for the affected
+    candidate — never 1 (safe to release). Whole-corpus failures mark EVERY
+    candidate indeterminate; a single candidate's failure never contaminates
+    its siblings.
+    """
+    if not candidates:
+        return {}
+    if repo_root is None:
+        return {c: 2 for c in candidates}
+
+    worktree_root = main_worktree_root(repo_root)
+    allowed_roots = [
+        worktree_root / "state" / "handoffs",
+        worktree_root / "archive" / "handoffs",
+    ]
+
+    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
+    # Both are whole-corpus conditions: no candidate can be decided under them.
+    if scan_errors or not live_paths:
+        return {c: 2 for c in candidates}
+
+    # Index only the NON-archived nodes. `reverse_membership` drops every
+    # archive-resident child afterwards via `_is_terminal_or_archived_child`
+    # rule 1, which is a POSITIVE, unconditional path-segment exclusion — it
+    # is not one of that predicate's fail-closed branches, so an archived node
+    # can never survive into the returned live set no matter what its
+    # frontmatter says or whether it can be read at all. Indexing them is
+    # therefore pure work for an answer that is discarded: 951 nodes indexed
+    # to decide over 235. Measured 172ms -> 31ms, with zero verdict
+    # differences across all 235 candidates in this corpus — which is
+    # corroboration, not the argument; the argument is that rule 1 cannot
+    # fail open.
+    #
+    # Same consecutive-parts test rule 1 uses, deliberately NOT a substring
+    # match — a repo literally named "archive" would false-match one (that
+    # predicate's own comment, and its F2 review note about non-conventional
+    # archive shapes, apply verbatim here because this filter must agree with
+    # it exactly). Rules 2 and 3 (terminal status / deployment_state) are NOT
+    # pre-filtered here: those ARE the fail-closed branches, and they stay
+    # where they are.
+    #
+    # `live_paths` itself is still passed to reverse_membership below, so its
+    # empty-set fail-closed guard still judges the true corpus.
+    def _archive_resident(p: str) -> bool:
+        parts = Path(p).parts
+        return any(
+            parts[i] == "archive" and parts[i + 1] == "handoffs"
+            for i in range(len(parts) - 1)
+        )
+
+    index_set = [p for p in live_paths if not _archive_resident(p)]
+    try:
+        index = await asyncio.to_thread(
+            build_reverse_edge_index,
+            index_set,
+            str(worktree_root / "state" / "handoffs"),
+        )
+    except Exception:  # noqa: BLE001 — an unbuildable index decides nothing
+        return {c: 2 for c in candidates}
+
+    codes: Dict[str, int] = {}
+    for candidate in candidates:
+        resolved = contained_path(Path(candidate), allowed_roots)
+        if resolved is None or not os.path.isfile(str(resolved)):
+            codes[candidate] = 2
+            continue
+        try:
+            children = reverse_membership(
+                str(resolved), live_paths, edge_kinds=edge_kinds, index=index
+            )
+        except Exception:  # noqa: BLE001
+            codes[candidate] = 2
+            continue
+        codes[candidate] = 0 if len(children) > 0 else 1
+    return codes
 
 
 @register_op("handoff.has_live_children")
@@ -511,7 +632,7 @@ def blocked_by_dependents(
         error:       str or None; non-None only when state=="indeterminate".
     """
     # Function-local imports — see module docstring's IMPORT DISCIPLINE note.
-    from coordinator_core.ops.handoff_reconcile import _collect_all_handoffs_for_gate_index
+    from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
 
     candidate_abs = str(Path(candidate_path).resolve())
     exclude_abs: Set[str] = {str(Path(p).resolve()) for p in (exclude or [])}

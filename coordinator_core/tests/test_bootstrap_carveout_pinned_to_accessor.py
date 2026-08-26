@@ -38,7 +38,21 @@ _PINNED_NAMES = ("_ENGINE_ROOT_NEW_VAR", "_ENGINE_ROOT_OLD_VAR")
 
 
 def _module_level_str_constants(path: pathlib.Path) -> dict[str, str]:
-    """Module-level `NAME = "literal"` assignments, read without importing."""
+    """Module-level `NAME = "literal"` assignments, read without importing.
+
+    FOLLOWS AN IN-BOUNDARY IMPORT. A pinned name may be declared in this file or
+    in a sibling under the same `coordinator/bin/lib/` directory and imported from
+    there -- `_ENGINE_ROOT_NEW_VAR` now comes from `engine_bootstrap.py`. That is
+    NOT the circularity AC13's carve-out exists to avoid: the ban is on importing
+    `coordinator_core.engine_root`, the thing this ladder exists to locate, and a
+    sibling on the near side of the same one-way boundary is already loaded. This
+    check's stated purpose -- "these are the SAME rule written twice ... when they
+    disagree, nothing fails loudly" -- is served wherever the boundary-side
+    constant lives; requiring one specific file would push the tree toward a
+    THIRD copy of a value the boundary already single-sources, which is more drift
+    surface, not less. Only in-boundary siblings are followed; an import from
+    anywhere else stays invisible here and still fails the check.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     found: dict[str, str] = {}
     for node in tree.body:
@@ -49,6 +63,21 @@ def _module_level_str_constants(path: pathlib.Path) -> dict[str, str]:
             continue
         if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
             found[target.id] = node.value.value
+
+    wanted = [n for n in _PINNED_NAMES if n not in found]
+    if not wanted:
+        return found
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        imported = {a.asname or a.name for a in node.names}
+        if not imported.intersection(wanted):
+            continue
+        sibling = path.parent / (node.module.replace(".", "/") + ".py")
+        if not sibling.is_file():
+            continue
+        for name, value in _module_level_str_constants(sibling).items():
+            found.setdefault(name, value)
     return found
 
 
@@ -174,11 +203,35 @@ def test_carveout_precedence_pins_the_new_name_only():
     """
     src = _CC_INVOKE.read_text(encoding="utf-8")
 
-    assert 'existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")\n' in src
-    assert (
-        'os.environ.get(_ENGINE_ROOT_NEW_VAR, "") or os.environ.get(_ENGINE_ROOT_OLD_VAR'
-        not in src
-    ), "cc_invoke still falls back to the retired name; C14 removed that rung"
+    # BY AST, NOT BY SOURCE LINE. This used to assert the exact text
+    # `existing = os.environ.get(_ENGINE_ROOT_NEW_VAR, "")`, which went red the
+    # moment the call site was reworded to `env_root = os.environ.get(...) or ""`
+    # -- a rename of a local and a swap of one default form, neither of which
+    # touches the claim. That is the failure mode this module's own NEGATIVE SPEC
+    # forbids: "Not that the two files' TEXT matches ... only the VALUES and the
+    # PRECEDENCE are contract." The property is what is pinned here: the carve-out
+    # still reads the NEW name from the environment, and never reads the retired
+    # one from it at all.
+    tree = ast.parse(src)
+    env_reads = {
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "environ"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in _PINNED_NAMES
+    }
+    assert "_ENGINE_ROOT_NEW_VAR" in env_reads, (
+        "cc_invoke's hand-duplicated rung no longer reads _ENGINE_ROOT_NEW_VAR from "
+        "the environment at all; AC13's carve-out must still resolve Rung 1."
+    )
+    assert "_ENGINE_ROOT_OLD_VAR" not in env_reads, (
+        "cc_invoke still falls back to the retired name; C14 removed that rung"
+    )
     assert "_ENGINE_ROOT_OLD_VAR: claude_klabauter_root" not in src, (
         "cc_invoke still exports the retired name into child environments"
     )

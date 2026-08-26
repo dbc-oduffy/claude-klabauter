@@ -43,7 +43,7 @@ repo's own pytest `python_files` config declares to be a test is exempted
 from the unresolved-write basis only, never from a resolved tracked write,
 because a test module's writes are fixture writes, not repo artifacts.
 
-Six mechanical narrowing rules cut WRITE_TARGET_UNRESOLVED false positives,
+Nine mechanical narrowing rules cut WRITE_TARGET_UNRESOLVED false positives,
 none of them by deleting a write site — a tmp/derivative rule always
 SUBSTITUTES the real destination or leaves the site counted exactly as
 before; nothing here removes a genuine write from the swept population:
@@ -71,13 +71,33 @@ before; nothing here removes a genuine write from the swept population:
   - R5 (bases provably outside the tracked tree): a write target rooted in
     `tempfile.gettempdir`/`mkdtemp`/`mkstemp`/`TemporaryDirectory`/
     `NamedTemporaryFile`, a pytest `tmp_path`/`tmp_path_factory` fixture
-    Name, `sessions_dir(...)`, `git_common_dir(...)`, or `Path.home()`
-    cannot produce a tracked repo artifact and is excluded from the
-    population entirely (neither tracked nor unresolved).
+    Name, `sessions_dir(...)`, `git_common_dir(...)`, `Path.home()`, or
+    `os.devnull` cannot produce a tracked repo artifact and is excluded from
+    the population entirely (neither tracked nor unresolved). `os.devnull` is
+    R1's discard-sink class reached through the target position rather than a
+    `json.dump` file argument.
   - R6 (test-scaffolding exemption, extended): the existing `python_files`
     glob exemption is extended, by directory shape rather than basename, to
     `conftest.py`, any module under a `tests/` directory, and any module
     under `coordinator_core/testing/` or `coordinator_core/benchmarks/`.
+  - R7 (scratch mkstemp descriptor): `os.fdopen(fd, "w")` where `fd` is the
+    descriptor half of a `fd, path = tempfile.mkstemp(...)` unpack whose
+    `path` half is NEVER promoted by a later `replace` (aliases followed).
+    R5's criterion applied to the one shape R5 cannot read: an integer.
+    Scoped to the un-promoted case precisely so R3's contract above holds —
+    a temp file that goes on to BECOME the artifact keeps its site counted,
+    unresolved destination and all.
+  - R8 (single-assignment local names): a write target that is still a bare
+    Name after R4 is substituted with its bound expression when that name is
+    assigned exactly once in the innermost function containing the write and
+    is not one of that function's parameters, then re-classified by R5 and
+    the literal check. R5's exclusions are written against expressions, so
+    without this they cover only writes that inline their own base:
+    `p = os.path.join(tempfile.gettempdir(), ...)` then `open(p, "w")` was
+    unresolved despite being provably a temp write. Scope-correctness is
+    load-bearing, not tidiness — see `_ScopeBindings`.
+  - R9 (`os.devnull`): the kernel's bit bucket is not a path in any tree.
+    Same standing as R1's stdio sinks.
 
 AC6 — discovery reads source text only, via `ast.parse`; it never imports a
 swept module. This is also what keeps
@@ -567,15 +587,277 @@ def _is_excluded_base(node: ast.AST) -> bool:
                     return True
             elif isinstance(func, ast.Name) and func.id in _EXCLUDED_HELPER_CALL_NAMES:
                 return True
+        elif (
+            isinstance(sub, ast.Attribute)
+            and sub.attr == "devnull"
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "os"
+        ):
+            # A discard sink, not a destination -- the same class R1 already
+            # excludes for `sys.stdout`/`StringIO`, reached through the target
+            # position instead of a `json.dump` file argument
+            # (`open(os.devnull, "w")` in `coordinator_core/warm/server.py`).
+            return True
         elif isinstance(sub, ast.Name) and sub.id in _EXCLUDED_FIXTURE_NAMES:
+            return True
+        elif (
+            isinstance(sub, ast.Attribute)
+            and sub.attr == "devnull"
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "os"
+        ):
+            # R9: `os.devnull` is the kernel's bit bucket, not a path in any
+            # tree. Same standing as R1's stdio sinks -- a write there cannot
+            # produce an artifact, tracked or otherwise.
             return True
     return False
 
 
+class _ScopeBindings:
+    """R8's per-scope single-assignment index.
+
+    Scope-correct by construction: a name is looked up ONLY in the innermost
+    function containing the write site, and a name that is a PARAMETER of
+    that function is never substituted. A flat module-wide map gets this
+    wrong in a way that silently manufactures findings -- `path` assigned
+    once in one helper would be substituted into a different helper whose
+    own `path` is a parameter, and the sweep would then report that second
+    helper as writing whatever the first one wrote. Measured live on
+    `coordinator_core/tests/test_review_brightline_gate.py`, which a flat map
+    reported as an UNDECLARED writer of a production module it only ever
+    reads.
+    """
+
+    def __init__(self, tree: ast.AST) -> None:
+        self._scopes: list[tuple[int, int, dict[str, ast.AST]]] = []
+        self._index_scope(tree, is_module=True)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._index_scope(node, is_module=False)
+
+    @staticmethod
+    def _own_body_nodes(scope: ast.AST):
+        """Walk *scope*'s own body without descending into nested function or
+        class bodies -- a nested scope's assignments are not this scope's."""
+        stack = list(ast.iter_child_nodes(scope))
+        while stack:
+            node = stack.pop()
+            yield node
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            stack.extend(ast.iter_child_nodes(node))
+
+    def _index_scope(self, scope: ast.AST, is_module: bool) -> None:
+        counts: dict[str, int] = {}
+        values: dict[str, ast.AST] = {}
+        for node in self._own_body_nodes(scope):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        counts[target.id] = counts.get(target.id, 0) + 1
+                        values[target.id] = node.value
+            elif isinstance(node, ast.withitem) and isinstance(
+                node.optional_vars, ast.Name
+            ):
+                name = node.optional_vars.id
+                counts[name] = counts.get(name, 0) + 1
+                values[name] = node.context_expr
+
+        params: set[str] = set()
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spec = scope.args
+            for arg in (
+                list(spec.posonlyargs)
+                + list(spec.args)
+                + list(spec.kwonlyargs)
+                + ([spec.vararg] if spec.vararg else [])
+                + ([spec.kwarg] if spec.kwarg else [])
+            ):
+                params.add(arg.arg)
+
+        binds = {
+            name: value
+            for name, value in values.items()
+            if counts[name] == 1 and name not in params
+        }
+        if not binds:
+            return
+        start = 0 if is_module else getattr(scope, "lineno", 0)
+        end = (1 << 30) if is_module else (getattr(scope, "end_lineno", None) or start)
+        self._scopes.append((start, end, binds))
+
+    def anywhere(self, name: str) -> ast.AST | None:
+        """The binding for *name* from any indexed scope, innermost first.
+
+        Only for the alias closure in `_promoted_tmp_names`, where the
+        question is "was this temp handle ever promoted anywhere in the
+        module" -- a scope-blind question by construction. Write-target
+        resolution uses `at()` and stays scope-correct.
+        """
+        best: ast.AST | None = None
+        best_span = None
+        for start, end, binds in self._scopes:
+            if name not in binds:
+                continue
+            span = end - start
+            if best_span is None or span < best_span:
+                best, best_span = binds[name], span
+        return best
+
+    def at(self, lineno: int) -> dict[str, ast.AST]:
+        """The binds of the INNERMOST indexed scope containing *lineno*."""
+        best: dict[str, ast.AST] | None = None
+        best_span = None
+        for start, end, binds in self._scopes:
+            if not (start <= lineno <= end):
+                continue
+            span = end - start
+            if best_span is None or span < best_span:
+                best, best_span = binds, span
+        return best or {}
+
+
+_SUBSTITUTION_HOPS = 3
+
+
+def _substitute_local_names(expr: ast.AST, binds: dict[str, ast.AST]) -> ast.AST:
+    """R8's substitution pass: replace bare Names with their single bound
+    expression, up to `_SUBSTITUTION_HOPS` times so a two-step binding
+    (`tmp = Path(tmpdir)`, `f = tmp / "x"`) resolves. Bounded rather than
+    fixpointed because a self-referential binding would otherwise spin."""
+    class _Substituter(ast.NodeTransformer):
+        def visit_Name(self, node: ast.Name) -> ast.AST:  # noqa: N802 (ast API name)
+            bound = binds.get(node.id)
+            if bound is None or isinstance(bound, ast.Name):
+                return node
+            return bound
+
+    for _ in range(_SUBSTITUTION_HOPS):
+        rendered = ast.unparse(expr)
+        reparsed = ast.parse(rendered).body[0]
+        if not isinstance(reparsed, ast.Expr):
+            break
+        expr = _Substituter().visit(reparsed.value)
+        if ast.unparse(expr) == rendered:
+            break
+    return expr
+
+
+def _promoted_tmp_names(tree: ast.AST, scope_binds: "_ScopeBindings") -> frozenset[str]:
+    """Names used as the SOURCE of an `os.replace`/`Path.replace` -- i.e. temp
+    files that become a real artifact rather than staying scratch.
+
+    Aliases count. `fd, tmp_name = tempfile.mkstemp(...)` followed by
+    `tmp_path = Path(tmp_name)` and `os.replace(tmp_path, dest)` promotes
+    `tmp_name` just as directly as replacing it by name would; reading only
+    the literal replace argument would call that fd scratch and drop a write
+    site R3 exists to keep (`coordinator_core/percolate/manifest.py`).
+    """
+    promoted: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "replace"
+        ):
+            continue
+        receiver = node.func.value
+        if isinstance(receiver, ast.Name) and receiver.id == "os":
+            if node.args and isinstance(node.args[0], ast.Name):
+                promoted.add(node.args[0].id)
+            continue
+        if isinstance(receiver, ast.Name):
+            promoted.add(receiver.id)
+        elif isinstance(receiver, ast.Call) and receiver.args and isinstance(
+            receiver.args[0], ast.Name
+        ):
+            promoted.add(receiver.args[0].id)
+
+    # Alias closure: a promoted name bound to an expression naming other
+    # locals promotes those too (`tmp_path = Path(tmp_name)`).
+    for _ in range(_SUBSTITUTION_HOPS):
+        widened = set(promoted)
+        for name in promoted:
+            bound = scope_binds.anywhere(name)
+            if bound is None:
+                continue
+            widened.update(
+                sub.id for sub in ast.walk(bound) if isinstance(sub, ast.Name)
+            )
+        if widened == promoted:
+            break
+        promoted = widened
+    return frozenset(promoted)
+
+
+def _scratch_mkstemp_fds(tree: ast.AST, scope_binds: "_ScopeBindings") -> frozenset[str]:
+    """R7: fd names from `fd, path = tempfile.mkstemp(...)` whose PATH
+    partner is never promoted by a later `replace`.
+
+    The pairing is what makes this safe. R3's contract (see module docstring)
+    is that a temp write is never dropped when the temp file goes on to
+    BECOME the artifact -- `os.replace(tmp, dest)` with an unresolvable
+    `dest` must stay `WRITE_TARGET_UNRESOLVED`, because a real artifact was
+    written to a place the sweep cannot name. A scratch temp with no replace
+    at all is the opposite case: it is deleted, and nothing it wrote ever
+    reaches the tree.
+    """
+    promoted = _promoted_tmp_names(tree, scope_binds)
+    scratch: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        target = node.targets[0]
+        value = node.value
+        if not (
+            isinstance(target, ast.Tuple)
+            and len(target.elts) == 2
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "mkstemp"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "tempfile"
+        ):
+            continue
+        fd_elt, path_elt = target.elts
+        if not (isinstance(fd_elt, ast.Name) and isinstance(path_elt, ast.Name)):
+            continue
+        if path_elt.id not in promoted:
+            scratch.add(fd_elt.id)
+    return frozenset(scratch)
+
+
+def _is_fdopen_of_scratch_fd(call: ast.Call, scratch_fds: frozenset[str]) -> bool:
+    """R7: True for `os.fdopen(<scratch mkstemp fd>, "w", ...)`.
+
+    `_write_target_expr` cannot answer for an fdopen -- an fd is a number,
+    not a path -- so every such write previously fell through as unresolved.
+    A descriptor from `tempfile.mkstemp` that is never promoted by a
+    `replace` is a temp file BY CONSTRUCTION, which is R5's criterion applied
+    to the one shape R5 cannot see: an integer.
+    """
+    func = call.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr == "fdopen"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "os"
+    ):
+        return False
+    if not call.args:
+        return False
+    fd_arg = call.args[0]
+    return isinstance(fd_arg, ast.Name) and fd_arg.id in scratch_fds
+
+
 def _resolve_target_expr(
-    expr: ast.AST, tmp_bases: dict[str, ast.AST]
+    expr: ast.AST,
+    tmp_bases: dict[str, ast.AST],
+    local_binds: dict[str, ast.AST] | None = None,
 ) -> tuple[str, str | None]:
-    """Classify a raw target expression, applying R4's substitution first.
+    """Classify a raw target expression, applying R4's substitution first,
+    then R8's single-assignment name substitution when the expression is
+    still neither excluded nor literal.
 
     Returns `("excluded", None)`, `("literal", <string>)`, or
     `("unresolved", None)`.
@@ -594,6 +876,18 @@ def _resolve_target_expr(
     literal = _str_const(resolved)
     if literal is not None:
         return "literal", literal
+
+    if local_binds:
+        # R8 runs LAST: R4's `.tmp`-sibling substitution and R5's inline
+        # exclusions both answer on the expression as written, and only a
+        # target still carrying an unresolved Name reaches here.
+        widened = _substitute_local_names(resolved, local_binds)
+        if ast.unparse(widened) != ast.unparse(resolved):
+            if _is_excluded_base(widened):
+                return "excluded", None
+            literal = _str_const(widened)
+            if literal is not None:
+                return "literal", literal
 
     return "unresolved", None
 
@@ -667,6 +961,8 @@ def _module_is_generator(
     handle_names = _handle_names(tree)
     tmp_bases, mkstemp_names = _tmp_var_info(tree)
     tmp_var_names = mkstemp_names | frozenset(tmp_bases)
+    scope_binds = _ScopeBindings(tree)
+    scratch_fds = _scratch_mkstemp_fds(tree, scope_binds)
 
     unresolved_seen = False
 
@@ -686,13 +982,18 @@ def _module_is_generator(
             unresolved_seen = True
             continue
 
+        if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7
+            continue
+
         expr = _write_target_expr(node)
         if expr is None:
             unresolved_seen = True
             continue
 
-        kind, literal = _resolve_target_expr(expr, tmp_bases)
-        if kind == "excluded":  # R5
+        kind, literal = _resolve_target_expr(
+            expr, tmp_bases, scope_binds.at(node.lineno)
+        )
+        if kind == "excluded":  # R5 (widened by R8)
             continue
         if kind == "unresolved":
             unresolved_seen = True

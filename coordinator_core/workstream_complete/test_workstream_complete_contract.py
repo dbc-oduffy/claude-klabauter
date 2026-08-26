@@ -32,9 +32,13 @@ blanket-exempt, if C2*/C3 lands one).
 
 Coverage caveat, stated explicitly rather than silently assumed: this file
 is authored before C2a-C2i exist, so `_all_emittable_directive_clis` can
-only sweep the THREE conditional axes already documented on today's
+only sweep the FOUR conditional axes already documented on today's
 pre-conversion `build_directives` (governing_plan_slug presence,
-chain-terminal-vs-single-session disposition, review-fields presence).
+chain-terminal-vs-single-session disposition, review-fields presence,
+and lesson-capture engine-stamp reachability -- the fourth added when
+C11/AC15 made the lesson-capture directives conditional on
+`_lesson_capture_reachable()`, which is monkeypatched over both legs
+rather than left to whatever this clone's stamp state happens to be).
 Most of the ~35 new directives C2a-C2i add are expected to be unconditional
 scans/shell-conversions (D-3/D-4) and so appear on every sweep leg
 regardless; if C3 lands a genuinely new conditional axis this sweep does
@@ -222,14 +226,20 @@ def _all_emittable_directive_clis(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     for gate in dispositions:
         for governing_plan_slug in (False, True):
             for review_present in (False, True):
-                monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, gate=gate: gate)
-                decisions = _rich_decisions(
-                    governing_plan_slug=governing_plan_slug,
-                    review_present=review_present,
-                    tmp_path=tmp_path,
-                )
-                decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
-                clis.update(d["cli"] for d in decision_object["directives"])
+                for lesson_reachable in (False, True):
+                    monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, gate=gate: gate)
+                    monkeypatch.setattr(
+                        wsc,
+                        "_lesson_capture_reachable",
+                        lambda reachable=lesson_reachable: reachable,
+                    )
+                    decisions = _rich_decisions(
+                        governing_plan_slug=governing_plan_slug,
+                        review_present=review_present,
+                        tmp_path=tmp_path,
+                    )
+                    decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
+                    clis.update(d["cli"] for d in decision_object["directives"])
     return clis
 
 

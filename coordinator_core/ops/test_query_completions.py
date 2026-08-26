@@ -80,7 +80,16 @@ def test_format_json_emits_bare_stringify_array(tmp_path: Path):
     assert parsed == [
         {
             "path": "archive/completed/2026-07/c.md",
-            "frontmatter": {"title": "Entry C", "nature": "fix", "liveness": "LIVE"},
+            "frontmatter": {
+                "title": "Entry C",
+                "nature": "fix",
+                "liveness": "LIVE",
+                # "archived" is injected onto every record's frontmatter,
+                # always present (coordinator_core/ops/records_query.py's own
+                # module docstring, same collection-origin injection as
+                # "liveness" -- not optional, not type-specific).
+                "archived": False,
+            },
         }
     ]
 
