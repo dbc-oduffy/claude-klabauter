@@ -166,7 +166,12 @@ from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 _chunk_paths = git_native._chunk_paths
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
-from coordinator_core.git.git_state import IndexParseError, index_read_cache_scope, read_index
+from coordinator_core.git.git_state import (
+    IndexParseError,
+    head_blobs,
+    index_read_cache_scope,
+    read_index,
+)
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -985,6 +990,74 @@ def _require_worktree_root(worktree_root: Union[str, Path]) -> Path:
     return root
 
 
+def _swept_rename_delete_paths(
+    root: Path, paths: Sequence[str]
+) -> Tuple[Dict[str, str], Set[str]]:
+    """`(swept_rename, swept_delete)` for `paths` -- the same two facts
+    `explicit_stage()` used to read via a single unpathspec'd `git diff
+    --cached --name-status --find-renames` (spawn 1, C2, docs/dispatch-briefs/
+    2026-08-26-the-commit-op-stops-asking-git-eleven-times/C2.md). In-process
+    via `read_index` + `head_blobs` for the common case -- never a new
+    parser; both readers already back `dirty_tree_gate` on this same call
+    path (see that gate's own `_is_staged` for the identical index-vs-HEAD
+    shape this mirrors) -- with a scoped git fallback for the one case an
+    index/HEAD comparison genuinely cannot answer on its own.
+
+    A path `p` that is absent from the current index but present at HEAD is
+    either a swept DELETE or a swept RENAME. An EXACT `(mode, sha)` match
+    against some other current-index path is a safe, spawn-free proof of a
+    100%-identical rename -- an ordinary `git mv`, or an add+rm of
+    unmodified content, the shape a concurrent peer/tail sweep documented
+    in `explicit_stage()`'s own docstring actually produces. No exact match
+    is reported as a plain DELETE.
+
+    This deliberately does NOT replicate git's percentage-similarity
+    `--find-renames` judgment (default ~50% content similarity): a
+    concurrent peer's rename of a path this call also EDITED first (rare --
+    the "swept" population this function classifies is, by construction, a
+    path this call's OWN caller never touched) would be misreported as a
+    delete rather than a rename. `explicit_stage()`'s own docstring already
+    tolerates a swept path being misclassified as plain "missing" for
+    unrelated reasons (an unrecognized rename target falls through to
+    `swept_deleted`/`missing`, never a hard failure) -- this is the same
+    tolerance, one layer earlier, and is why `deletion_paths` (built from
+    `staged_paths`, not from this rename map) is what protects the actual
+    commit-message "Deleted" block, not this classification.
+
+    Raises `IndexParseError` on an unmerged (mid-merge-conflict) index --
+    caller decides fallback, mirroring `dirty_tree_gate`'s own fail-loud
+    contract; never silently degrades to "nothing swept".
+    """
+    swept_rename: Dict[str, str] = {}
+    swept_delete: Set[str] = set()
+    if not paths:
+        return swept_rename, swept_delete
+
+    index_snapshot = read_index(root)
+    head_result = head_blobs(root, paths)
+    if not head_result:
+        return swept_rename, swept_delete
+
+    sha_to_paths: Dict[str, List[str]] = {}
+    for ip, entry in index_snapshot.items():
+        sha_to_paths.setdefault(entry.sha, []).append(ip)
+
+    for p in paths:
+        head_entry = head_result.get(p)
+        if head_entry is None:
+            continue
+        if p in index_snapshot:
+            continue
+        _, head_sha_value = head_entry
+        candidates = [ip for ip in sha_to_paths.get(head_sha_value, []) if ip != p]
+        if candidates:
+            swept_rename[p] = sorted(candidates)[0]
+        else:
+            swept_delete.add(p)
+
+    return swept_rename, swept_delete
+
+
 def explicit_stage(
     worktree_root: Union[str, Path],
     paths: Sequence[str],
@@ -1216,20 +1289,37 @@ def explicit_stage(
     if not paths:
         return StageOutcome(exit_code=0, skipped=["stage:no-paths-provided"])
 
-    swept_rename: Dict[str, str] = {}
-    swept_delete: Set[str] = set()
-    diff_result = git_native.diff_cached_name_status(root, find_renames=True)
-    if diff_result.ok:
-        for line in diff_result.stdout.splitlines():
-            parsed = _parse_rename_line(line)
-            if parsed is not None:
-                swept_rename[parsed[0]] = parsed[1]
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 2 and parts[0] == "D":
-                swept_delete.add(parts[1])
-    # A failing `git diff --cached` (e.g. no commits yet) leaves the swept-set
-    # empty -- best-effort, mirrors the OLD seam's try/except-Exception shape.
+    # C2 (2026-08-26, state/dispatch-briefs/2026-08-26-the-commit-op-stops-
+    # asking-git-eleven-times/C2.md, spawn 1): the pre-add "what's already
+    # swept" read, in-process via `read_index` + `head_blobs` -- see
+    # `_swept_rename_delete_paths`'s own docstring for the exact-match
+    # rename constraint and why it needs no new parser. `read_index` raises
+    # `IndexParseError` on any unmerged (mid-merge-conflict) index --
+    # `dirty_tree_gate` already learned (code-review finding F1) that an
+    # uncaught raise here turns a stage-classification decision into a
+    # crashed commit op, so a parse failure falls back to the original
+    # `git diff --cached --name-status --find-renames` spawn rather than
+    # propagating.
+    try:
+        swept_rename, swept_delete = _swept_rename_delete_paths(
+            root, [_worktree_key(root, p) for p in paths]
+        )
+    except IndexParseError:
+        swept_rename = {}
+        swept_delete = set()
+        diff_result = git_native.diff_cached_name_status(root, find_renames=True)
+        if diff_result.ok:
+            for line in diff_result.stdout.splitlines():
+                parsed = _parse_rename_line(line)
+                if parsed is not None:
+                    swept_rename[parsed[0]] = parsed[1]
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[0] == "D":
+                    swept_delete.add(parts[1])
+        # A failing `git diff --cached` (e.g. no commits yet) leaves the
+        # swept-set empty -- best-effort, mirrors the OLD seam's
+        # try/except-Exception shape.
 
     # Unstaged-deletion set (defect A): tracked paths, scoped to this call's
     # own `paths`, whose worktree content is missing but whose index still

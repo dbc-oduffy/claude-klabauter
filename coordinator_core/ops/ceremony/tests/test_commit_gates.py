@@ -620,6 +620,66 @@ def test_dirty_tree_gate_none_gate_paths_preserves_unfiltered_behaviour(tmp_path
     assert outcome.unattributable == ["orphan.txt"]
 
 
+def test_dirty_tree_gate_scoped_autocrlf_dirty_clean_tracked_path_not_flagged(tmp_path):
+    """DR-227 (2026-08-26 follow-up): the reverted `da156a723` attempt hashed
+    on-disk worktree bytes and compared them to the index sha, which
+    misclassified ~81% of clean tracked files as diverged on this repo's
+    `core.autocrlf=true` (measured 326/400 MISMATCH). This pins that the
+    scoped fast path never inspects content or stat bytes at all -- a clean,
+    committed, autocrlf-normalized file inside `gate_paths` is never flagged,
+    because classification here is index-membership vs on-disk-existence
+    only, with nothing for autocrlf's byte-level normalization to disturb."""
+    repo = _init_repo(tmp_path)
+    _git(["config", "core.autocrlf", "true"], repo)
+    _seed_file(repo, "crlf.txt", "line one\nline two\n")
+    _git(["add", "--", "crlf.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    outcome = dirty_tree_gate(repo, gate_paths=["crlf.txt"])
+    assert outcome.passed is True
+    assert outcome.unattributable == []
+
+
+def test_dirty_tree_gate_scoped_unstaged_deletion_still_reported(tmp_path):
+    """DR-227's one reachable member: an index entry whose worktree path
+    vacated without ever being `git rm`ed. Must still report through the
+    zero-spawn scoped fast path -- `deletion_block_gate` Assertion-1 already
+    blocks this case earlier with a better diagnostic, but this gate's own
+    fail-closed contract does not change: it must still classify it as
+    unattributable, not silently pass just because the enumeration
+    mechanism changed."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "doomed.txt", "content")
+    _git(["add", "--", "doomed.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    (repo / "doomed.txt").unlink()
+
+    outcome = dirty_tree_gate(repo, gate_paths=["doomed.txt"])
+    assert outcome.passed is False
+    assert outcome.unattributable == ["doomed.txt"]
+
+
+def test_dirty_tree_gate_scoped_peer_dirty_path_excluded_even_with_own_hit(tmp_path):
+    """DR-227 fail-closed pairing, exercised alongside a genuine hit: a
+    peer's own dirty (untracked) file entirely outside this caller's
+    `gate_paths` must be excluded even when this caller's own scoped
+    candidate genuinely reports -- not merely down-ranked, absent from
+    `unattributable` altogether (module negative-spec, DR-227)."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "peer-session-file.txt", "peer's in-flight work")
+    _seed_file(repo, "mine.txt", "my own untracked file")
+
+    outcome = dirty_tree_gate(repo, gate_paths=["mine.txt"])
+    assert outcome.passed is False
+    assert outcome.unattributable == ["mine.txt"]
+    assert "peer-session-file.txt" not in outcome.unattributable
+
+
 def test_dirty_tree_gate_empty_gate_paths_scopes_to_nothing_and_passes(tmp_path):
     """`gate_paths=[]` (empty, non-None) is DELIBERATELY NOT the same as
     `None` -- it scopes to nothing, so every otherwise-unattributable path

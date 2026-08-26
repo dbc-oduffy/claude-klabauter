@@ -158,3 +158,31 @@ def test_a_complete_module_passes_every_scoping():
         None,
     ):
         _check(publish_sync, modes)
+
+
+def test_refusal_names_the_engine_module_to_diff_against(stale_override):
+    """A refusal against an OVERRIDE must name the engine module the reader has
+    to diff, not just the offending path. doe-claude-em, 2026-08-26: an AC15
+    refusal over `sweep_top_level_orphans` gave them the kwarg and the rung --
+    enough for a five-minute diagnosis -- but not the reference path, which
+    they then had to find by hand before they could port the missing bodies."""
+    with pytest.raises(publish.PublishSyncContractError) as excinfo:
+        _check(stale_override, frozenset({"mirror", "repo-cut"}))
+    assert str(publish._ENGINE_PUBLISH_SYNC_PATH) in excinfo.value.message
+
+
+def test_refusal_against_the_engine_module_does_not_name_it_twice():
+    """The suffix is for the override case only. When the engine module IS what
+    failed, repeating its path adds a second copy of a fact already in the
+    message -- one fact once (guard-messaging § Register)."""
+    module = types.ModuleType("engine_missing_sync_mirror")
+    module.sync_flat_mirror = publish_sync.sync_flat_mirror
+    module.load_ignore = publish_sync.load_ignore
+    with pytest.raises(publish.PublishSyncContractError) as excinfo:
+        publish.check_publish_sync_contract(
+            module,
+            publish._ENGINE_PUBLISH_SYNC_PATH,
+            "native",
+            modes_in_run=frozenset({"mirror"}),
+        )
+    assert "Expected (engine)" not in excinfo.value.message

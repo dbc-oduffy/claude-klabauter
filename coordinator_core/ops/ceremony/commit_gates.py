@@ -125,6 +125,21 @@ Negative-spec (hard-won, preserved from the bash originals):
     narrowing what the gate is even allowed to report on. See
     `ceremony/wsc_commit.py:2037`'s `_run_dirty_tree_gate` docstring for
     the cross-pointer back to here.
+  - `dirty_tree_gate`'s scoped (`gate_paths` not `None`) code path does NOT
+    spawn `git diff-files`/`git ls-files` to enumerate the dirty tree and
+    then filter it down -- DR-227 (docs/decisions/DR-227-whole-tree-dirty-
+    classifier-redundant-under-explicit-path-scoping.md, 2026-08-26
+    follow-up) proves the scoped case-(c) set is empty by construction for
+    the staged half of `gate_paths`, and its one reachable member (an
+    unstaged deletion) is answerable with `read_index()` + `os.path.exists()`
+    at zero spawns. Do NOT re-add a `_dirty_candidate_paths` call, and do NOT
+    add a stat/content-based worktree comparison to cover the diverged-bytes
+    axis in the scoped path -- that axis is unreachable through the real
+    caller and a naive stat/byte comparison reproduces the exact
+    autocrlf false-positive class the reverted `da156a723` attempt shipped
+    (measured: 326/400 clean tracked files MISMATCH on this repo's
+    `core.autocrlf=true`). The unscoped (`gate_paths=None`) path is
+    unaffected and still uses `_dirty_candidate_paths`.
   - Neither gate shells out to bash, node, or awk -- all parsing is native
     Python string/regex work; every git read routes through
     `git_native._git` (AC2/AC3), never a bare `subprocess.run`.
@@ -853,6 +868,20 @@ def dirty_tree_gate(
                               session's file on a shared branch, the normal
                               case) is excluded, never scored against this
                               caller.
+
+                          A non-empty `gate_paths` takes a DIFFERENT,
+                          zero-`git`-spawn code path than `None` (see DR-227,
+                          docs/decisions/DR-227-whole-tree-dirty-classifier-
+                          redundant-under-explicit-path-scoping.md, 2026-08-26
+                          follow-up): rather than enumerating the whole dirty
+                          tree via `git diff-files`/`git ls-files` and
+                          filtering it down, the scoped case classifies each
+                          `gate_paths` member directly against `read_index()`
+                          and `os.path.exists()`. This does not attempt the
+                          diverged-bytes axis (see the classification loop's
+                          own comment) -- DR-227 proves that axis unreachable
+                          through the real caller, and `None` still covers it
+                          for any caller that needs it.
     """
     root = Path(worktree_root)
     known_scope = _build_known_scope(root)
@@ -868,13 +897,72 @@ def dirty_tree_gate(
     if scoped and not gate_scope:
         return DirtyTreeOutcome(passed=True, unattributable=[])
 
-    # Pathspec-scoped when the caller named one. The filter below already
-    # drops every path outside `gate_scope`, so scoping the QUERY narrows
-    # only work, never the answer -- and it is retained verbatim rather than
-    # relied upon being redundant: a directory element in `gate_paths` makes
-    # `git` emit that directory's children, which the exact-match filter
-    # discards exactly as it does today under the whole-tree scan.
-    all_paths: List[str] = _dirty_candidate_paths(root, sorted(gate_scope) if scoped else None)
+    if scoped:
+        # DR-227 (docs/decisions/DR-227-whole-tree-dirty-classifier-
+        # redundant-under-explicit-path-scoping.md), 2026-08-26 follow-up:
+        # the vacuity argument proves case (c) is empty by construction for
+        # the staged half of `gate_paths` -- every staged path is already
+        # caught by case (a) before scoping is even consulted (see this
+        # module's own "degenerate by construction" negative-spec above).
+        # The only member that CAN reach case (c) through the real caller
+        # (`run_commit_pipeline`) is an unstaged deletion: an index entry
+        # whose worktree path has vacated without ever being staged for
+        # deletion. Answered here with `os.path.exists()` over the caller's
+        # own `gate_scope` at zero `git` spawns, retiring the two
+        # `_dirty_candidate_paths` subprocesses (`git diff-files` +
+        # `git ls-files --others`) this scoped path used to pay for just to
+        # re-derive a set already known to be empty.
+        #
+        # A second, symmetric axis -- untracked (no index entry, present on
+        # disk) -- is answered the same zero-spawn way, purely as
+        # fail-closed defence-in-depth (DR-227's own rationale) against a
+        # future caller hand-building `gate_paths` with a path that was
+        # never staged at all; today's real caller cannot produce one
+        # (`compute_gate_paths` only ever unions `stage.staged_paths` and
+        # `deleted_paths`).
+        #
+        # DELIBERATELY NOT attempted here: the diverged-bytes axis (a
+        # tracked, unstaged path whose worktree CONTENT differs from the
+        # index). That axis is BLOCKED absent a filter-aware in-process
+        # hash -- git's own content comparison (autocrlf, other filters)
+        # cannot be reproduced with a stat/byte check without reproducing
+        # the exact false-positive class the reverted `da156a723` attempt
+        # shipped (measured on this repo: 326/400 clean autocrlf-normalized
+        # tracked files MISMATCH under a naive worktree-bytes-vs-index-sha
+        # comparison). Per DR-227, this axis is unreachable through the real
+        # caller anyway -- every non-deletion `gate_paths` member is already
+        # staged and excluded by case (a) before this classification runs.
+        # The unscoped branch below (`gate_paths=None`) is untouched and
+        # still covers this axis via `git diff-files` for its own callers.
+        try:
+            index_snapshot = read_index(root)
+        except IndexParseError as exc:
+            return DirtyTreeOutcome(
+                passed=False,
+                unattributable=[f"<index unreadable: {exc}>"],
+            )
+
+        for path in sorted(gate_scope):
+            in_index = path in index_snapshot
+            on_disk = os.path.exists(root / path)
+            if in_index == on_disk:
+                # Both true: staged/clean, or the blocked diverged-bytes
+                # axis -- not answered by this fast path. Both false: not
+                # a member of either reachable axis at all.
+                continue
+            if path in known_scope:
+                continue
+            unattributable.append(path)
+
+        return DirtyTreeOutcome(passed=not unattributable, unattributable=unattributable)
+
+    # Unscoped (`gate_paths=None`) -- the original whole-tree walk, retained
+    # for `ops.dirty_tree_gate`'s CLI trampoline and any other direct
+    # unscoped caller of this function. DR-227's vacuity argument does not
+    # apply here: there is no caller-supplied candidate set to bound the
+    # search to, so the diverged-bytes axis still needs `git diff-files`'s
+    # real content comparison.
+    all_paths: List[str] = _dirty_candidate_paths(root, None)
 
     # (a)'s "staged" classification no longer trusts git status's own X
     # column -- it is recomputed from `read_index` + `head_blobs` (the

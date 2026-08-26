@@ -2842,6 +2842,93 @@ def _hash_object_stdin_paths(
     )
 
 
+def _hash_worktree_blobs(
+    paths: Sequence[str],
+    *,
+    cwd: Union[str, Path],
+    timeout: float = _DEFAULT_TIMEOUT_SECS,
+) -> GitResult:
+    """Write a blob per worktree-sourced `path`, in process where safe,
+    falling back to the ONE-spawn `_hash_object_stdin_paths` ladder for
+    every path this in-process check cannot safely reproduce. C3,
+    docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md:
+    adopts `commit_authored_new_file`'s already-shipped in-process blob
+    write (`git_objects.write_object` behind a clean-pipeline pre-check)
+    into this call site, retiring most `git hash-object -w --stdin-paths`
+    spawns without narrowing what this branch can commit.
+
+    Per path, read `cwd/path`'s bytes off disk and apply the SAME two
+    refusals `commit_authored_new_file` carries verbatim (carried, not
+    re-derived, per this chunk's brief): a CR byte in the content refuses
+    the in-process write (CR-free content is a fixed point of `text`/
+    `core.autocrlf` clean normalization, so its absence makes the eol
+    machinery provably a no-op rather than merely unlikely), and a
+    repo-local `filter=` attribute pattern matching the path refuses it
+    too (`_clean_filter_may_apply`, path-scoped, not repo-scoped -- an
+    LFS repo stays deliverable for a markdown memo). An unreadable path
+    (already deleted, now a directory, permission error) also refuses,
+    since only `git hash-object` itself can report that failure the way
+    every existing caller of this branch already expects.
+
+    A refused path is never dropped: it is queued into the SAME
+    `git hash-object -w --stdin-paths` spawn today's ladder already
+    issues, so a refused case commits identically to before this chunk
+    -- this is an optimisation with an escape hatch, never a narrowing
+    of what `_commit_scoped_private_index` can commit. `write_object`
+    writes bytes VERBATIM; the safety argument above is exactly what
+    makes that byte-identical to what `git hash-object -w` (which runs
+    the clean pipeline) would have written for a refused-free path.
+
+    Returns a `GitResult` shaped like `_hash_object_stdin_paths`'s own
+    contract: on success, `stdout` carries one 40-hex sha per line, in
+    the SAME ORDER `paths` was given in -- callers zip that order back
+    onto `paths` themselves, in-process shas and spawned shas
+    interleaved transparently.
+    """
+    if not paths:
+        return GitResult(returncode=0, stdout="", stderr="")
+
+    root = Path(cwd)
+    in_process_shas: Dict[str, str] = {}
+    refused: List[str] = []
+
+    for path in paths:
+        try:
+            content = (root / path).read_bytes()
+        except OSError:
+            refused.append(path)
+            continue
+        if b"\r" in content:
+            refused.append(path)
+            continue
+        if _clean_filter_may_apply(root, path.replace("\\", "/")) is not None:
+            refused.append(path)
+            continue
+        in_process_shas[path] = write_object(resolve_git_common_dir(root), b"blob", content)
+
+    if refused:
+        spawn_result = _hash_object_stdin_paths(refused, cwd=root, timeout=timeout)
+        if not spawn_result.ok:
+            return spawn_result
+        shas = spawn_result.stdout.splitlines()
+        if len(shas) != len(refused):
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    "_hash_worktree_blobs: `git hash-object --stdin-paths` "
+                    f"returned {len(shas)} sha(s) for {len(refused)} refused "
+                    "path(s) -- refusing to guess an alignment"
+                ),
+            )
+        spawned_shas = dict(zip(refused, shas))
+    else:
+        spawned_shas = {}
+
+    ordered = [in_process_shas.get(p, spawned_shas.get(p, "")) for p in paths]
+    return GitResult(returncode=0, stdout="\n".join(ordered) + "\n", stderr="")
+
+
 def _commit_scoped_private_index(
     diverged: Sequence[str],
     non_diverged: Sequence[str],
@@ -2904,8 +2991,13 @@ def _commit_scoped_private_index(
     fan-out/`git write-tree`/`git commit-tree`/`git update-ref` are all
     gone. The whole tree is now assembled IN PROCESS: `read_index()` (C2,
     spawn-free) supplies the one real-index snapshot AC11(a) requires,
-    `_hash_object_stdin_paths()` writes every worktree-sourced blob in ONE
-    spawn regardless of pathspec length (AC13), `_assemble_commit_tree_input`
+    `_hash_worktree_blobs()` writes every worktree-sourced blob (C3,
+    docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md:
+    in process, via `write_object`, for every path a clean-pipeline
+    pre-check clears; only a refused path falls back to the ONE
+    `git hash-object -w --stdin-paths` spawn this call site used to
+    issue unconditionally regardless of pathspec length, AC13),
+    `_assemble_commit_tree_input`
     (C8a) resolves each path's `(mode, sha)` (or ABSENT, for a staged
     deletion) off that snapshot plus the HEAD tree spine, and
     `_commit_via_head_spine` (C4) rewrites HEAD's tree spine, builds the
@@ -2950,7 +3042,7 @@ def _commit_scoped_private_index(
     # private index used to take.
     worktree_blobs: Dict[str, str] = {}
     if worktree_paths:
-        hash_result = _hash_object_stdin_paths(worktree_paths, cwd=root)
+        hash_result = _hash_worktree_blobs(worktree_paths, cwd=root)
         if not hash_result.ok:
             return hash_result
         shas = hash_result.stdout.splitlines()

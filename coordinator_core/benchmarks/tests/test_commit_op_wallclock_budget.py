@@ -16,36 +16,46 @@ them — so the two numeric gates below (AC4's 150ms wallclock median, AC7's
 "AC4's target holds under concurrent load") are now REAL assertions, not
 recorded-only instrument sanity.
 
-STALE-NUMBER WARNING, 2026-08-26 (session a2d4a470). The MEASURED block below
-predates `a28dd424` and records COLD-path numbers under a warm label; the
-8-way figure is real but was taken under heavy box load, not by the 8-way arm
-alone. Superseded numbers, measured through one identical shape per rung
+STALE-NUMBER WARNING, 2026-08-26 (session a2d4a470). An earlier MEASURED
+block here recorded 551.6ms wallclock / 849.4ms p95 / 695.3ms process time /
+35.75 job-object processes/call / 3959.1ms 8-way p50 -- COLD-path numbers
+under a warm label, predating `a28dd424`. Do not cite those figures; they
+are removed from this docstring rather than left for a reader to stumble
+into. Superseded numbers, measured through one identical shape per rung
 (docs/research/spike-verdicts/2026-08-26-where-the-commit-op-s-other-half-
 second-goes.md): wallclock median 360.4ms, in-process handler 371.4ms over
 **11 git spawns** (320.0ms, 86.1%), 8-way p50 1232.8ms with 0/8
-indeterminate. Two further defects in THIS file, both owned by C5 of
-docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md:
-`_write_driver` emits a driver that ITSELF spawns the invoke door, so every
-sample here carries TWO interpreter starts (~37ms of pure floor) while AC5's
-dial leg is measured at ONE — the two numbers were never comparable; and the
-job-object process count under-reports (3.0 vs the census's 11) because it
-sees landing spawns, not the gate path. Do not cite the block below.
+indeterminate.
 
-MEASURED 2026-08-26, POST-C3/C5, this repo's own isolated warm server (this
-file's own `warm_engine_root` fixture): wallclock median 551.6ms / p95
-849.4ms (target 150ms), process_time 695.3ms at 35.75 job-object
-processes/call, and an 8-way concurrent p50 of 3959.1ms / p95 3990.7ms —
-each roughly 3.7-26x over AC4's target, not a rounding-distance miss. AC5's
-dial leg alone (a zero-git `ping` through the identical door) measures 1
-process / ~82ms, so the transport itself is not the residual cost: the
-excess sits inside the commit op's own handler path (the four commit-leg
-gates, trailer assembly, and/or hooks still walking `subprocess.run` rather
-than the in-process object-write machinery C3 shipped for the commit itself)
-— a design/mechanism gap in files this chunk's `writes:` scope excludes
+INSTRUMENT FIX, C5 of docs/plans/2026-08-26-the-commit-op-stops-asking-git-
+eleven-times.md. Two defects in THIS file's prior shape, both now fixed:
+`_write_driver` emitted a driver that ITSELF spawned the invoke door, so
+every wallclock/concurrent sample carried TWO interpreter starts (~37ms of
+pure floor) while AC5's dial leg is measured at ONE — the two numbers were
+never comparable. The wallclock and concurrent legs now call
+`_invoke_commit_argv` directly (`_prepare_commit_invocation` mutates
+`tracked.txt` and writes the params file OUTSIDE the timed window, in the
+harness loop, before `time.perf_counter()` starts) — ONE interpreter per
+sample, the same shape AC5's dial leg measures. The process-time/spawn-count
+leg still uses `_write_driver` + `batched_process_time_ms`, which by
+construction re-runs identical argv and so cannot vary content from outside;
+that leg's process-time figure therefore still folds in the driver's own
+interpreter start (module's own DRIVER SHAPE section below), and the
+job-object process count under-reports (3.0 vs the census's 11) because it
+sees landing spawns, not the gate path — a separate, already-known
+limitation of that leg, not something this fix claims to close.
+
+No MEASURED block is recorded here post-fix: this chunk (C5) rebuilds the
+instrument only, and does not re-run it to mint new gated numbers -- that is
+C6's own task per the header above. AC5's dial leg alone (a zero-git `ping`
+through the identical door) measures 1 process / ~82ms, so the transport
+itself is not the residual cost: the excess named by the spike sits inside
+the commit op's own handler path (the four commit-leg gates, trailer
+assembly, and/or hooks still walking `subprocess.run` rather than the
+in-process object-write machinery C3 shipped for the commit itself) — a
+design/mechanism gap in files this chunk's `writes:` scope excludes
 (`commit_op.py`, `git_native.py`, `commit_pipeline.py`), not a measurement
-artifact of this instrument. Recorded here, gated below, and reported back
-to the plan rather than silently loosened: per the plan's own AC4 section,
-"the answer is to make the op cheaper... not to widen AC4."
+artifact of this instrument.
 
 THREE COLUMNS, NEVER COLLAPSED (plan task body, verbatim instruction).
 wallclock (median/p50/p95), process time, and job-object spawn count are
@@ -90,21 +100,28 @@ Skips (never fails) when this file's own `coordinator_core/` package is
 absent, which cannot happen in a checked-out repo but is named for parity
 with the sibling gate's skip discipline.
 
-DRIVER SHAPE. `batched_process_time_ms` re-runs the SAME argv `k` times, so
-per-invocation commit content must differ -- the driver mutates
-`tracked.txt` to fresh content IN-PROCESS, then spawns `python -m
-coordinator_core.invoke ceremony.commit ... --params-file <path>` as a
-CHILD and exits with its own return code, forwarding stdout so this file's
-callers can still read the JSON-RPC envelope. `--params-file` (not the
-positional `params_json` argv form) is deliberate, not incidental: this
-driver's params carry a JSON object with braces/spaces
-(`invoke/__main__.py`'s own docstring names exactly this payload shape as
-`--params-file`'s reason to exist -- quoting-immune, ARG_MAX-safe). The
-driver's own interpreter start is therefore counted alongside the invoke
-door's in every figure this file reports; unlike `test_commit_path_process_
-budget.py`'s driver-residue calibration, this file does not subtract it out
--- C2 is establishing the instrument, not pinning an AC6-style ceiling
-tight enough for a wrapper's own interpreter start to matter.
+TWO DIFFERENT SHAPES, POST-C5. The wallclock leg (AC4) and the concurrent
+leg (AC7) time the invoke door argv DIRECTLY via `_invoke_commit_argv` — no
+driver, ONE interpreter start per sample — with `_prepare_commit_invocation`
+mutating `tracked.txt` and writing the `--params-file` sidecar OUTSIDE the
+timed window, in the harness loop, before the clock starts. The
+process-time/spawn-count leg (still recorded, never gated) keeps the driver
+shape: `batched_process_time_ms` re-runs the SAME argv `k` times, so
+per-invocation commit content must differ from OUTSIDE that call, which only
+a driver can do -- the driver mutates `tracked.txt` to fresh content
+IN-PROCESS, then spawns `python -m coordinator_core.invoke ceremony.commit
+... --params-file <path>` as a CHILD and exits with its own return code,
+forwarding stdout so this file's callers can still read the JSON-RPC
+envelope. `--params-file` (not the positional `params_json` argv form) is
+deliberate, not incidental: the params carry a JSON object with
+braces/spaces (`invoke/__main__.py`'s own docstring names exactly this
+payload shape as `--params-file`'s reason to exist -- quoting-immune,
+ARG_MAX-safe). The driver's own interpreter start is therefore still counted
+alongside the invoke door's in that one leg's process-time figure; unlike
+`test_commit_path_process_budget.py`'s driver-residue calibration, this file
+does not subtract it out for that leg -- it is a known, named limitation of
+the process-time/spawn-count column only, never of the wallclock or
+concurrent columns AC4/AC7 gate.
 
 AC5's DIAL LEG: measured as `ping` (a "none"-scoped, zero-git, near-instant
 op) against the SAME isolated warm server — the cost of reaching the engine
@@ -430,6 +447,46 @@ def _build_fixture_repo(tmp_path: Path, branch: str) -> Path:
     return repo
 
 
+def _prepare_commit_invocation(repo: Path, counter_path: Path) -> Path:
+    """Mutates `tracked.txt` to fresh content and writes the `--params-file`
+    sidecar OUTSIDE any timed window -- content variation and the params IO
+    are harness setup, not part of the measured invocation (module
+    docstring: "Per-iteration content mutation must happen OUTSIDE the timed
+    window ... vary it in the harness before starting the clock, exactly as
+    the spike's own ladder does"). Same idempotent-fixture trap
+    `test_commit_path_process_budget.py::_write_driver` names -- re-running
+    identical content would make every re-commit a no-op. Returns the
+    `--params-file` path the caller builds its argv from."""
+    n = int(counter_path.read_text()) if counter_path.exists() else 0
+    n += 1
+    counter_path.write_text(str(n))
+    (repo / "tracked.txt").write_text(f"harness rev {n}\n", encoding="utf-8")
+    params = {
+        "subject": f"c2 wallclock baseline commit {n}",
+        "stage_paths": ["tracked.txt"],
+        "caller_paths": ["tracked.txt"],
+        "push_mode": "none",
+    }
+    params_path = counter_path.with_suffix(".params.json")
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+    return params_path
+
+
+def _invoke_commit_argv(repo: Path, params_path: Path) -> List[str]:
+    """The invoke door argv, timed DIRECTLY -- no driver wrapper, ONE
+    interpreter start, the same shape AC5's dial leg measures (module
+    docstring: "time the invoke door argv directly"). `--params-file` (not
+    the positional `params_json` argv form) is deliberate, not incidental:
+    this driver's params carry a JSON object with braces/spaces
+    (`invoke/__main__.py`'s own docstring names exactly this payload shape
+    as `--params-file`'s reason to exist -- quoting-immune, ARG_MAX-safe)."""
+    return [
+        sys.executable, "-m", "coordinator_core.invoke", "ceremony.commit",
+        "--params-file", str(params_path), "--repo", str(repo),
+        "--allow-unstamped-dispatch",
+    ]
+
+
 def _write_driver(driver_path: Path, repo: Path, counter_path: Path, isolated_root: Path) -> None:
     """Writes a driver that, IN-PROCESS, mutates `tracked.txt` to fresh
     content (so k identical-argv re-runs each produce a real, distinct
@@ -437,7 +494,17 @@ def _write_driver(driver_path: Path, repo: Path, counter_path: Path, isolated_ro
     .py::_write_driver` names), writes the params object to a sidecar file,
     then spawns the real invoke door via `--params-file` (module docstring:
     quoting-immune for a JSON payload carrying braces/spaces) and forwards
-    its stdout/stderr/returncode verbatim."""
+    its stdout/stderr/returncode verbatim.
+
+    STILL USED ONLY for the process-time/spawn-count leg
+    (`batched_process_time_ms`), which re-runs the SAME argv k times and so
+    has no harness-side loop to mutate content between calls from outside —
+    the driver's own extra interpreter start is therefore folded into that
+    leg's process-time figure by construction (module docstring: "the driver
+    exists because `batched_process_time_ms` re-runs identical argv"). The
+    wallclock and concurrent legs below no longer use this: they call
+    `_prepare_commit_invocation` + `_invoke_commit_argv` and time the invoke
+    door directly, ONE interpreter per sample."""
     script = f'''\
 import json
 import subprocess
@@ -494,13 +561,28 @@ def _percentile(ordered: List[float], pct: float) -> float:
     return ordered[idx]
 
 
-def _wallclock_samples(cmd: List[str], k: int, cwd: str, env: dict) -> dict:
+def _wallclock_samples(
+    cmd: List[str],
+    k: int,
+    cwd: str,
+    env: dict,
+    prepare: Optional[object] = None,
+) -> dict:
     """Spawn-to-exit wall clock, one sample per real invocation (never a
     batched/amortised figure — AC4/AC7 need PER-CALL quantiles, not a mean).
     Verifies rc==0 and a real (non-error) JSON-RPC envelope for every
-    sample, same AC9-style discipline `timer.py::time_invocation` applies."""
+    sample, same AC9-style discipline `timer.py::time_invocation` applies.
+
+    `cmd` is the invoke door argv directly (module docstring: "time the
+    invoke door argv directly") -- ONE interpreter start per sample, never a
+    driver wrapper. `prepare`, if given, runs once per iteration BEFORE the
+    clock starts -- the harness-side content mutation the module docstring
+    requires stay OUTSIDE the timed window, exactly as the spike's own
+    ladder does."""
     samples_ms: List[float] = []
     for _ in range(k):
+        if prepare is not None:
+            prepare()
         t0 = time.perf_counter()
         completed = subprocess.run(
             cmd,
@@ -545,14 +627,15 @@ def test_commit_op_wallclock_and_spawn_baseline_are_recorded(
     repo = _build_fixture_repo(tmp_path, "work/c2-wallclock-baseline")
     env = _env()
 
-    wall_driver = tmp_path / "driver_wall.py"
     wall_counter = tmp_path / "wall_counter.txt"
-    _write_driver(wall_driver, repo, wall_counter, warm_engine_root)
+    wall_params = _prepare_commit_invocation(repo, wall_counter)
+    wall_argv = _invoke_commit_argv(repo, wall_params)
     wall = _wallclock_samples(
-        [sys.executable, str(wall_driver)],
+        wall_argv,
         k=K_WALLCLOCK_SAMPLES,
         cwd=str(warm_engine_root),
         env=env,
+        prepare=lambda: _prepare_commit_invocation(repo, wall_counter),
     )
 
     proc_driver = tmp_path / "driver_proc.py"
@@ -647,20 +730,19 @@ def test_commit_op_concurrent_load_wallclock_is_recorded(
         _git(base_repo, "worktree", "add", "-b", branch, str(wt_path), "HEAD", env=env)
         worktrees.append(wt_path)
 
-    drivers = []
+    argvs = []
     for i, wt in enumerate(worktrees):
-        driver = tmp_path / f"driver_concurrent_{i}.py"
         counter = tmp_path / f"concurrent_counter_{i}.txt"
-        _write_driver(driver, wt, counter, warm_engine_root)
-        drivers.append(driver)
+        params_path = _prepare_commit_invocation(wt, counter)
+        argvs.append(_invoke_commit_argv(wt, params_path))
 
     procs = []
     starts = []
-    for driver in drivers:
+    for argv in argvs:
         starts.append(time.perf_counter())
         procs.append(
             subprocess.Popen(
-                [sys.executable, str(driver)],
+                argv,
                 cwd=str(warm_engine_root),
                 env=env,
                 stdout=subprocess.PIPE,

@@ -917,10 +917,19 @@ def _commit_via_index(root: Path, rel_path: str, content: str = "data\n") -> Non
     filename to exist on disk.
     """
     _git(["config", "core.protectNTFS", "false"], root)
+    # Latent-bug fix (C2, discovered while proving `_swept_rename_delete_paths`
+    # unchanged behavior): `input=content` with `text=True` lets Python
+    # translate outgoing '\n' to the platform newline (CRLF on Windows)
+    # before it ever reaches git's stdin, so a blob written here can differ
+    # byte-for-byte from the SAME logical content added normally via
+    # `_seed_file` + `git add` (which is LF-normalized on checkin) -- making
+    # an intended byte-identical rename fixture actually NOT byte-identical.
+    # Raw bytes, no text-mode translation, so this blob matches what a real
+    # `git add` of the same content would store.
     blob = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"],
-        cwd=str(root), input=content, check=True, capture_output=True, text=True,
-    ).stdout.strip()
+        cwd=str(root), input=content.encode("utf-8"), check=True, capture_output=True,
+    ).stdout.decode("utf-8").strip()
     _git(["update-index", "--add", "--cacheinfo", f"100644,{blob},{rel_path}"], root)
     _git(["commit", "-m", f"add {rel_path}"], root)
 
@@ -6052,3 +6061,129 @@ def test_git_native_push_and_fetch_defaults_are_the_named_remote_guard(tmp_path)
             f"{fn.__name__} carries its own timeout literal ({default}) instead of "
             f"REMOTE_BUDGET_SECS"
         )
+
+
+# ---------------------------------------------------------------------------
+# _swept_rename_delete_paths (C2, state/dispatch-briefs/2026-08-26-the-
+# commit-op-stops-asking-git-eleven-times/C2.md, spawn 1): explicit_stage()'s
+# pre-add "what's already swept" read, routed through read_index/head_blobs
+# for the common case, with a scoped-down git fallback only when an exact
+# (mode, sha) match cannot resolve a missing-from-index path on its own.
+# ---------------------------------------------------------------------------
+
+
+def test_swept_rename_delete_paths_plain_delete_needs_no_git_spawn(tmp_path, monkeypatch):
+    """A path git-rm'd (staged deletion, nothing re-added anywhere) is
+    reported as a swept delete WITHOUT the git fallback ever firing -- the
+    common case this chunk exists to make spawn-free."""
+    import coordinator_core.ops.ceremony.commit_pipeline as cp
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "gone.md", "content\n")
+    _git(["add", "--", "gone.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["rm", "-q", "--", "gone.md"], repo)
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("git fallback must not fire for an unambiguous delete")
+
+    monkeypatch.setattr(cp.git_native, "diff_cached_name_status", _fail_if_called)
+
+    swept_rename, swept_delete = cp._swept_rename_delete_paths(repo, ["gone.md"])
+    assert swept_rename == {}
+    assert swept_delete == {"gone.md"}
+
+
+def test_swept_rename_delete_paths_exact_content_rename_needs_no_git_spawn(tmp_path, monkeypatch):
+    """A real `git mv` of unmodified content is byte-identical -- resolved
+    as a swept rename via the exact (mode, sha) match, no git fallback."""
+    import coordinator_core.ops.ceremony.commit_pipeline as cp
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "old.md", "content\n")
+    _git(["add", "--", "old.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["mv", "old.md", "new.md"], repo)
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("git fallback must not fire for an exact-content rename")
+
+    monkeypatch.setattr(cp.git_native, "diff_cached_name_status", _fail_if_called)
+
+    swept_rename, swept_delete = cp._swept_rename_delete_paths(repo, ["old.md"])
+    assert swept_rename == {"old.md": "new.md"}
+    assert swept_delete == set()
+
+
+def test_swept_rename_delete_paths_edited_rename_reads_as_delete_not_error(tmp_path):
+    """A rename WITH a content edit is not byte-identical, so this function's
+    exact-match check cannot prove it is a rename -- it reads as a plain
+    swept delete instead of git's percentage-similarity rename verdict, per
+    this function's own documented negative-spec. Never a hard failure or
+    an unproven rename report -- see `_swept_rename_delete_paths`'s own
+    docstring for why `explicit_stage()`'s `deletion_paths` bookkeeping
+    (built from `staged_paths`, not this rename map) is unaffected by the
+    misclassification."""
+    import coordinator_core.ops.ceremony.commit_pipeline as cp
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "old.md", "line one\nline two\nline three\nline four\n")
+    _git(["add", "--", "old.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["mv", "old.md", "new.md"], repo)
+    _seed_file(repo, "new.md", "line one\nline two\nline three\nEDITED\n")
+    _git(["add", "--", "new.md"], repo)
+
+    swept_rename, swept_delete = cp._swept_rename_delete_paths(repo, ["old.md"])
+    assert swept_rename == {}
+    assert swept_delete == {"old.md"}
+
+
+def test_swept_rename_delete_paths_raises_indexparseerror_on_unmerged_index(tmp_path):
+    """An unmerged (mid-merge-conflict) index must RAISE, never silently
+    degrade to 'nothing swept' -- mirrors `dirty_tree_gate`'s own
+    `read_index` fail-loud contract; `explicit_stage()` catches this and
+    falls back to the original unscoped git spawn."""
+    from coordinator_core.git.git_state import IndexParseError
+    import coordinator_core.ops.ceremony.commit_pipeline as cp
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.md", "one\n")
+    _git(["add", "--", "a.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _git(["checkout", "-q", "-b", "side"], repo)
+    _seed_file(repo, "a.md", "side\n")
+    _git(["commit", "-q", "-am", "side change"], repo)
+    _git(["checkout", "-q", "main"], repo)
+    _seed_file(repo, "a.md", "main\n")
+    _git(["commit", "-q", "-am", "main change"], repo)
+    subprocess.run(["git", "merge", "-q", "side"], cwd=str(repo), capture_output=True, text=True)
+
+    with pytest.raises(IndexParseError):
+        cp._swept_rename_delete_paths(repo, ["a.md"])
+
+
+def test_explicit_stage_falls_back_to_git_on_indexparseerror(tmp_path, monkeypatch):
+    """`explicit_stage()` itself catches `IndexParseError` from
+    `_swept_rename_delete_paths` and falls back to the original git spawn
+    rather than propagating -- the same fail-loud-then-fallback shape
+    `_worktree_deleted_paths`'s caller already uses."""
+    import coordinator_core.ops.ceremony.commit_pipeline as cp
+    from coordinator_core.git.git_state import IndexParseError
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.md", "content\n")
+    _git(["add", "--", "a.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "b.md", "new file\n")
+
+    def _raise(*a, **k):
+        raise IndexParseError("simulated unmerged index")
+
+    monkeypatch.setattr(cp, "_swept_rename_delete_paths", _raise)
+
+    outcome = explicit_stage(repo, ["b.md"])
+    assert outcome.acted == ["b.md"]
+    assert outcome.exit_code == 0
+

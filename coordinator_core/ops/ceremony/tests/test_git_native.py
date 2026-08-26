@@ -1985,3 +1985,126 @@ def test_pathspec_file_is_nul_separated_and_never_dequoted(tmp_path):
             "every --pathspec-from-file call site must pair with "
             "--pathspec-file-nul or git will C-dequote the file"
         )
+
+
+# ---------------------------------------------------------------------------
+# _hash_worktree_blobs -- C3, docs/plans/2026-08-26-the-commit-op-stops-
+# asking-git-eleven-times.md. Adopts `commit_authored_new_file`'s already-
+# shipped in-process `write_object` blob write into the
+# `_commit_scoped_private_index` worktree-blob leg, retiring most
+# `git hash-object -w --stdin-paths` spawns while falling back to that same
+# spawn, byte-identically, for every case the in-process pre-check refuses.
+# ---------------------------------------------------------------------------
+
+
+def test_hash_worktree_blobs_clean_path_writes_in_process_no_spawn(tmp_path):
+    """A plain, CR-free, unattributed path is written entirely in process --
+    zero `git` spawns -- and its sha matches what `git hash-object -w` would
+    have produced for the same bytes."""
+    repo = _init_real_repo(tmp_path)
+    # `write_bytes`, not `write_text` -- Windows text-mode writes translate a
+    # bare `\n` to `\r\n`, which would make this "clean" fixture carry the
+    # very CR byte the in-process path refuses on, defeating the test.
+    (repo / "clean.txt").write_bytes(b"hello world\n")
+
+    real_git = git_native._git
+    spawned = []
+
+    def _spy(args, **kwargs):
+        spawned.append(list(args))
+        return real_git(args, **kwargs)
+
+    with patch.object(git_native, "_git", side_effect=_spy):
+        result = git_native._hash_worktree_blobs(["clean.txt"], cwd=repo)
+
+    assert result.ok is True
+    assert spawned == [], f"clean path must be written in process, no spawn: {spawned}"
+
+    expected_sha = _real_git_out(repo, "hash-object", "clean.txt")
+    assert result.stdout.splitlines() == [expected_sha]
+
+
+def test_hash_worktree_blobs_cr_content_falls_back_to_spawn_byte_identical(tmp_path):
+    """Content carrying a CR byte cannot be reproduced by an in-process
+    verbatim write (the clean pipeline's CRLF normalization might apply) --
+    refused into the SAME `git hash-object -w --stdin-paths` spawn ladder
+    used before this chunk, and the resulting sha is byte-identical to what
+    that spawn always produced for this content."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
+
+    result = git_native._hash_worktree_blobs(["crlf.txt"], cwd=repo)
+
+    assert result.ok is True
+    expected_sha = _real_git_out(repo, "hash-object", "crlf.txt")
+    assert result.stdout.splitlines() == [expected_sha]
+
+
+def test_hash_worktree_blobs_filter_attributed_path_falls_back_to_spawn_byte_identical(tmp_path):
+    """A path a repo-local `.gitattributes` `filter=` pattern matches is
+    refused for the in-process write (a `filter.*.clean` driver might apply)
+    -- falls back to the spawn, byte-identical to `git hash-object -w`."""
+    repo = _init_real_repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.bin filter=lfs\n", encoding="utf-8")
+    (repo / "asset.bin").write_bytes(b"\x00\x01\x02binary")
+
+    result = git_native._hash_worktree_blobs(["asset.bin"], cwd=repo)
+
+    assert result.ok is True
+    expected_sha = _real_git_out(repo, "hash-object", "asset.bin")
+    assert result.stdout.splitlines() == [expected_sha]
+
+
+def test_hash_worktree_blobs_mixed_paths_preserve_input_order(tmp_path):
+    """A clean in-process path and a refused (CR-carrying) spawned path in
+    the same call return shas in the SAME ORDER `paths` was given, matching
+    `_hash_object_stdin_paths`'s own ordering contract."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "clean.txt").write_bytes(b"clean\n")
+    (repo / "crlf.txt").write_bytes(b"has\r\ncr\r\n")
+
+    result = git_native._hash_worktree_blobs(["crlf.txt", "clean.txt"], cwd=repo)
+
+    assert result.ok is True
+    expected = [
+        _real_git_out(repo, "hash-object", "crlf.txt"),
+        _real_git_out(repo, "hash-object", "clean.txt"),
+    ]
+    assert result.stdout.splitlines() == expected
+
+
+def test_hash_worktree_blobs_empty_paths_is_a_documented_noop_no_spawn(tmp_path):
+    repo = _init_real_repo(tmp_path)
+
+    with patch.object(git_native, "_git", side_effect=AssertionError("must not spawn")):
+        result = git_native._hash_worktree_blobs([], cwd=repo)
+
+    assert result == git_native.GitResult(returncode=0, stdout="", stderr="")
+
+
+def test_commit_scoped_private_index_worktree_leg_uses_hash_worktree_blobs(tmp_path):
+    """The rewire point itself: `_commit_scoped_private_index`'s worktree-
+    sourced leg must call the new in-process-first helper, not the old
+    unconditional-spawn one directly."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "file.txt").write_text("original\n", encoding="utf-8")
+    _real_git(["add", "--", "file.txt"], repo)
+    _real_git(["commit", "-q", "-m", "baseline"], repo)
+
+    (repo / "file.txt").write_text("changed\n", encoding="utf-8")
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("edit\n\nSession-Id: t\n", encoding="utf-8")
+
+    real_helper = git_native._hash_worktree_blobs
+    calls = []
+
+    def _spy(paths, **kwargs):
+        calls.append(list(paths))
+        return real_helper(paths, **kwargs)
+
+    with patch.object(git_native, "_hash_worktree_blobs", side_effect=_spy):
+        result = git_native._commit_scoped_private_index([], ["file.txt"], msg_file, repo)
+
+    assert result.ok is True
+    assert calls == [["file.txt"]]
