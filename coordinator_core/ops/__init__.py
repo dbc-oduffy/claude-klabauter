@@ -256,7 +256,15 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.cruft_sweep", ""),
     (
         "coordinator_core.ops.completion_ops",
-        'registers "completion.reconcile_commits", "plan.append_session" (strang-10 B, DR-216)',
+        # `completion.reconcile_commits` was struck from this annotation on
+        # 2026-08-26. It was KILLED and rebuilt from scratch per PM ruling
+        # 2026-08-23 (see that module's own docstring, which has said so since),
+        # but the eager-import table went on advertising it for three days. A
+        # registration table that names an op the registry does not serve is the
+        # failure MEMORY.md records twice over -- a killed op name living on in a
+        # string-keyed surface -- and here it was the surface a reader would
+        # trust FIRST to learn what exists.
+        'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
     ),
     ("coordinator_core.ops.review_trail_write", 'registers "review_trail.write" (strang-10 B, DR-216)'),
     (
@@ -276,12 +284,20 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.backfill_reference_edges", 'registers "fleet.backfill_reference_edges"'),
     ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
-    ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos"'),
+    ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos", "session.audit_unreapable"'),
     (
         "coordinator_core.ops.session.boot_backstop",
-        'registers "session.boot_sweep" (C5, docs/plans/2026-08-22-the-boot-backstop-'
-        "asks-git-nothing.md — rebuilt zero-git-query-spawn backstop; module renamed "
-        "from boot_sweep.py, op id preserved)",
+        # `session.boot_sweep` struck from this annotation 2026-08-26, found by
+        # `tests/test_registration_annotations_resolve.py` on the run that added
+        # it. The rebuilt backstop this entry describes did NOT clear the bar
+        # either -- 30017ms against 2000ms, 8/8 caller_timeout -- and the op was
+        # killed, so the table was advertising a name that could only refuse.
+        # Its last caller, `coordinator/bin/sweep-boot.py`, is now a gravestone.
+        # The module stays eagerly imported: the suspension door lives in it, and
+        # de-registering it would turn a loud refusal into METHOD_NOT_FOUND.
+        "eagerly imported for its suspension door; registers no dispatchable op "
+        "(session.boot_sweep killed 2026-08-23, see docs/plans/2026-08-22-the-"
+        "boot-backstop-asks-git-nothing.md for the rebuild that also missed)",
     ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),

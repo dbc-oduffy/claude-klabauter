@@ -3917,7 +3917,7 @@ def commit_scoped(
             attributed_session_id=attributed_session_id,
         )
         if result.ok and not suppress_post_commit_auto_push:
-            _replay_post_commit_auto_push(root)
+            _replay_post_commit_auto_push(root, path_list, attributed_session_id)
         return result
 
     diverged_set = set(diverged)
@@ -3948,7 +3948,7 @@ def commit_scoped(
     # for this path, which went unnoticed only because `run_commit_pipeline`
     # used to push synchronously on EVERY mode and covered it incidentally.
     if result.ok and not suppress_post_commit_auto_push:
-        _replay_post_commit_auto_push(root)
+        _replay_post_commit_auto_push(root, path_list, attributed_session_id)
     return result
 
 
@@ -4058,7 +4058,11 @@ def _drop_trailer_arg(trailer_args: List[str], trailer_name: str) -> List[str]:
     return kept
 
 
-def _replay_post_commit_auto_push(root: Union[str, Path]) -> None:
+def _replay_post_commit_auto_push(
+    root: Union[str, Path],
+    path_list: Optional[Sequence[str]] = None,
+    attributed_session_id: Optional[str] = None,
+) -> None:
     """Replay `coordinator-auto-push` (`post-commit`) after a successful
     `commit_authored_content()` CAS -- DR-272 § 2.4 Bound 2, "MUST be
     replayed" (unlike `pre-commit`, which that same bound EXEMPTS for this
@@ -4082,11 +4086,61 @@ def _replay_post_commit_auto_push(root: Union[str, Path]) -> None:
     Honest limit, stated per DR-272 § 2.4 Bound 2's own instruction: hook
     replay after plumbing-only commit machinery is THIS REPO'S OWN CALL --
     the mechanism spike found no primary source of practitioners doing this.
+
+    `path_list` (C4, docs/plans/2026-08-26-the-commit-op-stops-asking-git-
+    eleven-times.md): when given, this call's own caller ALREADY knows which
+    paths just landed -- `commit_scoped()`'s two callers below pass their own
+    `path_list` straight through. Releasing those claims IN-PROCESS here
+    (via `session.scope.release_committed_claims`, the same call
+    `auto_push._release_claims_for_head` would otherwise reach) retires the
+    `git show --name-only HEAD` that helper spends to relearn the same
+    paths, and `--no-claim-release` then tells `auto_push.main()` to skip
+    its own redundant `git status --porcelain` clean-check leg too -- see
+    that flag's own comment in `auto_push.main` and
+    `_release_claims_for_head`'s "CORRECTED 2026-08-26" paragraph, which
+    names this exact caller. `attributed_session_id`, when given, is the
+    caller's own already-resolved committing-session identity (mirrors
+    `commit_scoped`'s own docstring for that parameter) and takes precedence
+    over a blind `session_core.resolve_session_id()` read of this process's
+    env, for the same reason `commit_scoped` prefers it for its `Session-Id:`
+    trailer.
+
+    `path_list=None` (`commit_authored_content`'s call, not migrated by this
+    chunk) preserves the prior behavior unchanged: `auto_push.main()` runs
+    its own `_release_claims_for_head` fallback, exactly as before.
+
+    Fail-open, like `_release_claims_for_head` itself: any failure in the
+    in-process release falls through to the unmigrated path (no
+    `--no-claim-release`), so `auto_push.main()`'s own fallback release still
+    runs rather than leaving the claim stuck `T` forever.
     """
+    argv = ["--repo-root", str(root)]
+    if path_list:
+        try:
+            from coordinator_core.session import core as _session_core
+            from coordinator_core.session import scope as _session_scope
+
+            sid = attributed_session_id or _session_core.resolve_session_id(str(root))
+            paths = [p for p in path_list if p]
+            if sid and paths:
+                # Releases only paths that are CLEAN in the worktree, and is
+                # structurally incapable of releasing a peer's claim -- see
+                # `release_committed_claims`'s own docstring for both
+                # properties. Same clean-check `_release_claims_for_head`
+                # itself relies on; this call does not relax it.
+                _session_scope.release_committed_claims(sid, paths, cwd=str(root))
+            argv.append("--no-claim-release")
+        except Exception:
+            # Never let a diagnostic here become the thing that blocks the
+            # commit auto-push replays after -- fall through to the
+            # unmigrated leg so `auto_push.main()`'s own fallback release
+            # still runs.
+            argv = ["--repo-root", str(root)]
+
     try:
         from coordinator_core.hooks import auto_push
 
-        auto_push.main(["--repo-root", str(root)])
+        auto_push.main(argv)
     except Exception:
         pass
 

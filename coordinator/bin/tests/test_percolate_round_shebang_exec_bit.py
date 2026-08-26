@@ -195,3 +195,29 @@ def test_reconciliation_converges_and_leaves_plain_files_alone(dest_repo):
     _git(dest_repo, "commit", "-q", "-m", "modes")
     assert _mod._already_committed_non_executable_scripts(dest_repo, []) == []
     assert _mode(dest_repo, "data.md") == "100644"
+
+
+def test_repo_root_may_be_a_str(dest_repo):
+    """`_cmd_round_default` binds `repo_root` from `_resolve_repo_root`, whose
+    return type is `Optional[str]` -- a `Path /` expression against it raises
+    `TypeError` and took a live round down at the commit leg on 2026-08-26.
+    Every test here had passed a `Path`, which is exactly why the suite was
+    green while the only real caller crashed."""
+    (dest_repo / "hook.py").write_text(_SHEBANG, encoding="utf-8")
+    assert _mod._stage_shebang_exec_bits(str(dest_repo), ["hook.py"]) == 1
+    assert _mode(dest_repo, "hook.py") == "100755"
+
+
+def test_an_unexpected_error_never_reaches_the_round(dest_repo, monkeypatch, capsys):
+    """This step sits BETWEEN the pathspec derivation and the commit, so an
+    exception escaping it leaves the dest synced with paths staged but
+    uncommitted -- a worse failure class than the refusals around it, which all
+    leave a state the next round re-derives. Best-effort means best-effort."""
+    (dest_repo / "hook.py").write_text(_SHEBANG, encoding="utf-8")
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("git went missing")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _explode)
+    assert _mod._stage_shebang_exec_bits(dest_repo, ["hook.py"]) == 0
+    assert "executable-bit step failed" in capsys.readouterr().err
