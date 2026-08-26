@@ -153,7 +153,7 @@ def test_seeded_index_is_permitted(tmp_path: Path):
     assert tree_sha and tree_sha != EMPTY_TREE_SHA
 
 
-def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path):
+def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path, monkeypatch):
     """End-to-end pin on the incident's CLASS, RE-SITED (2026-08-26, C7).
 
     `archive_and_commit` no longer opens a `GIT_INDEX_FILE` at all
@@ -167,6 +167,28 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
     the same way -- loud, before the commit, before any disk state is
     committed.
 
+    RE-SITED AGAIN, 2026-08-26 (`cffa6e99f`, this repair): the original
+    fixture used `restage_src=False` (the default) with `src` untracked at
+    HEAD. Under the same commit -- `_hash_object_stdin_paths` was scoped to
+    `restage_src=True` moves only -- the restage_src=False assembled-tree
+    build ALSO tightened: it now requires `src` to carry a HEAD tree entry
+    unconditionally (the sha comes from HEAD's own record for src, never
+    invented), and refuses "untracked-at-head" before ever reaching the
+    noop-commit guard this test means to pin. With `src` untracked at HEAD,
+    that refusal fires first and the intended `empty-spine-commit` guard is
+    never reached -- exactly the "interception no longer fires" failure
+    mode this repair exists to close.
+
+    Fixed by flipping the fixture's Move to `restage_src=True` (this test
+    does not care which arm of `Move.restage_src` it exercises, only that
+    the assembled tree is a genuine no-op against HEAD): that arm sources
+    `dst`'s sha from a fresh `git hash-object` of the on-disk bytes rather
+    than from `src`'s HEAD entry, so `src` may stay untracked at HEAD as the
+    fixture always intended, and the noop-commit guard is reached. A spy on
+    `_hash_object_stdin_paths` (wrapping the real implementation, not a
+    stub) proves that call genuinely fires on this path, so a future re-site
+    of ITS call site fails this test loudly instead of going quietly green.
+
     Fixture: `dst` is ALREADY tracked in HEAD with the exact bytes and mode
     the move would (redundantly) write there again, and `src` is untracked
     in HEAD (so its removal from the tree is not a real deletion either) --
@@ -174,6 +196,17 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
     `read_tree_spine` reports for HEAD, so `_assembled_commit_is_noop`
     refuses before `_commit_via_head_spine` is ever called.
     """
+    import coordinator_core.ops.fleet._common as _common_mod
+
+    real_hash_object = _common_mod._hash_object_stdin_paths
+    hash_object_calls = []
+
+    def _spy_hash_object(paths, **kwargs):
+        hash_object_calls.append(list(paths))
+        return real_hash_object(paths, **kwargs)
+
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _spy_hash_object)
+
     root = tmp_path / "repo"
     _seed_repo(root)
     identical_bytes = "already archived, byte-identical\n"
@@ -198,6 +231,7 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
     move = Move(
         src=src, dst=dst, candidate_id="cross-repo/inbox/already-archived.md",
         force=True,
+        restage_src=True,
     )
 
     acted, failed = _run(
@@ -207,6 +241,8 @@ def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path
             subject="fleet: archive 1 actioned memo(s)",
         )
     )
+
+    assert hash_object_calls, "the mocked/spied _hash_object_stdin_paths was never invoked -- interception did not fire"
 
     assert acted == [], "nothing may be reported as archived when the commit was refused"
     assert len(failed) == 1

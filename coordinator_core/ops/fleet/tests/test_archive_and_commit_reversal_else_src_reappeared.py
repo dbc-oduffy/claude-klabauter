@@ -18,25 +18,39 @@ docstring). The reversal guard this module pinned then sat at the batched
 had already landed.
 
 RE-TARGETED, 2026-08-26 (C2 `dccf2fc01`, this plan's C7): `git add --`
-itself is gone too -- the ONE remaining post-move split-failure point is now
-the batched `git hash-object -w --stdin-paths` call
-(`_hash_object_stdin_paths`, a SYNCHRONOUS wrapper offloaded through
-`asyncio.to_thread`, not an `asyncio.create_subprocess_exec` call -- see
-this plan's sibling `test_head_race_between_read_tree_and_commit.py` for
-the same technique explained at more length). This module carries that
-coverage forward onto the new failure point rather than dropping it:
+itself is gone too, AND (a second, later removal on the SAME day —
+`cffa6e99f`, this repair) the batched `git hash-object -w --stdin-paths`
+call (`_hash_object_stdin_paths`) is no longer called at all on a
+`restage_src=False` move (the default, and what this test's fixture uses)
+-- it now fires ONLY over the `restage_src=True` subset. This test's
+original interception point (`_hash_object_stdin_paths`) therefore never
+runs on this fixture's path any more, and the test would go green having
+verified nothing.
+
+RE-SITED (this repair): the interception now targets
+`_commit_via_head_spine` -- the HEAD-race CAS landing call
+(`coordinator_core.ops.ceremony.git_native._commit_via_head_spine`,
+imported into `_common`) that fires unconditionally on the commit-landing
+step, for every move regardless of `restage_src`. It sits strictly between
+os.replace (already landed) and the commit actually being recorded, which
+is exactly where this test needs to interpose: a failure there drives the
+SAME `commit_rc != 0` reversal branch the old hash-object failure used to
+drive (both failure shapes feed the identical post-commit reversal loop
+below `if commit_rc != 0:`). A call-counter sentinel on the mock asserts
+the interception genuinely fired, so a future re-site of the call site
+fails this test loudly instead of going quietly green.
 
 1. Quiet path (no reversal attempted at all): dst pre-exists and force is
    False -- archive_and_commit refuses the move BEFORE calling os.replace
    (see the `dst-exists` guard), so nothing moved and there is nothing to
    reverse or WARN about.
-2. Elif-fires path: os.replace succeeds, then the batched hash-object step
-   fails (mocked -- a generic failure shape, not an index/worktree
-   divergence, so no real-git requirement here) with a concurrent write
-   recreating src's original path before the reversal attempt runs. The
-   reversal cannot rename dst back over a reappeared src, so it WARNs and
-   leaves dst orphaned, landing the item in failed[] annotated
-   "reversal-skipped-src-reappeared".
+2. Elif-fires path: os.replace succeeds, then the commit-landing step
+   (`_commit_via_head_spine`, mocked -- a generic failure shape, not an
+   index/worktree divergence, so no real-git requirement here) fails with a
+   concurrent write recreating src's original path before the reversal
+   attempt runs. The reversal cannot rename dst back over a reappeared src,
+   so it WARNs and leaves dst orphaned, landing the item in failed[]
+   annotated "reversal-skipped-src-reappeared".
 
 Real git is load-bearing for the repo scaffolding (a working tree +
 private-index staging) but not for either scenario's divergence -- both are
@@ -134,11 +148,17 @@ def test_quiet_when_dst_exists_refusal_never_touches_disk(tmp_path: Path, caplog
 def test_reversal_elif_fires_when_src_reappears_before_stage_reversal(
     tmp_path: Path, caplog, monkeypatch,
 ) -> None:
-    """os.replace succeeds, the batched hash-object step then fails, and a
+    """os.replace succeeds, the commit-landing step then fails, and a
     concurrent writer recreates src's original path before the reversal
     runs -- the elif must fire: WARN, leave dst orphaned, annotate failed[]
     with "reversal-skipped-src-reappeared" rather than clobber the
-    reappeared src."""
+    reappeared src.
+
+    Re-sited (2026-08-26) onto `_commit_via_head_spine` -- see module
+    docstring for why `_hash_object_stdin_paths` no longer fires on this
+    (restage_src=False, default) path. `call_count` proves the mock
+    actually fired, so a future re-site of the commit-landing call site
+    fails this test loudly instead of going quietly green."""
     root = tmp_path / "repo"
     _init_repo(root)
 
@@ -151,24 +171,30 @@ def test_reversal_elif_fires_when_src_reappears_before_stage_reversal(
 
     dst = root / "b" / "dst.txt"
 
-    def _hash_object_and_reappear_src(*args, **kwargs):
-        # The real batched hash-object spawn (`git hash-object -w
-        # --stdin-paths`) is left to fail synthetically rather than
-        # engineered through real git state: the mock recreates src
-        # (simulating a concurrent writer landing on the vacated path) and
-        # returns a synthetic failed GitResult directly.
-        src.write_text("concurrent writer content\n", encoding="utf-8")
-        return GitResult(returncode=1, stdout="", stderr="synthetic stage failure")
+    call_count = 0
 
-    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _hash_object_and_reappear_src)
+    def _commit_via_head_spine_and_reappear_src(*args, **kwargs):
+        # The real HEAD-spine commit landing is left to fail synthetically
+        # rather than engineered through real git state: the mock recreates
+        # src (simulating a concurrent writer landing on the vacated path)
+        # and returns a synthetic failed GitResult directly.
+        nonlocal call_count
+        call_count += 1
+        src.write_text("concurrent writer content\n", encoding="utf-8")
+        return GitResult(returncode=1, stdout="", stderr="synthetic commit-landing failure")
+
+    monkeypatch.setattr(
+        _common_mod, "_commit_via_head_spine", _commit_via_head_spine_and_reappear_src
+    )
 
     with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.fleet._common"):
         acted, failed = _run(archive_and_commit(
             worktree_root=root,
             moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
-            subject="test: reappeared-src reversal at stage-failure",
+            subject="test: reappeared-src reversal at commit-landing failure",
         ))
 
+    assert call_count >= 1, "the mocked _commit_via_head_spine was never invoked -- interception did not fire"
     assert acted == []
     assert len(failed) == 1
     assert failed[0]["id"] == "a/src.txt"

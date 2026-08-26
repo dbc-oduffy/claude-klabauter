@@ -2923,7 +2923,7 @@ def my_agent_touched(
     a ``T``/``R`` event journal via ``scope.format_touch_event``) together
     with any ``touch-record.jsonl`` family (new dialect) into ONE ordered
     line set before it goes through ``scope.project_self_scope`` — the same
-    projection ``compute_scope`` Step 1 and ``_release_from_touched_file``
+    projection ``compute_scope`` Step 1 and the record release step
     use — before it leaves this function. Projection is PER AGENT DIR
     because ``release_committed_claims`` appends each agent's ``R`` events
     into that agent's own file; a path whose last event there is ``R`` is

@@ -485,6 +485,21 @@ def test_f3_git_add_and_commit_plumbing_pathspec_scoping(repo: Path, monkeypatch
     `-A`/`.`), and the commit is built from an in-process `assembled` dict
     scoped to exactly this batch's acted src/dst paths
     (`_commit_via_head_spine`), never from reading any index.
+
+    RE-SITED AGAIN, 2026-08-26 (`cffa6e99f`): `_hash_object_stdin_paths` is
+    now called ONLY over a batch's `restage_src=True` subset --
+    `archive_terminal_handoffs` never sets `restage_src=True` (it always
+    takes the default, `restage_src=False`), so that call no longer fires
+    on THIS op's path at all; asserting `hash_object_calls` is non-empty
+    would silently stop exercising anything the moment that call stopped
+    firing here (the exact failure mode this repair exists to close --
+    see `hash_object_calls` below, which now asserts the opposite: the
+    call is NEVER made on this path, because the whole batch is
+    `restage_src=False`). The FORWARD-B pathspec-scoping property survives
+    intact through `_commit_via_head_spine`'s spy instead: it fires
+    unconditionally, for every move regardless of `restage_src`, and its
+    `spine_calls` sentinel (asserted below) is what proves this test's
+    interception actually still fires.
     """
     name = "2026-01-20-pathspec-scoping.md"
     _seed(repo, name, "status: claimed")
@@ -536,16 +551,22 @@ def test_f3_git_add_and_commit_plumbing_pathspec_scoping(repo: Path, monkeypatch
         f"in-process via _commit_via_head_spine; captured {commit_plumbing_calls!r}"
     )
 
-    # The replacement staging call: hash-object, fed an EXPLICIT path list
-    # -- never -A, never a bare '.', never empty.
-    assert hash_object_calls, f"expected at least one hash-object call; captured {captured_argv!r}"
-    for paths in hash_object_calls:
-        assert "-A" not in paths and "." not in paths, f"got {paths!r}"
-        assert paths, "hash-object must be fed an explicit non-empty path list"
+    # archive_terminal_handoffs never sets restage_src=True, so the
+    # hash-object staging call (scoped to that subset only) must NOT fire
+    # on this op's path at all -- if it ever does, something started
+    # setting restage_src=True here and this assertion should be revisited
+    # together with the docstring above.
+    assert hash_object_calls == [], (
+        f"archive_terminal_handoffs is restage_src=False-only; "
+        f"_hash_object_stdin_paths must not be called: {hash_object_calls!r}"
+    )
 
     # The replacement commit call: _commit_via_head_spine, scoped to
     # exactly this batch's acted paths -- never the whole worktree/index.
-    assert spine_calls, "expected at least one _commit_via_head_spine call"
+    # This is the interception this test now actually depends on; the
+    # assertion below both proves it fired at all AND pins the
+    # pathspec-scoping property the test is named for.
+    assert spine_calls, "expected at least one _commit_via_head_spine call -- interception did not fire"
     for assembled in spine_calls:
         assert assembled, "assembled tree delta must be non-empty and explicit"
 

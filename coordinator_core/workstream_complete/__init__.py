@@ -1155,8 +1155,18 @@ def build_deletion_blocks_check_directive(
         return None
     args = [msg_file]
     if stage_paths:
+        # Normalised to repo-relative forward slashes because `gate_scope`
+        # membership is exact-string matching against `git diff --cached
+        # --name-status` output, which always spells paths that way. A caller
+        # handing over Windows separators would drop silently OUT of the
+        # scope while the same value still drove the commit pathspec (git
+        # accepts both there) -- the gate would then be NARROWER than the
+        # commit, which is the one direction that weakens it, and silently
+        # (2026-08-26 review, slice 4). Done here rather than trusting an
+        # upstream guarantee: `decisions` is operator-supplied JSON and
+        # carries no such contract.
         args.append("--")
-        args.extend(stage_paths)
+        args.extend(str(path).replace("\\", "/") for path in stage_paths)
     return _directive(
         "d-deletion-blocks",
         "check-workstream-complete-deletion-blocks",

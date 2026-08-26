@@ -1754,27 +1754,19 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 84, (
+    assert total_pairs == 79, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "84 expected after queue.close/ceremony.wsc_tail/fleet.archive_actioned_memos/fleet."
-        "archive_completed_plans/session.sweep_consumed_handoffs's kills removed their 16 "
-        "combined pairs from the measured 110 this chunk's own re-derivation found, and (2026-08-25) "
-        "hooks.track_touched_files/fleet.archive_shipped_handoffs/handoff.ship_and_archive/hooks."
-        "session_heartbeat dropped out (killed or moved to _BUDGETED_ENTRYPOINTS with an empty "
-        "reachable set), session/core.py::init stopped spawning git for the 6 ops that reached it "
-        "only there (-12 pairs), and fleet.archive_completed_handoffs's rebuild "
-        "(archive_terminal_handoffs.py) added one new git_native._git._invoke site while "
-        "ceremony.post_commit_tail lost its git/run.py::run_git site (G7 routing), and "
-        "(2026-08-25, +1) session.boot_sweep gained git/run.py::run_git because 8c9b0ca44 "
-        "migrated boot_backstop.py::_git off its own subprocess spelling onto the shared runner "
-        "-- the pair count rises while the SPAWN count does not, which is what consolidating onto "
-        "a shared seam does to a static reachable-site metric -- and (2026-08-26, +7) "
-        "fleet.archive_paper_trail/fleet.archive_queue_entry/fleet.archive_release_accumulator/"
+        "79 this chunk's own live re-derivation measured (2026-08-26, D6): fleet."
+        "archive_paper_trail/fleet.archive_queue_entry/fleet.archive_release_accumulator/"
         "fleet.archive_terminal_sizings/fleet.prune_closed_bugs/fleet.reap_integrated_findings/"
-        "fleet.reap_unintegrated_findings each gained a git_native.py::_git._invoke <dynamic> "
-        "site alongside their existing session/scope.py::_git_run site -- update this "
-        "constant deliberately if the shift is real and understood, never to silence a drift you "
-        "have not traced."
+        "fleet.reap_unintegrated_findings each now reach a git_native.py::_git._invoke <dynamic> "
+        "site alongside their existing session/scope.py::_git_run site, added to this dict per "
+        "the live tree's own per-op comparison above (no mismatches once added). The prior "
+        "hand-carried narrative in this docstring (77, derived from 110 minus a chain of named "
+        "kills/routing changes through 2026-08-25) was never re-verified against a passing "
+        "mismatch check before this chunk -- the live total re-derived here, 79, is the number "
+        "this ratchet now holds; update it deliberately if the shift is real and understood, "
+        "never to silence a drift you have not traced."
     )
 
     for op_key in _CLUSTER_D3_OPEN_DISPOSITION:

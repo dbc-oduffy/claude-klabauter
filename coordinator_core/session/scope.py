@@ -1631,22 +1631,33 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
     session's age cannot determine which dialect it writes, and no cohort has
     to die for anything.
 
-    WHAT ACTUALLY STILL EMITS LEGACY DIALECT is a writer C7 missed:
-    ``claims._release_path_claim_everywhere`` enumerates via
-    ``claim_index._enumerate_touched_files`` (a ``touched.txt``-only reverse
-    index) and appends its ``R`` event to ``touched.txt`` ALONE, never to the
-    touch record. Every legacy event observed after the publish was an ``R``,
-    batched with one timestamp across several agent dirs — a release pass,
-    not a session's Edit hook. ``scope._release_from_touched_file`` is the
-    deliberate legacy arm of a T/R pair and is a separate question.
+    THE LEGACY WRITERS ARE NOW ALL GONE. Every legacy event observed after the
+    publish was an ``R``, batched with one timestamp across several agent dirs
+    — a release pass, never a session's Edit hook. Both release writers have
+    since been migrated onto the record: ``claims._release_path_claim_
+    everywhere`` (``488b68a6a``, union-aware T-decision, ``append_event``
+    write) and the agent-dir arm, which used to write
+    ``.agents/<aid>/touched.txt`` through a ``_release_from_touched_file``
+    helper that is now DELETED, not left dormant — ``release_committed_claims``
+    calls ``_release_from_touch_record`` with the agent's own id instead.
 
-    So deletion is gated on a CODE FIX, not a clock: repoint that release
-    writer (and settle ``_release_from_touched_file``) onto the touch record,
-    re-run the migration once to sweep what it emitted in the meantime, THEN
-    delete this arm. Until then the drain does not hold: an ``R`` appended to
-    an already-drained ``touched.txt`` is invisible to a jsonl-only reader,
-    so a released claim would read as still-held. Do not trust this
-    paragraph's counts, only its method.
+    SO WHAT KEEPS THIS ARM ALIVE IS NOW ONLY THE EXISTING CORPUS, and that is a
+    READ concern, not a write one. Records already on disk in the old dialect
+    stay readable only through here, and ``claim_index`` carries the matching
+    pair of arms (``_has_claim_surface``, and the legacy fold in its own
+    ``_read_stream_claims``) for the same reason. A legacy-only claim is still
+    reachable and still releasable — there is a test pinning exactly that.
+
+    DELETION PRECONDITION, restated now that the writer half is discharged:
+    re-run ``ops.session.legacy_touch_corpus_migrate`` to sweep whatever the
+    old writers emitted before they were migrated, confirm
+    ``legacy_touch_corpus_drain_check`` reports zero undrained, and then delete
+    THIS arm and ``claim_index``'s two arms in ONE change. Deleting a read arm
+    while records still carry the old dialect is the mistake C7b already made
+    once: it dropped ``claim_index``'s legacy read on the premise that C7c
+    would retire the writer, C7c was reverted, and a live session's claim then
+    read as unclaimed — the one answer that authorizes a write. Do not trust
+    this paragraph's counts, only its method.
 
     Why re-render rather than hand callers ``TouchEvent`` objects directly:
     the projection policies this module's OTHER callers still share
@@ -2639,84 +2650,21 @@ def _porcelain_dirty_paths(status_output: str) -> Optional[Set[str]]:
     return dirty
 
 
-def _release_from_touched_file(
-    touched_path: str,
-    clean: Set[str],
-    when: datetime,
-    normalize: Callable[[str], Optional[str]],
-) -> None:
-    """Append an ``R`` event for each currently-``T``-claimed path in
-    *touched_path* whose normalized form is in *clean* — the shared
-    per-file release step :func:`release_committed_claims` runs once for
-    its own session dir and once per back-pointed agent dir. Private
-    plumbing, not part of this module's policy surface (mirrors
-    ``_collect_peer_path_mtimes``'s own "internal plumbing" framing) —
-    AC12 forbids a third named CLAIMED/RELEASED policy entry point, and
-    this makes no such decision itself; it only reconciles an
-    already-computed clean-set against an already-computed claimed-set.
-
-    APPEND ONLY — one ``write()`` call per emitted event line, safely
-    under PIPE_BUF, mirroring ``touch()``'s and
-    ``claims.py::atomic_dedup_append``'s discipline (see that function's
-    docstring for the T21 lost-update race this is named for: the prior
-    mktemp+sort+mv pattern on THIS FILE let concurrent writers each
-    read-then-overwrite, silently dropping the loser's entries — NO
-    mktemp, no mv, no flock, here either).
-
-    Never releases a directory entry (``some/dir/``): its claim covers
-    files outside the commit pathspec, so it is excluded before and after
-    normalization. Fail-safe is RETAIN, not raise: any read/parse/write
-    failure leaves this file's release skipped for this call.
-    """
-    if not os.path.isfile(touched_path):
-        return
-    try:
-        existing_lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-
-    claimed = project_self_scope(existing_lines)
-    to_release: List[str] = []
-    # Review: code-reviewer Finding 4 (2026-08-03) — `claimed` is a `Set[str]`;
-    # iterating it unsorted made a multi-path release's on-disk append order
-    # depend on hash randomization. Harmless for last-event-wins semantics
-    # (each event is keyed by its own path) but non-reproducible for a file
-    # this plan treats as an authoritative append-only ledger — sorted() is
-    # free and gives every multi-path release a deterministic byte sequence.
-    for raw_path in sorted(claimed):
-        if not raw_path or raw_path.endswith("/"):
-            continue  # never release a directory entry
-        norm = normalize(raw_path)
-        if norm is None or norm.endswith("/"):
-            continue
-        if norm in clean:
-            to_release.append(raw_path)
-
-    if not to_release:
-        return  # AC10 — no empty write, don't churn touched.txt's mtime
-
-    try:
-        with open(touched_path, "a", encoding="utf-8", newline="\n") as fh:
-            for raw_path in to_release:
-                fh.write(format_touch_event("R", raw_path, when) + "\n")
-    except OSError:
-        return  # fail-safe RETAIN — a partial write leaves fewer paths
-        # released than requested, never more; safe direction.
-
-
 def _release_from_touch_record(
     sink_path: "Path | str",
     sid: str,
     clean: Set[str],
     when: datetime,
     normalize: Callable[[str], Optional[str]],
+    agent_id: Optional[str] = None,
 ) -> None:
     """C4 — the seam-through counterpart of
-    :func:`_release_from_touched_file`, for THIS session's OWN
-    ``touch-record.jsonl`` (never the agent-dir side, which stays on
-    :func:`_release_from_touched_file` against ``.agents/<aid>/touched.txt``
-    until a future chunk migrates that writer too — see
-    :func:`release_committed_claims`'s own call sites). Written to keep
+the former ``_release_from_touched_file``, for BOTH release planes.
+    That future chunk landed: the agent-dir side no longer writes
+    ``.agents/<aid>/touched.txt`` — it calls this function with the agent's
+    own id, so one writer now serves the session plane and the agent plane
+    (see :func:`release_committed_claims`'s own call sites). The legacy
+    writer is deleted, not left dormant beside its replacement. Written to keep
     `release_committed_claims` a correct round-trip counterpart of
     `touch()`'s C4 writer flip: an R event that never reaches the same
     substrate `compute_scope`'s Step 1 (and `claim_index`) now read would
@@ -2732,8 +2680,8 @@ def _release_from_touch_record(
     """
     claimed_lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
     if degraded:
-        return  # fail-safe RETAIN -- mirrors `_release_from_touched_file`'s
-        # own OSError-skip posture.
+        return  # fail-safe RETAIN -- the same OSError-skip posture the
+        # deleted legacy writer had, kept deliberately.
     claimed = project_self_scope(claimed_lines)
     to_release: List[str] = []
     for raw_path in sorted(claimed):
@@ -2753,7 +2701,7 @@ def _release_from_touch_record(
             touch_record.append_event(
                 sink_path,
                 session_id=sid,
-                agent_id=None,
+                agent_id=agent_id,
                 verb=touch_record.VERB_RELEASE,
                 path=raw_path,
                 timestamp=when.timestamp(),
@@ -2822,7 +2770,7 @@ def release_committed_claims(
     agent fan-out's own dialect) — never cross-applied, and never a
     directory entry released even if it would otherwise equal a
     caller-supplied path after normalization (see
-    :func:`_release_from_touched_file`).
+    the now-deleted ``_release_from_touched_file``).
 
     ``cwd`` MUST be the worktree root, not an arbitrary subdirectory — the
     session-side normalization passes it straight through as
@@ -2924,7 +2872,7 @@ def release_committed_claims(
     # matching this chunk's canonicalize-both-sides thesis
     # (`claim_index.lookup` does the identical thing for its own set-diff).
     # `clean` is expressed in CANONICAL form (not the caller's original
-    # dialect): `_release_from_touched_file` below tests membership via
+    # dialect): the release step below tests membership via
     # `norm in clean`, where `norm` is always the canonical output of its
     # own `normalize` callback — so `clean` must be canonical too, or that
     # membership test reintroduces the identical dialect fork one level
@@ -3003,11 +2951,26 @@ def release_committed_claims(
             continue
         if em_sid != sid:
             continue  # not this session's own fan-out — never release it
-        _release_from_touched_file(
-            str(agent_dir / "touched.txt"),
+        # The agent plane's release now goes through the SAME record writer the
+        # session plane uses -- this was the last legacy-dialect WRITER on the
+        # release path (`_release_from_touch_record`'s own docstring named it as
+        # a future chunk). Both ids are already in hand: `em_sid` was just read
+        # from the back-pointer and matched, and the agent id is the dir name, so
+        # nothing is fabricated. An agent dir whose back-pointer is missing or
+        # unreadable never reaches here -- the `except OSError: continue` above
+        # skips it -- so the ownerless-agent-dir class is excluded by the
+        # existing control flow rather than by a new guess.
+        #
+        # The READ stays union-aware (`_read_touch_record_as_legacy_lines`), so
+        # an agent whose claims are still legacy-only is released, not stranded.
+        # Deleting that read arm is a SEPARATE step from deleting this writer.
+        _release_from_touch_record(
+            str(agent_dir / _TOUCH_RECORD_FILENAME),
+            em_sid,
             clean,
             when,
             _normalize_agent_touched_entry,
+            agent_id=agent_dir.name,
         )
 
 
@@ -3272,6 +3235,8 @@ def release_phantom_claims(sid: str, cwd: Optional[str] = None) -> None:
             touch_record.append_event(
                 sink_path,
                 session_id=sid,
+                # This is the SESSION's own sink, never an agent dir -- phantom
+                # release runs over `sid`'s own record only.
                 agent_id=None,
                 verb=touch_record.VERB_RELEASE,
                 path=raw_path,

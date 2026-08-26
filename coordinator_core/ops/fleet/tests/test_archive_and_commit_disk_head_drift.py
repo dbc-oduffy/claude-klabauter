@@ -26,14 +26,25 @@ instant the (disk-reading) terminality predicate passes -- an
 archive-gate-bypass reached through a different mechanism than b3e61bd00's,
 but the same class.
 
-Now (C5-REPAIR, 2026-08-21): the batched disk/HEAD drift check is RESTORED
-as a refusal gate for restage_src=False moves (the default) -- see
-_common.archive_and_commit's docstring. restage_src=True is exempt: it is
-the caller's assertion that it authored src's current on-disk content on
-purpose immediately before queuing the move (e.g. a terminality stamp just
-written), so drift there is expected, not suspicious -- and that exempt
-path is where the ORIGINAL "fresh content survives os.replace" positive
-case now lives. See Move.restage_src's docstring.
+Then (C5-REPAIR, 2026-08-21): the batched disk/HEAD drift check was
+RESTORED as a refusal gate for restage_src=False moves (the default).
+
+Now (PM ruling, 2026-08-26, cffa6e99f): that refusal gate is RETIRED
+outright, not merely re-sited. archival moves may assume a terminal
+handoff's disk content matches HEAD, because nothing in this fleet stamps
+a record complete and leaves the stamp uncommitted -- the drift the gate
+was refusing does not arise in practice, so the refusal was pure cost with
+no corresponding incident of its own. The one real incident this module's
+own history traces to, b3e61bd00, was the STALE-BLOB mechanism -- `git
+mv` re-keying a private index's stale HEAD-seeded blob for src -- which
+`os.replace` retired structurally (F-5, 2026-08-21), before the drift gate
+was ever restored. The archive-gate-bypass job the drift gate did after
+that (refusing an uncommitted-but-drifted disk write) never itself had an
+incident behind it; the PM ruling above retires it on that basis.
+`test_drifted_src_is_refused_by_default` below is retired accordingly,
+not deleted -- see its own docstring. The `restage_src=True` sibling is
+unaffected either way: it was always exempt from the drift gate and
+remains a plain "fresh disk content survives os.replace" positive case.
 
 This module spawns real git (mirrors the governed model in
 coordinator_core/ops/ceremony/tests/fixtures/real_git.py) but is
@@ -48,11 +59,11 @@ Spec backlink: archive-gate bypass investigation, commit b3e61bd00
 ("fleet: archive 7 shipped handoff(s)", Session-Id
 1e7c7cb6-206d-4e07-901f-d9160018b233).
 
-Negative-spec: do NOT assert the restage_src=False (default) case succeeds
-under drift -- that is exactly the archive-gate-bypass shape this module
-exists to close. test_archive_shipped_handoffs_disk_head_drift.py pins the
-same refusal at the archive_shipped_handoffs op layer; this module pins it
-at the archive_and_commit mechanism layer.
+Negative-spec: do NOT restore the drift refusal on the strength of this
+module's own history -- the PM ruling above (2026-08-26) is doctrine, not
+a suggestion this module happens to embody; the gate is retired, not
+merely quiet. `test_drifted_src_is_refused_by_default` below now records
+that ruling rather than pinning the old refusal.
 """
 
 from __future__ import annotations
@@ -128,11 +139,19 @@ def _seed_drifted_repo(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 def test_drifted_src_is_refused_by_default(tmp_path: Path):
-    """restage_src=False (the default): a candidate whose on-disk content
-    diverges from HEAD but was never staged or committed is REFUSED, not
-    archived -- the archive-gate-bypass refusal this module exists to pin.
-    Nothing moves on disk; the tree stays dirty exactly as the caller left
-    it."""
+    """RETIRED refusal, recorded as retired (PM ruling, 2026-08-26, see
+    module docstring) -- this test used to assert a drifted restage_src=False
+    candidate is REFUSED. That refusal gate was deleted outright in
+    cffa6e99f: archival moves may assume a terminal handoff's disk content
+    matches HEAD, because nothing in this fleet stamps a record complete and
+    leaves the stamp uncommitted. The one real incident behind this module
+    (b3e61bd00) was the stale-blob mechanism, which `os.replace` retired
+    structurally (F-5, 2026-08-21) -- the archive-gate-bypass refusal this
+    test pinned never had an incident of its own behind it.
+
+    Recorded here as an explicit assertion of the NEW behaviour (drift no
+    longer refuses a restage_src=False move) rather than a silent deletion,
+    so a future reader sees the ruling was applied on purpose."""
     root, src, drifted_content = _seed_drifted_repo(tmp_path)
 
     dst = root / "archive" / "handoffs" / "2026-08" / src.name
@@ -140,15 +159,14 @@ def test_drifted_src_is_refused_by_default(tmp_path: Path):
 
     acted, failed = _run(archive_and_commit(worktree_root=root, moves=[move], subject="fleet: archive 1 shipped handoff(s)"))
 
-    assert acted == []
-    assert len(failed) == 1
-    assert failed[0]["id"] == move.candidate_id
-    assert "disk/HEAD drift" in failed[0]["reason"]
+    assert failed == [], f"drift no longer refuses a restage_src=False move: {failed}"
+    assert acted == [{"id": move.candidate_id, "archived": True}]
 
-    # Refused before any move — src untouched, dst never created.
-    assert src.exists()
-    assert src.read_text(encoding="utf-8") == drifted_content
-    assert not dst.exists()
+    # The archived file carries the drifted disk content — os.replace moved
+    # whatever was on disk at src, and no gate intervened.
+    assert not src.exists()
+    assert dst.exists()
+    assert dst.read_text(encoding="utf-8") == drifted_content
 
 
 def test_drifted_src_with_restage_src_is_archived_with_its_fresh_on_disk_content(tmp_path: Path):

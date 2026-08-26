@@ -157,7 +157,87 @@ def test_skipped_row_contributes_no_published_from_claim(monkeypatch, tmp_path):
     )
     record_path = settings_home / "machine-local" / "publish-provenance.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    assert record["rows"]["skipped-row"] == {"published": False}
+    # The obligation is that a skipped row asserts NO published-from claim —
+    # not that the entry has exactly one key. `last_attempt_at` was added
+    # alongside merge-forward and says when the row was last reached, which
+    # is the opposite of a published-from claim.
+    entry = record["rows"]["skipped-row"]
+    assert entry["published"] is False
+    assert "toplevels" not in entry
+    assert "sha" not in entry
+    assert "last_published" not in entry
+
+
+def test_a_row_absent_from_this_round_keeps_its_last_published_sha(monkeypatch, tmp_path):
+    """The merge-forward obligation. A row the round did not reach used to
+    disappear from the record, which reads identically to a row that has
+    never published — so a mirror lagging source raised nothing anywhere
+    (found 2026-08-26 by hand-diffing two mirrors)."""
+    settings_home = _settings_home(monkeypatch, tmp_path)
+    record_path = settings_home / "machine-local" / "publish-provenance.json"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        json.dumps(
+            {
+                "completed_at": "2026-08-26T13:19:02+00:00",
+                "rows": {
+                    "absent-next-round": {
+                        "published": True,
+                        "toplevels": {"X:\repo": "a" * 40},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish.write_publish_provenance_record(
+        succeeded_row_names=[],
+        failed_row_names=[],
+        skipped_row_names=["some-other-row"],
+        rows_by_name={},
+        round_pinned_shas={},
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    carried = record["rows"]["absent-next-round"]
+    assert carried["published"] is True
+    assert carried["toplevels"] == {"X:\repo": "a" * 40}
+    assert record["rows_in_last_round"] == ["some-other-row"]
+
+
+def test_a_row_that_fails_after_publishing_keeps_the_earlier_success(monkeypatch, tmp_path):
+    """Anti-scope 3 forbids asserting a sha for THIS round's outcome. It does
+    not require forgetting that the row ever published — forgetting is what
+    made the lag invisible."""
+    settings_home = _settings_home(monkeypatch, tmp_path)
+    record_path = settings_home / "machine-local" / "publish-provenance.json"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        json.dumps(
+            {
+                "completed_at": "2026-08-26T13:19:02+00:00",
+                "rows": {
+                    "row": {
+                        "published": True,
+                        "toplevels": {"X:\repo": "b" * 40},
+                        "published_at": "2026-08-26T13:19:02+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish.write_publish_provenance_record(
+        succeeded_row_names=[],
+        failed_row_names=["row"],
+        skipped_row_names=[],
+        rows_by_name={},
+        round_pinned_shas={},
+    )
+    entry = json.loads(record_path.read_text(encoding="utf-8"))["rows"]["row"]
+    assert entry["published"] is False
+    assert "toplevels" not in entry
+    assert entry["last_published"]["toplevels"] == {"X:\repo": "b" * 40}
+    assert entry["last_published"]["at"] == "2026-08-26T13:19:02+00:00"
 
 
 def test_unwritable_target_warns_without_raising(monkeypatch, tmp_path):

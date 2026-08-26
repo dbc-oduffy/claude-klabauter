@@ -346,6 +346,60 @@ def test_build_deletion_blocks_check_directive_returns_none_for_falsy_msg_file()
     assert wsc.build_deletion_blocks_check_directive("") is None
 
 
+# The defect the three below close: the gate reads `git diff --cached`, so
+# unscoped it sees every staged deletion in the index. On a shared branch that
+# includes a concurrent peer's -- which this ceremony neither authored nor
+# commits, and which has no correct disposition: claiming a peer's deletions in
+# the commit body misdescribes the commit, and unstaging them destroys their
+# work. (2026-08-26, session 30cdf406, blocked here by 18 of them.)
+
+
+def test_deletion_blocks_directive_scopes_the_gate_to_the_ceremonys_own_paths():
+    """`stage_paths` reaches the CLI as its own `-- <pathspec>` scope."""
+    directive = wsc.build_deletion_blocks_check_directive(
+        "msg.txt", ["state/lessons/a.yaml", "archive/completed/b.md"]
+    )
+
+    assert directive is not None
+    assert directive["args"] == [
+        "msg.txt",
+        "--",
+        "state/lessons/a.yaml",
+        "archive/completed/b.md",
+    ]
+
+
+def test_deletion_blocks_directive_normalises_windows_separators():
+    """A backslash would drop a path silently OUT of the gate's scope.
+
+    `gate_scope` membership is exact-string matching against `git diff --cached
+    --name-status` output, which is always repo-relative with forward slashes,
+    while git accepts either spelling in the commit pathspec. Unnormalised, the
+    gate would be NARROWER than the commit -- the one direction that weakens
+    it, and silently."""
+    directive = wsc.build_deletion_blocks_check_directive(
+        "msg.txt", [r"state\lessons\a.yaml", "archive/completed/b.md"]
+    )
+
+    assert directive is not None
+    assert directive["args"][2:] == [
+        "state/lessons/a.yaml",
+        "archive/completed/b.md",
+    ]
+
+
+def test_deletion_blocks_directive_without_stage_paths_stays_whole_index():
+    """Absent or empty `stage_paths` is byte-identical to the pre-scoping
+    shape -- no `--` at all, so whole-index mode is unchanged for every caller
+    that supplies no scope."""
+    assert wsc.build_deletion_blocks_check_directive("msg.txt", None)["args"] == [
+        "msg.txt"
+    ]
+    assert wsc.build_deletion_blocks_check_directive("msg.txt", [])["args"] == [
+        "msg.txt"
+    ]
+
+
 # ---------------------------------------------------------------------------
 # jp-coverage-verdict -- ADVISORY, not enforced (examined and confirmed
 # as-designed; see `state/lessons/2026-07-27-verify-a-gate-actually-
