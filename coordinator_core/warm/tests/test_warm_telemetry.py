@@ -66,6 +66,32 @@ def test_record_exit_rejects_unknown_reason():
         t.record_exit("some-other-reason")
 
 
+def test_cold_row_carries_op_and_pid_when_supplied(tmp_path):
+    """A BURST HAS TO BE ATTRIBUTABLE. 1600 rows in 13 seconds (2026-08-25)
+    could name no process and no op, so the defect they reported could not be
+    chased. Both travel on the row now."""
+    telemetry.record_client_cold_fallback(engine_root=tmp_path, op="memo.check_addressee", pid=4321)
+
+    rows = [
+        json.loads(line)
+        for line in telemetry.client_cold_path(tmp_path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["op"] == "memo.check_addressee"
+    assert rows[0]["pid"] == 4321
+    assert "ts" in rows[0]
+
+
+def test_cold_row_omits_op_and_pid_when_unknown(tmp_path):
+    """Omitted, never invented: six days of rows predate these keys, and a
+    caller that cannot name its op must not be made to fabricate one."""
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    row = json.loads(telemetry.client_cold_path(tmp_path).read_text(encoding="utf-8").strip())
+    assert set(row) == {"ts"}
+
+
 def test_exit_detail_is_absent_unless_recorded():
     """Seven days of rows predate this field. An absent key keeps them and
     every reader of them working unchanged, so the field costs nothing to

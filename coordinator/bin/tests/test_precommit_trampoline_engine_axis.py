@@ -61,7 +61,13 @@ import cc_invoke  # noqa: E402  (import after path setup)
 
 _STORE = _REPO_ROOT / "setup" / "percolate-hooks" / "percolate-store.yaml"
 
-_TRAMPOLINE = _BIN_DIR / "install-claude-klabauter-precommit-hook.py"
+#: The population, discovered — not one hardcoded path. The original subject
+#: (`install-claude-klabauter-precommit-hook.py`) was deleted at 65508c924 ("C3: delete
+#: staged-rollback and precommit-hook ops"), after which this file's AC-import
+#: test raised FileNotFoundError on every run instead of asserting anything: a
+#: guard pointed at a corpse. The JOB survives the subject, so it is the job
+#: that is re-anchored here — every bin CLI dispatching a publish-renamed op,
+#: which is the same population AC-axis above already sweeps.
 
 #: `run_op_main("coordinator_core.ops.<name>", ...)` — the dispatched op module,
 #: read out of the trampoline source rather than hardcoded, so this file tracks a
@@ -135,35 +141,59 @@ def test_publish_renamed_op_trampolines_are_off_the_dispatch_axis() -> None:
     )
 
 
-def test_precommit_trampoline_resolves_a_root_holding_its_own_op() -> None:
+def _renamed_op_trampolines() -> list[Path]:
+    """Every bin CLI that dispatches an op the publish store renames."""
+    renamed = _publish_renamed_basenames()
+    if not renamed:
+        return []
+    return [
+        script
+        for script in sorted(_BIN_DIR.glob("*.py"))
+        if any(f"{op}.py" in renamed for op in _dispatched_op_modules(script.read_text(
+            encoding="utf-8", errors="replace")))
+    ]
+
+
+def test_renamed_op_trampolines_resolve_a_root_holding_their_own_op() -> None:
     """AC-import: the resolved engine root actually contains the dispatched op.
 
-    Exercises the SAME resolver the trampoline names, discovered from its source
+    Exercises the SAME resolver each trampoline names, discovered from its source
     rather than assumed, so the test cannot pass by checking an axis the file no
     longer uses.
     """
-    source = _TRAMPOLINE.read_text(encoding="utf-8")
+    if not _publish_renamed_basenames():
+        pytest.skip("publish store absent (published mirror) — nothing to cross-check")
 
-    if _COLOCATED_CALL_RE.search(source):
-        root = Path(cc_invoke.resolve_colocated_claude_klabauter_root(str(_TRAMPOLINE)))
-    elif _DISPATCH_CALL_RE.search(source):
-        root = Path(cc_invoke._resolve_claude_klabauter_root())
-    else:  # pragma: no cover - a third axis would need its own reasoning here
-        pytest.fail(
-            f"{_TRAMPOLINE.name} resolves its engine root through neither known "
-            "seam; this test must be taught the new one rather than deleted."
-        )
+    trampolines = _renamed_op_trampolines()
+    assert trampolines, (
+        "no bin CLI dispatches a publish-renamed op any more. If that is real, this "
+        "guard's subject is gone and the file should be retired deliberately — not "
+        "left passing vacuously over an empty population."
+    )
 
-    op_modules = _dispatched_op_modules(source)
-    assert op_modules, f"{_TRAMPOLINE.name} dispatches no coordinator_core.ops module"
+    for trampoline in trampolines:
+        source = trampoline.read_text(encoding="utf-8", errors="replace")
 
-    for op_name in sorted(op_modules):
-        module_file = root / "coordinator_core" / "ops" / f"{op_name}.py"
-        assert module_file.is_file(), (
-            f"{_TRAMPOLINE.name} dispatches coordinator_core.ops.{op_name}, but the "
-            f"engine root it resolves ({root}) has no {module_file.relative_to(root)} "
-            "— the import fails at run time and the pre-commit gate never installs. "
-            "This is the published-mirror-vs-working-tree axis defect: the op is "
-            "renamed by the publish transform, so it is only importable from the "
-            "checkout this trampoline itself ships in."
-        )
+        if _COLOCATED_CALL_RE.search(source):
+            root = Path(cc_invoke.resolve_colocated_claude_klabauter_root(str(trampoline)))
+        elif _DISPATCH_CALL_RE.search(source):
+            root = Path(cc_invoke._resolve_claude_klabauter_root())
+        else:  # pragma: no cover - a third axis would need its own reasoning here
+            pytest.fail(
+                f"{trampoline.name} resolves its engine root through neither known "
+                "seam; this test must be taught the new one rather than deleted."
+            )
+
+        op_modules = _dispatched_op_modules(source)
+        assert op_modules, f"{trampoline.name} dispatches no coordinator_core.ops module"
+
+        for op_name in sorted(op_modules):
+            module_file = root / "coordinator_core" / "ops" / f"{op_name}.py"
+            assert module_file.is_file(), (
+                f"{trampoline.name} dispatches coordinator_core.ops.{op_name}, but the "
+                f"engine root it resolves ({root}) has no {module_file.relative_to(root)} "
+                "— the import fails at run time and the pre-commit gate never installs. "
+                "This is the published-mirror-vs-working-tree axis defect: the op is "
+                "renamed by the publish transform, so it is only importable from the "
+                "checkout this trampoline itself ships in."
+            )

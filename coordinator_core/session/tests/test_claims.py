@@ -2804,3 +2804,94 @@ class TestReleasePhantomClaims:
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         for name in ("ghost1.py", "ghost2.py", "ghost3.py"):
             assert name not in offer["safe_paths"]
+
+
+class TestDeadHolderResidueWarning:
+    """A stale takeover is correct about the CLAIM and silent about the WORK.
+
+    Regression cover for
+    ``state/bug-backlog/2026-08-26-a-pickup-inherits-a-baton-but-not-its-pl-1e91b4881518.yaml``:
+    two authorized sessions ran the same twelve-chunk plan concurrently because
+    every takeover path reported "holder dead" and "work free" as one verdict.
+    These pin the second fact being reported separately -- and, in the archive
+    case, being reachable at all.
+    """
+
+    @staticmethod
+    def _holder_record(record_dir: Path, sid: str, *paths: str) -> None:
+        record_dir.mkdir(parents=True, exist_ok=True)
+        with open(record_dir / "touch-record.jsonl", "wb") as fh:
+            for p in paths:
+                fh.write(
+                    touch_record.encode_line(
+                        session_id=sid, agent_id=None, verb="T", path=p
+                    )
+                )
+
+    def test_residue_in_a_live_session_dir_is_named(self, tmp_path, monkeypatch, capsys):
+        sid = "11111111-2222-3333-4444-555555555555"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        self._holder_record(sdir, sid, "a.py", "b.py")
+        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: {"a.py", "zzz.py"})
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+
+        claims._warn_dead_holder_residue("plan", "some-plan", sid, str(tmp_path))
+
+        err = capsys.readouterr().err
+        assert "'a.py'" in err, err
+        assert "b.py" not in err, "b.py is claimed but CLEAN — must not be reported as residue"
+        assert "the WORK is not necessarily free" in err, err
+
+    def test_archived_holder_is_found_and_labelled(self, tmp_path, monkeypatch, capsys):
+        """The fourth variant: record complete, correctly written, and filed in
+        .archive/ where nothing looked. A peer read 'no directory' as 'no trace
+        at all' and waited for an owner that had died hours earlier."""
+        sid = "59196a45-e6de-47c5-8533-662d980dba9b"
+        base = tmp_path / ".git" / "coordinator-sessions"
+        archived = base / ".archive" / f"{sid}-2026-08-25"
+        self._holder_record(archived, sid, "orphan.py")
+        base.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(base))
+        monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
+        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: {"orphan.py"})
+
+        assert claims._dead_holder_record_dir(sid, str(tmp_path)) == str(archived)
+
+        claims._warn_dead_holder_residue("handoff", "some-baton", sid, str(tmp_path))
+        err = capsys.readouterr().err
+        assert "'orphan.py'" in err, err
+        assert ".archive/" in err, "an archived holder must SAY it was archived: " + err
+
+    def test_clean_dead_holder_says_nothing(self, tmp_path, monkeypatch, capsys):
+        """No residue -> no message. The takeover is genuinely uneventful and a
+        warning on every stale claim would train the reader to ignore it."""
+        sid = "22222222-3333-4444-5555-666666666666"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        self._holder_record(sdir, sid, "committed.py")
+        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: set())
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+        claims._warn_dead_holder_residue("plan", "p", sid, str(tmp_path))
+        assert capsys.readouterr().err == ""
+
+    def test_never_raises_and_never_blocks(self, tmp_path, monkeypatch, capsys):
+        """Fail-OPEN is the contract: this is advisory, and an advisory that
+        raises is worse than no advisory. Every leg is stubbed to explode."""
+        def _boom(*a, **k):
+            raise RuntimeError("disk gone")
+
+        monkeypatch.setattr(claims, "_dead_holder_record_dir", _boom)
+        claims._warn_dead_holder_residue("plan", "p", "sid", str(tmp_path))
+
+        monkeypatch.setattr(claims, "_dead_holder_record_dir", lambda *a, **k: str(tmp_path))
+        monkeypatch.setattr(claims, "_read_holder_claims", _boom)
+        claims._warn_dead_holder_residue("plan", "p", "sid", str(tmp_path))
+
+    def test_unresolvable_holder_is_lookup_fail_not_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(tmp_path))
+        monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
+        assert claims._dead_holder_record_dir("", str(tmp_path)) is None
+        assert claims._dead_holder_record_dir("no-such-sid", str(tmp_path)) is None

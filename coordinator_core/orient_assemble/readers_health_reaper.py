@@ -27,14 +27,13 @@ Purpose, per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md`
    `claude-klabauter-bin-sentinel` — see `_read_working_repo_registration`'s own
    docstring for the DR-132 backlink.
 
-2. The day-cadence handoff-archival/reaper family
-   (`coordinator/bin/reap-orphaned-in-flight-handoffs.py`, 629 lines,
-   fused): per the Approach's explicit zero-spawn budget decision, this
-   reader accepts exactly ONE `subprocess.run` call to that CLI's
-   `--dry-run` mode for the read-side report — extracting the dry-run
-   detection logic in-process was assessed disproportionate cost for a
-   once-a-day boot. This is the SOLE accepted subprocess in this reader
-   family; see `_REAP_SUBPROCESS_EXCEPTION` below.
+2. The day-cadence handoff-archival/reaper family: per
+   `docs/plans/2026-08-26-two-callers-want-two-numbers-not-a-1301-line-cli.md`
+   chunk C2, this reader calls `coordinator_core.ops.reap_in_flight_claims
+   .survey()` directly, in-process — no subprocess, no prose parsing. The
+   fused `coordinator/bin/reap-orphaned-in-flight-handoffs.py` CLI this
+   reader used to spawn is deleted (DR-344 § 6); this reader family now has
+   zero accepted subprocess exceptions.
 3. Marker-freshness dedup (AC-7): the three cadence-duplicated checks
    (session reads `state/.workday-start-marker`; day owns it and, via the
    `d-workday-marker-write` directive naming the real
@@ -51,10 +50,12 @@ Negative-spec:
     - Does NOT call `observer-sidecar-scan` — not one of the three
       health-probe subcommands the plan's port-scoping table names for this
       chunk.
-    - Does NOT extract `reap-orphaned-in-flight-handoffs.py`'s read-side
-      logic in-process, and does NOT add a SECOND accepted subprocess call
-      anywhere in this module — the reaper `--dry-run` call is the one and
-      only documented exception to the assembler's zero-spawn budget.
+    - Does NOT spawn a subprocess anywhere in this module — the reaper's
+      former `--dry-run` subprocess call is gone along with the fused CLI
+      it invoked; this reader family has no accepted subprocess exception
+      left.
+    - Does NOT re-implement the deleted prose-parsing regex contract —
+      `reap_in_flight_claims.survey()` returns integers directly.
     - Does NOT ever invoke the reaper's LIVE (non-`--dry-run`) mode, and
       does NOT invoke `_run_archive_stamp_cli` — mutation stays a
       `directives[]` entry naming the existing CLI, never performed here.
@@ -74,9 +75,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -84,18 +82,16 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
+from coordinator_core.ops.reap_in_flight_claims import survey as _reap_survey
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
-#: The two source CLIs' absolute paths — resolved relative to this file,
-#: never a literal device path (portability discipline, AC-16). This file
-#: lives at coordinator_core/orient_assemble/, so parents[2] is the claude-klabauter
-#: repo root (mirrors readers_handoff_triage._SOURCE_PATH's same parents[2]).
+#: The health-probes source CLI's absolute path — resolved relative to this
+#: file, never a literal device path (portability discipline, AC-16). This
+#: file lives at coordinator_core/orient_assemble/, so parents[2] is the
+#: claude-klabauter repo root (mirrors readers_handoff_triage._SOURCE_PATH's same
+#: parents[2]).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HEALTH_PROBES_PATH = _REPO_ROOT / "coordinator" / "bin" / "workday-start-health-probes.py"
-_REAPER_PATH = _REPO_ROOT / "coordinator" / "bin" / "reap-orphaned-in-flight-handoffs.py"
-
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_SUBPROCESS_TIMEOUT = 30
 
 #: Ceremony-name each cadence's own converted surface hooks — mirrors the
 #: three command surfaces this baton converts (workday-start.md,
@@ -211,48 +207,30 @@ def _read_ceremony_hook(cadence: str) -> ReaderResult:
     )
 
 
-#: ACCEPTED SUBPROCESS EXCEPTION (Approach § "Zero-spawn budget — explicit
-#: decision"): the assembler is zero-spawn for every reader EXCEPT this one.
-#: `reap-orphaned-in-flight-handoffs.py --dry-run` is a 629-line fused CLI;
-#: extracting its read-side detection logic in-process was assessed
-#: disproportionate cost for a once-a-day boot, so ONE subprocess call to
-#: the existing `--dry-run` mode is accepted here instead. This is the SOLE
-#: subprocess call in this reader family — do not add a second one anywhere
-#: in this module.
-_REAP_SUBPROCESS_EXCEPTION = True
-
-_REAP_WOULD_RELEASE_RE = re.compile(
-    r"^(\d+) orphaned in_flight handoffs would be released \(dry-run\)$", re.MULTILINE
-)
-_REAP_WOULD_RECLAIM_RE = re.compile(
-    r"^(\d+) orphaned in_flight handoffs would be reclaimed as shipped \(dry-run\)$",
-    re.MULTILINE,
-)
-
-
 def _read_reaper_dry_run() -> ReaderResult:
-    """Day-cadence handoff-archival/reaper family — the accepted single
-    subprocess call (see `_REAP_SUBPROCESS_EXCEPTION` above). Parses the
-    dry-run summary counts (never per-file lines, to stay resilient to the
-    source CLI's own prose wording) into a directive naming the live CLI as
-    the remediation, when there is anything to reap/reclaim."""
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(_REAPER_PATH), "--dry-run"],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            creationflags=_NO_WINDOW,
-            cwd=str(_REPO_ROOT),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ReaderResult()
+    """Day-cadence handoff-archival/reaper family. Calls
+    `reap_in_flight_claims.survey()` directly, in-process — no subprocess,
+    no prose parsing. `survey()` returns the two integers this reader needs
+    (`would_release`, `would_reclaim`) directly; there is no stdout to
+    regex-match and nothing left to parse.
 
-    stdout = proc.stdout or ""
-    would_release_match = _REAP_WOULD_RELEASE_RE.search(stdout)
-    would_reclaim_match = _REAP_WOULD_RECLAIM_RE.search(stdout)
-    would_release = int(would_release_match.group(1)) if would_release_match else 0
-    would_reclaim = int(would_reclaim_match.group(1)) if would_reclaim_match else 0
+    Fail-soft on ANY exception, returning an empty result. This is a
+    RESTORATION of the guard the subprocess form carried (`except (OSError,
+    subprocess.TimeoutExpired)`), not a new one, and it is not the fallback
+    escape hatch this rebuild forbids — it never reaches for the deleted CLI
+    or for a second way of getting the answer. It exists because
+    `orient_assemble.__init__` runs `reader.collect(cadence)` in a bare loop
+    with NO per-reader guard, so an exception here takes down the whole
+    orientation assemble for the session. `survey()` walks ~2000 corpus files
+    on a box running dozens of concurrent sessions that write handoffs, so a
+    file vanishing mid-scan is an ordinary event, not a defect. An advisory
+    reader going quiet is the correct failure; orientation dying is not."""
+    try:
+        result = _reap_survey(_REPO_ROOT)
+    except Exception:  # noqa: BLE001 - see negative-spec below
+        return ReaderResult()
+    would_release = result.would_release
+    would_reclaim = result.would_reclaim
 
     if would_release == 0 and would_reclaim == 0:
         return ReaderResult()
@@ -393,9 +371,9 @@ def collect(cadence: str) -> ReaderResult:
     """Compute this reader family's directives/judgment_points for `cadence`.
 
     Health probes run for every cadence (their detail is not cadence-tuned).
-    The reaper family's accepted subprocess call is day-cadence only — the
-    Approach scopes it as "the day-cadence handoff-archival/reaper family",
-    never fired at session/week cadence.
+    The reaper family's survey() call is day-cadence only — the Approach
+    scopes it as "the day-cadence handoff-archival/reaper family", never
+    fired at session/week cadence.
     """
     results = [
         _read_claude_klabauter_bin_sentinel(),

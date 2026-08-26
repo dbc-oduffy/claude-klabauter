@@ -792,7 +792,7 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
         _record_permanent_preamble_failure(exc)
         result = None
     if result is None:
-        _record_cold_fallback()
+        _record_cold_fallback(msg.get("method"))
     return result
 
 
@@ -838,7 +838,7 @@ def _record_permanent_preamble_failure(exc: Exception) -> None:
         )
 
 
-def _record_cold_fallback() -> None:
+def _record_cold_fallback(op: "str | None" = None) -> None:
     """Record one cold fallback -- the instrument W6+W7 found dead: only
     THIS process (the client) ever observes a cold fallback, so this is
     the sole call site across the whole warm engine that can ever
@@ -848,11 +848,24 @@ def _record_cold_fallback() -> None:
     served warm response must never pay this import. Never raises --
     `record_client_cold_fallback` is itself best-effort, and an import
     failure here is swallowed the same way (Backstop 2: nothing in the
-    preamble may fail in a way that fails the op)."""
+    preamble may fail in a way that fails the op).
+
+    `op` and the pid are carried so a BURST can be attributed. A row used to
+    be a bare timestamp, and on 2026-08-25 this file recorded 1600 of them
+    in 13 seconds (~123/s) with no way to say which process or which op
+    produced any of them -- an unattributable defect report
+    (state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-
+    seconds.yaml). Both values are already in hand here: `os` is imported
+    inside this function rather than at module scope, matching this
+    module's import budget (`is_warm_enabled`'s own note on why there is no
+    top-level `import os`), and the cost lands only on a path that was
+    already about to import `telemetry`."""
     try:
+        import os
+
         from coordinator_core.warm.telemetry import record_client_cold_fallback
 
-        record_client_cold_fallback(engine_root=_engine_clone_root())
+        record_client_cold_fallback(engine_root=_engine_clone_root(), op=op, pid=os.getpid())
     except Exception:  # noqa: BLE001 -- Backstop 2, see docstring
         return
 

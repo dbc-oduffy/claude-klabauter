@@ -767,6 +767,54 @@ def test_explicit_stage_absolute_path_outside_worktree_is_missing(tmp_path):
     assert outcome.missing_caller_paths == [outsider]
 
 
+def test_worktree_deletion_probe_spawns_one_git_per_chunk(tmp_path, monkeypatch):
+    """The fail-loud deletion probe costs exactly ONE git process per chunk.
+
+    Spawn-count guard (2026-08-26, DR-344). The first revision of this probe
+    spawned a second `git ls-files` per chunk to "settle" paths that
+    porcelain-v2 reported nothing for, then discarded its stdout -- measured
+    at 2x the spawns of the `git ls-files --deleted` probe it replaced (8 vs
+    4 on a 600-path batch) for a byte-identical result set. Process creation
+    is the cost on this path, not the query, so a per-chunk spawn multiplier
+    is a budget defect even when the wall-clock delta looks small on a
+    developer-sized batch.
+
+    A silent path is not unresolved here: once the `git status` call has
+    SUCCEEDED, silence means git scanned the path and had nothing to report,
+    which is definitionally "not deleted". The permissive guess this probe
+    exists to close was silence after a FAILED probe, and that arm raises.
+    """
+    from coordinator_core.ops.ceremony import git_native as _gn
+
+    repo = _init_repo(tmp_path)
+    names = [f"pkg/mod{i // 20}/file{i:03d}.py" for i in range(60)]
+    for name in names:
+        _seed_file(repo, name, "v1")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    for name in names[:3]:
+        (repo / name).unlink()
+
+    calls: list = []
+    real_git = _gn._git
+
+    def _counting(*args, **kwargs):
+        calls.append(args)
+        return real_git(*args, **kwargs)
+
+    monkeypatch.setattr(_gn, "_git", _counting)
+    deleted = commit_pipeline_mod._worktree_deleted_paths_chunked(repo, names)
+
+    expected_chunks = len(list(commit_pipeline_mod._chunk_paths(list(names))))
+    assert {
+        commit_pipeline_mod._worktree_key(repo, n) for n in names[:3]
+    } <= deleted
+    assert len(calls) == expected_chunks, (
+        f"deletion probe spawned {len(calls)} git process(es) for "
+        f"{expected_chunks} chunk(s) -- expected exactly one per chunk"
+    )
+
+
 def test_explicit_stage_relative_path_outside_worktree_is_missing(tmp_path):
     """The RELATIVE spelling of an out-of-worktree path classifies exactly
     like the absolute one above.

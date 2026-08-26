@@ -163,7 +163,12 @@ def client_cold_path(engine_root: Optional[Path] = None) -> Path:
     return svc_dir(engine_root) / CLIENT_COLD_FILENAME
 
 
-def record_client_cold_fallback(*, engine_root: Optional[Path] = None) -> None:
+def record_client_cold_fallback(
+    *,
+    engine_root: Optional[Path] = None,
+    op: Optional[str] = None,
+    pid: Optional[int] = None,
+) -> None:
     """Append one line recording a cold fallback observed by a CLIENT
     process -- the instrument `warm/client.py`'s `try_warm_dispatch` calls
     on every outcome that sends its caller down the cold dispatch path.
@@ -180,7 +185,20 @@ def record_client_cold_fallback(*, engine_root: Optional[Path] = None) -> None:
     fallback itself fails (`warm/client.py`'s Backstop 2: nothing in the
     warm preamble may fail in a way that fails the op).
     """
-    record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    record: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    # WHAT A BARE TIMESTAMP COULD NOT ANSWER. This file recorded 1600 rows in
+    # 13 seconds on 2026-08-25 (~123/s) -- a burst that is, by the shape of
+    # this instrument, many short-lived processes each taking one miss rather
+    # than one process retrying. Which processes, and running which op, was
+    # unanswerable from the rows, so the defect could not be chased at all
+    # (state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-
+    # seconds.yaml). Both keys are OMITTED when unknown, so the six days of
+    # rows already on disk keep their exact shape and a caller that cannot
+    # name its op is not made to invent one.
+    if op is not None:
+        record["op"] = op
+    if pid is not None:
+        record["pid"] = pid
     path = client_cold_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -771,21 +771,23 @@ def _worktree_deleted_paths_chunked(root: Path, paths: Sequence[str]) -> Set[str
                     f"leading token: {record!r}"
                 )
 
-        unresolved = [p for p in scoped_chunk if _worktree_key(root, p) not in seen]
-        if unresolved:
-            ls_result = git_native.ls_files_scoped(root, unresolved)
-            if not ls_result.ok:
-                raise WorktreeDeletionProbeFailed(
-                    "_worktree_deleted_paths_chunked: absent-record settling "
-                    f"`git ls-files` failed (rc={ls_result.returncode}) for "
-                    f"{len(unresolved)} path(s) "
-                    f"({condense_git_diagnostic(ls_result.stderr) or 'no diagnostic output'})"
-                )
-            # Every unresolved path is now settled as either CLEAN-TRACKED
-            # (present in this call's output) or MATCHED-NOTHING (absent) --
-            # neither is a deletion, so nothing further is added to
-            # `deleted` here; the call's sole purpose is to make sure the
-            # silence was actually resolved rather than merely assumed.
+        # NO absent-record settling spawn here, deliberately -- this probe's
+        # answer domain is "which of `paths` are worktree-deleted", and for
+        # THAT question a silent path is resolved, not defaulted. Once the
+        # `git status` call above has SUCCEEDED, silence means git scanned
+        # the path and had nothing to report, which is definitionally "not
+        # deleted" whether the path is clean-tracked or matched nothing.
+        # Neither outcome is a deletion, so no second read can change the
+        # answer. The permissive-guess failure this function exists to close
+        # was silence after a FAILED probe -- that arm now raises above.
+        #
+        # The present/absent split callers need is settled independently by
+        # `explicit_stage`'s own in-process `(root / p).exists()` check (see
+        # its docstring), which costs no process at all. An earlier revision
+        # spawned `git ls-files` per chunk here and discarded its stdout:
+        # measured 2x the spawns of the probe it replaced (8 vs 4 on a
+        # 600-path batch, +122ms) for an identical result set, which at
+        # percolate scale alone would breach the DR-344 brightline.
     return deleted
 
 

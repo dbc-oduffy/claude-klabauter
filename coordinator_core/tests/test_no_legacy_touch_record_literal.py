@@ -60,6 +60,17 @@ C6-C9 landed:
     § Problem documents. The function's own in-line comment states the
     condition for its removal: "This stays until a chunk migrates that
     writer off the old dialect ... and deletes this union."
+  - ``session/stable_pid_watch.py::_touch_record_family`` — added 2026-08-26
+    at this plan's close-out, after C10 landed. The K-006 stable-PID watch
+    is a post-C10 module, so it could not have been in the C10 measurement.
+    Its literal is the SAME ratified union as ``scope.py``'s: the function
+    routes through ``touch_record.discover_family`` — C5's widening policy,
+    not a filename swap — and appends the legacy sibling only when it
+    exists, on the same fact C8 ratified (``claims.atomic_dedup_append``
+    still emits the old dialect through the CLI ``claim-path`` seam). The
+    reason is written into the function's own docstring, and the branch is
+    existence-only: nothing there decodes a line, so it never grows a second
+    legacy-dialect PARSER. This entry retires when C8's writer does.
   - ``ops/session/migrate_touched_prefix.py::_iter_touched_files``,
     ``ops/session/legacy_touch_corpus_migrate.py`` (module scope),
     ``ops/session/legacy_touch_corpus_drain_check.py`` (module scope) —
@@ -71,14 +82,15 @@ C6-C9 landed:
 
 NOT allowlisted, deliberately
 ==============================
-``session/shape.py::session_shape_magnitude`` still carries the literal
-and is NOT exempted here. Commit ``727e1d5ad``'s own message: "``shape.py
-:: session_shape_magnitude`` and its test are examined-and-unchanged, not
-delivered. C5 reports the divergence rather than claiming the probe. It
-stays open." An unresolved gap is not a deliberate retention — allowlisting
-it would be exactly the "silent allowlist" this chunk's brief calls a
-defect. This gate is therefore expected to be RED on this site until a
-future chunk closes it; that red is accurate, not this test's bug.
+``session/shape.py::session_shape_magnitude`` carried the literal through
+six waves and was deliberately NOT exempted, on the grounds that an
+unresolved gap is not a deliberate retention and allowlisting it would be
+exactly the "silent allowlist" C10's brief calls a defect. That red was
+accurate, and it is what forced the fix: C10 (commit ``404fc157102a5b6f``)
+migrated ``files_touched`` onto the C0 union seam rather than exempting the
+site. The entry stays absent from ``_PRODUCTION_EXEMPT_SITES``, and this
+paragraph stays as the worked precedent for the next site that asks to be
+allowlisted instead of migrated.
 
 Negative-spec
 =============
@@ -122,6 +134,7 @@ _PRODUCTION_EXEMPT_SITES: frozenset[str] = frozenset({
     "coordinator_core/ops/session/migrate_touched_prefix.py::_iter_touched_files",
     "coordinator_core/ops/session/legacy_touch_corpus_migrate.py::<module>",
     "coordinator_core/ops/session/legacy_touch_corpus_drain_check.py::<module>",
+    "coordinator_core/session/stable_pid_watch.py::_touch_record_family",
     # This gate itself is a test module and is already excluded by the
     # `_is_test_file` check below; no self-entry is needed the way the
     # WSC-disposition gate needed one, because none of this file's own
@@ -229,11 +242,13 @@ def test_no_legacy_touch_record_literal_outside_named_exemptions():
     ``ast.Constant`` in a non-test module under ``coordinator_core/`` may
     equal ``"touched.txt"``.
 
-    Expected to be RED on ``session/shape.py::session_shape_magnitude``
-    until a future chunk closes that named, tracked gap (see module
-    docstring § "NOT allowlisted, deliberately") — this test is not
-    required to pass at the moment C10 lands; it is required to report the
-    true state accurately, which today includes that one open site.
+    Green as of C10 (``404fc157102a5b6f``), which migrated the one site
+    this gate deliberately refused to allowlist — see module docstring
+    § "NOT allowlisted, deliberately". A red here is a real new site, not
+    a known-open one: either migrate it onto the C0 union seam, or add a
+    named, dated, symbol-keyed entry to ``_PRODUCTION_EXEMPT_SITES`` with
+    the reason ALSO written into the offending function's own docstring.
+    A rationale that lives only in this file is not an exemption.
     """
     violations = find_legacy_touch_record_literals(_SCAN_ROOT)
     assert violations == [], (

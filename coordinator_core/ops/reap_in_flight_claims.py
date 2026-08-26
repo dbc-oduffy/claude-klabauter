@@ -81,6 +81,16 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 #: narrowed to just one (a corpus can carry either).
 _CLAIMED_STATUS_VALUES = ("claimed", "consumed")
 
+#: The holder FIELD, both spellings, in live-first order. DR-084 renamed
+#: `consumed_by` -> `claimed_by`; the live `state/handoffs` corpus is 100%
+#: `claimed_by` (66 of 66 holder stamps, 44 of 44 on in_flight records,
+#: measured 2026-08-26) and carries ZERO `consumed_by`. Reading only the
+#: legacy spelling makes this whole module see an empty corpus and report
+#: 0/0 -- which is exactly what it did until AC5's parity diff caught it.
+#: Same shape as `_CLAIMED_STATUS_VALUES` above, which had the rename
+#: applied for the status VALUE while the field was left behind.
+_HOLDER_FIELDS = ("claimed_by", "consumed_by")
+
 _VERDICT_RELEASE = "release"
 _VERDICT_RECLAIM_SHIPPED = "reclaim_shipped"
 _VERDICT_SKIP_LIVE_CHILDREN = "skip_live_children"
@@ -96,7 +106,7 @@ class HandoffRecord:
     resolved_path: Path
     status: Optional[str]
     deployment_state: Optional[str]
-    consumed_by: Optional[str]
+    holder: Optional[str]
     kind: Optional[str]
     deliverable_id: Optional[str]
     handoff_id: Optional[str]
@@ -124,6 +134,23 @@ class SurveyResult:
 # ---------------------------------------------------------------------------
 # Corpus pass — ONE open per file (AC3)
 # ---------------------------------------------------------------------------
+
+
+def _read_holder(fm: str) -> Optional[str]:
+    """The claim holder's session id, reading `claimed_by` then the legacy
+    `consumed_by` (DR-084 pre-rename). Both spellings, live-first.
+
+    Negative-spec: never reads ONE spelling. The live corpus is entirely
+    `claimed_by`, so a single-spelling read of `consumed_by` yields an empty
+    claim set and a silent 0/0 survey -- a defect that unit tests writing
+    their own fixtures cannot see, because they write whichever spelling the
+    implementation reads.
+    """
+    for key in _HOLDER_FIELDS:
+        value = read_fm_field_unquoted(fm, key)
+        if value:
+            return value
+    return None
 
 
 def _read_text_once(path: Path) -> str:
@@ -154,7 +181,7 @@ def _build_corpus(handoffs_dir: Path) -> List[HandoffRecord]:
                 resolved_path=entry.resolve(),
                 status=read_fm_field_unquoted(fm, "status"),
                 deployment_state=read_fm_field_unquoted(fm, "deployment_state"),
-                consumed_by=read_fm_field_unquoted(fm, "consumed_by"),
+                holder=_read_holder(fm),
                 kind=read_fm_field_unquoted(fm, "kind"),
                 deliverable_id=read_fm_field_unquoted(fm, "deliverable_id"),
                 handoff_id=read_fm_field_unquoted(fm, "handoff_id"),
@@ -169,7 +196,7 @@ def _in_flight_claims(corpus: List[HandoffRecord]) -> List[HandoffRecord]:
         for r in corpus
         if r.status in _CLAIMED_STATUS_VALUES
         and r.deployment_state == "in_flight"
-        and r.consumed_by
+        and r.holder
     ]
 
 
@@ -319,7 +346,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
         return SurveyResult(0, 0, [])
 
     dead: List[HandoffRecord] = [
-        r for r in claims if not session_live(r.consumed_by, cwd=str(repo_root))
+        r for r in claims if not session_live(r.holder, cwd=str(repo_root))
     ]
     if not dead:
         return SurveyResult(0, 0, [])
@@ -331,7 +358,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 
     dead_holders_seen: Dict[str, int] = {}
     for r in dead:
-        dead_holders_seen[r.consumed_by] = dead_holders_seen.get(r.consumed_by, 0) + 1
+        dead_holders_seen[r.holder] = dead_holders_seen.get(r.holder, 0) + 1
 
     pending: List[HandoffRecord] = []
     dispositions: List[Disposition] = []
@@ -344,7 +371,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
                 else "live-children check indeterminate — fail-closed"
             )
             dispositions.append(
-                Disposition(str(r.path), r.consumed_by, _VERDICT_SKIP_LIVE_CHILDREN, reason)
+                Disposition(str(r.path), r.holder, _VERDICT_SKIP_LIVE_CHILDREN, reason)
             )
             continue
         pending.append(r)
@@ -366,7 +393,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
             dispositions.append(
                 Disposition(
                     str(r.path),
-                    r.consumed_by,
+                    r.holder,
                     _VERDICT_SKIP_GOVERNED_PLAN,
                     f"deliverable_id {r.deliverable_id!r} governed by implemented plan "
                     f"{plan.get('path')!r} — releasing would re-advertise shipped work",
@@ -384,7 +411,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
     candidate_shas_by_path: Dict[str, List[str]] = {}
     all_shas: List[str] = []
     for r in ship_check:
-        shas = _shipped_orphan_candidate_shas(r.consumed_by, dead_holders_seen, completion_index)
+        shas = _shipped_orphan_candidate_shas(r.holder, dead_holders_seen, completion_index)
         if shas:
             candidate_shas_by_path[str(r.resolved_path)] = shas
             all_shas.extend(shas)
@@ -401,9 +428,9 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
             dispositions.append(
                 Disposition(
                     str(r.path),
-                    r.consumed_by,
+                    r.holder,
                     _VERDICT_RECLAIM_SHIPPED,
-                    f"holder {r.consumed_by} is dead but authored a completion "
+                    f"holder {r.holder} is dead but authored a completion "
                     f"entry whose commits include shipped sha {best}",
                     sha=best,
                 )
@@ -413,9 +440,9 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
             dispositions.append(
                 Disposition(
                     str(r.path),
-                    r.consumed_by,
+                    r.holder,
                     _VERDICT_RELEASE,
-                    f"holder {r.consumed_by} is dead with no resolvable shipped commit",
+                    f"holder {r.holder} is dead with no resolvable shipped commit",
                 )
             )
 

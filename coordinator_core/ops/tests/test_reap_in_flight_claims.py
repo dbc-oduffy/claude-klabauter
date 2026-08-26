@@ -21,11 +21,19 @@ from coordinator_core.ops import reap_in_flight_claims as mod
 
 
 def _write_handoff(handoffs_dir, name, *, status, deployment_state, consumed_by=None,
-                    kind=None, deliverable_id=None, handoff_id=None):
+                    kind=None, deliverable_id=None, handoff_id=None, holder_field="claimed_by"):
+    """`holder_field` defaults to the LIVE corpus spelling, `claimed_by`.
+
+    It is a parameter rather than a constant because the original suite hard-wrote
+    `consumed_by` — the legacy DR-084 spelling the implementation happened to read —
+    and so passed 26 green while the module saw an empty live corpus and reported
+    0/0. A fixture that writes whichever spelling the code reads cannot detect that
+    the code reads the wrong one. Default live, override to pin the legacy path.
+    """
     lines = ["---", 'title: "test handoff"', f"status: {status}",
              f"deployment_state: {deployment_state}"]
     if consumed_by is not None:
-        lines.append(f"consumed_by: {consumed_by}")
+        lines.append(f"{holder_field}: {consumed_by}")
     if kind is not None:
         lines.append(f"kind: {kind}")
     if deliverable_id is not None:
@@ -538,3 +546,68 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ===========================================================================
+# Holder-field spelling — the AC5 parity failure that 26 green tests missed
+# ===========================================================================
+def test_reads_the_live_corpus_holder_spelling(tmp_path):
+    """`claimed_by` is what the live corpus actually carries: 66 of 66 holder
+    stamps and 44 of 44 in_flight ones, measured 2026-08-26, with ZERO
+    `consumed_by`. Reading only the legacy spelling made survey() report 0/0
+    against real data while every unit test passed."""
+    handoffs_dir = tmp_path / "handoffs"
+    handoffs_dir.mkdir()
+    _write_handoff(handoffs_dir, "a.md", status="claimed", deployment_state="in_flight",
+                   consumed_by="sess1", holder_field="claimed_by")
+
+    claims = mod._in_flight_claims(mod._build_corpus(handoffs_dir))
+    assert [c.holder for c in claims] == ["sess1"]
+
+
+def test_still_reads_the_legacy_holder_spelling(tmp_path):
+    """DR-084's pre-rename `consumed_by` stays readable — a corpus can carry
+    either, the same reason `_CLAIMED_STATUS_VALUES` holds both status words."""
+    handoffs_dir = tmp_path / "handoffs"
+    handoffs_dir.mkdir()
+    _write_handoff(handoffs_dir, "a.md", status="consumed", deployment_state="in_flight",
+                   consumed_by="sess1", holder_field="consumed_by")
+
+    claims = mod._in_flight_claims(mod._build_corpus(handoffs_dir))
+    assert [c.holder for c in claims] == ["sess1"]
+
+
+def test_live_spelling_is_preferred_when_both_are_present(tmp_path):
+    handoffs_dir = tmp_path / "handoffs"
+    handoffs_dir.mkdir()
+    body = [
+        "---",
+        'title: "t"',
+        "status: claimed",
+        "deployment_state: in_flight",
+        "claimed_by: live",
+        "consumed_by: legacy",
+        "---",
+        "body",
+    ]
+    (handoffs_dir / "a.md").write_text(chr(10).join(body) + chr(10), encoding="utf-8")
+
+    claims = mod._in_flight_claims(mod._build_corpus(handoffs_dir))
+    assert [c.holder for c in claims] == ["live"]
+
+
+def test_the_real_corpus_is_not_invisible_to_this_module():
+    """Corpus-truth pin, not a fixture: if `state/handoffs` carries in_flight
+    claims at all, this module must SEE them. The 0/0 defect is exactly what a
+    fixture-only suite cannot catch, so this one test reads real disk."""
+    corpus_dir = Path(__file__).resolve().parents[3] / "state" / "handoffs"
+    if not corpus_dir.is_dir():
+        pytest.skip("no live corpus in this checkout")
+    corpus = mod._build_corpus(corpus_dir)
+    if not corpus:
+        pytest.skip("empty corpus")
+    stamped = [r for r in corpus if r.holder]
+    assert stamped, (
+        "every record in the live corpus parsed with an EMPTY holder — the module "
+        "is reading a field name the corpus does not use"
+    )

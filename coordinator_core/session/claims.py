@@ -549,6 +549,148 @@ CLAIM_STAGE_APPLY = "apply"
 #: 30 minutes routinely, so a 30-minute lease would expire mid-verification
 #: as the NORMAL case. Four hours clears that with margin while still
 #: bounding an abandoned reservation inside a working day.
+def _dead_holder_record_dir(held_sid: str, cwd: Optional[str] = None) -> Optional[str]:
+    """The directory holding ``held_sid``'s touch record, looked up in the LIVE
+    session tree first and then in ``.archive/``.
+
+    The archive leg is the point. A session that dies with uncommitted work is
+    archived to ``<sessions>/.archive/<sid>-<date>/`` with its record complete
+    and correctly written -- and every claim/liveness surface queries only the
+    live tree, so that session reads as AUTHORLESS rather than as DEAD. The
+    record is fine; the query was wrong. See the fourth variant in
+    ``state/bug-backlog/2026-08-26-a-pickup-inherits-a-baton-but-not-its-pl-
+    1e91b4881518.yaml``, where a peer read "no directory" as "no trace at all"
+    and held its own overlapping chunk waiting for an owner that had died hours
+    earlier.
+
+    Returns ``None`` (never raises) when ``held_sid`` is empty or no record
+    directory resolves in either location -- lookup-fail, not an error.
+    """
+    if not held_sid:
+        return None
+    live = core.session_dir(held_sid, cwd)
+    if live and os.path.isdir(live):
+        return live
+    base = core.sessions_dir(cwd)
+    if not base:
+        return None
+    archive = os.path.join(base, ".archive")
+    try:
+        # Archive dirs are `<sid>-<YYYY-MM-DD>`; a session archived more than
+        # once yields several, and the newest is the one whose residue is
+        # still plausibly in the tree.
+        matches = sorted(
+            entry.path
+            for entry in os.scandir(archive)
+            if entry.name.startswith(held_sid + "-") and entry.is_dir()
+        )
+    except OSError:
+        return None
+    return matches[-1] if matches else None
+
+
+def _warn_dead_holder_residue(
+    class_: str, basename: str, held_sid: str, cwd: Optional[str] = None
+) -> None:
+    """Print, on stderr, the paths a dead claim-holder left DIRTY in the tree,
+    immediately before its claim is taken over. Advisory only -- this never
+    blocks or alters the takeover, which is correct: the holder IS dead and the
+    claim IS stale.
+
+    What it closes is the conflation underneath that correctness. "The holder is
+    dead" and "the work is free" are different facts, and every takeover path
+    reported them as one verdict -- so a taker was told a plan was free while a
+    successor session was mid-execution on it, and fired a second authorized
+    workflow over the same twelve chunks. Detection was never missing; it was
+    pointed at a corpse and said nothing about what the corpse was holding.
+
+    Fail-OPEN at every step (an unresolvable record dir, an unreadable record, a
+    failed ``git status``): the takeover proceeds silently, exactly as before.
+    This is a message, and a message that raises would be worse than no message.
+
+    ONE git spawn, on the takeover path only -- which is rare by construction
+    (it requires a dead holder) and already the slow path. Nothing here runs on
+    a claim that is granted or refused normally.
+    """
+    try:
+        record_dir = _dead_holder_record_dir(held_sid, cwd)
+        if not record_dir:
+            return
+        sink = os.path.join(record_dir, "touch-record.jsonl")
+        claimed, _ok = _read_holder_claims(sink)
+        if not claimed:
+            return
+        dirty = _dirty_paths(cwd)
+        residue = sorted(claimed & dirty)
+        if not residue:
+            return
+        archived = os.path.basename(os.path.dirname(record_dir)) == ".archive" or (
+            os.sep + ".archive" + os.sep
+        ) in record_dir
+        shown = ", ".join(repr(p) for p in residue[:5])
+        more = f" (+{len(residue) - 5} more)" if len(residue) > 5 else ""
+        print(
+            f"cs_claim_{class_}: {basename}'s dead holder (session "
+            f"{held_sid or '?'}) left {len(residue)} uncommitted path(s) in the "
+            f"tree: {shown}{more}. The claim is stale and is being taken over; "
+            f"the WORK is not necessarily free. Read those paths before writing "
+            f"them, and check for a successor session that picked this up"
+            + (f" — holder record found in .archive/, not the live tree" if archived else "")
+            + ".",
+            file=sys.stderr,
+        )
+    except Exception:
+        return
+
+
+def _read_holder_claims(sink_path: str) -> Tuple[set, bool]:
+    """``(paths this sink still claims, read_ok)`` -- the raw last-verb-wins
+    fold, with NO liveness filter.
+
+    Deliberately not ``touch_record.project_live_claims``: that keeps only
+    claims whose session is still live, and this caller's holder is dead by
+    construction, so the shared seam would return an empty set every time. The
+    dead holder's claims are exactly what is wanted here.
+    """
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    return (
+        {p for p, event in claims.items() if event.verb == touch_record.VERB_TOUCH},
+        not degraded,
+    )
+
+
+def _dirty_paths(cwd: Optional[str] = None) -> set:
+    """Repo-relative paths git reports as dirty. Empty set on any failure.
+
+    Imported function-local, not at module scope: this module is on the Bash
+    guard import path and the only caller is the rare dead-holder takeover, so
+    the import cost is paid there rather than on every guard fire.
+    """
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    try:
+        out = subprocess.run(
+            ["git", "--no-optional-locks", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            cwd=cwd or None,
+            timeout=20,
+            # Windows is first-class here: without this the spawn pops a console
+            # window under headless Bash. Shared helper, not a local getattr, so
+            # the suppression cannot drift from every other spawn site.
+            **no_console_creationflags(),
+        ).stdout
+    except Exception:
+        return set()
+    return {
+        line[3:].strip().strip('"')
+        for line in out.splitlines()
+        if len(line) > 3
+    }
+
+
 BRIEF_CLAIM_LEASE_MINUTES = int(
     os.environ.get("COORDINATOR_BRIEF_CLAIM_LEASE_MINUTES", "240")
 )
@@ -888,6 +1030,7 @@ def claim_artifact(
 
     # Holder is dead / >30-min idle, or holds an expired brief-stage lease —
     # either way the claim is stale; take over.
+    _warn_dead_holder_residue(class_, basename, held_sid, cwd)
     if lease_expired:
         print(
             f"cs_claim_{class_}: expired brief-stage claim on {basename} (session "

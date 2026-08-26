@@ -432,6 +432,51 @@ def _fatal_stderr(message: str) -> None:
 #: chosen to be long enough that a genuine interpreter-plus-election boot is
 #: not cut off mid-flight, and short enough that nobody can mistake it for
 #: normal operation or absorb it as cadence.
+#:
+#: WHAT THE COLD LOG SAYS, AND WHY IT CANNOT SET THIS NUMBER (doe-claude-cb,
+#: 2026-08-26, swept from `client-cold.jsonl`; both readings below
+#: reproduced independently here). 2131 recorded misses, 2026-08-20 ->
+#: 2026-08-26, clustered into 121 outage windows at a >60s gap.
+#:
+#: THE FILE HAS TWO DEFENSIBLE READINGS AND THEY DISAGREE BY 9x. A window is
+#: measured from its first miss to its last, so it is bounded by when callers
+#: happened to call, and 42 of the 121 windows hold a SINGLE miss -- they
+#: measure 0s carrying no duration information at all. Read every window and
+#: the median is 1s with 28% over 15s. Drop the windows that cannot measure
+#: anything and the median is 9s with 43% over 15s (n=79). Neither is the
+#: answer: the first is dragged down by windows that measured nothing, and
+#: the second over-samples long outages, because a long outage collects more
+#: calls and so is likelier to clear the >=2 bar. The honest statement is a
+#: bracket -- median somewhere in 1-9s, over-bound share somewhere in 28-43%
+#: -- and nothing on disk narrows it.
+#:
+#: So the premise is COMPATIBLE with this file, not vindicated by it. A wait
+#: is worth having if misses are usually a server nearly up; that reading
+#: survives, and so does a materially worse one.
+#:
+#: This is worse than censored: it is censored with the bias direction
+#: unknown. Fitting a constant to either reading would be the same defect as
+#: quoting an ETA -- a number that looks measured and is not. What the tail
+#: does establish (p90 56s, max 234s on the all-windows reading) is that no
+#: fixed bound covers it.
+#:
+#: What the tail DOES establish is that no fixed bound covers it, and that
+#: chasing it would be the wrong move: a caller inside the 234s window eats
+#: the full failure either way, and a longer bound only adds sleeping to it.
+#: The long windows are a separate fault to be found, not a duration to be
+#: absorbed. `client-boot-wait.jsonl` is the instrument that can eventually
+#: set this number, because it records actual waits with `served` alongside
+#: elapsed -- uncensored, and able to separate "waited and got there" from
+#: "waited and never did".
+#:
+#: NEVER REACHABLE FROM A HOOK. This wait is for the op/CLI door, where a
+#: caller is already waiting on a result. A hook path must pass
+#: `COORDINATOR_WARM_BOOT_WAIT_SECS=0` in the child it spawns: hooks fire on
+#: the session and commit hot path where blocking is never acceptable, and
+#: `client-cold.jsonl` carries a burst of 1600 misses in 13 seconds
+#: (2026-08-25T16:33:28Z, ~123/s), which is many short-lived processes each
+#: taking one miss. Whatever produces that burst must never each sleep here.
+#: -> state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-seconds.yaml
 WARM_BOOT_WAIT_SECS = 15.0
 
 #: First poll interval, and the cap it backs off to. Fast at the start because
@@ -441,6 +486,11 @@ WARM_BOOT_WAIT_SECS = 15.0
 #: (`_spawned_this_process`) and cross-process debounced by
 #: `breadcrumb.should_spawn`, so every poll after the first re-uses the spawn
 #: already in flight rather than triggering another.
+#:
+#: That claim is about SPAWNS and answers only the spawn question. It says
+#: nothing about MISSES, which are recorded per poll and per process -- and a
+#: burst of them is a real observed shape on this box, not a hypothetical
+#: (see `WARM_BOOT_WAIT_SECS` above). Do not read it as covering both.
 _BOOT_POLL_MIN_SECS = 0.1
 _BOOT_POLL_MAX_SECS = 1.0
 _BOOT_POLL_GROWTH = 1.6
