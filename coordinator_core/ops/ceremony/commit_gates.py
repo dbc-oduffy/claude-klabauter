@@ -625,6 +625,91 @@ def _diff_name_only_worktree(cwd: Union[str, Path], paths: Sequence[str]) -> Git
     return _git(["diff", "--name-only", "--", *paths], cwd=cwd)
 
 
+def _dirty_candidate_paths(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> List[str]:
+    """Every path `dirty_tree_gate` could classify, WITHOUT `git status`.
+
+    Purpose: `status --porcelain` costs ~1500ms on a 36k-file worktree and
+    scoping the pathspec does not move it (measured 1543-1600ms scoped to four
+    paths, against 1431-1710ms unscoped) -- because `status` also runs the
+    index-vs-HEAD tree comparison, and THAT is the expensive half
+    (`diff-index --cached HEAD` alone: 1487ms; `diff-files`: 48ms). At a 2.0s
+    `ipc.CEREMONY_BUDGET_SECS`, one such call is 75% of the whole budget, and
+    `ceremony.commit` was timing out on 28 of 31 calls because of it.
+    → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-one-git-status.md
+
+    `dirty_tree_gate` does not USE the index-vs-HEAD half it was paying for:
+    it recomputes staged-ness itself from `read_index` + `head_blobs` (see
+    `_is_staged` there), having explicitly stopped trusting status's own X
+    column. So the two cheap halves are the whole requirement:
+
+      - `diff-files` -- tracked paths whose worktree bytes diverge from the
+        index, INCLUDING worktree deletions. The index-vs-worktree axis.
+      - `ls-files --others --exclude-standard` -- untracked, non-ignored
+        paths. Exactly status's `??` population (status excludes ignored too).
+
+    Equivalence, not approximation: the paths this drops relative to `status`
+    are the index-vs-HEAD-only ones -- staged-with-clean-worktree, and staged
+    deletions -- and those are precisely the paths `dirty_tree_gate`'s
+    classification loop `continue`s on at its FIRST check (`_is_staged` →
+    skip). A path it would have reported cannot be one this omits.
+
+    Deliberately NOT `-M`/`--find-renames`: a rename staged in the index is an
+    index-vs-HEAD fact, already skipped as staged. On the worktree axis the two
+    halves report the old path (via `diff-files`, as a deletion) and the new one
+    (via `ls-files --others`) separately, which is the same pair of paths
+    status's `XY DEST\\0SRC\\0` rename record resolves to under
+    `_iter_porcelain_z_paths`. No rename record means no second field to
+    consume, so no record-aware reader is needed here.
+
+    `-z` for the same reason `_status_porcelain_unquoted` uses it: these paths
+    key `read_index`/`head_blobs` lookups verbatim, and both are unquoted. `-z`
+    is the only shape that disables git's C-quoting unconditionally.
+
+    Fail-open on a failed chunk, preserving `dirty_tree_gate`'s pre-existing
+    behaviour EXACTLY -- it never checked `status_result.ok` either, so a git
+    failure yielded an empty path list and a passing gate. Preserved rather
+    than fixed here because this change ships under a live outage and must not
+    also change what the gate refuses; the fail-open is filed separately.
+
+    Chunked against the Windows argv cap, as its predecessor was.
+    """
+    both: List[str] = []
+    for base in (
+        ["--no-optional-locks", "diff-files", "-z", "--name-only"],
+        # `--directory --no-empty-directory` is load-bearing, not tidying:
+        # `status --porcelain` collapses a wholly-untracked directory to ONE
+        # `dir/` record, and this gate's two filters (`known_scope` from a
+        # handoff `scope:` entry, and `gate_scope` exact-match) key on that
+        # collapsed shape. Enumerating the directory's files instead turns one
+        # attributable `state/subagent-share/<sid>/` entry into N unmatched
+        # per-file entries -- measured here as 34 collapsed paths becoming 216
+        # file paths, every one of them a fresh false "unattributable".
+        [
+            "--no-optional-locks", "ls-files", "-z", "--others",
+            "--exclude-standard", "--directory", "--no-empty-directory",
+        ],
+    ):
+        if paths is None:
+            result = _git(base, cwd=cwd)
+            if not result.ok:
+                return []
+            both.append(result.stdout)
+            continue
+        for chunk in _chunk_paths(list(paths)):
+            result = _git([*base, "--", *chunk], cwd=cwd)
+            if not result.ok:
+                return []
+            both.append(result.stdout)
+
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for field in "".join(both).split("\x00"):
+        if field and field not in seen:
+            seen.add(field)
+            ordered.append(field)
+    return ordered
+
+
 def _status_porcelain_unquoted(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> GitResult:
     """`git status --porcelain -z`, RAW/unquoted paths -- REGRESSION-2 fix.
 
@@ -789,8 +874,7 @@ def dirty_tree_gate(
     # relied upon being redundant: a directory element in `gate_paths` makes
     # `git` emit that directory's children, which the exact-match filter
     # discards exactly as it does today under the whole-tree scan.
-    status_result = _status_porcelain_unquoted(root, sorted(gate_scope) if scoped else None)
-    all_paths: List[str] = _iter_porcelain_z_paths(status_result.stdout)
+    all_paths: List[str] = _dirty_candidate_paths(root, sorted(gate_scope) if scoped else None)
 
     # (a)'s "staged" classification no longer trusts git status's own X
     # column -- it is recomputed from `read_index` + `head_blobs` (the
@@ -824,38 +908,34 @@ def dirty_tree_gate(
             return (entry.mode, entry.sha) != head_entry
         return head_entry is not None
 
-    # EOL phantom filter (tracked-unstaged only -- untracked files are
-    # never phantoms since there is no index entry to compare against).
-    # "Tracked-unstaged" is now: present in the index AND not staged per
-    # `_is_staged` above (the index-vs-HEAD half), not the old x_char == ' '
-    # read off git status's own column.
-    phantom_candidates = [
-        path
-        for path in all_paths
-        if path in index_snapshot and not _is_staged(path)
-    ]
-
-    # Batched EOL-phantom check (docs/plans/2026-08-07-n-plus-one-git-spawn-
-    # class-and-amplification-gate.md § C1): ONE `git diff --name-only`
-    # over every tracked-unstaged candidate, instead of one `git diff
-    # --quiet` per porcelain line. `real_diff_paths` is exactly the subset
-    # WITH a real diff; any candidate absent from it is a phantom -- see
-    # `_diff_name_only_worktree()`'s own docstring for why this is the
-    # correct inversion (not "pass all paths to one `git diff --quiet`",
-    # which loses per-path resolution). This is the retained worktree-axis
-    # spawn -- KEPT deliberately (see module/function docstring): no hash
-    # of on-disk bytes is ever compared to a git OID here.
-    real_diff_paths: Set[str] = set()
-    if phantom_candidates:
-        diff_result = _diff_name_only_worktree(root, phantom_candidates)
-        real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
-
+    # The EOL-phantom filter that used to sit here is GONE, and its absence is
+    # the point rather than an omission: it was a second whole-tree `git diff`
+    # (`_diff_name_only_worktree`, measured 1272ms -- the gate's single largest
+    # cost, larger than the `status` call) whose only job was to re-check, by
+    # content, paths that `git status --porcelain` had reported dirty on a STAT
+    # mismatch alone. Git-for-Windows stat staleness makes that population real,
+    # so against a status-sourced candidate list the filter was load-bearing.
+    #
+    # `_dirty_candidate_paths` no longer sources from `status`. `diff-files` is
+    # a diff: when the stat says dirty it hashes the worktree bytes before
+    # emitting, so a phantom cannot reach `all_paths` in the first place. Not
+    # merely argued -- measured on this worktree, both directions:
+    #
+    #     status --porcelain (tracked)   n=72   756ms
+    #     diff-files --name-only         n=59    67ms
+    #     git diff --name-only (content) n=59  1324ms
+    #     phantoms status reported that diff-files already dropped : 13
+    #     phantoms that LEAKED through diff-files                  :  0
+    #     real diffs diff-files MISSED                             :  0
+    #
+    # The filter was stripping a population that can no longer occur. Should
+    # that ever stop holding, the symptom is LOUD and fail-closed -- a phantom
+    # would classify as (c) and refuse the commit, naming the path -- never a
+    # silent pass. → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-
+    # one-git-status.md
     for path in all_paths:
         # (a) Staged: this session's own pending commit.
         if _is_staged(path):
-            continue
-
-        if path in index_snapshot and path not in real_diff_paths:
             continue
 
         # (b) Known concurrent owner.

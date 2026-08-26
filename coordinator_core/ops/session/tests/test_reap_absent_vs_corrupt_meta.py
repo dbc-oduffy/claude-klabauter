@@ -63,6 +63,18 @@ def _session_dir(sessions_dir: Path, sid: str, *, age_seconds: float,
     return sdir
 
 
+# Sub-reap (i) now selects candidates by a positive uuid-shape test
+# (docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md, C2), so a
+# fixture standing in for a REAL session must be uuid-shaped or the reaper never
+# considers it. The store fixtures below (`decisions`, `_branch-overrides`, and
+# the denylist walk) stay deliberately non-uuid — being rejected is their point.
+_SID_NO_META_OLD = "11111111-aaaa-4aaa-8aaa-000000000001"  # was "no-meta-old"
+_SID_NO_META_FRESH = "22222222-aaaa-4aaa-8aaa-000000000002"  # was "no-meta-fresh"
+_SID_CORRUPT_META_OLD = "33333333-aaaa-4aaa-8aaa-000000000003"  # was "corrupt-meta-old"
+_SID_REAL_STALE = "44444444-aaaa-4aaa-8aaa-000000000004"  # was "real-stale-session"
+_SID_EMPTY = "55555555-aaaa-4aaa-8aaa-000000000005"  # was "empty-dir"
+
+
 def _reap(sessions_dir: Path):
     return reap._reap_stale_sessions(sessions_dir, frozenset(), None)
 
@@ -73,13 +85,13 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         meta-is-None defer fired before the staleness check could run."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
-            sessions_dir, "no-meta-old",
+            sessions_dir, _SID_NO_META_OLD,
             age_seconds=reap._SESSION_STALE_SECONDS + 3600, meta=None,
         )
 
         reaped, deferred, failed = _reap(sessions_dir)
 
-        assert reaped == ["no-meta-old"], (
+        assert reaped == [_SID_NO_META_OLD], (
             "a session dir with no meta.json, cold for over 24h, was not "
             "reaped — the absent case is still riding the corrupt case's "
             "fail-closed-to-keep defer, so the stuck pool stays permanent"
@@ -94,7 +106,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         Write/Edit before its backfill has fired: recent mtime, so kept."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
-            sessions_dir, "no-meta-fresh", age_seconds=60, meta=None,
+            sessions_dir, _SID_NO_META_FRESH, age_seconds=60, meta=None,
         )
 
         reaped, deferred, failed = _reap(sessions_dir)
@@ -110,7 +122,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         at any age, and ambiguity keeps."""
         sessions_dir = tmp_path / "coordinator-sessions"
         sdir = _session_dir(
-            sessions_dir, "corrupt-meta-old",
+            sessions_dir, _SID_CORRUPT_META_OLD,
             age_seconds=reap._SESSION_STALE_SECONDS * 10,
             meta="{not json at all",
         )
@@ -123,7 +135,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
             "longer covers the genuinely ambiguous case"
         )
         assert sdir.exists()
-        assert [d["id"] for d in deferred] == ["corrupt-meta-old"]
+        assert [d["id"] for d in deferred] == [_SID_CORRUPT_META_OLD]
         assert "unreadable" in deferred[0]["reason"]
 
     def test_empty_record_less_dir_is_deferred_not_reaped(self, tmp_path):
@@ -131,7 +143,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         over no entries is not a staleness answer, so it reads as the 0.0
         unknown-timestamp sentinel and keeps."""
         sessions_dir = tmp_path / "coordinator-sessions"
-        sdir = sessions_dir / "empty-dir"
+        sdir = sessions_dir / _SID_EMPTY
         sdir.mkdir(parents=True)
         stamp = time.time() - reap._SESSION_STALE_SECONDS * 10
         os.utime(sdir, (stamp, stamp))
@@ -140,7 +152,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
 
         assert reaped == []
         assert sdir.exists()
-        assert [d["id"] for d in deferred] == ["empty-dir"]
+        assert [d["id"] for d in deferred] == [_SID_EMPTY]
 
 
 class TestNonSessionStoresAreNeverReaped:
@@ -167,7 +179,7 @@ class TestNonSessionStoresAreNeverReaped:
             age_seconds=reap._SESSION_STALE_SECONDS * 30, meta=None,
         )
         victim = _session_dir(
-            sessions_dir, "real-stale-session",
+            sessions_dir, _SID_REAL_STALE,
             age_seconds=reap._SESSION_STALE_SECONDS + 3600, meta=None,
         )
 
@@ -179,7 +191,7 @@ class TestNonSessionStoresAreNeverReaped:
             "absent-meta fallback removed the accidental defer that hid it"
         )
         assert "decisions" not in reaped
-        assert reaped == ["real-stale-session"], (
+        assert reaped == [_SID_REAL_STALE], (
             "the store skip must not also suppress genuine reaping"
         )
         assert not victim.exists()

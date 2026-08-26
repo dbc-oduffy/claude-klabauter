@@ -1258,7 +1258,17 @@ def test_brightline_process_time_for_the_added_loopback_hop(
     brightline, measured as PROCESS TIME (`time.process_time()`), never wall
     clock (CLAUDE.md § Load norm). Recorded with `n` samples (asserted, not
     merely printed) and this measurement's own load state (module-section
-    docstring above: no peer load -- not a claim of a fleet-load figure)."""
+    docstring above: no peer load -- not a claim of a fleet-load figure).
+
+    MEASURED IN AGGREGATE, NOT PER SAMPLE. `time.process_time()` advances in
+    scheduler ticks -- 15.625ms on Windows (64Hz) -- so timing ONE
+    sub-millisecond hop against it reads 0.0000ms for nearly every sample and
+    exactly one tick for whichever straddles a boundary. The original form of
+    this test did `max()` over 20 such samples and therefore asserted on the
+    QUANTUM rather than on this hop; measured 2026-08-26 at median 0.0000ms,
+    worst 15.6250ms, which is the tick to four decimal places. Summing across
+    enough hops that the total dwarfs one tick is what makes the per-hop
+    figure real."""
     import urllib.request
 
     root = _stamped(tmp_path)
@@ -1289,24 +1299,29 @@ def test_brightline_process_time_for_the_added_loopback_hop(
     thread = threading.Thread(target=_serve, daemon=True)
     thread.start()
     try:
-        n = 20
-        samples_ms: List[float] = []
+        n = 200
         url = f"http://{front_door.bind_host()}:{port}{front_door.HEALTH_PATH}"
+        for _ in range(5):
+            with urllib.request.urlopen(url, timeout=2.0) as resp:
+                resp.read()
+        start = time.process_time()
         for _ in range(n):
-            start = time.process_time()
             with urllib.request.urlopen(url, timeout=2.0) as resp:
                 assert 200 <= resp.status < 300
                 resp.read()
-            samples_ms.append((time.process_time() - start) * 1000.0)
+        total_ms = (time.process_time() - start) * 1000.0
 
-        assert len(samples_ms) == n
         budget_ms = _BRIGHTLINE_MS * _BRIGHTLINE_MARGIN_FACTOR
-        worst = max(samples_ms)
-        assert worst < budget_ms, (
-            f"front-door loopback hop process-time {worst:.3f}ms across n={n} "
-            f"samples exceeds this test's {_BRIGHTLINE_MARGIN_FACTOR:.0%} "
-            f"margin of the DR-344 brightline ({_BRIGHTLINE_MS}ms) -- "
-            f"samples: {samples_ms!r}"
+        per_hop_ms = total_ms / n
+        assert total_ms < budget_ms * n, (
+            f"front-door loopback hop process-time {per_hop_ms:.4f}ms per hop "
+            f"({total_ms:.2f}ms total, n={n}) exceeds this test's "
+            f"{_BRIGHTLINE_MARGIN_FACTOR:.0%} margin of the DR-344 brightline "
+            f"({_BRIGHTLINE_MS}ms)"
+        )
+        assert total_ms > 0.0, (
+            f"process time did not advance across n={n} hops -- below this "
+            "platform's clock tick, so the measurement carries no information"
         )
     finally:
         httpd.shutdown()

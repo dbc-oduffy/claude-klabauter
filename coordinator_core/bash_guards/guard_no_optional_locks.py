@@ -87,6 +87,8 @@ from coordinator_core.bash_guards._command_tokenizer import (
     _REDIRECT_DUP_LHS_RE as _bt_REDIRECT_DUP_LHS_RE,
     _REDIRECT_DUP_RHS_RE as _bt_REDIRECT_DUP_RHS_RE,
 )
+from coordinator_core.bash_guards._dialect import dialect_from_tool_name
+from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 
 #: The two subcommands this guard rewrites -- the two lock-acquiring
 #: commands agents reach for constantly (see module docstring). Deliberately
@@ -392,6 +394,30 @@ def check_git_no_optional_locks(
     cmd = _crlf_strip(cmd)
     if "\n" in cmd:
         return None
+
+    # Shape precedence: a command whose PRIMARY shape is MULTI_PROBE_BANNER
+    # is already owned by the `multiprobe-banner`/`multiprobe-banner-
+    # rewrite` guards (dispatch.py), whose remedy (collapsing every probe,
+    # including any bare `git status`, into one process) strictly subsumes
+    # this guard's own single-flag insertion -- rewriting just the `git
+    # status` segment here would offer a weaker fix AND short-circuit the
+    # dispatch chain before the banner guards (registered in a later band,
+    # see dispatch.py's `GuardBand` ordering) ever run. Mirrors the same
+    # shape-precedence deferral `guard_multiprobe_banner.check` itself
+    # already honors against `Shape.GREP_VIA_BASH` (AC-7). Dialect-aware
+    # (payload's `tool_name`) so this also defers correctly under
+    # PowerShell, where `dialect_from_tool_name` resolves a dialect this
+    # guard's own bash-only tokenizer above cannot classify shapes for.
+    dialect = dialect_from_tool_name(
+        (payload or {}).get("tool_name") if isinstance(payload, dict) else None
+    )
+    if dialect is not None:
+        classification = classify_command(cmd, dialect=dialect)
+        if (
+            classification.primary is not None
+            and classification.primary.shape is Shape.MULTI_PROBE_BANNER
+        ):
+            return None
 
     tokens = _bt_tokenize_full_command(cmd)
     if tokens is None:

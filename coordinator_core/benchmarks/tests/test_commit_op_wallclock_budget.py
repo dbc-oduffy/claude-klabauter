@@ -16,6 +16,21 @@ them — so the two numeric gates below (AC4's 150ms wallclock median, AC7's
 "AC4's target holds under concurrent load") are now REAL assertions, not
 recorded-only instrument sanity.
 
+STALE-NUMBER WARNING, 2026-08-26 (session a2d4a470). The MEASURED block below
+predates `a28dd424` and records COLD-path numbers under a warm label; the
+8-way figure is real but was taken under heavy box load, not by the 8-way arm
+alone. Superseded numbers, measured through one identical shape per rung
+(docs/research/spike-verdicts/2026-08-26-where-the-commit-op-s-other-half-
+second-goes.md): wallclock median 360.4ms, in-process handler 371.4ms over
+**11 git spawns** (320.0ms, 86.1%), 8-way p50 1232.8ms with 0/8
+indeterminate. Two further defects in THIS file, both owned by C5 of
+docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md:
+`_write_driver` emits a driver that ITSELF spawns the invoke door, so every
+sample here carries TWO interpreter starts (~37ms of pure floor) while AC5's
+dial leg is measured at ONE — the two numbers were never comparable; and the
+job-object process count under-reports (3.0 vs the census's 11) because it
+sees landing spawns, not the gate path. Do not cite the block below.
+
 MEASURED 2026-08-26, POST-C3/C5, this repo's own isolated warm server (this
 file's own `warm_engine_root` fixture): wallclock median 551.6ms / p95
 849.4ms (target 150ms), process_time 695.3ms at 35.75 job-object

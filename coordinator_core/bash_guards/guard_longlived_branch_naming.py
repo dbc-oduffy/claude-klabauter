@@ -102,6 +102,12 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
     token_matches_binary,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    expand_start_process_invocations,
+    tokenize_command,
+)
 from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     SANCTIONED_LONGLIVED_PREFIXES,
@@ -233,6 +239,32 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         git_root = resolve_git_root(payload.get("cwd"))
         if not _is_hazard_repo(git_root or ""):
             return None
+
+        # Dialect-aware Start-Process expansion (C8,
+        # pln-the-destructive-core-learns-the-she): this entry's
+        # `matchers` already declares `COMMAND_TOOL_NAMES` but
+        # `resolve_command_positions` is a Bash-shaped tokenizer with no
+        # PowerShell awareness, so a `Start-Process git -ArgumentList
+        # 'checkout','-b','feature/x'` invocation resolves to a segment
+        # headed by `Start-Process`, never `git`, and `_classify_segment`
+        # below never reaches the sanctioned-prefix predicate -- even
+        # though the base `git checkout -b` argv is byte-identical across
+        # dialects. This guard NEVER denies (see module docstring "WHAT
+        # THIS DOES"), so this is a missed advisory, never a spurious one.
+        # Same narrow fix as the sibling entries: for a PowerShell payload
+        # only, tokenize via `_dialect.tokenize_command` and run the SAME
+        # `expand_start_process_invocations` pass, then rejoin the
+        # expanded tokens back into text so `resolve_command_positions`
+        # (unchanged, still exercised byte-for-byte on the BASH leg) sees
+        # the target's real argv in command position. A PowerShell parse
+        # failure leaves `cmd` untouched.
+        _lln_dialect = dialect_from_tool_name(payload.get("tool_name"))
+        if _lln_dialect is Dialect.POWERSHELL:
+            _lln_ps_tokens = tokenize_command(
+                cmd, _lln_dialect, guard_name="longlived-branch-naming"
+            )
+            if _lln_ps_tokens is not None:
+                cmd = " ".join(expand_start_process_invocations(_lln_ps_tokens))
 
         for resolved in resolve_command_positions(cmd):
             name = _classify_segment(resolved.tokens)

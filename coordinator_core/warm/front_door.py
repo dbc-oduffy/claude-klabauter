@@ -97,11 +97,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
-from coordinator_core.warm import breadcrumb, lifecycle, skew
+from coordinator_core.warm import breadcrumb, door_credential, front_door_routing, lifecycle, skew
 from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
 from coordinator_core.warm.http_listener import bind_host
 from coordinator_core.warm.server import InFlightCounter
@@ -1136,6 +1136,33 @@ class _FrontDoorContext:
         self.engine_root = engine_root
         self.in_flight = InFlightCounter()
         self.dials = DialCounter(engine_root=engine_root)
+        self.door_key = self._boot_credential()
+
+    @staticmethod
+    def _boot_credential() -> Optional[str]:
+        """Read the door's shared secret ONCE, at boot (AC17).
+
+        Read here rather than per fire because this process is resident: a
+        per-fire read would put disk I/O back on a path whose whole appeal is
+        60 nanoseconds of `compare_digest`.
+
+        The directory boundary is ASSERTED, not assumed -- a secret in a
+        directory other users can read is not a secret, and a credential
+        believed to be sound is worse than none. A failed assertion does not
+        raise out of here: this door must still bind and still answer, because
+        `unroutable_response`'s loud did-not-run is a far better outcome than a
+        port nothing is listening on. It simply holds no key, so every fire
+        answers `credential_absent` until an operator fixes the directory.
+        """
+        try:
+            door_credential.assert_directory_excludes_others()
+        except Exception as exc:  # noqa: BLE001 -- never brick the door
+            print(
+                "[front-door] refusing to hold a credential: %s" % exc,
+                file=sys.stderr,
+            )
+            return None
+        return door_credential.read_secret()
 
     def close_listener(self) -> None:
         try:
@@ -1209,12 +1236,95 @@ def _make_handler(ctx: "_FrontDoorContext"):
             self.send_response(404)
             self.end_headers()
 
-        def do_POST(self) -> None:  # noqa: N802 -- stdlib-mandated name
-            # No routing wired here -- see this section's negative-spec.
-            # C4's `front_door_routing.py` is what turns this into a real
-            # `/hook/<op>` forward; until then a POST here is unserved.
-            self.send_response(404)
+        def _answer(self, payload: Dict[str, Any], status: int = 200) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:  # noqa: N802 -- stdlib-mandated name
+            """Authenticate, resolve, forward -- in that order, and the order
+            is the point (AC17).
+
+            The credential is checked BEFORE the route is resolved and before
+            anything is forwarded, so an unauthenticated fire never causes this
+            process to touch a listener on its behalf. It is never forwarded
+            tokenless "in the hope the listener accepts it", and this door
+            still mints and recomputes nothing: it COMPARES a shared secret,
+            which is a different act from computing an engine token
+            (`door_credential`'s own negative spec).
+
+            Every failure answers through `unroutable_response`'s loud
+            did-not-run shape rather than an HTTP error status, because a hook
+            caller reads the BODY -- a bare 4xx reaches the harness as a guard
+            that produced nothing, which is indistinguishable from a guard that
+            passed. That indistinguishability is the whole thing this plan
+            exists to remove.
+            """
+            event = self.headers.get(HOOK_EVENT_HEADER) or UNLABELLED_EVENT
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+
+            presented = door_credential.credential_from_headers(self.headers)
+            if presented is None:
+                state = front_door_routing.CREDENTIAL_ABSENT
+            elif not door_credential.verify(presented, ctx.door_key):
+                state = front_door_routing.CREDENTIAL_INVALID
+            else:
+                state = None
+            if state is not None:
+                self._answer(
+                    front_door_routing.unroutable_response(
+                        front_door_routing.RouteResolution(state=state), event
+                    )
+                )
+                return
+
+            resolution = front_door_routing.resolve_route(
+                self.headers, front_door_root=ctx.engine_root
+            )
+            if resolution.state != front_door_routing.ROUTED:
+                self._answer(front_door_routing.unroutable_response(resolution, event))
+                return
+
+            # `enter`/`exit`, not `with`: `InFlightCounter` exposes those
+            # names rather than the context-manager protocol, and this is the
+            # counter `warm.lifecycle` polls to know a drain has finished.
+            ctx.in_flight.enter()
+            try:
+                forwarded = front_door_routing.forward_request(
+                    resolution, self.path, body
+                )
+            finally:
+                ctx.in_flight.exit()
+            if forwarded is None:
+                # The route resolved but the hop did not land. Reported as the
+                # no-listener fact rather than a fifth vocabulary: from the
+                # caller's side "the record said live and the dial failed" and
+                # "no record" are the same remediation, and `forward_request`'s
+                # own contract already collapses every hop failure to `None`.
+                self._answer(
+                    front_door_routing.unroutable_response(
+                        front_door_routing.RouteResolution(
+                            state=front_door_routing.NO_LISTENER,
+                            identity=resolution.identity,
+                            engine_root=resolution.engine_root,
+                        ),
+                        event,
+                    )
+                )
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(forwarded)))
+            self.end_headers()
+            self.wfile.write(forwarded)
 
     return _Handler
 

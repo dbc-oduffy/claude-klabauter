@@ -193,3 +193,70 @@ def test_brief_git_spawn_budget_is_at_most_four(repo, monkeypatch):
         f"expected at most 4 git spawns from one brief() call, got "
         f"{len(calls)}: {calls}"
     )
+
+
+def test_brief_spends_a_fifth_spawn_when_the_window_cannot_cover_us(repo, monkeypatch):
+    """The other branch of the same contract, and the reason it is worth a spawn.
+
+    `brief()` reads this session's owned shas from the peer trailer map when
+    that map provably saw all of them, and pays an authoritative
+    `git log --grep=Session-Id` walk when it cannot prove that. The proof is
+    `_map_window_covers_session`: the map is built over
+    `--since=<earliest live peer start>`, so a session that started BEFORE
+    that peer may have commits the window never held.
+
+    Why the extra spawn is the right purchase: these shas become
+    `commit_slices`, which IS the review scope. A truncated list does not
+    surface as a smaller measurement -- it surfaces as a partitioned review
+    reporting full coverage while the commits outside the window go
+    unreviewed and unnamed. Measured on session 8bb305c5 (2026-08-26): 7
+    owned commits, the map held 4, and the 3 it dropped carried the code.
+
+    Fixture inverts the sibling test's ordering deliberately: this session's
+    claim dir is created FIRST, so the session predates its own live peer and
+    the window cannot be proven to cover it. Asserting the walk FIRED (not
+    merely that the count rose) is what keeps this from passing for an
+    unrelated reason.
+    """
+    sid = "22222222-2222-2222-2222-222222222222"
+    peer_sid = "33333333-3333-3333-3333-333333333333"
+    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir.mkdir(parents=True)
+    peer_claim_dir = repo / ".git" / "coordinator-sessions" / peer_sid
+    peer_claim_dir.mkdir(parents=True)
+    # Backdate THIS session an hour. Creation order alone cannot express
+    # "older than the window": both dirs land in the same clock tick, the two
+    # timestamps compare equal, and `>=` reads that as covered. Setting the
+    # time explicitly is what makes this fixture the unprovable case rather
+    # than a race that usually resolves the other way.
+    import os as _os
+
+    _hour_ago = _os.path.getmtime(peer_claim_dir) - 3600
+    _os.utime(claim_dir, (_hour_ago, _hour_ago))
+
+    def _commit_with_trailer(filename: str, content: str, committing_sid: str) -> str:
+        (repo / filename).write_text(content, encoding="utf-8")
+        _git("add", filename, cwd=repo)
+        _git("commit", "-qm", f"work\n\nSession-Id: {committing_sid}", cwd=repo)
+        return _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+
+    _commit_with_trailer("peer-file.txt", "peer\n", peer_sid)
+    _commit_with_trailer("own-file-1.txt", "own1\n", sid)
+    _commit_with_trailer("own-file-2.txt", "own2\n", sid)
+    (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    _patch_gate_with_sid(monkeypatch, sid)
+    calls = _wrap_popen_for_git_spawn_count(monkeypatch)
+
+    wsc.brief(decisions={}, repo_root=repo)
+
+    walked = [c for c in calls if any("--grep=^Session-Id:" in str(a) for a in c)]
+    assert walked, (
+        "the authoritative sha walk did not fire for a session the map's window "
+        "cannot be proven to cover -- review scope may be silently truncated: "
+        f"{calls}"
+    )
+    assert len(calls) <= 5, (
+        f"expected at most 5 git spawns on the unprovable-window path, got "
+        f"{len(calls)}: {calls}"
+    )

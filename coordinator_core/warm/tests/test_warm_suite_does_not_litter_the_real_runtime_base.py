@@ -52,6 +52,16 @@ _WRITER_MODULES = (
     # listed here, which is exactly the escape the docstring above warns
     # about: it ran outside this file's subprocess litter-guard.
     "coordinator_core/warm/tests/test_server_loop.py",
+    # Added 2026-08-26 with the door credential (AC17). Registered on this
+    # guard's first run against it, as intended: the module stands up a real
+    # door and vouches for a real listener, so it writes a discovery record.
+    # Its own `door` fixture sets `RUNTIME_BASE_ENV` to `tmp_path` before
+    # anything is written, which is why the litter never reaches the operator's
+    # base -- but the guard's contract is registration, not a promise, and a
+    # future edit dropping that fixture line must fail here rather than
+    # silently start writing into `%LOCALAPPDATA%` on a box running 50-70
+    # sessions.
+    "coordinator_core/warm/tests/test_front_door_authenticated_forward.py",
     # Added 2026-08-25 with the atomic-discovery-write fix. This guard caught it
     # on the first full-suite run, and it was right to: the same omission had
     # already bitten in an ad-hoc script that afternoon, which wrote 400 junk
@@ -70,6 +80,14 @@ _WRITER_MODULES = (
     # time on the same shape.
     "coordinator_core/warm/tests/test_front_door.py",
     "coordinator_core/warm/tests/test_front_door_routing.py",
+    # Added 2026-08-26. Landed at `4ac8fa019` calling `supervisor.write_discovery`
+    # without registering here, so the full warm suite ran red on this guard --
+    # the third time this exact omission has been caught, which is the guard
+    # earning its place rather than a nuisance. The module itself is well
+    # behaved: it passes `engine_root=` a `tmp_path`-derived stamped root at
+    # every call site, so this registration records coverage, it does not
+    # excuse litter.
+    "coordinator_core/warm/tests/test_http_transport_telemetry.py",
 )
 
 

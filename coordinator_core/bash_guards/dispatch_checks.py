@@ -149,7 +149,9 @@ from coordinator_core.bash_guards._dialect import (
     Dialect,
     _strip_ps_quotes,
     dialect_from_tool_name,
+    expand_start_process_invocations,
     resolve_segments_for_dialect,
+    tokenize_command,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
@@ -3837,6 +3839,30 @@ def _check_destructive_git_revert_full(
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
     cmd = _strip_heredoc_bodies(cmd)
+    # Dialect-aware Start-Process expansion (C8,
+    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
+    # already declares `COMMAND_TOOL_NAMES` (dispatch.py) but the regex
+    # pipeline below (`_GR_BASE_RE`/`_gr_is_revert_segment`) anchors on a
+    # LITERAL `git` token at segment start, so a PowerShell `Start-Process
+    # git -ArgumentList 'stash'` invocation evaded detection even though the
+    # bare-text `\bgit\b`/`\bstash\b` gates a few lines below both matched --
+    # confirmed live, see `docs/reference/guard-tool-name-membership.md` § 3z
+    # "Coverage is PARTIAL". Resolved narrowly: for a PowerShell payload
+    # only, tokenize via `_dialect.tokenize_command` and run the SAME
+    # `expand_start_process_invocations` pass `resolve_segments_for_dialect`
+    # already applies for every other converted entry, then rejoin the
+    # expanded tokens back into text so the existing regex pipeline below
+    # (unchanged, and still exercised byte-for-byte on the BASH leg) sees the
+    # target's real argv in command position. A PowerShell parse failure
+    # (`tokenize_command` returns `None`, already logged SILENT by that
+    # call) leaves `cmd` untouched -- the pre-existing bare-text regex gates
+    # below still get a chance at the raw string, matching this function's
+    # long-standing behavior for every dialect before this change.
+    _gr_dialect = dialect_from_tool_name((hook_payload or {}).get("tool_name"))
+    if _gr_dialect is Dialect.POWERSHELL:
+        _gr_ps_tokens = tokenize_command(cmd, _gr_dialect, guard_name="destructive-git-revert")
+        if _gr_ps_tokens is not None:
+            cmd = " ".join(expand_start_process_invocations(_gr_ps_tokens))
     # Review: code-reviewer -- Finding 3 (P2, 2026-07-28): normalize a
     # head-position Windows-exe/case-varied git spelling to the bare `git`
     # token BEFORE verb resolution -- see `_normalize_git_exe_head_to_bare`
@@ -8271,6 +8297,30 @@ def check_git_commit_safe_commit_advise(
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
+    # Dialect-aware Start-Process expansion (C8,
+    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
+    # already declares `COMMAND_TOOL_NAMES` but `_bt_tokenize_full_command`
+    # below is a Bash-shaped tokenizer with no PowerShell awareness, so a
+    # `Start-Process git -ArgumentList 'commit','-m','wip'` invocation
+    # tokenizes to a segment headed by `Start-Process`, never `git`, and
+    # every scope predicate below silently never runs -- a missed
+    # detection, not a spurious advisory, since this check is
+    # `fail_closed=False` (advisory only). Same narrow fix as
+    # `_check_destructive_git_revert_full`: for a PowerShell payload only,
+    # tokenize via `_dialect.tokenize_command` and run the SAME
+    # `expand_start_process_invocations` pass, then rejoin the expanded
+    # tokens back into text so the existing Bash-shaped pipeline below
+    # (unchanged, still exercised byte-for-byte on the BASH leg) sees the
+    # target's real argv in command position. A PowerShell parse failure
+    # leaves `cmd` untouched, matching this function's long-standing
+    # behavior for every dialect before this change.
+    _gcsa_dialect = dialect_from_tool_name((payload or {}).get("tool_name"))
+    if _gcsa_dialect is Dialect.POWERSHELL:
+        _gcsa_ps_tokens = tokenize_command(
+            cmd, _gcsa_dialect, guard_name="git-commit-safe-commit-advise"
+        )
+        if _gcsa_ps_tokens is not None:
+            cmd = " ".join(expand_start_process_invocations(_gcsa_ps_tokens))
     tokens = _bt_tokenize_full_command(cmd)
     if tokens is None:
         return None

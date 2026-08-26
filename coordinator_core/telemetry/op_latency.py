@@ -573,6 +573,7 @@ def record_op_latency(
     sid: Optional[str] = None,
     corr_id: Optional[str] = None,
     caller: Optional[str] = None,
+    error_code: Optional[int] = None,
 ) -> None:
     """Append one JSON line recording a single op invocation's wall-clock cost.
 
@@ -580,7 +581,24 @@ def record_op_latency(
         {"op": str, "t_start": float epoch, "elapsed_ms": float,
          "outcome": "ok"|"error"|"timeout", "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
-         "kind": "complete", "corr_id": str|null, "caller": str|null}
+         "kind": "complete", "corr_id": str|null, "caller": str|null,
+         "error_code": int|null}
+
+    ``error_code`` is the JSON-RPC ``error.code`` when the response carried
+    one, and it is what makes the ``outcome == "error"`` population READABLE.
+    Without it every failure class collapses into one undifferentiated bucket:
+    a real handler failure, a caller dialling an op the registry does not serve
+    (``-32601`` METHOD_NOT_FOUND), and a caller dialling an op that was
+    deliberately KILLED all record identically. That is not hypothetical -- on
+    2026-08-26 a filed P1 quoted "9.6% error" as one number across a fleet, and
+    splitting it required probing a LIVE registry with `get_op_handler`,
+    because the number on disk could not answer it. Two thirds of that
+    population turned out to be callers dialling names that do not exist.
+    → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-one-git-status.md
+
+    Additive and defaulting to ``None`` for the same reason ``corr_id`` and
+    ``caller`` are: a caller that predates it is unaffected, and an older row
+    on disk simply lacks the key.
 
     ``outcome`` "timeout" means the CALLING side gave up waiting — it does NOT
     mean the op handler stopped running (see module docstring negative-spec).
@@ -615,6 +633,7 @@ def record_op_latency(
         "kind": "complete",
         "corr_id": corr_id,
         "caller": caller,
+        "error_code": error_code,
     }
     _write_entry(entry, repo_root)
 

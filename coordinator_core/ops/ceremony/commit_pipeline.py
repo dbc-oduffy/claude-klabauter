@@ -214,7 +214,7 @@ _COMPOSITION_SPAN_PUSH = "commit_pipeline.push"
 #:
 #: THE DEFAULT IS "none" AS OF 2026-08-26, and was "sync" before that. The
 #: reason "sync" held the slot has expired: it was `scoped_git_commit.py`'s
-#: wire contract, and that op was killed (K-001, `state/kill-ledger.md`) --
+#: wire contract, and that op was killed (K-045, `state/kill-ledger.md`) --
 #: the file is gone and the name is unregistered, so the default was
 #: protecting a caller that no longer exists.
 #:
@@ -349,7 +349,9 @@ _PUSH_MAX_RETRIES = 3
 #: The full ladder is 3 pushes + 2 fetches = 5 network legs ~= 3.8s, plus a local
 #: rebase and the ladder's own `rev-parse`/`rev-list` spawns. 12.0s is ~3x that
 #: network cost, leaving room for the per-spawn scheduling tax the 50-70-session
-#: load norm imposes (`coordinator_core/git/run.py :: _SPAWN_SCHEDULING_HEADROOM_SECS`).
+#: load norm imposes -- a real cost, but NOT a term plugged into this number:
+#: 12.0 is a flat literal chosen as ~3x the network estimate, not
+#: `network + headroom`. Cited as why the multiplier is 3x rather than 1.5x.
 #:
 #: A CEILING, NEVER A TARGET, and deliberately well under the 30s dispatch guard
 #: so THIS is what stops the ladder and the guard stays a backstop whose breach
@@ -389,6 +391,46 @@ PUSH_RETRY_BUDGET_SECS: float = 12.0
 #: `PUSH_RETRY_BUDGET_SECS`, sized for a different caller.
 _CEREMONY_PUSH_HEADROOM_SECS: float = 0.8
 CEREMONY_PUSH_BUDGET_SECS: float = CEREMONY_BUDGET_SECS - _CEREMONY_PUSH_HEADROOM_SECS
+
+
+def _ceremony_push_budget(pre_push_elapsed: Optional[float]) -> float:
+    """The push ladder's budget for a ceremony op, measured from what the op
+    has ALREADY SPENT rather than from a fixed slice of its ceiling.
+
+    The fixed slice was wrong and the review caught it (2026-08-26, slice-3
+    reviewer, P2). `push_with_retry` stamps its deadline at ITS OWN entry, so
+    a flat `CEREMONY_PUSH_BUDGET_SECS` handed the push a full 1.2s ladder no
+    matter how long staging, gates and the commit had already taken. Pre-push
+    work over its 0.8s allowance therefore pushed the TOTAL past
+    `CEREMONY_BUDGET_SECS`, the outer `asyncio.wait_for` fired mid-push, and
+    the mid-flight cut this budget exists to prevent came back -- precisely in
+    the slow-box case it was written for. The 0.8s figure was also never
+    measured: it is `2.0 - 1.2`, the residual left after picking the push
+    number, and the reviewer was right to refuse it as a load-tested ceiling.
+
+    Measuring from actual elapsed time removes the need for that figure to be
+    true. A slow pre-push phase now TIGHTENS the ladder instead of silently
+    overrunning the ceiling, which is the direction that keeps the op inside
+    its budget under exactly the load that threatens it.
+
+    `None` (no measurement in hand) falls back to the flat slice -- the
+    pre-2026-08-26 behaviour, and still bounded.
+
+    Never returns <= 0: an op already over its ceiling gets `_CEREMONY_PUSH_
+    FLOOR_SECS`, one honest attempt at the remote rather than a zero budget
+    that refuses to try. The outer clamp is the backstop for a genuinely
+    overrunning op; this function's job is to stop being the CAUSE of one.
+    """
+    if pre_push_elapsed is None:
+        return CEREMONY_PUSH_BUDGET_SECS
+    return max(CEREMONY_BUDGET_SECS - pre_push_elapsed, _CEREMONY_PUSH_FLOOR_SECS)
+
+
+#: The least a ceremony push ladder is ever given. Below one network round
+#: trip (~600-750ms measured 2026-08-26) a budget cannot buy an attempt, only
+#: a guaranteed refusal, and a refusal that never touched the remote is worse
+#: information than an attempt that failed.
+_CEREMONY_PUSH_FLOOR_SECS: float = 0.5
 
 #: Matches `git_native._git()`'s own synthesized `TimeoutExpired` stderr
 #: ("git push ...: timed out after {timeout}s (...)") -- the ONE reason
@@ -3137,10 +3179,18 @@ def _budget_exhausted_reason(
     """
     budget_part = "budget" if budget_secs is None else f"{float(budget_secs):g}s budget"
     tail = f" (last: {last_reason})" if last_reason else ""
+    # `attempts_made == 0` is the budget-too-small-to-try-once case: saying
+    # "stopped after 0 attempt(s) ... before the remote accepted" implies a
+    # remote that declined us, when nothing was ever sent.
+    made = (
+        "stopped before any attempt"
+        if attempts_made == 0
+        else f"stopped after {attempts_made} attempt(s)"
+    )
     return (
-        f"git push: stopped after {attempts_made} attempt(s) -- the ladder's own "
-        f"{budget_part} was exhausted before the remote accepted{tail}. Nothing is "
-        f"in flight; reconcile and retry at the next checkpoint."
+        f"git push: {made} -- the ladder's own {budget_part} was exhausted "
+        f"before the remote accepted{tail}. Nothing is in flight; reconcile "
+        f"and retry at the next checkpoint."
     )
 
 
@@ -3196,8 +3246,13 @@ def push_with_retry(
     this call itself pushed.
 
     `budget_secs` (2026-08-26) -- an END-TO-END deadline for this whole
-    ladder, stamped at entry, with every network leg sized from the
-    remainder and the deadline re-checked BETWEEN attempts. `None` (the
+    ladder, stamped at entry, with each REMOTE leg (`push`, `fetch`) sized
+    from the remainder and the deadline re-checked BETWEEN attempts. The
+    local `rebase --onto` between them is deliberately NOT bounded by it:
+    it spawns no network call, and cutting a rebase mid-flight would leave
+    the worktree mid-rebase -- a worse state than the overrun it would
+    prevent. The between-attempts check is what catches a ladder whose
+    rebase ran long. `None` (the
     default) keeps the pre-existing unbudgeted behaviour for every caller
     that has not opted in, so this parameter changes nothing it is not
     passed to. See `PUSH_RETRY_BUDGET_SECS` for why the ladder must own a
@@ -3912,13 +3967,22 @@ def _run_in_plane_archive_sweep(
     if not _archive_sweep_due(common_dir, _ARCHIVE_SWEEP_INTERVAL_S):
         return [], []
 
-    # Deferred PAST the cadence gate, deliberately: `plan_sweep` is a coroutine,
-    # so reaching it at module scope pulled `asyncio` (and its `ssl`/`socket`
-    # subtree) plus the fleet module into every commit -- ~42ms of a ~88ms cold
-    # import, for a job that runs once per `_ARCHIVE_SWEEP_INTERVAL_S`. Below
-    # the gate, the interpreter pays it only on the commits that sweep.
-    import asyncio
-
+    # Deferred PAST the cadence gate, deliberately: importing the fleet
+    # module pulls its own dependency tree into every commit for a job that
+    # runs once per `_ARCHIVE_SWEEP_INTERVAL_S`. Below the gate, the
+    # interpreter pays it only on the commits that sweep.
+    #
+    # `plan_sweep` is now SYNCHRONOUS (C2, docs/plans/2026-08-26-the-sweep-
+    # stops-paying-for-a-room-it-nev.md), so this call site no longer wraps
+    # it in `asyncio.run(...)` and no longer imports `asyncio` at all --
+    # confirmed live before this change: `inspect.iscoroutinefunction(
+    # archive_terminal_handoffs.plan_sweep)` was `True`, and the OLD
+    # `asyncio.run(...)` call against a now-sync `plan_sweep` would raise
+    # `ValueError: a coroutine was expected`, silently swallowed by the
+    # `except Exception:` below into `return [], []` -- disabling in-plane
+    # archiving forever with only a logged warning as its trace (staff-eng
+    # Finding 0). Calling `plan_sweep` directly is the fix, not a
+    # side-effect of the sync migration.
     from coordinator_core.ops.fleet import archive_terminal_handoffs
 
     lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
@@ -3931,10 +3995,8 @@ def _run_in_plane_archive_sweep(
 
     try:
         try:
-            moves, _skipped = asyncio.run(
-                archive_terminal_handoffs.plan_sweep(
-                    worktree_root, common_dir, _archive_sweep_cap()
-                )
+            moves, _skipped = archive_terminal_handoffs.plan_sweep(
+                worktree_root, common_dir, _archive_sweep_cap()
             )
         except Exception:
             _LOG.warning(
@@ -3987,7 +4049,7 @@ def run_commit_pipeline(
     stage_paths: Sequence[str] = (),
     caller_paths: Optional[Set[str]] = None,
     on_committed: Optional[Callable[[str], None]] = None,
-    push_mode: str = PUSH_MODE_NONE,
+    push_mode: str = PUSH_MODE_SYNC,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     deliverable_id: Optional[str] = None,
@@ -4654,7 +4716,7 @@ def run_commit_pipeline(
                 root,
                 allow_protected_branch=allow_protected_branch,
                 protected_branch_override_reason=protected_branch_override_reason,
-                budget_secs=CEREMONY_PUSH_BUDGET_SECS,
+                budget_secs=_ceremony_push_budget(_pre_push_elapsed),
             )
             record_composition_span(
                 composition_id=_composition_id,
@@ -4769,7 +4831,9 @@ def run_commit_pipeline(
             sid=_span_sid,
         )
         _push_t_start = time.time()
-        push_outcome = push_with_retry(root, budget_secs=CEREMONY_PUSH_BUDGET_SECS)
+        push_outcome = push_with_retry(
+            root, budget_secs=_ceremony_push_budget(_pre_push_elapsed)
+        )
         record_composition_span(
             composition_id=_composition_id,
             name=_COMPOSITION_SPAN_PUSH,

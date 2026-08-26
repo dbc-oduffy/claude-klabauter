@@ -405,7 +405,35 @@ def resolve_cli(
     """The one seam `directives[].cli` ever passes through, for whichever
     closed `dispatch_table` the caller owns. Closed over a literal dict
     supplied by the caller — an unrecognized name raises before any
-    directive in the run has executed."""
+    directive in the run has executed.
+
+    Two distinct `cli`-keyed populations exist across the codebase today,
+    and this function serves only one of them. Population (a): this
+    module's own callers (`baton_assemble`, `merge_assemble`,
+    `pickup_assemble`, and siblings) build `dispatch_table` as `cli_name ->
+    Callable[[list[str], Path], dict[str, Any]]` — an already-adapted
+    in-process handler, resolved and invoked through THIS function.
+    Population (b): `workday_complete`/`workstream_complete`/
+    `workweek_complete`'s own private `_CLI_DISPATCH` tables map `cli_name
+    -> Path` — a literal on-disk script location, never a `Callable` — and
+    are resolved through each module's own private `_resolve_cli`, which
+    this function has no part in; the trio's own module docstrings state
+    outright that they deliberately do not build on this module's
+    directive-execution engine (a separate baton's anti-scope surface).
+
+    What this implies for the file behind a `cli` key: in population (a)
+    the value found in `dispatch_table` IS the callable that runs; in
+    population (b) the value is a `Path` to a script that must still be
+    loaded (via `importlib.util.spec_from_file_location`) and invoked via
+    its own `main` entrypoint before anything runs — a lookup hit in one
+    population's table is not equivalent to a lookup hit in the other's,
+    and the two `cli_name` namespaces are not merged or cross-checked
+    anywhere. Population (b)'s in-process load-and-invoke primitive is
+    `coordinator_core.ceremony_common.cli_dispatch` (`load_cli_module`/
+    `invoke_cli_main`) — the shared implementation each trio member's
+    private copy is a candidate to converge onto (see that module's own
+    docstring), additive-only as of this writing and not yet load-bearing
+    for any of the three."""
     handler = dispatch_table.get(cli_name)
     if handler is None:
         raise UnrecognizedDirective(f"unrecognized directive cli {cli_name!r}")

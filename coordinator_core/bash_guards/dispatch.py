@@ -232,6 +232,9 @@ from coordinator_core.bash_guards._platform_verdict import (
 from coordinator_core.bash_guards._tool_names import (
     COMMAND_TOOL_NAMES,
 )
+from coordinator_core.bash_guards._dialect import (
+    dialect_from_tool_name as _dialect_from_tool_name,
+)
 from coordinator_core.session.guard_unlock_sentinel import (
     annotate_deny as _annotate_unlock,
     consume as _consume_unlock,
@@ -1877,15 +1880,22 @@ def _build_guard_chain(
         # advisory and a later hard deny (e.g. `block-approval-sentinel-
         # creation` at an earlier chain position) still returns that deny
         # first, unaffected by this entry's position.
-        # matchers=("Bash",) LITERAL, deliberately not sourced from this
-        # module's own MATCHERS declaration: that declaration sits on the
-        # module's `check()` leg, which is dead (see the retirement comment
-        # above) -- the leg actually registered here, `check_advisory`,
-        # carries no `tool_name` gate of its own. Per C1's sourcing rule, a
-        # registration whose applicable leg declares nothing gets the
-        # literal default, visible at the site rather than implied by a
-        # declaration that governs a different function.
-        GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4,
+        # docs/plans/2026-08-26-the-destructive-core-learns-the-shell-it-
+        # guards.md, Bucket B): `check_advisory` itself is ALREADY fully
+        # dialect-aware -- it resolves `dialect_from_tool_name(payload.get(
+        # "tool_name"))` and declines to rule (`dialect is None`) rather than
+        # assuming Bash, then calls the shared `_evaluate(cmd, dialect)`. The
+        # registered leg has carried working PowerShell detection since it
+        # was authored; only the chain-entry `matchers` gate here kept a
+        # PowerShell payload from ever reaching it, per the master-gate note
+        # in `_any_declared_matchers`. This is connecting a built dialect
+        # leg to the dispatcher, not authoring new detection -- same shape as
+        # `bump-outside-repo-write`'s own C4 widening above. The literal
+        # tuple (not a `MATCHERS` import) stays for the reason given in the
+        # comment above: the declaration on this module's dead `check()` leg
+        # does not describe `check_advisory`'s own tool-name coverage.
+        GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Same ordering requirement as the sentinel/worktree/stash/branch
         # guards above, for the identical `offer-git-c` short-circuit
         # reason: that check rewrites `cd <dir> && git <sub>` into `git -C
@@ -2066,20 +2076,46 @@ def _build_guard_chain(
         # starves it by construction. `git-no-optional-locks` returns a
         # rewrite envelope for `git status`/bare `git diff`, so
         # `reap-stale-git-lock` must precede it here.
-        GuardEntry("reap-stale-git-lock", lambda: _check_reap_stale_git_lock(cmd, cwd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        #
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, docs/plans/
+        # 2026-08-26-the-destructive-core-learns-the-shell-it-guards.md,
+        # Bucket B): `_find_lock_taking_git_invocation` splits `cmd` into
+        # segments and matches each on the literal substring `"git"` plus a
+        # resolved subcommand -- a `git`-shaped invocation is spelled
+        # identically under PowerShell (`git add`/`git commit`/... take no
+        # dialect-specific form), so this is a foreign-binary-argv case per
+        # C1's audit rule: correct without a `_dialect` reference. No
+        # detection change; only the chain-entry gate moves.
+        GuardEntry("reap-stale-git-lock", lambda: _check_reap_stale_git_lock(cmd, cwd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Mechanical leg of the same campaign: auto-rewrites `git status`/bare
         # `git diff` to insert `--no-optional-locks` pre-subcommand,
         # prompt-free -- see guard_no_optional_locks.py's own module
         # docstring for the measured evidence this rewrite is
         # behavior-preserving.
-        GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        #
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, same plan/Bucket
+        # B as above): the insertion point is located via `tokenize_full_
+        # command` plus a raw-character-offset scan over `cmd`'s own text --
+        # a bare `git status`/`git diff` invocation is identical text under
+        # both dialects, the same foreign-binary-argv case `reap-stale-
+        # git-lock` immediately above already documents. No detection
+        # change.
+        GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Content: deliberately NOT crash-deny-routed (see module docstring).
         # Review: code-reviewer (Finding 2) -- check_validate_commit's git
         # calls (staged-file list, scope-check toplevel resolution, CLAUDE.md
         # blob fetch, frontmatter diff) are all cwd-sensitive; thread cwd
         # through so they resolve against the payload's actual working
         # directory rather than this process's own os.getcwd().
-        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        #
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, same plan/Bucket
+        # B as above): `check_validate_commit`'s own `contains_git_commit`
+        # gate is a raw `re.match(r"^git\s+commit(\s|$)", command)` (and the
+        # same pattern re-run per `&&`/`||`/`;`-split segment) -- `git
+        # commit` is spelled identically in both dialects, the same
+        # foreign-binary-argv case as the two entries above. No detection
+        # change.
+        GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Review: review-integrator -- Finding 2. Registered AHEAD of
         # `probe-spray` (moved up from the dispatcher's own tail below it),
         # satisfying two ordering constraints at once:
@@ -2101,7 +2137,18 @@ def _build_guard_chain(
         #      to its position relative to the rewrite guards further down).
         GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_inprocess_search)),
         # Advisory (dispatcher own tail).
-        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        #
+        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, docs/plans/
+        # 2026-08-26-the-destructive-core-learns-the-shell-it-guards.md,
+        # Bucket B): every `is_probe`/`is_strong_probe` test above is a raw
+        # `re.match`/`re.search` against `cmd`'s own text (`echo`, `true`,
+        # `sleep <n>`, ...) plus the session-keyed ring-buffer recurrence
+        # check, none of which reads through the bash-only tokenizer -- a
+        # probe-shaped one-liner is spelled identically whether the caller
+        # names the tool `Bash` or `PowerShell` (`echo probe` is valid text
+        # under either), so this is the same foreign-binary/literal-text
+        # case as the other four Bucket B entries. No detection change.
+        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # 2. block-illegal-filename.sh (cohort 1, Bash leg, advisory).
         GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_illegal_filename)),
         # 5b. check-test-suite-invocation -- no legacy bash predecessor (new
@@ -2171,12 +2218,20 @@ def _build_guard_chain(
         # reason (distinct from its dual-declaring sibling `multiprobe-
         # banner`): docs/reference/guard-tool-name-membership.md §8a.
         GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        # Ungated chain member (C1 audit finding): guard_head_tail_rewrite.py
-        # declares no MATCHERS and carries no tool_name gate of its own.
-        # NOT a Bucket C member -- Bash-only here is a documented deferral,
-        # not correct-by-construction: docs/reference/guard-tool-name-
-        # membership.md §8b (Bucket D; C9 wires this registration).
-        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
+        # guard_head_tail_rewrite.py declares no module MATCHERS but reads
+        # dialect via `check_head_tail_plumbing_rewrite`'s own docstring
+        # (AC16 CALLEE-GRAPH AUDIT, C6 pln-the-shape-classifier-reaches-
+        # a-e743e5), which named this exact registration's literal
+        # `("Bash",)` as out of that chunk's write scope. Built-but-not-
+        # wired (Bucket D, state/audits/2026-08-26-guard-detection-
+        # language-dependence-recensus.md Finding 4); C9 closes the
+        # deferral by widening to the declared universe AND passing
+        # `dialect=` explicitly -- unlike `bump-outside-repo-write`'s own
+        # callee, this function does not derive dialect from `payload`
+        # internally; its `dialect is Dialect.POWERSHELL` gate only fires
+        # on an explicit caller-supplied `dialect=`, per this function's
+        # own AC16 docstring.
+        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id, dialect=_dialect_from_tool_name(payload.get("tool_name") if isinstance(payload, dict) else None), payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=COMMAND_TOOL_NAMES),
         # Registered in the rewrite band for the same reason as the entries
         # above it (its rewrite is provably params-identical -- see that
         # module's rung-A argument), with one difference worth naming: unlike

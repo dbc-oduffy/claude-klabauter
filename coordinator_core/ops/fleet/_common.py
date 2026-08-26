@@ -1956,6 +1956,7 @@ async def archive_and_commit(
                     env=base_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    **no_console_creationflags(),
                 )
                 diff_out, diff_stderr = await diff_proc.communicate()
                 if diff_proc.returncode != 0:

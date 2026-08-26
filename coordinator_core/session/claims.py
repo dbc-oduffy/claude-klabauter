@@ -1776,6 +1776,59 @@ def _class_token_hint(class_: str) -> str:
     return ""
 
 
+def _is_touch_record_sink(sink_path: str) -> bool:
+    """True when *sink_path* is an agent-plane ``touch-record.jsonl`` (or one
+    of its rotated family members) rather than a legacy ``touched.txt``.
+
+    Keyed on the filename the writer owns (``touch_record`` appends only to
+    sinks it named), never on content sniffing: an empty jsonl sink and an
+    empty ``touched.txt`` are byte-identical, and guessing wrong picks the
+    wrong appender.
+    """
+    name = Path(sink_path).name
+    return name == "touch-record.jsonl" or (
+        name.startswith("touch-record.") and name.endswith(".jsonl")
+    )
+
+
+def _release_from_touch_record(
+    sink_path: str, claimant_sid: str, path: str, normalized_target: str
+) -> None:
+    """Append an ``R`` event for *path* to a ``touch-record.jsonl`` sink, but
+    only when that sink's last-verb-wins projection still holds *path* as
+    ``T`` -- the jsonl-plane counterpart of the ``touched.txt`` T-check in
+    :func:`_release_path_claim_everywhere`, with the same fail-safe-RETAIN
+    posture (any read or write error skips this sink rather than raising, so
+    a surviving ``T`` reappears on the next lookup instead of being lost).
+
+    Reads through ``touch_record._read_stream_claims`` (the family-aware seam,
+    so a rotated member is not missed) and writes through
+    ``touch_record.append_event`` (the only sanctioned appender for this
+    plane). Never hand-formats a jsonl line.
+    """
+    try:
+        claims_by_path, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    except Exception:
+        return
+    event = None
+    for recorded_path, recorded in claims_by_path.items():
+        if claim_index._normalize_key(recorded_path) == normalized_target:
+            event = recorded
+            break
+    if event is None or getattr(event, "verb", None) != "T":
+        return
+    try:
+        touch_record.append_event(
+            sink_path,
+            session_id=claimant_sid,
+            agent_id=getattr(event, "agent", None),
+            verb="R",
+            path=getattr(event, "path", path),
+        )
+    except Exception:
+        return
+
+
 def _release_path_claim_everywhere(
     path: str, sids: set, base: str, cwd: Optional[str] = None
 ) -> None:
@@ -1816,6 +1869,19 @@ def _release_path_claim_everywhere(
     pairs, _complete = claim_index._enumerate_touched_files(base)
     for touched_path, claimant_sid in pairs:
         if claimant_sid not in sids:
+            continue
+        # The enumerator reaches BOTH planes: the legacy `touched.txt` line
+        # format and the agent plane's `touch-record.jsonl`. Reading a jsonl
+        # sink with `parse_touch_event` (a `touched.txt` line parser) yields
+        # no events, so the T-check below never fires and the release becomes
+        # a silent no-op that still reports success -- which is what made a
+        # dead agent-plane claim unclearable through any sanctioned route
+        # while `clear_claim_if_dead` returned True. Both planes are read
+        # through their own seam and written through their own appender.
+        if _is_touch_record_sink(touched_path):
+            _release_from_touch_record(
+                touched_path, claimant_sid, path, normalized_target
+            )
             continue
         try:
             lines = Path(touched_path).read_text(encoding="utf-8").splitlines()
@@ -1898,21 +1964,34 @@ def _clear_path_claim_if_dead(
     reports and ``ceremony.scoped_git_commit`` fails closed on, whose
     claimant is confirmed dead, had no sanctioned release path before this.
 
-    Fail-closed exactly like the classed forms: ANY live claimant on *path*
-    refuses the WHOLE clear (never a partial release) -- a path with two
-    claimants, one dead and one live, stays claimed by the live one for the
-    same reason ``scoped_git_commit`` already refuses it, so partially
-    clearing it would accomplish nothing. An UNANSWERABLE claim-index
-    verdict also refuses (never treated as "no claimant"). A DOUBLE
+    Fail-closed exactly like the classed forms: any live PEER claimant on
+    *path* refuses the WHOLE clear (never a partial release) -- a path with
+    two claimants, one dead and one live-peer, stays claimed by the live peer
+    for the same reason ``scoped_git_commit`` already refuses it, so partially
+    clearing it would accomplish nothing.
+
+    THE CALLING SESSION IS NOT A PEER, and excluding it is the whole point of
+    this entrypoint rather than a relaxation of it. The reasoning above holds
+    only while the live claimant is someone else: ``scoped_git_commit`` never
+    refuses a path on the caller's OWN claim, so a path co-claimed by the
+    caller and a dead peer is refused SOLELY because of the dead peer -- the
+    exact state this function exists to resolve. Counting the caller as a
+    live claimant made that state permanently unclearable through any
+    sanctioned route, which is why ``_live_ones`` and the reaped-sid set below
+    both exclude ``my_sid``. The caller's own claim is never touched; only
+    confirmed-dead sids are released.
+
+    An UNANSWERABLE claim-index verdict also refuses (never treated as "no
+    claimant"). A DOUBLE
     ``claim_index.lookup`` + liveness re-read brackets the write (matches
     ``clear_claim_if_dead``'s own TOCTOU discipline for the mkdir plane): if
     a peer takes a fresh live claim on *path* between reads, the second read
     sees it and the whole clear aborts.
 
     Returns True on a successful clear OR an idempotent no-op (no claimant,
-    absent sessions dir, bad baton root already ruled out by the caller).
-    Returns False on an UNANSWERABLE index, a live claimant, or a claimant
-    that became live on the TOCTOU re-read.
+    no DEAD claimant to clear, absent sessions dir, bad baton root already
+    ruled out by the caller). Returns False on an UNANSWERABLE index, a live
+    peer claimant, or a peer that became live on the TOCTOU re-read.
     """
     base, ok = _resolve_path_claim_base(baton_repo_root, cwd)
     if not ok:
@@ -1928,8 +2007,14 @@ def _clear_path_claim_if_dead(
     def _claimants() -> List[str]:
         return claim_index.lookup([path], sessions_dir=base, cwd=cwd).get(path, [])
 
+    my_sid = core.resolve_session_id(cwd)
+
     def _live_ones(sids: List[str]) -> List[str]:
-        return [sid for sid in sids if liveness.session_live(sid, cwd)]
+        return [
+            sid
+            for sid in sids
+            if sid != my_sid and liveness.session_live(sid, cwd)
+        ]
 
     claimants = _claimants()
     if claim_index.UNANSWERABLE in claimants:
@@ -1971,7 +2056,9 @@ def _clear_path_claim_if_dead(
         )
         return False
 
-    dead_sids = set(claimants) | set(claimants2)
+    dead_sids = (set(claimants) | set(claimants2)) - {my_sid}
+    if not dead_sids:
+        return True  # only the caller claims this path -- nothing dead to clear
     _release_path_claim_everywhere(path, dead_sids, base, cwd)
     return True
 

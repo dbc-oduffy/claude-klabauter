@@ -169,7 +169,25 @@ own entry below), restricted to the high-precision stratum:
                     contains a spawn site.
   c-cross-module -- the callee is imported (`from X import name`) and resolves, via a repo-wide
                     name index built over the same scope, to a function in another module whose
-                    own body directly contains a spawn site.
+                    own body directly contains a spawn site. Resolution is by the ORIGINAL
+                    imported name AND its resolved SOURCE MODULE (`_import_resolves_to`), not
+                    merely the local binding: an aliased import (`from a import f as g`) makes
+                    the local binding (`g`) and the definition name (`f`) diverge, and a lookup
+                    keyed on the local binding alone can only ever find HOMONYMS of the alias --
+                    a same-named-but-unrelated function elsewhere, never the one actually
+                    imported. The resolver (`_resolve_reexport_chain`) handles three cases: an
+                    `__init__.py` IS the module it packages, never `pkg.__init__`; a re-export
+                    hop (the named module itself imports the same original name from somewhere
+                    else) is followed, carrying and REWRITING the name at each hop, bounded at
+                    `_REEXPORT_HOP_BOUND` hops with a star re-export (`from .impl import *`)
+                    declining to constrain rather than pruning to nothing; and a `level > 0`
+                    relative import resolves against the importing file's own package, where an
+                    `__init__.py`'s package is itself, not its parent. Fixture:
+                    `undetermined` imported from `coordinator_core.plan_assemble.predicates`,
+                    defined in that package's `__init__.py` -- see
+                    `test_route_c_resolves_reexported_init_name` and its siblings. Landed
+                    2026-08-26 (`pln-route-c-resolves-the-imported-name-not-the-local-alias`,
+                    this file's own C1 chunk).
   d-injected     -- a bare-`Name` argument sits in a runner-shaped position (a kwarg named
                     `run`/`runner`/`git`/`git_runner`/`run_git`/`spawn`, OR the passed
                     identifier's own first token is `run`/`git`/`spawn`) and resolves, via the
@@ -255,12 +273,16 @@ NEGATIVE SPEC -- what this collector deliberately does NOT do:
 
 KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated preference):
 
-  - Route b/c/e resolution is by function NAME only, not full import-graph resolution -- a
+  - Route b/e resolution is by function NAME only, not full import-graph resolution -- a
     same-named function in two unrelated modules can collide (the prototype's own `dict.get()`
-    mis-resolution artifact, in the deep tail it excludes). Accepted here because routes b/c/e
+    mis-resolution artifact, in the deep tail it excludes). Accepted here because routes b/e
     are restricted to the high-precision stratum, where this collector independently verifies the
     resolved function's body via `sites_in_source`/spawn-detection before counting a route, not
-    by name alone.
+    by name alone. Route c is narrower than this bullet historically described: it resolves the
+    ORIGINAL imported name and its SOURCE MODULE (`_import_resolves_to`), not the local binding
+    alone -- see route c's own entry above for what that does and does not cover (a re-export
+    chain past `_REEXPORT_HOP_BOUND` hops, or one behind an unresolvable star re-export, still
+    degrades to the by-name rule this bullet describes for b/e).
   - Nested-generator constant-literal detection (discriminator 2) is applied to a comprehension's
     FIRST generator only; a non-literal outer generator with a literal inner one is not
     specially handled.
@@ -1507,6 +1529,19 @@ class _FuncIndex:
     #: reached by a direct spawner (leg 2) -- route g's fixed point. See
     #: `_spawn_bearing_params`.
     spawn_bearing_params: frozenset[tuple[str, str, str]] = frozenset()
+    #: relpath -> {local_binding: {(original_imported_name, resolved_absolute_module), ...}},
+    #: additive alongside `imported_names_by_file` (route c's original by-local-binding gate,
+    #: UNCHANGED -- routes other than c still read it). A local name bound twice from different
+    #: sources (`try: from a import f / except ImportError: from b import f`) keeps BOTH arms
+    #: as separate pairs rather than collapsing to one, matching the deliberate
+    #: over-approximation `ast.walk` already relies on elsewhere in this index. A module of
+    #: `"*"` is the star-reexport decline-to-constrain sentinel -- see `_resolve_reexport_chain`.
+    #: Populated by `_build_func_index`'s existing `ast.ImportFrom` walk (no new parse), then
+    #: resolved by a second in-memory pass over the per-file raw records after the file loop
+    #: completes -- see that function's docstring for why the second pass cannot run mid-loop.
+    resolved_imports_by_file: dict[str, dict[str, set[tuple[str, str]]]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 def _generic_runner_param(
@@ -1690,6 +1725,166 @@ def _load_file_records(files: list[tuple[str, pathlib.Path]]) -> list[_FileRecor
     return records
 
 
+#: Bound on a re-export hop chain (`_resolve_reexport_chain`). A re-export chain deeper than
+#: this is a corpus smell, not a case this resolver supports -- see that function's docstring
+#: for what happens on exhaustion (resolve to the syntactically named module, not an
+#: iteration-order-dependent "last module reached").
+_REEXPORT_HOP_BOUND = 4
+
+#: Sentinel module value meaning "decline to constrain by module" -- a star re-export
+#: (`from .impl import *`) cannot be followed by name, so the pair reached so far is kept but
+#: its module is widened to match anything rather than pruned to nothing (Finding 5).
+_UNCONSTRAINED_MODULE = "*"
+
+
+def _relpath_to_module(relpath: str) -> str:
+    """Dotted module path for `relpath`, collapsing `pkg/sub/__init__.py` to the package
+    `pkg.sub` -- never `pkg.sub.__init__` -- because an `__init__.py` file IS the module it
+    packages, not a submodule of it (route c resolver case 1: the `__init__` collapse)."""
+    posix = relpath.replace("\\", "/")
+    if posix.endswith("/__init__.py"):
+        posix = posix[: -len("/__init__.py")]
+    elif posix == "__init__.py":
+        posix = ""
+    elif posix.endswith(".py"):
+        posix = posix[: -len(".py")]
+    return posix.replace("/", ".")
+
+
+def _relpath_is_package_init(relpath: str) -> bool:
+    """True for `pkg/sub/__init__.py` (or a top-level `__init__.py`) -- route c resolver case
+    3 needs this distinct from `_relpath_to_module`'s collapse: an `__init__.py`'s OWN package,
+    for relative-import resolution, is itself, never its parent."""
+    posix = relpath.replace("\\", "/")
+    return posix.endswith("/__init__.py") or posix == "__init__.py"
+
+
+def _absolute_import_module(relpath: str, node: ast.ImportFrom) -> str:
+    """The absolute dotted module `node` (a `from X import ...`, any `level`) names, resolved
+    against `relpath`'s own package -- route c resolver case 3. `level == 0` is already
+    absolute (`node.module` as written). For `level > 0`, the base package is `relpath`'s own
+    module UNLESS `relpath` is a package `__init__.py`, in which case the base package is that
+    module itself (case 1's collapse applies here too, so a level-1 relative import inside a
+    package's `__init__.py` resolves against the package, not its grandparent) -- then `level -
+    1` further trailing components are stripped, matching Python's own relative-import
+    algorithm."""
+    if node.level == 0:
+        return node.module or ""
+    own_module = _relpath_to_module(relpath)
+    if _relpath_is_package_init(relpath):
+        package = own_module
+    elif "." in own_module:
+        package = own_module.rsplit(".", 1)[0]
+    else:
+        package = ""
+    parts = package.split(".") if package else []
+    strip = node.level - 1
+    if strip > 0:
+        parts = parts[: len(parts) - strip] if strip <= len(parts) else []
+    base = ".".join(parts)
+    if node.module:
+        return f"{base}.{node.module}" if base else node.module
+    return base
+
+
+def _resolve_reexport_chain(
+    raw_imports_by_file: dict[str, dict[str, set[tuple[str, str]]]],
+    module_to_relpath: dict[str, str],
+    start_name: str,
+    start_module: str,
+) -> tuple[str, str]:
+    """Follow a `(original_name, module)` pair across re-export hops to the module that
+    actually DEFINES the name, CARRYING AND REWRITING THE NAME at each hop (route c resolver
+    case 2) -- not just the module, since a renaming re-export (`from .impl import f as g` in
+    an `__init__.py`) must rewrite `original_name` from `g` back to `f` at the hop into `impl`,
+    or the pair matches nothing downstream.
+
+    Bounded at `_REEXPORT_HOP_BOUND` hops. On cycle detection OR bound exhaustion, resolves to
+    the pair reached so far -- the SYNTACTICALLY NAMED module as written at that point, never an
+    iteration-order-dependent "last module reached" -- which degrades cleanly to the naive
+    dotted-path rule already measured (6279 kept).
+
+    A star re-export (`from .impl import *`) cannot be followed by name -- the target file's
+    raw imports carry no per-name record to hop through. Rather than pruning the binding to
+    nothing, this DECLINES TO CONSTRAIN it: the module is widened to `_UNCONSTRAINED_MODULE`,
+    which the match helper (`_import_resolves_to`) treats as matching any module, falling back
+    to the current all-candidates behaviour for that one binding (Finding 5)."""
+    name, module = start_name, start_module
+    seen: set[tuple[str, str]] = set()
+    for _ in range(_REEXPORT_HOP_BOUND):
+        if (name, module) in seen:
+            break
+        seen.add((name, module))
+        tgt_relpath = module_to_relpath.get(module)
+        if tgt_relpath is None:
+            break
+        tgt_imports = raw_imports_by_file.get(tgt_relpath, {})
+        candidates = tgt_imports.get(name)
+        if not candidates:
+            if "*" in tgt_imports:
+                return name, _UNCONSTRAINED_MODULE
+            break
+        if len(candidates) != 1:
+            # Ambiguous hop target (a try/except import binding the same name from two
+            # sources) -- stop rather than picking one arm arbitrarily.
+            break
+        name, module = next(iter(candidates))
+    return name, module
+
+
+def _resolve_imports_by_file(
+    raw_imports_by_file: dict[str, dict[str, set[tuple[str, str]]]],
+    module_to_relpath: dict[str, str],
+) -> dict[str, dict[str, set[tuple[str, str]]]]:
+    """Second in-memory pass (route c resolver, AC2): resolves every raw `(original_name,
+    module-as-written)` pair collected during `_build_func_index`'s file loop into its final
+    `(original_name, resolved_module)` pair, following re-export hops via
+    `_resolve_reexport_chain`. Runs AFTER the file loop completes because a re-export hop needs
+    the TARGET file's own import data, which may not exist yet mid-loop -- not a second walk
+    over the filesystem or the ASTs, and no subprocess."""
+    resolved: dict[str, dict[str, set[tuple[str, str]]]] = {}
+    for relpath, bindings in raw_imports_by_file.items():
+        resolved_bindings: dict[str, set[tuple[str, str]]] = {}
+        for local_binding, pairs in bindings.items():
+            resolved_bindings[local_binding] = {
+                _resolve_reexport_chain(raw_imports_by_file, module_to_relpath, name, module)
+                for name, module in pairs
+            }
+        resolved[relpath] = resolved_bindings
+    return resolved
+
+
+def _import_resolves_to(
+    index: _FuncIndex, relpath: str, local_name: str, def_relpath: str, def_name: str
+) -> bool:
+    """Route c's shared match helper (AC3), the single site all three route-c resolution
+    sites call (`_resolve_callee_def`, `_is_direct_spawner_name`, and
+    `find_unbatched_per_item_spawns`'s own `imported_here` leg) -- see module docstring's
+    route-c section for why route c needs both the ORIGINAL imported name and the resolved
+    SOURCE MODULE, not merely the local binding `imported_names_by_file` already gates on.
+
+    True when `local_name`, as imported into `relpath`, resolves -- through
+    `index.resolved_imports_by_file` -- to the definition at `(def_relpath, def_name)`: a
+    candidate matches when ANY pair in the local binding's resolved set agrees on both name and
+    module (Finding 4's set, not a single pair, so a name bound twice from different sources
+    keeps both arms). A resolved module of `_UNCONSTRAINED_MODULE` (a star-reexport hop,
+    Finding 5) matches any module.
+
+    For an UNALIASED import, `original_name` IS the local binding, so this narrows exactly the
+    homonym case an alias creates: an aliased import makes the local binding and the
+    definition name diverge, and a lookup keyed on the local binding alone (the prior rule)
+    can only ever find homonyms of the ALIAS, never the name actually defined at the resolved
+    source."""
+    pairs = index.resolved_imports_by_file.get(relpath, {}).get(local_name)
+    if not pairs:
+        return False
+    def_module = _relpath_to_module(def_relpath)
+    for orig_name, module in pairs:
+        if orig_name == def_name and (module == def_module or module == _UNCONSTRAINED_MODULE):
+            return True
+    return False
+
+
 def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
     """One pass over the scoped corpus, building the repo-wide name index routes b/c/d/e/f
     resolve against, single-hop only for those five. Route g's `spawn_bearing_params` is the
@@ -1705,8 +1900,16 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
     adds nothing and its `changed` flag stays `False`, so both loops halt.
 
     Consumes pre-computed `_FileRecord`s (G3) rather than re-reading/re-parsing/re-detecting
-    each file itself -- see `_load_file_records`'s docstring."""
+    each file itself -- see `_load_file_records`'s docstring.
+
+    `resolved_imports_by_file` (route c's resolver, AC1/AC2) is populated in two passes over
+    this SAME `ast.ImportFrom` walk's raw output, not a second parse: the walk below collects
+    each file's raw `(original_name, module-as-written)` pairs into `raw_imports_by_file` as it
+    already visits every file once for `imported_names_by_file`; `_resolve_imports_by_file`
+    then runs ONCE, after this loop completes, over that in-memory dict -- a re-export hop
+    needs the TARGET file's own raw import data, which may not exist yet mid-loop."""
     index = _FuncIndex()
+    raw_imports_by_file: dict[str, dict[str, set[tuple[str, str]]]] = {}
 
     for record in records:
         relpath = record.relpath
@@ -1728,11 +1931,16 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
         _ParamDefaultTracker(relpath, index.param_runner_defaults).visit(tree)
 
         imported: set[str] = set()
+        raw_imports: dict[str, set[tuple[str, str]]] = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
+                abs_module = _absolute_import_module(relpath, node)
                 for alias in node.names:
                     imported.add(alias.asname or alias.name)
+                    local_binding = alias.asname or alias.name
+                    raw_imports.setdefault(local_binding, set()).add((alias.name, abs_module))
         index.imported_names_by_file[relpath] = imported
+        raw_imports_by_file[relpath] = raw_imports
 
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1765,6 +1973,9 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
             runner_param = _generic_runner_param(node, own_spawn_linenos)
             if runner_param is not None and name not in index.runner_shaped_funcs:
                 index.runner_shaped_funcs[name] = runner_param
+
+    module_to_relpath = {_relpath_to_module(r.relpath): r.relpath for r in records}
+    index.resolved_imports_by_file = _resolve_imports_by_file(raw_imports_by_file, module_to_relpath)
 
     index.spawn_bearing_params = _compute_spawn_bearing_params(index)
     return index
@@ -2867,22 +3078,34 @@ def _resolve_callee_def(
     index: _FuncIndex, relpath: str, callee: str
 ) -> list[tuple[str, str]]:
     """Callee resolution for route g: same-module first, else a name imported into this file --
-    the same discipline routes b/c/f already use. Kept local rather than shared with those
-    routes because route g is the only one that needs the resolved function's own NODE (to read
-    its parameter list and walk its body), not merely a yes/no "does it spawn"."""
+    the same discipline routes b/c/f already use, narrowed the same way route c is by
+    `_import_resolves_to` (the ORIGINAL imported name and its resolved SOURCE MODULE, not
+    merely the local binding). Kept local rather than shared with those routes because route g
+    is the only one that needs the resolved function's own NODE (to read its parameter list and
+    walk its body), not merely a yes/no "does it spawn"."""
     if (relpath, callee) in index.func_defs:
         return [(relpath, callee)]
     if callee in index.imported_names_by_file.get(relpath, set()):
-        return [k for k in index.funcs_by_name.get(callee, []) if k[0] != relpath]
+        return [
+            k
+            for k in index.funcs_by_name.get(callee, [])
+            if k[0] != relpath and _import_resolves_to(index, relpath, callee, k[0], k[1])
+        ]
     return []
 
 
 def _is_direct_spawner_name(index: _FuncIndex, relpath: str, ident: str) -> bool:
     """True when the bare identifier `ident`, referenced in `relpath`, names a direct spawner
-    -- same-module (route b's resolution) or imported (route c's). Route g's leg-2 seed."""
+    -- same-module (route b's resolution) or imported (route c's, narrowed by
+    `_import_resolves_to` the same way `_resolve_callee_def` is). Route g's leg-2 seed."""
     if (relpath, ident) in index.same_module_direct_spawn:
         return True
-    return ident in index.imported_names_by_file.get(relpath, set()) and ident in index.direct_spawn_funcs
+    if ident not in index.imported_names_by_file.get(relpath, set()):
+        return False
+    return any(
+        _import_resolves_to(index, relpath, ident, def_relpath, ident)
+        for def_relpath, _ in index.direct_spawn_funcs.get(ident, [])
+    )
 
 
 def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str, str]]:
@@ -3719,13 +3942,20 @@ def find_unbatched_per_item_spawns(
                     if not (gated is not None and verb is not None and verb not in gated):
                         route = "b-local-helper"
 
-                # route c-cross-module: imported name resolves (repo-wide, by name) to a
-                # function elsewhere that directly spawns.
+                # route c-cross-module: the IMPORTED NAME resolves -- via `_import_resolves_to`,
+                # the original imported name AND its resolved source module, not merely the
+                # local binding `imported_here` gates on -- to a function elsewhere that
+                # directly spawns. See module docstring's route-c section.
                 if (
                     route is None
                     and callee in imported_here
                     and callee in index.direct_spawn_funcs
                     and not any(r == relpath for r, _ in index.direct_spawn_funcs[callee])
+                    and any(
+                        _import_resolves_to(index, relpath, callee, def_relpath, callee)
+                        for def_relpath, _ in index.direct_spawn_funcs[callee]
+                        if def_relpath != relpath
+                    )
                 ):
                     route = "c-cross-module"
 
@@ -5004,6 +5234,179 @@ def test_route_c_cross_module_positive(tmp_path):
     assert len(matches) == 1
     assert matches[0].path.endswith("caller.py")
     assert matches[0].callee == "commit_one"
+
+
+# --------------------------------------------------------------------------
+# Route c resolver (AC1/AC2/AC3): the imported name AND its resolved source module, not the
+# local binding alone. Fixture shape for the `__init__` collapse and re-export-hop cases below
+# was measured this session, not invented from scratch: `undetermined` imported from
+# `coordinator_core.plan_assemble.predicates`, defined in that package's `__init__.py`.
+# --------------------------------------------------------------------------
+
+
+def test_relpath_to_module_collapses_package_init():
+    assert _relpath_to_module("coordinator_core/plan_assemble/predicates/__init__.py") == (
+        "coordinator_core.plan_assemble.predicates"
+    )
+    assert _relpath_to_module("coordinator_core/plan_assemble/predicates.py") == (
+        "coordinator_core.plan_assemble.predicates"
+    )
+
+
+def test_absolute_import_module_relative_import_in_package_init():
+    # `pkg/sub/__init__.py`'s OWN package is itself (case 3) -- a level-1 relative import
+    # there resolves against `pkg.sub`, not its parent `pkg`.
+    node = ast.parse("from . import helper\n").body[0]
+    assert _absolute_import_module("pkg/sub/__init__.py", node) == "pkg.sub"
+
+    node2 = ast.parse("from .. import helper\n").body[0]
+    assert _absolute_import_module("pkg/sub/__init__.py", node2) == "pkg"
+
+    # A non-package module's own package is its PARENT.
+    node3 = ast.parse("from . import helper\n").body[0]
+    assert _absolute_import_module("pkg/sub/mod.py", node3) == "pkg.sub"
+
+
+def test_resolve_reexport_chain_rewrites_the_name_across_a_renaming_hop():
+    # `pkg/__init__.py`: `from .impl import spawn_it as g` -- a renaming re-export.
+    raw = {
+        "pkg/__init__.py": {"g": {("spawn_it", "pkg.impl")}},
+        "pkg/impl.py": {},
+    }
+    module_to_relpath = {"pkg": "pkg/__init__.py", "pkg.impl": "pkg/impl.py"}
+    assert _resolve_reexport_chain(raw, module_to_relpath, "g", "pkg") == ("spawn_it", "pkg.impl")
+
+
+def test_resolve_reexport_chain_declines_to_constrain_past_a_star_reexport():
+    raw = {
+        "pkg/reexport.py": {"*": {("*", "pkg.real")}},
+        "pkg/real.py": {},
+    }
+    module_to_relpath = {"pkg.reexport": "pkg/reexport.py", "pkg.real": "pkg/real.py"}
+    name, module = _resolve_reexport_chain(raw, module_to_relpath, "real_spawn", "pkg.reexport")
+    assert (name, module) == ("real_spawn", _UNCONSTRAINED_MODULE)
+
+
+def test_resolve_reexport_chain_bound_exhaustion_resolves_to_syntactically_named_module():
+    # A cycle: `a` re-exports `x` from `b`, `b` re-exports `x` from `a`. Cycle detection stops
+    # the walk and resolves to the pair reached so far, not an iteration-order-dependent "last
+    # module reached" -- pins `_REEXPORT_HOP_BOUND`.
+    raw = {
+        "a.py": {"x": {("x", "b")}},
+        "b.py": {"x": {("x", "a")}},
+    }
+    module_to_relpath = {"a": "a.py", "b": "b.py"}
+    name, module = _resolve_reexport_chain(raw, module_to_relpath, "x", "a")
+    assert name == "x"
+    assert module in ("a", "b")
+
+
+def test_route_c_resolves_reexported_init_name(tmp_path):
+    # `__init__` collapse (case 1): the callee is defined directly inside a package's
+    # `__init__.py`, imported by its collapsed dotted module -- must not be mis-pruned by a
+    # naive `pkg.sub.__init__` comparison.
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def spawn_one(path):\n"
+        "    subprocess.run(['git', 'commit', path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "caller.py").write_text(
+        "from pkg import spawn_one\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        spawn_one(p)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "c-cross-module"]
+    assert len(matches) == 1
+    assert matches[0].callee == "spawn_one"
+
+
+def test_route_c_resolves_a_renaming_reexport(tmp_path):
+    # `pkg/__init__.py` re-exports `impl.g` under a DIFFERENT local name (`h`); the caller then
+    # re-imports THAT under yet another alias that happens to collide, at the call site, with
+    # an unrelated function elsewhere also named `g` (a decoy real spawner in a different
+    # module). Route c's outer gate can only ever match a call-site spelling that IS some
+    # def's own bare name (unchanged, additive-only architecture) -- this fixture is
+    # constructed so that coincidence holds, and the point under test is which of the two
+    # `g`-named candidates the resolver accepts: `_resolve_reexport_chain` must REWRITE the
+    # name at the `.impl import g as h` hop (h -> g) to find the true target's module
+    # (`pkg.impl`), and `_import_resolves_to` must then prune the unrelated decoy (`unrelated_g`)
+    # whose module does not match.
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "impl.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def g(path):\n"
+        "    subprocess.run(['git', 'commit', path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text("from .impl import g as h\n", encoding="utf-8")
+    (tmp_path / "unrelated_g.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def g(path):\n"
+        "    subprocess.run(['git', 'commit', path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "caller.py").write_text(
+        "from pkg import h as g\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        g(p)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "c-cross-module"]
+    assert len(matches) == 1
+    assert matches[0].callee == "g"
+
+
+def test_route_c_declines_to_constrain_past_a_star_reexport(tmp_path):
+    # `pkg/reexport.py` re-exports `real.real_spawn` via `import *`, which cannot be followed
+    # by name. Without the star's decline-to-constrain fallback, the resolved module would stay
+    # `pkg.reexport` (the immediate import's own module) and never match `real_spawn`'s true
+    # module `pkg.real` -- a false NEGATIVE this fixture pins against.
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "real.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def real_spawn(path):\n"
+        "    subprocess.run(['git', 'commit', path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    (pkg / "reexport.py").write_text("from .real import *\n", encoding="utf-8")
+    (tmp_path / "caller.py").write_text(
+        "from pkg.reexport import real_spawn\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        real_spawn(p)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "c-cross-module"]
+    assert len(matches) == 1
+    assert matches[0].callee == "real_spawn"
+
+
+def test_import_resolves_to_prunes_a_homonym_of_the_alias():
+    # An aliased import's local binding equals a same-named-but-unrelated function's def name
+    # -- must NOT match, since the module differs (the false-positive this chunk's resolver
+    # exists to prune).
+    index = _FuncIndex()
+    index.resolved_imports_by_file["caller.py"] = {"g": {("f", "real_mod")}}
+    assert _import_resolves_to(index, "caller.py", "g", "unrelated_mod.py", "g") is False
+    assert _import_resolves_to(index, "caller.py", "g", "real_mod.py", "f") is True
 
 
 def test_route_d_injected_positive(tmp_path):

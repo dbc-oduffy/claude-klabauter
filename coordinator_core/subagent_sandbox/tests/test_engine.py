@@ -26,6 +26,7 @@ Engine under test: coordinator_core/subagent_sandbox/engine.py
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -800,3 +801,51 @@ def test_load_policy_falls_through_arg_env_default(
     )
     loaded = engine.load_policy()
     assert loaded.report_sidecar == {REPORT_SIDECAR_TYPE}
+
+
+# ---------------------------------------------------------------------------
+# yaml-import ratchet -- state/sizings/2026-08-26-the-provenance-seam-stops-
+# dragging-yaml.yaml. `yaml` is used ONLY inside `load_policy`; a
+# fresh-interpreter import of `coordinator_core.engine_provenance_counter`
+# (which imports `resolve_git_root_cheap` from this package, never
+# `load_policy`) must not register it. Same idiom as
+# `coordinator/bin/tests/test_cc_invoke_warm_in_process.py :: _run_ac7_probe`
+# -- a fresh subprocess interpreter, asserting on `sys.modules` membership,
+# never on timing.
+# ---------------------------------------------------------------------------
+
+_YAML_RATCHET_PROBE = """
+import sys
+sys.path.insert(0, {repo!r})
+import coordinator_core.engine_provenance_counter
+print("yaml" in sys.modules)
+"""
+
+
+def _run_yaml_ratchet_probe() -> bool:
+    """Import `engine_provenance_counter` in a fresh interpreter; return
+    whether `yaml` landed in `sys.modules` as a result."""
+    repo_root = Path(engine.__file__).resolve().parents[2]
+    proc = subprocess.run(
+        [sys.executable, "-c", _YAML_RATCHET_PROBE.format(repo=str(repo_root))],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, (
+        f"probe failed (rc={proc.returncode}): {proc.stderr[-800:]}"
+    )
+    return proc.stdout.strip() == "True"
+
+
+def test_engine_provenance_counter_import_does_not_register_yaml() -> None:
+    """A fresh-interpreter import of `engine_provenance_counter` -- which pulls
+    `resolve_git_root_cheap` through this package's `__init__.py` -- must not
+    pay `import yaml`'s module-registration cost. `yaml` is used exclusively
+    inside `load_policy`, which this import path never calls."""
+    assert not _run_yaml_ratchet_probe(), (
+        "coordinator_core.engine_provenance_counter's import registered "
+        "'yaml' in sys.modules -- yaml must stay a function-local import "
+        "inside engine.load_policy, not a module-scope import in engine.py."
+    )

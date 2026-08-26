@@ -16,6 +16,7 @@ Spec backlink: coordinator_core/hooks/postuse_advisory_dispatch.py (module under
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import glob
 import json
@@ -662,3 +663,89 @@ def test_runtime_tripwire_fails_open_when_seam_raises(monkeypatch):
     monkeypatch.setattr(repo_root_seam, "show_toplevel", _boom)
 
     assert pad._check_runtime_tripwire_sync("test-session-rt-seam-raises", "") == ""
+
+# ---------------------------------------------------------------------------
+# Failure isolation across the fold.
+#
+# This op replaced four separate hook PROCESSES, and a process boundary
+# isolates a crash for free: one raising script could not suppress the other
+# three's advisories. A bare asyncio.gather gives that away silently -- it
+# propagates the first exception and abandons its siblings' results. All four
+# legs read transcripts and sentinel files off a shared disk on a box running
+# ~50 concurrent sessions, so a transient read failure is the expected case.
+#
+# Found by doe-claude-1d, 2026-08-26, while carrying the property into their
+# hook-transport plan. The module's existing concurrency reasoning is correct
+# and answers a different question; failure isolation was not the axis.
+# ---------------------------------------------------------------------------
+
+
+def _raise(exc):
+    def _boom(*_args, **_kwargs):
+        raise exc
+
+    return _boom
+
+
+def test_one_raising_leg_does_not_suppress_its_siblings(monkeypatch, capsys):
+    """The property four separate processes had for free."""
+    monkeypatch.setattr(
+        pad, "_check_context_pressure_sync", _raise(OSError("transcript unreadable"))
+    )
+    monkeypatch.setattr(pad, "_check_runtime_tripwire_sync", lambda *a: "tripwire spoke")
+    monkeypatch.setattr(pad, "_check_first_agent_dispatch_sync", lambda *a: "")
+
+    async def _quiet(*_a, **_k):
+        return ""
+
+    monkeypatch.setattr(pad.nudge_unauthorized_handoff, "advisory_text", _quiet)
+
+    result = asyncio.run(
+        pad._handler(
+            {"session_id": "test-session-isolation", "tool_name": "Agent"},
+            repo_root=None,
+        )
+    )
+
+    assert "tripwire spoke" in result["hookSpecificOutput"]["additionalContext"]
+    stderr = capsys.readouterr().err
+    assert "leg=context_pressure" in stderr
+    assert "OSError" in stderr
+
+
+def test_every_leg_raising_still_returns_a_clean_no_advisory(monkeypatch):
+    """An advisory hook fails open toward silence, never toward an error envelope."""
+    for name in (
+        "_check_context_pressure_sync",
+        "_check_runtime_tripwire_sync",
+        "_check_first_agent_dispatch_sync",
+    ):
+        monkeypatch.setattr(pad, name, _raise(RuntimeError("disk gone")))
+
+    async def _also_raises(*_a, **_k):
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(pad.nudge_unauthorized_handoff, "advisory_text", _also_raises)
+
+    result = asyncio.run(
+        pad._handler(
+            {"session_id": "test-session-isolation-all", "tool_name": "Agent"},
+            repo_root=None,
+        )
+    )
+
+    assert result == {}
+
+
+def test_the_session_id_absent_short_circuit_also_fails_open(monkeypatch, capsys):
+    """The single-leg path has no sibling to protect but still must not raise."""
+
+    async def _raises(*_a, **_k):
+        raise OSError("transcript unreadable")
+
+    monkeypatch.setattr(pad.nudge_unauthorized_handoff, "advisory_text", _raises)
+
+    result = asyncio.run(pad._handler({"tool_name": "Write"}, repo_root=None))
+
+    assert result == {}
+    assert "leg=unauthorized_handoff" in capsys.readouterr().err

@@ -1231,7 +1231,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # dropping this module's op registration (see ops/__init__.py's
     # "FAILED to import" warning) — a module-level import here regresses
     # that. Lazy, function-local import breaks the cycle at call time.
-    from coordinator_core.pickup_assemble import compute_repo_identity_gate
+    from coordinator_core.repo_identity_gate import compute_repo_identity_gate
     repo_identity_gate = compute_repo_identity_gate(git_root, sid)
     if repo_identity_gate["verdict"] == "MISMATCH":
         print(f"Error: {repo_identity_gate['message']}", file=sys.stderr)

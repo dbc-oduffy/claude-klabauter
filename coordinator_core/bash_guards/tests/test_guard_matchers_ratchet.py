@@ -253,118 +253,96 @@ EXPECTED: Dict[str, _Expected] = {
         "to permanently Bash-only.",
     ),
     # -- Bash-only, NOT permanently correct: a real, temporary gap (6) --
+    # Bucket D, WIRED by C9 (2026-08-26). Both entries already read the
+    # dialect at their registered leg and simply never declared it; C9
+    # changed the declaration only, with no detection work. They move here
+    # to bucket (1) -- dual-declaring AND dialect-reading -- because that
+    # is now literally true of both. Leaving them at NOT_YET_CONVERTED
+    # after the widening is what turned this ratchet red: the gate is
+    # comparing the live registration against this table, which is exactly
+    # the regrowth it exists to catch, fired against its own plan.
     "block-dev-repo-sentinel-removal-advisory": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket D (built-but-not-wired): the registered `check_advisory` "
-        "leg already calls `dialect_from_tool_name`, but the registration "
-        "itself is still literal `(\"Bash\",)` -- a one-line rewiring "
-        "owed to C9, per state/audits/2026-08-26-guard-detection-"
-        "language-dependence-recensus.md Finding 4.",
+        ("Bash", "PowerShell"),
     ),
     "head-tail-plumbing-rewrite": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket D (built-but-not-wired): guard_head_tail_rewrite.py "
-        "carries a working `Dialect.POWERSHELL` branch, reachable today "
-        "only as a callee of the dual-declaring `plumbing-and-loops`, not "
-        "via this entry's own registration -- a documented deferral owed "
-        "to C9, per the same Finding 4.",
+        ("Bash", "PowerShell"),
     ),
     "reap-stale-git-lock": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "No PowerShell-applicability audit recorded yet for this entry; "
-        "not asserted correct-by-construction absent one.",
+        ("Bash", "PowerShell"),
     ),
     "git-no-optional-locks": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "No PowerShell-applicability audit recorded yet for this entry; "
-        "not asserted correct-by-construction absent one.",
+        ("Bash", "PowerShell"),
     ),
+    # Bucket B, WIRED by C4 (2026-08-26): the four git-shaped advisories.
+    # git's argv is byte-identical across dialects, so these fire on the
+    # same argv under both -- the PowerShell-applicability audit these rows
+    # were waiting on IS the C4 conversion plus its own per-entry test
+    # (test_git_shaped_advisories_fire_under_both.py). Moved to bucket (1).
+    # NOTE `probe-spray` is slated for deletion by
+    # state/handoffs/2026-08-21-2026-08-21_191819_guards-under-the-
+    # brightline.md and was PM-cut from this plan's Bucket B; C4 widened it
+    # anyway. Harmless (advisory band, and it fires on identical argv), but
+    # the row is recorded here rather than silently inheriting the cohort's
+    # rationale, so whoever deletes the entry does not read this as an
+    # endorsement of keeping it.
     "validate-commit": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "No PowerShell-applicability audit recorded yet for this entry; "
-        "not asserted correct-by-construction absent one.",
+        ("Bash", "PowerShell"),
     ),
     "probe-spray": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "No PowerShell-applicability audit recorded yet for this entry; "
-        "not asserted correct-by-construction absent one.",
+        ("Bash", "PowerShell"),
     ),
-    # -- dual-declaring BUT Bash-detecting (9) -- AC8 bucket (3). --
-    # state/audits/2026-08-26-guard-detection-language-dependence-
-    # recensus.md Findings 2 (six module-backed) and 3 (three inline).
-    # Conversion (if any is warranted) is C8's job, not this ratchet's --
-    # this list only stops the corpus certifying these as bucket (1).
+    # -- formerly dual-declaring-but-Bash-detecting (9), now CONVERTED
+    # (C8's second pass, Finding 7 of the recensus record) -- moved to
+    # bucket (1). state/audits/2026-08-26-guard-detection-language-
+    # dependence-recensus.md Findings 2 (six module-backed) and 3 (three
+    # inline) found these nine declaring `COMMAND_TOOL_NAMES` with zero
+    # `_dialect` references. The first C8 pass measured only base-argv
+    # identity and wrongly read eight of the nine as correct-as-drafted;
+    # re-measured against the PowerShell `Start-Process` anti-bypass
+    # surface specifically (the same surface that gapped
+    # `destructive-git-revert`, whose own base argv also matched
+    # identically), seven were REAL detection gaps and are now converted
+    # (a dialect-gated `_dialect.tokenize_command` +
+    # `expand_start_process_invocations` pass, narrowly scoped to
+    # `Start-Process`, ahead of each entry's existing Bash-shaped
+    # pipeline). The ninth, `destructive-git-revert-advisory`, is a thin
+    # wrapper over the SAME `_check_destructive_git_revert_full` function
+    # `destructive-git-revert`'s hard-deny leg calls, so the first C8
+    # pass's fix already covered it too -- a genuine no-change verdict,
+    # confirmed empirically, not re-derived. All nine now demonstrably
+    # branch on dialect at detection time, which is bucket (1)'s test.
+    # Moving them here (rather than leaving DUAL_DECLARING_BASH_DETECTING
+    # with a corrected reason) is what bucket (1)'s own definition
+    # requires once detection genuinely branches on dialect -- see
+    # `test_dual_declaring_bash_detecting_kind_is_pinned` below, now
+    # asserting the empty set for the same reason Bucket D's two entries
+    # moved here under C9 above.
     "block-noncanonical-branch-creation": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in block_noncanonical_branch_creation."
-        "py -- Finding 2. Chain-eligible for PowerShell, detects with "
-        "Bash-shaped logic only.",
     ),
     "block-subagent-commit": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in block_subagent_commit.py -- "
-        "Finding 2. Deny-capable; matches `git commit` argv spelled "
-        "identically under both dialects (foreign-binary-argv "
-        "refinement), so absence of a dialect import is not by itself a "
-        "known defect -- C8 settles which.",
     ),
     "block-subagent-grant-acquisition": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in block_subagent_grant_acquisition."
-        "py -- Finding 2. Deny-capable; see block-subagent-commit's "
-        "foreign-binary-argv caveat.",
     ),
     "block-subagent-guard-grant": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in block_subagent_guard_grant.py -- "
-        "Finding 2. Deny-capable; see block-subagent-commit's "
-        "foreign-binary-argv caveat.",
     ),
     "branch-set-precedence": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in guard_branch_set_precedence.py -- "
-        "Finding 2. Chain-eligible for PowerShell, detects with "
-        "Bash-shaped logic only.",
     ),
     "longlived-branch-naming": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Zero `_dialect` references in guard_longlived_branch_naming.py "
-        "-- Finding 2. Chain-eligible for PowerShell, detects with "
-        "Bash-shaped logic only.",
     ),
     "destructive-git-revert": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Inline in dispatch.py, backed by dispatch_checks.py -- Finding "
-        "3. `dispatch_checks.py` has zero dialect imports at module "
-        "level. Deny-capable (fail_closed=True); Finding 3 puts this at "
-        "the top of C8's list.",
     ),
     "destructive-git-revert-advisory": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Inline in dispatch.py, backed by dispatch_checks.py -- Finding "
-        "3. Advisory sibling of destructive-git-revert; same zero-"
-        "dialect-import module.",
     ),
     "git-commit-safe-commit-advise": _Expected(
         ("Bash", "PowerShell"),
-        DUAL_DECLARING_BASH_DETECTING,
-        "Inline in dispatch.py, backed by dispatch_checks.py -- Finding "
-        "3. Advisory; `dispatch_checks.py` has zero dialect imports at "
-        "module level.",
     ),
 }
 
@@ -506,7 +484,11 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
     assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 48
-    assert bucket3 == 9, "expected 9 dual-declaring-but-Bash-detecting entries, found %d" % bucket3
+    assert bucket3 == 0, (
+        "expected 0 dual-declaring-but-Bash-detecting entries -- C8's "
+        "second pass converted all 9 (Finding 7 of the recensus record), "
+        "found %d" % bucket3
+    )
 
 
 def test_powershell_via_bash_kind_is_pinned_and_carries_no_remediation(
@@ -545,25 +527,43 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
     assert len(by_construction) == 10
-    assert len(not_yet_converted) == 6
+    # EMPTY as of 2026-08-26, and that is this plan's terminal state, not a
+    # dropped assertion: pln-the-destructive-core-learns-th-d5ade0 converted
+    # every entry that was carrying `not-yet-converted` -- Bucket B's four
+    # git-shaped advisories (C4), Bucket D's two built-but-not-wired entries
+    # (C9), and Bucket A's five (C2/C3, of which `runaway-find` moved to
+    # `bash-only-by-construction` instead). The pin stays at an exact count
+    # rather than being deleted, so a NEW entry parked here is visible as a
+    # change to this line, with the same "write the reason down" pressure
+    # the non-empty cohort carried.
+    assert len(not_yet_converted) == 0
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)
     assert HELD_PENDING_TOKENIZER_FIX != BASH_ONLY_BY_CONSTRUCTION != NOT_YET_CONVERTED
 
 
 def test_dual_declaring_bash_detecting_kind_is_pinned():
-    """AC8's bucket (3): the exemption list is exactly the nine members
-    the 2026-08-26 recensus found (Findings 2+3), not the plan's own
-    stale pre-census "seven" estimate. A new member cannot join without a
-    written record (an `EXPECTED` row with a reason), and an existing
-    member cannot silently drop off the list (e.g. by C8 converting it
-    without updating this ratchet) without this test failing."""
+    """AC8's bucket (3): EMPTY as of C8's second pass (Finding 7 of the
+    recensus record). The 2026-08-26 recensus found nine members
+    (Findings 2+3); the first C8 pass converted one
+    (`destructive-git-revert`) and left the other eight here, believing
+    them correct-as-drafted under the foreign-binary-argv carve-out. That
+    read measured only base-argv identity -- re-measured against the
+    PowerShell `Start-Process` anti-bypass surface, seven were real
+    detection gaps (now converted) and the ninth
+    (`destructive-git-revert-advisory`) was already covered by the first
+    pass's shared-function fix. The pin stays at an exact (empty) set
+    rather than being deleted, so a NEW bucket-3 member is visible as a
+    change to this assertion, matching `test_held_cohort_kinds_are_
+    uniform_and_distinct_from_by_construction`'s own convention for its
+    `not_yet_converted` cohort."""
     members = {
         gid
         for gid, exp in EXPECTED.items()
         if exp.kind == DUAL_DECLARING_BASH_DETECTING
     }
-    assert members == {
+    assert members == set()
+    for gid in (
         "block-noncanonical-branch-creation",
         "block-subagent-commit",
         "block-subagent-grant-acquisition",
@@ -573,9 +573,9 @@ def test_dual_declaring_bash_detecting_kind_is_pinned():
         "destructive-git-revert",
         "destructive-git-revert-advisory",
         "git-commit-safe-commit-advise",
-    }
-    for gid in members:
+    ):
         assert EXPECTED[gid].matchers == ("Bash", "PowerShell")
+        assert EXPECTED[gid].kind is None
 
 
 def test_narrowing_a_full_universe_guard_is_detected():

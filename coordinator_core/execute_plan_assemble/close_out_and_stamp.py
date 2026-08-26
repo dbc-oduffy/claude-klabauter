@@ -1902,10 +1902,13 @@ def close_out_and_stamp(
     # Deferred: `coordinator_core.pickup_assemble` imports `coordinator_core.ops`,
     # whose eager registration walk reaches this module. A module-level import here
     # closes that cycle and drops the cascade ops from the registry.
-    from coordinator_core.pickup_assemble import (
+    from coordinator_core.pickup_assemble import resolve_repo_root
+    # C1 extraction: `compute_repo_identity_gate`/`_REPO_IDENTITY_MISMATCH` now
+    # live in the lean `repo_identity_gate` module -- importing from there
+    # avoids paying for the 10k-line `pickup_assemble` module for this leg too.
+    from coordinator_core.repo_identity_gate import (
         _REPO_IDENTITY_MISMATCH,
         compute_repo_identity_gate,
-        resolve_repo_root,
     )
 
     explicit_repo_root = repo_root is not None
@@ -2318,7 +2321,10 @@ def close_out_and_stamp(
             # checkpoint (`workday-complete`, `workstream-complete`, ...)
             # runs next and calls `push_outstanding()` itself. Explicit,
             # never by omission (C5, AC5/AC6) -- an omitted `push_mode`
-            # here would silently regress back to `PUSH_MODE_SYNC`, exactly
+            # here would fall back to `run_commit_pipeline`'s own default
+            # (`PUSH_MODE_NONE` since 2026-08-26; `PUSH_MODE_SYNC` before
+            # that, which is the regression this line was written against),
+            # exactly
             # the failure `test_close_out_and_stamp_publishes.py`'s
             # `TestPublishBoundaryHistoricalRedProof` pins against.
             push_mode=PUSH_MODE_NEVER,

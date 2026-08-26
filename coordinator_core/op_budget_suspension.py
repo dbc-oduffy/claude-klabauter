@@ -396,6 +396,7 @@ def refusal_message(method: str) -> str:
     record = SUSPENDED_OPS.get(method)
     max_ms = 0.0
     fallback = ""
+    note = ""
     if isinstance(record, dict):
         measured = record.get("measured")
         if isinstance(measured, dict):
@@ -406,9 +407,31 @@ def refusal_message(method: str) -> str:
         raw_fallback = record.get("fallback")
         if isinstance(raw_fallback, str):
             fallback = raw_fallback.strip()
+        raw_note = record.get("note")
+        if isinstance(raw_note, str):
+            note = raw_note.strip()
     return (
-        f"{method} is off: measured max {max_ms:.0f}ms against a "
+        # A NUMBER TRAVELS WITHOUT ITS INSTRUMENT UNLESS THE MESSAGE CARRIES IT.
+        # `session.boot_sweep`'s max_ms is 30016.6 and its note is "8/8 ended in
+        # caller_timeout at 30s" -- the figure is `ipc.DISPATCH_TIMEOUT_SECS`,
+        # the point where the dispatcher gave up, not a duration anything ran
+        # for. Rendering it as "measured max 30016ms" and dropping the note read
+        # to two EMs (claude-klabauter-em and doe-claude-em, 2026-08-26) as a
+        # measured 15x overshoot of the bar, and a cross-repo plan sized a
+        # from-scratch rewrite against it before either of us read the note that
+        # was in the record all along. The record was honest; the message was
+        # not. DoE's own corpus had already ruled this class three days earlier
+        # -- state/lessons/2026-08-23-a-number-without-its-instrument-gets-acted
+        # -on-as-the-other-instrument.md.
+        #
+        # A timeout-derived figure is a FLOOR on the op's cost and says nothing
+        # about its real duration: the op could be barely over the bar or
+        # hundreds of times over it. That distinction is exactly what a sizing
+        # decision turns on, so it is rendered here rather than left for a
+        # reader to go find.
+        f"{method} is off: max {max_ms:.0f}ms against a "
         f"{SUSPENSION_BAR_MS:.0f}ms bar. "
+        + (f"How that number arose: {note} " if note else "")
         + (f"{fallback} " if fallback else "")
         + "Killed, not suspended -- the old implementation does not come "
         "back. If the job is still needed, plan a new one under 500ms."

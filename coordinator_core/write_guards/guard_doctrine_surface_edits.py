@@ -152,7 +152,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
-from coordinator_core.pickup_assemble import compute_repo_identity_gate
+from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (

@@ -179,9 +179,17 @@ def _sdir(repo, sid):
 
 
 def _make_stale(sid_dir: Path):
-    """Push a session dir's last_activity and touched.txt both outside the
+    """Push a session dir's last_activity and EVERY on-disk record outside the
     abandonment window (>= 2 independently-stale-signal floor) AND outside
-    reap's own 24h staleness threshold."""
+    reap's own 24h staleness threshold.
+
+    Ages the whole directory, not just `touched.txt`: `session_abandoned`'s
+    freshest-signal gate reads `newest_record_mtime(sdir)`, which was widened
+    off any single filename literal, so `core.init`'s one-shot creation stamps
+    (`head_at_start`, `started_at`) count as records too. Back-dating
+    `touched.txt` alone leaves them at creation-time-fresh, the gate reads
+    NOT-abandoned, and the session is never reaped — the fixture, not the
+    reaper, being wrong."""
     core.update_meta_field(str(sid_dir), "last_activity", "2000-01-01T00:00:00Z")
     touched = sid_dir / "touched.txt"
     stale_epoch = (
@@ -191,7 +199,21 @@ def _make_stale(sid_dir: Path):
     )
     if not touched.exists():
         touched.write_text("x", encoding="utf-8")
-    os.utime(str(touched), (stale_epoch, stale_epoch))
+    for record in sid_dir.iterdir():
+        if record.is_file():
+            os.utime(str(record), (stale_epoch, stale_epoch))
+
+
+# Sub-reap (i) selects candidates by a positive uuid-shape test
+# (docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md, C2), so a
+# fixture sid MUST be uuid-shaped or `_reap_stale_sessions` never considers it at
+# all. These four ids carry the old mnemonic names in their comments; the shape,
+# not the wording, is what the reaper reads. A non-uuid sid here does not fail
+# loudly — it makes the test vacuous, which is why they are named constants.
+_SID_ABANDONED_LIVE = "aaaaaaaa-1111-4111-8111-000000000001"  # was "abandoned-live"
+_SID_LIVE_QUIET = "bbbbbbbb-2222-4222-8222-000000000002"  # was "live-quiet"
+_SID_DEAD = "cccccccc-3333-4333-8333-000000000003"  # was "dead-sid"
+_SID_UNKNOWN_TS = "dddddddd-4444-4444-8444-000000000004"  # was "unknown-ts"
 
 
 class TestReapStaleSessionsLiveWitnessAbandonment:
@@ -204,19 +226,19 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
 
     def test_live_witness_abandoned_and_stale_is_reaped(self, tmp_path):
         repo = _make_repo(tmp_path)
-        core.init("abandoned-live", cwd=str(repo))
+        core.init(_SID_ABANDONED_LIVE, cwd=str(repo))
         sessions_dir = Path(core.sessions_dir(cwd=str(repo)))
-        sdir = _sdir(repo, "abandoned-live")
+        sdir = _sdir(repo, _SID_ABANDONED_LIVE)
         _make_stale(sdir)
 
         reaped, deferred, failed = reap._reap_stale_sessions(
             sessions_dir,
-            frozenset({"abandoned-live"}),
+            frozenset({_SID_ABANDONED_LIVE}),
             None,
             str(repo),
         )
 
-        assert reaped == ["abandoned-live"]
+        assert reaped == [_SID_ABANDONED_LIVE]
         assert deferred == []
         assert failed == []
         assert not sdir.exists()
@@ -230,15 +252,15 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
         is stale — the liveness skip must not be removed, only widened for
         the abandoned case."""
         repo = _make_repo(tmp_path)
-        core.init("live-quiet", cwd=str(repo))
+        core.init(_SID_LIVE_QUIET, cwd=str(repo))
         sessions_dir = Path(core.sessions_dir(cwd=str(repo)))
-        sdir = _sdir(repo, "live-quiet")
+        sdir = _sdir(repo, _SID_LIVE_QUIET)
         core.update_meta_field(str(sdir), "last_activity", "2000-01-01T00:00:00Z")
         (sdir / "touched.txt").write_text("x", encoding="utf-8")  # fresh mtime
 
         reaped, deferred, failed = reap._reap_stale_sessions(
             sessions_dir,
-            frozenset({"live-quiet"}),
+            frozenset({_SID_LIVE_QUIET}),
             None,
             str(repo),
         )
@@ -253,9 +275,9 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
         still reaps on the pre-existing 24h path, independent of
         abandonment."""
         repo = _make_repo(tmp_path)
-        core.init("dead-sid", cwd=str(repo))
+        core.init(_SID_DEAD, cwd=str(repo))
         sessions_dir = Path(core.sessions_dir(cwd=str(repo)))
-        sdir = _sdir(repo, "dead-sid")
+        sdir = _sdir(repo, _SID_DEAD)
         core.update_meta_field(str(sdir), "last_activity", "2000-01-01T00:00:00Z")
 
         reaped, deferred, failed = reap._reap_stale_sessions(
@@ -265,15 +287,15 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
             str(repo),
         )
 
-        assert reaped == ["dead-sid"]
+        assert reaped == [_SID_DEAD]
         assert deferred == []
         assert failed == []
 
     def test_unknown_last_activity_is_deferred_not_reaped(self, tmp_path):
         repo = _make_repo(tmp_path)
-        core.init("unknown-ts", cwd=str(repo))
+        core.init(_SID_UNKNOWN_TS, cwd=str(repo))
         sessions_dir = Path(core.sessions_dir(cwd=str(repo)))
-        sdir = _sdir(repo, "unknown-ts")
+        sdir = _sdir(repo, _SID_UNKNOWN_TS)
         core.update_meta_field(str(sdir), "last_activity", "not-a-timestamp")
 
         reaped, deferred, failed = reap._reap_stale_sessions(
@@ -285,6 +307,6 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
 
         assert reaped == []
         assert len(deferred) == 1
-        assert deferred[0]["id"] == "unknown-ts"
+        assert deferred[0]["id"] == _SID_UNKNOWN_TS
         assert failed == []
         assert sdir.exists()

@@ -51,15 +51,31 @@ from coordinator_core.warm import breadcrumb
 
 __all__ = [
     "COOKIE_FILENAME",
+    "CURL_CONFIG_FILENAME",
+    "COOKIE_HEADER",
+    "curl_config_path",
     "DirectoryNotPrivateError",
     "cookie_path",
     "mint",
+    "ensure",
     "read",
     "clear",
     "assert_directory_private",
 ]
 
 COOKIE_FILENAME = "warm.cookie"
+
+#: Sibling curl config carrying the cookie as a header line. A SECOND
+#: spelling of the same secret, in the same ACL-protected directory, and it
+#: exists for one measured reason: the whole justification for the HTTP
+#: transport is that curl reaches the listener in ~10.4ms against a ~26.0ms
+#: bare-interpreter floor. Any delivery path that starts a Python process to
+#: read the cookie has already spent more than the transport saves. A curl
+#: caller does `curl --config <this file>` and pays nothing.
+CURL_CONFIG_FILENAME = "warm.curlrc"
+
+#: The request header the cookie travels in.
+COOKIE_HEADER = "X-Coordinator-Cookie"
 
 
 class DirectoryNotPrivateError(Exception):
@@ -81,6 +97,30 @@ def cookie_path(engine_root: Optional[Path] = None) -> Path:
     return breadcrumb.svc_dir(engine_root) / COOKIE_FILENAME
 
 
+def curl_config_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/warm.curlrc` -- the interpreter-free delivery path."""
+    return breadcrumb.svc_dir(engine_root) / CURL_CONFIG_FILENAME
+
+
+def _write_private_atomically(path: Path, content: str) -> None:
+    """Write `content` to `path` via a `.tmp` sibling + `os.replace`.
+
+    The rename is load-bearing: it is what stops a reader seeing a
+    half-written file, the property Bitcoin Core's own atomic-cookie shape
+    relies on. `0o600` is real on POSIX and inert on Windows, where the
+    directory's inherited ACL carries the protection instead -- see the
+    module docstring.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode("ascii"))
+    finally:
+        os.close(fd)
+    os.replace(str(tmp_path), str(path))
+
+
 def mint(engine_root: Optional[Path] = None) -> str:
     """Mint a new boot cookie and write it ATOMICALLY: a `.tmp` sibling is
     written and fsynced-by-close, then `os.replace` renames it onto the
@@ -93,20 +133,58 @@ def mint(engine_root: Optional[Path] = None) -> str:
     Creates `cookie_path(engine_root)`'s parent directory if it does not
     yet exist, matching `breadcrumb.write_breadcrumb`'s own
     `mkdir(parents=True, exist_ok=True)` pattern.
+
+    LIFETIME -- "boot cookie" NAMES THE FILE, NOT A ROTATION SCHEDULE, and
+    the wiring chunk must not call this at every boot. The secret is
+    generated ON FIRST ABSENCE and never rotated on a schedule
+    (`docs/research/spike-verdicts/2026-08-26-loopback-op-dispatch-credential-shape.md`,
+    corrected at `112810600`). The hook-fire caller cannot read this file:
+    it receives the secret interpolated from a session environment fixed at
+    launch, with no re-export channel, so a cookie rotated at engine boot
+    leaves every session launched before that restart authenticating
+    nothing for the rest of its life -- and a listener can outlive a
+    publish by hours with health green throughout.
     """
     token = secrets.token_hex(32)
-    path = cookie_path(engine_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
-
-    fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, token.encode("ascii"))
-    finally:
-        os.close(fd)
-
-    os.replace(str(tmp_path), str(path))
+    _write_private_atomically(cookie_path(engine_root), token)
+    # Written in the SAME mint, never lazily on first read. The two writes
+    # are individually atomic but NOT atomic as a pair -- an interruption
+    # between them leaves a curlrc lagging the cookie. That is tolerated,
+    # not prevented: a lagging curlrc sends a stale credential, which the
+    # refusal path rejects as a wrong cookie. Fails safe, never open.
+    _write_private_atomically(
+        curl_config_path(engine_root),
+        f'header = "{COOKIE_HEADER}: {token}"\n',
+    )
     return token
+
+
+def ensure(engine_root: Optional[Path] = None) -> str:
+    """Return the existing cookie, minting one only if none is there.
+
+    THE LIFETIME POLICY, IN ONE FUNCTION. `mint()` unconditionally
+    replaces; this is the call a boot path wants, and the difference is
+    the whole correction recorded in `mint`'s docstring: a secret
+    regenerated at every engine boot strands every session launched
+    before that boot, because the hook-fire caller receives it
+    interpolated from a launch-fixed environment with no re-export
+    channel. Generated ON FIRST ABSENCE, never rotated on a schedule.
+
+    Rotation is an operator action bounded by the longest live session --
+    `clear()` then this -- never a boot side-effect.
+
+    A cookie that exists but is unreadable is NOT silently replaced:
+    `read()` returns None only for a missing or unreadable file, and
+    replacing an unreadable one would rotate the secret out from under
+    every live session on a transient read error. The narrow race of two
+    engines booting together is safe by construction -- both write via
+    `os.replace`, so a reader sees one whole token or the other, never a
+    tear.
+    """
+    existing = read(engine_root)
+    if existing is not None:
+        return existing
+    return mint(engine_root)
 
 
 def read(engine_root: Optional[Path] = None) -> Optional[str]:
@@ -125,13 +203,18 @@ def read(engine_root: Optional[Path] = None) -> Optional[str]:
 
 
 def clear(engine_root: Optional[Path] = None) -> None:
-    """Best-effort, idempotent unlink of the cookie file. Never raises --
-    matches `breadcrumb.unlink_breadcrumb`'s own best-effort contract."""
-    path = cookie_path(engine_root)
-    try:
-        path.unlink()
-    except OSError:
-        pass
+    """Best-effort, idempotent unlink of BOTH the cookie and its curl
+    config. Never raises -- matches `breadcrumb.unlink_breadcrumb`'s own
+    best-effort contract.
+
+    Both, because leaving the curlrc behind would leave a readable secret
+    on disk after a clean exit that was supposed to remove it.
+    """
+    for path in (cookie_path(engine_root), curl_config_path(engine_root)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -279,7 +362,11 @@ def assert_directory_private(engine_root: Optional[Path] = None) -> None:
     hand-builds for the pipe.
 
     POSIX: asserts the cookie FILE's mode is exactly `0o600` -- the
-    property `mint()`'s `os.open` call actually establishes there.
+    property `mint()`'s `os.open` call actually establishes there. The
+    NAME says directory and this leg does not check one, deliberately:
+    on POSIX the file's own mode carries the protection, because write
+    access to the containing directory does not let another user read or
+    overwrite a `0o600` file they do not own.
 
     Never called from any boot sequence by this chunk (see module
     docstring's WIRING NOTE) -- it is a callable a later chunk wires in.

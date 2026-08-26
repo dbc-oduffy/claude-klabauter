@@ -112,6 +112,12 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
     token_matches_binary,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    expand_start_process_invocations,
+    tokenize_command,
+)
 from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
 from coordinator_core.daily_branch import _HOURS_48_SECONDS, is_canonical_branch, should_prompt_rename
@@ -280,6 +286,33 @@ def check(
 
         if not _PRE_FILTER_RE.search(cmd):
             return None
+
+        # Dialect-aware Start-Process expansion (C8,
+        # pln-the-destructive-core-learns-the-she): this entry's `matchers`
+        # already declares `COMMAND_TOOL_NAMES` but `_find_new_daily_
+        # target`'s own `resolve_command_positions` call is a Bash-shaped
+        # tokenizer with no PowerShell awareness, so a `Start-Process git
+        # -ArgumentList 'checkout','-b','work/<machine>/<date>'` invocation
+        # resolves to a segment headed by `Start-Process`, never `git`, and
+        # the canonical-daily-branch predicate never runs -- even though
+        # the base `git checkout -b` argv is byte-identical across
+        # dialects. This guard is advisory-only (fails OPEN on anything it
+        # cannot evaluate, per its own `try/except Exception: return None`
+        # posture), so this is a missed advisory, never a spurious one.
+        # Same narrow fix as the sibling entries: for a PowerShell payload
+        # only, tokenize via `_dialect.tokenize_command` and run the SAME
+        # `expand_start_process_invocations` pass, then rejoin the
+        # expanded tokens back into text so `_find_new_daily_target`
+        # (unchanged, still exercised byte-for-byte on the BASH leg) sees
+        # the target's real argv in command position. A PowerShell parse
+        # failure leaves `cmd` untouched.
+        _bsp_dialect = dialect_from_tool_name(tool_name)
+        if _bsp_dialect is Dialect.POWERSHELL:
+            _bsp_ps_tokens = tokenize_command(
+                cmd, _bsp_dialect, guard_name="branch-set-precedence"
+            )
+            if _bsp_ps_tokens is not None:
+                cmd = " ".join(expand_start_process_invocations(_bsp_ps_tokens))
 
         target = _find_new_daily_target(cmd)
         if target is None:

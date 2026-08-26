@@ -1538,6 +1538,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # read to the wrong git common dir and report another tree's breaches as
     # this one's.
     "op_census.breaches":                       "show_top",
+    # "show_top" — chunk C6 (docs/plans/2026-08-26-merges-directives-stop-
+    # starting-interpreters.md): both ops receive an already-resolved
+    # worktree root and forward it straight through as `brief()`/`apply()`'s
+    # own `repo_root=` keyword; each function's decision object/directive
+    # execution is genuinely per-worktree (branch_state, tags, directives
+    # all read/write the SERVED worktree, not the main-worktree-rooted
+    # `state/` tree `common_dir` ops share). "none" would drop the resolved
+    # root and silently fall back to each function's own `resolve_repo_root()`
+    # (a real git-command probe against ambient cwd) on every call.
+    "merge_assemble.brief":                      "show_top",
+    "merge_assemble.apply":                      "show_top",
 }
 
 # ---------------------------------------------------------------------------

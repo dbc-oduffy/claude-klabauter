@@ -41,6 +41,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 
 from coordinator_core.ipc import register_op
@@ -830,6 +831,48 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Failure isolation for the fold
+# ---------------------------------------------------------------------------
+
+
+def _text_or_breadcrumb(label: str, result) -> str:
+    """One leg's advisory text, or "" when that leg raised — never a re-raise.
+
+    The disposition is fail-open toward silence for the failing leg ONLY. Every
+    caller of this function has already collected its siblings' results, so a
+    raise here would convert one leg's transient read failure into a suppressed
+    advisory for all of them — the exact property the four separate hook
+    processes this op replaced could not lose.
+
+    The breadcrumb names the leg. Without it the drop is indistinguishable from
+    a leg that ran and had nothing to say, which for an advisory is silent by
+    construction: there is no artifact whose absence anyone would notice.
+    """
+    if isinstance(result, BaseException):
+        print(
+            "postuse_advisory_dispatch: leg=%s raised %s: %s — its sibling legs are "
+            "unaffected" % (label, type(result).__name__, result),
+            file=sys.stderr,
+        )
+        return ""
+    return result or ""
+
+
+async def _leg_text(label: str, coro) -> str:
+    """Await one leg alone, with the same fail-open disposition as the gather path.
+
+    The `session_id`-absent short-circuit above awaits a single leg with no
+    siblings to protect, but an advisory hook that raises still fails the whole
+    hook rather than passing quietly — so it gets the same treatment as a leg
+    inside the gather, and for the same reason.
+    """
+    try:
+        return (await coro) or ""
+    except BaseException as exc:  # noqa: BLE001 — advisory hooks fail open; see docstring
+        return _text_or_breadcrumb(label, exc)
+
+
+# ---------------------------------------------------------------------------
 # Op handler
 # ---------------------------------------------------------------------------
 
@@ -912,15 +955,41 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # The other three fail-open when session_id is absent, but short-circuit
     # early here to skip asyncio.to_thread overhead when there's nothing to do.
     if not session_id:
-        uh_text = await uh_coro
+        uh_text = await _leg_text("unauthorized_handoff", uh_coro)
         return post_advisory(uh_text) if uh_text else no_advisory()
 
     # Run all four checks concurrently — they use disjoint sentinel namespaces.
-    cp_text, rt_text, ad_text, uh_text = await asyncio.gather(
+    #
+    # `return_exceptions=True` IS THE FAILURE-ISOLATION BUY-BACK, and it is not the
+    # same concern as the ordering/latency argument above. This fold replaced FOUR
+    # SEPARATE HOOK PROCESSES, and a process boundary isolates a crash for free: one
+    # raising script could not suppress the other three's advisories. A bare `gather`
+    # gives that away silently — it propagates the first exception and abandons its
+    # siblings' results, so a single unreadable transcript or sentinel takes down all
+    # four legs at once. All four read transcripts and sentinel files off a shared
+    # disk on a box running ~50 concurrent sessions, so a transient read failure is
+    # the expected case, not the exotic one.
+    #
+    # Found by doe-claude-1d while carrying this property into their hook-transport
+    # plan, after `agent_postuse_dispatch` (the PostToolUse(Agent) fan-in) was built
+    # with it. The concurrency reasoning above is correct and answers a different
+    # question; failure isolation simply was not the axis. Every fan-in in this
+    # package owes this buy-back, and it is per-fold — never inherited.
+    results = await asyncio.gather(
         asyncio.to_thread(_check_context_pressure_sync, session_id, transcript_path),
         asyncio.to_thread(_check_runtime_tripwire_sync, session_id, agent_id),
         asyncio.to_thread(_check_first_agent_dispatch_sync, session_id, tool_name),
         uh_coro,
+        return_exceptions=True,
+    )
+    labels = (
+        "context_pressure",
+        "runtime_tripwire",
+        "first_agent_dispatch",
+        "unauthorized_handoff",
+    )
+    cp_text, rt_text, ad_text, uh_text = (
+        _text_or_breadcrumb(label, result) for label, result in zip(labels, results)
     )
 
     texts = [text for text in (cp_text, rt_text, ad_text, uh_text) if text]

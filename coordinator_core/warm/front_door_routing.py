@@ -115,6 +115,8 @@ __all__ = [
     "CloneIdentityExtractor",
     "clone_identity_from_headers",
     "KEY_ABSENT",
+    "CREDENTIAL_ABSENT",
+    "CREDENTIAL_INVALID",
     "ROOT_UNRESOLVABLE",
     "ROOT_UNSTAMPED",
     "NO_LISTENER",
@@ -167,6 +169,16 @@ def clone_identity_from_headers(headers: Mapping[str, str]) -> Optional[str]:
 #: PATH" section for what each one means and who (this module vs. C5) owns
 #: turning it into a response.
 KEY_ABSENT = "key_absent"
+#: AC17. Two distinct credential facts, kept apart for the same reason AC6
+#: keeps its four routing facts apart: "this session never came through the
+#: launcher" and "something presented a credential that is not ours" have
+#: different owners and different remediations, and one message for both makes
+#: a misconfigured session indistinguishable from a forged fire. Not an
+#: information leak worth withholding -- the caller that cannot read the secret
+#: also cannot read either message, and the operator who can read both needs
+#: them separate to diagnose anything.
+CREDENTIAL_ABSENT = "credential_absent"
+CREDENTIAL_INVALID = "credential_invalid"
 ROOT_UNRESOLVABLE = "root_unresolvable"
 ROOT_UNSTAMPED = "root_unstamped"
 NO_LISTENER = "no_listener"
@@ -249,6 +261,11 @@ def resolve_route(
 #: called for `ROUTED` -- see `unroutable_response` below.
 _UNROUTABLE_DETAILS: dict = {
     KEY_ABSENT: lambda res: "no clone identity on this request",
+    CREDENTIAL_ABSENT: lambda res: (
+        "no door credential on this request -- this session was not started "
+        "through the claude-doe launcher, or the key was vetoed to empty"
+    ),
+    CREDENTIAL_INVALID: lambda res: "door credential presented does not match this box's",
     ROOT_UNRESOLVABLE: lambda res: "clone identity %s names no engine root this box can resolve" % res.identity,
     ROOT_UNSTAMPED: lambda res: "clone root %s carries no valid engine stamp" % res.engine_root,
     NO_LISTENER: lambda res: "clone root %s has no live listener" % res.engine_root,

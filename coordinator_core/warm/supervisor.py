@@ -91,7 +91,15 @@ from coordinator_core.warm.engine_root import current_engine_clone, is_engine_ro
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
-from coordinator_core.warm import breadcrumb, election, hook_http, lifecycle, skew, telemetry
+from coordinator_core.warm import (
+    breadcrumb,
+    cookie,
+    election,
+    hook_http,
+    lifecycle,
+    skew,
+    telemetry,
+)
 from coordinator_core.warm.http_listener import _collect_response, _frame_from_request
 from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
 
@@ -418,6 +426,30 @@ def listener_url(record: dict) -> Optional[str]:
     if not isinstance(port, int):
         return None
     return f"http://127.0.0.1:{port}"
+
+
+def _pinned_hosts(port: int) -> frozenset:
+    """The exact `Host` values this listener answers on, for `port`.
+
+    DERIVED FROM `listener_url` ON PURPOSE -- the authority this listener
+    publishes and the authority it accepts are one decision, and two
+    spellings of it would let a client dial a URL the pin then refuses.
+    `localhost` is included as the equivalent spelling of the same
+    loopback endpoint.
+
+    LITERALS ONLY. Never a prefix/suffix test and never a "looks like an
+    IP" heuristic: webpack-dev-server's CVE-2025-30360 accepted any
+    IP-literal as local, which an attacker's own IP satisfies. A value
+    like `127.0.0.1:<port>.evil.com` must NOT match, which set membership
+    gives for free and a substring test would not.
+
+    IPv4 LOOPBACK ONLY, because the listener itself binds only IPv4
+    (`("127.0.0.1", 0)`) -- `[::1]:<port>` cannot reach the handler to be
+    compared. Anything that moves that bind to dual-stack must add the
+    v6 literal here in the same change, or the pin refuses the very
+    authority `listener_url` would then publish.
+    """
+    return frozenset({f"127.0.0.1:{port}", f"localhost:{port}"})
 
 
 def check_health(
@@ -818,6 +850,95 @@ def _make_handler(ctx: "_ServerContext"):
             # "resident listener process").
             pass
 
+        def parse_request(self) -> bool:
+            """ONE central Host check, ahead of stdlib's dispatch to any
+            `do_*` method -- deliberately here and not in each handler.
+
+            WHY `parse_request` AND NOT `handle_one_request`: stdlib parses
+            the request line and headers INSIDE `parse_request`, so a check
+            placed in `handle_one_request` ahead of the `super()` call sees
+            no `self.headers` at all and silently passes everything -- a pin
+            that is not a pin. `handle_one_request` calls
+            `if not self.parse_request(): return`, so returning False here
+            halts before dispatch, which is exactly the semantics wanted.
+
+            WHY HOST, AND WHY NOT AN ORIGIN ALLOWLIST. Origin validation is
+            a PER-HANDLER discipline: it has to be re-applied on every route
+            and every upgrade path, and it lapses silently the moment
+            someone adds one. That is not hypothetical -- Vite shipped
+            Origin checks on its HTTP path and not on its WebSocket upgrade
+            TWICE (CVE-2025-24010, CVE-2026-39363), and in both cases the
+            check was never RUN, so its logic was irrelevant. `Host` is
+            present on every HTTP request line, WebSocket handshakes
+            included, so it can be validated ONCE, before routing, and
+            cannot lapse as the code grows. If a WS/SSE upgrade path is
+            ever added here, its Origin check belongs in THIS method, not
+            beside the new route.
+
+            LITERAL COMPARISON ONLY -- never a prefix, suffix, or
+            "looks like an IP" test. webpack-dev-server's CVE-2025-30360
+            accepted any IP-literal as local, which an attacker's own IP
+            satisfies.
+
+            This is defence-in-depth against browser-borne requests, NOT
+            authentication: it stops a page the operator visits, and stops
+            a DNS-rebound name (rebinding changes where the socket lands,
+            never the `Host` the browser writes). The credential is a
+            separate, load-bearing control.
+            """
+            if not super().parse_request():
+                return False
+            if not self._host_is_pinned():
+                # Refuse without dispatching, and close: a rebound or
+                # foreign-Host caller gets no route, no op, no body read.
+                self.close_connection = True
+                try:
+                    self.send_error(421, "Misdirected Request")
+                except Exception:  # noqa: BLE001 -- never fail the listener on a refusal
+                    pass
+                return False
+            return True
+
+        def _host_is_pinned(self) -> bool:
+            """True iff this request's `Host` is one of the loopback
+            literals this listener actually publishes.
+
+            Called from `parse_request` AFTER `super().parse_request()`
+            has populated `self.headers` -- the `headers is None` guard
+            below is belt-and-braces for a subclass or stdlib change that
+            reorders that, not a live path.
+
+            The accepted set is EXACTLY what this listener's own
+            `listener_url` builds (`127.0.0.1:<bound port>`) plus the
+            equivalent `localhost` spelling. `localhost` is safe to accept
+            for the same reason `Host` works at all: an attacker cannot
+            make a browser send someone else's name.
+
+            Compared CASE-INSENSITIVELY against the (lower-case) pinned
+            set: hostnames are case-insensitive per RFC 9110, so a
+            `Host: LOCALHOST:<port>` that this listener genuinely published
+            must not read as a foreign authority.
+            """
+            headers = getattr(self, "headers", None)
+            if headers is None:
+                return True
+            sent = headers.get_all("Host") or []
+            if len(sent) > 1:
+                # REFUSED, never "read the first one". A repeated `Host` is
+                # request-smuggling shape: whichever value this handler
+                # compares, a downstream reader could take the other, and
+                # the pin would then be validating a header nobody acted
+                # on. No real client sends two.
+                return False
+            host = (sent[0] if sent else "").strip().lower()
+            if not host:
+                # HTTP/1.1 requires Host; HTTP/1.0 does not. An absent Host
+                # cannot be a browser (every browser sends one), so this
+                # refuses nothing real and stays permissive for a raw
+                # HTTP/1.0 client.
+                return self.request_version == "HTTP/1.0"
+            return host in _pinned_hosts(int(self.server.server_address[1]))
+
         def do_GET(self) -> None:  # noqa: N802 -- stdlib-mandated name
             if self.path.rstrip("/") == HEALTH_PATH:
                 body = b"ok"
@@ -971,6 +1092,27 @@ def _make_handler(ctx: "_ServerContext"):
     return _Handler
 
 
+def _assert_credential_ready(root: Path) -> None:
+    """Generate the cookie if absent, then assert the directory holding it
+    excludes other users. Raises `cookie.DirectoryNotPrivateError` if it
+    does not (AC2); the caller turns that into a refusal to serve (AC3).
+
+    CALLED BEFORE THE BIND, NEVER BESIDE THE DISCOVERY WRITE. A listener
+    that binds first and checks second has already been reachable on a
+    port it could not protect, which is the whole failure this guard
+    exists to prevent.
+
+    `ensure`, never `mint` -- see `cookie.ensure`. Minting here would
+    rotate the secret at every engine boot and strand every session
+    launched before it: the refuted lifetime, not the policy.
+
+    Ordered ensure-then-assert because the directory is created by the
+    first write, so the assertion needs something to read.
+    """
+    cookie.ensure(root)
+    cookie.assert_directory_private(root)
+
+
 def main() -> int:
     """The supervisor process entrypoint `ensure_listener`'s spawn trigger
     targets. Boot sequence, mirroring `warm.server.main`'s numbered steps:
@@ -1030,6 +1172,19 @@ def main() -> int:
     # never at `__init__` time).
     class _NotYetBound:
         pass
+
+    try:
+        _assert_credential_ready(root)
+    except cookie.DirectoryNotPrivateError as exc:
+        # FAIL CLOSED, and loudly. Returning non-zero without a discovery
+        # record is what makes this a refusal to serve rather than a
+        # silently-unprotected listener: no record means no client finds a
+        # port, and the pipe transport keeps working untouched.
+        print(
+            f"[warm-http-supervisor] refusing to serve: {exc}",
+            file=__import__("sys").stderr,
+        )
+        return 3
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
     version_state = skew.ServerVersionState(root)

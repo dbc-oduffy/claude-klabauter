@@ -11,9 +11,12 @@ mints a real cookie under the operator's `%LOCALAPPDATA%`.
 from __future__ import annotations
 
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -82,10 +85,18 @@ def test_mint_is_atomic_via_os_replace(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(cookie.os, "replace", _spy_replace)
     token = cookie.mint(tmp_path)
-    assert len(calls) == 1
-    src, dst = calls[0]
-    assert src.endswith(".tmp")
-    assert dst == str(cookie.cookie_path(tmp_path))
+
+    # TWO atomic writes now, not one: the cookie and its curl config. BOTH
+    # must go through the rename -- a curlrc written in place could be read
+    # half-formed, and a curlrc that lagged the cookie would deliver a stale
+    # credential the refusal path would then correctly reject.
+    assert len(calls) == 2, f"expected an atomic replace per written file, got {calls!r}"
+    destinations = {dst for _src, dst in calls}
+    assert destinations == {
+        str(cookie.cookie_path(tmp_path)),
+        str(cookie.curl_config_path(tmp_path)),
+    }
+    assert all(src.endswith(".tmp") for src, _dst in calls)
     assert cookie.read(tmp_path) == token
 
 
@@ -252,3 +263,186 @@ def test_ow_ace_is_refused_when_another_principal_owns_the_directory(monkeypatch
     monkeypatch.setattr(cookie, "_directory_dacl_sddl", lambda _d: sddl)
     with pytest.raises(cookie.DirectoryNotPrivateError, match="OWNER RIGHTS"):
         cookie.assert_directory_private()
+
+
+# --------------------------------------------------------------------------
+# The curl config -- the interpreter-free delivery path.
+#
+# WHY THIS FILE EXISTS AT ALL: the entire justification for the HTTP
+# transport is that curl reaches the listener in ~10.4ms against a ~26.0ms
+# bare-interpreter floor. A delivery path that starts Python to read the
+# cookie has already spent more than the transport saves, so the credential
+# has to be readable by curl itself. `curl --config <file>` is that path.
+# --------------------------------------------------------------------------
+
+
+def test_mint_writes_a_curl_config_carrying_the_token(tmp_path):
+    token = cookie.mint(tmp_path)
+    text = cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
+    assert text == f'header = "{cookie.COOKIE_HEADER}: {token}"\n'
+
+
+def test_clear_removes_the_curl_config_too(tmp_path):
+    """Leaving the curlrc behind would leave a readable secret on disk after
+    a clean exit that was supposed to remove it."""
+    cookie.mint(tmp_path)
+    assert cookie.curl_config_path(tmp_path).exists()
+    cookie.clear(tmp_path)
+    assert not cookie.cookie_path(tmp_path).exists()
+    assert not cookie.curl_config_path(tmp_path).exists()
+
+
+def test_curl_config_and_cookie_never_disagree(tmp_path):
+    """Re-minting rewrites BOTH. A curlrc that lagged the cookie would send a
+    stale credential the refusal path would correctly reject -- a
+    self-inflicted outage that looks like an attack."""
+    for _ in range(3):
+        token = cookie.mint(tmp_path)
+        text = cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
+        assert token in text
+        assert cookie.read(tmp_path) == token
+
+
+def test_curl_actually_consumes_the_config_and_sends_the_header(tmp_path):
+    """END-TO-END, against a real socket and the real curl binary.
+
+    This is the assertion the whole file is for: not that the config LOOKS
+    right, but that curl parses it and puts the header on the wire. A config
+    with the wrong directive name or quoting would satisfy every test above
+    and still deliver nothing.
+    """
+    curl = shutil.which("curl")
+    if not curl:
+        pytest.skip("no curl on PATH")
+
+    token = cookie.mint(tmp_path)
+    seen = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["header"] = self.headers.get(cookie.COOKIE_HEADER)
+            seen["host"] = self.headers.get("Host")
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), _Handler)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        proc = subprocess.run(
+            [
+                curl, "-s", "-S", "--max-time", "10",
+                "--config", str(cookie.curl_config_path(tmp_path)),
+                f"http://127.0.0.1:{port}/health",
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert proc.returncode == 0, proc.stderr
+    assert seen.get("header") == token, f"curl did not send the cookie header: {seen!r}"
+    # Same capture confirms the authority the Host pin matches against, so
+    # the two controls are verified against ONE observation rather than two
+    # assumptions.
+    assert seen.get("host") == f"127.0.0.1:{port}"
+
+
+# --------------------------------------------------------------------------
+# AC1/AC2/AC3 -- THE WIRING. `cookie.py` shipped as an unreferenced module
+# with a WIRING NOTE deferring this to "a later chunk"; nothing called it,
+# so no cookie was ever generated and the boot guard never ran. These pin
+# the callable INTO the boot path, which is what those ACs actually asked
+# for and what a gate reading the cookie depends on.
+# --------------------------------------------------------------------------
+
+
+def test_ensure_generates_on_first_absence(tmp_path: Path) -> None:
+    assert cookie.read(tmp_path) is None
+    token = cookie.ensure(tmp_path)
+    assert len(token) == 64
+    assert cookie.read(tmp_path) == token
+
+
+def test_ensure_does_not_rotate_an_existing_cookie(tmp_path: Path) -> None:
+    """THE REFUTED LIFETIME, PINNED AS REFUSED. A boot that re-mints strands
+    every session launched before it: the hook-fire caller holds the secret
+    in a launch-fixed environment with no re-export channel."""
+    first = cookie.ensure(tmp_path)
+    for _ in range(3):
+        assert cookie.ensure(tmp_path) == first
+
+
+def test_ensure_keeps_the_curlrc_in_step_on_first_generation(tmp_path: Path) -> None:
+    token = cookie.ensure(tmp_path)
+    assert token in cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
+
+
+def test_credential_guard_generates_the_cookie_when_the_directory_is_sound(
+    tmp_path: Path,
+) -> None:
+    from coordinator_core.warm import supervisor
+
+    supervisor._assert_credential_ready(tmp_path)
+    assert cookie.read(tmp_path) is not None
+
+
+def test_credential_guard_raises_on_a_directory_that_is_not_private(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2. The guard's whole job is to be the thing that says no."""
+    from coordinator_core.warm import supervisor
+
+    def _boom(engine_root=None):
+        raise cookie.DirectoryNotPrivateError("directory is not private")
+
+    monkeypatch.setattr(cookie, "assert_directory_private", _boom)
+    with pytest.raises(cookie.DirectoryNotPrivateError):
+        supervisor._assert_credential_ready(tmp_path)
+
+
+def test_the_guard_runs_before_the_bind() -> None:
+    """AC3, AS AN ORDERING PROPERTY -- the half a mocked unit test cannot
+    see. A listener that binds first and checks second has already been
+    reachable on a port it could not protect, so the ORDER is the control,
+    not the presence of a call. Read off the source of `main` because that
+    is where the ordering actually lives.
+
+    PRECEDING THE BIND SUBSUMES PRECEDING THE PUBLISH: the discovery record
+    is written from the bound port, so it cannot precede the bind. Asserted
+    against the bind alone and not also against the publish symbol, because
+    naming that symbol here would trip the warm suite's litter guard, whose
+    scan is a substring match -- and joining `_WRITER_MODULES` to quiet it
+    would record this module as a writer it is not.
+    """
+    import inspect
+
+    from coordinator_core.warm import supervisor
+
+    src = inspect.getsource(supervisor.main)
+    guard = src.index("_assert_credential_ready")
+    bind = src.index("ThreadingHTTPServer(")
+    assert guard < bind, "the credential guard must precede the bind"
+
+
+def test_a_refused_boot_returns_nonzero_before_binding() -> None:
+    """The refusal's observable half: a non-zero return taken in the guard
+    block itself, so a refused boot never reaches the bind and no client
+    ever finds a port. The failure degrades to the named pipe rather than
+    to an unprotected listener."""
+    import inspect
+
+    from coordinator_core.warm import supervisor
+
+    src = inspect.getsource(supervisor.main)
+    guard_block = src[
+        src.index("_assert_credential_ready") : src.index("ThreadingHTTPServer(")
+    ]
+    assert "return 3" in guard_block, "the guard must refuse with a non-zero exit"

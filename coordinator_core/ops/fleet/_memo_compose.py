@@ -7,11 +7,29 @@ memo.compose, memo.list, `gate_liveness.emit_discharge`,
 `contract.emit_memo_schema`, `ops.ceremony.branch_resolution`) shares. This
 module used to live inside `coordinator_core.ops.fleet.memo_send` (the
 memo.send op handler carried it as a "shared-helper home" alongside its own
-send-only logic) — split out here when memo.send was killed (PM ruling
-2026-08-23: killed ops die outright, no stub) so every live sibling keeps a
-working import after that module's deletion. Nothing in this file is a
-registered op; it has no `@register_op` and no MUTATES/writes surface of its
-own — each caller's own op module owns that.
+send-only logic) — split out here so every sibling keeps a working import
+independent of that module's fate. Nothing in this file is a registered op; it
+has no `@register_op` and no MUTATES/writes surface of its own — each caller's
+own op module owns that.
+
+CORRECTION, 2026-08-26. This paragraph previously said the split happened
+"when memo.send was killed (PM ruling 2026-08-23: killed ops die outright, no
+stub)", and described `memo_send.py` as deleted. **That is not the state of
+the tree and was not when it was written.** `memo.send` is REGISTERED AND
+LIVE — `memo_send.py` exists, carries `@register_op("memo.send")`, and is
+present on all four registration surfaces in the published mirror as well as
+here; it is ABSENT from `op_budget_suspension.SUSPENDED_OPS`, whose only row
+is `session.boot_sweep`. Verified independently in the mirror by doe-claude-em
+(2026-08-26) after this docstring sent two EMs down a dead-name hunt: it was
+cited across a repo boundary as evidence that a memo op had been killed, and
+reasoning was built on it before anyone resolved the op.
+
+Whether the 2026-08-23 ruling was reversed, or never covered this op, is a
+question for the PM and is NOT answered here — but no live op is contradicting
+a live kill, because there is no live kill. A docstring is not where an op's
+liveness should be read from in the first place: resolve the name
+(`ipc.get_op_handler`, which raises `OpSuspendedError` for a killed op) and
+read `SUSPENDED_OPS`.
 
 Negative-spec: does NOT contain anything specific to memo.send's cross-tree
 delivery (containment check, delivery commit, sent-ledger) — that logic died
@@ -152,6 +170,58 @@ def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
     return value.strip(), None
 
 
+#: Repo-relative anchors a `supersedes` reference may legitimately start from.
+#: An absolute path containing one of these is truncated to it; anything else
+#: absolute falls back to its basename. Ordered longest-first so the most
+#: specific anchor wins.
+_SUPERSEDES_ANCHORS = ("cross-repo/inbox/", "cross-repo/archive/", "state/memo-outbox/")
+
+#: A value that begins like a filesystem-absolute path on EITHER platform --
+#: POSIX `/x` or Windows `X:\x` / `X:/x`. Deliberately platform-agnostic: the
+#: value being normalized was written on whatever host the SENDER ran on, and
+#: the observed defect is a macOS-shaped path arriving on a Windows box.
+_ABSOLUTE_REF_RE = re.compile(r"^(?:/|[A-Za-z]:[\\/])")
+
+
+def _normalize_supersedes_ref(ref: str) -> str:
+    """Reduce a host-absolute `supersedes` reference to a portable one.
+
+    A `supersedes` value is READ ON A DIFFERENT MACHINE than it was written
+    on -- it names a memo in the receiver's tree, and receiver and sender are
+    routinely different hosts and different platforms. An absolute path is
+    therefore never portable, and the failure is silent: it simply resolves
+    nowhere, so a reader cannot tell a superseded memo from a live one.
+
+    OBSERVED, not hypothetical (doe-claude-em, 2026-08-26): five memos in
+    DoE's inbox carry a `supersedes` of the form
+    `/Users/<user>/X/DoE-claude/cross-repo/inbox/<name>.md` -- a macOS-shaped
+    absolute path for a repo that lives on a Windows drive root on the box
+    that received it. DoE runs a `guard-foreign-platform-paths` hook for
+    exactly this shape, but inbound memo bodies are not on its beat.
+
+    Rule, deliberately narrow so no valid value changes:
+      - Not absolute -> returned VERBATIM. A repo-relative path or a bare
+        memo id is already portable and is not this function's business.
+      - Absolute and containing a known repo anchor -> truncated to the
+        anchor, yielding the repo-relative path the receiver can resolve.
+      - Absolute with no anchor -> the basename, which is what a reader
+        actually matches on and is recoverable by search.
+
+    Negative-spec: this NEVER rejects. A `supersedes` naming a memo the
+    receiver cannot resolve is bad; refusing to send the superseding memo at
+    all is worse, because the correction is the thing being withheld.
+    """
+    ref = ref.strip()
+    if not _ABSOLUTE_REF_RE.match(ref):
+        return ref
+    unified = ref.replace("\\", "/")
+    for anchor in _SUPERSEDES_ANCHORS:
+        idx = unified.find(anchor)
+        if idx != -1:
+            return unified[idx:]
+    return unified.rsplit("/", 1)[-1] or ref
+
+
 def _validate_supersedes_param(op_mode: str, supersedes_raw: Any, dry_run: bool):
     """Validate/normalize the optional `supersedes` param — shared by every
     memo-composing op.
@@ -195,7 +265,7 @@ def _validate_supersedes_param(op_mode: str, supersedes_raw: Any, dry_run: bool)
                     f"string (got {entry!r}) — a supersession list is never "
                     f"silently pruned; fix or drop the entry",
                 )
-            cleaned.append(entry.strip())
+            cleaned.append(_normalize_supersedes_ref(entry))
         if cleaned:
             supersedes = cleaned[0] if len(cleaned) == 1 else cleaned
     elif supersedes_raw is not None:
@@ -207,7 +277,7 @@ def _validate_supersedes_param(op_mode: str, supersedes_raw: Any, dry_run: bool)
             )
         # Blank/whitespace-only bare string is ABSENCE, not an error — see
         # unified rule above.
-        supersedes = supersedes_raw.strip() or None
+        supersedes = _normalize_supersedes_ref(supersedes_raw) or None
     return supersedes, None
 
 

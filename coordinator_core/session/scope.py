@@ -1613,19 +1613,39 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
     migrated ``self_claim`` itself onto the new dialect. So that seam is a CLI
     entrypoint built for a future Node caller that had already been retired.
 
-    What DOES still justify the union is different, transient, and measured:
-    long-running processes that started before the engine carrying C7 reached
-    the published mirror (2026-08-26 17:01Z) keep executing the pre-C7
-    Edit/Write hook for their whole life. On the day of measuring, 55
-    legacy-dialect events postdated the C7 commit, from 6 session/agent dirs,
-    the most recent from an agent alive for ten hours. Plus the undrained
-    corpus itself: ~100 live dirs hold a legacy ``touched.txt`` with no jsonl
-    sibling, and their claims are only readable through this arm.
+    NEITHER ORIGINAL CONDITION IS WHAT KEEPS THIS ARM ALIVE. Both were
+    stated as clocks ("no code change advances either"); re-derived
+    2026-08-26, one is discharged and the other was never a clock at all.
 
-    Both of those drain on a CLOCK, not on a code change. The union may be
-    deleted once (a) no pre-publish process survives and (b) the corpus is
-    drained — NOT when someone migrates ``atomic_dedup_append``, which would
-    accomplish nothing. Re-measure both before deleting; do not trust this
+    (b) THE UNDRAINED CORPUS IS DISCHARGED. It was never time-dependent —
+    only an unrun migration. ``ops.session.legacy_touch_corpus_migrate`` was
+    applied (135 dirs, 1294 events written, 177 dropped as foreign-worktree
+    entries); ``ops.session.legacy_touch_corpus_drain_check`` reports 135
+    drained / 0 undrained; re-running is a no-op by construction.
+
+    (a) "PRE-PUBLISH PROCESSES RUNNING OLD CODE" IS FALSE. The Edit/Write
+    hook is ``python3 -c "exec(open(bootstrap).read())"`` — a FRESH process
+    per tool call that re-reads the script from disk every fire, dispatching
+    the op in-process (``ipc.dispatch_ops_from_hook``), never through the
+    warm server. No long-lived process holds this module's code, so a
+    session's age cannot determine which dialect it writes, and no cohort has
+    to die for anything.
+
+    WHAT ACTUALLY STILL EMITS LEGACY DIALECT is a writer C7 missed:
+    ``claims._release_path_claim_everywhere`` enumerates via
+    ``claim_index._enumerate_touched_files`` (a ``touched.txt``-only reverse
+    index) and appends its ``R`` event to ``touched.txt`` ALONE, never to the
+    touch record. Every legacy event observed after the publish was an ``R``,
+    batched with one timestamp across several agent dirs — a release pass,
+    not a session's Edit hook. ``scope._release_from_touched_file`` is the
+    deliberate legacy arm of a T/R pair and is a separate question.
+
+    So deletion is gated on a CODE FIX, not a clock: repoint that release
+    writer (and settle ``_release_from_touched_file``) onto the touch record,
+    re-run the migration once to sweep what it emitted in the meantime, THEN
+    delete this arm. Until then the drain does not hold: an ``R`` appended to
+    an already-drained ``touched.txt`` is invisible to a jsonl-only reader,
+    so a released claim would read as still-held. Do not trust this
     paragraph's counts, only its method.
 
     Why re-render rather than hand callers ``TouchEvent`` objects directly:

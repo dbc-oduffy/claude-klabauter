@@ -1376,14 +1376,30 @@ _DIRTY_TREE_SHAPES = [
 #: swallowed as an EOL phantom (passed). The live gate (now reading `-z`,
 #: unquoted) resolves the same lookup correctly and reports the path
 #: unattributable -- a CORRECT answer, not bug-for-bug parity with the buggy
-#: oracle. Only `path_with_space` hits this in practice: `nonascii_path`'s
-#: C-quoted, octal-escaped literal (`"caf\303\251..."`) does NOT reproduce
-#: the same miss when fed to `git diff --name-only` as a pathspec -- both
-#: live and oracle agree there (verified by a real run, not assumed; the
-#: mechanism is presumably git's own pathspec parser recognising and
-#: unquoting the C-quoted literal, unlike a plain-text name-list compare) --
-#: so `nonascii_path` is deliberately absent from this set.
-_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS = {"path_with_space"}
+#: oracle.
+#:
+#: 2026-08-26: `nonascii_path` JOINS this set, and the reason it was excluded
+#: was half the picture. The prior note had it that git's pathspec parser
+#: unquotes a C-quoted octal literal on the INPUT side, so `nonascii_path` fed
+#: to `git diff --name-only` matched and both implementations agreed. Input was
+#: never the problem. `git diff --name-only` also EMITS C-quoted paths, so
+#: `real_diff_paths` held `"caf\303\251-r\303\251sum\303\251.txt"` while the
+#: loop tested the raw `café-résumé.txt` -- the plain-text membership check
+#: missed, and the path was swallowed as an EOL phantom. Both agreed because
+#: BOTH were wrong: a genuinely dirty non-ASCII path passed the dirty-tree
+#: gate silently. That is a fail-OPEN in the gate whose whole job is refusing
+#: to commit over unattributable dirt.
+#:
+#: It is fixed by deletion rather than by a decoder: `dirty_tree_gate` no
+#: longer runs the EOL-phantom filter at all, because its candidate list now
+#: comes from `diff-files` (which hashes content before emitting, so no
+#: phantom reaches it -- measured 0 leaked, 0 real diffs missed) instead of
+#: from `git status --porcelain` (which reports on stat alone). No quoted
+#: output is parsed anywhere on the path, so the whole bug class is gone.
+#: The live gate now reports the dirty non-ASCII path; the oracle still
+#: swallows it. → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-
+#: one-git-status.md
+_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS = {"path_with_space", "nonascii_path"}
 
 
 @pytest.mark.parametrize("shape", _DIRTY_TREE_SHAPES)

@@ -2424,6 +2424,10 @@ async def dispatch_message(msg: dict) -> dict:
     # invocation -- the caller of THIS dispatch does not change between the
     # started and complete rows of the same corr_id.
     caller = None
+    # The JSON-RPC `error.code` off the response, so the `outcome == "error"`
+    # population on disk is READABLE without probing a live registry. See
+    # `record_op_latency`'s own `error_code` note for the incident.
+    error_code = None
     try:
         from coordinator_core.telemetry.op_latency import (
             caller_module,
@@ -2454,6 +2458,8 @@ async def dispatch_message(msg: dict) -> dict:
         error = response.get("error") if isinstance(response, dict) else None
         if error is not None:
             message = error.get("message", "") if isinstance(error, dict) else ""
+            code = error.get("code") if isinstance(error, dict) else None
+            error_code = code if isinstance(code, int) else None
             outcome = "timeout" if isinstance(message, str) and message.startswith("op timed out after") else "error"
         return response
     except BaseException:
@@ -2473,6 +2479,7 @@ async def dispatch_message(msg: dict) -> dict:
                 sid=sid,
                 corr_id=corr_id,
                 caller=caller,
+                error_code=error_code,
             )
         except Exception:
             _log().debug(

@@ -82,11 +82,15 @@ Two modes, selected by whether `to` is supplied:
     input shape.
     CAVEAT (Finding 3, review sidecar above): this models ONLY the plain
     filename path. `memo.list` accepts no `supersedes` param, so this preview
-    cannot model `memo_send._redelivery_filename`'s branch (same-day
-    `supersedes:` collision) — a sender previewing a same-day redelivery via
-    `memo.list` before calling `memo.send` with `supersedes:` set may see a
-    `resolved_filename` that the actual send does not use. "Authoritative"
-    above holds only for the non-supersedes case.
+    once could not model
+    `memo_send._redelivery_filename`'s branch (same-day `supersedes:`
+    collision). RESOLVED 2026-08-26, by deletion rather than by this preview
+    improving: `_redelivery_filename` no longer exists anywhere in
+    `coordinator_core`, and live `memo.send` REFUSES a same-day collision
+    ("already exists in the receiver's inbox -- refuse (no clobber)") instead
+    of disambiguating it. This preview is now exact for the supersedes case
+    too, because there is no second filename shape left to miss. What a sender
+    should know instead is that a same-day re-send does not land at all.
 
 Both modes always return the `dry_run:true` envelope (`build_dry_run_result`)
 — `memo.list` has no "act" mode; it is a pure read from end to end.
@@ -597,10 +601,11 @@ def _resolve_candidate(
     authority for both halves of the filename, not just the topic/date
     halves). `topic` absent (or `to` unresolved) means no `resolved_filename`
     key is added at all — unchanged from before this field existed. Does NOT
-    model `memo.send`'s `supersedes`-triggered `_redelivery_filename` branch —
-    `memo.list` has no `supersedes` param, so a same-day redelivery send may
-    land at a different filename than this preview shows (Finding 3, review
-    sidecar).
+    model `memo.send`'s former `supersedes`-triggered
+    `_redelivery_filename` branch, which no longer exists (removed by
+    2026-08-26; live `memo.send` refuses a same-day collision rather than
+    renaming around it). The preview is exact; a same-day re-send is refused,
+    not filed elsewhere.
 
     Raises:
         ValueError: propagated from `_memo_filename` when the resolved sender
@@ -698,9 +703,10 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
                                    `topic` alone, or `to` unresolved, adds no
                                    such key. `memo.list` has no `supersedes`
                                    param, so this does not model `memo.send`'s
-                                   `_redelivery_filename` branch — a same-day
-                                   `supersedes:` send may land at a different
-                                   filename (Finding 3, review sidecar).
+                                   former `_redelivery_filename` branch,
+                                   which no longer exists — a same-day re-send
+                                   is now REFUSED, not filed under another
+                                   name.
         from_id (str, optional):  mirrors `memo.send`'s own `from_id` param —
                                    the sender identity namespaced into
                                    `resolved_filename`. Absent defaults to the

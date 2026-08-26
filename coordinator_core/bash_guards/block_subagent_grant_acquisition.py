@@ -123,6 +123,12 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _extract_dash_c_payload,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    expand_start_process_invocations,
+    tokenize_command,
+)
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
@@ -360,6 +366,37 @@ def check(payload: dict) -> Optional[dict]:
         return None
 
     cmd_for_classification = _strip_heredoc_bodies(cmd)
+
+    # Dialect-aware Start-Process expansion (C8,
+    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
+    # already declares `COMMAND_TOOL_NAMES` but `_tokenize_full_command`
+    # (imported above from `block_subagent_destructive_action`) is a
+    # Bash-shaped tokenizer with no PowerShell awareness, so a
+    # `Start-Process python -ArgumentList '-m','coordinator_core...'`
+    # invocation of the gated CLI evades `_evaluate` even though its own
+    # base `python -m ...` argv is byte-identical across dialects -- the
+    # anti-bypass surface, not the base match, is what a PowerShell
+    # `Start-Process` wrapper defeats. Same narrow fix as
+    # `_check_destructive_git_revert_full`/`check_git_commit_safe_commit_
+    # advise`: for a PowerShell payload only, tokenize via `_dialect.
+    # tokenize_command` and run the SAME `expand_start_process_invocations`
+    # pass, then rejoin the expanded tokens back into text so `_evaluate`'s
+    # existing Bash-shaped pipeline (unchanged, still exercised
+    # byte-for-byte on the BASH leg) sees the target's real argv in command
+    # position. A PowerShell parse failure leaves `cmd_for_classification`
+    # untouched, matching this function's long-standing behavior for every
+    # dialect before this change.
+    _bsga_dialect = dialect_from_tool_name(payload.get("tool_name"))
+    if _bsga_dialect is Dialect.POWERSHELL:
+        _bsga_ps_tokens = tokenize_command(
+            cmd_for_classification,
+            _bsga_dialect,
+            guard_name="block-subagent-grant-acquisition",
+        )
+        if _bsga_ps_tokens is not None:
+            cmd_for_classification = " ".join(
+                expand_start_process_invocations(_bsga_ps_tokens)
+            )
 
     deny_kind = _evaluate(cmd_for_classification)
     if deny_kind is None:

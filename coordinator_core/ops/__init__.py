@@ -572,6 +572,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "warm_guard.evaluate" (the warm-side bash-guard chain — state/'
         "handoffs/2026-08-23-the-warm-guard-op-gets-registered.md)",
     ),
+    (
+        "coordinator_core.merge_assemble.ops",
+        'registers "merge_assemble.brief" and "merge_assemble.apply" (chunk C6, '
+        "docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md)",
+    ),
 ]
 
 # module dotted-path -> the exception raised the last time we tried to import

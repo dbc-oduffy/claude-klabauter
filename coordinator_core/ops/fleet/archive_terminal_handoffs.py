@@ -91,7 +91,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
@@ -374,13 +373,19 @@ def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
         return False
 
 
-async def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Dict[str, bool]:
+def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Dict[str, bool]:
     """Resolve every distinct `shipped_in` sha's object-existence via the
     Rail-2 bounded reader — ZERO git spawns (C10, AC-11; supersedes the
     prior `git cat-file --batch` rail).
 
     Deduplicates first (repeat shipped_in values across candidates are
     common). Returns {} when there is nothing to resolve.
+
+    SYNCHRONOUS (C2, docs/plans/2026-08-26-the-sweep-stops-paying-for-a-
+    room-it-nev.md): this function was `async def` with no `await` in its
+    body at all — the easy tell that the whole op's async shape was
+    self-imposed rather than load-bearing. See the module's own `_handler`
+    docstring for the full justification.
     """
     distinct = sorted({s.strip() for s in shas if s and isinstance(s, str) and s.strip()})
     if not distinct:
@@ -388,7 +393,7 @@ async def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Di
     return {sha: _object_exists_no_spawn(common_dir, sha) for sha in distinct}
 
 
-async def _dirty_handoff_relpaths(worktree: Path) -> set:
+def _dirty_handoff_relpaths(worktree: Path) -> set:
     """ONE `git status --porcelain -- state/handoffs` call; returns the set of
     repo-relative paths under state/handoffs/ that carry uncommitted worktree
     changes.
@@ -404,7 +409,7 @@ async def _dirty_handoff_relpaths(worktree: Path) -> set:
     every other check plus `archive_and_commit`'s own drift refusal downstream.
     """
     scoped_dir = "state/handoffs"
-    result = await asyncio.to_thread(status_porcelain, worktree, [scoped_dir])
+    result = status_porcelain(worktree, [scoped_dir])
     if not result.ok:
         _LOG.warning(
             "archive_terminal_handoffs: git status --porcelain -- %s failed "
@@ -508,7 +513,7 @@ def _sort_key(terminal_since: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _scan_terminal(
+def _scan_terminal(
     worktree_root: Path,
     common_dir: Path,
     *,
@@ -580,7 +585,7 @@ async def _scan_terminal(
         for meta in metas.values()
         if (meta.get("deployment_state") or "").strip().lower() == "shipped" and meta.get("shipped_in")
     ]
-    shipped_in_resolved = await _batch_resolve_shipped_in(common_dir, shipped_in_shas)
+    shipped_in_resolved = _batch_resolve_shipped_in(common_dir, shipped_in_shas)
 
     # Rail 1 — worktree-dirty exclusion. known_dirty_relpaths (in-plane
     # reuse) short-circuits the git status spawn entirely; see this
@@ -588,14 +593,14 @@ async def _scan_terminal(
     if known_dirty_relpaths is not None:
         dirty_relpaths = known_dirty_relpaths
     else:
-        dirty_relpaths = await _dirty_handoff_relpaths(worktree_root)
+        dirty_relpaths = _dirty_handoff_relpaths(worktree_root)
 
     # ONE reverse-edge index build over the metas already read above — no
     # second per-node frontmatter scan.
     index = build_reverse_edge_index(live_set_str, handoff_dir=str(worktree_root / "state" / "handoffs"), metas=metas)
 
     # ONE resolve_live_session_ids() call, hoisted out of the per-candidate loop.
-    live_sids = await asyncio.to_thread(resolve_live_session_ids)
+    live_sids = resolve_live_session_ids()
 
     def _refuse(candidate_id: str, reason: str) -> None:
         if skipped is not None:
@@ -657,7 +662,7 @@ async def _scan_terminal(
     return results
 
 
-async def plan_sweep(
+def plan_sweep(
     worktree_root: Path,
     common_dir: Path,
     cap: int,
@@ -697,7 +702,7 @@ async def plan_sweep(
     `apply_sweep` or `archive_and_commit`; `skipped` is a list of
     `{id, reason}` using the same reason strings that ship today, unchanged.
     """
-    terminal = await _scan_terminal(
+    terminal = _scan_terminal(
         worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
         skipped=scan_skipped,
     )
@@ -808,7 +813,7 @@ def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
     return acted, failed
 
 
-async def _handle_act(
+def _handle_act(
     mode: str,
     worktree_root: Path,
     common_dir: Path,
@@ -819,22 +824,34 @@ async def _handle_act(
     ACTUALLY APPLIED this invocation to `cap` (oldest-first among the
     caller-supplied candidate_ids), and defer the rest with a first-class
     reason rather than truncating silently.
+
+    SYNCHRONOUS (C2). `_common.archive_and_commit` was found to remain a
+    coroutine (staff-eng Finding 9, not in this chunk's scope to change —
+    it is a separate module under active rewrite elsewhere), so this
+    function drives it at exactly ONE boundary via a single
+    `asyncio.run(...)`, imported locally so the classification-only path
+    (this function is reached only on dry_run:false) never pays the
+    `asyncio` import cost on the far more common dry_run:true preview path.
     """
-    moves, skipped = await plan_sweep(worktree_root, common_dir, cap, candidate_ids=candidate_ids)
+    moves, skipped = plan_sweep(worktree_root, common_dir, cap, candidate_ids=candidate_ids)
 
     acted: List[dict] = []
     failed: List[dict] = []
 
     if moves:
+        import asyncio
+
         n = len(moves)
         commit_subject = (
             f"fleet: archive {n} terminal handoff(s)\n\n"
             f"Archived via fleet.archive_completed_handoffs (dry_run:false)."
         )
-        new_acted, new_failed = await archive_and_commit(
-            worktree_root=worktree_root,
-            moves=moves,
-            subject=commit_subject,
+        new_acted, new_failed = asyncio.run(
+            archive_and_commit(
+                worktree_root=worktree_root,
+                moves=moves,
+                subject=commit_subject,
+            )
         )
         acted.extend(new_acted)
         failed.extend(new_failed)
@@ -848,7 +865,7 @@ async def _handle_act(
 
 
 @register_op("fleet.archive_completed_handoffs")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """fleet.archive_completed_handoffs — cap-bounded terminal-handoff archiver.
 
     Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md.
@@ -863,6 +880,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     truncated.
 
     repo_root arg is the git common dir (_OP_KEY_SCOPE="common_dir").
+
+    SYNCHRONOUS (C2, docs/plans/2026-08-26-the-sweep-stops-paying-for-a-
+    room-it-nev.md § C2). `coordinator_core/ipc.py :: _dispatch` branches on
+    `inspect.iscoroutinefunction(handler)`; the SYNC branch already runs
+    `await asyncio.wait_for(asyncio.to_thread(handler, ...), timeout=op_timeout)`
+    — the dispatcher offloads a sync handler to a thread and applies the
+    per-op timeout itself. This handler declaring itself `async def` took on
+    that same obligation a second time, for no benefit (none of its three
+    internal `to_thread` calls awaited anything else concurrently), and paid
+    a 31.3ms module-scope `import asyncio` (dragging `ssl`/`socket`) on the
+    classification-only (dry_run:true) path to do it. Going sync retires the
+    obligation and its import cost together; the ACT path's own
+    `asyncio.run(...)` boundary is `_handle_act`'s, not this handler's.
     """
     parsed = validate_params(params)
     if isinstance(parsed, dict):
@@ -904,7 +934,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     try:
         if dry_run:
-            terminal = await _scan_terminal(worktree, common_dir)
+            terminal = _scan_terminal(worktree, common_dir)
             accepted = terminal[:cap]
             deferred = terminal[cap:]
             candidates = []
@@ -935,6 +965,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "validate_params accepted it — contract violation, refusing",
             )
 
-        return await _handle_act(mode, worktree, common_dir, candidate_ids, cap)
+        return _handle_act(mode, worktree, common_dir, candidate_ids, cap)
     finally:
         _release_sweep_lock(lock_path)

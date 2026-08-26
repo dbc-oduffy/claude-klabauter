@@ -348,6 +348,11 @@ OP_MODULE_MAP: Dict[str, str] = {
     "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
     "eol.repair":                              "coordinator_core.ops.eol.repair",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
+    # merge_assemble.brief / merge_assemble.apply — one module registers both
+    # ops (mirrors the shared-value shape above), chunk C6, docs/plans/
+    # 2026-08-26-merges-directives-stop-starting-interpreters.md.
+    "merge_assemble.brief":                    "coordinator_core.merge_assemble.ops",
+    "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
 }
 
 

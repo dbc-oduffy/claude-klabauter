@@ -101,6 +101,7 @@ import sys
 import asyncio
 import json
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +137,20 @@ _AGENT_ARCHIVE_RETENTION_SECONDS: int = 14 * 24 * 3600  # 14d mtime → prune .a
 # shared source of truth with archive_handoffs.py's Check 4 — code-reviewer F1,
 # 2026-07-14 claim-lock-liveness slice1 review). Re-exported via this module's
 # namespace for existing test imports (coordinator_core.ops.session.reap.{_CLAIM_SUBDIRS,_sessions_dir}).
+
+# Positive uuid-shape gate for sub-reap (i)'s candidate loop (C2,
+# docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md). Same
+# literal as coordinator_core/session/tests/test_liveness.py ::
+# test_every_non_uuid_real_child_is_denylisted_or_a_file (lowercase-only, no
+# version/variant-nibble strictness). Defined locally rather than imported
+# from session.liveness — that module has no uuid regex of its own (only
+# comments naming the test) — deliberately: the two literals are expected to
+# stay identical in SHAPE while the two surfaces' failure directions differ
+# (D3). Lowercase-only by the same established shape, so an uppercase-hex id
+# is also permanently unreapable here — a keep-direction (safe) consequence.
+_SESSION_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 def _last_reap_path(sessions_dir: Path) -> Path:
@@ -319,23 +334,45 @@ def _reap_stale_sessions(
 
     if liveness_error is not None:
         # Fail-closed: liveness resolution failed — defer ALL sessions.
+        # Gated on the same uuid-shape positive test as the main loop below
+        # (C2) so this defers[] list stops naming non-session stores it can
+        # never reap anyway — it defers everything, so it cannot cull a
+        # store, but it must not report one as a deferred session either.
         for sdir in sorted(sessions_dir.iterdir()):
-            if sdir.is_dir() and not sdir.name.startswith("."):
-                deferred.append({
-                    "id": sdir.name,
-                    "reason": f"resolve_live_session_ids failed — deferred (fail-closed): {liveness_error}",
-                })
+            if not sdir.is_dir():
+                continue
+            if not _SESSION_UUID_RE.match(sdir.name):
+                continue
+            deferred.append({
+                "id": sdir.name,
+                "reason": f"resolve_live_session_ids failed — deferred (fail-closed): {liveness_error}",
+            })
         return reaped, deferred, failed
 
     now_epoch = _now_utc_epoch()
     archive_root = sessions_dir / ".archive"
 
+    gate_rejected_count = 0
     for sdir in sorted(sessions_dir.iterdir()):
         if not sdir.is_dir():
             continue
         sid = sdir.name
         if sid.startswith("."):
-            continue  # skip .archive, .agents, .last-reap sentinel
+            continue  # skip .archive, .agents, .last-reap sentinel — traversal, not a session question
+
+        # Positive uuid-shape gate (C2): the FIRST discriminator after the
+        # dot-prefix skip. A candidate that is not uuid-shaped is not a
+        # session directory, full stop — this replaces the exclusion-list
+        # test that used to run here as the primary discriminant.
+        if not _SESSION_UUID_RE.match(sid):
+            gate_rejected_count += 1
+            continue
+
+        # Everything below is subordinate belt-and-braces (D3): unreachable
+        # for any name the gate above already rejected, and that
+        # unreachability is the proof they are no longer load-bearing. Left
+        # in place rather than deleted so a future uuid-shaped collision
+        # (unlikely, not impossible) still gets the old protection.
         if sid.startswith("_"):
             # `_`-prefix already means "not a session" in this hub: sub-reap
             # (ii) writes its archive entries as `.archive/_agents-<aid>-<date>`
@@ -374,9 +411,20 @@ def _reap_stale_sessions(
             # still have read 0.0 and kept, which is precisely what would have
             # made the loss look partial and random rather than systematic.
             #
-            # Shared with `session.liveness`, never re-listed here: this loop
-            # and `live_session_ids` must agree on what is not a session, and
-            # a second copy is how they stop agreeing.
+            # NOT shared with `session.liveness` (C2, reversing the prior
+            # comment here): the two surfaces now identify sessions
+            # differently ON PURPOSE. This loop's failure direction is KEEP —
+            # a false negative (a real session the uuid gate rejects) just
+            # retains a directory a day longer, no harm done. `live_session_
+            # ids`' failure direction is claim-visibility, where a false
+            # negative is claim theft — a much sharper cost. The 2026-08-08
+            # rejection of a shared allowlist/denylist stands for liveness
+            # and is not overturned here
+            # (state/lessons/2026-08-12-an-allowlist-inverted-answers-a-
+            # differen-39eb90586b5e.yaml: sharing a constant is wrong
+            # precisely when its callers don't fail the same way). This
+            # comment records that deliberate divergence rather than a
+            # shared check.
             continue
 
         # Liveness check: if the session registry says this sid is live, keep it
@@ -479,6 +527,14 @@ def _reap_stale_sessions(
                 )
             else:
                 failed.append({"id": sid, "reason": f"mv failed: {exc}"})
+
+    if gate_rejected_count:
+        _LOG.debug(
+            "session.reap: uuid-shape gate rejected %d non-session candidate(s) "
+            "(count only, not a list — this is the permanently-unreapable "
+            "population, kept countable)",
+            gate_rejected_count,
+        )
 
     return reaped, deferred, failed
 

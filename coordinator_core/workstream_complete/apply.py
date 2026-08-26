@@ -279,7 +279,7 @@ from coordinator_core.ceremony_common.cli_rejection import (
     describe_exit_class,
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
-from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
+from coordinator_core.repo_identity_gate import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # spawns `git rev-parse --show-toplevel` via `_run_git`, not zero-spawn
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,

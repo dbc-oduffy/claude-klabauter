@@ -51,8 +51,6 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import yaml
-
 #: agent_id format guards (reference hook lines 96-130).
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
 _NAMED_TEAMMATE_RE = re.compile(r"^a.+-[a-f0-9]{16}$")
@@ -185,6 +183,19 @@ def load_policy(policy_path: Optional[str] = None) -> Policy:
         raw = resolved.read_text(encoding="utf-8")
     except OSError:
         return _empty_policy()
+
+    # Function-local import: `yaml` is used ONLY here, inside the one
+    # function that actually parses the policy file. Every other call site
+    # in this module (`resolve_git_root_cheap`, `resolve_git_root`,
+    # `resolve_effective_types`, the OR-resolver legs) never touches it. A
+    # module-scope `import yaml` therefore taxed every caller of any of
+    # those -- including `engine_provenance_counter.record_engine_provenance`,
+    # which imports `resolve_git_root_cheap` through this package's
+    # `__init__.py` and never parses policy YAML -- with a ~10ms import cost
+    # on a per-op-CLI-call hot path. See
+    # `docs/research/2026-08-26-the-op-cli-residual-above-the-interpreter-floor.md`
+    # § Finding 2.
+    import yaml
 
     try:
         data = yaml.safe_load(raw)

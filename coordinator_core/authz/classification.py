@@ -4124,6 +4124,39 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # other hooks.* ops that write session-scoped bookkeeping (e.g.
     # "hooks.session_heartbeat") rather than the read-only hooks.* entries above.
     "warm_guard.evaluate": OpClass.MUTATING,
+
+    # merge_assemble.brief — COMPUTE_ONLY: `coordinator_core.merge_assemble.
+    # ops::_merge_assemble_brief` is a thin adapter over `merge_assemble.brief()`,
+    # which recomputes branch_state/version_bump/directives[]/judgment_points[]
+    # purely from reads (git log/tag queries) and returns them as a decision
+    # object — `apply()` is the mutating half that executes any of it.
+    # DR-208 five-question affirmation (all "no"):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #      Every read is a git query (branch_state, version_bump proposal);
+    #      nothing is written back.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    # Spec: docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md § C6
+    "merge_assemble.brief": OpClass.COMPUTE_ONLY,
+    # merge_assemble.apply — MUTATING: `coordinator_core.merge_assemble.
+    # ops::_merge_assemble_apply` is a thin adapter over `merge_assemble.apply.
+    # apply()`, which recomputes the brief and dispatches its directives[]
+    # through a closed CLI table that cuts release tags, mutates branch state,
+    # and mints/hands back a Tier-U grant — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Cuts tags, mutates branches, writes a Tier-U grant token under
+    #      `.git/coordinator-sessions/<sid>/`.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #      The Tier-U grant write/handback.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      Git refs/tags are shared, cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # Spec: docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md § C6
+    "merge_assemble.apply": OpClass.MUTATING,
 })
 
 

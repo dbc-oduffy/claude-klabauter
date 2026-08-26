@@ -433,9 +433,32 @@ def test_rows_without_a_sanctioned_fallback_name_none():
         if record.get("fallback"):
             continue
         message = op_budget_suspension.refusal_message(op)
-        head = f"{op} is off: measured max "
+        head = f"{op} is off: max "
         assert message.startswith(head), message
         assert message.endswith(_REFUSAL_TAIL), message
+
+
+def test_the_refusal_renders_how_the_number_arose():
+    """A number without its instrument gets acted on as the other instrument.
+
+    This assertion replaced one pinning the literal `"is off: measured max "`.
+    That wording was the defect, not the contract: `session.boot_sweep`'s
+    max_ms is `ipc.DISPATCH_TIMEOUT_SECS` -- the point the dispatcher gave up,
+    recorded honestly in the row's own `note` ("8/8 ended in caller_timeout at
+    30s") and then dropped by the message that called it "measured". Two EMs
+    read it as a measured 15x overshoot and a cross-repo plan sized a rewrite
+    against it. Calling a ceiling a measurement is the thing being prevented.
+    """
+    for op, record in op_budget_suspension.SUSPENDED_OPS.items():
+        note = record.get("note")
+        message = op_budget_suspension.refusal_message(op)
+        assert "measured max" not in message, message
+        if note:
+            assert note.strip() in message, (
+                f"{op}'s refusal drops its own note, which is the only place "
+                f"the reader learns whether the number is a duration or a "
+                f"ceiling: {message}"
+            )
 
 
 # --- § Roster COMPLETENESS (C4, AC11) ---------------------------------------

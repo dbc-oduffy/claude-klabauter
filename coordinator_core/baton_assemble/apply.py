@@ -2376,7 +2376,7 @@ def apply(
     read-only verb -- every `apply` silently minted a fresh id and broke
     the spine join the flag exists to preserve."""
     from coordinator_core.baton_assemble import TransportFailure, brief, resolve_repo_root
-    from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
+    from coordinator_core.repo_identity_gate import compute_repo_identity_gate  # C3: foreign-repo gate
 
     composition_budget = make_fleet_budget("baton_assemble")
 

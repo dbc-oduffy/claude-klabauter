@@ -5609,3 +5609,62 @@ def test_session_shape_disposition_from_decisions_direct():
         {"jp-session-shape": {"disposition": "bogus"}}
     ) is None
     assert wsc._session_shape_disposition_from_decisions({"jp-session-shape": "not-a-dict"}) is None
+
+
+def test_session_owned_shas_from_map_cannot_prove_it_saw_every_commit():
+    """The hazard the review-scope caller must not inherit (2026-08-26).
+
+    `_session_owned_shas_from_map` guards ABSENCE (no entry for this sid ->
+    `None` -> spawning fallback) but cannot guard PARTIALITY. Its input is
+    built over `--since=<earliest LIVE PEER start>` -- a window bounded by
+    other sessions' start times, unrelated to when this session first
+    committed -- so a session whose commits straddle that boundary gets an
+    answer that is truthful about what the window held and silent about what
+    it did not. The fallback never fires, because the map did answer.
+
+    Pinned as a PROPERTY OF THE HELPER, not a bug in it: this is the correct
+    behaviour for peer attribution, which is what the map exists for. It is
+    only wrong where completeness is load-bearing, which is why the review-
+    scope caller takes the authoritative walk instead (see the test below).
+    """
+    sid = "11111111-1111-1111-1111-111111111111"
+    # A window that happened to catch only this session's most recent commit.
+    windowed = {"newest": sid, "peer": "22222222-2222-2222-2222-222222222222"}
+    assert wsc._session_owned_shas_from_map(windowed, sid) == ["newest"], (
+        "the helper answers from the window it was given -- if this ever "
+        "returns None for a partial map, the review-scope caller below may "
+        "safely take the fast path again"
+    )
+
+
+def test_review_scope_resolution_does_not_take_the_trailer_map_fast_path():
+    """Review scope is resolved by the authoritative walk, never the map.
+
+    `commit_slices` IS the review scope: a truncated sha list does not
+    surface as a smaller measurement, it surfaces as a partitioned review
+    that reports covering every commit while the ones outside the map's
+    window go unreviewed and unnamed. Observed 2026-08-26 on session
+    8bb305c5 -- 6 owned commits, the map reported the 3 most recent, and the
+    3 it dropped were the ones carrying the code.
+
+    Asserted against the source of the review-scale branch rather than by
+    running it, because reproducing the failure needs a repo whose commits
+    straddle a live peer's start time -- a condition this suite cannot
+    manufacture without wall-clock coupling. The assertion is narrow: the
+    one call that feeds `precomputed_session_shas` on this path must not
+    pass `trailer_map`. Peer attribution's own use of the map is untouched.
+    """
+    import inspect
+
+    src = inspect.getsource(wsc)
+    marker = "precomputed_session_shas = _session_owned_shas("
+    assert marker in src, "review-scale sha resolution moved -- retarget this guard"
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(marker):
+            assert "trailer_map" not in stripped, (
+                "review scope took the trailer-map fast path again: that map's "
+                "window is bounded by peer start times, so a session whose "
+                "commits predate it is silently truncated and the partitioned "
+                "review under-covers without saying so"
+            )

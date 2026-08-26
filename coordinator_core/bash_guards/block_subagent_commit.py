@@ -1158,6 +1158,12 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _token_matches_binary,
     tokenize_full_command as _tokenize_full_command,
 )
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    expand_start_process_invocations,
+    tokenize_command,
+)
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
     _read_backpointer_subagent_type,
@@ -6297,6 +6303,32 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # below runs, so the whole path lands as one token instead of splitting
     # on the space and evading both matchers' argv0-position checks.
     cmd_for_scan = _normalize_windows_argv0_head_path_with_spaces(cmd_for_scan)
+
+    # Dialect-aware Start-Process expansion (C8,
+    # pln-the-destructive-core-learns-the-she): this entry's `matchers`
+    # already declares `COMMAND_TOOL_NAMES` but every matcher below
+    # (`_has_git_commit` and siblings) is built over `_tokenize_full_
+    # command`, a Bash-shaped tokenizer with no PowerShell awareness, so a
+    # `Start-Process git -ArgumentList 'commit','-am','wip'` invocation
+    # evades every one of them even though the base `git commit` argv is
+    # byte-identical across dialects -- the anti-bypass surface, not the
+    # base match, is what a PowerShell `Start-Process` wrapper defeats.
+    # Same narrow fix as `_check_destructive_git_revert_full`/
+    # `block_subagent_grant_acquisition.check`: for a PowerShell payload
+    # only, tokenize via `_dialect.tokenize_command` and run the SAME
+    # `expand_start_process_invocations` pass, then rejoin the expanded
+    # tokens back into text so the matchers below (unchanged, still
+    # exercised byte-for-byte on the BASH leg) see the target's real argv
+    # in command position. A PowerShell parse failure leaves `cmd_for_scan`
+    # untouched, matching this function's long-standing behavior for every
+    # dialect before this change.
+    _bsc_dialect = dialect_from_tool_name(payload.get("tool_name"))
+    if _bsc_dialect is Dialect.POWERSHELL:
+        _bsc_ps_tokens = tokenize_command(
+            cmd_for_scan, _bsc_dialect, guard_name="block-subagent-commit"
+        )
+        if _bsc_ps_tokens is not None:
+            cmd_for_scan = " ".join(expand_start_process_invocations(_bsc_ps_tokens))
 
     # Cheap pre-filter BEFORE any identity-resolution cost -- the
     # overwhelming majority of subagent Bash calls are not commits at all.

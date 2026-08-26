@@ -153,7 +153,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, NamedTuple, Optional, Sequence, Set, Union
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Union
 
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
@@ -606,6 +606,7 @@ def _committed_paths_for_sids(
     trailer_map_out: "Optional[Dict[str, str]]" = None,
     this_session_id: "Optional[str]" = None,
     own_session_numstat_out: "Optional[Dict[str, str]]" = None,
+    window_start_out: "Optional[List[str]]" = None,
 ) -> "Dict[str, Set[str]]":
     """The batched replacement for the former per-sha loop: for EVERY sid in
     `sid_to_start`, returns the set of paths touched by ITS OWN commits since
@@ -735,6 +736,17 @@ def _committed_paths_for_sids(
             f"bulk_trailer_session_map failed while resolving peer-committed paths "
             f"for {len(sid_to_start)} sid(s): {exc}"
         ) from exc
+
+    if window_start_out is not None:
+        # The `--since=` bound the map above was built with, handed back so a
+        # caller can tell whether that map could have seen ITS OWN whole
+        # history. `trailer_map` answers "which sid touched what, inside this
+        # window"; it cannot answer "did this window cover session X", and a
+        # caller needing completeness (review scope) rather than attribution
+        # has no other way to find out. A list rather than a return value, to
+        # leave this function's signature and every existing caller untouched
+        # -- the same out-param shape `trailer_map_out` already uses.
+        window_start_out.append(earliest)
 
     if trailer_map_out is not None:
         # RAW, unfiltered {sha: trailer-value} -- every sid the bulk walk
@@ -919,6 +931,7 @@ def resolve_known_concurrent_paths(
     extra_numstat_out: "Optional[Dict[str, str]]" = None,
     trailer_map_out: "Optional[Dict[str, str]]" = None,
     own_session_numstat_out: "Optional[Dict[str, str]]" = None,
+    window_start_out: "Optional[List[str]]" = None,
 ) -> "frozenset[str]":
     """Step 3.0 case-(b)'s peer-exclusion set (`classify_session_authored_
     files`'s `known_concurrent_paths` parameter) — the producer that did not
@@ -1096,6 +1109,7 @@ def resolve_known_concurrent_paths(
         trailer_map_out=trailer_map_out,
         this_session_id=this_session_id,
         own_session_numstat_out=own_session_numstat_out,
+        window_start_out=window_start_out,
     ).values():
         result.update(paths)
 

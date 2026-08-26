@@ -2643,8 +2643,18 @@ def _release_claims_for_head(repo_root: str) -> None:
     The post-commit hook is the one seam every route passes through, and this
     module is the only program that hook runs -- so folding the release in here
     costs ZERO additional processes on the commit hot path, where a second
-    interpreter start would be break-class under CLAUDE.md's brightline. One
-    ``git show`` spawn is added, inside a process that was starting anyway.
+    interpreter start would be break-class under CLAUDE.md's brightline.
+
+    CORRECTED 2026-08-26 (session a2d4a470), measured: this leg adds **TWO**
+    git spawns, not the one this docstring claimed -- ``git show --name-only``
+    here, plus the ``git status --porcelain`` that ``release_committed_claims``
+    takes for its clean check. ~49ms together at this box's ~22ms per spawn.
+    The ``--no-claim-release`` flag below already exists to skip both, and its
+    own comment says so; ``git_native._replay_post_commit_auto_push`` does not
+    pass it, and cannot until its caller releases claims itself -- see C4 of
+    docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md.
+    The ``git show`` is also avoidable outright on that route: it asks git
+    which paths just landed, a fact the commit pipeline is already holding.
 
     Complementary, never double-releasing: the coordinator commit path sets
     ``_ENV_SUPPRESS_FOR_SYNC_PUSH``, which returns from ``main`` before this is

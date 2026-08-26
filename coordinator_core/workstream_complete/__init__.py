@@ -2792,6 +2792,48 @@ def _resolve_base_sha_after_session_start(
     return shas, base_out.strip()
 
 
+def _map_window_covers_session(
+    window_start: "Optional[list[str]]", session_start_time: Any
+) -> bool:
+    """True only when the trailer map's `--since=` window provably contains
+    this session's entire commit history.
+
+    The proof is one comparison and no spawn: a session that STARTED at or
+    after the window opened cannot have committed before it, so every commit
+    it owns is inside the map. Anything else -- an older session, an
+    unresolvable window, an unresolvable/absent session start, a value that
+    will not parse -- returns False and sends the caller to the authoritative
+    walk.
+
+    FALSE IS THE SAFE ANSWER AND IS ALWAYS AVAILABLE. This gate exists to keep
+    a spawn, never to decide correctness: a wrong True silently truncates
+    review scope (see the call site), while a wrong False costs one `git log`.
+    Every ambiguous case therefore resolves False, and no exception from
+    parsing is allowed to propagate as a truthy result.
+    """
+    if not window_start or session_start_time is None:
+        return False
+    from datetime import datetime, timezone
+
+    def _parse(value: Any) -> "Optional[datetime]":
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    opened = _parse(window_start[0])
+    started = _parse(session_start_time)
+    if opened is None or started is None:
+        return False
+    return started >= opened
+
+
 def _session_owned_shas_from_map(
     trailer_map: "Optional[dict[str, str]]", session_id: str
 ) -> Optional[list[str]]:
@@ -3122,11 +3164,30 @@ def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], li
     treat `None` here the same as any other measurement failure."""
     if not paths:
         return [], []
-    normalized_paths = [p.replace("\\", "/") for p in paths]
-    listed = _run_git_read_only(["ls-files", "--", *normalized_paths], root)
-    if listed is None:
+    # Reads `.git/index` in process instead of spawning `git ls-files`. The
+    # question asked here is exactly the one an index entry answers -- "is
+    # this path tracked" -- and `git_state.read_index` is the same parser
+    # `ops/ceremony/git_native.py` and `commit_gates.py` already answer it
+    # with on the commit path. This module is the last one on the close path
+    # still spawning for it.
+    #
+    # Behaviour preserved, including the two shapes that are easy to get
+    # wrong. A DIRECTORY pathspec: `git ls-files -- <dir>` lists the files
+    # BENEATH it, never `<dir>` itself, so the directory lands in
+    # `untracked` under the spawn -- an exact-match index lookup puts it
+    # there too. And FAILURE: `read_index` raises `IndexParseError` rather
+    # than ever returning a partial or empty snapshot (its own negative
+    # spec), which is what lets this keep returning `None` on failure rather
+    # than the `(list(paths), [])` this docstring forbids.
+    # Function-local: this module sits on `ops/ipc`'s cold-start path and
+    # `git_state` is not otherwise imported here (see `git/run.py`'s IMPORT
+    # COST section, and `git_index.py`'s own precedent for the same move).
+    from coordinator_core.git.git_state import IndexParseError, read_index
+
+    try:
+        known = read_index(root)  # an IndexSnapshot IS a `{path: IndexEntry}` dict
+    except (IndexParseError, OSError):
         return None
-    known = {line.strip() for line in listed.splitlines() if line.strip()}
     tracked = [p for p in paths if p.replace("\\", "/") in known]
     untracked = [p for p in paths if p.replace("\\", "/") not in known]
     return tracked, untracked
@@ -3906,13 +3967,45 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     own_numstat_blocks: dict[str, str] = {}
     if measurement_paths is None:
         trailer_map: dict[str, str] = {}
+        window_start: list[str] = []
         known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
             root,
             gate.sid,
             trailer_map_out=trailer_map,
             own_session_numstat_out=own_numstat_blocks,
+            window_start_out=window_start,
         )
-        precomputed_session_shas = _session_owned_shas(root, gate.sid, trailer_map=trailer_map)
+        # THE MAP IS TRUSTED ONLY WHERE IT CAN BE PROVEN TO HAVE SEEN US.
+        #
+        # `resolve_known_concurrent_paths` builds `trailer_map` over
+        # `--since=<earliest LIVE PEER start>` -- a window bounded by other
+        # sessions' start times, with no relationship to when THIS session
+        # first committed. `_session_owned_shas_from_map` guards the case
+        # where that map holds NO entry for this session (absence of evidence
+        # -> None -> spawning fallback) but cannot guard a PARTIAL one: a
+        # session whose commits straddle the boundary is silently truncated,
+        # and the fallback never fires because the map did answer.
+        #
+        # These shas become `commit_slices`, which IS the review scope, so a
+        # truncated answer does not read as a smaller measurement -- it reads
+        # as a partitioned review that covered every commit while the ones
+        # outside the window went unreviewed and unnamed. Measured on session
+        # 8bb305c5 (2026-08-26): 7 owned commits, the map held 4, and the 3 it
+        # dropped were the ones carrying the code.
+        #
+        # The completeness test is free, which is why this is a gate and not a
+        # blanket refusal of the fast path (that cost a 5th spawn and broke
+        # `test_gate_path_spawn_budget.py`'s ceiling of 4): if this session
+        # STARTED at or after the window opened, every commit it could
+        # possibly have made is inside the window, so the map is complete by
+        # construction. Only a session older than the window -- or one whose
+        # start or window cannot be resolved -- pays the authoritative walk.
+        if _map_window_covers_session(window_start, session_start_time):
+            precomputed_session_shas = _session_owned_shas(
+                root, gate.sid, trailer_map=trailer_map
+            )
+        else:
+            precomputed_session_shas = _session_owned_shas(root, gate.sid)
         # C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-
         # four.md § C5): `known_added_paths`, derived from THIS same
         # `own_numstat_blocks` -- zero extra spawn cost, see

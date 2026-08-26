@@ -647,8 +647,15 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
     # under `coordinator_core/git/` (on `ipc`'s cold-start path, per
     # `run.py`'s IMPORT COST section) must not pay just to expose the
     # signature -- only a caller that actually reaches the one retained
-    # spawn pays for the shared packer.
-    from coordinator_core.ops.ceremony.git_native import _chunk_paths
+    # spawn pays for the shared packer. `_chunk_paths` itself now lives in
+    # `coordinator_core.git.argv_batch` (2026-08-26, C1 of docs/plans/
+    # 2026-08-26-the-archival-commit-helper-computes-its-own-tree.md,
+    # retiring the `git/` -> `ops/` edge this import used to cross) -- kept
+    # function-scoped regardless: measured 1.84ms p50 import self-time, and
+    # this module is on the commit hot path via `commit_trailers`, so
+    # hoisting would hand that cost to every importer, including ones that
+    # never call `head_blobs`.
+    from coordinator_core.git.argv_batch import _chunk_paths
 
     paths = [p for p in paths if p]
     if not paths:

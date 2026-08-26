@@ -24,7 +24,26 @@ Coverage (discharges AC-3 and AC-5, per the C4 dispatch brief's own "Test surfac
         pinned as an importable-symbol assertion: the name no longer exists on
         `coordinator_core.ops.ceremony.tail_ops`.
 
-Spec backlink: pln-the-terminal-handoff-sweep-sto-91fcc2 § C4.
+C2 additions (docs/plans/2026-08-26-the-sweep-stops-paying-for-a-room-it-nev.md § C2):
+    (e) test_ac13_in_plane_sweep_returns_non_empty_move_set_against_the_real_plan_sweep --
+        AC-13: over a fixture containing a known-archivable record, calls
+        `_run_in_plane_archive_sweep` against the REAL (unmocked)
+        `archive_terminal_handoffs.plan_sweep`, now synchronous, and asserts a
+        NON-EMPTY move set -- the exact regression staff-eng Finding 0 named: a
+        sync `plan_sweep` reached through the OLD `asyncio.run(...)` wrapper
+        raises `ValueError`, silently swallowed by this leg's own
+        `except Exception:` into `([], [])`, disabling in-plane archiving
+        forever with only a logged warning as its trace.
+    (f) test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout --
+        AC-4: `fleet.archive_completed_handoffs`'s handler is asserted
+        `inspect.iscoroutinefunction(...) is False`, then dispatched for real
+        through `coordinator_core.ipc.dispatch_message` with a stalling
+        `_scan_terminal` and a tiny per-op timeout override, proving
+        `ipc.py`'s own sync branch (`asyncio.wait_for(asyncio.to_thread(...))`)
+        -- not the op itself -- now owns the per-op timeout.
+
+Spec backlink: pln-the-terminal-handoff-sweep-sto-91fcc2 § C4;
+docs/plans/2026-08-26-the-sweep-stops-paying-for-a-room-it-nev.md § C2 (AC-4, AC-13).
 """
 
 from __future__ import annotations
@@ -112,13 +131,13 @@ def _spy_git(monkeypatch) -> dict:
     return calls
 
 
-async def _fake_plan_sweep_one_move(worktree_root, common_dir, cap, *, candidate_ids=None):
+def _fake_plan_sweep_one_move(worktree_root, common_dir, cap, *, candidate_ids=None):
     src = worktree_root / "state" / "handoffs" / "old.md"
     dst = worktree_root / "archive" / "handoffs" / "old.md"
     return [Move(src=src, dst=dst, candidate_id="state/handoffs/old.md")], []
 
 
-async def _fake_plan_sweep_raises(worktree_root, common_dir, cap, *, candidate_ids=None):
+def _fake_plan_sweep_raises(worktree_root, common_dir, cap, *, candidate_ids=None):
     raise RuntimeError("boom -- scan failed")
 
 
@@ -282,7 +301,7 @@ def test_fire_archive_sweeps_detached_has_no_live_caller():
 
 
 def _counting_plan_sweep(calls: dict):
-    async def _fake(worktree_root, common_dir, cap, *, candidate_ids=None, **kwargs):
+    def _fake(worktree_root, common_dir, cap, *, candidate_ids=None, **kwargs):
         calls["n"] += 1
         return [], []
     return _fake
@@ -449,3 +468,91 @@ def test_cadence_gate_makes_that_spawn_per_interval_not_per_commit(tmp_path, mon
         f"five ceremony commits inside one interval must cost ONE git spawn "
         f"between them, not one each; got {len(spawned)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (e) AC-13 -- the real (now-synchronous) plan_sweep still yields a non-empty
+# move set through this leg -- guards the exact staff-eng Finding 0 regression
+# ---------------------------------------------------------------------------
+
+
+def test_ac13_in_plane_sweep_returns_non_empty_move_set_against_the_real_plan_sweep(
+    tmp_path, monkeypatch
+):
+    repo = _init_repo(tmp_path)
+    _seed_file(
+        repo,
+        "state/handoffs/2026-01-01-archivable.md",
+        '---\ntitle: "archivable"\ncreated: 2026-01-01\nstatus: claimed\n'
+        'deployment_state: continued\ncontinued_into: hnd-child-1\n---\n\nBody.\n',
+    )
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    common_dir = repo / ".git"
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
+
+    srcs, dsts = commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir)
+
+    assert srcs == ["state/handoffs/2026-01-01-archivable.md"], (
+        "the real, now-synchronous plan_sweep must still be reachable directly "
+        "(no asyncio.run wrapper) and must still find the known-archivable "
+        f"record; got srcs={srcs!r} dsts={dsts!r}"
+    )
+    assert dsts == ["archive/handoffs/2026-01/2026-01-01-archivable.md"]
+    assert not (repo / "state" / "handoffs" / "2026-01-01-archivable.md").exists()
+    assert (repo / "archive" / "handoffs" / "2026-01" / "2026-01-01-archivable.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# (f) AC-4 -- the op still dispatches, and its handler is sync: a real dispatch
+# through coordinator_core.ipc proves the per-op timeout now fires via ipc.py's
+# own sync branch, not the op
+# ---------------------------------------------------------------------------
+
+
+def test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout(tmp_path, monkeypatch):
+    import asyncio
+    import inspect
+    import time as _time
+
+    import coordinator_core.ipc as _ipc
+    from coordinator_core.ops.fleet import archive_terminal_handoffs as _atho
+
+    assert inspect.iscoroutinefunction(_atho._handler) is False, (
+        "fleet.archive_completed_handoffs's handler must be a plain sync "
+        "function -- ipc.py's own sync branch is what now supplies the "
+        "thread-offload and per-op timeout (C2)."
+    )
+
+    repo = _init_repo(tmp_path)
+
+    def _stalling_scan_terminal(*_args, **_kwargs):
+        _time.sleep(60)  # stall -- the tiny per-op timeout below fires first
+        return []
+
+    monkeypatch.setattr(_atho, "_scan_terminal", _stalling_scan_terminal)
+
+    orig_timeout = _ipc.DISPATCH_TIMEOUT_SECS
+    _ipc.DISPATCH_TIMEOUT_SECS = 0.05  # fast enough for the suite, long enough to be real
+    try:
+        msg = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "fleet.archive_completed_handoffs",
+            "_origin_worktree": str(repo),
+            "params": {
+                "mode": "already-terminal",
+                "dry_run": True,
+                "cap": 10,
+            },
+        }
+        result = asyncio.run(_ipc.dispatch_message(msg))
+    finally:
+        _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
+
+    assert "error" in result, (
+        f"a real dispatch of a stalled sync handler must time out via ipc.py's "
+        f"own sync branch; got {result!r}"
+    )
+    assert "timed out" in result["error"]["message"]
