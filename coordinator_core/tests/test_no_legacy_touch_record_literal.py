@@ -22,6 +22,23 @@ itself IS (or contains) a matching string-constant node. This mirrors
 ``test_no_bare_chain_terminal_literal.py`` and ``test_no_hardcoded_paths.py``'s
 existing AST-gate discipline in this same corpus, not a novel technique.
 
+STANDING CORRECTION (2026-08-26) — the reason repeated below is WRONG
+=====================================================================
+Several entries justify themselves by "``claims.atomic_dedup_append`` still
+emits the old dialect through the CLI ``claim-path`` seam". Traced end to end
+on 2026-08-26, that writer is UNREACHABLE: its only caller is
+``js_bridge_cli._cmd_claim_path``, whose only caller is
+``coordinator/lib/coordinator_session.py::claim_path``, which has no caller
+outside its own tests — its intended Node consumer was deleted 2026-07-27
+per ``js_bridge_cli``'s own docstring, and C6 moved ``self_claim`` off it.
+
+The exemptions still stand, on a DIFFERENT and measured basis: pre-publish
+long-running processes keep running the old Edit/Write hook until they exit,
+and ~100 live dirs still hold an undrained legacy ``touched.txt``. Both drain
+on a clock. Full reasoning at ``scope.py ::
+_read_touch_record_as_legacy_lines``. Do not retire these entries by
+"migrating ``atomic_dedup_append``" — that would change nothing.
+
 Allowlist, precisely (see ``_PRODUCTION_EXEMPT_SITES`` below)
 ===============================================================
 Every entry is ``relpath::symbol``, named and dated, never a rationale-fit

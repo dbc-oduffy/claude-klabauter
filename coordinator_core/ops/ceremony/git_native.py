@@ -3093,11 +3093,25 @@ def _commit_scoped_private_index(
     # rewrite can only re-point existing directory levels, it cannot
     # synthesize a new one that `write-tree` would otherwise happily create
     # from a freshly-populated index.
+    # `refuse_noop` gated on the shared index being genuinely PRESENT (P1
+    # 69ce1cdfd's own distinguishing signal -- see `substitute`, below,
+    # for the same test): when `index_snapshot.stat_identity is None` (the
+    # `.git/index` file itself is missing), every `_SOURCE_STAGED` path
+    # resolves off HEAD by design (`_assemble_commit_tree_input`'s own
+    # `index_file_absent` arm) -- the resulting tree is BYTE-IDENTICAL to
+    # HEAD's on purpose, as the safety net against P1 69ce1cdfd's damage
+    # class (a vanished index silently reading every staged path as a
+    # deletion). That intentional no-op must still land and report the
+    # HEAD substitution (`test_absent_shared_index_never_deletes_the_
+    # scoped_path_it_was_asked_to_commit`) -- refusing it here would
+    # re-open the exact "committing nothing when something was actually
+    # asked for" confusion this parameter exists to prevent for the
+    # ORDINARY (index-present) no-op case, applied to the wrong case.
     fast_result = _commit_via_head_spine(
         root, assembled, old_head, msg_file,
         index_stat_identity=index_snapshot.stat_identity,
         caller="_commit_scoped_private_index",
-        refuse_noop=True,
+        refuse_noop=index_snapshot.stat_identity is not None,
     )
     if fast_result is not None:
         if not fast_result.ok:
@@ -3211,8 +3225,13 @@ def _commit_scoped_private_index(
             # no real content change, exactly the "nothing to commit"
             # no-op `git commit` itself refused for free pre-C3. Only
             # meaningful with a real parent to compare against -- an
-            # unborn branch's first commit has no HEAD tree to diff.
-            if old_head is not None:
+            # unborn branch's first commit has no HEAD tree to diff. Also
+            # gated on the shared index being genuinely present (see the
+            # matching comment on this function's own fast-path call site,
+            # above) -- the absent-index HEAD-fallback safety net
+            # (P1 69ce1cdfd) intentionally produces this same byte-
+            # identical tree and must still land.
+            if old_head is not None and index_snapshot.stat_identity is not None:
                 parent_tree_sha = _git_state_head_tree_sha(root)
                 if parent_tree_sha is not None and tree_sha == parent_tree_sha:
                     return GitResult(returncode=1, stdout="", stderr="")

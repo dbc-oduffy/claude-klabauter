@@ -257,6 +257,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
     "hooks.receiver_state_sensor": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
+    # Fan-in over agent_completion_log + track_dispatched_agents: MUTATING by union.
+    "hooks.agent_postuse_dispatch": OpClass.MUTATING,
     "hooks.track_dispatched_agents": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
     # hooks.subagent_review_mark — MUTATING, same session-runtime write class as
@@ -2293,6 +2295,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # `_KNOWN_UNCLASSIFIED_OPS_DEBT` (authz/registration_quad.py) — that baseline is
     # frozen and extending it is a plan amendment, never a local executor call.
     "percolate.run_identity_check": OpClass.COMPUTE_ONLY,
+    # MUTATING despite its "none" scope and its COMPUTE_ONLY percolate siblings:
+    # this op builds the token index ON DISK (mkdir + write_text + atomic replace
+    # into the dest tree), so a COMPUTE_ONLY declaration would be false. Landed
+    # 2026-08-26 (C3, payload-parity-asks-an-index-not-the-payload) with three of
+    # the four registration surfaces filled; this row closes the quad.
+    "percolate.build_token_index": OpClass.MUTATING,
     # engine.drift — COMPUTE_ONLY: read-only drift probe. Resolves the running engine SHA
     # (resolve_engine_sha) and runs `git merge-base --is-ancestor` against MIN_KNOWN_GOOD_SHA
     # in the engine's own checkout; no state write, no rag store write (dual-write ban).

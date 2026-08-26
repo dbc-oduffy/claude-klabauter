@@ -2054,32 +2054,60 @@ def _run_guarded() -> int:
 
     _preload_op_registry()
 
+    # ...and this is the first instant a connection gets a PROMPT answer:
+    # `_preload_op_registry` above is the ~703ms of imports that would
+    # otherwise land on whichever caller arrived first. Both instants are
+    # recorded because a client that reaches the first still waits for the
+    # second.
+    #
+    # RECORDED BEFORE `ensure_listener`, MOVED 2026-08-26. This call used to sit
+    # below that block, so every `ready_secs` on disk silently included up to
+    # `supervisor.HEALTH_CHECK_TIMEOUT_SECS` of somebody else's health probe --
+    # a cost that has nothing to do with whether THIS server can answer, in the
+    # one row that exists to say when it can. The succession investigation
+    # reasoned from `ready_secs` throughout and never saw it, because its
+    # sandbox had no stale discovery record to make the probe wait.
+    _record_own_boot(spawn_epoch, listener_at, repo_root)
+
     # C2 (docs/plans/2026-08-25-the-http-listener-gets-something-keeping-it-up.md):
     # this pipe server is the one resident, per-machine, elected process the box
     # runs, so its own boot -- past its OWN election, never before -- is what gives
     # the http listener a supervisor that is itself supervised. Lazy-imported: a
     # module-level `from coordinator_core.warm import supervisor` would be
     # circular, since `supervisor.py` itself imports `InFlightCounter`/`_serve_line`
-    # from this module. Return value ignored by contract -- `ensure_listener` never
-    # waits and returns `None` on every failure mode (unreadable discovery, a dead
-    # pid, a failed health check, a spawn not yet bound). Wrapped anyway, mirroring
-    # the breadcrumb write just above: `ensure_listener` is DOCUMENTED never to
-    # raise, but this boot sequence must not take that on faith -- a pipe server
-    # that failed to boot because an http listener could not start would invert
-    # the guarantee this call exists to provide.
-    try:
-        from coordinator_core.warm import supervisor
+    # from this module.
+    #
+    # ON ITS OWN THREAD, MOVED OFF THE CRITICAL PATH 2026-08-26. `ensure_listener`
+    # is documented never to wait; it waits up to `HEALTH_CHECK_TIMEOUT_SECS`
+    # (2.0s) inside `check_health`, a synchronous `urlopen`, whenever a discovery
+    # record names a live pid whose listener has hung (see that function's own
+    # corrected docstring, and `docs/research/2026-08-26-repo-warm-succession.md`
+    # § 4). Paid here, it lands on the successor's time-to-answerable during
+    # exactly the window a caller is already waiting out a predecessor's drain.
+    #
+    # NOTHING DEPENDS ON THE ORDERING, which is what makes this safe rather than
+    # merely faster: the return value is ignored by contract, and the OTHER
+    # production call site (`warm/entry_seam.py :: _trigger_listener_boot`, C3)
+    # exists precisely to cover the case this one does not -- neither process
+    # running. The two are redundant coverage of one goal, not a chain, so the
+    # worst case here is that the http listener starts a few hundred ms later
+    # and the next hook fire nudges it anyway.
+    #
+    # The try/except stays despite the thread: a daemon thread's uncaught
+    # exception would print a traceback to a stderr `spawn_detached` opens as
+    # DEVNULL, and this boot sequence must not take "documented never to raise"
+    # on faith -- the same reason the breadcrumb write above is wrapped.
+    def _ensure_http_listener() -> None:
+        try:
+            from coordinator_core.warm import supervisor
 
-        supervisor.ensure_listener(repo_root)
-    except Exception as exc:  # noqa: BLE001 -- fail-open by construction, see comment above
-        print(f"[warm-server] http listener ensure_listener() failed: {exc!r}", file=sys.stderr)
+            supervisor.ensure_listener(repo_root)
+        except Exception as exc:  # noqa: BLE001 -- fail-open by construction
+            print(f"[warm-server] http listener ensure_listener() failed: {exc!r}", file=sys.stderr)
 
-    # ...and this is the first instant a connection gets a PROMPT answer:
-    # `_preload_op_registry` above is the ~703ms of imports that would
-    # otherwise land on whichever caller arrived first. Both instants are
-    # recorded because a client that reaches the first still waits for the
-    # second.
-    _record_own_boot(spawn_epoch, listener_at, repo_root)
+    threading.Thread(
+        target=_ensure_http_listener, daemon=True, name="warm-http-ensure-listener"
+    ).start()
 
     ctx = _ServerContext(
         name=elected.endpoint,

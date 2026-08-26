@@ -24,10 +24,21 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 
 import pytest
 
 from coordinator_core.bash_guards import dispatch
+
+#: `fresh_git_repo` below spawns real `git` from a `@pytest.fixture`, not
+#: from a collectible `test_*` -- the spawn ratchet's per-function
+#: `@pytest.mark.spawns_process`/`cadence` form is INERT for a spawner
+#: pytest reaches only via fixture injection (`coordinator_core/tests/
+#: test_no_new_spawning_tests.py` § Rule 4, condition (ii)), so this file
+#: uses the module-level form instead, tiering every test in it (including
+#: the pre-existing, non-spawning `Remove-Item` oracle tests above) onto
+#: the cadence gate rather than leaving them falsely reported as tiered.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 #: The four spellings of "delete the git store" from the plan's own oracle
@@ -164,3 +175,136 @@ class TestBashLegUnchanged:
         scratch = tmp_path / "scratch-oracle-file.txt"
         scratch.write_text("scratch")
         assert not _denies("rm %s" % scratch, "Bash", repo_cwd)
+
+
+class TestDestructiveGitOrphanForcePush:
+    """C3: `destructive-git-orphan`'s CHECK 2 (force push) as the anti-
+    bypass trigger, per the dispatch brief's explicit warning not to build
+    this check's own oracle on `git reset --hard` at chain altitude (a
+    dirty tree's stateful peer-claim guard denies first and masks this
+    guard entirely). Force-push is a pure argv/text check with no such
+    stateful leg."""
+
+    def test_plain_force_push_denies_under_both_dialects(self, repo_cwd) -> None:
+        """Before C3, `tool_name="PowerShell"` never reached this check at
+        all (`matchers=("Bash",)`) -- this is the before/after transition
+        AC5 pins, not new detection vocabulary (git argv is unchanged)."""
+        cmd = "git push --force origin main"
+        assert _denies(cmd, "Bash", repo_cwd)
+        assert _denies(cmd, "PowerShell", repo_cwd)
+
+    def test_backtick_escaped_git_denies_under_both_dialects(self, repo_cwd) -> None:
+        """The anti-bypass surface itself: a backtick inside the literal
+        word `git` defeats the pre-existing `\\bgit\\b` raw-text scan (the
+        backtick is a non-word character, splitting `git` into two
+        tokens) but is resolved cleanly by tree-sitter-pwsh's own escape
+        handling, then rewritten back to plain `git ...` text by
+        `_ps_git_bypass_segments` before the existing regex ladder ever
+        sees it. `_ps_git_bypass_segments` runs unconditionally
+        (`check_destructive_rm`'s own precedent: "Deliberately NOT gated
+        on `dialect_from_tool_name`" -- the DoE-claude rearm relabels a
+        genuine PowerShell call's `tool_name` to `"Bash"` before this
+        dispatcher ever sees it), so this denies under BOTH declared
+        `tool_name` values, not only `"PowerShell"`."""
+        cmd = "g`it push --force origin main"
+        assert _denies(cmd, "Bash", repo_cwd)
+        assert _denies(cmd, "PowerShell", repo_cwd)
+
+    def test_unparseable_powershell_does_not_deny(self, repo_cwd) -> None:
+        """AC4: a command that is BOTH backtick-broken (so the raw
+        `\\bgit\\b` scan cannot catch it on its own -- otherwise this row
+        would be a true positive via the pre-existing scan, proving
+        nothing about the PowerShell parse-failure path) AND carries an
+        unterminated here-string (so `resolve_segments_for_dialect`
+        itself returns `None`) must yield silence, never a deny, under
+        the widened matchers."""
+        assert not _denies("g`it push --force origin main @'", "PowerShell", repo_cwd)
+        assert not _denies("g`it push --force origin main @'", "Bash", repo_cwd)
+
+
+@pytest.fixture()
+def fresh_git_repo(tmp_path, monkeypatch):
+    """An isolated, freshly-`git init`ed repo -- `check_destructive_git_
+    clean`'s oracle resolves the process cwd (no `-C` in the synthetic
+    segment), so this fixture `chdir`s into it for the test's duration
+    rather than fabricating output. NOT a fleet-registered repo (see
+    `_is_hazard_repo`), so unsuitable for `blanket-git-add` tests -- those
+    use `repo_cwd` (this checkout) instead."""
+    subprocess.run(
+        ["git", "init", "-q"], cwd=str(tmp_path), check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "oracle@example.invalid"], cwd=str(tmp_path), check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "oracle"], cwd=str(tmp_path), check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "scratch.txt").write_text("load-bearing per _GC_LOADBEARING_PREFIXES")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+class TestDestructiveGitCleanLoadBearing:
+    """C3: `destructive-git-clean`'s own top-of-function gate (`\\bgit\\b`
+    AND `\\bclean\\b` over raw `cmd`) is a second bypass point beyond the
+    per-segment scan -- widened via `_gc_ps_segments` alongside the loop
+    itself, or a backtick-escaped invocation would short-circuit to
+    `None` before ever reaching the segment walk."""
+
+    def test_backtick_escaped_git_clean_denies_under_both_dialects(self, fresh_git_repo) -> None:
+        """`_gc_ps_segments` runs unconditionally (same rationale as
+        `TestDestructiveGitOrphanForcePush`'s own backtick row), so this
+        denies under both declared `tool_name` values."""
+        cmd = "g`it clean -fdx"
+        cwd = str(fresh_git_repo)
+        assert _denies(cmd, "Bash", cwd)
+        assert _denies(cmd, "PowerShell", cwd)
+
+    def test_plain_git_clean_denies_under_both_dialects(self, fresh_git_repo) -> None:
+        cmd = "git clean -fdx"
+        cwd = str(fresh_git_repo)
+        assert _denies(cmd, "Bash", cwd)
+        assert _denies(cmd, "PowerShell", cwd)
+
+    def test_unparseable_powershell_does_not_deny(self, fresh_git_repo) -> None:
+        """AC4: backtick-broken (defeats the raw top-of-function gate) AND
+        an unterminated here-string (`resolve_segments_for_dialect`
+        returns `None`) -- silence under both dialects, never a deny."""
+        cwd = str(fresh_git_repo)
+        assert not _denies("g`it clean -fdx @'", "PowerShell", cwd)
+        assert not _denies("g`it clean -fdx @'", "Bash", cwd)
+
+
+@pytest.mark.real_home
+class TestBlanketGitAdd:
+    """C3: `blanket-git-add` requires a fleet-registered hazard repo
+    (`_is_hazard_repo`) -- `repo_cwd` (this checkout, claude-klabauter
+    itself) rather than a fresh throwaway repo. `real_home`: `_is_hazard_
+    repo`'s fleet registry read resolves through the real machine-local
+    registry -- under the suite's default home-quarantine this checkout
+    is never recognized as hazard-registered and the guard silently
+    no-ops, which is a test-harness artifact, not a guard defect (read-
+    only oracle, per this marker's own docstring)."""
+
+    def test_backtick_escaped_git_add_denies_under_both_dialects(self, repo_cwd) -> None:
+        """`_ga_ps_segments` runs unconditionally (same rationale as the
+        two sibling classes above), so this denies under both declared
+        `tool_name` values."""
+        cmd = "g`it add -A"
+        assert _denies(cmd, "Bash", repo_cwd)
+        assert _denies(cmd, "PowerShell", repo_cwd)
+
+    def test_plain_git_add_dash_a_denies_under_both_dialects(self, repo_cwd) -> None:
+        cmd = "git add -A"
+        assert _denies(cmd, "Bash", repo_cwd)
+        assert _denies(cmd, "PowerShell", repo_cwd)
+
+    def test_unparseable_powershell_does_not_deny(self, repo_cwd) -> None:
+        """AC4: backtick-broken AND an unterminated here-string -- silence
+        under both dialects, never a deny."""
+        assert not _denies("g`it add -A @'", "PowerShell", repo_cwd)
+        assert not _denies("g`it add -A @'", "Bash", repo_cwd)

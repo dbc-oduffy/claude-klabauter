@@ -913,6 +913,31 @@ def _make_handler(ctx: "_ServerContext"):
                     event = {**event, "env": header_env}
 
                 request_frame = hook_http.build_request(event, op_name)
+                # NEGATIVE SPEC -- THIS LINE IS LOAD-BEARING SECURITY AND DOES NOT LOOK IT.
+                # Stamping the SERVER's own token here is what keeps a CALLER's token out of
+                # `server._serve_line`, whose skew branch does NOT refuse a wrong token: it
+                # calls `skew.evict_on_skew`, which closes the listener and drains. That takes
+                # the warm engine down for every session on this box, and the outage is
+                # load-proportional -- MEASURED at 16.8s under a 17s drain, 0.05s with no
+                # in-flight work (`docs/research/2026-08-26-18h35-warm-succession-workdir/
+                # experiment-results-lockout.md`, 1df224ef7). The lockout is the drain, not the
+                # eviction.
+                #
+                # `ServerVersionState.is_skewed` is a plain inequality and cannot tell a stale
+                # CALLER from a stale SERVER. On the named pipe that ambiguity is harmless,
+                # because the token is a COMPONENT OF THE PIPE NAME -- a stale caller dials a
+                # name that does not exist and goes cold, never reaching `_serve_line`. The
+                # HTTP endpoint is a fixed published port with no such binding, and this
+                # overwrite is the only thing standing in for it.
+                #
+                # Removing this is exactly what the op-CLI widening must do -- an op CLI needs
+                # its own token honoured or it is served silently by a stale generation instead
+                # of `ENGINE_SKEW`. Do NOT remove it as a redundant-looking assignment: the
+                # refusal gate must land in the SAME change. Semantics are specified once, in
+                # docs/research/spike-verdicts/2026-08-26-loopback-op-dispatch-credential-shape.md
+                # § Refusal semantics -- consume it, do not re-derive it here.
+                # Guard: `warm/tests/test_http_caller_token_cannot_evict.py`, whose first
+                # assertion is DESIGNED to go red when this line goes.
                 request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
                 # `record_invocation` / `record_exit` were falling through to

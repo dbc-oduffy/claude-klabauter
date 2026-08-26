@@ -147,6 +147,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 from coordinator_core.bash_guards import commit_tripwires
 from coordinator_core.bash_guards._dialect import (
     Dialect,
+    _strip_ps_quotes,
     dialect_from_tool_name,
     resolve_segments_for_dialect,
 )
@@ -1775,6 +1776,70 @@ def _no_verify_rescan_shell_c_and_heredoc(
     return None
 
 
+def _ps_git_bypass_segments(cmd: str, guard_name: str) -> Optional[List[str]]:
+    """Shared PowerShell anti-bypass surface for the git-shaped Bucket A
+    checks (`destructive-git-orphan`, `destructive-git-clean`,
+    `blanket-git-add` -- C3, `docs/plans/2026-08-26-the-destructive-core-
+    learns-the-shell-it-guards.md`).
+
+    Per that plan's own body: git's own argv is byte-identical across
+    dialects (the 2026-08-07 audit's "foreign-binary-argv" refinement), so
+    none of these three checks needs new VOCABULARY -- their existing
+    bash-shaped regex ladders already recognize `git ... clean`/`git reset
+    --hard`/`git add -A` the moment that text is visible in plain form.
+    What is missing is recovering that plain-text rendering from
+    UNDERNEATH PowerShell's own syntax: the `&` call operator, `Start-
+    Process`, backtick escapes, and `@'...'@`/`@"..."@` here-strings.
+    `resolve_segments_for_dialect` already resolves all four for free --
+    `&` is emitted as a literal separator token by `_powershell_tokens`
+    (module docstring, "leading & call-operator becomes literal token
+    `&`"), `Start-Process`'s hidden argv is reconstructed by
+    `expand_start_process_invocations` (called unconditionally on the
+    POWERSHELL leg inside `resolve_segments_for_dialect`), and backtick
+    escapes / here-strings are native `tree-sitter-pwsh` grammar, not
+    something this function has to re-implement. `Invoke-Expression`/`iex`
+    is the one shape that seam does NOT unwind on its own -- its string
+    argument is DATA to the tokenizer, not argv -- so it is unwrapped one
+    level deep here, mirroring this module's own `_shell_c_unwrap_
+    payloads` idiom for `sh -c`/`bash -c`.
+
+    Returns `None` when `resolve_segments_for_dialect` itself returns
+    `None` (the PowerShell text failed to parse) -- distinct from `[]`
+    ("parsed fine, no git invocation found") -- so every caller can
+    preserve AC4's fail-open posture: unparseable PowerShell must yield
+    the SAME silence it yields today, never a deny. Each returned string
+    is a bash-shaped `git ...` rendering, appended by the caller onto the
+    SAME string-segment list its pre-existing regex ladder already walks
+    (`_split_segments(cmd)` / `_awk_quote_aware_split(cmd)`), reusing that
+    ladder byte-for-byte instead of forking a parallel PowerShell copy of
+    it -- same shape `check_destructive_rm` already established for its
+    own PowerShell leg.
+    """
+    segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name=guard_name)
+    if segments is None:
+        return None
+    out: List[str] = []
+    for tokens, _pipe_before in segments:
+        if not tokens:
+            continue
+        head = _ps_normalize_verb_token(tokens[0]).lower()
+        if head in ("invoke-expression", "iex") and len(tokens) > 1:
+            inner = _strip_ps_quotes(tokens[1])
+            nested = resolve_segments_for_dialect(inner, Dialect.POWERSHELL, guard_name=guard_name)
+            if not nested:
+                continue
+            for ntoks, _npipe in nested:
+                if not ntoks:
+                    continue
+                nhead = _ps_normalize_verb_token(ntoks[0]).lower()
+                if nhead == "git":
+                    out.append(" ".join([nhead] + [str(t) for t in ntoks[1:]]))
+            continue
+        if head == "git":
+            out.append(" ".join([head] + [str(t) for t in tokens[1:]]))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 2. check_destructive_git_orphan -- block-destructive-git-orphan.sh
 # F0: PER-SEGMENT `git -C <dir>` resolution -- never a single dispatcher-level
@@ -2132,7 +2197,30 @@ def check_destructive_git_orphan(
     _memo_run_git = _new_git_memo()
     _orphan_hint = _orphan_override_hint(payload, git_root)
 
-    for seg in _split_segments(cmd):
+    # C3 (pln-the-destructive-core-learns-the-she): `git`'s own argv is
+    # byte-identical across dialects, so the base match needs no new
+    # vocabulary -- only the anti-bypass surface, recovered via the shared
+    # `_ps_git_bypass_segments` seam and appended to the SAME bash-shaped
+    # segment list this loop already walks. `None` (PowerShell parse
+    # failure) yields no synthetic segments -- silence is preserved (AC4),
+    # never a deny on text this seam could not parse.
+    #
+    # FED THE PROSE-STRIPPED `cmd`, NEVER `raw_cmd`. This chunk first passed
+    # `raw_cmd` (captured above, before the heredoc/quoted-span stripping)
+    # on the reasoning that the PowerShell tokenizer wants unstripped text.
+    # Measured, that reintroduces the exact CHECK 2/3 prose bug the stripping
+    # exists to prevent: a heredoc COMMIT MESSAGE documenting a hazard
+    # (`git reset --hard $(...)` quoted inside the body as prose) was
+    # re-tokenized out of the heredoc body and denied as a real subshell-
+    # resolved target -- caught by `test_check1_hazard_prose_not_subshell_
+    # target.py::heredoc_commit_message`. Bash heredoc bodies are not
+    # PowerShell syntax, so stripping them costs the PowerShell leg nothing;
+    # keeping them costs a false deny on ordinary commit prose, which is the
+    # worse direction on a CONFINEMENT_DENY entry. The two sibling call
+    # sites (`destructive-git-clean`, `blanket-git-add`) already pass `cmd`.
+    _orphan_ps_segments = _ps_git_bypass_segments(cmd, "destructive-git-orphan") or []
+
+    for seg in list(_split_segments(cmd)) + _orphan_ps_segments:
         if not seg.strip():
             continue
         if not re.search(r"\bgit\b", seg):
@@ -3348,7 +3436,14 @@ def check_destructive_git_clean(
     cmd = _join_backslash_newlines(cmd)
     cmd = _strip_heredoc_bodies(cmd)
 
-    if not re.search(r"\bgit\b", cmd) or not re.search(r"\bclean\b", cmd):
+    # C3: see `_ps_git_bypass_segments` docstring -- git's own argv is
+    # unchanged across dialects, so the gap closed here is the anti-bypass
+    # surface, not a new vocabulary. `None` (unparseable PowerShell) is
+    # treated the same as "found nothing" for gate purposes -- the bash
+    # leg's own regex gate still governs whether this returns None here.
+    _gc_ps_segments = _ps_git_bypass_segments(cmd, "destructive-git-clean") or []
+
+    if (not re.search(r"\bgit\b", cmd) or not re.search(r"\bclean\b", cmd)) and not _gc_ps_segments:
         return None
     if _override("COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload):
         return None
@@ -3370,7 +3465,7 @@ def check_destructive_git_clean(
             _clean_oracle_memo[key] = cached
         return cached
 
-    for seg in _split_segments(cmd):
+    for seg in list(_split_segments(cmd)) + _gc_ps_segments:
         if not seg.strip():
             continue
         if not _gc_is_clean_segment(seg):
@@ -4499,7 +4594,11 @@ def check_blanket_git_add(
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
 
-    if not _GIT_ADD_GATE_RE.search(cmd):
+    # C3: see `_ps_git_bypass_segments` docstring -- git's own argv is
+    # unchanged across dialects; only the anti-bypass surface is new here.
+    _ga_ps_segments = _ps_git_bypass_segments(cmd, "blanket-git-add") or []
+
+    if not _GIT_ADD_GATE_RE.search(cmd) and not _ga_ps_segments:
         return None
 
     rc, out = _run_git(["rev-parse", "--show-toplevel"], cwd=_bt_blanket_add_dash_c_cwd(cmd))
@@ -4534,7 +4633,7 @@ def check_blanket_git_add(
         return None
 
     matched_cmd = ""
-    for seg in _awk_quote_aware_split(cmd):
+    for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
         if not seg.strip():
             continue
         seg_cmd = re.sub(r'"[^"]*"', " ", seg)
@@ -6156,7 +6255,66 @@ def _bt_python3_invocation_cache_key() -> Optional[List[Any]]:
         os.environ.get("CLAUDE_HOME", os.environ.get("USERPROFILE", "")),
         os.environ.get("COORDINATOR_SETTINGS_HOME", ""),
         os.environ.get("COORDINATOR_PYTHON", ""),
+        # Rendering version. The key covers every input to WHICH interpreter
+        # resolves; this covers HOW the resolved path is rendered. DR-363 turned
+        # a bare absolute path into a $HOME-relative one, and without this token
+        # every box with a warm cache would keep serving the pre-DR-363 string --
+        # username and all -- until its `_machine_local.py` happened to change.
+        # Bump on any change to `_bt_render_interpreter_path`.
+        _BT_INTERPRETER_RENDERING_VERSION,
     ]
+
+
+#: Bumped whenever `_bt_render_interpreter_path` changes shape; folded into
+#: `_bt_python3_invocation_cache_key` so a warm cross-process cache cannot serve
+#: a string rendered by the previous scheme.
+_BT_INTERPRETER_RENDERING_VERSION = 2
+
+
+def _bt_render_interpreter_path(python_bin: str) -> str:
+    """Render a resolved interpreter path for an AGENT-FACING advisory, with no
+    operator username in it.
+
+    DR-363 (rejected recommendation, PM 2026-08-26). Three guards' rewrite
+    advisories embedded the resolved absolute interpreter, which on a stock
+    Windows install is
+    ``C:/Users/<username>/AppData/Local/Programs/Python/Python313/python.exe``
+    (backslashes in the real value; written with forward slashes here so this
+    docstring carries no escape sequences).
+    The username enters from the box running the suite, never from a committed
+    byte, so nothing leaks to the mirror -- but B7's subject is what a guard puts
+    in front of an agent, and the PM refused to widen B7's exemption to cover it.
+    The requirement is *no username in the message*; this function is the
+    mechanism, and it is the ONE choke point all three advisories render through.
+
+    NEGATIVE SPEC -- what this deliberately does NOT do: it does not fall back to
+    a bare ``python3``. DR-363 § Options rules that out and the rejection does not
+    revive it: ``python3`` is frequently absent on the Windows hosts
+    ``resolve_python_bin`` exists to serve, and an advisory that does not run is
+    worse than none.
+
+    ``$HOME`` rather than ``~`` or ``%LOCALAPPDATA%``, because the rendered string
+    has to survive being pasted into either host this fleet runs:
+
+    - ``$HOME`` is defined in Git Bash AND is an automatic variable in PowerShell,
+      so one rendering covers both. ``%LOCALAPPDATA%`` expands in cmd.exe only,
+      and ``~`` does not expand inside the quotes the path needs for its spaces.
+    - Double quotes, not `shlex.quote`'s single quotes: single quotes would make
+      ``$HOME`` literal and the advisory would not run.
+    - Forward slashes, which Windows accepts throughout and which avoid the
+      backslash-as-escape trap inside a double-quoted Bash string.
+
+    An interpreter outside the user's home carries no username to remove, so it is
+    returned through `shlex.quote` exactly as before."""
+    try:
+        home = os.path.expanduser("~")
+        rel = os.path.relpath(python_bin, home)
+    except (OSError, ValueError):
+        # ValueError: relpath across drives on Windows -- not under home.
+        return shlex.quote(python_bin)
+    if rel.startswith(os.pardir) or os.path.isabs(rel):
+        return shlex.quote(python_bin)
+    return '"$HOME/%s"' % rel.replace(os.sep, "/").replace("\\", "/")
 
 
 def _bt_python3_invocation() -> str:
@@ -6239,7 +6397,10 @@ def _bt_python3_invocation() -> str:
         return "python3"
     if not python_bin:
         return "python3"
-    result = " ".join(shlex.quote(tok) for tok in (python_bin, *python_args))
+    result = " ".join(
+        [_bt_render_interpreter_path(python_bin)]
+        + [shlex.quote(tok) for tok in python_args]
+    )
 
     if cache_key is not None:
         try:

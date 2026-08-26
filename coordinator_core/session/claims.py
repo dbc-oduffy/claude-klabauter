@@ -290,6 +290,34 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
     ``scope.touch()``'s event-log dialect instead of appending a bare,
     unstamped line.
 
+    REACHABILITY, RE-DERIVED 2026-08-26 — BOTH callers named above are gone,
+    and this function appears to have NO live caller at all. ``self_claim``
+    was migrated onto ``touch_record.append_event`` by C6 (``d3eef7976``) and
+    no longer comes here. The ``claim_path`` route is a chain of dead links:
+    this function's only in-tree caller is
+    ``js_bridge_cli._cmd_claim_path``; that command's only caller is
+    ``coordinator_session.py::claim_path``; and ``claim_path`` has no caller
+    outside its own tests. Its intended consumer was the Node shim
+    ``coordinator/lib/coordinator_session.js``, deleted 2026-07-27 along with
+    ``coordinator/bin/refresh-queries.js`` — see ``js_bridge_cli``'s own
+    docstring, which states plainly that its JS-shim description is
+    "historical provenance for the port, not a live pointer".
+
+    This matters beyond bookkeeping: AC9 of
+    ``docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
+    its-writers.md`` RETAINED the legacy union read in ``scope.py`` on the
+    stated grounds that THIS function is a reachable old-dialect writer. That
+    justification does not hold. The union is still needed, for reasons that
+    are real, measured, and unrelated — see
+    ``scope.py :: _read_touch_record_as_legacy_lines``.
+
+    NOT deleted here, deliberately: this is a CLI entrypoint surface, and
+    "no caller found in four trees" is strong evidence but not proof against
+    an out-of-tree consumer. Deleting it is a decision with its own blast
+    radius, not a tidy-up to ride along with a docstring correction. Anyone
+    taking that on: the requirement to name first is "does anything still need
+    a CLI claim-path seam at all", not "can this function be removed".
+
     Append-only write (the fix for the T21 lost-update race: the prior
     mktemp+sort+mv pattern let N concurrent writers each read-then-overwrite,
     so the last mv won and earlier distinct-path merges were silently

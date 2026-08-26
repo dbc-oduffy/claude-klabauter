@@ -150,3 +150,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     await asyncio.to_thread(_append_audit_entry, log_file, entry)
 
     return no_advisory()
+
+#: Public entry point for the PostToolUse(Agent) fan-in
+#: (`coordinator_core.hooks.agent_postuse_dispatch`). The fan-in must not reach
+#: into `_handler` across a module boundary, and this op stays registered under
+#: its own name for direct callers regardless — the fold is additive.
+run = _handler

@@ -1606,15 +1606,18 @@ def _build_guard_chain(
         # the-destructive-core-learns-the-shell-it-guards.md): declaration
         # LAST, per entry, only once the check's own detection reads the
         # dialect -- `check_no_verify` already does (C2's dialect-aware
-        # segmentation seam) and `check_destructive_rm` now does (this
-        # chunk's `_PS_REMOVE_VERBS` table-driven PowerShell leg). Both
-        # widen to `COMMAND_TOOL_NAMES` here; the other four Bucket A
-        # entries below stay `("Bash",)` pending their own PowerShell
-        # anti-bypass work.
+        # segmentation seam), `check_destructive_rm` (this chunk's
+        # `_PS_REMOVE_VERBS` table-driven PowerShell leg), and now the
+        # three git-shaped checks below (`_ps_git_bypass_segments` --
+        # git's own argv is byte-identical across dialects, so the work
+        # was the anti-bypass surface, not new vocabulary). `runaway-find`
+        # stays `("Bash",)`: POSIX `find` has no PowerShell-equivalent
+        # argv shape to widen onto (reclassified Bash-only-by-construction
+        # in the matchers ratchet, not merely deferred).
         GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Hard-deny leg ONLY -- never returns the advisory half (Review:
         # staff-eng, Finding 0: an advisory returned from THIS
         # CONFINEMENT_DENY slot would short-circuit `evaluate_payload_json`
@@ -1662,7 +1665,12 @@ def _build_guard_chain(
         # this widening nor a future narrowing would fail a test. Census
         # entry: `docs/reference/guard-tool-name-membership.md` § 3.
         GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        # Bash-only is correct by construction, not unconverted -- this
+        # entry keys on POSIX `find`'s own argv shape and no PowerShell
+        # cmdlet or binary shares it, so there is no vocabulary to widen
+        # onto. Drafted as Bucket A, reclassified by C3 on measurement:
+        # docs/reference/guard-tool-name-membership.md § 8c.
         GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Must precede `offer-git-c`. That check rewrites `cd <dir> && git <sub>`
         # into `git -C <dir> <sub>` and returns allow+updatedInput, which

@@ -1598,6 +1598,36 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
     the four agent-dir branches, previously each grew their own legacy arm;
     all now route through here instead).
 
+    WHY THIS UNION IS STILL HERE — RE-DERIVED 2026-08-26, and NOT for the
+    reason AC9 recorded. AC9 retained it because ``claims.atomic_dedup_append``
+    was believed to be a REACHABLE legacy writer via the CLI ``claim-path``
+    seam. **That premise is false at HEAD and appears to have been false when
+    written.** Traced end to end: ``atomic_dedup_append``'s only caller is
+    ``js_bridge_cli._cmd_claim_path``; that command's only caller is
+    ``coordinator/lib/coordinator_session.py::claim_path``; and ``claim_path``
+    has no caller outside its own tests. Its intended consumer was the Node
+    shim ``coordinator/lib/coordinator_session.js``, which
+    ``js_bridge_cli``'s OWN docstring records as deleted on 2026-07-27, along
+    with the named example caller ``coordinator/bin/refresh-queries.js`` —
+    whose Python successor now calls ``claims.self_claim()`` in process. C6
+    migrated ``self_claim`` itself onto the new dialect. So that seam is a CLI
+    entrypoint built for a future Node caller that had already been retired.
+
+    What DOES still justify the union is different, transient, and measured:
+    long-running processes that started before the engine carrying C7 reached
+    the published mirror (2026-08-26 17:01Z) keep executing the pre-C7
+    Edit/Write hook for their whole life. On the day of measuring, 55
+    legacy-dialect events postdated the C7 commit, from 6 session/agent dirs,
+    the most recent from an agent alive for ten hours. Plus the undrained
+    corpus itself: ~100 live dirs hold a legacy ``touched.txt`` with no jsonl
+    sibling, and their claims are only readable through this arm.
+
+    Both of those drain on a CLOCK, not on a code change. The union may be
+    deleted once (a) no pre-publish process survives and (b) the corpus is
+    drained — NOT when someone migrates ``atomic_dedup_append``, which would
+    accomplish nothing. Re-measure both before deleting; do not trust this
+    paragraph's counts, only its method.
+
     Why re-render rather than hand callers ``TouchEvent`` objects directly:
     the projection policies this module's OTHER callers still share
     (``project_self_scope``, ``project_peer_claims``, ``_challenger_t_events``,

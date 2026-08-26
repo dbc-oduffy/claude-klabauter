@@ -152,7 +152,7 @@ class _Expected:
 #: dual-declaring-but-Bash-detecting entry carries a machine-
 #: distinguishable `kind` plus prose (AC5, AC7, AC8).
 EXPECTED: Dict[str, _Expected] = {
-    # -- full-universe, dialect-reading (20) --
+    # -- full-universe, dialect-reading (23) --
     "block-approval-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-disarm-marker-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-illegal-filename": _Expected(("Bash", "PowerShell")),
@@ -176,7 +176,10 @@ EXPECTED: Dict[str, _Expected] = {
     # guard_roster(), not carried over from an earlier read of dispatch.py.
     "no-verify": _Expected(("Bash", "PowerShell")),
     "destructive-rm": _Expected(("Bash", "PowerShell")),
-    # -- Bash-only by construction, never a conversion candidate (9) --
+    "destructive-git-orphan": _Expected(("Bash", "PowerShell")),
+    "destructive-git-clean": _Expected(("Bash", "PowerShell")),
+    "blanket-git-add": _Expected(("Bash", "PowerShell")),
+    # -- Bash-only by construction, never a conversion candidate (10) --
     # docs/reference/guard-tool-name-membership.md § 8's Bucket C table.
     "powershell-via-bash-guard": _Expected(
         ("Bash",),
@@ -240,31 +243,16 @@ EXPECTED: Dict[str, _Expected] = {
         "(--params-file -) form -- both the failure mode and the rewrite "
         "target are POSIX-shell-quoting-specific.",
     ),
-    # -- Bash-only, NOT permanently correct: a real, temporary gap (10) --
-    "destructive-git-orphan": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket A: pending dialect-aware conversion, this plan's C3 "
-        "vocabulary work.",
-    ),
-    "destructive-git-clean": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket A: pending dialect-aware conversion, this plan's C3 "
-        "vocabulary work.",
-    ),
-    "blanket-git-add": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket A: pending dialect-aware conversion, this plan's C3 "
-        "vocabulary work.",
-    ),
     "runaway-find": _Expected(
         ("Bash",),
-        NOT_YET_CONVERTED,
-        "Bucket A: pending dialect-aware conversion, this plan's C3 "
-        "vocabulary work.",
+        BASH_ONLY_BY_CONSTRUCTION,
+        "C3 (pln-the-destructive-core-learns-the-she): detects POSIX "
+        "`find`'s argv shape (-mtime/-exec/anchor-path walk); no "
+        "PowerShell cmdlet or binary shares that argv, so there is no "
+        "vocabulary to widen onto -- reclassified from a temporary gap "
+        "to permanently Bash-only.",
     ),
+    # -- Bash-only, NOT permanently correct: a real, temporary gap (6) --
     "block-dev-repo-sentinel-removal-advisory": _Expected(
         ("Bash",),
         NOT_YET_CONVERTED,
@@ -556,8 +544,8 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
     not_yet_converted = {
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
-    assert len(by_construction) == 9
-    assert len(not_yet_converted) == 10
+    assert len(by_construction) == 10
+    assert len(not_yet_converted) == 6
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)
     assert HELD_PENDING_TOKENIZER_FIX != BASH_ONLY_BY_CONSTRUCTION != NOT_YET_CONVERTED

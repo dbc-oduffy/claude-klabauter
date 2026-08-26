@@ -284,6 +284,19 @@ def unroutable_response(resolution: RouteResolution, event_name: str) -> Optiona
     about DoE's deny-on-unreachable policy and does not reroute to cold
     dispatch (DR-347 Ruling 3, module docstring's NEGATIVE SPEC section) --
     it only turns a resolved fact into the wire-shape response.
+
+    READ THAT CITATION NARROWLY. DR-347 Ruling 3 is about which engine TREE
+    serves a dispatch -- "no fallback to claude-klabauter" means no fallback to this
+    repo's unstamped tree, enforced by the stamp gate at `ipc.dispatch_
+    message` (`UNSTAMPED_ENGINE_ROOT_ERROR`, -32005). It is not a general
+    prohibition on cold dispatch: a cold caller that resolves the STAMPED
+    mirror passes that gate, which is what the PostToolUse hook family
+    already does via `_engine_root.resolve_claude_klabauter_root()`. The refuses-rather-
+    than-falls-back property is Ruling 2, and it is scoped to the door binary
+    as an invocation surface. Two EMs have now read the citation above as
+    forbidding any cold fall-through and sized work on it; the ruling is not
+    resident in the published mirror, so the citing docstring is the only
+    place the distinction can be read from there.
     """
     if resolution.state == ROUTED:
         return None

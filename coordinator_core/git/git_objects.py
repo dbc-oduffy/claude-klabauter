@@ -213,6 +213,22 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
     result: list[tuple[Path, Path]] = []
     if generation is not None:
         for idx_path in sorted(pack_dir.glob("*.idx")):
+            # Skip git's in-progress packs. `index-pack`/`receive-pack`/`gc`
+            # write `.tmp-<pid>-pack-<sha>.{idx,pack}` in this directory and
+            # rename them into place when complete, so a temp pair is
+            # transient by construction and is never the right answer to an
+            # object lookup. `Path.glob` matches leading-dot names -- unlike
+            # the shell and unlike `glob.glob` -- so `*.idx` picks these up,
+            # and the pair then passes the `is_file()` check below because at
+            # that instant it genuinely exists. The failure lands later, at
+            # the `open()` in `_read_pack_bytes`, once git has renamed it
+            # away: FileNotFoundError on a `.tmp-*.pack`, from a caller that
+            # did check the file was there. Observed 27 times in one session
+            # on 2026-08-26 (`.git/push-failures.log`, auto_push.py), which is
+            # what a busy box with concurrent fetch and gc looks like from
+            # here.
+            if idx_path.name.startswith("."):
+                continue
             pack_path = idx_path.with_suffix(".pack")
             if pack_path.is_file():
                 result.append((idx_path, pack_path))
@@ -555,7 +571,24 @@ def _search_packs_for_sha(
         offset = _pack_index_find(pidx, sha)
         if offset is None:
             continue
-        pack_bytes = _read_pack_bytes(pack_path)
+        try:
+            pack_bytes = _read_pack_bytes(pack_path)
+        except OSError:
+            # The pack was listed, and is gone by the time it is opened. The
+            # dot-prefix skip in `_iter_pack_files` removes the common cause
+            # (git's temp packs), but not the race itself: a concurrent `gc`
+            # may unlink any pack between the listing and this open, and the
+            # listing is cached across calls precisely so it is not re-stat'd
+            # per lookup. `_read_pack_bytes`' own contract -- never hold a
+            # mapping open, so gc can always unlink -- makes this reachable by
+            # design rather than by accident.
+            #
+            # A vanished pack is not a missing object: git only unlinks a pack
+            # whose objects it has already written elsewhere, so the sha is
+            # still findable. Skipping to the next pack, and ultimately to the
+            # loose-object and caller-level fallbacks, returns the right answer
+            # where raising returned none at all.
+            continue
         type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
         type_name = _PACK_TYPE_NAMES.get(type_num)
         if type_name is None:

@@ -191,6 +191,22 @@ def _env(**overrides) -> dict:
     base.setdefault(
         "COORDINATOR_ENGINE_ROOT", str(Path(__file__).resolve().parents[2].parent)
     )
+    # `warm/settings.py::is_warm_enabled()` resolves COORDINATOR_WARM, then
+    # the `engine.warm.enabled` machine-registry rung, then falls through to
+    # off. The isolated `warm_engine_root` clone hardlinks `coordinator_core/`
+    # only -- none of the machine registry that second rung reads -- so a
+    # driver relying on the registry rung to reach warmth goes cold
+    # unconditionally inside this fixture, regardless of the box's own
+    # machine-wide setting. Setting the env rung here is therefore necessary
+    # for these drivers to ever dial the isolated server at all. It is
+    # deliberately NOT sufficient on its own: requesting warmth only fixes
+    # today's stripped-registry input, and warm-off is itself a legitimate
+    # supported configuration under which a cold dispatch is
+    # indistinguishable from a correctly-configured one by inspecting env
+    # alone -- see `_assert_warmth_or_fail` below, which asserts the outcome
+    # from the transport's own warm-vs-cold attribution rather than trusting
+    # this request to have landed.
+    base.setdefault("COORDINATOR_WARM", "1")
     base.update(overrides)
     return base
 
@@ -250,6 +266,76 @@ def _wait_for_live_breadcrumb(isolated_root: Path, deadline_secs: float) -> Opti
     return None
 
 
+def _assert_warmth_or_fail(isolated_root: Path) -> None:
+    """Warmth PRECONDITION for this whole module -- assert it, do not merely
+    request it (dispatch brief). `_env()` setting `COORDINATOR_WARM=1` makes
+    a warm dial POSSIBLE; it cannot make it true, because warm-off is a
+    legitimate supported configuration and a cold dispatch under it is
+    indistinguishable from a correctly-configured one by inspecting request
+    env alone. The instrument does not malfunction in that case -- it
+    faithfully measures a real (cold) mode and, absent this check, reports it
+    under a label ("warm-served") that requesting warmth implied but never
+    established.
+
+    Reuses `coordinator_core.warm.telemetry.client_cold_count` -- the
+    module's OWN warm-vs-cold attribution primitive
+    (`warm/client.py::_record_cold_fallback` is the sole call site able to
+    observe a cold fallback, module docstring: "THE CLIENT IS THE ONLY
+    PROCESS THAT CAN OBSERVE A COLD FALLBACK") -- rather than inventing a new
+    marker. One cheap `ping` (a COMPUTE_ONLY, zero-git op) is dialed through
+    the exact same door (`python -m coordinator_core.invoke`) and env
+    (`_env()`) the measurement drivers use; `client_cold_count` is read
+    before and after. No increment means this process's one dispatch reached
+    a running warm server and was served by it -- an increment, or a
+    non-zero return code, means it fell back cold, and every figure this
+    module would otherwise record under a "warm-served" label would
+    actually be a cold one wearing that label.
+    """
+    from coordinator_core.warm import telemetry
+
+    env = _env()
+    # A few retries, not a loosening of the assertion: the breadcrumb this
+    # fixture already waited on proves the server PROCESS is alive, not that
+    # its op registry has finished preloading (`_preload_op_registry` runs
+    # AFTER election, ~703ms of imports on the first dispatch --
+    # `warm/telemetry.py::record_server_boot`'s own docstring) or that its
+    # single pending listener (module docstring's "the warm server keeps a
+    # single pending listener") has reached accept for this probe. A dial
+    # that races that window is not the "warm-off" case this precondition
+    # exists to catch -- it is retried; a dial that keeps missing is not.
+    attempts = 3
+    completed = None
+    before = after = 0
+    for attempt in range(attempts):
+        before = telemetry.client_cold_count(engine_root=isolated_root)
+        completed = subprocess.run(
+            [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
+            cwd=str(isolated_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_S,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        after = telemetry.client_cold_count(engine_root=isolated_root)
+        if completed.returncode == 0 and after == before:
+            return
+        if attempt < attempts - 1:
+            time.sleep(_BOOT_POLL_INTERVAL_SECS * 2)
+    if completed is None or completed.returncode != 0 or after > before:
+        pytest.fail(
+            "warmth precondition FAILED: a probe 'ping' dispatched through the "
+            "same invoke door and env the measurement drivers use was not "
+            f"confirmed warm-served (rc={completed.returncode}, "
+            f"client_cold_count(isolated_root) before={before} after={after} "
+            "-- an increment means warm/client.py::try_warm_dispatch fell "
+            "back cold for this probe). Every figure this module records is "
+            "gated on this check because warm-off is a legitimate "
+            "configuration indistinguishable from a cold dispatch by env "
+            f"alone. stdout={completed.stdout!r} stderr={completed.stderr!r}"
+        )
+
+
 def _terminate(pid: int) -> None:
     import psutil
 
@@ -295,6 +381,7 @@ def warm_engine_root() -> Iterator[Path]:
                 f"isolated warm server (source={source_root}) did not reach a "
                 f"PID-alive breadcrumb within {_BOOT_WAIT_DEADLINE_SECS}s"
             )
+        _assert_warmth_or_fail(isolated_root)
         yield isolated_root
     finally:
         crumb = breadcrumb.read_breadcrumb(engine_root=isolated_root)
@@ -464,7 +551,9 @@ def test_commit_op_wallclock_and_spawn_baseline_are_recorded(
     )
 
     detail = (
-        f"AC4 baseline (C1's unchanged pipeline, expected BAD -- module docstring): "
+        f"AC4 warm-served baseline (warmth asserted by warm_engine_root's "
+        f"_assert_warmth_or_fail, not merely requested -- see that helper's "
+        f"docstring): "
         f"wallclock median={wall['median_ms']}ms p50={wall['p50_ms']}ms "
         f"p95={wall['p95_ms']}ms min={wall['min_ms']}ms max={wall['max_ms']}ms "
         f"(n={wall['n']}). process_time={proc['process_time_ms']}ms "
@@ -580,8 +669,9 @@ def test_commit_op_concurrent_load_wallclock_is_recorded(
     p50 = round(_percentile(ordered, 0.50), 3)
     p95 = round(_percentile(ordered, 0.95), 3)
     detail = (
-        f"AC7 concurrent-load baseline (n={len(ordered)} distinct worktrees, "
-        f"expected BAD -- module docstring): wallclock p50={p50}ms p95={p95}ms "
+        f"AC7 warm-served concurrent-load baseline (n={len(ordered)} distinct "
+        f"worktrees, warmth asserted by warm_engine_root's "
+        f"_assert_warmth_or_fail, not merely requested): wallclock p50={p50}ms p95={p95}ms "
         f"min={round(ordered[0], 3)}ms max={round(ordered[-1], 3)}ms samples={ordered}"
     )
     print(detail)

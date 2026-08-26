@@ -77,6 +77,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.session_heartbeat":                "coordinator_core.hooks",
     "hooks.agent_completion_log":             "coordinator_core.hooks",
     "hooks.track_dispatched_agents":          "coordinator_core.hooks",
+    "hooks.agent_postuse_dispatch":           "coordinator_core.hooks",
     "hooks.suggest_sonnet_research":          "coordinator_core.hooks",
     "hooks.nudge_unauthorized_handoff":       "coordinator_core.hooks",
     "hooks.postuse_advisory_dispatch":        "coordinator_core.hooks",

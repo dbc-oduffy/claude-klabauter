@@ -158,6 +158,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.session_heartbeat",  # registers "hooks.session_heartbeat"
     "coordinator_core.hooks.agent_completion_log",  # registers "hooks.agent_completion_log"
     "coordinator_core.hooks.track_dispatched_agents",  # registers "hooks.track_dispatched_agents"
+    "coordinator_core.hooks.agent_postuse_dispatch",  # registers "hooks.agent_postuse_dispatch"
     "coordinator_core.hooks.context_pressure_precompact",  # registers "hooks.context_pressure_precompact"
     "coordinator_core.hooks.subagent_zero_tool_use",  # registers "hooks.subagent_zero_tool_use"
     "coordinator_core.hooks.subagent_zero_tool_use_surface",  # registers "hooks.subagent_zero_tool_use_surface"

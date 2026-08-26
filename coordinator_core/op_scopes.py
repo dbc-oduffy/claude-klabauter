@@ -87,6 +87,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.receiver_state_sensor":           "common_dir",
     "hooks.agent_completion_log":            "common_dir",
     "hooks.track_dispatched_agents":         "common_dir",
+    # hooks.agent_postuse_dispatch — the PostToolUse(Agent) fan-in over the two
+    # entries directly above. A fan-in takes the UNION of its legs' scopes, so this
+    # is common_dir because they are; it is declared here rather than inherited
+    # silently. It is also why this fold is NOT hosted inside
+    # hooks.postuse_advisory_dispatch ("none") — see that module's docstring.
+    "hooks.agent_postuse_dispatch":          "common_dir",
     "hooks.subagent_zero_tool_use":          "common_dir",
     "hooks.subagent_zero_tool_use_surface":  "common_dir",
     "hooks.subagent_zero_tool_use_resolve":  "common_dir",

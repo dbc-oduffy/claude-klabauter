@@ -168,6 +168,7 @@ import sys
 import tempfile
 import time
 import re
+import uuid
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
@@ -434,7 +435,28 @@ def do_pathspec(args: "Args") -> None:
 
     Negative-spec: does NOT resurrect `scoped-git-commit` or any string-keyed
     reference to it — the op name is `ceremony.commit`, a fresh identity
-    (commit_op.py's own docstring), not the killed op reincarnated."""
+    (commit_op.py's own docstring), not the killed op reincarnated.
+
+    AC8 reconcile (2026-08-26, docs/plans/2026-08-26-the-commit-becomes-a-
+    warm-served-op.md § AC8, "RESOLVED — reconcile, not prevention"): an
+    attempt id is minted before dispatch and threaded through as an
+    `Attempt-Id:` commit trailer via `ceremony.commit`'s own `trailers`
+    param (the same unconditional-trailer machinery `commit_trailers.py`
+    already stamps `Session-Id:`/`Deliverable-Id:` through — reused, not a
+    second mechanism). On an INDETERMINATE outcome (a `cc_invoke` timeout, a
+    `BrokenPipeError`-shaped failure, or a malformed/ambiguous envelope —
+    see `_is_indeterminate_outcome`'s own docstring for the exact,
+    deliberately narrow predicate) this caller reconciles BEFORE reporting
+    anything: it searches recent branch history for a commit carrying this
+    call's own `Attempt-Id:` trailer via `commit_pipeline
+    ._reconcile_landed_despite_failure` — the same bounded-log-search
+    primitive `commit()`'s own reported-failure-but-landed repair already
+    uses, reused rather than re-derived (delegate, don't duplicate, this
+    function's own established idiom). Found means the commit already
+    landed — report success. Absent means nothing landed — report failure
+    and say the retry is safe. This is detect-and-report, never
+    detect-and-redo: no retry is issued from here (Anti-scope, this plan —
+    a commit is not idempotent)."""
     from cc_invoke import cc_invoke
 
     # Puts coordinator_core on sys.path so cc_invoke()'s in-process warm-reach
@@ -446,18 +468,30 @@ def do_pathspec(args: "Args") -> None:
     require_engine_on_path(__file__)
 
     worktree_root = os.getcwd()
+    attempt_id = uuid.uuid4().hex
+    attempt_trailer = f"Attempt-Id: {attempt_id}"
+    pre_sha = _resolve_pre_sha_for_reconcile(worktree_root)
+
     params = {
         "subject": args.subject,
         "stage_paths": args.paths,
         "caller_paths": args.paths,
+        "trailers": attempt_trailer,
     }
     try:
         result = cc_invoke("ceremony.commit", params, worktree_root)
+    except BrokenPipeError as exc:
+        _reconcile_after_indeterminate(args, worktree_root, attempt_trailer, pre_sha, exc)
+        return
     except RuntimeError as exc:
-        if not _op_is_unregistered(exc):
+        if _op_is_unregistered(exc):
+            result = _commit_via_pipeline_fallback(args, worktree_root)
+        elif _is_indeterminate_outcome(exc):
+            _reconcile_after_indeterminate(args, worktree_root, attempt_trailer, pre_sha, exc)
+            return
+        else:
             print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
             sys.exit(1)
-        result = _commit_via_pipeline_fallback(args, worktree_root)
 
     if not result.get("committed"):
         print(
@@ -467,6 +501,193 @@ def do_pathspec(args: "Args") -> None:
         sys.exit(1)
 
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
+
+
+def _is_indeterminate_outcome(exc: RuntimeError) -> bool:
+    """True when `exc` (a `RuntimeError` raised by `cc_invoke()`) means the
+    dispatch outcome is UNKNOWN — the op may or may not have already
+    executed and possibly committed — rather than a clean, determinate
+    answer.
+
+    Deliberately narrow, mirroring `_op_is_unregistered`'s own narrow-
+    predicate discipline (this file's established pattern — see that
+    function's docstring): getting this wrong in the PERMISSIVE direction
+    would route a real, determinate failure (a gate declining, an empty
+    pathspec — reported by `cc_invoke` as a clean JSON-RPC error envelope
+    with a real code) through the reconcile path and could silently mask it
+    as "reconcile found nothing, retry is safe" when it should instead
+    report the refusal as-is.
+
+    Matches exactly:
+      - `cc_invoke.is_timeout_error(exc)` — the client-side `cc_invoke:
+        engine timeout after Ns` shape (`_timeout_exceeded_message`). A
+        timeout never stops the engine (project CLAUDE.md § Load norm), so
+        a mutating ceremony op may already have landed.
+      - `"warm dispatch indeterminate"` — the warm transport's OWN
+        indeterminate classification (`cc_invoke.py ::
+        _apply_warm_envelope`, `WARM_DISPATCH_INDETERMINATE`): a mutating
+        op delivered to the warm server but never answered.
+      - A malformed/unparseable envelope (`"invoke stdout is not valid
+        JSON"`, `"envelope is not a JSON object"`, `"envelope missing
+        'result' key"`) — the process ran and produced *something*, but not
+        a clean success or a structured error either; neither a "clean
+        success" nor an "explicit structured refusal" per this plan's own
+        AC8 text.
+
+    Does NOT match: `-32601`/Method-not-found (handled separately by
+    `_op_is_unregistered`, before this predicate ever runs — request never
+    reached a handler), a real JSON-RPC error envelope carrying an actual
+    op-level refusal (`"op returned JSON-RPC error envelope"` with a
+    non-indeterminate code — a gate decline, a validation error), or any
+    pre-dispatch failure (engine-root resolution, params serialization,
+    engine-won't-start) — none of those leave the outcome in doubt."""
+    from cc_invoke import is_timeout_error
+
+    if is_timeout_error(exc):
+        return True
+    text = str(exc)
+    return (
+        "warm dispatch indeterminate" in text
+        or "invoke stdout is not valid JSON" in text
+        or "envelope is not a JSON object" in text
+        or "envelope missing 'result' key" in text
+    )
+
+
+def _resolve_pre_sha_for_reconcile(worktree_root: str) -> Optional[str]:
+    """`git rev-parse HEAD`, resolved BEFORE dispatch, for the reconcile's
+    own bounded-range search (`_reconcile_landed_despite_failure`'s
+    `pre_sha` argument). Returns `None` on any failure (no commits yet, the
+    call itself timed out/errored) — that function's own fallback path
+    already handles a missing `pre_sha` safely via an unfiltered, walk-
+    bounded `git rev-list --max-count` probe, so failing open to `None`
+    here is correct, not a gap."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def _reconcile_after_indeterminate(
+    args: "Args",
+    worktree_root: str,
+    attempt_trailer: str,
+    pre_sha: Optional[str],
+    exc: Exception,
+) -> None:
+    """The AC8 mechanism itself: on an indeterminate `ceremony.commit`
+    outcome, search recent branch history for a commit already carrying
+    this call's own `Attempt-Id:` trailer BEFORE reporting anything.
+
+    Reuses `commit_pipeline._reconcile_landed_despite_failure` — the exact
+    bounded-log-search primitive named in this plan's dispatch brief as
+    prior art — rather than re-implementing a `git log`/`git rev-list`
+    bound here: same function, same collision-free-trailer safety argument,
+    same "a match inside the window is ours no matter how wide the window
+    is" reasoning (that function's own docstring). Never touches
+    `commit_pipeline.py` itself.
+
+    `repo_root` for that call is the git COMMON DIR, matching
+    `_commit_via_pipeline_fallback`'s own resolution (this handler's own
+    established idiom) — not the worktree.
+
+    Exits 0 with the reconciled sha on FOUND (a slow success, never a
+    failure); exits 1 naming the original exception plus "reconcile found
+    nothing, retry is safe" on ABSENT. Never retries a mutation itself
+    (Anti-scope, this plan)."""
+    common_dir = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=worktree_root,
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if common_dir.returncode != 0:
+        print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
+        print(
+            "Reconcile could not run: git common dir unresolved "
+            f"({(common_dir.stderr or '').strip()}). Do not assume the "
+            "commit landed; verify manually before retrying.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    resolved = Path(common_dir.stdout.strip())
+    if not resolved.is_absolute():
+        resolved = Path(worktree_root) / resolved
+
+    require_engine_on_path(__file__)
+    from coordinator_core.ops.ceremony.commit_pipeline import (
+        _reconcile_landed_despite_failure,
+    )
+
+    # A reconcile fired on a CLIENT timeout races the write it is looking for.
+    # The client's deadline expiring is not evidence the engine has stopped --
+    # that is the entire premise of the hazard this reconcile exists to close.
+    # So re-probe across the op's own remaining budget before concluding
+    # anything: it converts "has not happened yet" into "found" without
+    # weakening the rule below, and costs nothing when the commit is genuinely
+    # absent. Bounded, and never a retry of the mutation itself.
+    probe = _reconcile_landed_despite_failure(resolved, attempt_trailer, pre_sha, args.paths)
+    if probe.sha is None:
+        deadline = time.monotonic() + _RECONCILE_SETTLE_SECS
+        while probe.sha is None and time.monotonic() < deadline:
+            time.sleep(_RECONCILE_POLL_SECS)
+            probe = _reconcile_landed_despite_failure(
+                resolved, attempt_trailer, pre_sha, args.paths
+            )
+
+    if probe.sha is not None:
+        print(
+            f"committed sha={probe.sha} — ceremony.commit exceeded its deadline "
+            f"({exc}), but the commit is confirmed landed via reconcile "
+            "(Attempt-Id trailer found in history): this is a slow success, "
+            "not a failure.",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
+    # ABSENCE IS NOT A DETERMINATE NEGATIVE. Presence of the Attempt-Id proves
+    # the commit landed; absence cannot distinguish "did not happen" from "has
+    # not happened yet", because the engine may still be inside its own budget
+    # writing it. Reporting absence as "a retry is safe" is an INSTRUCTION, and
+    # it is wrong exactly when the hazard is real -- claude-klabauter-15 followed
+    # it at ~20:20 against a commit that had in fact landed (455cbdf53), and
+    # only escaped a duplicate because the retry found the pathspec clean.
+    # See state/lessons/2026-08-26-a-reconcile-that-runs-too-soon-says-retry-
+    # is-safe.md. The outcome here is UNKNOWN and must read as unknown.
+    print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
+    print(
+        "Reconcile found no commit carrying this attempt's Attempt-Id trailer "
+        f"after re-probing for {_RECONCILE_SETTLE_SECS:.0f}s "
+        f"(decline={probe.decline!r}). This is UNKNOWN, not a confirmed "
+        "failure: the engine may still have been writing when the client's "
+        "deadline expired. VERIFY with `git log` before re-running -- a blind "
+        "retry can double-commit.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+#: How long the AC8 reconcile keeps re-probing for its Attempt-Id after a
+#: client-side timeout, and how often. The engine may still be inside its own
+#: ceremony budget when the client gives up, so a single probe reads a race as
+#: a determinate negative. Sized above the 2.0s ceremony ceiling so a commit
+#: still landing when the client bailed is normally observed rather than
+#: reported unknown.
+_RECONCILE_SETTLE_SECS = 3.0
+_RECONCILE_POLL_SECS = 0.25
 
 
 def _op_is_unregistered(exc: Exception) -> bool:
