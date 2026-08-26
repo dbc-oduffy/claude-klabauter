@@ -116,6 +116,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.stamp_phase":                    "coordinator_core.ops.handoff_phase_stamp",
     "handoff.backfill_claim_stamp":           "coordinator_core.ops.handoff_backfill_claim_stamp",
     "handoff.ship_and_archive":               "coordinator_core.ops.handoff_ship_archive",
+    "handoff.reconcile_open":                 "coordinator_core.ops.handoff_reconcile",
     "handoff.archive_transition":             "coordinator_core.ops.handoff_archive_transition",
     "handoff.repoint_origin":                 "coordinator_core.ops.handoff_repoint_origin",
     "handoff.normalize":                      "coordinator_core.ops.handoff_normalize",

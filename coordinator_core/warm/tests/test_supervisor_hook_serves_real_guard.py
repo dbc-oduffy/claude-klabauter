@@ -40,15 +40,33 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.warm import skew, supervisor
+from coordinator_core.warm import cookie, skew, supervisor
 
 
-def _post(port: int, event: dict, timeout: float = 5.0, path: Optional[str] = None):
+#: Cookie minted by the most recent `_bind_handler`, so `_post` can present
+#: it without every call site threading it. The listener now REQUIRES the
+#: boot cookie on every non-health request; these tests bind a `tmp_path`
+#: engine root, so reading the AMBIENT cookie here would authenticate
+#: against the wrong root and refuse.
+_BOUND_TOKEN: Optional[str] = None
+
+
+def _post(
+    port: int,
+    event: dict,
+    timeout: float = 5.0,
+    path: Optional[str] = None,
+    token: Optional[str] = None,
+):
     body = json.dumps(event).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    presented = token if token is not None else _BOUND_TOKEN
+    if presented is not None:
+        headers[cookie.COOKIE_HEADER] = presented
     req = urllib.request.Request(
         "http://127.0.0.1:%d%s" % (port, path or supervisor.HOOK_PATH),
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -73,6 +91,10 @@ def _bind_handler(tmp_path: Path, *, dispatch):
 
     skew.write_engine_stamp(tmp_path, "sha-test")
     root = tmp_path
+    # Real production wiring includes the credential: `main` generates the
+    # cookie before it binds, so a bound listener always has one.
+    global _BOUND_TOKEN
+    _BOUND_TOKEN = cookie.ensure(root)
     version_state = skew.ServerVersionState(root)
     ctx = supervisor._ServerContext(
         httpd=None,

@@ -79,6 +79,7 @@ convention per `warm.breadcrumb`'s own docstring) --
 from __future__ import annotations
 
 import calendar
+import hmac
 import json
 import os
 import tempfile
@@ -897,7 +898,69 @@ def _make_handler(ctx: "_ServerContext"):
                 except Exception:  # noqa: BLE001 -- never fail the listener on a refusal
                     pass
                 return False
+            if not self._cookie_is_valid():
+                # 401-shaped and fail-closed, per the spike verdict's
+                # § Refusal semantics row 1. REFUSE THE CALLER, NEVER EVICT:
+                # the listener must be fully serving for the next caller
+                # after it refuses this one. A refusal that drained would
+                # be the outage this credential exists to prevent, spelt
+                # differently.
+                self.close_connection = True
+                try:
+                    self.send_error(401, "Unauthorized")
+                except Exception:  # noqa: BLE001 -- never fail the listener on a refusal
+                    pass
+                return False
             return True
+
+        def _cookie_is_valid(self) -> bool:
+            """True iff this request carries the boot cookie.
+
+            THE LOAD-BEARING CONTROL. The `Host` pin above is
+            defence-in-depth against a browser; this is what actually
+            establishes that the caller can read a file only this user
+            can read.
+
+            Placed in `parse_request` for the same reason the Host pin is:
+            once, before routing, where it cannot lapse as `do_*` methods
+            are added. It is INDEPENDENT of the skew refusal in
+            `do_POST` -- that one answers WHICH ENGINE GENERATION the
+            caller thinks it is dialling and is coupled to the
+            self-stamping line; this one answers WHO IS CALLING. Same spec
+            section, different question, different site.
+
+            HEALTH IS EXEMPT, DELIBERATELY. `GET /health` returns the
+            fixed literal `ok` and reveals nothing an open port does not
+            already reveal, while `check_health` is the probe callers run
+            BEFORE they have any reason to have read the cookie -- gating
+            it would break discovery to protect nothing. The exemption is
+            this narrow: one path, one method, a fixed body.
+
+            FAIL CLOSED ON THE SERVER'S OWN SIDE TOO. If the expected
+            cookie cannot be read at request time -- deleted, corrupted,
+            or permissions changed under a running listener -- every
+            caller is refused rather than admitted. Boot already refuses
+            these cases (`_assert_credential_ready`); this covers the
+            window after boot.
+            """
+            if self.command == "GET" and self.path.rstrip("/") == HEALTH_PATH:
+                return True
+            expected = cookie.read(ctx.engine_root)
+            if not expected:
+                return False
+            headers = getattr(self, "headers", None)
+            if headers is None:
+                return False
+            sent = headers.get_all(cookie.COOKIE_HEADER) or []
+            if len(sent) != 1:
+                # Zero is an uncredentialed caller. More than one is a
+                # smuggling shape -- refuse rather than pick a value a
+                # downstream reader might disagree with, exactly as the
+                # Host pin does with a repeated header.
+                return False
+            # `compare_digest`, never `==`: a credential compared with a
+            # short-circuiting equality leaks its prefix through timing.
+            return hmac.compare_digest(sent[0].strip(), expected)
 
         def _host_is_pinned(self) -> bool:
             """True iff this request's `Host` is one of the loopback

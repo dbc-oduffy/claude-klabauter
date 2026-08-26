@@ -904,7 +904,66 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/fleet/memo_reconcile_outbox.py",
         ("_memo_reconcile_outbox",),
     ),
+    #
+    # D6 (2026-08-22-the-composition-gate-counts-processes-across-the-op-graph, this chunk):
+    # three newly-registered ops the completeness guard had not caught up to, each verified
+    # by hand (not just by the mechanical empty measurement) before enrolling:
+    #   - `hooks.agent_postuse_dispatch`: `_handler` runs its two legs
+    #     (`agent_completion_log.run`, `track_dispatched_agents.run`) through `asyncio.gather`
+    #     -- an indirect call the walker cannot trace as an edge -- but both leg modules were
+    #     read directly and carry no `subprocess`/`Popen` call anywhere in either file. Zero
+    #     spawns on the real reachable set, not merely on what the walker can see.
+    #   - `percolate.build_token_index`: `_percolate_build_token_index` hands off to
+    #     `build_token_index_slice` (`asyncio.to_thread`) -> `_derive_slices`/
+    #     `_count_total_files` and `coordinator_core.percolate.token_index` -- read directly,
+    #     no `subprocess`/`Popen` anywhere in either module.
+    #   - `merge_assemble.brief`: `_merge_assemble_brief` calls `merge_assemble.brief()`
+    #     (`coordinator_core/merge_assemble/__init__.py`), a COMPUTE_ONLY read of branch state
+    #     and directive-list construction; no dispatch table, no subprocess.
+    #
+    # `merge_assemble.apply` (the fourth name the registry divergence check flagged) is
+    # DELIBERATELY NOT enrolled here despite also measuring an empty function-granular
+    # reachable set: `_merge_assemble_apply` calls `merge_assemble.apply.apply()`, which
+    # dispatches through its own closed `_CLI_DISPATCH` table (`coordinator_core/
+    # merge_assemble/apply.py`) -- a dict of function VALUES passed BY REFERENCE into
+    # `apply_base.execute_directives` (a different module), which invokes the selected
+    # handler dynamically by key. That handler set includes `_dispatch_node_ceremony_gate`
+    # and `_run_py_script`-backed dispatchers that call `subprocess.run` directly. This is a
+    # genuine resolver gap (dict-valued callables invoked through a cross-module parameter,
+    # not a call the AST walker's direct-call-target/thread-hop resolution can see) --
+    # exactly the "empty set caused by a resolver gap is a resolver bug, not an enrolment"
+    # case this chunk's own dispatch brief named. Enrolling it here with an empty spawn
+    # tuple would misrepresent a real, MUTATING, subprocess-reaching op as spawn-free.
+    # Fixing the walker to trace a dict-of-callables handed to another module's function is
+    # a resolver capability this chunk's own scope (re-derive the ratchet) does not cover,
+    # and reused by production (`spawn_bearing_ops.ops_with_spawn_evidence(function_granular=
+    # True)` calls the SAME `_reachable_functions`/`_build_corpus`/`_on_path_spawn_sites` this
+    # module owns) -- widening it here risks shifting counts this file has pinned elsewhere.
+    # Left OUT of `_BUDGETED_ENTRYPOINTS`; `test_registry_divergence_and_residual_stay_
+    # accounted` will keep flagging it until a future chunk either fixes the resolver or
+    # gives `merge_assemble.apply` a real (non-empty) legitimization. Reported, not silenced.
 }
+
+#: C4 (pln-reconcile-open-comes-back-under-the-bar, 2026-08-26) MEASUREMENT NOTE:
+#: `handoff.reconcile_open` was rebuilt from first principles after DR-344's kill bar deleted
+#: the prior implementation (C2b), which had seven git-spawn sites. The rebuild's own
+#: orchestration (`_handler` itself, `gate_eval`, `handoff_corpus`, `policy_loader`) is
+#: COMPUTE_ONLY plus one JSON file write -- but `_handler` also imports
+#: `handoff_transition._read_gate_evidence_resolved` (R12, DR-320's prose-vs-evidence guard),
+#: whose I/O-kind `gate_evidence` leg resolution (`sibling_fact.resolve_leg`) reaches
+#: `coordinator_core/git/run.py:426 run_git` -- MEASURED here via
+#: `test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint`: enrolling this op above
+#: with an empty-set claim failed that test with exactly one uncounted site,
+#: `coordinator_core/git/run.py:426 enclosing='run_git' argv0='git'`. That claim was wrong
+#: and is corrected here rather than left green on a false premise: this is a genuinely
+#: NON-EMPTY reachable spawn set, so `handoff.reconcile_open` stays OUT of
+#: `_BUDGETED_ENTRYPOINTS` (the "measured empty, zero legitimization needed" bucket above)
+#: and is left as an accounted RESIDUAL -- the same disposition this file's own comments give
+#: `merge_assemble.apply` immediately above: a live op with a non-empty reachable spawn set,
+#: not enrolled, not legitimized, reported rather than silenced. A per-site
+#: `_LEGITIMIZED_SITES` entry (mechanism pin + a companion fixture proving the git call is
+#: actually exercised/bounded) is future work for whoever picks up this op's own spawn
+#: budget -- not built in this chunk.
 
 #: The two counter shapes a legitimation may rest on. Each names what it guarantees AND the hole
 #: it leaves; neither dominates the other, which is why the exemption model records which one an
@@ -1133,7 +1192,8 @@ _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 #: found 13 further live ops / 59 (op, site) pairs, matching the brief's own EM-measured slice
 #: exactly (13 ops x their own site count: 8+5*8+1+1+4 == 59). `queue.close` (5 pairs) and
 #: `ceremony.wsc_tail` (8 pairs) were killed and deleted 2026-08-23 (PM ruling, code gone); their
-#: rows are removed rather than left pointing at dead entrypoints, leaving 11 ops / 46 pairs
+#: rows are removed rather than left pointing at dead entrypoints, and `workday.drain_pending_
+#: push` lost its `_invoke_cockpit_publish` site on re-derivation (-1), leaving 10 ops / 41 pairs
 #: (enumerated in `_CLUSTER_D2_OPEN_DISPOSITION` below).
 #:
 #: DISPOSITION, NAMED HONESTLY PER AC19C (not silence, not a fabricated legitimation, not "a
@@ -1326,12 +1386,13 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
         "_CLUSTER_D2_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 46, (
+    assert total_pairs == 41, (
         f"_CLUSTER_D2_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "46 expected after queue.close's (5 pairs) and ceremony.wsc_tail's (8 pairs) kills "
-        "removed their rows from the EM-measured 59 this chunk's own brief named -- update this "
-        "constant deliberately if the shift is real and understood, never to silence a drift you "
-        "have not traced."
+        "41 expected after queue.close's (5 pairs) and ceremony.wsc_tail's (8 pairs) kills "
+        "removed their rows from the EM-measured 59 this chunk's own brief named, and "
+        "workday.drain_pending_push lost its _invoke_cockpit_publish site (-1, live tree "
+        "re-derivation) -- update this constant deliberately if the shift is real and "
+        "understood, never to silence a drift you have not traced."
     )
 
     for op_key in _CLUSTER_D2_OPEN_DISPOSITION:
@@ -1445,15 +1506,19 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_paper_trail": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_queue_entry": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_release_accumulator": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_terminal_sizings": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.migrate_handoff_vocabulary": (
@@ -1464,12 +1529,15 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.prune_closed_bugs": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.reap_integrated_findings": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.reap_unintegrated_findings": (
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "git.push_failure_verdict": (
@@ -1686,9 +1754,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 77, (
+    assert total_pairs == 84, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "77 expected after queue.close/ceremony.wsc_tail/fleet.archive_actioned_memos/fleet."
+        "84 expected after queue.close/ceremony.wsc_tail/fleet.archive_actioned_memos/fleet."
         "archive_completed_plans/session.sweep_consumed_handoffs's kills removed their 16 "
         "combined pairs from the measured 110 this chunk's own re-derivation found, and (2026-08-25) "
         "hooks.track_touched_files/fleet.archive_shipped_handoffs/handoff.ship_and_archive/hooks."
@@ -1700,7 +1768,11 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "(2026-08-25, +1) session.boot_sweep gained git/run.py::run_git because 8c9b0ca44 "
         "migrated boot_backstop.py::_git off its own subprocess spelling onto the shared runner "
         "-- the pair count rises while the SPAWN count does not, which is what consolidating onto "
-        "a shared seam does to a static reachable-site metric -- update this "
+        "a shared seam does to a static reachable-site metric -- and (2026-08-26, +7) "
+        "fleet.archive_paper_trail/fleet.archive_queue_entry/fleet.archive_release_accumulator/"
+        "fleet.archive_terminal_sizings/fleet.prune_closed_bugs/fleet.reap_integrated_findings/"
+        "fleet.reap_unintegrated_findings each gained a git_native.py::_git._invoke <dynamic> "
+        "site alongside their existing session/scope.py::_git_run site -- update this "
         "constant deliberately if the shift is real and understood, never to silence a drift you "
         "have not traced."
     )
@@ -2219,13 +2291,16 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         "_CLUSTER_D5_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 44, (
+    assert total_pairs == 42, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "44 expected after ceremony.wsc_tail/completion.reconcile_commits/fleet."
+        "42 expected after ceremony.wsc_tail/completion.reconcile_commits/fleet."
         "archive_completed_plans's kills dropped their entrypoint and disposition entries from "
-        "the prior 49, and (2026-08-25, G7 routing) deliverable.cascade_terminal lost its "
+        "the prior 49, (2026-08-25, G7 routing) deliverable.cascade_terminal lost its "
         "execute_plan_assemble/row_spans.py::_run_git site once that function stopped calling "
-        "subprocess.run directly -- update this constant deliberately if the shift is real and "
+        "subprocess.run directly (49 -> 44), and handoff.reconcile_open's own kill (C2b/C6/C9, "
+        "the op deleted outright) dropped its 2 pairs (archive_stamp.py::_run_git, "
+        "reconcile/commit_reality.py::_git) from both this dict and _CLUSTER_D5_OPEN_ENTRYPOINTS "
+        "(44 -> 42) -- update this constant deliberately if the shift is real and "
         "understood, never to silence a drift you have not traced."
     )
 

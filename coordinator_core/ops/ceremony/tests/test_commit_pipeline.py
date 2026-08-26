@@ -815,9 +815,19 @@ def test_worktree_deletion_probe_spawns_exactly_one_git(tmp_path, monkeypatch):
     assert {
         commit_pipeline_mod._worktree_key(repo, n) for n in names[:3]
     } <= deleted
-    assert len(calls) == 1, (
+    # 2026-08-26: retargeted from `== 1` to `== 0`. The old assertion pinned
+    # the PREVIOUS optimization (chunked-scoped -> one unscoped read) as a
+    # FLOOR, so it failed on the improvement rather than on a regression. The
+    # probe now answers from `git_state.read_index` + `os.path.lexists` and
+    # spawns nothing; `git status` walked the whole worktree to answer a
+    # question about caller-named paths.
+    # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2
+    #   state/lessons/2026-08-26-a-spawns-stated-purpose-is-not-evidence-the-spawn-is-needed.md
+    assert len(calls) == 0, (
         f"deletion probe spawned {len(calls)} git process(es) for a "
-        f"{len(names)}-path batch -- expected exactly one, unscoped"
+        f"{len(names)}-path batch -- expected ZERO: this is an index read, "
+        "not a git question. One spawn means the in-process path was skipped "
+        "(an `IndexParseError` fallback, or the read was reverted)."
     )
 
 
@@ -2542,6 +2552,29 @@ def test_residue_paths_chunked_partial_chunk_failure_only_taints_that_chunk(monk
     assert other_paths <= residue, "every OTHER chunk's paths must still answer correctly"
 
 
+def _force_deletion_probe_fallback(monkeypatch):
+    """Make `_worktree_deleted_paths` take its `git status` FALLBACK arm.
+
+    That probe answers in-process from `git_state.read_index` + `os.path.
+    lexists` as of 2026-08-26 (C2 of docs/plans/2026-08-26-the-commit-op-stops-
+    asking-git-eleven-times.md), falling back to the porcelain-v2 read only on
+    `IndexParseError` -- an unmerged, split, or unsupported-version index.
+
+    The tests below predate that change and drive the parsing arm with a FAKE
+    status stream against a nonexistent repo root, so they cannot exercise the
+    in-process path at all. The fallback still ships and must stay covered, so
+    they pin it explicitly rather than being deleted or silently retargeted.
+    Coverage for the in-process path is a real-repo test, not a mocked one --
+    see `test_worktree_deletion_probe_spawns_exactly_one_git` (now asserting
+    ZERO) and `test_explicit_stage_large_batch_unstaged_deletion_classified_
+    via_unscoped_probe`.
+    """
+    def _raise(*_a, **_kw):
+        raise commit_pipeline_mod.IndexParseError("forced fallback (test)")
+
+    monkeypatch.setattr(commit_pipeline_mod, "read_index", _raise)
+
+
 def test_worktree_deleted_paths_intersects_requested_paths_only(monkeypatch):
     """`_worktree_deleted_paths()` takes ONE unscoped `git status` read and
     intersects the result against the CALLER's requested `paths` in-process
@@ -2572,6 +2605,7 @@ def test_worktree_deleted_paths_intersects_requested_paths_only(monkeypatch):
 
     paths_universe = paths + [foreign_deleted]
     monkeypatch.setattr(git_native, "status_porcelain_v2", _fake_status_v2)
+    _force_deletion_probe_fallback(monkeypatch)
 
     deleted = commit_pipeline_mod._worktree_deleted_paths(Path("/fake/root"), paths)
 
@@ -2597,6 +2631,7 @@ def test_worktree_deleted_paths_probe_failure_raises(monkeypatch):
         return GitResult(returncode=1, stdout="", stderr="simulated probe failure")
 
     monkeypatch.setattr(git_native, "status_porcelain_v2", _fake_status_v2)
+    _force_deletion_probe_fallback(monkeypatch)
 
     with pytest.raises(commit_pipeline_mod.WorktreeDeletionProbeFailed):
         commit_pipeline_mod._worktree_deleted_paths(Path("/fake/root"), paths)
@@ -2634,7 +2669,17 @@ def test_explicit_stage_large_batch_unstaged_deletion_classified_via_unscoped_pr
 
     outcome = explicit_stage(repo, all_paths, caller_paths={"docs/to-delete.md"})
 
-    assert len(calls) == 1, "exactly one unscoped status-v2 read, regardless of batch size"
+    # 2026-08-26: retargeted 1 -> 0. This is now the REAL-REPO proof that the
+    # in-process probe (`read_index` + `os.path.lexists`) classifies a
+    # caller-named deletion correctly at 1200-path scale while spawning
+    # nothing. The behavioural assertions below are unchanged and are what the
+    # test is actually for; the spawn count is the budget half.
+    # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2
+    assert len(calls) == 0, (
+        f"deletion probe spawned {len(calls)} status-v2 read(s) -- expected "
+        "ZERO: an index read answers this. One means the `IndexParseError` "
+        "fallback fired, or the in-process path was reverted."
+    )
     assert outcome.exit_code == 0
     assert "docs/to-delete.md" in outcome.deletion_paths
     assert "docs/to-delete.md" not in outcome.missing_caller_paths
@@ -5742,6 +5787,17 @@ def test_msys_path_form_is_rejected_not_normalised(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _assert_single_push_prefix(message: str) -> None:
+    """Exactly one leading `git push: `, on every branch that builds one.
+
+    Counting occurrences would false-fail on a remote diagnostic that quotes
+    the literal text (2026-08-26 review, slice 3 P2) -- the invariant is about
+    the PREFIX, so it is checked at the front of the string and nowhere else.
+    """
+    assert message.startswith("git push: "), message
+    assert not message.startswith("git push: git push: "), message
+
+
 def _budget_repo(tmp_path):
     """A `work/*` repo with a real remote configured, past every early return
     in `push_with_retry` so the retry ladder itself is what runs."""
@@ -5778,6 +5834,7 @@ def test_push_budget_exhausted_between_attempts_is_failed_not_unconfirmed(tmp_pa
     assert outcome.exit_code != 0
     assert "budget" in outcome.failed[0]
     assert "Nothing is in flight" in outcome.failed[0]
+    _assert_single_push_prefix(outcome.failed[0])
 
 
 def test_push_budget_exhausted_at_the_fetch_leg_never_fetches(tmp_path, monkeypatch):
@@ -5840,7 +5897,38 @@ def test_push_budget_exhausted_at_the_fetch_leg_never_fetches(tmp_path, monkeypa
     # doubled prefix, so the branch this test pins shipped `"git push: git
     # push: stopped after ..."` while its attempt-0 sibling said it once
     # (2026-08-26 review, slice 2).
-    assert outcome.failed[0].count("git push: ") == 1, outcome.failed[0]
+    _assert_single_push_prefix(outcome.failed[0])
+
+
+def test_push_reject_without_upstream_says_git_push_once(tmp_path, monkeypatch):
+    """The third prefix producer, on the branch no budget test reaches.
+
+    `_budget_repo` configures a remote but no tracking ref, so a rejected push
+    breaks here rather than going on to fetch. The reason built on this branch
+    reaches `PushOutcome` through the ladder's shared final return, which adds
+    the `git push: ` prefix -- so this branch must not add its own.
+
+    Red proof: restore the `f"git push: rejected and no upstream ..."` literal
+    and the message reads `"git push: git push: rejected ..."`. The 2026-08-26
+    review found this by enumerating producers; the budget tests could not,
+    because each of them establishes a real upstream to reach the fetch leg."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    monkeypatch.setattr(
+        git_native,
+        "push",
+        lambda *a, **kw: GitResult(
+            returncode=1, stdout="", stderr="! [rejected] (non-fast-forward)"
+        ),
+    )
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.failed
+    _assert_single_push_prefix(outcome.failed[0])
+    assert "no upstream tracking ref resolvable" in outcome.failed[0]
 
 
 def test_push_budget_sizes_each_leg_from_the_remainder(tmp_path, monkeypatch):

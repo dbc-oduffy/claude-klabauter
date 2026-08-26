@@ -17,11 +17,16 @@ and `coordinator_core/`), not only the core 45 -- this is the leg that notices a
 register-bearing file by existence alone, before anyone classifies it core or outlier.
   - Leg 1 (`_discover_candidate_ids`, ~200ms on the real corpus): a byte-level regex scan, no
     AST. Catches a NEW register-bearing file.
-  - Leg 2 (`test_leg2_population_artifact_matches_current_candidates`, ~15ms): compares the
-    fresh leg-1 scan against the frozen snapshot recorded in the JSON artifact. A mismatch in
-    EITHER direction (new candidate appeared, or a recorded one vanished) means the artifact is
-    stale and must be regenerated -- see `_REGENERATE_COMMAND` below, printed verbatim in the
-    failure message.
+  - Leg 2 (`test_leg2_population_artifact_matches_current_candidates`, ~15ms, CADENCE-marked):
+    compares the fresh leg-1 scan against the frozen snapshot recorded in the JSON artifact. A
+    mismatch in EITHER direction (new candidate appeared, or a recorded one vanished) means the
+    artifact is stale and must be regenerated -- see `_REGENERATE_COMMAND` below, printed
+    verbatim in the failure message. It is cadence-marked for noise, not cost: it compares
+    against the whole corpus, so on a shared branch any peer's register edit reddens it for
+    every other session. The test's own docstring carries the full reasoning.
+  - Leg 2's integrity half (`test_leg2_population_artifact_is_internally_consistent`) stays in
+    the FAST tier: it reads only the artifact, so no peer can redden it, and it catches the one
+    thing regeneration cannot fix -- an artifact that was hand-edited rather than derived.
 
 ROW RESOLUTION (AC1, AC7). Every core-45 row falls into one of two buckets:
   - PATH rows (`repo-path` / `bare-filename`) are self-identifying by shape -- a leaf containing
@@ -503,6 +508,7 @@ def test_leg1_candidate_discovery_finds_the_committed_core_registers() -> None:
     )
 
 
+@pytest.mark.cadence
 def test_leg2_population_artifact_matches_current_candidates() -> None:
     """AC8 leg 2: the frozen artifact's candidate snapshot vs. a fresh leg-1 scan.
 
@@ -510,6 +516,22 @@ def test_leg2_population_artifact_matches_current_candidates() -> None:
     artifact means a new register-bearing file landed and nobody regenerated; a candidate in the
     artifact but absent now means one vanished (which is also this sweep's canary surface: see
     `test_canary_registers_are_present_in_the_derived_population`).
+
+    CADENCE-MARKED, and the reason is not cost -- this leg is ~15ms. It compares against the
+    WHOLE corpus, so on a shared branch any peer adding or removing a register anywhere under
+    the census roots reddens it for every other session, on a change they did not make. That was
+    observed twice in one execution session. A gate that reddens on other people's work is one
+    the fleet learns to regenerate past without reading, and the inherited anti-scope from
+    `docs/plans/2026-08-25-a-collector-that-sees-past-one-hop.md` names that training effect as
+    a reason not to ship a noisy gate -- it would be this workstream's own defect class, one
+    level up.
+
+    What this does NOT trade away: enrolment-by-existence still fires, just at cadence gates
+    rather than per-commit. The window in which a brand-new register sits unenrolled is one
+    cadence gate wide, and nothing depends on that register's rows being swept before then. The
+    artifact's own integrity check is deliberately NOT here -- see
+    `test_leg2_population_artifact_is_internally_consistent`, which stays in the fast tier
+    because it cannot be reddened by anyone else's work.
     """
     artifact = _load_population_artifact()
     stored = _stored_candidate_ids(artifact)
@@ -523,6 +545,19 @@ def test_leg2_population_artifact_matches_current_candidates() -> None:
         f"(new: {sorted(new_candidates)!r}, vanished: {sorted(vanished_candidates)!r}). "
         f"Regenerate with: {_REGENERATE_COMMAND}"
     )
+
+
+def test_leg2_population_artifact_is_internally_consistent() -> None:
+    """The artifact's recorded hash matches its own recorded candidate list.
+
+    FAST TIER, deliberately, while its sibling above is cadence-marked. This assertion reads
+    only the artifact -- never the corpus -- so no peer's register edit can redden it. It
+    catches the one failure regeneration cannot fix and staleness does not imply: an artifact
+    someone hand-edited instead of regenerating, which would otherwise let a hand-written
+    candidate list masquerade as a derived one.
+    """
+    artifact = _load_population_artifact()
+    stored = _stored_candidate_ids(artifact)
 
     assert artifact["candidate_ids_sha256"] == _candidate_ids_hash(stored), (
         "register_population.json's recorded hash does not match its own recorded candidate "

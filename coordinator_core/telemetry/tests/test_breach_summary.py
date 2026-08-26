@@ -255,3 +255,66 @@ def test_breach_summary_does_not_mutate_its_input_rows():
     breach_summary(entries, bar_ms=500.0, now=BASE_T)
 
     assert entries[0] == before
+
+
+# ---------------------------------------------------------------------------
+# origin filtering -- the field exists so a census does not convict an op on
+# harness traffic, and until 2026-08-26 this census read it not at all.
+# ---------------------------------------------------------------------------
+
+
+def _origin(row, origin):
+    row = dict(row)
+    row["origin"] = origin
+    return row
+
+
+def test_declared_benchmark_rows_do_not_convict_an_op():
+    """The motivating case, at its real shape: a harness op that sleeps 12-20s
+    BY DESIGN dominated `stolen_ms` and ranked worst on the whole box, ahead of
+    an op genuinely breaching its budget."""
+    entries = [_origin(_complete("sandbox.sleep", 20_000.0), "benchmark")]
+    entries += [_complete("ceremony.commit", 2_008.0) for _ in range(28)]
+
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+
+    assert [r["op"] for r in summary["ops"]] == ["ceremony.commit"]
+    assert summary["totals"]["breaching_ops"] == 1
+
+
+def test_declared_test_rows_do_not_convict_an_op():
+    """`invocation_origin` stamps TEST from a live pytest run, so every suite
+    that dispatches would otherwise land in the census that convicts ops."""
+    entries = [_origin(_complete("op.a", 30_000.0), "test")]
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+    assert summary["ops"] == []
+    assert summary["totals"]["breaching_ops"] == 0
+
+
+def test_absent_origin_still_counts():
+    """Every row written before the field existed lacks the key. Dropping them
+    would silently delete real traffic from the census meant to surface it --
+    contaminated but visible beats clean but blind."""
+    entries = [_complete("op.a", 30_000.0)]  # no "origin" key at all
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+    assert _row_for(summary, "op.a")["breaches"] == 1
+
+
+def test_declared_production_counts():
+    entries = [_origin(_complete("op.a", 30_000.0), "production")]
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+    assert _row_for(summary, "op.a")["breaches"] == 1
+
+
+def test_filtered_rows_leave_no_trace_in_totals():
+    """A benchmark row must not inflate `attempts` either -- a breach RATE
+    computed against a contaminated denominator is wrong in the other
+    direction, and `attempts` is that denominator."""
+    entries = [_origin(_complete("op.a", 100.0), "benchmark") for _ in range(50)]
+    entries += [_complete("op.a", 30_000.0)]
+
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+
+    row = _row_for(summary, "op.a")
+    assert row["attempts"] == 1
+    assert row["breach_rate"] == 1.0

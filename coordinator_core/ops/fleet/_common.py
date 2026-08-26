@@ -629,35 +629,29 @@ def _message_with_hookless_trailers(
     return subject_text + "\n\n" + "\n".join(lines) + "\n"
 
 
-def _replay_post_commit_hook(worktree_root: Union[str, Path]) -> None:
-    """Replay `coordinator-auto-push` (`post-commit`) after a successful CAS
-    landing — the hook the replaced `git commit` used to fire and that
-    `commit-tree`/`update-ref` fire for nobody. A fleet archival commit that
-    never replays it never pushes, which surfaces downstream as auto-push lag
-    with no attributable cause. Same replay `git_native.
-    _replay_post_commit_auto_push` performs for its own ladder, invoked the
-    same way the installed hook invokes it (`--repo-root` only, so the
-    hook's own detached-background default is what runs).
-
-    Best-effort: `auto_push.main()` already never raises, and the import is
-    wrapped too so a stripped-down install cannot turn a landed commit into
-    an exception here.
-    """
-    try:
-        from coordinator_core.hooks import auto_push
-
-        # `--no-claim-release`: both archival commit seams in this module
-        # release their own claims immediately after this replay, with the
-        # paths they already know. Without the flag `_release_claims_for_head`
-        # re-derives the identical path set with a `git show` and releases it a
-        # second time -- the double release its own docstring says cannot
-        # happen, because that guarantee rests on `_ENV_SUPPRESS_FOR_SYNC_PUSH`,
-        # which this path must not set (it would stand the push down too).
-        # Measured 2026-08-25: two spawns, `git show` + `git status`, for a job
-        # already done.
-        auto_push.main(["--repo-root", str(worktree_root), "--no-claim-release"])
-    except Exception:  # noqa: BLE001 — a landed commit must not fail on hook replay
-        pass
+# `_replay_post_commit_hook` (the `coordinator-auto-push` post-commit replay)
+# was REMOVED HERE (C2, 2026-08-26, docs/plans/2026-08-26-the-archival-seam-
+# stops-asking-git-at-all.md) — PM ruling, ratified and restated on re-ask:
+# auto-push moves to other ceremonies and does not belong on this path. The
+# replay was the single largest process-count item left in this call: it
+# spawned `auto_push.main()`, which itself spawns `rev-parse` and `push`, and
+# `push` spawns its OWN children (`receive-pack`, `index-pack`) invisible to
+# an in-process spy — roughly 8 of the call's 19 processes, larger than
+# everything C1 (this same plan) touches.
+#
+# WHAT IS LOST, in the removed docstring's own words: "A fleet archival
+# commit that never replays it never pushes, which surfaces downstream as
+# auto-push lag with no attributable cause." Removing the call means an
+# archival commit landed via `archive_and_commit`/`rm_and_commit` is pushed
+# by whatever pushes next (the installed `post-commit` hook on a caller's own
+# `git commit`, a scheduled sync sweep, or another ceremony's own push step),
+# never by itself. See each function's own docstring for the same note at
+# its call site.
+#
+# `auto_push.py` itself is untouched — it is in a DIFFERENT plan's scope
+# (`pln-the-commit-op-stops-asking-git-f5a8a9`, landed `f9a44e039`) and is
+# actively edited by a concurrent session; only the call from this module is
+# removed, never the callee.
 
 
 # ---------------------------------------------------------------------------
@@ -1724,17 +1718,25 @@ async def archive_and_commit(
     update-ref` — is GONE): the batch's `{path: (mode, sha) | _ABSENT}`
     tree-delta is assembled directly, in process, and handed to
     `_commit_via_head_spine`, which rewrites HEAD's tree spine, builds the
-    commit object, and lands it via a locked `cas_ref` compare-and-swap — the
-    ONLY git spawn left anywhere in this build is the one batched `git
-    hash-object -w --stdin-paths` call that writes every acted dst's blob.
-    For each acted move: dst's blob sha comes from hashing dst's CURRENT
-    on-disk content (never HEAD's — a `restage_src=True` move's content was
+    commit object, and lands it via a locked `cas_ref` compare-and-swap.
+    An all-`restage_src=False` batch issues ZERO git processes of its own
+    (C1 of docs/plans/2026-08-26-the-archival-seam-stops-asking-git-at-all.md,
+    2026-08-26): such a move is a pure rename of bytes already in the object
+    store, so BOTH `head_entry[0]` (mode) and `head_entry[1]` (blob sha) come
+    straight from `read_tree_spine`, spawn-free. The only git spawn left
+    anywhere in this build is one batched `git hash-object -w --stdin-paths`
+    call, over the `restage_src=True` subset ONLY (never called at all when
+    that subset is empty) — for each such move, dst's blob sha comes from
+    hashing dst's CURRENT on-disk content (never HEAD's — its content was
     authored fresh on disk just before this call and may legitimately differ
-    from HEAD's own blob for src); dst's MODE is inherited from HEAD's entry
-    for src, read spawn-free via `read_tree_spine`, which PRESERVES an
-    executable bit (`100755`) HEAD already recorded — a plain `git add`
-    staging pass would silently normalise that bit away under
-    `core.filemode=false` (AC-10). src is marked `_ABSENT` (deleted).
+    from HEAD's own blob for src); dst's MODE is still inherited from HEAD's
+    entry for src either way, read spawn-free via `read_tree_spine`, which
+    PRESERVES an executable bit (`100755`) HEAD already recorded — a plain
+    `git add` staging pass would silently normalise that bit away under
+    `core.filemode=false` (AC-5). src is marked `_ABSENT` (deleted). A
+    `restage_src=False` src with no HEAD tree entry at all is refused
+    (`untracked-at-head`, in failed[]) rather than defaulted or hashed — see
+    the assembled-tree-build comment below.
 
     For each Move:
     1. Ensures dst.parent exists (os.replace will not create directories).
@@ -1754,25 +1756,26 @@ async def archive_and_commit(
     src (src's LAST-COMMITTED content), not what was on disk — os.replace
     always moves current on-disk bytes, so there is no stale blob to re-key.
 
-    That is NOT the whole of what the drift guard was doing, and removing
-    the guard entirely (2026-08-21 F-5 swap, corrected by the C5-REPAIR)
-    reopened a second, undocumented job it also did: refusing to archive a
-    candidate whose disk content has diverged from HEAD but was never
-    committed — a buggy op, a half-finished edit, or a peer session mid-write
-    on this shared branch writing e.g. `deployment_state: shipped` to disk
-    without staging or committing it. Without the guard, os.replace happily
-    relocates that uncommitted content: every terminality predicate reads
-    disk, so the SHA-gate/terminality re-verify passes, and archival proceeds
-    on a candidate nothing has actually finalised. That is an archive-gate
-    bypass, the same class b3e61bd00 named, reached by a different path.
+    That is NOT the whole of what the drift guard used to do (2026-08-21 F-5
+    through 2026-08-25): it also refused to archive a candidate whose disk
+    content had diverged from HEAD but was never committed. The C1 chunk of
+    docs/plans/2026-08-26-the-archival-seam-stops-asking-git-at-all.md
+    RETIRED that refusal outright, by PM ruling, rather than re-siting it:
 
-    So the batched disk/HEAD drift check (below, ahead of the per-move loop)
-    is RESTORED as a refusal gate for restage_src=False moves — it costs zero
-    additional spawns (it was already batched before the F-5 swap; see
-    _argv_path_chunks). restage_src=True moves are exempt: the caller
-    authored src's current on-disk content on purpose immediately before
-    queuing the move (e.g. a terminality stamp just written), so drift there
-    is expected, not suspicious. See Move.restage_src's docstring.
+        PM RULING, 2026-08-26 — "Archival moves can assume no peer touches a
+        terminal handoff between the sweep and the commit — yes, especially
+        if the op is meant to run subsecond." (PM, verbatim.) The candidates
+        are already terminal: claimed, closed, selected by a sweep that
+        refuses live-claimed records — a peer editing a closed record inside
+        a one-call window is not a shape this fleet produces, and the
+        sweep's own live-claim refusal is the check that actually covers it.
+        This is a DIFFERENT guard from the HEAD-race CAS inside
+        `_commit_via_head_spine` (b4f0bfe88) — that CAS catches a peer
+        COMMIT landing mid-sweep and is untouched by this ruling; the drift
+        gate caught src's BYTES changing on disk mid-sweep, with no
+        incident ever behind it. No stat-based or in-process substitute
+        replaces it — reintroducing one re-opens the fork
+        `git_state.py`'s "THE WORKTREE HASH DOES NOT WORK" comment closes.
 
     After all moves: the `assembled` tree-delta built directly from the acted
     moves (see above) IS the exact scope of the commit — an explicitly-keyed
@@ -1799,6 +1802,14 @@ async def archive_and_commit(
 
     No private index exists to clean up any more — `_commit_via_head_spine`
     reads no `GIT_INDEX_FILE` and mutates no index, private or shared.
+
+    DOES NOT PUSH (C2, 2026-08-26, PM ruling — auto-push moves to other
+    ceremonies and does not belong on this path). A landed commit is pushed
+    by whatever pushes next — the installed `post-commit` hook firing on a
+    caller's own later `git commit`, a scheduled sync sweep, or another
+    ceremony's own push step — never by this function itself. See the
+    removal note where `_replay_post_commit_hook` used to be defined, above,
+    for the cost this traded away.
 
     FORWARD-B hazard (DR-211 D3, amended 2026-07-26): a `git commit -- <paths>` call
     commits WORKTREE content for the named paths, not the intended content — so a dirty
@@ -1838,6 +1849,17 @@ async def archive_and_commit(
       index hint. See F-5.
     - NEVER opens a `GIT_INDEX_FILE` — `_commit_via_head_spine` reads and
       mutates no index, private or shared, at all.
+    - NEVER hashes a blob in-process (e.g. a hand-rolled `sha1("blob "+len+
+      "\0"+content)`) to avoid the remaining `git hash-object` spawn —
+      `core.autocrlf`/`core.filemode`/smudge filters make an in-process
+      worktree hash wrong for a meaningful fraction of paths on this repo;
+      see `git_state.py`'s "THE WORKTREE HASH DOES NOT WORK" comment. C1 of
+      docs/plans/2026-08-26-the-archival-seam-stops-asking-git-at-all.md
+      reaches zero spawns by having NOTHING TO HASH for a `restage_src=False`
+      batch, never by hashing more cheaply.
+    - NEVER reintroduces a disk/HEAD drift check (stat-based or otherwise) —
+      retired outright by PM ruling, 2026-08-26; see the comment where it
+      used to sit, above the per-move os.replace loop.
     - stdout/stderr captured as bytes (not text=True) — decoded with errors="replace" on failure.
 
     Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4);
@@ -1877,15 +1899,6 @@ async def archive_and_commit(
     import asyncio
 
     try:
-        # Hardened allowlist env: strips GIT_SSH_COMMAND, GIT_EXEC_PATH,
-        # GIT_PROXY_COMMAND, GIT_TEMPLATE_DIR and all other GIT_* execution/hook
-        # redirect vectors (LOW env-hardening fix; see _make_git_env). No
-        # `idx_path` -- this function no longer stages through a private
-        # `GIT_INDEX_FILE`; the drift-check `git diff HEAD -- <paths>` call
-        # below compares the worktree directly against HEAD and is unaffected
-        # by which index (if any) is bound in this env.
-        base_env = _make_git_env()
-
         # HEAD-race CAS anchor (b4f0bfe88 etc., 2026-08-18/20): captured once,
         # here, spawn-free (reads .git/HEAD directly) -- and used below both
         # as the commit's parent and as `_commit_via_head_spine`'s CAS
@@ -1893,9 +1906,9 @@ async def archive_and_commit(
         # silently inherited. (The read-tree-HEAD private-index seed this
         # comment used to describe is gone -- see the module-level import
         # note above `_commit_via_head_spine` -- but the race this anchor
-        # closes is the same one: a peer commit landing in the drift-check/
-        # os.replace window between here and the commit below must not be
-        # silently reverted.)
+        # closes is the same one: a peer commit landing in the os.replace
+        # window between here and the commit below must not be silently
+        # reverted.)
         old_head = _read_head_sha(worktree_root)
         if old_head is None:
             return [], [
@@ -1915,66 +1928,22 @@ async def archive_and_commit(
         created_dirs_by_id: dict = {}
 
         # ---------------------------------------------------------------
-        # Batched disk/HEAD drift check (RESTORED, C5-REPAIR 2026-08-21) —
-        # runs ONCE for the whole batch, ahead of the per-item move loop.
+        # NO DISK/HEAD DRIFT CHECK HERE (deliberate absence, C1 of
+        # docs/plans/2026-08-26-the-archival-seam-stops-asking-git-at-all.md,
+        # 2026-08-26) — this function used to spawn a batched
+        # `git diff --name-only HEAD -- <srcs>` at this point, chunked via
+        # `_argv_path_chunks`, and refuse any restage_src=False move whose
+        # src had uncommitted disk content diverging from HEAD.
         #
-        # The F-5 os.replace swap correctly retired the STALE-BLOB hazard
-        # this check originally guarded (`git mv` re-keying a private
-        # index's last-committed blob instead of current disk content — see
-        # this function's docstring). It does NOT retire the check's second,
-        # undocumented job: refusing to archive a restage_src=False
-        # candidate whose disk content has diverged from HEAD but was never
-        # staged or committed. os.replace has no notion of "is this
-        # committed" — it moves whatever bytes are on disk unconditionally —
-        # so without this refusal, a buggy op, a half-finished edit, or a
-        # peer session mid-write on this shared branch can have its
-        # uncommitted terminality stamp (e.g. `deployment_state: shipped`)
-        # relocated into the archive the instant the (disk-reading)
-        # terminality predicate passes. That is the b3e61bd00
-        # archive-gate-bypass class again, reached through os.replace rather
-        # than through git mv's stale-blob path.
-        #
-        # `git diff --name-only -- <every restage_src=False move's src>` in
-        # one batched, chunked call (see _argv_path_chunks) yields the SET of
-        # drifted paths; membership is tested per move in the loop below.
-        # restage_src=True moves are exempt — the caller authored src's
-        # current disk content on purpose immediately before queuing the
-        # move (see Move.restage_src's docstring), so drift there is
-        # expected, not suspicious. A batch failure (nonzero rc — a genuine
-        # git error, not "some files differ") is attributed to every
-        # restage_src=False move individually in the loop below, the same
-        # "reason echoed per item" shape the resync batch failures use.
-        plain_srcs = [m.src for m in moves if not m.restage_src]
-        drift_batch_error: Optional[str] = None
-        drifted_ids: set = set()
-        if plain_srcs:
-            for chunk in _argv_path_chunks(plain_srcs):
-                diff_argv = ["git", "diff", "--name-only", "HEAD", "--"] + chunk
-                diff_proc = await asyncio.create_subprocess_exec(
-                    *diff_argv,
-                    cwd=str(worktree_root),
-                    env=base_env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    **no_console_creationflags(),
-                )
-                diff_out, diff_stderr = await diff_proc.communicate()
-                if diff_proc.returncode != 0:
-                    err_msg = diff_stderr.decode(errors="replace").strip()
-                    drift_batch_error = (
-                        f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed"
-                    )
-                    # One failed chunk fails the whole drift check: a partial
-                    # drifted_ids set would read as "these moves are clean"
-                    # for every path the unrun chunks would have named.
-                    drifted_ids = set()
-                    break
-                drifted_ids |= {
-                    line.strip()
-                    for line in diff_out.decode(errors="replace").splitlines()
-                    if line.strip()
-                }
-
+        # PM RULING, 2026-08-26 — "Archival moves can assume no peer touches
+        # a terminal handoff between the sweep and the commit — yes,
+        # especially if the op is meant to run subsecond." (PM, verbatim.)
+        # See archive_and_commit's own docstring above for the full ruling
+        # text and why the HEAD-race CAS inside `_commit_via_head_spine`
+        # (b4f0bfe88) is a DIFFERENT guard, untouched by this removal. No
+        # stat-based or in-process substitute replaces this check — do not
+        # re-add one; that reopens the fork `git_state.py`'s "THE WORKTREE
+        # HASH DOES NOT WORK" comment closes.
         # ---------------------------------------------------------------
         # Per-item move: os.replace, in-process (F-5 swap, 2026-08-21).
         #
@@ -1988,10 +1957,8 @@ async def archive_and_commit(
         # bytes regardless, so there is nothing left for that staging to do
         # — it is correctly gone (the new unconditional batched `git add --
         # src dst` below stages current on-disk bytes for every move
-        # already). The disk/HEAD DRIFT CHECK above is a DIFFERENT
-        # mechanism (a refusal gate, not a staging optimisation) and is
-        # restored, not moot — see the block above and Move.restage_src's
-        # docstring for why.
+        # already). There is no disk/HEAD drift check left to run ahead of
+        # this loop either — see the removal comment immediately above.
         #
         # os.replace has no split-failure mode (unlike `git mv`, which could
         # rename on disk and then fail the index update) — it is one atomic
@@ -2003,32 +1970,6 @@ async def archive_and_commit(
             # or a failed commit (further below) can remove the empty tree
             # it created rather than leaving destination residue.
             created_dirs_by_id[move.candidate_id] = _mkdir_and_track_created(move.dst.parent)
-
-            if not move.restage_src:
-                # Membership test against the batched drift check computed
-                # once, above this loop — see that block's comment for why a
-                # batch failure is attributed per item here rather than
-                # re-spawning per move.
-                if drift_batch_error is not None:
-                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
-                    failed.append({
-                        "id": move.candidate_id,
-                        "reason": drift_batch_error,
-                    })
-                    continue
-                if rel_id(move.src, worktree_root) in drifted_ids:
-                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
-                    failed.append({
-                        "id": move.candidate_id,
-                        "reason": (
-                            "disk/HEAD drift: src has uncommitted changes not "
-                            "reflected in HEAD — refusing move (a terminality "
-                            "check that read on-disk content would be "
-                            "misrepresented by archiving stale-relative-to-HEAD "
-                            "content that was never committed)"
-                        ),
-                    })
-                    continue
 
             if not move.force and move.dst.exists():
                 # os.replace has no "fail if dst exists" mode (unlike plain
@@ -2064,65 +2005,138 @@ async def archive_and_commit(
         # `git add -- src dst` staging dance entirely. `_commit_via_head_spine`
         # (imported from ops.ceremony.git_native, see the module-level import
         # note) lands straight from this dict via a locked ref CAS with ZERO
-        # git spawns of its own -- the only spawn left in this whole build is
-        # the one batched `git hash-object -w --stdin-paths` below.
+        # git spawns of its own. A `restage_src=False` move (a rename of
+        # bytes already in the object store) needs no spawn at all -- see the
+        # PM-ruling block below; the only spawn left anywhere in this build
+        # is one batched `git hash-object -w --stdin-paths`, over the
+        # `restage_src=True` subset ONLY, and only when that subset is
+        # non-empty (C1 of docs/plans/2026-08-26-the-archival-seam-stops-
+        # asking-git-at-all.md).
         src_rel_by_id = {m.candidate_id: rel_id(m.src, worktree_root) for m in acted_moves}
         dst_rel_by_id = {m.candidate_id: rel_id(m.dst, worktree_root) for m in acted_moves}
 
-        # HEAD's mode for each acted src, spawn-free (`read_tree_spine` reads
-        # loose/packed tree objects in process). Repathing a HEAD-tracked
-        # blob to its new dst this way PRESERVES the mode HEAD recorded for
-        # it (AC-10) -- including `100755` -- which a `git add` staging pass
-        # would silently normalise away under `core.filemode=false`.
+        # HEAD's (mode, sha) for each acted src, spawn-free (`read_tree_spine`
+        # reads loose/packed tree objects in process). Repathing a
+        # HEAD-tracked blob to its new dst this way PRESERVES the mode HEAD
+        # recorded for it (AC-5) -- including `100755` -- which a `git add`
+        # staging pass would silently normalise away under
+        # `core.filemode=false`. For a `restage_src=False` move this ALSO
+        # supplies the blob sha directly (see below) -- such a move is a pure
+        # rename, so `os.replace` moved exactly the bytes HEAD already has
+        # recorded for src, and `head_entry[1]` (probed identical to
+        # `git hash-object`'s own answer, 20/20 paths) needs no spawn to
+        # confirm.
         head_spine = read_tree_spine(worktree_root, list(src_rel_by_id.values()))
 
-        # Current on-disk content at every acted dst, hashed in ONE spawn
-        # regardless of batch size. Deliberately never HEAD's own blob sha:
-        # a `restage_src=True` move's content was authored fresh on disk
-        # immediately before this call (e.g. a terminality stamp) and may
-        # legitimately differ from what HEAD still has recorded for src --
-        # only the MODE is inherited from HEAD, never the content.
-        # `_hash_object_stdin_paths` is a SYNCHRONOUS wrapper (git_native's
-        # own `_git()`, subprocess.run under the hood) -- this module's own
-        # NEGATIVE-SPEC forbids a blocking call on this coroutine's thread
-        # (DR-211 D4, "single asyncio event loop"), so it is offloaded via
-        # `asyncio.to_thread`, the same pattern this function already uses
-        # for `release_committed_claims` below.
-        dst_rel_list = [dst_rel_by_id[m.candidate_id] for m in acted_moves]
-        hash_result = await asyncio.to_thread(
-            _hash_object_stdin_paths, dst_rel_list, cwd=worktree_root,
-        )
+        # `restage_src=True` moves are the ONLY ones needing a fresh hash:
+        # their content was authored fresh on disk immediately before this
+        # call (e.g. a terminality stamp) and may legitimately differ from
+        # what HEAD still has recorded for src -- only the MODE is inherited
+        # from HEAD for those, never the content. Scoped to just this subset,
+        # and not called at all when it is empty (the common archival shape)
+        # -- `git hash-object --stdin-paths` with no input is a spawn that
+        # buys nothing. `_hash_object_stdin_paths` is a SYNCHRONOUS wrapper
+        # (git_native's own `_git()`, subprocess.run under the hood) -- this
+        # module's own NEGATIVE-SPEC forbids a blocking call on this
+        # coroutine's thread (DR-211 D4, "single asyncio event loop"), so it
+        # is offloaded via `asyncio.to_thread`, the same pattern this
+        # function already uses for `release_committed_claims` below.
+        restage_moves = [m for m in acted_moves if m.restage_src]
+        restage_dst_rel_list = [dst_rel_by_id[m.candidate_id] for m in restage_moves]
+        hash_result = None
+        if restage_dst_rel_list:
+            hash_result = await asyncio.to_thread(
+                _hash_object_stdin_paths, restage_dst_rel_list, cwd=worktree_root,
+            )
 
         assembled: Dict[str, Union[Tuple[int, str], object]] = {}
         spine_error: Optional[str] = None
+        untracked_ids: List[str] = []
         if head_spine is None:
             spine_error = "spine-unresolvable: could not read HEAD's tree spine"
-        elif not hash_result.ok:
+        elif hash_result is not None and not hash_result.ok:
             spine_error = (
                 "hash-object-failed: "
                 + (hash_result.stderr.strip() or "git hash-object -w --stdin-paths failed")
             )
+        elif hash_result is not None and len(hash_result.stdout.splitlines()) != len(restage_moves):
+            spine_error = (
+                "hash-object-failed: `git hash-object --stdin-paths` "
+                f"returned {len(hash_result.stdout.splitlines())} sha(s) for "
+                f"{len(restage_moves)} requested path(s) -- refusing to guess "
+                "an alignment"
+            )
         else:
-            dst_shas = hash_result.stdout.splitlines()
-            if len(dst_shas) != len(acted_moves):
-                spine_error = (
-                    "hash-object-failed: `git hash-object --stdin-paths` "
-                    f"returned {len(dst_shas)} sha(s) for {len(acted_moves)} "
-                    "requested path(s) -- refusing to guess an alignment"
-                )
-            else:
-                for m, dst_sha in zip(acted_moves, dst_shas):
-                    src_rel = src_rel_by_id[m.candidate_id]
-                    dst_rel = dst_rel_by_id[m.candidate_id]
-                    parent, _, leaf = src_rel.rpartition("/")
-                    head_entry = head_spine.get(parent, {}).get(leaf)
+            dst_sha_by_id = {}
+            if hash_result is not None:
+                dst_sha_by_id = {
+                    m.candidate_id: dst_sha
+                    for m, dst_sha in zip(restage_moves, hash_result.stdout.splitlines())
+                }
+            for m in acted_moves:
+                src_rel = src_rel_by_id[m.candidate_id]
+                dst_rel = dst_rel_by_id[m.candidate_id]
+                parent, _, leaf = src_rel.rpartition("/")
+                head_entry = head_spine.get(parent, {}).get(leaf)
+                if m.restage_src:
                     # Default to the ordinary file mode when src somehow
-                    # carries no HEAD entry (should not happen for an
-                    # archival move of a tracked file) -- never invent an
-                    # executable bit that was not already there.
+                    # carries no HEAD entry -- never invent an executable
+                    # bit that was not already there. The sha always comes
+                    # from the fresh hash above, never from head_entry.
                     mode = head_entry[0] if head_entry is not None else 0o100644
-                    assembled[dst_rel] = (mode, dst_sha)
-                    assembled[src_rel] = _ABSENT
+                    dst_sha = dst_sha_by_id[m.candidate_id]
+                else:
+                    # `head_entry is None` is now a REFUSAL, not a default:
+                    # once `head_entry[1]` is load-bearing for the blob sha
+                    # (see the PM-ruling comment above), a src with no HEAD
+                    # tree entry has no sha to invent -- an untracked src is
+                    # a caller error, not something to paper over with a
+                    # spawn or a fabricated empty-blob sha.
+                    if head_entry is None:
+                        untracked_ids.append(m.candidate_id)
+                        continue
+                    mode, dst_sha = head_entry[0], head_entry[1]
+                assembled[dst_rel] = (mode, dst_sha)
+                assembled[src_rel] = _ABSENT
+
+        # A restage_src=False move whose src carries no HEAD tree entry never
+        # makes it into `assembled` above -- reverse its os.replace (mirrors
+        # the commit-failure reversal loop further below), drop its now-empty
+        # created dir, and reclassify it to failed[] individually. This does
+        # NOT fail the rest of the batch: unlike a spine/hash-object error
+        # (which is a property of the whole call), "this one src is
+        # untracked" is a property of that one move alone.
+        if untracked_ids:
+            untracked_id_set = set(untracked_ids)
+            for m in acted_moves:
+                if m.candidate_id not in untracked_id_set:
+                    continue
+                if m.dst.exists() and not m.src.exists():
+                    try:
+                        m.dst.rename(m.src)
+                    except OSError as exc:
+                        _LOG.warning(
+                            "archive_and_commit: could not reverse rename for "
+                            "untracked-at-head move %s -> %s: %s",
+                            m.dst, m.src, exc,
+                        )
+                if not m.dst.exists():
+                    _cleanup_created_dirs(created_dirs_by_id[m.candidate_id])
+                failed.append({
+                    "id": m.candidate_id,
+                    "reason": (
+                        "untracked-at-head: src has no HEAD tree entry, so "
+                        "there is no blob sha to repath without a spawn -- "
+                        "refusing rather than inventing one (see the "
+                        "restage_src=False branch of archive_and_commit's "
+                        "assembled-tree build)"
+                    ),
+                })
+            acted_ids -= untracked_id_set
+            acted = [a for a in acted if a["id"] not in untracked_id_set]
+            acted_moves = [m for m in acted_moves if m.candidate_id not in untracked_id_set]
+            if not acted:
+                return acted, failed
 
         # Re-sited AC-7 guarantee. `_empty_private_index_breach` refused a
         # pathspec-less commit whose PRIVATE INDEX resolved to git's empty
@@ -2199,12 +2213,15 @@ async def archive_and_commit(
             else:
                 commit_rc = 0
                 err_msg = ""
-                # The commit is landed; replay the `post-commit` hook the
-                # replaced `git commit`/`update-ref` ladder used to fire.
-                # `_commit_via_head_spine` itself fires no hooks (a direct
-                # locked-ref CAS, same as the `commit-tree` + `update-ref`
-                # plumbing it replaces). See `_replay_post_commit_hook`.
-                _replay_post_commit_hook(worktree_root)
+                # The commit is landed. `_commit_via_head_spine` itself fires
+                # no hooks (a direct locked-ref CAS, same as the
+                # `commit-tree` + `update-ref` plumbing it replaces), and the
+                # `post-commit` (auto-push) replay that used to run here was
+                # REMOVED (C2, 2026-08-26, PM ruling — auto-push moves to
+                # other ceremonies) — see the removal note where
+                # `_replay_post_commit_hook` used to be defined, above, for
+                # the cost and what is lost. This commit is pushed by
+                # whatever pushes next, not by itself.
 
         if commit_rc != 0:
             _LOG.error(
@@ -2405,6 +2422,13 @@ async def rm_and_commit(
     What a FAILED `--remove` here leaves is a different shape, not this one: the
     index still recording a path that HEAD has dropped and disk no longer has.
     That is what the `index_resync_failed` annotation below exists to surface.
+
+    DOES NOT PUSH (C2, 2026-08-26, PM ruling — auto-push moves to other
+    ceremonies and does not belong on this path). A landed commit is pushed
+    by whatever pushes next, never by this function itself — see
+    archive_and_commit's own DOES NOT PUSH note, and the removal note where
+    `_replay_post_commit_hook` used to be defined, for the cost this traded
+    away.
 
     Private index is always cleaned up in the finally block.
 
@@ -2652,11 +2676,14 @@ async def rm_and_commit(
             else:
                 commit_rc = 0
                 err_msg = ""
-                # The commit is landed; replay the `post-commit` hook
-                # the replaced `git commit`/`update-ref` ladder used to
-                # fire. `_commit_via_head_spine` itself fires no hooks
-                # (a direct locked-ref CAS). See `_replay_post_commit_hook`.
-                _replay_post_commit_hook(worktree_root)
+                # The commit is landed. `_commit_via_head_spine` itself
+                # fires no hooks (a direct locked-ref CAS), and the
+                # `post-commit` (auto-push) replay that used to run here
+                # was REMOVED (C2, 2026-08-26, PM ruling — auto-push moves
+                # to other ceremonies) — see the removal note where
+                # `_replay_post_commit_hook` used to be defined, above, for
+                # the cost and what is lost. This commit is pushed by
+                # whatever pushes next, not by itself.
 
         if commit_rc != 0:
             _LOG.error(

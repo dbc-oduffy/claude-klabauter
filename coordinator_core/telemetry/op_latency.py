@@ -207,6 +207,13 @@ INVOCATION_ORIGINS = frozenset({PRODUCTION, TEST, BENCHMARK})
 # nobody may declare themselves unknown.
 UNKNOWN = "unknown"
 
+#: Declared origins a CENSUS must not convict an op on. Deliberately built from
+#: the declared values only -- `UNKNOWN` is absent, so a pre-field row (no
+#: `origin` key at all) still counts. See `breach_summary`, the reader this
+#: exists for, for why absent-stays-counted is the right direction and why a
+#: name-based denylist would undo the whole point of the field.
+_NON_PRODUCTION_ORIGINS = frozenset({TEST, BENCHMARK})
+
 #: A harness declares its own origin here; benchmark runners set it to
 #: `BENCHMARK`. Same env-var-not-import discipline as ROUTE_ENV: this module is
 #: on the dispatch hot path and must not import a harness to ask what it is.
@@ -1056,13 +1063,41 @@ def breach_summary(
     materialised once; pass a BOUNDED iterable
     (`coordinator_core.ops.op_budget_breaches` holds the read bound).
 
+    Rows whose `origin` DECLARES itself `TEST` or `BENCHMARK` are excluded, and
+    this function is the reason that field exists. `invocation_origin`'s own note
+    records the motivating case: 10,832 completions in seven days, none of them
+    production traffic, from five benchmark modules timing the bare-invoke floor
+    -- written down at the sink precisely because "EVERY completion count used to
+    convict an op was contaminated by an unknown amount". Convicting an op is
+    what this function does, and until 2026-08-26 it read the field not at all.
+    A benchmark harness that exists to hammer an op to its ceiling is not that op
+    stealing time from the box, and ranking it worst teaches an operator to skip
+    the line.
+
+    An ABSENT origin stays counted, as `UNKNOWN` rather than as production. Every
+    row written before the field existed lacks the key, and dropping them would
+    silently delete real traffic from the very census meant to surface it -- the
+    "invisible to everyone" failure `invocation_origin`'s docstring weighs and
+    rejects, reached from the reader's side instead of the writer's. Contaminated
+    but visible beats clean but blind; a row that over-counts is arguable to
+    anyone reading it, a row that vanished is arguable to no one.
+
+    Note this filter cannot catch a harness that fails to DECLARE itself: the
+    writer defaults to `PRODUCTION` on purpose, so a forgetful harness
+    contaminates rather than disappears, by design. That is a bug in the harness,
+    fixed at the harness (`ORIGIN_ENV`), and no name-based denylist belongs here
+    -- a hardcoded op-name list is exactly what the `origin` field replaced.
+
     Never raises on a malformed row: a row that is not a dict, or that carries
     a non-numeric `elapsed_ms`/`t_start`, is skipped.
     """
     if now is None:
         now = time.time()
 
-    rows = [e for e in entries if isinstance(e, dict)]
+    rows = [
+        e for e in entries
+        if isinstance(e, dict) and e.get("origin", UNKNOWN) not in _NON_PRODUCTION_ORIGINS
+    ]
 
     per_op: dict = {}
     started: dict = {}

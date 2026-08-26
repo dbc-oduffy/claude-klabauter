@@ -1180,6 +1180,10 @@ _TRUST_CAVEAT_TMPL = (
 
 
 def _render_cache(
+    # Review: coordinator:code-reviewer a56496f0 finding 3 — keyword-only
+    # closes the mid-signature-insertion recurrence at every call site,
+    # not only the one the publish gate happened to check.
+    *,
     invoker: str,
     iso_now: str,
     git_head: str,
@@ -1342,25 +1346,25 @@ def build_cache(
     pinboard_final = _first_line(pinboard_final)
 
     output = _render_cache(
-        invoker,
-        iso_now,
-        git_head,
-        uproject_path,
-        workstreams,
-        rechecks,
-        branch_line,
-        recent_commits,
-        push_health,
-        wiki_lines,
-        atlas_lines,
-        capability_pointers_lines,
-        fast_test_lines,
-        audits_lines,
-        hook_cancellation_line,
-        warm_engine_line,
-        budget_breach_line,
-        housekeeping_lines,
-        pinboard_final,
+        invoker=invoker,
+        iso_now=iso_now,
+        git_head=git_head,
+        uproject_path=uproject_path,
+        workstreams=workstreams,
+        rechecks=rechecks,
+        branch_line=branch_line,
+        recent_commits=recent_commits,
+        push_health=push_health,
+        wiki_lines=wiki_lines,
+        atlas_lines=atlas_lines,
+        capability_pointers_lines=capability_pointers_lines,
+        fast_test_lines=fast_test_lines,
+        audits_lines=audits_lines,
+        hook_cancellation_line=hook_cancellation_line,
+        warm_engine_line=warm_engine_line,
+        budget_breach_line=budget_breach_line,
+        housekeeping_lines=housekeeping_lines,
+        pinboard_final=pinboard_final,
     )
 
     return {

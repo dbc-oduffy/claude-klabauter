@@ -391,8 +391,13 @@ _GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin")
 #: deeper-reachability collector covers what this gate cannot --
 #: `coordinator_core/tests/test_deep_per_item_spawn_worklist.py`. Its published precision is
 #: 33%/75%/83% at depths 2/3/4 (n=12 per stratum, single unblinded judge, wide overlapping
-#: intervals -- read as an order-of-magnitude sanity check, not a floor). It runs at
-#: `@pytest.mark.cadence`, never fast tier: a full run is ~60-80s process time, roughly two
+#: intervals -- read as an order-of-magnitude sanity check, not a floor). SUPERSEDED
+#: 2026-08-26: every reachability edge in that sample was resolved by route c's pre-fix
+#: alias-blind rule (`pln-route-c-resolves-the-imported-name-not-the-local-alias`), so the
+#: figures are an upper bound rather than a measured property of the fixed instrument. No
+#: revised figure is asserted here; the re-sample is tracked at
+#: `state/improvement-queue/2026-08-26-re-sample-the-deep-collector-precision-post-seam-fix.yaml`.
+#: It runs at `@pytest.mark.cadence`, never fast tier: a full run is ~60-80s process time, roughly two
 #: orders over the 500ms brightline, so it is offline-advisory only and never gating.
 #:
 #: Public (no leading underscore) unlike its module-private siblings below: that successor
@@ -2163,7 +2168,7 @@ def _argv0_varies_through_helper(
     a site it cannot decide is the safe direction; suppressing one it guessed at is not."""
     if not tainted:
         return False
-    for tgt_relpath, tgt_name in _resolve_callee_def(index, relpath, callee):
+    for tgt_relpath, tgt_name in _resolve_callee_def_wide(index, relpath, callee):
         fn = index.func_defs.get((tgt_relpath, tgt_name))
         if fn is None:
             continue
@@ -2304,18 +2309,29 @@ def _is_lazily_memoized_resolution(
                 cache = resolve(...)      # the flagged call, assigned to that same name
             use(cache, item)              # and never rebound      (`_cache_reset_inside_loop`)
 
-    PROVISIONAL, and load-bearing in a way nobody intended (2026-08-26, claude-klabauter-15
-    `4ca622718`). This discriminator's RULE stands on its own: a single-slot latch resolves once
-    per scan, and that is true independently of any one site. What is NOT settled is why the
-    collector reported the motivating site at all. The P1 that owns it
+    RETAINED ON ITS OWN MERITS (2026-08-26, plan
+    `2026-08-26-route-c-resolves-the-imported-name-not-the-local-alias`, chunk C4). This
+    discriminator's RULE stands on its own: a single-slot latch resolves once per scan, and that
+    is true independently of any one site -- it carries a positive control
+    (`test_discriminator_lazy_memo_not_flagged`, a route-a direct-spawn-in-loop fixture that
+    route c's fix cannot subsume, since it never touches an import at all) plus its own
+    load-bearing negatives, and is not a stand-in for either register.
+
+    The motivating site's OWN false-positive cause, previously unexplained, IS now understood
+    and fixed upstream: the P1 that owns it
     (`state/bug-backlog/2026-08-25-the-amplification-gate-resolves-an-alias-bf22411daeda.yaml`)
-    originally blamed route c resolving an alias to a same-named sibling THAT SPAWNS -- and that
-    mechanism was re-measured and does not hold: all three in-scope `_git_common_dir` siblings
-    are walk-only, and the two that spawn are outside gate scope, so route c cannot reach them.
-    The flag was wrong, but the reason is now genuinely unknown, and this predicate is currently
-    the only thing keeping the site quiet. Treat it as a provisional suppression over an
-    unexplained cause, NOT as that P1's closure: if the real cause is found and fixed, re-check
-    whether this discriminator still earns its place rather than assuming it does.
+    originally blamed route c resolving an alias to a same-named sibling THAT SPAWNS. That
+    mechanism was re-measured mid-investigation and looked like it did not hold; it was later
+    confirmed correct at a finer grain by the route-c-resolves-the-imported-name-not-the-local-
+    alias plan (`4ca622718` and the chunk-C1 fix that followed it): route c was matching a local
+    binding name against `funcs_by_name` without checking that the resolved definition's own
+    source module and original imported name agreed, so an aliased import could resolve to an
+    unrelated same-named sibling. C1's route-c fix (this plan) now excludes the
+    `promote_shipped_in_flight_stubs.py:493` site UPSTREAM, on that ground, independently of this
+    discriminator. This predicate is retained anyway: it decides the general
+    lazily-memoized-single-slot-cache shape on its own terms, not as a proxy for the alias bug,
+    and continues to keep quiet any other site with the same shape that route c's fix does not
+    reach.
 
     Motivating site, and why this is a FALSE POSITIVE rather than debt:
     `coordinator_core/ops/promote_shipped_in_flight_stubs.py :: _run_promotions` resolves
@@ -3025,7 +3041,7 @@ def _root_scoped_through_helper(
     the ordinary path above cannot see it."""
     if not tainted:
         return False
-    for tgt_relpath, tgt_name in _resolve_callee_def(index, relpath, callee):
+    for tgt_relpath, tgt_name in _resolve_callee_def_wide(index, relpath, callee):
         fn = index.func_defs.get((tgt_relpath, tgt_name))
         if fn is None:
             continue
@@ -3091,6 +3107,40 @@ def _resolve_callee_def(
             for k in index.funcs_by_name.get(callee, [])
             if k[0] != relpath and _import_resolves_to(index, relpath, callee, k[0], k[1])
         ]
+    return []
+
+
+def _resolve_callee_def_wide(
+    index: _FuncIndex, relpath: str, callee: str
+) -> list[tuple[str, str]]:
+    """Callee resolution for the two SUPPRESSOR legs only (Disc 8
+    `_argv0_varies_through_helper` and Disc 12 leg B `_root_scoped_through_helper`) --
+    deliberately WIDE, unlike `_resolve_callee_def`'s narrow (`_import_resolves_to`-filtered)
+    resolution used by the positive routes (route g's fixed point and route c's
+    `_is_direct_spawner_name`). All same-name candidates imported into this file are returned,
+    with no `_import_resolves_to` pruning by resolved source module.
+
+    This asymmetry is deliberate, not an oversight: a SUPPRESSOR that resolves narrowly can miss
+    the helper definition that actually backs a call (wrong-module false negative in the
+    resolution step) and, missing it, decline to suppress -- which SURFACES a site rather than
+    hiding one. A suppressor over-approximating its resolution is safe in the direction this
+    module's docstring already requires (decline is safe, suppress-when-unsure is not); a
+    suppressor under-approximating it is not. The positive routes have the opposite risk
+    profile -- a wide resolution there would let an unrelated same-named import manufacture a
+    false suppression of a real site -- so they keep the narrow, `_import_resolves_to`-filtered
+    form.
+
+    Cites AC4b and the measurement that settled this: narrowing this path (as a prior pass to
+    this module did by routing the suppressor legs through the narrow `_resolve_callee_def`)
+    took the reported baseline from 25 to 26 sites, surfacing exactly one false positive --
+    `coordinator_core/ops/cascade_baton_rows.py :: _first_deliverable_commit_range_base`, whose
+    enclosing loop is a search whose branches all return, so `_run_git` runs at most once. That
+    surfaced site is the canary a later 'consistency' cleanup must not silently reintroduce by
+    collapsing this function back into the narrow one."""
+    if (relpath, callee) in index.func_defs:
+        return [(relpath, callee)]
+    if callee in index.imported_names_by_file.get(relpath, set()):
+        return [k for k in index.funcs_by_name.get(callee, []) if k[0] != relpath]
     return []
 
 
@@ -5407,6 +5457,37 @@ def test_import_resolves_to_prunes_a_homonym_of_the_alias():
     index.resolved_imports_by_file["caller.py"] = {"g": {("f", "real_mod")}}
     assert _import_resolves_to(index, "caller.py", "g", "unrelated_mod.py", "g") is False
     assert _import_resolves_to(index, "caller.py", "g", "real_mod.py", "f") is True
+
+
+def test_resolve_callee_def_wide_keeps_the_homonym_narrow_prunes():
+    """C2a asymmetry pin: `_resolve_callee_def_wide` (the two suppressor legs,
+    `_argv0_varies_through_helper` and `_root_scoped_through_helper`) must return BOTH
+    same-named candidates -- the real import target AND an unrelated homonym defined elsewhere
+    -- while `_resolve_callee_def` (route g's fixed point, route c's
+    `_is_direct_spawner_name`) must prune the homonym via `_import_resolves_to`, exactly as
+    `test_import_resolves_to_prunes_a_homonym_of_the_alias` pins for that narrow path alone.
+
+    This is the split the C2a EM resolution authorized: C1 had narrowed `_resolve_callee_def`
+    itself, which both suppressor legs called, collapsing the deliberate asymmetry the
+    2026-08-19 measurement settled (AC4b) -- narrowing the suppressor path took the reported
+    baseline from 25 to 26 sites, surfacing exactly one false positive,
+    `coordinator_core/ops/cascade_baton_rows.py :: _first_deliverable_commit_range_base`. A
+    later 'consistency' cleanup collapsing `_resolve_callee_def_wide` back into
+    `_resolve_callee_def` would silently reintroduce that false positive -- this test is the
+    canary."""
+    fn_node = ast.parse("def g():\n    pass\n").body[0]
+    index = _FuncIndex()
+    index.func_defs[("real_mod.py", "g")] = fn_node
+    index.func_defs[("unrelated_mod.py", "g")] = fn_node
+    index.funcs_by_name["g"] = [("real_mod.py", "g"), ("unrelated_mod.py", "g")]
+    index.imported_names_by_file["caller.py"] = {"g"}
+    index.resolved_imports_by_file["caller.py"] = {"g": {("g", "real_mod")}}
+
+    narrow = _resolve_callee_def(index, "caller.py", "g")
+    wide = _resolve_callee_def_wide(index, "caller.py", "g")
+
+    assert narrow == [("real_mod.py", "g")]
+    assert set(wide) == {("real_mod.py", "g"), ("unrelated_mod.py", "g")}
 
 
 def test_route_d_injected_positive(tmp_path):

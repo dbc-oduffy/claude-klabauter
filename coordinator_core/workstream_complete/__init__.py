@@ -230,7 +230,7 @@ import sys
 from datetime import timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Mapping, NamedTuple, Optional
+from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
@@ -1120,7 +1120,9 @@ def _lesson_capture_route_payload() -> dict[str, Any]:
     }
 
 
-def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[dict[str, Any]]:
+def build_deletion_blocks_check_directive(
+    msg_file: Optional[str], stage_paths: Optional[Sequence[str]] = None
+) -> Optional[dict[str, Any]]:
     """Step 2.67's deletion-blocks check against the prepared commit-
     message file (`d-deletion-blocks`). The CLI's positional
     `<prepared-commit-msg-file>` is REQUIRED — its own usage line has no
@@ -1134,13 +1136,31 @@ def build_deletion_blocks_check_directive(msg_file: Optional[str]) -> Optional[d
     session simply skips it (2026-07-27 finding: this directive was
     previously emitted unconditionally with `args: []` whenever
     `decisions["msg_file"]` was absent, failing with a usage error on
-    every real `apply` run that didn't happen to supply it)."""
+    every real `apply` run that didn't happen to supply it).
+
+    `stage_paths` is forwarded as the CLI's own `-- <pathspec>` scope, and
+    on a shared branch it is what makes this gate answerable at all. The gate
+    reads `git diff --cached`, so unscoped it sees every staged deletion in
+    the index -- including a concurrent peer's, which this session neither
+    authored nor commits. That left no correct move: claiming a peer's
+    deletions in this commit body is a lie about what the commit contains,
+    and unstaging them destroys their work. Scoped to the paths the ceremony
+    actually commits, the gate asks the question it means to ask (2026-08-26,
+    session 30cdf406, blocked here with 18 peer-staged archive deletions).
+    Absent `stage_paths` the whole-index behaviour is unchanged -- a bare
+    `--` with no trailing paths is equivalent to omitting it, so an empty
+    list contributes no `--` at all.
+    """
     if not msg_file:
         return None
+    args = [msg_file]
+    if stage_paths:
+        args.append("--")
+        args.extend(stage_paths)
     return _directive(
         "d-deletion-blocks",
         "check-workstream-complete-deletion-blocks",
-        [msg_file],
+        args,
     )
 
 
@@ -1256,7 +1276,9 @@ def build_directives(
 
     # -- Step 2.65/2.66/2.67 (C2c): memo lifecycle + deletion blocks --
     directives.extend(directives_memo_lifecycle.build_directives(decisions))
-    deletion_blocks_check_directive = build_deletion_blocks_check_directive(decisions.get("msg_file"))
+    deletion_blocks_check_directive = build_deletion_blocks_check_directive(
+        decisions.get("msg_file"), decisions.get("stage_paths")
+    )
     if deletion_blocks_check_directive is not None:
         directives.append(deletion_blocks_check_directive)
 

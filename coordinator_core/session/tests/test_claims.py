@@ -1405,12 +1405,16 @@ class TestClearClaimIfDeadArtifactClass:
         repo = _make_repo(tmp_path)
         sid = "11111111-1111-4111-8111-111111111111"
         _write_session(repo, sid, _stale())
-        touched = _write_touch_claim(repo, sid, self._TARGET)
+        _write_touch_claim(repo, sid, self._TARGET)
+        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == [sid]
         assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is True
-        verb, _ts, path = scope.parse_touch_event(
-            touched.read_text(encoding="utf-8").splitlines()[-1]
-        )
-        assert (verb, path) == ("R", self._TARGET)
+        # Assert through the module's own read path, NOT the bytes of one file.
+        # The release is written to the `touch-record.jsonl` sink via
+        # `touch_record.append_event`; `touched.txt` is never appended to. An
+        # assertion on the legacy file's last line is a consumer of a dialect
+        # this plane no longer writes, and would go red on a correct release.
+        assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == []
 
     def test_live_claimant_on_non_classed_path_refuses(self, tmp_path):
         # Negative control: a live claimant must NOT be cleared.
@@ -1449,12 +1453,12 @@ class TestReleaseArtifactArtifactClass:
     def test_holder_self_releases(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
-        touched = _write_touch_claim(repo, "me-sid", self._TARGET)
+        _write_touch_claim(repo, "me-sid", self._TARGET)
+        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == ["me-sid"]
         assert claims.release_artifact("artifact", self._TARGET, cwd=str(repo)) is True
-        verb, _ts, path = scope.parse_touch_event(
-            touched.read_text(encoding="utf-8").splitlines()[-1]
-        )
-        assert (verb, path) == ("R", self._TARGET)
+        # Read path, not file bytes -- see the sibling test's note.
+        assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == []
 
     def test_non_holder_path_is_noop(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

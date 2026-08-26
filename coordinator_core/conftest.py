@@ -787,6 +787,16 @@ def exercise_suspended_op(monkeypatch):
 #     that half, and a dir that is never minted is never appended into.
 #   - Does NOT clean up what it flags. A test that leaks into the live hub is
 #     broken and must fail loudly, not have its symptom swept.
+#   - Considers DIRECTORIES ONLY. The hub also carries plain files that no
+#     session owns -- `archive-terminal-handoffs.lock` was observed failing
+#     this guard mid-run on 2026-08-26, attributed to whichever test happened
+#     to straddle a peer's lock acquisition. A lock file is not a session
+#     directory and can never be the leak this guard names.
+#   - Does NOT attribute a new DIRECTORY to the test that saw it appear. A
+#     peer's own leaking test minting a fixture-named dir concurrently reads
+#     here as this test's leak (`altlive-isolation-fixture-session`, observed
+#     the same run). Real detection, wrong owner. Tracked in
+#     `state/bug-backlog/` rather than solved with an mtime/pid heuristic.
 #   - Lives HERE rather than in the repo-root `conftest.py` because
 #     `coordinator_core/pytest.ini` wins as configfile for any invocation
 #     whose path argument sits under `coordinator_core/`, which makes that
@@ -814,16 +824,25 @@ def _looks_like_a_harness_session_id(name: str) -> bool:
         return False
 
 
+def _live_hub_session_dirs() -> set:
+    """Directory names directly under the live hub. `scandir` rather than
+    `listdir` because the hub carries peer-owned lock FILES that are not
+    session directories and must never be read as leaked ones; `is_dir()`
+    comes off the dirent here, so this stays one directory walk."""
+    with os.scandir(_LIVE_HUB) as entries:
+        return {e.name for e in entries if e.is_dir()}
+
+
 @_pytest.fixture(autouse=True)
 def _no_new_live_session_hub_entries():
     try:
-        before = set(os.listdir(_LIVE_HUB))
+        before = _live_hub_session_dirs()
     except OSError:
         yield
         return
     yield
     try:
-        after = set(os.listdir(_LIVE_HUB))
+        after = _live_hub_session_dirs()
     except OSError:
         return
     new_entries = after - before

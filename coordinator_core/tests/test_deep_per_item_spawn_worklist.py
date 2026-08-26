@@ -66,6 +66,14 @@ publish "the defensible claim is the floor (>=X% at every depth)" -- the minimum
 estimates is not a floor a 12-per-stratum sample supports, and asserting one is the same class of
 overclaim this plan's own Anti-scope forbids under "Do not inherit precision figures."
 
+SUPERSEDED 2026-08-26, not merely re-sample-pending: every edge in this sample was resolved by
+route c's pre-fix alias-blind rule (`pln-route-c-resolves-the-imported-name-not-the-local-alias`),
+confirmed to admit false edges on aliased imports, so these figures are an upper bound on the
+fixed instrument's true precision rather than a measured property of it. No revised figure is
+asserted here. The re-sample -- >=30 sites drawn at random from the post-fix worklist, two
+independent judges, disagreement rate published -- is tracked at
+`state/improvement-queue/2026-08-26-re-sample-the-deep-collector-precision-post-seam-fix.yaml`.
+
 METHOD, not just n: the sample was judged by a SINGLE UNBLINDED JUDGE who authored the
 instrument being evaluated (this session, 2026-08-25), against the rubric "a site is a true
 positive when the flagged per-item call reaches a real, unbatched spawn through routes a-g,
@@ -123,6 +131,7 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     _compute_spawn_bearing_params,
     _discover_scope_files,
     _gate_scope_paths,
+    _import_resolves_to,
     _load_file_records,
     _REPO_ROOT,
     find_unbatched_per_item_spawns,
@@ -133,16 +142,16 @@ def _call_graph(
     index: _FuncIndex,
 ) -> dict[tuple[str, str], set[tuple[str, str]]]:
     """Every top-level function's outgoing call edges, resolved same-module-first then via the
-    calling file's `from X import` names -- ALL CANDIDATES for an imported name resolving to
-    more than one same-named definition elsewhere, never a single "the" resolution. Transcribed
-    verbatim from the gate's own route-g precedent (`_resolve_callee_def`'s same-module-then-
-    imported discipline, and its `[k for k in index.funcs_by_name.get(callee, []) if k[0] !=
-    relpath]` all-candidates stance) rather than re-derived, per the spike probe's measured
-    precision figures.
+    calling file's `from X import` names, narrowed through the shared route-c match helper
+    `_import_resolves_to` (the ORIGINAL imported name and its resolved SOURCE MODULE, not the
+    local binding alone) -- the same helper `_resolve_callee_def`/`_is_direct_spawner_name` call
+    in the gate module, so this closure does not carry a second copy of route c's resolution
+    rule. Still ALL CANDIDATES for an imported name resolving to more than one same-named,
+    same-module-matched definition elsewhere, never a single "the" resolution.
 
     This is a bounded over-approximation exactly where route g's own resolution is: an imported
-    name that happens to resolve to several same-named functions across the corpus gets an edge
-    to every one of them, not just the "right" one. NO repo-wide bare-name fallback -- a
+    name that resolves (module AND name) to several same-named functions across the corpus gets
+    an edge to every one of them, not just the "right" one. NO repo-wide bare-name fallback -- a
     same-named, unimported function elsewhere never gets an edge (see module docstring's
     Anti-scope paragraph)."""
     edges: dict[tuple[str, str], set[tuple[str, str]]] = {}
@@ -160,7 +169,9 @@ def _call_graph(
                 continue
             if callee in index.imported_names_by_file.get(relpath, set()):
                 for candidate in index.funcs_by_name.get(callee, []):
-                    if candidate[0] != relpath:
+                    if candidate[0] != relpath and _import_resolves_to(
+                        index, relpath, callee, candidate[0], candidate[1]
+                    ):
                         out_edges.add(candidate)
     return edges
 
@@ -312,9 +323,15 @@ def test_call_graph_declines_unimported_homonym(tmp_path):
 
 
 def test_call_graph_all_candidates_for_homonym_across_two_imported_modules(tmp_path):
-    """Positive companion: when `helper` is genuinely IMPORTED and resolves to more than one
-    same-named definition across the corpus, every candidate gets an edge -- the bounded
-    over-approximation this closure inherits from route g's own all-candidates stance."""
+    """C3 (route-c narrowing, plan `2026-08-26-route-c-resolves-the-imported-name-not-the-local-
+    alias.md`): under the OLD all-candidates stance this alias-free fixture (`from mod_a import
+    helper`) asserted edges to both `mod_a.helper` and `mod_b.helper`. `_import_resolves_to` now
+    requires the candidate's own module to equal the import's resolved SOURCE MODULE, so
+    `mod_b.helper` -- a homonym never imported by `caller.py` at all -- no longer qualifies.
+    `mod_a.helper` survives because it is both same-named AND the actual resolved source; the
+    bounded over-approximation this closure inherits from route g is retained only for genuine
+    multi-definition-WITHIN-ONE-MODULE cases, not for an unrelated same-named function in a
+    module nothing here imports."""
     mod_a = tmp_path / "mod_a.py"
     mod_a.write_text(
         "def helper(x):\n"
@@ -349,8 +366,66 @@ def test_call_graph_all_candidates_for_homonym_across_two_imported_modules(tmp_p
     edges = _call_graph(index)
     assert edges[("caller.py", "check")] == {
         ("mod_a.py", "helper"),
-        ("mod_b.py", "helper"),
     }
+
+
+def test_no_remaining_direct_read_of_imported_names_by_file_outside_the_helper():
+    """AC6: `_call_graph`, `_site_depth`, and `_reachable_spawn_sites` (this module) plus
+    `_resolve_callee_def`/`_is_direct_spawner_name`/`find_unbatched_per_item_spawns`'s own
+    `imported_here` leg (the gate module) are the six route-c/route-g resolution sites C1/C3
+    repoint at the single shared helper, `_import_resolves_to`. Stronger than "one definition
+    site": a surviving THIRD (or Nth) inline transcription of the old
+    `funcs_by_name.get(callee)`-then-filter-by-relpath resolution, never routed through the
+    helper, would still leave exactly one `_import_resolves_to` definition in the corpus while
+    quietly resolving candidates the narrow rule was meant to prune -- this walks every function
+    in both modules that reads `imported_names_by_file` (the local-binding gate every route-c
+    site still legitimately checks first) and asserts that ANY function ALSO reading
+    `funcs_by_name` (the candidate-set lookup only the old all-candidates rule needed unfiltered)
+    also references `_import_resolves_to` by name in its own body -- i.e. it hands the candidate
+    set through the helper rather than accepting it raw.
+
+    `_resolve_callee_def_wide` (gate module) is excluded the same way `_import_resolves_to`
+    itself is: its own docstring (citing AC4b and the 25-vs-26-site measurement) documents a
+    DELIBERATE wide resolution for the two suppressor legs alone, never routed through
+    `_import_resolves_to` by design -- not a stray transcription of route c/g's narrow rule, so
+    it is not one of C3's three legs and flagging it here would be a false positive against a
+    named, cited exception."""
+    import inspect
+
+    from coordinator_core.tests import test_no_unbatched_per_item_git_spawn as gate_module
+    from coordinator_core.tests import (
+        test_deep_per_item_spawn_worklist as collector_module,
+    )
+
+    def _funcs_reading_both_without_helper(module) -> list[str]:
+        source = inspect.getsource(module)
+        tree = ast.parse(source)
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name in ("_import_resolves_to", "_resolve_callee_def_wide"):
+                continue
+            attrs_used = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+            calls_get_on_funcs_by_name = any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "get"
+                and isinstance(n.func.value, ast.Attribute)
+                and n.func.value.attr == "funcs_by_name"
+                for n in ast.walk(node)
+            )
+            names_used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            reads_imported_names = "imported_names_by_file" in attrs_used
+            calls_helper = "_import_resolves_to" in names_used
+            if reads_imported_names and calls_get_on_funcs_by_name and not calls_helper:
+                offenders.append(f"{module.__name__}::{node.name}")
+        return offenders
+
+    offenders = _funcs_reading_both_without_helper(
+        gate_module
+    ) + _funcs_reading_both_without_helper(collector_module)
+    assert offenders == []
 
 
 def test_widened_index_does_not_mutate_base(tmp_path):
@@ -732,10 +807,11 @@ def _reachable_spawn_sites(
     exactly 2 `_run_git` calls: the published figure overstated the real per-iteration cost by
     ~22x. No millisecond figure is derivable from this count; do not multiply it into one.
 
-    Callee resolution mirrors `_site_depth`'s own same-module-first-then-imported-all-candidates
-    order, transcribed rather than re-derived, so a homonym-imported callee starts the walk from
-    every candidate definition exactly as `_call_graph`'s own bounded over-approximation does
-    elsewhere in this module.
+    Callee resolution mirrors `_site_depth`'s own same-module-first-then-imported-narrowed
+    order, both routed through the shared `_import_resolves_to` match helper rather than a
+    separate transcription, so a homonym-imported callee starts the walk only from the
+    candidate definition(s) whose module and name the import actually resolves to, exactly as
+    `_call_graph`'s own bounded over-approximation does elsewhere in this module.
 
     `None` when the callee cannot be resolved into any starting node at all -- same honesty rule
     as `_known_cost_ms`/`_site_depth`: an unresolvable chain gets no fabricated count, not a 0."""
@@ -748,6 +824,7 @@ def _reachable_spawn_sites(
             candidate
             for candidate in base.funcs_by_name.get(site.callee, [])
             if candidate[0] != site.path
+            and _import_resolves_to(base, site.path, site.callee, candidate[0], candidate[1])
         }
     if not starts:
         return None
@@ -813,9 +890,10 @@ def _site_depth(
     for every site inside it. `depths` is already seeded at 1 for exactly the functions in
     `base.same_module_direct_spawn` (`_depths`'s own BFS seed, itself built off
     `base.direct_spawn_funcs`), so keying the lookup on the callee -- resolved same-module-first
-    then via imported all-candidates, transcribed from `_call_graph`'s own resolution order
-    rather than re-derived -- reads depth-1 off exactly the index the fix brief names, with no
-    second corpus walk. `None` when no candidate resolves within `depths` at all."""
+    then via the shared `_import_resolves_to` match helper (the same route-c resolution
+    `_call_graph` uses, not a separate transcription of it) -- reads depth-1 off exactly the
+    index the fix brief names, with no second corpus walk. `None` when no candidate resolves
+    within `depths` at all."""
     same_module_key = (site.path, site.callee)
     if same_module_key in base.func_defs:
         return depths.get(same_module_key)
@@ -823,7 +901,9 @@ def _site_depth(
         candidate_depths = [
             depths[candidate]
             for candidate in base.funcs_by_name.get(site.callee, [])
-            if candidate[0] != site.path and candidate in depths
+            if candidate[0] != site.path
+            and candidate in depths
+            and _import_resolves_to(base, site.path, site.callee, candidate[0], candidate[1])
         ]
         if candidate_depths:
             return min(candidate_depths)

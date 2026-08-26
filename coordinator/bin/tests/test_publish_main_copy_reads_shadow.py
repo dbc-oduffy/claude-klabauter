@@ -49,7 +49,6 @@ publish = _load_publish_module()
 
 def _stub_out_unrelated_gates(monkeypatch, publish):
     monkeypatch.setattr(publish, "check_live_install_clobber", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "check_dirty_tree", lambda *a, **k: True)
     monkeypatch.setattr(publish, "check_marketplace_version_regression", lambda *a, **k: True)
     monkeypatch.setattr(publish, "check_version_consistency", lambda *a, **k: True)
     monkeypatch.setattr(publish, "warn_machine_slug_net", lambda *a, **k: None)

@@ -166,7 +166,7 @@ from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 _chunk_paths = git_native._chunk_paths
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
-from coordinator_core.git.git_state import index_read_cache_scope
+from coordinator_core.git.git_state import IndexParseError, index_read_cache_scope, read_index
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -793,6 +793,44 @@ def _worktree_deleted_paths(root: Path, paths: Sequence[str]) -> Set[str]:
     """
     if not paths:
         return set()
+
+    # 2026-08-26 THIRD fix: answer this in-process, at ZERO spawns.
+    #
+    # The two prior revisions each optimized the wrong axis. The first
+    # pathspec-scoped and CHUNKED the read (8-32 spawns); the second collapsed
+    # that to ONE unscoped read. Neither asked whether git is needed at all --
+    # and `git status` walks the entire worktree (36,547 tracked files here) to
+    # answer a question about a handful of caller-named paths.
+    #
+    # The predicate the loop below actually implements is the v2 `Y` column
+    # alone (`parts[1][1] == "D"`): worktree-vs-index deletion, i.e. "the path
+    # has an index entry and is missing from disk". It never consults
+    # index-vs-HEAD. So the whole probe is one index read plus one `lexists`
+    # per requested path:
+    #   - `read_index` parses `.git/index` directly (2.029ms for this repo's
+    #     36,935 entries, against ~22ms for a bare process creation), and
+    #     RAISES `IndexParseError` on any unmerged (stage != 0) entry -- the
+    #     same fail-loud answer the `u`-record arm below gives, for the same
+    #     reason.
+    #   - `os.path.lexists`, not `.exists()`: a symlink whose target is gone is
+    #     still an index-matching entry to git, and `.exists()` would misreport
+    #     it as deleted.
+    #
+    # Falls back to the read below on `IndexParseError` rather than failing the
+    # commit: a split index or an unsupported version is a shape `git status`
+    # handles and this reader declines, so the capability must not narrow.
+    # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2
+    requested_keys = {_worktree_key(root, p) for p in paths}
+    try:
+        snapshot = read_index(root)
+    except IndexParseError:
+        snapshot = None
+    if snapshot is not None:
+        return {
+            key
+            for key in requested_keys
+            if key in snapshot and not os.path.lexists(os.path.join(root, key))
+        }
 
     result = git_native.status_porcelain_v2(root)
     if not result.ok:
@@ -3389,9 +3427,13 @@ def push_with_retry(
             break
 
         if upstream_info is None:
-            last_reason = (
-                f"git push: rejected and no upstream tracking ref resolvable ({reason})"
-            )
+            # No `git push: ` prefix here: `last_reason` reaches `PushOutcome`
+            # through the ladder's final return, which adds it. Embedding one
+            # made this read `"git push: git push: rejected and no upstream
+            # ..."` -- the third producer of the doubling the 2026-08-26 review
+            # (slice 2 Q3) caught on the budget paths, and the one its fix
+            # missed because no test reaches an unresolvable upstream.
+            last_reason = f"rejected and no upstream tracking ref resolvable ({reason})"
             break
 
         fetch_timeout = _remaining_or_none(deadline)

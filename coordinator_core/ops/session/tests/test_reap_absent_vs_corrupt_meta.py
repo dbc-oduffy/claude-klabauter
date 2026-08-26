@@ -36,6 +36,7 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -172,7 +173,16 @@ class TestNonSessionStoresAreNeverReaped:
     Pinned on a store that CARRIES FILES and is COLD, because an empty one
     passes for the unrelated reason tested above."""
 
-    def test_cold_populated_non_session_store_is_not_reaped(self, tmp_path):
+    def test_cold_populated_non_session_store_is_not_reaped(self, tmp_path, monkeypatch):
+        # Review: coordinator:code-reviewer (P1) -- the uuid-shape gate runs
+        # before the denylist check, so "decisions" (non-uuid) is already
+        # rejected by the uuid gate and this test would pass even if the
+        # denylist check were deleted. Bypass the uuid gate so the assertion
+        # actually exercises the denylist/subordinate checks, matching the
+        # idiom in test_reap_positive_session_identification.py ::
+        # test_gate_alone_keeps_non_session_dirs_with_denylist_emptied.
+        monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
+
         sessions_dir = tmp_path / "coordinator-sessions"
         store = _session_dir(
             sessions_dir, "decisions",
@@ -196,11 +206,21 @@ class TestNonSessionStoresAreNeverReaped:
         )
         assert not victim.exists()
 
-    def test_every_denylisted_name_is_skipped_not_just_the_sampled_one(self, tmp_path):
+    def test_every_denylisted_name_is_skipped_not_just_the_sampled_one(self, tmp_path, monkeypatch):
         """Asserted against the shared frozenset rather than a local list, so a
         name added to `session.liveness` is covered here without an edit --
-        the two must agree on what is not a session."""
+        the two must agree on what is not a session.
+
+        The uuid-shape gate is monkeypatched to match everything first
+        (Review: coordinator:code-reviewer, P1) -- none of these fixture
+        names is uuid-shaped, so without the bypass the uuid gate alone
+        rejects every candidate and the denylist membership check below is
+        never reached; this test would then keep passing even if a name
+        were silently dropped from `_NON_SESSION_DIR_NAMES`. Bypassing the
+        gate proves the denylist check itself is what is doing the work."""
         from coordinator_core.session.liveness import _NON_SESSION_DIR_NAMES
+
+        monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
 
         sessions_dir = tmp_path / "coordinator-sessions"
         planted = []
@@ -223,7 +243,7 @@ class TestNonSessionStoresAreNeverReaped:
             assert (sessions_dir / name).exists()
 
 
-    def test_underscore_prefixed_store_is_skipped_without_being_denylisted(self, tmp_path):
+    def test_underscore_prefixed_store_is_skipped_without_being_denylisted(self, tmp_path, monkeypatch):
         """`_`-prefix means "not a session" by the same convention sub-reap (ii)
         uses for `.archive/_agents-<aid>-<date>`.
 
@@ -231,7 +251,14 @@ class TestNonSessionStoresAreNeverReaped:
         because the point is coverage WITHOUT a denylist entry. The live case is
         `_branch-overrides/overrides.log` in a sibling tree that runs this
         engine: an append-only override audit trail no code in this repo
-        writes, so it could not have been anticipated by name from here."""
+        writes, so it could not have been anticipated by name from here.
+
+        The uuid-shape gate is monkeypatched to match everything first
+        (Review: coordinator:code-reviewer, P1) -- `_branch-overrides` is not
+        uuid-shaped, so without the bypass the uuid gate alone rejects it
+        before the `_`-prefix branch is ever reached, and this test would
+        prove nothing about that branch. Bypassing the gate proves the
+        `_`-prefix rule itself is what is doing the work."""
         sessions_dir = tmp_path / "coordinator-sessions"
         from coordinator_core.session.liveness import _NON_SESSION_DIR_NAMES
 
@@ -239,6 +266,7 @@ class TestNonSessionStoresAreNeverReaped:
             "this test is meaningless once the name is denylisted -- it exists "
             "to pin the prefix rule, not the entry"
         )
+        monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
         store = _session_dir(
             sessions_dir, "_branch-overrides",
             age_seconds=reap._SESSION_STALE_SECONDS * 50, meta=None,

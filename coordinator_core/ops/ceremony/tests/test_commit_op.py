@@ -567,6 +567,7 @@ def test_ac9_cold_fallback_after_no_pipe_found_commits_correctly(
 
 
 def test_ac9_cold_fallback_after_engine_skew_commits_correctly(
+
     monkeypatch: pytest.MonkeyPatch, _repo: Path
 ) -> None:
     """Set A post-delivery doubt classified as PROOF the op never ran:
@@ -601,3 +602,93 @@ def test_ac9_cold_fallback_after_engine_skew_commits_correctly(
     assert (_repo / file_name).exists()
     log = _git(["log", "-1", "--format=%s"], _repo)
     assert log.stdout.strip() == f"AC8 row: {file_name}"
+
+
+# ---------------------------------------------------------------------------
+# C1 (AC1/AC2/AC3): the spawn count is a real gate, not a number that
+# happens to pass. Wraps `subprocess.Popen` (never `.run` -- `.run`
+# delegates to `Popen`, so wrapping `Popen` alone already catches
+# `check_output`/`call`/every other `subprocess` entry point) for the
+# duration of one in-process `run_commit_pipeline()` call and records argv
+# per spawn. MUST BE SEEN RED against today's tree: `_MAX_SPAWNS` is the
+# real target (<=4), not the count this pass through the pipeline actually
+# produces (11) -- a spawn-count assertion that passes today would be
+# measuring the wrong thing, exactly how AC6 shipped green against an op
+# paying 11 spawns (this chunk's own brief). The fixture's own `git init`/
+# `git add`/`git commit`/`git config` setup runs BEFORE the wrapper is
+# installed, so only spawns from `run_commit_pipeline`'s own path are
+# counted -- that setup is outside the measured window by construction.
+# ---------------------------------------------------------------------------
+
+_MAX_SPAWNS = 4
+
+
+class _PopenSpawnRecorder:
+    """Wraps `subprocess.Popen` to record argv per spawn without changing
+    behaviour -- delegates construction to the real `Popen` immediately,
+    recording the argv it was called with first. Installed via monkeypatch
+    on the `subprocess` module for the duration of one pipeline call."""
+
+    def __init__(self, real_popen):
+        self._real_popen = real_popen
+        self.calls: list = []
+
+    def __call__(self, argv, *args, **kwargs):
+        self.calls.append(argv)
+        return self._real_popen(argv, *args, **kwargs)
+
+
+def test_run_commit_pipeline_spawn_count_is_gated(
+    monkeypatch: pytest.MonkeyPatch, _repo: Path
+) -> None:
+    """AC1: total spawn count from one `run_commit_pipeline()` call must
+    not exceed `_MAX_SPAWNS` (4). AC2: no two spawns share byte-identical
+    argv -- a repeated identical `git` invocation is itself evidence of
+    redundant work, not merely a count to shave. AC3: at most one spawn's
+    argv contains a `status` subcommand -- `git status`/`git status
+    --porcelain` collapsed to a single call across the whole pipeline."""
+    from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+
+    file_name = "spawn_count_probe.txt"
+    (_repo / file_name).write_text("spawn count probe\n", encoding="utf-8")
+
+    recorder = _PopenSpawnRecorder(subprocess.Popen)
+    monkeypatch.setattr(subprocess, "Popen", recorder)
+
+    result = run_commit_pipeline(
+        _repo,
+        session_id="spawn-count-probe-session",
+        subject="C1 spawn count probe",
+        stage_paths=[file_name],
+        push_mode="none",
+    )
+
+    assert not result.commit_failed and result.committed_sha, (
+        f"pipeline call under measurement must actually commit: {result!r}"
+    )
+
+    argvs = [list(map(str, argv)) for argv in recorder.calls]
+
+    # AC1: total spawn count.
+    assert len(argvs) <= _MAX_SPAWNS, (
+        f"run_commit_pipeline spawned {len(argvs)} processes "
+        f"(budget is {_MAX_SPAWNS}); argv per spawn: {argvs!r}"
+    )
+
+    # AC2: no byte-identical argv pair.
+    seen: dict = {}
+    for argv in argvs:
+        key = tuple(argv)
+        seen[key] = seen.get(key, 0) + 1
+    duplicates = {key: n for key, n in seen.items() if n > 1}
+    assert not duplicates, (
+        f"run_commit_pipeline issued byte-identical argv more than once: "
+        f"{duplicates!r}; full argv list: {argvs!r}"
+    )
+
+    # AC3: at most one `status` invocation.
+    status_calls = [argv for argv in argvs if "status" in argv]
+    assert len(status_calls) <= 1, (
+        f"run_commit_pipeline issued more than one `git status`-shaped "
+        f"call: {status_calls!r}; full argv list: {argvs!r}"
+    )

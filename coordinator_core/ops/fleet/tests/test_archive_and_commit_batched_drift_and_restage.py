@@ -14,25 +14,33 @@ batching discipline was, until 2026-08-26, the ONE remaining git spawn per
 archive_and_commit call that scaled with the move count: the batched `git
 add -- <every acted src AND dst>` staging call.
 
-RE-TARGETED, 2026-08-26 (C2 `dccf2fc01`, this plan's C7): `git add --`
-itself is now gone too -- `archive_and_commit` no longer stages through any
-index at all. The batched spawn that scales with move count is now `git
-hash-object -w --stdin-paths`, issued once for every acted move's `dst`
-content via `_hash_object_stdin_paths` (imported from `ops.ceremony.
-git_native`, a SYNCHRONOUS wrapper offloaded through `asyncio.to_thread` --
-not an `asyncio.create_subprocess_exec` call, so intercepting it means
-wrapping the module-level name itself, the same technique this plan's
-sibling `test_head_race_between_read_tree_and_commit.py` uses and explains
-at more length). This module still pins the SAME behaviour C4's batching
-discipline established -- one spawn covers an arbitrarily large move set,
-per-item attribution on a batch failure is exact (every acted move is
-reversed and reclassified, not just some), and an unrelated already-failed
-move (a pre-existing dst) is unaffected by a failure among the OTHER moves
-in the same call -- only the observed mechanism moved.
+RE-TARGETED, 2026-08-26 (C2 `dccf2fc01`, this plan's C7; then again by C1 of
+docs/plans/2026-08-26-the-archival-seam-stops-asking-git-at-all.md, same
+day): `git add --` is gone too -- `archive_and_commit` no longer stages
+through any index at all. And as of C1, `git hash-object -w --stdin-paths`
+no longer scales with the WHOLE move count either -- it is scoped to the
+`restage_src=True` subset only (`head_entry[1]`, `read_tree_spine`'s own
+blob sha, now supplies every `restage_src=False` move's sha directly,
+spawn-free; see `_common.py :: archive_and_commit`'s docstring for the PM
+ruling that retired the disk/HEAD drift gate this module used to pin
+alongside the staging spawn -- that gate no longer exists anywhere, by
+design, and this module carries no substitute for it). `_hash_object_stdin_
+paths` is imported from `ops.ceremony.git_native`, a SYNCHRONOUS wrapper
+offloaded through `asyncio.to_thread` -- not an `asyncio.create_subprocess_
+exec` call, so intercepting it means wrapping the module-level name itself,
+the same technique this plan's sibling `test_head_race_between_read_tree_
+and_commit.py` uses and explains at more length.
 
-Real git is load-bearing: the private index staging behaviour this module
-pins needs a real index, not a mocked git with none to diverge from --
-same argument test_archive_and_commit_disk_head_drift.py's docstring makes.
+This module still pins the SAME behaviour C4's batching discipline
+established, re-sited to the restage_src=True subset: one spawn covers an
+arbitrarily large restage_src=True set, per-item attribution on a batch
+failure is exact (every acted move is reversed and reclassified, not just
+some), and an unrelated already-failed move (a pre-existing dst) is
+unaffected by a failure among the OTHER moves in the same call -- only the
+observed mechanism, and the subset it now covers, moved.
+
+Real git is load-bearing: the staging/commit behaviour this module pins
+needs a real repo, not a mocked git with no object store to write into.
 
 Governed real-git pattern (state/audits/2026-08-07-spawn-heavy-test-excision-
 ledger.md): each test below gets its own throwaway repo; no module-scope
@@ -125,10 +133,14 @@ def _patch_counting_hash_object(monkeypatch):
     return calls
 
 
-def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path, monkeypatch) -> None:
-    """3 moves, all clean -- ONE `git hash-object -w --stdin-paths` spawn
-    hashes every acted move's dst content; there is no per-item `git mv` or
-    `git add` left to count."""
+def test_batched_stage_spawns_once_for_a_multi_move_restage_batch(tmp_path: Path, monkeypatch) -> None:
+    """3 restage_src=True moves -- ONE `git hash-object -w --stdin-paths`
+    spawn hashes every acted move's dst content; there is no per-item
+    `git mv` or `git add` left to count. (RE-TARGETED, C1: a restage_src=
+    False batch would spawn ZERO hash-object calls -- see test_common_tree_
+    build.py's `test_all_restage_src_false_batch_spawns_zero_hash_object_
+    calls` for that half of AC-1; this module keeps the restage_src=True
+    half, which still needs the spawn.)"""
     root = tmp_path / "repo"
     _init_repo(root)
     handoffs = root / "state" / "handoffs"
@@ -140,17 +152,22 @@ def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path, monkey
         return p
 
     srcs = [
-        _seed(f"2026-08-{i:02d}-clean{i}.md", f"---\nstatus: claimed\n---\n\n{i}.\n")
+        _seed(f"2026-08-{i:02d}-stamped{i}.md", f"---\nstatus: claimed\n---\n\n{i}.\n")
         for i in range(1, 4)
     ]
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: three handoffs"], root)
 
+    # Fresh, uncommitted content on every src -- what a restage_src=True
+    # caller authors immediately before queuing the move.
+    for s in srcs:
+        s.write_text(f"---\nstatus: claimed\ndeployment_state: shipped\n---\n\n{s.name}.\n", encoding="utf-8")
+
     def _dst(src: Path) -> Path:
         return root / "archive" / "handoffs" / "2026-08" / src.name
 
     moves = [
-        Move(src=s, dst=_dst(s), candidate_id=f"state/handoffs/{s.name}")
+        Move(src=s, dst=_dst(s), candidate_id=f"state/handoffs/{s.name}", restage_src=True)
         for s in srcs
     ]
 
@@ -162,12 +179,14 @@ def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path, monkey
         )
 
     assert hash_object_calls["n"] == 1, (
-        f"hash-object must spawn ONCE for the whole batch; got {hash_object_calls['n']}"
+        f"hash-object must spawn ONCE for the whole restage_src=True subset; got {hash_object_calls['n']}"
     )
     add_calls = counts.get(("git", "add", "--"), 0)
     assert add_calls == 0, "git add must never be spawned -- hash-object replaces staging entirely"
     mv_calls = counts.get(("git", "mv"), 0)
     assert mv_calls == 0, "git mv must never be spawned -- os.replace is the mover"
+    diff_calls = counts.get(("git", "diff", "--name-only"), 0)
+    assert diff_calls == 0, "the disk/HEAD drift gate is retired -- no git diff spawn survives it"
 
     assert failed == []
     assert {a["id"] for a in acted} == {m.candidate_id for m in moves}
@@ -177,12 +196,12 @@ def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path, monkey
 
 
 def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path, monkeypatch) -> None:
-    """A batched `git hash-object -w --stdin-paths` failure (mocked --
-    RE-TARGETED from a `git add --` failure, see module docstring; a
-    generic staging failure, not an index/worktree divergence) reverses
-    EVERY acted move's os.replace on disk and reclassifies all of them to
-    failed[] -- per-item attribution on a whole-batch stage failure is "all
-    or nothing", unlike the per-move `git mv` failure loop it replaced."""
+    """A batched `git hash-object -w --stdin-paths` failure (mocked, over a
+    restage_src=True batch -- the only shape that still calls it, C1)
+    reverses EVERY acted move's os.replace on disk and reclassifies all of
+    them to failed[] -- per-item attribution on a whole-batch stage failure
+    is "all or nothing", unlike the per-move `git mv` failure loop it
+    replaced."""
     root = tmp_path / "repo"
     _init_repo(root)
     handoffs = root / "state" / "handoffs"
@@ -198,12 +217,17 @@ def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path, monkeypat
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: two handoffs"], root)
 
+    # Fresh, uncommitted content -- restage_src=True is what routes both
+    # moves through the (about to fail) hash-object spawn.
+    src1.write_text("---\nstatus: claimed\ndeployment_state: shipped\n---\n\nA.\n", encoding="utf-8")
+    src2.write_text("---\nstatus: claimed\ndeployment_state: shipped\n---\n\nB.\n", encoding="utf-8")
+
     def _dst(src: Path) -> Path:
         return root / "archive" / "handoffs" / "2026-08" / src.name
 
     moves = [
-        Move(src=src1, dst=_dst(src1), candidate_id="state/handoffs/2026-08-01-a.md"),
-        Move(src=src2, dst=_dst(src2), candidate_id="state/handoffs/2026-08-02-b.md"),
+        Move(src=src1, dst=_dst(src1), candidate_id="state/handoffs/2026-08-01-a.md", restage_src=True),
+        Move(src=src2, dst=_dst(src2), candidate_id="state/handoffs/2026-08-02-b.md", restage_src=True),
     ]
 
     def _fail_hash_object(*args, **kwargs):
@@ -222,9 +246,10 @@ def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path, monkeypat
         assert "hash-object-failed" in item["reason"]
         assert "synthetic stage failure" in item["reason"]
 
-    # Every move's os.replace is reversed -- both srcs restored, neither dst survives.
-    assert src1.exists() and src1.read_text(encoding="utf-8") == "---\nstatus: claimed\n---\n\nA.\n"
-    assert src2.exists() and src2.read_text(encoding="utf-8") == "---\nstatus: claimed\n---\n\nB.\n"
+    # Every move's os.replace is reversed -- both srcs restored (with the
+    # fresh restage_src=True content), neither dst survives.
+    assert src1.exists() and src1.read_text(encoding="utf-8") == "---\nstatus: claimed\ndeployment_state: shipped\n---\n\nA.\n"
+    assert src2.exists() and src2.read_text(encoding="utf-8") == "---\nstatus: claimed\ndeployment_state: shipped\n---\n\nB.\n"
     assert not _dst(src1).exists()
     assert not _dst(src2).exists()
 

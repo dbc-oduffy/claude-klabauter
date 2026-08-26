@@ -282,6 +282,27 @@ def test_mint_writes_a_curl_config_carrying_the_token(tmp_path):
     assert text == f'header = "{cookie.COOKIE_HEADER}: {token}"\n'
 
 
+def test_mint_writes_the_listener_url_when_port_given(tmp_path):
+    """`port` lands in the SAME write as the header -- the whole point being
+    that C5's forwarder resolves nothing: `curl --config <file>` alone
+    carries both the credential and the destination."""
+    token = cookie.mint(tmp_path, port=54321)
+    text = cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
+    assert text == (
+        f'header = "{cookie.COOKIE_HEADER}: {token}"\n'
+        'url = "http://127.0.0.1:54321"\n'
+    )
+
+
+def test_mint_omits_the_url_line_when_port_is_none(tmp_path):
+    """The default -- today's only caller (`ensure()`, before the bind)
+    does not yet have a port to give. Omission, not a placeholder."""
+    token = cookie.mint(tmp_path)
+    text = cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
+    assert text == f'header = "{cookie.COOKIE_HEADER}: {token}"\n'
+    assert "url" not in text
+
+
 def test_clear_removes_the_curl_config_too(tmp_path):
     """Leaving the curlrc behind would leave a readable secret on disk after
     a clean exit that was supposed to remove it."""

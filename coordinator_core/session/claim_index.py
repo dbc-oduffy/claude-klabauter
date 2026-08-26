@@ -233,6 +233,33 @@ _AGENTS_SUBDIR = ".agents"
 #: cannot say".
 _TOUCHED_FILENAME = "touch-record.jsonl"
 
+#: The pre-cutover record filename, still readable through the compat union in
+#: ``scope._read_touch_record_as_legacy_lines`` and therefore still a REAL claim
+#: surface. Named here for one reason only: a claimant dir holding this file and
+#: NO ``touch-record.jsonl`` (and no rotated member) was invisible to
+#: ``_enumerate_touched_files``, because both of its existence probes key on
+#: ``_TOUCHED_FILENAME``. Invisible to the enumerator means unreachable by
+#: ``claims._release_path_claim_everywhere`` and ``clear_claim_if_dead``, so such
+#: a claim could not be released by ANY sanctioned route — it was held forever,
+#: including by a dead session. Delete this constant and its two probes together
+#: with the compat union, never before it.
+_LEGACY_TOUCHED_FILENAME = "touched.txt"
+
+
+def _has_claim_surface(sink_path: str) -> bool:
+    """True when *sink_path*'s directory holds any readable claim surface: the
+    live jsonl sink, one of its rotated family members, or — while the compat
+    union lives — a legacy ``touched.txt`` sibling.
+
+    Stat-only, no content read, matching this enumerator's contract. The legacy
+    arm is checked LAST because it is the rarest and is the one that goes away
+    with the union.
+    """
+    if os.path.isfile(sink_path) or touch_record.discover_family(sink_path):
+        return True
+    legacy = os.path.join(os.path.dirname(sink_path), _LEGACY_TOUCHED_FILENAME)
+    return os.path.isfile(legacy)
+
 
 def _normalize_key(path: str) -> str:
     """Canonicalize a path string to the SAME dialect ``touched.txt`` is
@@ -347,6 +374,29 @@ class _IndexState:
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
 
 
+def _legacy_ts_to_epoch(ts) -> float:
+    """Convert a legacy line's ISO-8601 timestamp to epoch seconds, or 0.0 when
+    it is absent or unparseable.
+
+    0.0 is the deliberate "unknown time" sentinel, not a real instant:
+    ``rebuild()`` keys off ``event.timestamp > 0`` to decide whether a claimant
+    contributes a RECENCY signal, so an unknown time leaves the claim recorded
+    while keeping it out of ``edit_ts`` — recording it as a 1970 instant would
+    make an active claimant read as the stalest on the box. Same reasoning, and
+    same sentinel, as ``legacy_touch_corpus_migrate``'s own epoch fallback.
+    """
+    if not ts:
+        return 0.0
+    try:
+        text = str(ts).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (ValueError, OSError, OverflowError):
+        return 0.0
+
+
 def _read_stream_claims(sink_path: str) -> tuple:
     """C4 (AC7) — the seam read: one claimant's on-disk family (the live
     ``touch-record.jsonl`` plus zero or more rotated siblings), decoded and
@@ -367,12 +417,81 @@ def _read_stream_claims(sink_path: str) -> tuple:
     trailing line is never a degrade signal here either — ``touch_record``
     already drops it before it reaches decode.
     """
-    # AC21 -- the transitional legacy-sink branch this module used to carry
-    # (deleted by C7b): `touch()` no longer writes the old ``touched.txt``
-    # dialect once its writer migrates (C7c), so every enumerated sink is
-    # read through the seam unconditionally.
+    # AC21's legacy-sink branch was deleted by C7b on the stated premise that
+    # "`touch()` no longer writes the old ``touched.txt`` dialect once its
+    # writer migrates (C7c)". C7C WAS REVERTED, NOT LANDED -- see that plan's
+    # own AC11-BLOCKER ("the cutover is under-scoped, discovered by executing
+    # C7c 2026-08-25 and reverted rather than landed"). So the premise for
+    # deleting this arm never came true: legacy records still exist and are
+    # still written, ``scope`` still carries its compat union, and this module
+    # was left as the ONE reader that had dropped its half of it.
+    #
+    # The cost was not a missed claim, it was an INVERTED SAFETY ANSWER. A
+    # claimant holding a legacy-only record resolved to "no claims", and a
+    # negative is the only answer that authorizes a write -- so a live holder's
+    # path read as unclaimed and ``clear_claim_if_dead`` reported success on a
+    # claim it had never seen. Restored here, reading through the SAME union
+    # seam every other reader uses (``scope._read_touch_record_as_legacy_lines``)
+    # rather than growing a second one, so AC4's one-decoder rule still holds.
+    #
+    # Delete this arm when the union itself goes, never before.
+    from coordinator_core.session import scope  # local: import cycle at module scope
+
     claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
-    return claims, not degraded
+    legacy_sibling = os.path.join(
+        os.path.dirname(sink_path), _LEGACY_TOUCHED_FILENAME
+    )
+    if not os.path.isfile(legacy_sibling):
+        return claims, not degraded
+
+    try:
+        lines, legacy_degraded = scope._read_touch_record_as_legacy_lines(sink_path)
+    except Exception:
+        return claims, False
+    if legacy_degraded:
+        return claims, False
+
+    # Legacy events are folded in FIRST and then overwritten by anything the
+    # jsonl family already resolved, mirroring the precedence
+    # ``_read_touch_record_as_legacy_lines`` itself documents (legacy first, so
+    # a later event in the new record still wins).
+    folded: Dict[str, touch_record.TouchEvent] = {}
+    for line in lines:
+        verb, ts, raw_path = scope.parse_touch_event(line)
+        if not raw_path or verb not in (touch_record.VERB_TOUCH, touch_record.VERB_RELEASE):
+            continue
+        key = canonicalize_relative_path(raw_path)
+        if key is None:
+            continue
+        # CONTAINMENT, enforced on the CANONICAL value, not on a leading-``../``
+        # prefix -- an entry can escape without one (``docs/../../peer/x.md``
+        # canonicalizes to ``../peer/x.md``). `canonicalize_relative_path` is a
+        # dialect normalizer, NOT a containment filter: it returns escaping and
+        # absolute values unchanged, so a `key is None` check does not screen
+        # them. A hand-written legacy line is arbitrary text -- the corpus
+        # demonstrably holds worktree-escaping and absolute entries (177 of them
+        # were dropped by `legacy_touch_corpus_migrate` on this repo alone) --
+        # and admitting one here would put a path this session never touched,
+        # outside the worktree, into `commit_set` and therefore into
+        # `safe_commit_offer`'s safe_paths. Same property
+        # `scope.classify_touch_entry` enforces; that function is not called
+        # directly because it needs a worktree_root this seam does not have.
+        if os.path.isabs(key) or key == ".." or key.startswith("../"):
+            continue
+        folded[key] = touch_record.TouchEvent(
+            schema_version=1,
+            verb=verb,
+            # A legacy line whose timestamp will not parse arrives as "unknown
+            # time" (0.0), which rebuild() already treats as "claimed, but not
+            # a recency signal" -- never as a 1970 instant that would make an
+            # active claimant read as the stalest on the box.
+            timestamp=_legacy_ts_to_epoch(ts),
+            session_id="",
+            agent_id=None,
+            path=raw_path,
+        )
+    folded.update(claims)
+    return folded, not degraded
 
 
 def _agent_owner_sid(agent_dir_path: str) -> tuple:
@@ -440,8 +559,10 @@ def _enumerate_touched_files(base: str) -> tuple:
         # C4: a claimant with no LIVE file but a rotated-away sibling (C2's
         # rotation, AC17) still has real claims on disk -- the live-file-
         # only `isfile` check would silently drop them. `discover_family`
-        # is a cheap `glob` + `exists`, not a content read.
-        if os.path.isfile(touched_path) or touch_record.discover_family(touched_path):
+        # is a cheap `glob` + `exists`, not a content read. `_has_claim_surface`
+        # adds the third case: a legacy-only claimant, readable through the
+        # compat union and otherwise unreleasable by any route.
+        if _has_claim_surface(touched_path):
             pairs.append((touched_path, entry.name))
 
     agents_base = os.path.join(base, _AGENTS_SUBDIR)
@@ -458,7 +579,7 @@ def _enumerate_touched_files(base: str) -> tuple:
         if not owner_sid:
             continue
         touched_path = os.path.join(agent_entry.path, _TOUCHED_FILENAME)
-        if os.path.isfile(touched_path) or touch_record.discover_family(touched_path):
+        if _has_claim_surface(touched_path):
             pairs.append((touched_path, owner_sid))
 
     return pairs, complete

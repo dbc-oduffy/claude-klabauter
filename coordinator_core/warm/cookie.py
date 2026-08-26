@@ -135,7 +135,7 @@ def _write_private_atomically(path: Path, content: str) -> None:
     os.replace(str(tmp_path), str(path))
 
 
-def mint(engine_root: Optional[Path] = None) -> str:
+def mint(engine_root: Optional[Path] = None, port: Optional[int] = None) -> str:
     """Mint a new boot cookie and write it ATOMICALLY: a `.tmp` sibling is
     written and fsynced-by-close, then `os.replace` renames it onto the
     final path. The rename is load-bearing -- it is what stops a client
@@ -158,6 +158,18 @@ def mint(engine_root: Optional[Path] = None) -> str:
     leaves every session launched before that restart authenticating
     nothing for the rest of its life -- and a listener can outlive a
     publish by hours with health green throughout.
+
+    `port`, WHEN GIVEN, IS EMITTED INTO THE SAME CURLRC WRITE -- an `url =`
+    line alongside the existing `header =` line, so `curl --config <file>`
+    alone carries both the credential and the destination and a caller
+    never has to re-derive the listener's port. Formatted identically to
+    `supervisor.listener_url` (`http://127.0.0.1:<port>`) -- not imported
+    from there, to avoid a cycle (`supervisor` already imports `cookie`).
+    Omitted entirely when `port` is None, which is what today's only
+    caller (`ensure()`, from `supervisor._assert_credential_ready`, called
+    BEFORE the bind -- see that function's docstring) still gets: the port
+    is not yet known at that call site. Wiring a real port through is a
+    later chunk's job; this parameter only supplies the capability.
     """
     token = secrets.token_hex(32)
     _write_private_atomically(cookie_path(engine_root), token)
@@ -166,10 +178,10 @@ def mint(engine_root: Optional[Path] = None) -> str:
     # between them leaves a curlrc lagging the cookie. That is tolerated,
     # not prevented: a lagging curlrc sends a stale credential, which the
     # refusal path rejects as a wrong cookie. Fails safe, never open.
-    _write_private_atomically(
-        curl_config_path(engine_root),
-        f'header = "{COOKIE_HEADER}: {token}"\n',
-    )
+    curl_config = f'header = "{COOKIE_HEADER}: {token}"\n'
+    if port is not None:
+        curl_config += f'url = "http://127.0.0.1:{port}"\n'
+    _write_private_atomically(curl_config_path(engine_root), curl_config)
     return token
 
 
