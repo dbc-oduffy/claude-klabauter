@@ -379,6 +379,24 @@ class TestDispatchPreswapFunctionGate:
         assert "pre-swap function gate FAILED" in captured.err
         assert "does not equal the expected subset" in captured.err
 
+    def test_empty_staging_is_not_read_as_a_flat_payload(self, tmp_path, capsys):
+        """code-reviewer Finding 1 (P1): an empty `staging_dir` means the row
+        staged NOTHING, not that its payload is legitimately flat.
+        Directory-presence alone cannot separate those, so reading absence
+        as flat would let expected and resolved both collapse to the empty
+        set and swap a row whose payload never materialized -- the exact
+        total-staging-failure case this gate exists to catch."""
+        repo_root = tmp_path / "dest-repo"
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        target = _make_target("coordinator-claude", repo_root, "", mode="mirror")
+
+        ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "pre-swap function gate FAILED" in captured.err
+        assert "does not equal the expected subset" in captured.err
+
     def test_mirror_mode_row_flat_via_source_map_passes(self, tmp_path):
         """EM feedback, new coverage requirement: `coordinator-claude`'s
         main mirror row (`mode == "mirror"`, `dest_subdir == ""`,

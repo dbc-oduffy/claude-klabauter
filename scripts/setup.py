@@ -1563,6 +1563,7 @@ def _coordinator_root_from_settings_home() -> "Path | None":
     # sibling-dir rung; a resolver-machinery failure is printed to stderr
     # before falling through, so it is visible without being fatal.
     try:
+        from coordinator_core._settings_home import settings_home
 
         sentinel = settings_home() / "machine-local" / ".doe-root"
     except Exception as exc:
@@ -2975,7 +2976,6 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
             assert_live_plugin_registration,
             format_report,
         )
-        from coordinator_core._settings_home import settings_home
 
         report = assert_live_plugin_registration(Path.home() / ".claude", live_plugin_root)
     except Exception as exc:  # advisory phase -- never fails the install
