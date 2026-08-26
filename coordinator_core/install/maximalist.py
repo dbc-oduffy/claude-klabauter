@@ -129,12 +129,38 @@ from typing import Callable, Dict, List, Optional, Sequence
 # below so it takes effect before any coordinator_core module resolves --
 # a stale `.pth` elsewhere on `sys.path` (fleet_env.py's sibling-binding
 # writer, see that module) can otherwise put a DIFFERENT checkout's
-# coordinator_core ahead of this one. Only inserted when this root is not
-# already present anywhere on `sys.path` -- if it is, some other mechanism
-# already accounts for it and a duplicate leading entry adds nothing.
-_EXPECTED_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_EXPECTED_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_EXPECTED_REPO_ROOT))
+# coordinator_core ahead of this one.
+#
+# PRECEDENCE, not presence. An earlier revision skipped the insert when this
+# root appeared ANYWHERE on `sys.path`, which is the wrong test: a root sitting
+# behind the `.pth` entry is present and still loses. Being on the path is not
+# the property that matters -- being FIRST is. Move it to the front whenever it
+# is not already there, and drop any later duplicate so the list does not grow
+# a second entry for the same root on re-import.
+#
+# Division of responsibility (Finding 4, coordinator:code-reviewer): this
+# insert only beats ordinary sys.path-entry competition (`.pth`-appended
+# dirs, PYTHONPATH). It does NOT beat a competing `sys.meta_path` finder
+# (e.g. a modern `pip install -e` `__editable___*_finder.py` hook) -- meta
+# path finders are consulted ahead of `sys.path` for many import mechanisms
+# and are untouched by this reorder. That case is not prevented here; it is
+# instead caught post-hoc by `_assert_own_plane_loaded`/
+# `_warn_own_plane_mismatch_nonfatal` below, which check what actually
+# loaded rather than what sys.path says should load.
+_EXPECTED_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+# Finding 2 (nit): pin the `parents[2]` depth so a future file move fails
+# loudly instead of silently resolving `_EXPECTED_REPO_ROOT` to the wrong
+# directory and turning every guard below into either a false positive or
+# (worse) a false negative.
+assert (Path(_EXPECTED_REPO_ROOT) / "coordinator_core").is_dir(), (
+    f"_EXPECTED_REPO_ROOT computed as {_EXPECTED_REPO_ROOT!r} but it has no "
+    "coordinator_core/ directory -- has this file moved? parents[2] above "
+    "assumes <root>/coordinator_core/install/maximalist.py."
+)
+if not sys.path or sys.path[0] != _EXPECTED_REPO_ROOT:
+    while _EXPECTED_REPO_ROOT in sys.path:
+        sys.path.remove(_EXPECTED_REPO_ROOT)
+    sys.path.insert(0, _EXPECTED_REPO_ROOT)
 
 from coordinator_core._settings_home import native_path_form
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
@@ -332,7 +358,19 @@ def _find_responsible_pth(actual_root: Path) -> Optional[Path]:
     form; returns the first match, or ``None`` when no such file is found
     (e.g. the responsible entry is a real editable install pointing
     somewhere else entirely, or the ``.pth`` was removed between load and
-    this check)."""
+    this check).
+
+    Best-effort for a diagnostic message only (Finding 3, coordinator:code-
+    reviewer) -- two known gaps, deliberately not hardened further: (a) an
+    ``import``-hook-style ``.pth`` (some editable installs use a Python
+    ``import`` line rather than a bare path) never appears as a directory-
+    literal path line, so it won't be found by this substring scan even when
+    it is in fact responsible; (b) a plain substring match on
+    ``actual_root``'s string form can misattribute cause if a *different*
+    ``.pth`` happens to reference a path that contains ``actual_root`` as a
+    substring (e.g. a sibling checkout whose path is a prefix/superstring
+    match). Acceptable here because the caller only ever uses this to name a
+    plausible cause in an error message, never to decide behavior."""
     seen: set = set()
     for entry in sys.path:
         if not entry:
@@ -357,6 +395,22 @@ def _find_responsible_pth(actual_root: Path) -> Optional[Path]:
     return None
 
 
+def _own_plane_mismatch() -> "Optional[tuple[str, Optional[Path]]]":
+    """Shared check behind `_assert_own_plane_loaded` (fatal, entry-point
+    only) and `_warn_own_plane_mismatch_nonfatal` (advisory, import-time).
+    Returns `None` when the loaded `coordinator_core.install.substrate`
+    resolves under this file's own repo root, else
+    `(actual_module_file, responsible_pth_or_None)`."""
+    actual_module_file = _substrate_plane_check_module.__file__
+    actual_root = Path(actual_module_file).resolve().parents[2]
+    # str-vs-str: `_EXPECTED_REPO_ROOT` is the string form the `sys.path`
+    # manipulation above needs. Comparing it to a Path is silently always
+    # False, which turns this guard into an unconditional FATAL.
+    if str(actual_root) == _EXPECTED_REPO_ROOT:
+        return None
+    return actual_module_file, _find_responsible_pth(actual_root)
+
+
 def _assert_own_plane_loaded() -> None:
     """C1: catch every OTHER way ``coordinator_core`` can resolve to a
     DIFFERENT repo than this file's own -- ``python -m``, a wrapper, a
@@ -365,15 +419,20 @@ def _assert_own_plane_loaded() -> None:
     assertion makes every other path legible instead of surfacing three
     phases later as an unrelated staleness report.
 
+    Fatal (``sys.exit(1)``) by design -- called only from the entry-point
+    path (``main()``/``__main__``), never at module import. A test module or
+    tool that does ``import coordinator_core.install.maximalist`` must never
+    have that import kill its process; see `_warn_own_plane_mismatch_nonfatal`
+    for the non-fatal signal that runs at import time instead.
+
     Register: one fact (which root loaded, which root should have),
     plus the terse alternative (fix the ``.pth``/PYTHONPATH named), nothing
     else -- no override key.
     """
-    actual_module_file = _substrate_plane_check_module.__file__
-    actual_root = Path(actual_module_file).resolve().parents[2]
-    if actual_root == _EXPECTED_REPO_ROOT:
+    mismatch = _own_plane_mismatch()
+    if mismatch is None:
         return
-    pth = _find_responsible_pth(actual_root)
+    actual_module_file, pth = mismatch
     print(
         f"FATAL: coordinator_core.install.substrate loaded from "
         f"{actual_module_file}, not this file's own repo root "
@@ -385,7 +444,26 @@ def _assert_own_plane_loaded() -> None:
     sys.exit(1)
 
 
-_assert_own_plane_loaded()
+def _warn_own_plane_mismatch_nonfatal() -> None:
+    """Import-time counterpart to `_assert_own_plane_loaded`: same check,
+    but WARN-and-continue rather than FATAL-and-exit, so a mixed plane is
+    still visible to a test process or tool that merely imports this module
+    without invoking it as the install entry point."""
+    mismatch = _own_plane_mismatch()
+    if mismatch is None:
+        return
+    actual_module_file, pth = mismatch
+    print(
+        f"WARN: coordinator_core.install.substrate loaded from "
+        f"{actual_module_file}, not this file's own repo root "
+        f"{_EXPECTED_REPO_ROOT} -- "
+        + (f"caused by {pth}" if pth is not None else "no responsible .pth file found on sys.path")
+        + " -- non-fatal on import; the install entry point (main()) will FATAL on this.",
+        file=sys.stderr,
+    )
+
+
+_warn_own_plane_mismatch_nonfatal()
 
 
 def _collect_writer_declarations(
@@ -1941,6 +2019,12 @@ def _run_body(
 
 
 def main(argv: List[str]) -> int:
+    # Fatal plane check belongs here, not at module scope (Finding 1,
+    # coordinator:code-reviewer): this is the actual install entry point --
+    # the only place a mixed-plane load should kill the process. A bare
+    # `import coordinator_core.install.maximalist` (tests, tooling) only
+    # gets the non-fatal `_warn_own_plane_mismatch_nonfatal` signal above.
+    _assert_own_plane_loaded()
     try:
         parsed = _parse_args(argv)
     except _UsageError as exc:

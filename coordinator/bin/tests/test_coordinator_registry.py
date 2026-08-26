@@ -136,10 +136,33 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    # Includes doe-claude-em as forgiving alias (C1).
-    assert reg.CENTRAL_RECEIVER_IDS == frozenset(
-        {"claude-central-em", "central-em", "central", "doe-claude-em"}
-    )
+    """One canonical central receiver id, no legacy aliases.
+
+    `claude-central-em`, `central-em`, and `central` were retired from
+    `identity.centralReceiverIds` on 2026-08-26 (claude-central-em's PM
+    ruling, sequenced with this assertion — that manifest is read LIVE out
+    of the DoE tree, so their edit lands in every session on the box the
+    instant it saves, and this test would go red across the fleet if it
+    still pinned the old set). They are detritus from the era when
+    `~/.claude` was the DoE tree; `doe-claude-em` was already
+    `centralReceiverIds[0]`, so nothing this repo EMITS changes — the three
+    aliases simply stop resolving.
+
+    The one functional consumer is addressability:
+    `cross-repo-memo.py::_is_central_receiver`, which reads this frozenset.
+    After the shrink, `--to doe-claude-em` still resolves and
+    `--to claude-central-em` fails loudly at send rather than misrouting,
+    which is the intended effect. Archived memos are unaffected: the
+    frontmatter routing path fails open on an unknown `to:`.
+
+    Verified before assenting: nothing in this repo emits a legacy alias
+    programmatically. Every remaining occurrence is prose — docstrings in
+    `coordinator-lesson-promote.py`, `coordinator-queue-append.py`,
+    `coordinator-doc-new.py`, `publish-allowlist-generate.py`, and
+    `cross-repo-memo.py`'s own comments — stale documentation once the
+    alias is gone, and safe to follow later rather than in step.
+    """
+    assert reg.CENTRAL_RECEIVER_IDS == frozenset({"doe-claude-em"})
 
 
 # AC-7: CENTRAL_REPO_BASENAMES retired (C1 — basename anchor abandoned; the

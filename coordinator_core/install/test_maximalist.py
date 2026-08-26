@@ -2055,10 +2055,102 @@ def test_own_plane_mismatch_refuses_naming_root_actual_path_and_pth(tmp_path, mo
 def test_own_plane_match_is_a_no_op(monkeypatch, capsys):
     """The matching case (the common, healthy one) must not print or exit."""
     real_substrate_file = str(
-        maximalist._EXPECTED_REPO_ROOT / "coordinator_core" / "install" / "substrate.py"
+        Path(maximalist._EXPECTED_REPO_ROOT) / "coordinator_core" / "install" / "substrate.py"
     )
     monkeypatch.setattr(
         maximalist, "_substrate_plane_check_module", _FakeSubstrateModule(real_substrate_file)
     )
     maximalist._assert_own_plane_loaded()  # must not raise
     assert capsys.readouterr().err == ""
+
+
+def test_own_root_wins_precedence_not_merely_present(tmp_path):
+    """The root must end up FIRST on `sys.path`, not merely somewhere on it.
+
+    Regression: the first cut of this prologue skipped the insert when the
+    root appeared anywhere on `sys.path` (`if str(root) not in sys.path`). A
+    root sitting BEHIND an editable-install `.pth` entry satisfies that test
+    and still loses every import — which is the exact failure the prologue
+    exists to prevent, passing its own guard.
+
+    Runs in a subprocess with the root pre-seeded at the END of `sys.path` via
+    PYTHONPATH: in-process assertion is impossible because the prologue runs
+    once, at import, before any test can arrange the path.
+    """
+    import subprocess
+
+    root = str(Path(maximalist.__file__).resolve().parents[2])
+    decoy = tmp_path / "decoy"
+    (decoy / "coordinator_core").mkdir(parents=True)
+    (decoy / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.append(sys.argv[1]);"
+            " import coordinator_core.install.maximalist;"
+            " import coordinator_core.install.substrate as s;"
+            " print(sys.path[0]); print(s.__file__)",
+            root,
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(decoy)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.splitlines()
+    assert lines[0] == root, (
+        f"sys.path[0] is {lines[0]!r}, not this repo's root {root!r} — "
+        "the prologue tested presence instead of precedence"
+    )
+    # Finding 5 (coordinator:code-reviewer): sys.path[0] being right is the
+    # mechanism, not the outcome that matters — assert the thing
+    # `_assert_own_plane_loaded` actually checks, that `substrate` itself
+    # resolved from this repo's root, not merely that the path entry did.
+    assert lines[1].startswith(root), (
+        f"coordinator_core.install.substrate loaded from {lines[1]!r}, not "
+        f"under this repo's root {root!r} — sys.path[0] was right but the "
+        "module that matters didn't actually load from there"
+    )
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_import_in_mismatched_plane_subprocess_does_not_exit_nonzero(tmp_path):
+    """Finding 1 (coordinator:code-reviewer, P1): a bare `import
+    coordinator_core.install.maximalist` must never kill the importing
+    process, even when the loaded plane is mismatched — only the entry
+    point (`main()`/`__main__`) may FATAL on that condition. Reproduces the
+    mismatch the same way `test_own_plane_wins_over_pth_shadowing_sys_path`
+    does (a shadow `coordinator_core` copy ahead on PYTHONPATH), but here we
+    additionally force the shadow copy to win by fabricating a second copy
+    that the `sys.path[0]` insert cannot beat — a directly-fabricated
+    mismatch via `sys.path` manipulation of `_substrate_plane_check_module`
+    is covered in-process by `test_own_plane_mismatch_refuses_...`; this
+    test covers the real import-time code path end-to-end in a subprocess."""
+    shadow_root = tmp_path / "shadow-repo"
+    shadow_root.mkdir()
+    _copy_coordinator_core_tree(shadow_root)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); sys.path.append(sys.argv[2]);"
+            " import coordinator_core.install.maximalist as m;"
+            " print('imported ok')",
+            str(shadow_root),
+            str(_REAL_REPO_ROOT),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, (
+        f"importing maximalist killed the process (rc={proc.returncode}); "
+        f"stderr={proc.stderr!r} — import must be non-fatal even on a "
+        "mismatched plane, only main()/__main__ may FATAL"
+    )
+    assert "imported ok" in proc.stdout

@@ -72,6 +72,16 @@ GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside a
 
 _PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the DoE filename
 
+#: Operator kill switch for real-machine-state mutation. Spelled here rather than
+#: imported from `install.substrate` (its definition site) on purpose: this module
+#: is on the install hot path and importing `substrate` for one string would drag
+#: its whole import cost in. `test_gen_doe_root_pointer.py` pins the two spellings
+#: equal, so the duplication cannot drift silently.
+_MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
+
+#: Opt back IN to writing the operator's live pointer from under pytest.
+_LIVE_WRITE_ALLOW_ENV = "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE"
+
 
 def _resolve_machine_local() -> Optional[str]:
     """Locate the `machine-local` CLI on PATH. Returns None if absent."""
@@ -223,6 +233,59 @@ def _seed_plugin_mirror_source_path(doe_root: str) -> None:
     print(f"plugin_mirror_source_path: written ({doe_root})")
 
 
+def _refuse_live_pointer_write(pointer_file: str) -> Optional[str]:
+    """Return a reason to refuse writing ``pointer_file``, or None to proceed.
+
+    A target UNDER the OS temp dir is always allowed: that is the sandbox-
+    redirected shape, and refusing it would break every legitimate tmp-scoped
+    test of this writer. Both refusal triggers therefore apply only OUTSIDE it —
+    `install.substrate._refuse_machine_mutation`'s ``check_temp_path`` reasoning,
+    which this mirrors. That heuristic is sound here because the target is not
+    caller-supplied: ``_pointer_file()`` derives it from ``machine_local_dir()``,
+    and a real install's settings-home never lives under the OS temp dir.
+
+    Outside the temp dir, either trigger refuses:
+
+    1. Running under pytest. No test has any business writing the operator's
+       real pointer. This does not depend on the quarantine fixture having run,
+       which is the point: that fixture returns EARLY for
+       ``@pytest.mark.real_home`` — before it sets the kill switch below — so a
+       marked test gets the real home AND no switch, though the marker is
+       documented as being for read-only oracles.
+
+    2. ``COORDINATOR_DISABLE_MACHINE_MUTATION=1`` — the operator-facing switch,
+       honoured here as it already is across ``install.substrate``.
+
+    Escape hatch for a test that genuinely must write the live pointer:
+    ``COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE=1``. Deliberately its own key rather
+    than reusing the ``real_home`` marker — writing the operator's live pointer
+    should have to be asked for by name, at the call site, not inherited from a
+    marker that means "read the real home".
+
+    Bug: state/bug-backlog/2026-08-26-a-test-writes-the-live-claude-machine-lo-
+    6cdf6bc87771.yaml — a test put a pytest tmpdir path into the operator's real
+    pointer, which under concurrency hands a peer session a pointer into a
+    deleted tmpdir.
+    """
+    if os.environ.get(_LIVE_WRITE_ALLOW_ENV) == "1":
+        return None
+
+    tmp_root = os.path.realpath(tempfile.gettempdir())
+    target = os.path.realpath(os.path.dirname(pointer_file) or ".")
+    if target == tmp_root or target.startswith(tmp_root + os.sep):
+        return None
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return (
+            "running under pytest and the target is outside the OS temp dir "
+            f"({target!r}) -- set {_LIVE_WRITE_ALLOW_ENV}=1 if this write is "
+            "genuinely intended"
+        )
+    if os.environ.get(_MUTATION_DISABLE_ENV) == "1":
+        return f"{_MUTATION_DISABLE_ENV}=1"
+    return None
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: arg parse, resolve, validate, write (or --check-only dry-run).
 
@@ -238,6 +301,23 @@ def main(argv: List[str]) -> int:
     this generator). This is a deliberate loosening from the prior strict
     "unknown argument" fail-loud contract, made specifically to support
     ``${ARGUMENTS}``-blob passthrough from install.md's single-line call sites.
+
+    REFUSES the live write when ``COORDINATOR_DISABLE_MACHINE_MUTATION=1``. That
+    switch is set suite-wide by ``coordinator_core/conftest.py::
+    _quarantine_real_home`` and is the operator-facing kill switch
+    ``install.substrate._refuse_machine_mutation`` already honours; this writer
+    did not, which is why a test could land a pytest tmpdir path in the operator's
+    real ``<settings-home>/machine-local/.doe-root`` (state/bug-backlog/
+    2026-08-26-a-test-writes-the-live-claude-machine-lo-6cdf6bc87771.yaml).
+
+    The switch is checked rather than a tmp-path heuristic BECAUSE the target is
+    not caller-supplied: ``_pointer_file()`` derives it from ``machine_local_dir()``,
+    so a caller that has lost ``HOME``/``CLAUDE_HOME`` resolves it through
+    ``Path.home()``'s passwd fallback and silently addresses the real machine.
+    A path heuristic cannot see that; the switch does not need to.
+
+    Refusing exits 0, not non-zero: an install that legitimately runs under the
+    switch must not be failed by it, and every caller branches on the status row.
     """
     check_only = False
     graceful_skip_unresolved = False
@@ -347,6 +427,12 @@ def main(argv: List[str]) -> int:
             print("doe_root_pointer: ready (no-op)")
             _seed_plugin_mirror_source_path(doe_root)
             return 0
+
+    refusal = _refuse_live_pointer_write(pointer_file)
+    if refusal:
+        print(f"{_PROG}: refusing to write {pointer_file}: {refusal}", file=sys.stderr)
+        print("doe_root_pointer: refused (machine mutation disabled)")
+        return 0
 
     pointer_dir = os.path.dirname(pointer_file)
     if pointer_dir and not os.path.isdir(pointer_dir):

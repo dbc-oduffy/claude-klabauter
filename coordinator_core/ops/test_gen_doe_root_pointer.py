@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import trusted_root_guard
+from coordinator_core.ops import gen_doe_root_pointer
 from coordinator_core.ops.gen_doe_root_pointer import main
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 from coordinator_core.testing.home_sandbox import sandbox_home
@@ -646,3 +647,99 @@ def test_registry_msys_mount_form_is_repaired(tmp_path, monkeypatch, _isolated_e
 
     assert rc == 0
     assert _pointer_path(_isolated_env).read_text() == f"{native_form}\n"
+
+
+class TestLivePointerWriteRefusal:
+    """`gen_doe_root_pointer.main` is the ONLY writer of
+    `<settings-home>/machine-local/.doe-root`, and nothing stopped it writing the
+    OPERATOR'S real pointer from inside a test -- so a test could leave a pytest
+    tmpdir path there, which under concurrency hands a peer session a pointer into
+    a deleted directory.
+
+    Bug: state/bug-backlog/2026-08-26-a-test-writes-the-live-claude-machine-lo-
+    6cdf6bc87771.yaml.
+
+    The refusal is gated on the target being OUTSIDE the OS temp dir. Inside it,
+    the write is sandbox-redirected and must still work -- the 34 sibling tests in
+    this module are that assertion, and an earlier version of this guard that
+    refused unconditionally on the kill switch broke 18 of them.
+    """
+
+    def test_env_name_matches_substrate_definition_site(self):
+        """The kill-switch name is spelled in two places (import cost, § its
+        comment in the module). Pin them equal so it cannot drift into a dead
+        switch that silently never fires."""
+        from coordinator_core.install import substrate
+
+        assert (
+            gen_doe_root_pointer._MUTATION_DISABLE_ENV
+            == substrate._MACHINE_MUTATION_DISABLE_ENV
+        )
+
+    def test_temp_rooted_target_is_always_allowed(self, tmp_path, monkeypatch):
+        """The sandbox-redirected shape proceeds even with the kill switch set --
+        this is what the 18-test regression taught."""
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+        target = tmp_path / "settings" / "machine-local" / ".doe-root"
+
+        assert gen_doe_root_pointer._refuse_live_pointer_write(str(target)) is None
+
+    def test_refuses_a_non_temp_target_under_pytest(self, monkeypatch):
+        """The real defect: a live target reached from inside a test. Uses a
+        synthetic path so the assertion never depends on -- or touches -- the
+        operator's actual pointer."""
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic::nodeid")
+        live_shaped = os.path.join(
+            os.sep, "Users", "someone", ".coordinator-claude-settings",
+            "machine-local", ".doe-root",
+        )
+
+        reason = gen_doe_root_pointer._refuse_live_pointer_write(live_shaped)
+
+        assert reason is not None
+        assert "outside the OS temp dir" in reason
+        assert "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE" in reason
+
+    def test_real_home_shaped_escape_is_closed(self, monkeypatch):
+        """`@pytest.mark.real_home` returns EARLY from the quarantine fixture,
+        before it sets the kill switch -- so a marked test has the real home and
+        no switch. Simulated here by clearing the switch: the pytest trigger must
+        still refuse, since it does not depend on the fixture having run."""
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic::nodeid")
+        live_shaped = os.path.join(os.sep, "opt", "live-settings", "machine-local", ".doe-root")
+
+        assert gen_doe_root_pointer._refuse_live_pointer_write(live_shaped) is not None
+
+    def test_named_opt_in_reopens_the_write(self, monkeypatch):
+        """A test that genuinely must write the live pointer asks for it by name,
+        rather than inheriting the permission from a marker meaning 'read the
+        real home'."""
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic::nodeid")
+        monkeypatch.setenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", "1")
+        live_shaped = os.path.join(os.sep, "opt", "live-settings", "machine-local", ".doe-root")
+
+        assert gen_doe_root_pointer._refuse_live_pointer_write(live_shaped) is None
+
+    def test_operator_kill_switch_still_refuses_outside_temp(self, monkeypatch):
+        """Trigger 2, with no pytest in the picture: the operator-facing switch
+        `install.substrate` already honours now covers this writer too."""
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+        live_shaped = os.path.join(os.sep, "opt", "live-settings", "machine-local", ".doe-root")
+
+        reason = gen_doe_root_pointer._refuse_live_pointer_write(live_shaped)
+
+        assert reason == "COORDINATOR_DISABLE_MACHINE_MUTATION=1"
+
+    def test_ordinary_operator_install_is_untouched(self, monkeypatch):
+        """The path that must keep working: a real install, no pytest, no switch."""
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        live_shaped = os.path.join(os.sep, "opt", "live-settings", "machine-local", ".doe-root")
+
+        assert gen_doe_root_pointer._refuse_live_pointer_write(live_shaped) is None

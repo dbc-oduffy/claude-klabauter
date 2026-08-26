@@ -117,8 +117,20 @@ def test_binary_in_declared_directory_never_named_for_removal(tmp_path, monkeypa
 
 def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, monkeypatch):
     """Positive control: a path inside the row's OWN published scope, tracked
-    at HEAD, and genuinely absent from `declared_payload` -- the class the
-    removal side exists to catch -- must still be named."""
+    at HEAD, genuinely absent from `declared_payload`, AND already gone from
+    the worktree -- the class the removal side exists to catch -- must still
+    be named.
+
+    The worktree deletion is load-bearing, not fixture noise. This test
+    originally left `stale.txt` on disk and asserted it was named anyway;
+    `_refuse_removals_present_on_disk` (added by a concurrent session after
+    this test landed) correctly refuses that, and the refusal is right for a
+    reason measured independently: `explicit_stage` runs `git add -- <paths>`,
+    which expresses a deletion only when the path is GONE from the worktree.
+    On a path still present and clean it is a pure no-op, so naming one puts
+    an entry in the pathspec that silently accomplishes nothing. The premise
+    of the old assertion was wrong, not the guard.
+    """
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -128,6 +140,9 @@ def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, mo
             "row_a/stale.txt": "no longer part of the payload",
         },
     )
+    # Committed at HEAD above, then removed from the worktree -- exactly the
+    # state a round leaves behind when source stops publishing a path.
+    (repo_root / "row_a" / "stale.txt").unlink()
     manifest = _mod._RoundManifest(
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
@@ -173,3 +188,72 @@ def test_removal_side_dormant_while_flag_is_false(tmp_path):
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
     assert not any(p.endswith("stale.txt") for p in pathspec)
+
+
+@pytest.mark.skipif(
+    not hasattr(__import__("os"), "symlink"), reason="platform has no symlink support"
+)
+def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
+    """A TRACKED symlink whose target is missing must be REFUSED by
+    `_refuse_removals_present_on_disk`, never named for removal.
+
+    This is the one file class where "not on disk" is a statement about the
+    symlink's TARGET rather than about the path itself: `os.path.exists`
+    follows the link and reads absent, so an `exists`-based refusal waves the
+    candidate through and the removal side deletes a path that is perfectly
+    present. `lexists` asks about the link. Zero tracked symlinks sit on
+    either mirror today -- this pins the behaviour for the round that
+    introduces the first one."""
+    import os
+
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
+    link = repo_root / "row_a" / "link.txt"
+    os.symlink("missing-target.txt", link)
+    _git_run(["git", "add", "-A"], repo_root)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q", "-m", "link"],
+        repo_root,
+    )
+    assert not os.path.exists(link) and os.path.lexists(link)
+
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a"}),
+    )
+    with pytest.raises(_mod.RemovalCandidateOnDiskError):
+        _mod._pathspec_from_manifest(manifest, str(repo_root))
+
+
+def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
+    """The SAME `lexists` property on the UNGATED leg -- `manifest.removed`
+    needs no `_REMOVAL_SIDE_ENABLED`, so a tracked symlink with a missing
+    target is reachable for deletion in a shipped round TODAY, not only once
+    the gate opens.
+
+    Leg A skips a path still present in dest's worktree because `git add`
+    expresses a deletion only for a path that is GONE; an `exists`-based skip
+    follows the link, reads the missing target as "gone", and stages the
+    deletion of a symlink that is perfectly present."""
+    import os
+
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
+    link = repo_root / "row_a" / "link.txt"
+    os.symlink("missing-target.txt", link)
+    _git_run(["git", "add", "-A"], repo_root)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q", "-m", "link"],
+        repo_root,
+    )
+
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a"}),
+        removed=frozenset({"row_a/link.txt"}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    assert not any(p.endswith("link.txt") for p in pathspec)

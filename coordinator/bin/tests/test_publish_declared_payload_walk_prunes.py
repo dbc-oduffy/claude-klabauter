@@ -121,3 +121,100 @@ def test_no_published_dirs_yields_nothing():
     """A round that published nowhere declares nothing extra — the same
     fail-direction the empty row scope gets on the removal side."""
     assert _mod._walk_published_payload([]) == set()
+
+
+def test_walk_is_bounded_by_the_published_dirs_and_declares_nothing_else(tmp_path):
+    """The composition invariant, pinned because it is not obvious and it
+    holds by ORDERING rather than by design.
+
+    `declared_payload` is `scan_set | _walk_published_payload(published_dest_dirs)`.
+    The obvious reading of that widening — "it re-declares everything on
+    disk at dest" — is what this session predicted, and it is wrong only
+    because the walk is bounded by the dirs THIS round published. A
+    directory sitting on disk from a retired row is therefore NOT declared,
+    which is what lets the removal side see it at all.
+
+    Measured 2026-08-26 on the `coordinator-claude` mirror: `declared_payload`
+    went DOWN 1498 -> 1477 across this change, and `whoami/` — a ratified
+    retirement whose bytes were still on disk — became reachable by
+    `head_tree - declared_payload` for the first time (0/23 -> 23/23).
+
+    NEGATIVE SPEC. Two independent changes would silently reverse that and
+    make every retired-but-still-on-disk path permanently undeletable:
+
+    - widening this walk's input beyond the round's own published dest dirs
+      (to the repo root, to `_dest_head_tree`'s output, to a `git status`
+      survey), or
+    - dropping the row-scoping that narrows those dirs in the first place.
+
+    Either one re-declares a retired row's bytes, and nothing else in the
+    pipeline would notice — the round would still report PASS, the pathspec
+    would simply stop naming the paths anyone wanted gone. Hence a test
+    rather than a comment.
+    """
+    published = tmp_path / "published"
+    (published / "pkg").mkdir(parents=True)
+    (published / "pkg" / "live.py").write_text("x = 1\n")
+
+    retired = tmp_path / "whoami"
+    (retired / "coordinator_whoami").mkdir(parents=True)
+    (retired / "coordinator_whoami" / "cli.py").write_text("# retired row, still on disk\n")
+    (retired / "pyproject.toml").write_text("[project]\n")
+
+    found = _mod._walk_published_payload([published])
+
+    assert published / "pkg" / "live.py" in found
+    assert not [p for p in found if "whoami" in p.parts], (
+        "a retired row's on-disk bytes entered declared_payload — the removal "
+        "side can no longer name them, and nothing downstream reports it"
+    )
+
+
+def test_over_declaring_silently_disables_removals(tmp_path):
+    """The failure mode is INERTNESS, and it is silent — which is why it gets
+    a test naming the consequence rather than only the prune.
+
+    MEASURED 2026-08-26 on `claude-klabauter`, from this session's own
+    defect: the walk shipped pruning only `.git`/`__pycache__`/staging, so a
+    flat-mirror row whose `dest_dir` is the mirror root descended into
+    `.fleet-env/` — the fleet virtualenv, 2.7GB and 26,405 files.
+    `declared_payload` reached **48,929** against a tracked tree of **8,717**,
+    which made `head_tree - declared_payload` **empty**. The removal side went
+    completely inert on that mirror and the round still reported PASS.
+
+    Note the direction. An over-wide `declared_payload` never deletes anything
+    WRONG — it quietly stops deleting anything at all. No verdict changes, no
+    warning fires, no count moves; the only symptom is that paths everyone
+    wants gone stay. A prune bug that over-deletes announces itself. This one
+    cannot, so the invariant it violates is asserted here directly:
+    **declared_payload must not exceed what dest actually tracks.**
+
+    Fixed by a concurrent session wiring the walk to
+    `surface.STRUCTURAL_NEVER_PUBLISHED_PREFIXES`, the SSOT that already
+    carried `.fleet-env` (and `.git`, `.percolate`) — the right fix, and the
+    one this session should have found instead of hardcoding three prunes.
+    """
+    root = tmp_path / "mirror"
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "real.py").write_text("x = 1\n")
+
+    # The shape that caused it: a large gitignored tree sitting in the row's
+    # own published dir, published by nothing.
+    venv = root / ".fleet-env" / "lib" / "python3.11" / "site-packages"
+    venv.mkdir(parents=True)
+    for i in range(50):
+        (venv / f"dep{i}.py").write_text("# vendored dependency\n")
+    (root / ".fleet-env" / "pyvenv.cfg").write_text("home = /usr\n")
+
+    found = _mod._walk_published_payload([root])
+
+    assert root / "coordinator_core" / "real.py" in found
+    assert not [p for p in found if ".fleet-env" in p.parts], (
+        "the environment directory entered declared_payload — head_tree minus "
+        "declared_payload then empties and the removal side goes inert, "
+        "silently, with the round still reporting PASS"
+    )
+    # The invariant, stated as the thing that actually matters: what the walk
+    # declares stays proportionate to real payload, never swamped by a
+    # destination's own local scratch.
+    assert len(found) == 1

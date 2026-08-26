@@ -736,6 +736,27 @@ def _install_one_content_matches(
     return dst.read_bytes() == _install_one_effective_bytes(src, dst, python_bin_substitution)
 
 
+def _install_one_live_would_rewrite(force_overwrite: bool, write_strategy: str) -> bool:
+    """Whether `_install_one`'s live path (`check_only=False`) would
+    actually rewrite an existing, content-differing destination for this
+    `(force_overwrite, write_strategy)` pair.
+
+    Review: coordinator:code-reviewer (P1) — check-mode previously
+    hand-maintained a second copy of this classification (`write_strategy
+    in ("careful", "refuse")` treated as an unconditional no-op) that
+    disagreed with the live path for `write_strategy="careful"`: live's
+    `elif force_overwrite:` branch performs a real write via
+    `_careful_write` there, it only refuses to write for `"refuse"`. This
+    is the single predicate both the live branch below and check-mode's
+    verdict now consult, so the two cannot drift apart again. Mirrors the
+    live path's own branching exactly: no write when the destination
+    exists and content differs unless `force_overwrite` is set and the
+    strategy isn't `"refuse"`."""
+    if not force_overwrite:
+        return False
+    return write_strategy != "refuse"
+
+
 def _install_one(
     src: Path, dst: Path, exec_bit: bool, warn_prefix: str, check_only: bool,
     *, force_overwrite: bool = False,
@@ -828,28 +849,38 @@ def _install_one(
         if dst.exists() and _install_one_content_matches(src, dst, python_bin_substitution):
             print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
             return
-        if dst.exists() and write_strategy in ("careful", "refuse"):
-            # CHECK-MODE CONTRACT (AC6): a foreign-tracked (or
-            # git-identity-unresolvable) stale destination reports as "not
-            # managed here" rather than raising — check must not hard-fail
-            # forever on the two destinations that were already dirty before
-            # this guard existed, with no remediation the plan permits.
-            print(
-                f"[install-substrate] check: {dst.name} not managed here "
-                f"(foreign-tracked, or git identity unresolvable) at {dst} — "
-                "not reported as stale"
-            )
-            return
-        if dst.exists() and not force_overwrite:
-            # Same classification the live path uses (`reason`/`force_overwrite`
-            # above): a destination outside the code-file/tracked-template
-            # classes is preserve-on-diff live, exit 0 — check-mode must agree
-            # rather than demanding a state (a rewritten, byte-identical
-            # destination) the live path itself refuses to produce (C3/AC5).
-            print(
-                f"[install-substrate] check: {dst.name} operator-customized "
-                f"(preserve-on-diff) at {dst} — not reported as stale"
-            )
+        # Review: coordinator:code-reviewer (P1, overridden to FIX) — the old
+        # `write_strategy in ("careful", "refuse")` clause treated BOTH
+        # strategies as an unconditional check-mode no-op, but the live path
+        # (`elif force_overwrite:` below) only refuses to write for
+        # "refuse"; "careful" with force_overwrite=True and differing
+        # content performs a REAL write via `_careful_write`. Check must
+        # follow the live path's actual verdict, not a hand-maintained
+        # second copy of its classification — `_install_one_live_would_rewrite`
+        # is that single shared predicate.
+        if dst.exists() and not _install_one_live_would_rewrite(force_overwrite, write_strategy):
+            if write_strategy in ("careful", "refuse"):
+                # CHECK-MODE CONTRACT (AC6): a foreign-tracked (or
+                # git-identity-unresolvable) destination live would not
+                # rewrite reports as "not managed here" rather than raising
+                # — check must not hard-fail forever on the two
+                # destinations that were already dirty before this guard
+                # existed, with no remediation the plan permits.
+                print(
+                    f"[install-substrate] check: {dst.name} not managed here "
+                    f"(foreign-tracked, or git identity unresolvable) at {dst} — "
+                    "not reported as stale"
+                )
+            else:
+                # Same classification the live path uses (`reason`/`force_overwrite`
+                # above): a destination outside the code-file/tracked-template
+                # classes is preserve-on-diff live, exit 0 — check-mode must agree
+                # rather than demanding a state (a rewritten, byte-identical
+                # destination) the live path itself refuses to produce (C3/AC5).
+                print(
+                    f"[install-substrate] check: {dst.name} operator-customized "
+                    f"(preserve-on-diff) at {dst} — not reported as stale"
+                )
             return
         status = "stale" if dst.exists() else "absent"
         raise SubstrateFatalError(
