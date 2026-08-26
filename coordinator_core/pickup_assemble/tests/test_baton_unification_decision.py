@@ -21,7 +21,7 @@ Coverage:
   - all four `pickup_assemble` dispositions (`live-peer` / `live-unrelated`
     / `handover` / `stale-claim`), one test per arm
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_baton_unification_decision.py -q
 """
 from __future__ import annotations

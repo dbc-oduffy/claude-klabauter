@@ -80,6 +80,22 @@ def test_stranded_entry_prior_refuses(tmp_path):
     assert excinfo.value.content_swapped is False
 
 
+def test_dotted_stranded_entry_prior_refuses(tmp_path):
+    """A dotted top-level entry (`.github`, `.mcp.json`, ...) is a legal
+    `_swap_publish_staging_into_dest_root` candidate -- that loop walks
+    `staging_dir.iterdir()` with no dotfile filter -- so a strand it leaves
+    behind is dotted too. `dest_dir.glob("*.prior")` cannot see one: stdlib
+    glob hides any basename starting with `.` from a pattern that does not
+    itself start with `.`. This pins the `iterdir()`-based scan that replaced
+    the glob."""
+    dest = _dest_root(tmp_path)
+    (dest / ".github.prior").mkdir()
+    with pytest.raises(_pub.PublishSwapPartial) as excinfo:
+        _pub._refuse_stranded_root_swap_prior(dest)
+    assert ".github.prior" in str(excinfo.value)
+    assert excinfo.value.content_swapped is False
+
+
 def test_fleet_env_prior_is_not_a_strand(tmp_path):
     """`.fleet-env.prior` is NAMED in
     `surface.STRUCTURAL_NEVER_PUBLISHED_PREFIXES` -- destination-repo build

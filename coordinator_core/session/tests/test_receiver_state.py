@@ -272,8 +272,22 @@ def dataclasses_values(obj):
 
 
 def _fake_session_dir(monkeypatch, tmp_path: Path):
-    """Point session.core.session_dir at a tmp_path-rooted fake sessions dir, so the
-    sibling-file writer test never touches the real repo's .git/coordinator-sessions/."""
+    """Point session.core's session-dir resolution AND its constructor at a
+    tmp_path-rooted fake sessions dir, so the sibling-file writer test never
+    touches the real repo's .git/coordinator-sessions/.
+
+    Both must be patched. `write_receiver_state` calls `core.ensure_session`
+    (the one constructor) and then fails closed on `os.path.isdir`; patching
+    only `session_dir` left the constructor resolving the REAL hub from the
+    process cwd and minting session directories into the live tree, which is
+    precisely what this helper exists to prevent (and what `conftest`'s live
+    session-hub litter guard catches). The fake constructor writes a
+    `meta.json` too, because that is the real one's postcondition -- a fake
+    that produced a record-less directory would bake into the fixture the very
+    state `ensure_session` exists to make impossible.
+    """
+    import json as _json
+
     from coordinator_core.session import core as session_core
 
     fake_base = tmp_path / "coordinator-sessions"
@@ -281,7 +295,20 @@ def _fake_session_dir(monkeypatch, tmp_path: Path):
     def _fake_session_dir(sid: str, cwd=None) -> str:
         return str(fake_base / sid)
 
+    def _fake_ensure_session(sid: str, cwd=None, **_kwargs) -> str:
+        d = fake_base / sid
+        d.mkdir(parents=True, exist_ok=True)
+        meta = d / "meta.json"
+        if not meta.is_file():
+            meta.write_text(
+                _json.dumps({"session_id": sid, "goal": ""}, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+        return str(d)
+
     monkeypatch.setattr(session_core, "session_dir", _fake_session_dir)
+    monkeypatch.setattr(session_core, "ensure_session", _fake_ensure_session)
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +443,27 @@ class TestSiblingFileWriter:
         assert ok
         sibling = tmp_path / "coordinator-sessions" / "sid-1" / "receiver-state.json"
         assert sibling.is_file()
-        meta = tmp_path / "coordinator-sessions" / "sid-1" / "meta.json"
-        assert not meta.exists()
         assert not (tmp_path / "state").exists()
+
+        # The property is that receiver-state is a SIBLING FILE, never a field
+        # inside the session record -- `meta.json` is a contended artifact and
+        # a per-turn verdict has no business in it.
+        #
+        # This used to be spelled `assert not meta.exists()`, which stopped
+        # being a statement about THIS writer on 2026-08-26: `ensure_session`
+        # is the session directory's one constructor and creates the record
+        # together with the directory, so a `meta.json` beside the sibling is
+        # now the CORRECT postcondition, not a leak. Asserting its absence
+        # would pin a record-less session directory -- exactly the state the
+        # constructor exists to make impossible. Pin the containment instead.
+        meta = tmp_path / "coordinator-sessions" / "sid-1" / "meta.json"
+        if meta.exists():
+            record = json.loads(meta.read_text(encoding="utf-8"))
+            leaked = {"verdict", "reason", "cpu_cursor", "stamp", "receiver_state"} & set(record)
+            assert not leaked, (
+                f"receiver-state field(s) {sorted(leaked)} leaked into meta.json -- "
+                "this writer owns a sibling file, never the session record"
+            )
 
     def test_written_record_shape(self, tmp_path: Path, monkeypatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)

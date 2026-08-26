@@ -365,6 +365,14 @@ def _sentinel_base(repo_root: "Path | None") -> Path:
     return Path(tempfile.gettempdir())
 
 
+#: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module
+#: needs. Deliberately NOT an import: this guard runs in a PreToolUse hook on
+#: the write hot path, where pulling in the session package for one string is
+#: cost the hook cannot justify -- the same reasoning
+#: `bash_guards/_override_log_path.NO_SESSION_BUCKET` states for its own copy.
+_NO_SESSION_BUCKET = "no-session"
+
+
 def _claim_warn_once(repo_root: "Path | None", payload: dict) -> bool:
     """Atomically claim this session's one WARN slot; True iff this call
     won it (i.e. should actually emit the advisory). A session carrying no
@@ -372,7 +380,24 @@ def _claim_warn_once(repo_root: "Path | None", payload: dict) -> bool:
     strictly better than never warning at all, matching the precedent this
     mirrors."""
     base = _sentinel_base(repo_root)
-    sentinel = base / "coordinator-sessions" / _session_key(payload) / _SESSION_SENTINEL_NAME
+    # A warn-once sentinel is not a session and must never mint one. This used
+    # to be `<hub>/<session_key>/` unconditionally, and when `repo_root`
+    # resolves, that hub is the REAL one: `liveness.live_session_ids`
+    # enumerates every non-denylisted child of it as a SESSION, so an advisory
+    # sentinel manufactured a phantom, record-less session that claim
+    # attribution and scope computation both read.
+    # `session/core.py::ensure_session` is the one constructor.
+    # Warn-once semantics are unchanged: the sentinel stays keyed on the
+    # session, one level deeper, under the denylisted `no-session` bucket
+    # (`liveness._NON_SESSION_DIR_NAMES`, the same fallback
+    # `bash_guards/_override_log_path` uses) whenever the session's own
+    # directory does not already exist.
+    sessions_root = base / "coordinator-sessions"
+    session_key = _session_key(payload)
+    sentinel_dir = sessions_root / session_key
+    if not sentinel_dir.is_dir():
+        sentinel_dir = sessions_root / _NO_SESSION_BUCKET / session_key
+    sentinel = sentinel_dir / _SESSION_SENTINEL_NAME
     try:
         sentinel.parent.mkdir(parents=True, exist_ok=True)
         with open(sentinel, "x", encoding="utf-8", newline="\n") as fh:

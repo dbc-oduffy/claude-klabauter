@@ -130,10 +130,30 @@ def _set_anchor_env(monkeypatch, repos, tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _make_session(repo_root, sid: str) -> None:
+    """Create the session the applicability log line will be about, through
+    `session/core.py::ensure_session` -- the one constructor.
+
+    These two tests used to log against a session id no directory existed for,
+    and the writer's own `mkdir` minted one. That is the phantom-session defect
+    the constructor closed (`liveness.live_session_ids` reads every
+    non-denylisted child of the hub as a SESSION), so the log writer no longer
+    creates `<hub>/<sid>` and buckets an unknown session into `no-session`
+    instead. The property these tests exist for -- WHICH REPO's hub receives
+    the line, anchor and never foreign -- is untouched by that; only the
+    fixture's assumption that the writer would create the session was.
+    """
+    from coordinator_core.session import core as _core
+
+    _core.reset_sessions_dir_cache()
+    _core.ensure_session(sid, str(repo_root))
+
+
 def test_finding3_applicability_log_lands_under_anchor_not_foreign_repo(
     repos, monkeypatch, tmp_path
 ):
     _set_anchor_env(monkeypatch, repos, tmp_path)
+    _make_session(repos["anchor"], "sess-f3")
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     result = guard.check_bump_foreign_repo_write(
@@ -158,10 +178,20 @@ def test_finding3_applicability_log_lands_under_anchor_not_foreign_repo(
         "the guard is bumping the write away from -- finding #3's exact "
         "defect"
     )
+    foreign_bucket = (
+        Path(session_dir("sess-f3", str(repos["foreign"]))).parent
+        / "no-session"
+        / "write_bump_applicability_log"
+    )
+    assert not foreign_bucket.exists(), (
+        "the `no-session` fallback must not become a second way into the "
+        "foreign repo's hub"
+    )
 
 
 def test_finding3_applicability_log_content_names_both_repos(repos, monkeypatch, tmp_path):
     _set_anchor_env(monkeypatch, repos, tmp_path)
+    _make_session(repos["anchor"], "sess-f3b")
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
     guard.check_bump_foreign_repo_write(cmd, "sess-f3b", str(repos["anchor"]), {})

@@ -84,9 +84,10 @@ def test_pending_removals_are_counted_and_named(tmp_path):
 
 
 def test_modified_and_untracked_files_are_not_counted(tmp_path):
-    """Only ` D` counts. A modified or untracked file is genuinely restored
-    or discarded by the remedy with nothing lost, so counting it would
-    manufacture a warning about a cost that is not being paid."""
+    """Only a `D` in the staged or worktree column counts. A modified or
+    untracked file is genuinely restored or discarded by the remedy with
+    nothing lost, so counting it would manufacture a warning about a cost
+    that is not being paid."""
     dest = _dest_with({"a.md": "a\n", "b.md": "b\n"}, tmp_path)
     (dest / "a.md").write_text("changed\n", encoding="utf-8")
     (dest / "new.md").write_text("new\n", encoding="utf-8")
@@ -95,6 +96,22 @@ def test_modified_and_untracked_files_are_not_counted(tmp_path):
 
     (dest / "b.md").unlink()
     assert "1 pending removal(s)" in _mod._pending_removal_warning(str(dest))
+
+
+def test_staged_deletion_is_counted(tmp_path):
+    """A deletion `git add`-staged but not yet committed (`"D "` in porcelain)
+    is the same lost-record hazard as an unstaged one -- it is exactly the
+    state left behind by a prior invocation of this module's own commit leg
+    (`commit_pipeline.explicit_stage`'s `git add -- <paths>`) that died
+    between staging and committing, before this widened check existed only
+    the unstaged (`" D"`) case was caught."""
+    dest = _dest_with({"a.md": "a\n", "b.md": "b\n"}, tmp_path)
+    (dest / "b.md").unlink()
+    _git(["git", "add", "-A"], dest)
+
+    warning = _mod._pending_removal_warning(str(dest))
+    assert "1 pending removal(s)" in warning
+    assert "ONLY record" in warning
 
 
 def test_unreadable_dest_says_nothing(tmp_path):

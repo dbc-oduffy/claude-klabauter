@@ -238,13 +238,13 @@ def session_shape_set(
     if not isinstance(frag, dict):
         return False
 
-    sdir = core.session_dir(sid, cwd)
-    if not sdir:
-        return False
-    # Session dir must exist (caller owns cs_init; defensively create).
-    try:
-        Path(sdir).mkdir(parents=True, exist_ok=True)
-    except OSError:
+    # The session dir must exist, and "defensively create" it with a bare mkdir
+    # is what minted record-less session dirs: this writer does not own cs_init
+    # and cannot assume the caller ran it. `ensure_session` is the one
+    # constructor -- dir and `meta.json` together or neither -- so a shape write
+    # can no longer leave behind a directory no peer can see.
+    sdir = core.ensure_session(sid, cwd)
+    if not sdir or not os.path.isdir(sdir):
         return False  # cannot create/access session dir -> shape write fails closed
 
     shape_file = Path(sdir) / "session-shape.json"

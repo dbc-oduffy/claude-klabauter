@@ -712,10 +712,14 @@ def write_receiver_state(
     path = _sibling_path(sid, cwd)
     if path is None:
         return False
-    sdir = os.path.dirname(path)
-    try:
-        os.makedirs(sdir, exist_ok=True)
-    except OSError:
+    # `ensure_session`, not `os.makedirs`: `_sibling_path` resolves
+    # `<hub>/<sid>/receiver-state.json`, so creating its parent here IS creating
+    # a session directory, and doing that without the record is what left
+    # sessions invisible to `liveness.live_session_ids` and unreapable by
+    # `ops/session/reap.py`. Same fail-closed contract as before -- an
+    # uncreatable session dir returns False.
+    sdir = _session_core.ensure_session(sid, cwd)
+    if not sdir or not os.path.isdir(sdir):
         return False
 
     record: dict[str, Any] = {

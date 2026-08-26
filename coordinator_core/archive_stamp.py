@@ -1830,18 +1830,20 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
 
         value = f"pickup: {value_source}"[:_SESSION_GOAL_MAX_CHARS]
 
-        # `ensure_meta`, not `session_dir`: a session directory is routinely
-        # created by a bookkeeping writer that never wrote the meta.json
-        # record, and `update_meta_field` no-ops on an absent file by
-        # contract -- so this write reported "did not complete" on every
-        # claim in such a session and `goal` stayed permanently unset, which
-        # is what a peer's claim-contention check reads.
+        # `ensure_session`, not `session_dir`: a session directory used to be
+        # routinely created by a bookkeeping writer that never wrote the
+        # meta.json record, and `update_meta_field` no-ops on an absent file by
+        # contract -- so this write reported "did not complete" on every claim
+        # in such a session and `goal` stayed permanently unset, which is what
+        # a peer's claim-contention check reads. The constructor now closes
+        # that at the source; this call remains the one that GUARANTEES the
+        # record before the write, which is what this site actually needs.
         # Second consumer of this call: `stable_pid` liveness stamping —
-        # `ensure_meta` is also the writer that (re-)stamps `stable_pid` on
+        # `ensure_session` is also the writer that (re-)stamps `stable_pid` on
         # a claim (see its own docstring's re-stamp arm). Narrowing this
         # call to `session_dir`/`update_meta_field` would silently drop
         # that stamp too, not just `goal`.
-        sdir = _session_core.ensure_meta(sid, str(worktree))
+        sdir = _session_core.ensure_session(sid, str(worktree))
         if not sdir:
             return
         if not _session_core.update_meta_field(sdir, "goal", value):

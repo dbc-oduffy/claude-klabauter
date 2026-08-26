@@ -53,7 +53,7 @@ minimum needed to select the right `execution_stamp_match` verdict branch
 for path 6). Over-constraining values here would make this test fragile for
 reasons the downstream consumer does not care about.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_consumer_field_path_contract.py -q
 """
 from __future__ import annotations

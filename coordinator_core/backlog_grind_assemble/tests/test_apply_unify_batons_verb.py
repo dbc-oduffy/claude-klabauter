@@ -28,7 +28,7 @@ No git, no subprocess: the routed path is stubbed at
 `coordinator_core.pickup_assemble.unify_run_batons`, whose own behaviour is
 proven in `pickup_assemble/tests/test_baton_unification.py`.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/backlog_grind_assemble/tests/test_apply_unify_batons_verb.py -q
 """
 from __future__ import annotations

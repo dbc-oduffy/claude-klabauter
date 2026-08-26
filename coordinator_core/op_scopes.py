@@ -1062,6 +1062,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # caller-supplied params (the publish target), matching the percolate.run/
     # percolate.validate_store "no repo state accessed" precedent.
     "percolate.check_inverse_drift":          "none",
+    # percolate.build_token_index — "none": the dest root it indexes is an explicit
+    # caller-supplied param (the publish target) and the index is written beside it
+    # under <root>/.percolate/, never into the dispatching tree; same precedent as
+    # percolate.run / percolate.check_inverse_drift.
+    "percolate.build_token_index":            "none",
     # repo.clone_and_register — "none": operates on a sibling repo path and the
     # OPERATOR's own machine-local registry, neither of which is the caller's own
     # dispatching tree; matches the plugin_health.* operator-machine-scoped class.

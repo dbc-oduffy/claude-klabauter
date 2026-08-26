@@ -22,7 +22,7 @@ Liveness is resolved via `coordinator_core.session.liveness.claim_holder_live`,
 itself keyed on `coordinator_core.session.core.stable_pid_alive` against the
 holder's `meta.json` — never the harness registry's raw pid or status field.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_claim_rule.py -q
 """
 from __future__ import annotations

@@ -70,6 +70,54 @@ GENERATES = []
 _UNRESOLVED = object()
 psutil = _UNRESOLVED  # type: ignore[assignment]
 
+#: Session directories this PROCESS has already tried, and failed, to stamp a
+#: ``stable_pid`` onto. Read only by ``ensure_session``'s re-stamp arm.
+#:
+#: Why this exists, measured. The re-stamp arm re-runs ``init()`` on every call
+#: whose record carries an EMPTY ``stable_pid``. That is correct as a REPAIR --
+#: it is the only path that can stamp a record created record-but-unstamped --
+#: but ``session/scope.py::touch`` calls ``ensure_session`` on every sanctioned
+#: mutating op, so on a box where the stamp can never succeed the repair
+#: re-runs Guard-1's psutil parent inspection on EVERY touch instead of once.
+#: Measured 2026-08-26 on this box (RUSAGE process time, n=400): the re-stamp
+#: arm costs **0.29ms per call against the stamped fast arm's 0.021ms -- 13.5x**
+#: -- and the live corpus shows a median of 19 touches per session and a
+#: maximum of 65, so the waste is ~5ms typical and ~19ms worst observed, per
+#: session, spent re-deriving an answer that provably cannot change.
+#:
+#: The affected population is not hypothetical and is exactly the one K-006 is
+#: about: POSIX hosts where Guard-1's parent-name check misses AND ``CLAUDE_PID``
+#: does not resolve. Every session on host `machine-b` stamped
+#: ``posix-parent-miss:name-mismatch`` on 2026-08-22 before the CLAUDE_PID leg
+#: landed (see ``init``'s POSIX leg (b) comment).
+#:
+#: PROCESS-LOCAL BY DESIGN, and that is the whole safety argument -- it is why
+#: this is a memo and not a marker file. Every input Guard-1 reads is constant
+#: for the life of a process (``os.getppid()``, the parent's own name,
+#: ``CLAUDE_PID`` in this process's environment, whether psutil imported), so
+#: within one process a second attempt cannot produce a different answer. A
+#: NEW process re-attempts from scratch. A session that becomes stampable later
+#: therefore still gets stamped by the next process to touch it, and K-006's
+#: Layer-1 gap cannot be silently reopened the way a persisted "gave up" marker
+#: on disk would reopen it.
+#:
+#: Keyed on the session DIRECTORY, not the bare sid: two worktrees can hold the
+#: same sid, and they are different records.
+_STAMP_ATTEMPTED: "set[str]" = set()
+
+#: Bound on ``_STAMP_ATTEMPTED``. The warm server is long-lived and serves many
+#: sessions, so an unbounded set is a slow leak. On overflow the whole set is
+#: dropped rather than evicted one-by-one: the cost of forgetting is one extra
+#: attempt per session, which is the behaviour this memo started from, so the
+#: cheap policy is also the safe one.
+_STAMP_ATTEMPTED_MAX = 512
+
+
+def reset_stamp_attempt_memo() -> None:
+    """Clear the process-local stamp-attempt memo. For tests, and for any
+    caller that has reason to believe Guard-1's inputs changed under it."""
+    _STAMP_ATTEMPTED.clear()
+
 
 def _psutil():
     global psutil
@@ -286,75 +334,124 @@ def session_dir(sid: str, cwd: Optional[str] = None) -> str:
     return str(Path(base) / sid)
 
 
-def ensure_meta(sid: str, cwd: Optional[str] = None) -> str:
-    """Return the session directory for ``sid``, creating its ``meta.json``
-    session RECORD first if the directory exists without one.
+def ensure_session(
+    sid: str,
+    cwd: Optional[str] = None,
+    *,
+    goal: str = "",
+    sessions_base: Optional[str] = None,
+    root: Optional[str] = None,
+) -> str:
+    """The session directory's ONE constructor: return ``<hub>/<sid>`` carrying
+    a ``meta.json`` session RECORD, having produced the directory and the record
+    in the SAME call, or neither.
 
-    Exists because a session directory has no single owner. ``init`` is the
-    only writer of ``meta.json``, but many bookkeeping writers reach a
-    session directory into being with ``mkdir(parents=True, exist_ok=True)``
-    and drop their own file in it (``write_bump_launch_cwd``,
-    ``push-failures-cursor.txt``, ``session-shape.json``, ``baton.json``,
-    ``dispatched-agents.txt``, ``touched.txt``, ...). So a directory
-    routinely exists with no record in it, and every writer that goes
-    through ``update_meta_field`` then silently no-ops -- that function
-    returns False on an absent file by contract, matching the bash original
-    which requires ``cs_init`` to have run first.
+    Every writer that needs a session directory to exist calls this. Nothing
+    else in this corpus may ``mkdir`` a session directory — that rule is not a
+    convention, it is a guard
+    (``coordinator_core/tests/test_session_dir_has_one_constructor.py``).
 
-    The field that made this visible is ``goal``: ``meta.json`` is its only
-    source, there is no harness-registry substitute, and a claim whose goal
-    write no-ops renders to every peer as ``holder_goal_state: undeclared``
-    -- which is exactly what a peer's claim-contention check reads when it
-    asks what a live holder is doing.
+    Why one owner, in facts rather than principle. ``init`` is the only writer
+    of ``meta.json`` and it used to run LAZILY, from whichever bookkeeping
+    writer happened to reach the hub first; meanwhile a dozen writers reached a
+    session directory into being with ``mkdir(parents=True, exist_ok=True)`` and
+    dropped their own file in it. Which sessions got a record was therefore a
+    RACE between lazy initializers, and a session that lost it was not degraded
+    but INVISIBLE:
 
-    Call this instead of ``session_dir`` at any site that is about to write
-    a meta.json field on a session it did not itself initialize.
+      - every ``update_meta_field``/``update_meta_fields`` write silently
+        no-ops (both return False on an absent file, by contract, matching the
+        bash original which requires ``cs_init`` to have run first);
+      - ``goal`` has no harness-registry substitute, so the session renders to
+        every peer as ``holder_goal_state: undeclared`` -- exactly what a
+        peer's claim-contention check reads when it asks what a live holder is
+        doing;
+      - ``ops/session/reap.py`` fail-closes to KEEP a directory it cannot read,
+        so such a session is both invisible and unreapable, accumulating
+        forever.
+
+    Cost, spiked before this was built rather than assumed and re-measured
+    after (2026-08-26, this box, RUSAGE process time, n=200): the marginal cost
+    of the record write at a site that previously only ``mkdir``-ed is
+    **+0.57ms on the CREATE path and +0.30ms on the idempotent refresh, with
+    ZERO process creations** -- ``init`` reads ``head_at_start``/``branch`` from
+    ``.git/HEAD`` in-process (see its own DR-344 note) and comm-verifies the
+    parent through psutil, so nothing here spawns. (The pre-build spike read
+    +0.42ms / +0.28ms; the atomic meta.json create added below accounts for the
+    difference, once per session.) The overwhelmingly common call -- a session
+    whose record already exists and is stamped -- short-circuits at the
+    ``is_file()`` below for 0.013ms and imports nothing. A caller that has never
+    imported ``psutil``/``git_state`` pays ~11ms ONCE per process, on the first
+    create only.
+      -> docs/research/spike-verdicts/2026-08-26-what-the-record-write-costs-at-a-mkdir-site.md
+
+    ``goal``/``sessions_base``/``root`` are pass-throughs to ``init`` -- see that
+    function's own negative-spec for the pre-resolved seam's contract
+    (``sessions_base`` is the HUB, ``root`` is a WORKTREE root, neither is
+    validated against the other). A caller holding both answers already, such as
+    ``hooks/track_touched_files``, must pass them: that handler is pinned at ZERO
+    ``core.git_root`` calls by its own guard.
+
+    Return contract, carried over unchanged from the ``ensure_meta`` this
+    replaced (deleted 2026-08-26 once this became the only constructor):
+    the resolved path is returned even when the create FAILED, so a caller's
+    existing no-op-and-warn branch stays reachable rather than a diagnostic field
+    turning into a new failure mode. ``""`` means the HUB itself was
+    unresolvable (not a git repo). A caller that must fail CLOSED checks
+    ``os.path.isdir()`` on the result -- "or neither" is observable there, not by
+    a raise.
 
     Negative-spec:
-        - Does NOT convert the many directory-creating writers to route
-          through one owner. That is the actual constructor fix (one
-          ``ensure_session`` producing dir+record together or neither), it
-          touches every per-session writer on the hook hot path, and it is
-          sized as its own plan. This function makes the WRITE path
-          self-sufficient; it does not stop record-less directories from
-          being created.
-        - Does NOT repair an existing meta.json that is unreadable, non-JSON,
-          or not a dict. ``init`` is an idempotent CREATE here, never a
+        - Does NOT lock. ``init`` is an idempotent CREATE here, never a
           read-modify-write, so it cannot clobber a concurrent writer's
           ``last_activity`` stamp -- the same bounded exception
-          ``hooks/session_heartbeat._bootstrap_meta`` already relies on.
-          ``update_meta_field`` still returns False for those cases and the
-          caller still handles it.
-        - Does NOT raise on a failed create. A session dir that cannot be
-          initialized returns the resolved path anyway, so the caller's
-          existing no-op-and-warn branch stays reachable rather than turning
-          a diagnostic field into a new failure mode.
+          ``hooks/session_heartbeat._bootstrap_meta`` already relies on. Do not
+          add a locking scheme on this path; it is on the hook hot path and the
+          race it would close does not exist.
+        - Does NOT repair an existing ``meta.json`` that is unreadable,
+          non-JSON, or not a dict. ``update_meta_field`` still returns False for
+          those cases and the caller still handles it.
+        - Does NOT raise on a failed create (see the return contract above).
+        - Is NOT the owner of every session-id-named directory on the machine.
+          Three other corpora key directories on a session id and are NOT
+          sessions: ``state/subagent-share/<sid>`` (a tracked repo artifact),
+          ``$COORDINATOR_SETTINGS_HOME``'s write-bump anchor and context-window
+          sidecar, and the tempdir guard-unlock sentinels. Routing any of those
+          through here would mint a session record for a directory that is not a
+          session.
 
     Re-stamp arm (C4, guard-claim-ceremony-stable-pid): an EXISTING
-    meta.json with an EMPTY ``stable_pid`` is re-run through ``init()``
-    instead of being returned untouched. Without this, an existing record
-    is permanently unstamped once created record-but-unstamped (Guard-1
-    missed at ``init()`` time -- psutil absent, or a partial write) --
-    the early ``is_file()`` return below never reaches ``init()``'s own
-    refresh arm, which is the only other place that writes ``stable_pid``.
-    ``init()`` is still idempotent-safe to call here: its refresh branch
-    only rewrites ``pid``/``last_activity``/``branch``/``stable_pid*``,
-    never ``goal`` (see that branch's own comment), so a repeat call
-    cannot clobber a concurrent writer's ``goal``/other fields.
+    ``meta.json`` with an EMPTY ``stable_pid`` is re-run through ``init()``
+    instead of being returned untouched. Without this, an existing record is
+    permanently unstamped once created record-but-unstamped (Guard-1 missed at
+    ``init()`` time -- psutil absent, or a partial write) -- the early
+    ``is_file()`` return below never reaches ``init()``'s own refresh arm, which
+    is the only other place that writes ``stable_pid``. ``init()`` is still
+    idempotent-safe to call here: its refresh branch only rewrites
+    ``pid``/``last_activity``/``branch``/``stable_pid*``, never ``goal`` (see
+    that branch's own comment), so a repeat call cannot clobber a concurrent
+    writer's ``goal``/other fields.
     """
-    sdir = session_dir(sid, cwd)
-    if not sdir:
+    if not sid:
+        raise ValueError("session_id required")
+    base = sessions_base if sessions_base else sessions_dir(cwd)
+    if not base:
         return ""
+    sdir = str(Path(base) / sid)
     meta_path = Path(sdir) / "meta.json"
     if meta_path.is_file():
-        if not read_meta_field(sdir, "stable_pid"):
-            try:
-                init(sid, cwd=cwd)
-            except Exception:  # noqa: BLE001 -- best-effort; caller handles a still-unstamped record
-                pass
-        return sdir
+        if read_meta_field(sdir, "stable_pid"):
+            return sdir
+        # Re-stamp arm. Attempt ONCE per process per session dir -- see
+        # `_STAMP_ATTEMPTED` for the measurement and for why process-local is
+        # what keeps this a bound rather than a permanent give-up.
+        if sdir in _STAMP_ATTEMPTED:
+            return sdir
+        if len(_STAMP_ATTEMPTED) >= _STAMP_ATTEMPTED_MAX:
+            _STAMP_ATTEMPTED.clear()
+        _STAMP_ATTEMPTED.add(sdir)
     try:
-        init(sid, cwd=cwd)
+        init(sid, goal, cwd=cwd, sessions_base=base, root=root)
     except Exception:  # noqa: BLE001 -- best-effort; caller handles a still-absent record
         pass
     return sdir
@@ -1599,6 +1696,31 @@ def init(
                 data["stable_pid_lstart"] = stable_pid_lstart
             if stable_pid_start_epoch:
                 data["stable_pid_start_epoch"] = stable_pid_start_epoch
-        meta_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+        # Atomic, mirroring `update_meta_fields` rather than the plain
+        # `write_text` this used to be. `ensure_session` makes this the
+        # machine's ONE session-record create, reached concurrently by peers on
+        # a box whose load norm is 50-70 LLMs: a truncate-then-write leaves a
+        # window where a peer reads a torn meta.json, and a torn file is WORSE
+        # than an absent one here -- `ensure_session`'s `is_file()` arm sees a
+        # record and returns, while every `update_meta_field` write against it
+        # no-ops on the JSON parse. os.replace closes the window on both
+        # platforms.
+        try:
+            fd, tmp_name = tempfile.mkstemp(prefix="meta.json.", dir=str(sdir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    json.dump(data, fh, indent=2)
+                    fh.write("\n")
+                os.replace(tmp_name, meta_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    # Best-effort tmp-file cleanup; the original exception is
+                    # re-raised below regardless.
+                    pass
+                raise
+        except OSError:
+            return False
 
     return True

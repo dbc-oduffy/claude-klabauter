@@ -159,6 +159,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.bash_guards._override_log_path import NO_SESSION_BUCKET
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 from coordinator_core.bash_guards._write_bump_session_start import (
     read_session_start_record,
@@ -885,14 +886,25 @@ def record_applicability_event(
         return
     if not sdir:
         return
+    # An applicability log line is not a session and must never mint one:
+    # this used to `mkdir(parents=True, exist_ok=True)` `<hub>/<session_id>`,
+    # and `liveness.live_session_ids` enumerates every non-denylisted child of
+    # that hub as a SESSION, so a diagnostic write manufactured a phantom,
+    # record-less session. `session/core.py::ensure_session` is the ONE
+    # constructor. The line itself is preserved, not dropped: an unknown
+    # session's line lands in the denylisted `no-session` bucket, the same
+    # fallback `bash_guards/_override_log_path` uses and for the same reason.
+    log_dir = Path(sdir)
+    if not log_dir.is_dir():
+        log_dir = log_dir.parent / NO_SESSION_BUCKET
     try:
-        Path(sdir).mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
         line = (
             f"{now_iso()} repo={repo} target={target} "
             f"session={session_id} agent_class={agent_class}\n"
         )
         with open(
-            Path(sdir) / _APPLICABILITY_LOG_FILENAME, "a", encoding="utf-8", newline="\n"
+            log_dir / _APPLICABILITY_LOG_FILENAME, "a", encoding="utf-8", newline="\n"
         ) as f:
             f.write(line)
     except Exception:

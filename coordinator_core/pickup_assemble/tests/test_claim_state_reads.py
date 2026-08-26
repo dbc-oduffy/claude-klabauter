@@ -27,7 +27,7 @@ Negative-spec: does NOT touch `compute_claim_gate`/`compute_claim_grant`
 (Appendix A row 34) — that pair is already ledger-only and is not part of
 this chunk (see the C11 dispatch brief's "Already correct" section).
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_claim_state_reads.py -q
 """
 from __future__ import annotations

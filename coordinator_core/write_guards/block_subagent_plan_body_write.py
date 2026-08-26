@@ -199,6 +199,10 @@ from coordinator_core.bash_guards._helpers import (
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.bash_guards._override_log_path import (
+    NO_SESSION_BUCKET,
+    session_audit_log_dir,
+)
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
@@ -398,8 +402,19 @@ def _write_block_log(
     if not session_id or not git_root:
         return
     try:
-        log_dir = Path(git_root) / ".git" / "coordinator-sessions" / session_id
-        log_dir.mkdir(parents=True, exist_ok=True)
+        # A DENY audit line is not a session and must never mint one: this
+        # used to `mkdir(parents=True, exist_ok=True)` `<hub>/<session_id>`,
+        # and `liveness.live_session_ids` enumerates every non-denylisted
+        # child of that hub as a SESSION -- so an audit write manufactured a
+        # phantom, record-less session that claim attribution and scope
+        # computation both read. `session/core.py::ensure_session` is the
+        # ONE constructor. The line is not dropped (it has security content,
+        # unlike `guard_doctrine_surface_edits`'s advisory log): an unknown
+        # session's line lands in the denylisted `no-session` bucket.
+        resolved = session_audit_log_dir(git_root, session_id)
+        if resolved is None:
+            return
+        log_dir = Path(resolved)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(log_dir / "plan-body-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
@@ -419,8 +434,16 @@ def _write_hook_emit_log(cwd: Optional[str], emit: str) -> None:
         git_dir = _resolve_git_dir(cwd)
         if not git_dir:
             return
-        session_id = os.environ.get("CLAUDE_SESSION_ID", "no-session")
-        log_dir = Path(git_dir) / "coordinator-sessions" / session_id / "hook-emits"
+        session_id = os.environ.get("CLAUDE_SESSION_ID", NO_SESSION_BUCKET)
+        # Same rule as `_write_block_log` above: a diagnostic emit log never
+        # mints `<hub>/<sid>` -- `ensure_session` is the one constructor, and a
+        # record-less child of that hub reads as a phantom SESSION to
+        # `liveness.live_session_ids`. An unknown session's line lands in the
+        # denylisted `no-session` bucket rather than being dropped.
+        sessions_root = Path(git_dir) / "coordinator-sessions"
+        if session_id != NO_SESSION_BUCKET and not (sessions_root / session_id).is_dir():
+            session_id = NO_SESSION_BUCKET
+        log_dir = sessions_root / session_id / "hook-emits"
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         with open(log_dir / "emits.tsv", "a", encoding="utf-8", newline="\n") as fh:

@@ -114,6 +114,20 @@ class StructuralPinError(RuntimeError):
     """
 
 
+class ProvenanceDivergenceError(RuntimeError):
+    """Marks `require_dispatch_engine_on_path`'s divergent-provenance raise
+    (C9), distinct from `_resolve_claude_klabauter_root`'s missed-rung RuntimeError.
+
+    Review: code-reviewer P1 (slice f5bdd60b4) — a bare `except RuntimeError`
+    around this call (e.g. `agent-worktree-sweep.py`) previously reframed
+    EVERY cause under a "CLAUDE_KLABAUTER_ROOT resolution failed" banner, which is
+    false for this one (remedy is import ordering, not CLAUDE_KLABAUTER_ROOT).
+    Subclasses RuntimeError so an existing `except RuntimeError` caller still
+    catches it unchanged; a caller that needs to discriminate catches this
+    first, same pattern as `StructuralPinError`.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Lazy op registration is unconditional as of 2026-08-22 (the
 # import-path-costs-nothing sprint): coordinator_core.ops never eagerly
@@ -613,24 +627,94 @@ class ProvenanceReport(NamedTuple):
 
 def _report_provenance(caller: str, root: str, axis: str) -> ProvenanceReport:
     """Call `provenance_against` with `root` (the caller's OWN resolved root,
-    never a re-resolved or module-level one — AC12) and wrap the result as a
-    `ProvenanceReport` carrying `caller` and `axis`.
+    never a re-resolved or module-level one — AC12), wrap the result as a
+    `ProvenanceReport` carrying `caller` and `axis`, and hand it to the C6
+    sink (`coordinator_core.engine_provenance_counter.record_engine_provenance`
+    — see `docs/plans/2026-08-26-the-seam-reports-what-it-got.md` § C6 and
+    `state/sizings/2026-08-26-the-provenance-gap-closed-end-to-end-no.yaml`'s
+    `pm_resolution.warn_sink` for the counter-not-stderr shape and why).
 
-    This is the query call itself — "report through the query" — not a sink.
-    The returned `ProvenanceReport` is not yet persisted or emitted anywhere;
-    C6 (`docs/plans/2026-08-26-the-seam-reports-what-it-got.md` § C6) owns
-    where it lands. Every one of `provenance_against`'s own no-raise/no-import/
-    no-sys.path-mutation guarantees apply unchanged here — this is a thin,
-    non-fallible wrap of its result, not a new fallible step.
+    A fallible step that degrades, never raises — NOT the thin, non-fallible
+    wrap this docstring once claimed to be. The sink call touches the
+    filesystem under `state/`, and every wrapper and `_seam_present` in this
+    module discards this function's return value, so the whole body — the
+    query call, the sink call, and the `ProvenanceReport` construction — sits
+    inside one outer `except Exception` that degrades to an
+    `unresolved`-verdict `ProvenanceReport` rather than letting a filesystem
+    edge case propagate past a caller that must never raise on any input or
+    filesystem state (hard constraint 3). `provenance_against`'s own
+    no-raise/no-import/no-sys.path-mutation guarantees still hold unchanged
+    for the query half; this function's own body deliberately never touches
+    `sys.path` either — the sink lookup is a plain ambient import, retried
+    nowhere, so an environment where `coordinator_core` is not importable
+    degrades the same way any other failure here does.
+
+    The sink import is ambient-only (no `sys.path` mutation of any kind,
+    matching this function's own no-`sys.path`-reference guard test) — a
+    process where `coordinator_core.engine_provenance_counter` is not already
+    importable simply does not get a recorded count, same as any other
+    degrade-to-`unresolved` case below.
+
+    THE `unimported` EARLY RETURN IS HARD CONSTRAINT 2, NOT AN OPTIMIZATION.
+    The sink lives under `coordinator_core`, so importing it binds the very
+    package this seam exists to observe. Reporting it unconditionally would
+    make asking the question create its own answer: a wrapper front-inserts
+    its root, the sink import then binds `coordinator_core` from that root,
+    and every later call in the process measures a binding the detector
+    itself caused. Worse, hooks on the blocking `UserPromptSubmit` path call
+    these wrappers, and a consumer that had not imported the engine must get
+    `unimported` — never an import as a side effect of the question. So an
+    `unimported` verdict returns BEFORE the sink import, which also keeps
+    that hot path free of both filesystem work and a package import (AC9).
+    Nothing is lost by not counting it: `provenance_against` returns
+    `unimported` exactly when `sys.modules` has no `coordinator_core`, so
+    the three verdicts that can carry a divergence — `match`, `divergent`,
+    `unresolved` — are all still recorded, and they are the only ones C7's
+    inventory can say anything about.
+
+    FOOTGUN FOR TEST AUTHORS (Review: code-reviewer P2): the `except
+    Exception` below also catches `AssertionError` (a subclass of `Exception`
+    in Python), not just filesystem/import failures — hard constraint 3
+    forces the broad catch, so this is not fixable without weakening it. A
+    test that injects a raising double INSIDE this function's body to assert
+    something failed loudly will have that assertion silently swallowed
+    instead of propagating; probe `sys.modules`/return values directly, the
+    way this file's own AC2/AC9 tests do, never a raise from inside a
+    monkeypatched probe.
     """
-    provenance = provenance_against(root=root)
-    return ProvenanceReport(
-        provenance.verdict,
-        provenance.imported_file,
-        provenance.engine_root,
-        caller,
-        axis,
-    )
+    try:
+        provenance = provenance_against(root=root)
+        report = ProvenanceReport(
+            provenance.verdict,
+            provenance.imported_file,
+            provenance.engine_root,
+            caller,
+            axis,
+        )
+        if report.verdict == PROVENANCE_UNIMPORTED:
+            return report
+        from coordinator_core.engine_provenance_counter import record_engine_provenance
+
+        # Review: code-reviewer P1 — omitting cwd left resolve_git_root_cheap's
+        # `if not cwd: return None` guard firing on every call, so the sink
+        # silently never wrote a record (indistinguishable at the call site
+        # from an intentional unresolvable-root degrade). os.getcwd() is a
+        # MISS-MODE-appropriate cwd for this sink: a symlinked-ancestor
+        # divergence between this and resolve_git_root's realpath answer only
+        # changes WHERE the append-only record lands, never a VERDICT (no
+        # guard decision rides on it), matching resolve_git_root_cheap's own
+        # documented caller contract.
+        record_engine_provenance(
+            caller,
+            axis,
+            report.verdict,
+            report.imported_file,
+            report.engine_root,
+            cwd=os.getcwd(),
+        )
+        return report
+    except Exception:  # noqa: BLE001 -- never raise past this reporting seam
+        return ProvenanceReport(PROVENANCE_UNRESOLVED, None, None, caller, axis)
 
 
 def provenance_against(*, root: str | None) -> EngineProvenance:
@@ -815,12 +899,40 @@ def require_dispatch_engine_on_path() -> str:
     Returns the resolved dispatch root, so a caller that also needs to hand it to
     ``cc_invoke`` can end on ``root = require_dispatch_engine_on_path()``.
 
+    HARDENED (C9, docs/plans/2026-08-26-the-seam-reports-what-it-got.md § C9):
+    raises RuntimeError when the reporting call resolves a ``divergent``
+    verdict — an earlier module-level import (of ``repo_identity``,
+    ``records_query``, ``machine_local_resolve``, or
+    ``coordinator_core.win_portability``) already bound ``coordinator_core``
+    into ``sys.modules`` off a tree other than this call's own resolved
+    ``root``, so the ``sys.path`` front-insert above is a no-op and the
+    caller is silently running the wrong tree. Landable only because C8
+    (docs/research/engine-provenance-carrier-dependence.md) enumerated every
+    carrier this defect shape was confirmed to reach and read each one's
+    touched surface as behaviourally identical between trees — this raise is
+    what turns a future carrier's genuinely-divergent surface into a loud
+    failure instead of a silent wrong-tree run. Explicitly NOT applied to
+    ``ensure_engine_on_path`` (see that function's own docstring for why its
+    degrade-to-None contract must stay intact for the engine-less scaffold
+    case) and not applied to the locator-axis wrappers above, which this
+    chunk's evidence does not cover.
+
+    A ``match``, ``unimported``, or ``unresolved`` verdict is unaffected —
+    this only raises on the one verdict that means "running the wrong tree".
+
     Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md
     (C16), and docs/reference/engine-root-env-var-routing.md for which call sites
     are on which axis.
     """
     root = _front_insert_on_path(_resolve_claude_klabauter_root())
-    _report_provenance("require_dispatch_engine_on_path", root, "dispatch")
+    report = _report_provenance("require_dispatch_engine_on_path", root, "dispatch")
+    if report.verdict == PROVENANCE_DIVERGENT:
+        raise ProvenanceDivergenceError(
+            "require_dispatch_engine_on_path: coordinator_core already bound "
+            f"from {report.imported_file!r}, diverges from dispatch root "
+            f"{report.engine_root!r}. Fix: call this before any earlier "
+            "module-level coordinator_core-binding import."
+        )
     return root
 
 

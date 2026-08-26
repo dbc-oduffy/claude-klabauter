@@ -14,7 +14,7 @@ Negative-spec covered:
     breaks the pickup itself — `_adopt_into_baton`'s fail-open posture,
     mirroring `quick_wrap_assemble._print_commits_into_baton`.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_session_baton_adoption.py -q
 """
 from __future__ import annotations

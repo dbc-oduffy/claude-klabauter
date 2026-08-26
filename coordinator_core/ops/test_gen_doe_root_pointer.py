@@ -689,6 +689,10 @@ class TestLivePointerWriteRefusal:
         synthetic path so the assertion never depends on -- or touches -- the
         operator's actual pointer."""
         monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        # The kill switch is cleared so this exercises the PYTEST trigger
+        # specifically; with it set the switch answers first (see
+        # `test_operator_kill_switch_wins_over_the_pytest_trigger`).
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic::nodeid")
         live_shaped = os.path.join(
             os.sep, "Users", "someone", ".coordinator-claude-settings",
@@ -700,6 +704,36 @@ class TestLivePointerWriteRefusal:
         assert reason is not None
         assert "outside the OS temp dir" in reason
         assert "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE" in reason
+
+    def test_operator_kill_switch_is_unconditional_for_a_real_caller(self, tmp_path, monkeypatch):
+        """Review finding 1. The switch must refuse REGARDLESS of the target path
+        for any non-pytest caller -- `install.substrate`'s module docstring
+        promises exactly that ("regardless of the path involved"), and an earlier
+        cut of this guard exempted every temp-rooted target ahead of the switch,
+        so an operator whose settings-home legitimately sits under TMPDIR (a
+        container, a relocated TMPDIR) could not disable this writer at all."""
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+        temp_rooted = tmp_path / "settings" / "machine-local" / ".doe-root"
+
+        reason = gen_doe_root_pointer._refuse_live_pointer_write(str(temp_rooted))
+
+        assert reason == "COORDINATOR_DISABLE_MACHINE_MUTATION=1", (
+            "a temp-rooted target let a real caller past the operator kill switch"
+        )
+
+    def test_operator_kill_switch_wins_over_the_pytest_trigger(self, monkeypatch):
+        """Precedence pin for the reorder: switch before pytest-outside-temp."""
+        monkeypatch.delenv("COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE", raising=False)
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic::nodeid")
+        live_shaped = os.path.join(os.sep, "opt", "live-settings", "machine-local", ".doe-root")
+
+        assert (
+            gen_doe_root_pointer._refuse_live_pointer_write(live_shaped)
+            == "COORDINATOR_DISABLE_MACHINE_MUTATION=1"
+        )
 
     def test_real_home_shaped_escape_is_closed(self, monkeypatch):
         """`@pytest.mark.real_home` returns EARLY from the quarantine fixture,

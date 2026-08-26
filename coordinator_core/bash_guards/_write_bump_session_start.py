@@ -113,7 +113,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.session.core import sessions_dir
+from coordinator_core.session.core import init as _session_init, sessions_dir
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 
 #: `$(coordinator-settings-home)/claude-klabauter/write-bump-anchor/` — the durable-data-plane
@@ -184,6 +184,79 @@ def _settings_home_anchor_dir(env: Optional[dict] = None) -> str:
     return os.path.join(home, *_SETTINGS_HOME_ANCHOR_SUBDIR)
 
 
+def _ensure_initialised_session_dir(
+    session_id: str, sessions_base: str, launch_cwd: str
+) -> Optional[Path]:
+    """Return `<sessions_base>/<session_id>` once it carries a `meta.json`, or
+    `None` when it does not — NEVER a bare `mkdir` of its own.
+
+    This function is why the SessionStart anchor cannot mint a half-initialised
+    session directory. It used to be `sdir.mkdir(parents=True, exist_ok=True)`
+    inline, and this hook is the FIRST thing to reach the per-session hub in a
+    session's life: `session/core.py::init` has had no SessionStart caller since
+    `session-init.py` was deleted in the 2026-07-15 hook kill, so a session whose
+    directory was minted here and which then never edited a file and never ran a
+    ceremony held a directory with `write_bump_launch_cwd` in it and no
+    `meta.json` — no `stable_pid` (K-006's F0 hazard, Layer-1 liveness disarmed),
+    no `started_at`/`head_at_start`, no `goal`, and every `update_meta_field`
+    write by every later bookkeeping writer silently no-opping against the absent
+    record (`session/core.py::update_meta_field` documents that no-op contract;
+    it cited `ensure_meta`, deleted 2026-08-26, until this repoint).
+    Measured live on this box 2026-08-26: three peer sessions born 12:41-13:01 in
+    exactly that shape.
+
+    `init` is the session directory's ONE constructor, and SessionStart is the
+    moment it is meant to run: the POSIX `CLAUDE_PID` leg that closed K-006's
+    measured 65.3% capture miss (`init`'s Guard-1 leg (b), `2a4f8b918`) reads the
+    harness parent, which is exactly what this hook has. `init` is also
+    spawn-free (both `head_at_start` and `branch` are in-process `.git/HEAD`
+    reads — see its own docstring's DR-344 note), so hosting it here costs the
+    SessionStart fan-in no process creations; `sessions_base` is handed over
+    PRE-RESOLVED from the caller's own `sessions_dir(launch_cwd)` so it is not
+    resolved a second time.
+
+    FAIL OPEN, like every other branch in this module: an `init` that raises, or
+    that leaves no `meta.json`, returns `None` and the caller skips the in-repo
+    write entirely. That degrades this record to its settings-home twin, which
+    `read_session_start_record` consults FIRST anyway — a strictly better failure
+    than minting the directory shape whose absence of a record is the defect.
+
+    Negative-spec:
+        - Do NOT re-add a `mkdir` here, or in the caller, as a fallback for a
+          failed `init`. A directory this module creates and does not initialise
+          is the whole defect; a directory it declines to create costs a fallback
+          anchor read that is already the primary read order.
+        - Do NOT guard on directory EXISTENCE instead of `meta.json` presence.
+          Another bookkeeping writer reaching the hub first is precisely how a
+          record-less directory is already reachable.
+    """
+    sdir = Path(sessions_base) / session_id
+    try:
+        # Imported lazily so this module's import graph stays what its
+        # negative-spec pins it to on the paths that never write.
+        from coordinator_core.lifecycle import main_worktree_root
+
+        # `sessions_base` IS `<git-common-dir>/coordinator-sessions`, so the
+        # common dir is its parent and the worktree root falls out of pure path
+        # logic -- `main_worktree_root` spawns nothing. Handing `init` BOTH
+        # pre-resolved answers is what keeps this call at zero process
+        # creations; without `root` it would fall through to `core.git_root`,
+        # which spawns `git rev-parse` on the interactive boot path.
+        root = str(main_worktree_root(Path(sessions_base).parent))
+    except Exception:
+        root = ""
+    try:
+        _session_init(
+            session_id,
+            cwd=launch_cwd,
+            sessions_base=sessions_base,
+            root=root or None,
+        )
+    except Exception:
+        return None
+    return sdir if (sdir / "meta.json").is_file() else None
+
+
 def write_session_start_record(
     session_id: str, launch_cwd: Optional[str] = None, env: Optional[dict] = None
 ) -> bool:
@@ -240,10 +313,12 @@ def write_session_start_record(
     try:
         base = sessions_dir(resolved_cwd)
         if base:
-            sdir = Path(base) / session_id
-            sdir.mkdir(parents=True, exist_ok=True)
-            (sdir / _RECORD_FILENAME).write_text(resolved_cwd, encoding="utf-8", newline="\n")
-            in_repo_ok = True
+            sdir = _ensure_initialised_session_dir(session_id, base, resolved_cwd)
+            if sdir is not None:
+                (sdir / _RECORD_FILENAME).write_text(
+                    resolved_cwd, encoding="utf-8", newline="\n"
+                )
+                in_repo_ok = True
     except Exception:
         # Fail open, unconditionally -- see module docstring "FAIL OPEN". A record that
         # cannot be written is a missed bump for this session, never a raised error.

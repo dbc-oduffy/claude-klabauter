@@ -28,7 +28,7 @@ Negative-spec coverage (the three constraints this fix must not break):
   - `drop` of a brief-stage claim never reaches `handoff_transition._unclaim`
     (in_flight -> ready_to_fire only, fail-loud on anything else)
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_brief_claim_lease.py -q
 """
 from __future__ import annotations

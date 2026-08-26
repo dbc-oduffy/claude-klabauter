@@ -297,6 +297,15 @@ _NON_SESSION_DIR_NAMES = frozenset(
         "handoff-claims",
         "memo-claims",
         "plan-claims",
+        # The fourth member of the `f"{class_}-claims"` family the three
+        # entries above belong to (`pickup_assemble/__init__.py`,
+        # `ops/ceremony/tail_ops.py`, `session-claim-cli claim-artifact`):
+        # a per-artifact-class claim store keyed by artifact basename, never
+        # by session id. Its absence here was a denylist HOLE, not a policy --
+        # the class name is caller-supplied, so listing three of four members
+        # left the fourth reading as a phantom session on any box that had
+        # taken an `artifact`-class claim.
+        "artifact-claims",
         "agent-sessions-locks",
         "logs",
         "no-session",

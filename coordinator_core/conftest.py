@@ -322,6 +322,19 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     hands the test the real home back, so anything that WRITES under it can
     corrupt live machine config — which is the bug this fixture exists to stop.
     """
+    # The machine-mutation kill switch is set for real_home tests TOO, above the
+    # opt-out, and is deliberately NOT part of what `real_home` hands back. The
+    # marker means "resolve the real home", which its docstring above scopes to
+    # read-only oracles; it never meant "and you may also mutate real machine
+    # state". Leaving the switch below the early return granted exactly that, so
+    # a marked test had the real home AND no kill switch at once -- the pairing
+    # behind the live `.doe-root` pollution (state/bug-backlog/2026-08-26-a-test-
+    # writes-the-live-claude-machine-lo-6cdf6bc87771.yaml). A test that genuinely
+    # must mutate real machine state now asks for it by name with
+    # `@pytest.mark.real_machine_mutation`, at its own call site.
+    if not request.node.get_closest_marker("real_machine_mutation"):
+        monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+
     if request.node.get_closest_marker("real_home"):
         return None
 
@@ -394,7 +407,8 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # the whole class suite-wide rather than relying on every such call site
     # independently deriving the same temp-path heuristic correctly. See
     # `coordinator_core.install.substrate._refuse_machine_mutation`.
-    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    # SET ABOVE the `real_home` opt-out, not here -- see the comment at the top
+    # of this fixture for why the two must not be granted together.
 
     # Same shape, second surface: the warm engine's runtime base is
     # `%LOCALAPPDATA%`, which the HOME/USERPROFILE quarantine above does not
@@ -726,3 +740,112 @@ def exercise_suspended_op(monkeypatch):
 
     monkeypatch.setattr(op_budget_suspension, "SUSPENDED_OPS", {})
     return None
+
+
+# ---------------------------------------------------------------------------
+# Live session-hub litter guard
+# ---------------------------------------------------------------------------
+#
+# Closes the class of defect commit c08e942e9 named ("two test-isolation
+# defects that wrote outside the sandbox, and the seams that let them"), on the
+# surface it did not cover: the real repo's own
+# `.git/coordinator-sessions/`. Measured 2026-08-26 — three directories in the
+# LIVE hub carrying test-fixture names, minted by tests that resolved a repo
+# root from the process cwd (the live repo) while taking their session id from
+# a monkeypatched env var: `sess-1` and `sess-abc` (born 08-13, holding one
+# `repo-identity-gate.log` each) and `altlive-probe` (born 08-17, holding one
+# `overrides.log`). Both writers have since been taught not to MINT a session
+# dir — `write_guards/guard_doctrine_surface_edits.py` returns unless the dir
+# already exists, and `bash_guards/_override_log_path.py` routes to the
+# `no-session` bucket instead — so those three kept receiving appends only
+# because they already existed. This fixture closes the SYMPTOM for any future
+# cause, which the two named fixes cannot: a guard that has to be remembered
+# for each new writer is the guard that gets forgotten.
+#
+# Cost, measured on this box 2026-08-26 against the live 374-entry hub
+# (`time.process_time`, k=1000): 0.26ms per `os.listdir`, so 0.52ms per test
+# for the before/after pair — a non-recursive listing, no walk and no spawn.
+# Same shape and same justification as
+# `coordinator_core/install/conftest.py`'s repo-root litter guard, whose
+# function-scoped-over-session-scoped reasoning applies here verbatim (a
+# session-scoped snapshot would attribute litter to "somewhere in this run"
+# and force a re-run under `-k` to localize it).
+#
+# NOT flaky under concurrent peers, which is the one thing this guard has to
+# get right on a box running 50-70 sessions against this same tree: a peer
+# session legitimately creates a directory here at any moment, so a new entry
+# alone is never the assertion. A new entry is flagged only when it is BOTH
+# absent from the harness session registry AND not UUID-shaped — a live peer's
+# id is always a harness UUID, and every fixture name observed in the wild
+# (`sess-1`, `sess-abc`, `altlive-probe`, `test-session-abc123`, `sess-msys-*`)
+# is neither.
+#
+# Negative-spec:
+#   - Does NOT detect an APPEND into a directory that already existed. That
+#     needs a per-file stat of ~380 directories per test, which this repo's
+#     brightline will not pay for; the two producer fixes above are what close
+#     that half, and a dir that is never minted is never appended into.
+#   - Does NOT clean up what it flags. A test that leaks into the live hub is
+#     broken and must fail loudly, not have its symptom swept.
+#   - Lives HERE rather than in the repo-root `conftest.py` because
+#     `coordinator_core/pytest.ini` wins as configfile for any invocation
+#     whose path argument sits under `coordinator_core/`, which makes that
+#     the rootdir and the root conftest unreachable — and this package is
+#     where the leaking tests are. The root conftest re-exports the fixture
+#     by name so the `coordinator/` testpaths are covered too.
+
+import uuid as _uuid
+
+import pytest as _pytest
+
+_LIVE_HUB = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".git",
+    "coordinator-sessions",
+)
+
+
+def _looks_like_a_harness_session_id(name: str) -> bool:
+    """`True` for a canonical UUID — the shape every real harness session id
+    has, and no test fixture name observed in the live hub has ever had."""
+    try:
+        return str(_uuid.UUID(name)) == name.lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+@_pytest.fixture(autouse=True)
+def _no_new_live_session_hub_entries():
+    try:
+        before = set(os.listdir(_LIVE_HUB))
+    except OSError:
+        yield
+        return
+    yield
+    try:
+        after = set(os.listdir(_LIVE_HUB))
+    except OSError:
+        return
+    new_entries = after - before
+    if not new_entries:
+        return
+    # Only now — on the rare positive — pay for the registry read.
+    try:
+        from coordinator_core.session import harness_registry
+
+        live = set(harness_registry.snapshot())
+    except Exception:
+        live = set()
+    leaked = sorted(
+        name
+        for name in new_entries
+        if name not in live and not _looks_like_a_harness_session_id(name)
+    )
+    assert not leaked, (
+        "test created entries in the REAL repo's session hub "
+        f"{_LIVE_HUB}: {leaked!r} — a guard or CLI under test resolved its "
+        "repo root from the process cwd (the live repo) while taking its "
+        "session id from a fixture. Point the code under test at a tmp_path "
+        "repo, or pass the root explicitly. See this file's Live session-hub "
+        "litter guard note."
+    )

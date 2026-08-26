@@ -12,7 +12,7 @@ OPTIONAL `recommendation` parameter that never changes emission or the
 Spec backlink: docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-
 holds.md § spine row C7.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_gate_check_shipped_blocker_evidence.py -q
 """
 from __future__ import annotations

@@ -273,7 +273,22 @@ _PAT_REF_LOCK = re.compile(
 # later in the ladder describes a dead local refspec, so an earlier position
 # only widens which stderrs this catches, never narrows another arm's own
 # match set.
-_PAT_DEAD_REF = re.compile(r"src refspec .* does not match any")
+#
+# Two wordings, one class. `src refspec ... does not match any` is what git
+# prints when the pushed refspec matches nothing; `<ref> cannot be resolved to
+# branch` is what it prints instead when the refspec IS branch-shaped (a
+# `refs/heads/...` form) but names a branch that no longer exists -- exactly the
+# rename-out-from-under-a-pending-push case this arm was written for, and the
+# wording `resolve_branch`'s own docstring already cites. Matching only the
+# first left the second falling through the whole ladder to `unknown`, which
+# routes to `log_failure` and so writes `.git/push-failures.log` -- the one file
+# `log_dead_ref_failure` exists to keep this class OUT of, because its counts
+# are read as "crash insurance is not currently working" by
+# `workday.surface_auto_push_failure_stats` and the Stop-time tripwire. A branch
+# rename therefore raised a standing false alarm on both.
+_PAT_DEAD_REF = re.compile(
+    r"(src refspec .* does not match any|cannot be resolved to branch)"
+)
 _PAT_NON_FAST_FORWARD = re.compile(
     r"(non-fast-forward|rejected.*fetch first|tip of your current branch is behind|stale info)"
 )

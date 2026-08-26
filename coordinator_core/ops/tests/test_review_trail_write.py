@@ -1662,8 +1662,8 @@ import logging  # noqa: E402
 
 from coordinator_core.session_attribution import GitLogFailed  # noqa: E402
 
-_GUARD_OWN_SESSION = "own-session-abcdef01"
-_GUARD_FOREIGN_SESSION = "peer-session-fedcba09"
+_GUARD_OWN_SESSION = "0a1b2c3d-4e5f-4071-8293-a4b5c6d7e8f9"
+_GUARD_FOREIGN_SESSION = "fedcba09-1111-4222-8333-444455556666"
 
 
 def _make_commit_touching(repo, path, message, session_id=None) -> str:

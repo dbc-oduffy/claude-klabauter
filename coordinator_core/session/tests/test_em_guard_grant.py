@@ -62,15 +62,31 @@ def _cleanup_sentinel(session_id: str, guard_name: str) -> None:
 
 
 class _FakeSessionSeam:
-    """Monkeypatches `core.session_dir` / `core.resolve_session_id` /
-    `liveness.session_live` so every test in this class runs against a
-    plain `tmp_path` directory tree -- no real git repo, no subprocess
-    spawn. Sessions default to LIVE; `kill(sid)` flips one to dead."""
+    """Monkeypatches `core.ensure_session` / `core.session_dir` /
+    `core.resolve_session_id` / `liveness.session_live` so every test in this
+    class runs against a plain `tmp_path` directory tree -- no real git repo,
+    no subprocess spawn. Sessions default to LIVE; `kill(sid)` flips one to
+    dead.
+
+    `ensure_session` MUST be patched here, not just `session_dir`: it is the
+    session directory's one constructor and it is what the module under test
+    now calls. With only `session_dir` patched, the module resolved the REAL
+    repo's hub from the process cwd and minted session directories into the
+    live tree -- caught by `conftest`'s live session-hub litter guard, which is
+    what this seam exists to make unnecessary.
+
+    The fake writes a `meta.json` as well as the directory, because that is the
+    real constructor's postcondition. A fake that created a record-less
+    directory would reproduce in the fixture exactly the state `ensure_session`
+    exists to prevent, and any test resting on it would be pinning a shape the
+    system is not allowed to be in.
+    """
 
     def __init__(self, monkeypatch, tmp_path: Path, default_sid: str):
         self._root = tmp_path
         self._default_sid = default_sid
         self._dead = set()
+        monkeypatch.setattr(eg.core, "ensure_session", self._ensure_session)
         monkeypatch.setattr(eg.core, "session_dir", self._session_dir)
         monkeypatch.setattr(eg.core, "resolve_session_id", self._resolve_sid)
         monkeypatch.setattr(eg.liveness, "session_live", self._session_live)
@@ -78,6 +94,18 @@ class _FakeSessionSeam:
     def _session_dir(self, sid, cwd=None):
         d = self._root / "sessions" / sid
         d.mkdir(parents=True, exist_ok=True)
+        return str(d)
+
+    def _ensure_session(self, sid, cwd=None, **_kwargs):
+        d = self._root / "sessions" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        meta = d / "meta.json"
+        if not meta.is_file():
+            meta.write_text(
+                json.dumps({"session_id": sid, "goal": ""}, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
         return str(d)
 
     def _resolve_sid(self, cwd=None):

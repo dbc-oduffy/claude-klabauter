@@ -411,3 +411,74 @@ class TestRegistrationQuad:
         assert OP_CLASSIFICATION[op_key] == OpClass.MUTATING
         assert _OP_KEY_SCOPE[op_key] == "common_dir"
         assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
+
+
+# ---------------------------------------------------------------------------
+# The store directory IS the session directory — this writer is a constructor
+# ---------------------------------------------------------------------------
+
+class TestStoreDirIsAnInitialisedSessionDir:
+    def test_write_leaves_no_session_dir_without_meta_json(self, tmp_path: Path) -> None:
+        """A bare ``makedirs`` here minted a session directory carrying only this
+        hook's own store — no ``meta.json``, so no ``stable_pid`` (K-006's F0
+        hazard: Layer-1 liveness disarmed) and every later ``update_meta_field``
+        write silently no-opping against the absent record. Fails against the
+        bare-``makedirs`` shape: the store line is written either way, only
+        ``meta.json`` is absent.
+        """
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+        ctx = _ctx(tmp_path)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(_assistant_line(0) + "\n")
+        sid = "sess-constructor-0001"
+
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": "agent-0001",
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+
+        sdir = _cs_dir(tmp_path) / sid
+        assert (sdir / "subagent-zero-tool-use.jsonl").is_file()
+        assert (sdir / "meta.json").is_file(), (
+            "the store write minted a session directory with no meta.json -- "
+            "the no_meta_json shape K-006's watch counts"
+        )
+
+    def test_failed_init_drops_the_record_rather_than_minting_the_dir(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Direction of the fail-open: losing one observability line is cheaper
+        than a half-initialised session directory, which is invisible to every
+        registry-independent liveness arm and no-ops every later meta write.
+        """
+        import coordinator_core.session.core as session_core
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(_assistant_line(0) + "\n")
+        sid = "sess-init-fails-0001"
+
+        def _boom(*_a, **_k):
+            raise OSError("read-only hub")
+
+        monkeypatch.setattr(session_core, "init", _boom)
+
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": "agent-0001",
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+
+        assert not (_cs_dir(tmp_path) / sid).exists()

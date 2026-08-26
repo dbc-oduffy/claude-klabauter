@@ -1381,8 +1381,13 @@ def do_blanket(session_id: str, args: "Args", cs_core, cs_liveness, cs_claims) -
     invoking = os.environ.get("CLAUDE_INVOKING_COMMAND", "")
     base = cs_core.sessions_dir()
     if base and session_id:
-        sdir = os.path.join(base, session_id)
-        os.makedirs(sdir, exist_ok=True)
+        # `ensure_session`, not `os.makedirs`: `<base>/<session_id>` IS a
+        # session directory, and creating it without a `meta.json` record is
+        # what left sessions invisible to `liveness.live_session_ids` and
+        # unreapable by `ops/session/reap.py`. The ceremony runs in a real
+        # session, so the record belongs here -- unlike a guard's audit log,
+        # which takes `_override_log_path`'s `no-session` bucket instead.
+        sdir = cs_core.ensure_session(session_id, sessions_base=base)
         log_file = os.path.join(sdir, "blanket-invocations.log")
         try:
             with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
@@ -1685,8 +1690,13 @@ def do_override(session_id: str, args: "Args", cs_core) -> None:
 
     base = cs_core.sessions_dir()
     if base and session_id:
-        sdir = os.path.join(base, session_id)
-        os.makedirs(sdir, exist_ok=True)
+        # `ensure_session`, not `os.makedirs`: `<base>/<session_id>` IS a
+        # session directory, and creating it without a `meta.json` record is
+        # what left sessions invisible to `liveness.live_session_ids` and
+        # unreapable by `ops/session/reap.py`. The ceremony runs in a real
+        # session, so the record belongs here -- unlike a guard's audit log,
+        # which takes `_override_log_path`'s `no-session` bucket instead.
+        sdir = cs_core.ensure_session(session_id, sessions_base=base)
         log_file = os.path.join(sdir, "overrides.log")
         try:
             with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
@@ -1908,8 +1918,9 @@ def do_scoped(
 
     if include_orphans:
         if not local_active_scope_file and base and session_id:
-            sdir = os.path.join(base, session_id)
-            os.makedirs(sdir, exist_ok=True)
+            # See the `ensure_session` note above: a session directory and
+            # its record are created together or neither.
+            sdir = cs_core.ensure_session(session_id, sessions_base=base)
             local_active_scope_file = os.path.join(sdir, "active-scope.txt")
 
         if not combined_mode and local_active_scope_file:
@@ -2219,8 +2230,13 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
 
     active_scope_file = ""
     if base and session_id:
-        sdir = os.path.join(base, session_id)
-        os.makedirs(sdir, exist_ok=True)
+        # `ensure_session`, not `os.makedirs`: `<base>/<session_id>` IS a
+        # session directory, and creating it without a `meta.json` record is
+        # what left sessions invisible to `liveness.live_session_ids` and
+        # unreapable by `ops/session/reap.py`. The ceremony runs in a real
+        # session, so the record belongs here -- unlike a guard's audit log,
+        # which takes `_override_log_path`'s `no-session` bucket instead.
+        sdir = cs_core.ensure_session(session_id, sessions_base=base)
         active_scope_file = os.path.join(sdir, "active-scope.txt")
 
     def _cleanup() -> None:

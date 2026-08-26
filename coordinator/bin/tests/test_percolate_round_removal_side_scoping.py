@@ -69,6 +69,25 @@ def _no_filter_side_effects(monkeypatch):
     monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
 
 
+def _symlinks_supported() -> bool:
+    """`hasattr(os, "symlink")` is True on Windows regardless of privilege --
+    the call itself raises `OSError`/`WinError 1314` there without Developer
+    Mode or elevation. The only portable check is attempting a real symlink
+    and skipping on failure."""
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as probe_dir:
+        target = Path(probe_dir) / "target.txt"
+        target.write_text("x")
+        link = Path(probe_dir) / "link.txt"
+        try:
+            os.symlink("target.txt", link)
+        except OSError:
+            return False
+    return True
+
+
 def test_unprocessed_row_live_files_never_named_for_removal(tmp_path, monkeypatch):
     """Witness class 1 (the dispatch brief's measured witness): a row this
     invocation did not process (absent from `published_dest_dirs`) must
@@ -172,26 +191,32 @@ def test_empty_published_dest_dirs_yields_empty_removal_set(tmp_path, monkeypatc
     assert pathspec == []
 
 
-def test_removal_side_dormant_while_flag_is_false(tmp_path):
-    """Regression pin for AC5: with `_REMOVAL_SIDE_ENABLED` at its shipped
-    `False` value, a genuinely stale in-scope path is NOT named -- the gate
-    the flag exists to hold shut."""
+def test_removal_side_fires_at_the_shipped_flag_value(tmp_path):
+    """The flag is ON (PM, 2026-08-26), so a genuinely stale in-scope path IS
+    named with no monkeypatching -- this test previously pinned the opposite
+    and is inverted rather than deleted, so the flip is visible in the file's
+    own history.
+
+    `stale.txt` is removed from the worktree because that is the only state a
+    commit can express a deletion from; a path still on disk is refused by
+    `_refuse_removals_present_on_disk`, which its own test covers."""
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
         repo_root,
         {"row_a/foo.txt": "hello", "row_a/stale.txt": "stale"},
     )
+    (repo_root / "row_a" / "stale.txt").unlink()
     manifest = _mod._RoundManifest(
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
-    assert not any(p.endswith("stale.txt") for p in pathspec)
+    assert any(p.endswith("stale.txt") for p in pathspec)
 
 
 @pytest.mark.skipif(
-    not hasattr(__import__("os"), "symlink"), reason="platform has no symlink support"
+    not _symlinks_supported(), reason="platform cannot create a symlink here (no privilege/Developer Mode)"
 )
 def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
     """A TRACKED symlink whose target is missing must be REFUSED by
@@ -227,6 +252,9 @@ def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
         _mod._pathspec_from_manifest(manifest, str(repo_root))
 
 
+@pytest.mark.skipif(
+    not _symlinks_supported(), reason="platform cannot create a symlink here (no privilege/Developer Mode)"
+)
 def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     """The SAME `lexists` property on the UNGATED leg -- `manifest.removed`
     needs no `_REMOVAL_SIDE_ENABLED`, so a tracked symlink with a missing
@@ -239,9 +267,13 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     deletion of a symlink that is perfectly present."""
     import os
 
+    # `row_b`, deliberately: with the flag ON, a present path inside
+    # `row_scope` is refused by the GATED leg before Leg A is reached, and the
+    # test would pass for the wrong reason. Leg A iterates `manifest.removed`
+    # directly and ignores `row_scope`, so publishing only `row_a` isolates it.
     repo_root = tmp_path / "repo"
-    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
-    link = repo_root / "row_a" / "link.txt"
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello", "row_b/keep.txt": "k"})
+    link = repo_root / "row_b" / "link.txt"
     os.symlink("missing-target.txt", link)
     _git_run(["git", "add", "-A"], repo_root)
     _git_run(
@@ -253,7 +285,7 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
-        removed=frozenset({"row_a/link.txt"}),
+        removed=frozenset({"row_b/link.txt"}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
     assert not any(p.endswith("link.txt") for p in pathspec)

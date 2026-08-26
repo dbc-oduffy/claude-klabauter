@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
+from coordinator_core.doe_root_pointer import read_doe_root_pointer
 
 
 # ---------------------------------------------------------------------------
@@ -405,18 +406,19 @@ def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> N
 # ---------------------------------------------------------------------------
 
 
-#: Pinned sibling checkout used ONLY by these two live-regression tests --
-#: never read by production code (which resolves it via
-#: `read_doe_root_pointer()`). abs-path-ok: fixed test-only path, matches
-#: the coordinator's own live measurement that caught the AC3 regression;
-#: skipped outright (never silently passed) when absent on the host.
-_LIVE_DOE_ROOT = "X:/DoE-claude"
-
-
 def _live_doe_root_or_skip() -> str:
-    if not Path(_LIVE_DOE_ROOT).is_dir():
-        pytest.skip(f"DoE-claude sibling checkout not present on this host: {_LIVE_DOE_ROOT}")
-    return _LIVE_DOE_ROOT
+    """Resolve the DoE sibling checkout the same way production does --
+    `read_doe_root_pointer()` (registry, then durable/legacy pointer file).
+    A literal root here named one machine's drive and skipped these two
+    live-regression tests on every other host, silently; the resolver
+    reaches the checkout wherever it actually is. Still skips (never
+    silently passes) when the pointer is unset or the tree is absent."""
+    resolved = read_doe_root_pointer()
+    if not resolved:
+        pytest.skip("DoE-claude root pointer unresolved on this host")
+    if not Path(resolved).is_dir():
+        pytest.skip(f"DoE-claude sibling checkout not present on this host: {resolved}")
+    return resolved
 
 
 @pytest.mark.real_home

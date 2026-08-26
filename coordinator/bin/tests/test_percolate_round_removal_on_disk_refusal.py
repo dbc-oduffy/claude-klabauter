@@ -100,8 +100,11 @@ def test_message_caps_the_list_but_reports_the_true_count(tmp_path):
     assert "... and 5 more" in msg
 
 
-def test_removal_side_stays_gated_off(tmp_path):
-    """AC5: flipping `_REMOVAL_SIDE_ENABLED` is not this chunk, and it deletes
-    from mirrors this repo does not own. Pinned so the flag cannot be flipped
-    without a test saying so out loud."""
-    assert _mod._REMOVAL_SIDE_ENABLED is False
+def test_removal_side_is_enabled(tmp_path):
+    """The flag was flipped ON by PM ruling, 2026-08-26, after both mirrors
+    were measured on the fixed walk (66 candidates at coordinator-claude, all
+    verified retired; 0 at claude-klabauter). This assertion did its job --
+    it said so out loud, and the flip is a deliberate edit to this line rather
+    than a silent constant change. It stays, inverted, for the same reason in
+    the other direction."""
+    assert _mod._REMOVAL_SIDE_ENABLED is True

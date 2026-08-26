@@ -663,3 +663,93 @@ def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, 
             total += 1
 
     return {"done": done, "total": total, "open": total - done}
+
+
+_AC_TABLE_ROW_RE = re.compile(r"^\|\s*(AC[0-9][A-Za-z0-9]*)\s*\|")
+# Leading tokens in a status cell that mean "not discharged". Anything else
+# recognised (met/done/…) counts as done; an UNRECOGNISED leading token counts
+# as OPEN — see the docstring on why this direction is the safe one.
+_AC_TABLE_OPEN_TOKENS = frozenset({"open", "partial", "pending", "blocked", "todo", "wip", "n/a"})
+_AC_TABLE_DONE_TOKENS = frozenset({"met", "done", "closed", "complete", "completed", "shipped", "waived"})
+
+
+def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
+    """Parses a PLAN's `| ACn | criterion | status |` table under its
+    `## Acceptance Criteria` heading — the plan-side counterpart to
+    `parse_consumed_handoff_acceptance_criteria`'s checkbox parse.
+
+    WHY BOTH EXIST, so neither is mistaken for a duplicate of the other.
+    Handoffs carry acceptance criteria as `- [ ]` checkboxes; PLANS carry them
+    as a three-column table. Measured over this repo's `docs/plans/` on
+    2026-08-26: 226 recent plans use the table row, 21 use checkboxes. The
+    checkbox parser is therefore correct for handoffs and structurally blind to
+    the format ~91% of plans actually use, which is how
+    `compute_landed_reconciliation_gate` came to report `indeterminate` — "is
+    status: landed but its Acceptance Criteria heading has no checkboxes" — on
+    a plan whose 16 criteria were all visibly met. A gate that cannot read the
+    dominant format is not a conservative gate; it is a gate that abstains
+    exactly when asked to work.
+
+    The shared checkbox parser is deliberately NOT widened to cover both: it is
+    also leg A of `consumed_handoff_completeness`, where the checkbox contract
+    is correct, and teaching it a second grammar would change handoff semantics
+    to fix a plan-reading bug.
+
+    Heading match and section boundary are identical to the checkbox parser's
+    (same `_ATX_HEADING_RE`, same case-folded `startswith` prefix test, same
+    stop-at-same-or-higher-level rule), so the two agree on WHERE the section
+    is and differ only in WHAT they count inside it.
+
+    Status classification reads the LAST cell of the row, strips markdown
+    emphasis and whitespace, and takes its leading word:
+        - a token in `_AC_TABLE_OPEN_TOKENS`  -> open
+        - a token in `_AC_TABLE_DONE_TOKENS`  -> done
+        - anything else                       -> OPEN, deliberately.
+    An unrecognised status is counted open because this gate's entire purpose
+    is to refuse a false-clean close: mis-reading an unknown token as done
+    would let a landed plan with genuinely open criteria stamp `implemented`,
+    which is the exact failure it exists to prevent. Mis-reading it as open
+    costs one WARN a human resolves in a sentence.
+
+    Return contract mirrors the checkbox parser's three values exactly:
+        - No `## Acceptance Criteria` heading at all -> `None`.
+        - Heading present, no `| ACn |` rows before the boundary ->
+          `{"done": 0, "total": 0, "open": 0}` (`total == 0`).
+        - Otherwise -> real `done`/`total`/`open` counts.
+
+    Pure parser over already-read text: never opens a file, never builds
+    `gates.*` evidence.
+    """
+    lines = text.splitlines()
+
+    section_level: Optional[int] = None
+    start_index: Optional[int] = None
+    for index, line in enumerate(lines):
+        match = _ATX_HEADING_RE.match(line)
+        if not match:
+            continue
+        if match.group(2).strip().casefold().startswith(_ACCEPTANCE_CRITERIA_PREFIX):
+            section_level = len(match.group(1))
+            start_index = index + 1
+            break
+
+    if start_index is None or section_level is None:
+        return None
+
+    done = 0
+    total = 0
+    for line in lines[start_index:]:
+        heading_match = _ATX_HEADING_RE.match(line)
+        if heading_match and len(heading_match.group(1)) <= section_level:
+            break
+        if not _AC_TABLE_ROW_RE.match(line):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        total += 1
+        token = cells[-1].lstrip("*_ ").split()[0].strip("*_:.,").casefold() if cells[-1].strip() else ""
+        if token in _AC_TABLE_DONE_TOKENS:
+            done += 1
+
+    return {"done": done, "total": total, "open": total - done}

@@ -1873,8 +1873,8 @@ def touch(
 
     ``root``, forwarded verbatim to :func:`normalize_touch_path`, is
     deliberately a SEPARATE parameter from ``cwd`` rather than an overload of
-    it — ``cwd`` here also anchors ``core.session_dir``/``core.init`` below,
-    neither of which carries ``normalize_touch_path``'s "MUST be the
+    it — ``cwd`` here also anchors ``core.session_dir``/``core.ensure_session``
+    below, neither of which carries ``normalize_touch_path``'s "MUST be the
     worktree root itself" precondition, so silently repurposing ``cwd`` as
     ``root`` would smuggle an unverified value into a call site that trusts
     it (clause 5 of the zero-spawn guard verifies, but only what it is
@@ -1922,22 +1922,27 @@ def touch(
 
     sink = os.path.join(sdir, _TOUCH_RECORD_FILENAME)
 
-    # Create session dir / backfill meta.json on touch if init() was skipped
-    # (fail-safe). Guard on meta.json presence, not just the dir: another
-    # bookkeeping writer (push cursor, session-shape) can create the dir first,
-    # leaving meta.json — and the Layer-1 liveness signal — unwritten (defect A,
-    # 2026-07-24). core.init is idempotent and backfills into an existing dir.
-    if not os.path.isdir(sdir) or not os.path.isfile(os.path.join(sdir, "meta.json")):
-        try:
-            core.init(sid, cwd=cwd)
-        except Exception as exc:
-            # fail-safe — touch() must not block on a failed lazy init();
-            # surface it for debugging since this is not an expected path.
-            print(
-                f"cs_touch: lazy core.init() failed for session {sid} "
-                f"(non-fatal): {exc}",
-                file=sys.stderr,
-            )
+    # Create session dir / backfill meta.json on touch through the ONE
+    # constructor (``core.ensure_session``), which owns the directory+record
+    # pairing and the absence guard this call site used to hand-roll: it
+    # short-circuits on an already-stamped record, and otherwise runs the same
+    # idempotent ``core.init`` that backfills into an existing dir. Do NOT
+    # re-add an ``isdir``/``isfile`` pre-check or a follow-up ``core.init``
+    # here — either one re-splits the decision this function was the last lazy
+    # caller of (defect A, 2026-07-24: a dir created by another bookkeeping
+    # writer with meta.json — and the Layer-1 liveness signal — never written).
+    # ``sessions_base`` is the hub ``session_dir`` above already resolved, so
+    # the constructor does not re-resolve it (pre-resolved seam, see
+    # ``ensure_session``'s own docstring).
+    ensured = core.ensure_session(sid, cwd, sessions_base=os.path.dirname(sdir))
+    if not os.path.isfile(os.path.join(ensured, "meta.json")):
+        # fail-safe — touch() must not block on a failed construction;
+        # surface it for debugging since this is not an expected path.
+        print(
+            f"cs_touch: core.ensure_session() left session {sid} without a "
+            f"meta.json record (non-fatal)",
+            file=sys.stderr,
+        )
 
     # C4/AC17: single atomic append, no dedup read, no app-level lock. The
     # `lock` parameter is KEPT (accepted, not renamed/removed) for call-site
@@ -1995,7 +2000,7 @@ def touch_written_path(session_id: str, rel_path: str, cwd: Optional[str] = None
 
     Guard: skips silently when ``core.session_dir(session_id, cwd)`` does
     not already exist on disk -- the phantom-live-peer guard. ``touch()``
-    lazily calls ``core.init()``, which would otherwise materialize a
+    calls ``core.ensure_session()``, which would otherwise materialize a
     live peer for a session id that was never actually spawned (the
     scenario ``coordinator_core/ipc.py``'s F1 comment documents),
     reachable here because a caller may resolve ``session_id``/``cwd``
@@ -4746,6 +4751,9 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
                 continue  # recently touched — may still be live
 
             archive_dest = os.path.join(archive_root, f"_agents-{agent_id}-{today}")
+            # Judged, not overlooked: ``archive_root`` is a literal-named
+            # bookkeeping child of the hub, never a session dir — no session
+            # record belongs here (core.ensure_session's negative-spec).
             os.makedirs(archive_root, exist_ok=True)
             # Review: code-reviewer P2 — match `_reap_stale_agents`'s
             # rename + exists-recheck idiom exactly rather than
@@ -4823,6 +4831,9 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
 
     archive_dir = os.path.join(base, ".archive", f"{sid}-{today}")
     try:
+        # Judged, not overlooked: ``.archive`` is a literal-named child of the
+        # hub, not a session dir; and this function is ARCHIVING an existing
+        # session, so constructing one here would be the inverse operation.
         os.makedirs(os.path.join(base, ".archive"), exist_ok=True)
         shutil.move(sdir, archive_dir)
     except OSError:

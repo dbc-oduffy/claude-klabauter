@@ -90,7 +90,7 @@ from pathlib import Path
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
-from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 
 
 #: Generator-provenance declaration: _append_record_sync writes to
@@ -142,19 +142,54 @@ def _count_tool_use_blocks(transcript_path: str) -> int | None:
     return count
 
 
-def _append_record_sync(store_path: str, entry: dict) -> None:
+def _append_record_sync(
+    store_path: str, entry: dict, session_id: str, sessions_base: str, root: str
+) -> None:
     """Append one compact-JSON record line to the per-session store (blocking I/O).
 
     Called exclusively via asyncio.to_thread() — must not be awaited directly.
     Failures are swallowed: observability loss is preferable to crashing the engine
     on a non-fatal bookkeeping write (mirrors agent_completion_log._append_audit_entry).
+
+    The store directory IS the session directory, so this writer is a session-
+    directory CONSTRUCTOR whether it means to be or not. It reaches the hub
+    through ``session/core.py::init`` — the directory's one constructor — rather
+    than through a bare ``makedirs``, because a directory minted here without a
+    ``meta.json`` carries no ``stable_pid`` (K-006's F0 hazard: Layer-1 liveness
+    disarmed), is invisible to ``liveness``'s registry-independent arms, and
+    silently no-ops every later ``update_meta_field`` write (see that function's
+    own docstring for the contract; this cited ``ensure_meta``, deleted
+    2026-08-26, until the repoint). ``init`` self-creates the directory and is
+    idempotent, so no ``makedirs`` is needed alongside it; both of its resolutions
+    are handed over pre-resolved by the caller, so it spawns nothing.
+
+    Negative-spec:
+        - Do NOT restore a ``makedirs`` fallback for a failed ``init``. A
+          half-initialised session directory is the defect; losing one
+          observability line is not.
+        - Guard on ``meta.json`` ABSENCE, never on directory absence — another
+          bookkeeping writer reaching the hub first is how a record-less
+          directory becomes reachable in the first place.
     """
     store_dir = os.path.dirname(store_path)
-    try:
-        os.makedirs(store_dir, exist_ok=True)
-    except OSError as exc:
-        print(f"subagent_zero_tool_use: cannot create store dir {store_dir}: {exc}", file=sys.stderr)
-        return
+    if not os.path.isfile(os.path.join(store_dir, "meta.json")):
+        try:
+            from coordinator_core.session.core import init as _session_init
+
+            _session_init(session_id, sessions_base=sessions_base, root=root or None)
+        except Exception as exc:  # noqa: BLE001 -- bookkeeping write, never fatal
+            print(
+                f"subagent_zero_tool_use: cannot initialise session dir {store_dir}: {exc}",
+                file=sys.stderr,
+            )
+            return
+        if not os.path.isfile(os.path.join(store_dir, "meta.json")):
+            print(
+                f"subagent_zero_tool_use: session dir {store_dir} left uninitialised — "
+                "record dropped",
+                file=sys.stderr,
+            )
+            return
     try:
         line = json.dumps(entry, separators=(",", ":")) + "\n"
         with open(store_path, "a", encoding="utf-8", newline="\n") as fh:
@@ -202,6 +237,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except RuntimeError:
         _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
     store_path = str(_sessions_base / session_id / "subagent-zero-tool-use.jsonl")
+    # Pure path logic off the hub this handler already resolved — no spawn.
+    try:
+        _worktree_root = str(main_worktree_root(_sessions_base.parent))
+    except Exception:  # noqa: BLE001 -- init resolves it itself on this arm
+        _worktree_root = ""
 
     recorded_at = (
         datetime.datetime.now(tz=datetime.timezone.utc)
@@ -217,6 +257,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
         "recorded_at": recorded_at,
     }
 
-    await asyncio.to_thread(_append_record_sync, store_path, entry)
+    await asyncio.to_thread(
+        _append_record_sync,
+        store_path,
+        entry,
+        session_id,
+        str(_sessions_base),
+        _worktree_root,
+    )
 
     return no_advisory()

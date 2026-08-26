@@ -1286,6 +1286,15 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     `start` is not inside a git worktree (including when `_run_git` itself
     degraded to its fallback `CompletedProcess` — that fallback's `returncode
     != 0` already routes here, so no separate try/except is needed).
+
+    NEGATIVE-SPEC — the `rev-parse --show-toplevel` hop is load-bearing, not a
+    formality. `cwd = start or Path.cwd()` is the exact shape audited in
+    `state/audits/2026-08-26-session-hub-writers-path-resolution.md` as the one
+    that reaches a repo no caller named; this instance is safe ONLY because
+    `--show-toplevel` re-anchors the process cwd to the worktree the process is
+    actually inside. Building a path by joining onto `cwd` directly — or
+    "simplifying" this to return `cwd` when the git call looks skippable —
+    reintroduces that defect silently, and nothing warns.
     """
     cwd = start or Path.cwd()
     result = _run_git(["rev-parse", "--show-toplevel"], cwd)

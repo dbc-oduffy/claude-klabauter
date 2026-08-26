@@ -42,7 +42,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (  # noqa: F
     test_every_write_guard_has_a_non_firing_control_row,
     test_expected_speaker_matches_measured_reality,
     test_hook_rows_fire_as_expected,
-    test_scratch_parent_is_outside_the_repo_and_carries_no_user_home,
+    test_scratch_parent_is_outside_the_repo_and_is_exempt_here,
     test_static_text_rows_fire_and_produce_non_empty_text,
     test_write_guard_rows_fire_as_expected,
 )

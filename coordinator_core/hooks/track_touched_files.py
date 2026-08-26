@@ -308,23 +308,30 @@ def _ensure_session_record_sync(
     registry entry that makes the claim this record is about visible to
     peers.
 
-    Two jobs in one thread hop on purpose (C9's hop budget): the ``makedirs``
-    is still this hook's ONLY mkdir, kept for cheap belt-and-suspenders
-    defense even though C7 made it provably redundant on both halves of this
-    call — ``session.core.init`` (called below when ``meta.json`` is absent)
-    does its own ``sdir.mkdir(parents=True, exist_ok=True)``, and
-    ``touch_record.append_event`` (the append half, back in ``_handler``)
-    creates its own sink's parent directory on every call. See
-    ``tests/test_track_touched_files_fresh_dir.py`` for the isolated proof
-    of both self-creations; that module no longer treats this ``makedirs``
-    as a guarded precondition. The ``isfile`` below is the whole
-    steady-state cost of the record half — one stat per Edit/Write, one
+    ONE call, to ``core.ensure_session`` — the session directory's single
+    constructor, which produces the directory and the record together or
+    neither. This function used to open with its own
+    ``os.makedirs(session_dir, exist_ok=True)`` ahead of an
+    absence-guarded ``core.init``, described as "belt-and-suspenders" and
+    provably redundant on both halves. That mkdir is deleted: belt-and-
+    suspenders is exactly how a session directory came to exist without a
+    record, because a mkdir that succeeds while the record write is skipped
+    or fails is precisely the litter this constructor exists to prevent. The
+    ``session_dir`` parameter is retained as the resolved path this hook
+    already computed (its ``touch_record`` sink's parent) and for the
+    existing call shape; ``ensure_session`` re-derives nothing, since the hub
+    and worktree root are handed over pre-resolved below.
+
+    Steady-state cost of the record half: **+0.018ms** per Edit/Write against
+    the ``makedirs``+``isfile`` pair it replaces (RUSAGE process time, n=2000,
+    2026-08-26), and NO ``mkdir`` syscall at all once the record exists — one
     ``init`` per session lifetime.
 
     WHY THIS IS NOT THE BOOTSTRAP C1 REMOVED. C1 stripped session bootstrap
     from this hook on the premise that liveness stamping "belongs at the
     claiming ceremony ... which already performs the identical ``ensure_meta``
-    write". That premise holds for every claim a *ceremony* makes and fails for
+    write" (that function was deleted 2026-08-26; ``ensure_session`` is the
+    constructor now, and the ceremony still performs the write). That premise holds for every claim a *ceremony* makes and fails for
     the claim an *edit* makes: appending a ``T`` event IS claim acquisition,
     and a session that only ever edits through Write/Edit runs no ceremony and
     no CLI, so it holds claims while absent from the registry
@@ -357,9 +364,17 @@ def _ensure_session_record_sync(
           record CREATION; it must never become a per-tool-call heartbeat —
           that is the distinction ``session/scope.py::touch``'s docstring
           pins, and DoE's ``session-heartbeat.py`` was retired over.
-        - Do NOT route this through ``core.ensure_meta``: its re-stamp arm
+        - Routed through ``core.ensure_session`` (the session directory's one
+          constructor) as of 2026-08-26. This bullet used to forbid the
+          predecessor ``core.ensure_meta`` on the grounds that its re-stamp arm
           reads and parses ``meta.json`` on the PRESENT path, i.e. on every
-          Edit/Write, which is the per-call cost this hook must not pay.
+          Edit/Write. Re-measured on this box (RUSAGE process time, n=2000):
+          that present-path read costs **+0.018ms** against the
+          ``makedirs``+``isfile`` pair it replaces, and ``ensure_session``
+          issues NO ``mkdir`` syscall at all once the record exists. The
+          objection was real and is retired by the number, not waived — and the
+          hook stops being one of the lazy initializers whose race decided
+          which sessions got a record at all.
         - Write confinement: the hub and worktree root are handed to
           ``core.init`` PRE-RESOLVED, from the same ``_common_dir`` this
           handler already resolved ``session_dir`` from — ``init`` never
@@ -374,16 +389,13 @@ def _ensure_session_record_sync(
           ``touched.txt`` literal, C5) counts a T-record-carrying dir with
           no ``meta.json`` as a ``no_meta_json`` miss.
     """
-    os.makedirs(session_dir, exist_ok=True)
-    if os.path.isfile(os.path.join(session_dir, "meta.json")):
-        return
     try:
         # Imported directly from session.core (never through the ops package)
         # for the same import-graph reason the back-pointer resolver below is —
         # see tests/test_track_touched_files_no_ops_import.py.
-        from coordinator_core.session.core import init as _session_init
+        from coordinator_core.session.core import ensure_session as _ensure_session
 
-        _session_init(session_id, sessions_base=sessions_base, root=worktree_root)
+        _ensure_session(session_id, sessions_base=sessions_base, root=worktree_root)
     except Exception:
         pass  # silent-failure contract; stable_pid_watch counts the miss
 
@@ -471,13 +483,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
     touch_record_sink = os.path.join(session_dir, _TOUCH_RECORD_FILENAME)
 
     # --- Session dir + liveness record for the append below ---
-    # C7: _ensure_session_record_sync's own ``makedirs`` is this hook's ONLY
-    # mkdir, kept as cheap belt-and-suspenders defense, but is no longer a
-    # guarded precondition for either half of this call --
-    # ``session.core.init`` (meta.json half) and ``touch_record.append_event``
-    # (append half, below) both self-create their own target's parent
-    # directory now. See that function's own docstring and
-    # ``tests/test_track_touched_files_fresh_dir.py`` for the isolated proof.
+    # This hook holds no mkdir of its own any more: the dir and the record are
+    # produced together by ``core.ensure_session``. It must stay AHEAD of the
+    # append below, which creates its own sink's parent unconditionally
+    # (``touch_record.append_event`` serves agent-keyed sinks too and is not
+    # session-aware) -- reversing the order would put a record-less session dir
+    # back on the disk on exactly the path this fix closes.
     #
     # _worktree_root is resolved HERE rather than at its former site below
     # (immediately before normalize_touch_path) because the record half needs

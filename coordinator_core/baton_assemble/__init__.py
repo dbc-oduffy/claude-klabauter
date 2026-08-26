@@ -268,6 +268,17 @@ class TransportFailure(Exception):
 
 
 def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Resolve the enclosing git worktree root for `start` (default cwd).
+
+    NEGATIVE-SPEC — the `show_toplevel` hop is load-bearing, not a formality.
+    `cwd = start or Path.cwd()` is the exact shape audited in
+    `state/audits/2026-08-26-session-hub-writers-path-resolution.md` as the
+    one that reaches a repo no caller named; this instance is safe ONLY
+    because `--show-toplevel` re-anchors the process cwd to the worktree the
+    process is actually inside. Building a path by joining onto `cwd`
+    directly -- or "simplifying" this to return `cwd` when the git call is
+    cheap to skip -- reintroduces that defect silently, and nothing warns.
+    """
     cwd = start or Path.cwd()
     top = show_toplevel(str(cwd))
     return Path(top) if top else None

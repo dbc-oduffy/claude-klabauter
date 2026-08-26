@@ -158,6 +158,59 @@ _CWD_OVERRIDE_KEY = "__cwd__"
 _NEUTRAL_SCRATCH_PARENT = Path(__file__).resolve().parents[3].parent / "coordinator-guard-corpus-scratch"
 
 
+#: The roots every fixture tempdir in this module is minted under -- the
+#: SSOT both message lints read to tell a fixture ECHO from a leak.
+#:
+#: Co-located with `_NEUTRAL_SCRATCH_PARENT` on purpose. Both
+#: `test_no_machine_absolute_path_in_guard_messages.py` (B7-shaped absolute
+#: paths) and `guard_message_register_lint.py` (B7 proper, redaction tokens)
+#: scan the text a guard renders, and a guard naming its real target back to
+#: the agent is the guard doing its job -- so both have to be able to
+#: recognize a path THIS module handed the guard as its input. Keying that on
+#: a location stated anywhere else is what broke: the abs-path lint keyed on
+#: `tempfile.gettempdir()` because that is where this corpus used to mint,
+#: `d1cf0b986` moved the mint root out to a repo sibling (to stop
+#: `guard_inprocess_search`'s footer latch minting phantom session dirs into
+#: the live `.git/coordinator-sessions/` hub), and the exemption stopped
+#: recognizing its own fixtures -- 15 spans across 13 guards reported as
+#: leaks, from this one line. Defined HERE, next to the mint root, a
+#: relocation cannot desync the two again.
+#:
+#: BY IDENTITY, never "looks like a scratch dir": a substring test would
+#: also clear a root a guard HARDCODED into its own prose, which is the leak
+#: class both lints exist for.
+FIXTURE_SCRATCH_ROOTS: tuple = (
+    tempfile.gettempdir(),
+    str(_NEUTRAL_SCRATCH_PARENT),
+)
+
+
+def is_fixture_scratch_path(candidate: str) -> bool:
+    """True if `candidate` is rooted under a root this corpus mints under."""
+    return any(candidate.startswith(root) for root in FIXTURE_SCRATCH_ROOTS)
+
+
+def fixture_scratch_spans(text: str) -> List[tuple]:
+    """Every `(start, end)` in `text` covered by a fixture-minted scratch
+    path -- the span a message lint must not report a hit inside.
+
+    Extends each occurrence of a mint root to the end of the path-shaped run
+    that follows it, so a redaction token sitting in the ROOT (the operator's
+    username, when the checkout lives under their home) and one sitting in a
+    tempdir suffix are both covered by the same span.
+    """
+    spans: List[tuple] = []
+    for root in FIXTURE_SCRATCH_ROOTS:
+        start = text.find(root)
+        while start != -1:
+            end = start + len(root)
+            while end < len(text) and text[end] not in " \t\n\r\"'`()[]<>":
+                end += 1
+            spans.append((start, end))
+            start = text.find(root, start + 1)
+    return spans
+
+
 def _neutral_scratch_parent() -> str:
     """The scratch parent every fixture tempdir is minted under.
 
@@ -176,18 +229,22 @@ def _neutral_scratch_parent() -> str:
        long as they sit there. With the parent outside every repo the upward walk
        finds no root at all, so `_latch_path` returns None and the write never
        happens -- eliminated, not redirected.
-    2. NO USER-HOME SEGMENT. Rendered scratch paths are embedded verbatim in
-       agent-facing message text, so a path carrying the operator's username
-       leaks it into the corpus (B7). This is what put the scratch in-repo in the
-       first place, and it is the constraint a naive "just move it out" breaks.
+    2. NAMED AS A FIXTURE ROOT BY THE ABS-PATH LINT. `test_no_machine_absolute_
+       path_in_guard_messages.py` fires this corpus and reports any absolute
+       path in the rendered text; its exemption 2 clears paths rooted under a
+       root the corpus MINTS under, identified by identity via
+       `_FIXTURE_SCRATCH_ROOTS`. Wherever this constant points, that tuple has
+       to name it -- satisfying constraint 1 by relocating and forgetting this
+       is exactly what `d1cf0b986` did, and it reddened the lint with 15 spans
+       across 13 guards that were all this one line.
 
-    Constraint 2 is NOT satisfied by inspection on this box and must not be
-    argued from one: `parents[3].parent` is the directory CONTAINING the repo,
-    which is a bare drive root on the Windows dev box and `<home>/dev/` for a
-    macOS fleet-floor checkout at `<home>/dev/claude-klabauter`. Same expression,
-    username on one platform and not the other. `test_scratch_parent_is_outside_
-    the_repo_and_carries_no_user_home` pins both constraints so the platform
-    nobody is running fails loudly instead of leaking quietly.
+    Constraint 2 REPLACED an earlier "no user-home segment" constraint, whose
+    B7 premise (a rendered fixture path leaks the operator's username into
+    agent-facing text) does not hold: these paths are minted and read inside a
+    test process, and the path a guard names in a real session is the
+    operator's own, which the lint's own exemption 2 rules is the guard doing
+    its job. It was also unsatisfiable -- see `test_scratch_parent_is_outside_
+    the_repo_and_is_exempt_here`, which pins both live constraints.
     """
     _NEUTRAL_SCRATCH_PARENT.mkdir(parents=True, exist_ok=True)
     return str(_NEUTRAL_SCRATCH_PARENT)
@@ -3776,20 +3833,43 @@ def fire_static_text_row(row: StaticTextRow) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_scratch_parent_is_outside_the_repo_and_carries_no_user_home():
+def test_scratch_parent_is_outside_the_repo_and_is_exempt_here():
     """Both of `_neutral_scratch_parent`'s constraints, pinned together.
 
-    They pull against each other -- moving the scratch out of the repo to stop
-    the latch leak is exactly what can put an operator's home directory in the
-    path -- so asserting either alone lets the other regress. Asserted here as
-    properties rather than against an expected literal: the correct value is
-    different on every machine, and a literal would pin this box.
+    Asserted as properties rather than against an expected literal: the correct
+    value is different on every machine, and a literal would pin this box.
 
-    The home leg is the one that cannot be checked by looking at this box.
-    `parents[3].parent` is a bare drive root here and `<home>/dev/` for a macOS
-    fleet-floor checkout, so the same expression is clean on the platform we run
-    and a B7 violation on the platform we do not. `Path.home()` makes that
-    falsifiable anywhere.
+    THE SECOND LEG USED TO ASSERT "no user-home segment", AND THAT WAS AN
+    UNSATISFIABLE CONJUNCTION -- retired 2026-08-26, not relaxed. Its stated
+    rationale was B7: a rendered scratch path carrying the operator's username
+    lands in agent-facing message text. That premise is wrong at the boundary
+    it names. These paths are minted by a test fixture and read by a test
+    process; no agent ever sees one. What a guard renders in a REAL session is
+    the operator's own real path, which the guard is naming back on purpose --
+    the class `test_no_machine_absolute_path_in_guard_messages.py`'s own
+    exemption 2 already rules is "doing its job, not leaking a doc/root
+    pointer". B7's subject is a path a guard RESOLVES AND HARDCODES into its
+    own prose (the `_resolve_override_keys_doc_display` defect that ratchet
+    exists for), never a path a fixture handed the guard as its input.
+
+    And the conjunction had no solution to hold out for. Leg 1 needs a
+    directory outside every git repo; the retired leg needed one with no
+    user-home segment; the lint additionally matches `/var/...`, `/tmp/...`,
+    and every drive-lettered Windows path unconditionally. On POSIX that
+    leaves root-owned `/opt`-style roots, unwritable by default; on Windows
+    every absolute path carries a drive letter, and `tempfile.gettempdir()`
+    itself sits under the user home. A checkout at `~/X/claude-klabauter` --
+    the fleet-normal shape -- fails the retired leg for a reason no code in
+    this repo can fix. A pin whose only remedy is "move your checkout" pins
+    the operator, not the constraint.
+
+    What replaces it is the invariant that actually discharges leg 1's cost.
+    Moving the scratch out of the repo (`d1cf0b986`) is what put fixture paths
+    beyond the abs-path lint's `gettempdir()`-keyed fixture-echo exemption and
+    put the operator's username inside every fired path for B7 proper --
+    reddening both. `FIXTURE_SCRATCH_ROOTS` now lives beside the mint root so
+    that cannot desync again, and this leg pins the one relationship that
+    remains statable: the mint root is among the roots the lints exempt.
     """
     scratch = _NEUTRAL_SCRATCH_PARENT.resolve()
     repo_root = Path(__file__).resolve().parents[3]
@@ -3804,12 +3884,11 @@ def test_scratch_parent_is_outside_the_repo_and_carries_no_user_home():
         % (scratch, repo_root)
     )
 
-    home = Path.home().resolve()
-    assert home not in scratch.parents and scratch != home, (
-        "scratch parent %s sits under the user home %s, so every rendered "
-        "fixture path embeds the operator's username in agent-facing corpus "
-        "text (B7). This is what put the scratch inside the repo originally -- "
-        "it needs a location that is neither." % (scratch, home)
+    assert str(_NEUTRAL_SCRATCH_PARENT) in FIXTURE_SCRATCH_ROOTS, (
+        "scratch parent %s is not among this module's own FIXTURE_SCRATCH_ROOTS "
+        "%r, so every fixture path a guard correctly names back reads as a leak "
+        "to both message lints. Whatever this constant becomes, that tuple has "
+        "to name it." % (_NEUTRAL_SCRATCH_PARENT, FIXTURE_SCRATCH_ROOTS)
     )
 
 

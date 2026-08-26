@@ -122,6 +122,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.fleet._common import _sessions_dir
+from coordinator_core.session import core
 
 _LOG = logging.getLogger(__name__)
 
@@ -268,7 +269,11 @@ def _release_shape_lock(lock_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _record_pickup_sync(
-    sdir: Path, sid: str, handoff_relpath: str, deliverable_id: Optional[str] = None
+    sdir: Path,
+    sid: str,
+    handoff_relpath: str,
+    deliverable_id: Optional[str] = None,
+    worktree_root: Optional[str] = None,
 ) -> dict:
     """Sync: lock, read-modify-write session-shape.json's pickup fields, unlock.
 
@@ -296,7 +301,14 @@ def _record_pickup_sync(
 
     Returns the result envelope (see _handler docstring for wire shape).
     """
-    sdir.mkdir(parents=True, exist_ok=True)
+    # `ensure_session`, not `sdir.mkdir`: `sdir` is `<hub>/<sid>`, so creating
+    # it here IS creating a session, and a pickup that mints the directory
+    # without the `meta.json` record leaves a session no peer can see and
+    # `ops/session/reap.py` cannot reap. The hub is handed over pre-resolved --
+    # `_handler` already derived it from `git_common_dir` -- so nothing is
+    # re-derived. The write below is unchanged and still fails through the
+    # caller's own OSError branch if the directory could not be created.
+    core.ensure_session(sid, sessions_base=str(sdir.parent), root=worktree_root)
     shape_file = sdir / "session-shape.json"
 
     lock_dir = _acquire_shape_lock(sdir, sid)
@@ -507,7 +519,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     try:
         result = await asyncio.to_thread(
-            _record_pickup_sync, sdir, sid, handoff_relpath, deliverable_id
+            _record_pickup_sync,
+            sdir,
+            sid,
+            handoff_relpath,
+            deliverable_id,
+            str(target_root),
         )
     except ShapeLockTimeout as exc:
         return _error_result(str(exc))

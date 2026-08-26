@@ -72,8 +72,9 @@ def _corpus() -> tuple[tuple, ...]:
     own walk tripled it (measured 2.43s for the module, ~800ms per walk). One
     walk, three readers.
 
-    Returns one `(repo_rel, record, parse_error, elapsed_ms)`-shaped row set;
-    `record` is None exactly when `parse_error` is set.
+    Returns `(rows, elapsed_ms)`, where each row is
+    `(repo_rel, record, parse_error)` and `record` is None exactly when
+    `parse_error` is set.
     """
     rows = []
     start = time.perf_counter()

@@ -33,16 +33,20 @@ own Layer-1 decision exactly, not a re-derivation:
   - ``stable_pid`` present with at least one witness -> Layer 1 engages ->
     not F0-exposed -> not a miss (regardless of whether the process is
     actually alive — aliveness is not this watch's question).
-  - No ``meta.json`` at all, but SOME other record file in the same dir
-    whose mtime is **within ``_NO_META_RECENCY_SECONDS``** (C4, 2026-08-22;
-    keying widened off the `touched.txt` literal onto
-    ``liveness.newest_record_mtime`` 2026-08-25, C5; recency-scoped
-    2026-08-26) -> a genuine session left no record whatsoever, so Layer 1
-    provably never engaged -> MISS (reason ``no_meta_json``) — closes the
-    gap where a session moved entirely out of "meta.json present,
-    unstamped" into "no meta.json at all" would otherwise fall out of this
-    watch's denominator and read CLEAN while the exposed population grows.
-    A dir with NEITHER file is still not counted (unrelated hub debris).
+  - No ``meta.json`` at all, in a dir carrying a TOUCH RECORD whose mtime is
+    within ``_NO_META_RECENCY_SECONDS`` (C4, 2026-08-22; keying widened off
+    the `touched.txt` literal 2026-08-25, C5; recency-scoped and re-keyed
+    onto owed-ness 2026-08-26) -> a session that reached the call which
+    writes the record and did not get it, so Layer 1 provably never engaged
+    -> MISS (reason ``no_meta_json``) — closes the gap where a session moved
+    entirely out of "meta.json present, unstamped" into "no meta.json at all"
+    would otherwise fall out of this watch's denominator and read CLEAN while
+    the exposed population grows.
+    A dir with no touch record is NOT counted, and that is the load-bearing
+    half: ``meta.json`` is written LAZILY, so a working session legitimately
+    has none for seconds to tens of minutes after it starts. See
+    ``_init_is_owed`` for the measurement, and for why a directory-age check
+    was tried for this job and retracted.
 
 Why the ``no_meta_json`` branch is recency-scoped, and why the scope is
 NOT a softening of AC8 (measured 2026-08-26 on host `machine-b`, 375
@@ -127,6 +131,97 @@ STATUS_CLEAN = "CLEAN"
 STATUS_EMPTY = "EMPTY"
 
 
+def _touch_record_family(sdir: Path) -> list[Path]:
+    """Every on-disk file backing this session's touch record, or `[]`.
+
+    Routed through ``touch_record.discover_family`` — the same family-aware
+    seam ``scope.py::_read_touch_record_as_legacy_lines`` reads — plus the
+    legacy ``touched.txt`` sibling it unions in, so this stays a WIDENING of
+    the C5 policy and not a swap back onto a single literal: a future record
+    rename is picked up under its new name, and a rotated generation
+    (``touch-record.jsonl.rotated-<ts>-<pid>.jsonl``) counts as evidence
+    exactly like the live file. Existence only — nothing here decodes a line,
+    so the branch stays a directory walk and a stat.
+    """
+    from coordinator_core.session import touch_record
+
+    family = list(touch_record.discover_family(sdir / "touch-record.jsonl"))
+    legacy = sdir / "touched.txt"
+    if legacy.is_file():
+        family.append(legacy)
+    return family
+
+
+def _init_is_owed(sdir: Path, now: float) -> bool:
+    """`True` iff this meta.json-less directory has reached the event that
+    OWES it a ``core.init``, and reached it recently.
+
+    ``meta.json`` is written LAZILY, not at directory creation, and this
+    function is the whole reason the branch below is not a race detector.
+    Measured on host `machine-b`, 2026-08-26, over every session directory
+    born that day: the directory itself is created at SessionStart by
+    ``bash_guards/_write_bump_session_start`` at **+0.0s, every time**, while
+    ``started_at`` — the file ``core.init`` writes once and never rewrites,
+    so its birth IS the instant ``init`` first ran — landed at +3.0s, +3.8s,
+    +101.9s, +320.7s, +367.6s, +1194.2s and **+2394.5s**. Forty minutes, on a
+    working session. One directory born 13:47 and one born 13:49 had no
+    ``meta.json`` while one born 13:51 did, which is not a "too young" race
+    and not a defect either — it is three sessions at different points in the
+    same lazy sequence. A watch with no owed-ness predicate reports that
+    ordinary sequence as K-006 exposure, and a watch that cries wolf is one
+    nobody reads.
+
+    What owes the record is a TOUCH: ``session/scope.py::touch`` calls
+    ``core.init`` before it appends, and (on an engine carrying `6bf7fc291`)
+    so does ``hooks/track_touched_files``. So a directory carrying a touch
+    record and no ``meta.json`` is a session that reached the call and did
+    not get the file — the genuine defect. A directory with no touch record
+    has not reached it, and is owed nothing yet.
+
+    Validated against the population rather than asserted: over the nine
+    sessions archived on 2026-08-26, this predicate selects exactly one —
+    `471733e0-…`, which edited files for thirteen minutes and died without
+    ever holding a ``meta.json`` — and rejects the other eight. Over the live
+    hub it rejects both freshly-born meta-less directories the probe was
+    flagging, and every one of the three test-fixture directories, whose only
+    file is a guard's advisory log.
+
+    The recency half is unchanged in purpose and re-keyed onto the touch
+    record's OWN mtime rather than ``liveness.newest_record_mtime``'s
+    newest-of-any-file: that is what kept the 223-dir fossil corpus out (its
+    back-filled ``touched.txt`` is dated 2026-07-31) while no longer letting
+    an unrelated file — a guard log appended today — hold a directory in the
+    window on a session's behalf.
+
+    Negative-spec:
+        - Does NOT key on the DIRECTORY's own creation age. That was this
+          module's 2026-08-26 first cut and it is retracted here: it excludes
+          a session running longer than the window that edits a file and gets
+          no record — a real miss, silently dropped — and it buys nothing the
+          touch-record scope does not already buy. Two scopes where one is
+          correct is not defense in depth; it is a false negative with a
+          second name.
+        - Does NOT reach for ``started_at``/``head_at_start`` as the marker.
+          They are absent for exactly the defect this branch must catch.
+    """
+    family = _touch_record_family(sdir)
+    if not family:
+        return False
+    newest = None
+    for member in family:
+        try:
+            candidate = int(member.stat().st_mtime)
+        except OSError:
+            continue
+        if newest is None or candidate > newest:
+            newest = candidate
+    if newest is None:
+        # Present but unstattable — a watch must not drop a directory it
+        # cannot measure out of its own denominator.
+        return True
+    return (now - newest) <= _NO_META_RECENCY_SECONDS
+
+
 def scan_stable_pid_misses(
     sessions_dir: Optional[Path | str] = None,
     cwd: Optional[str] = None,
@@ -201,23 +296,29 @@ def scan_stable_pid_misses(
             # repo's own signal that a session genuinely ran here, so a
             # meta.json-less dir bearing one is NOT "not a session record"
             # — it is exactly the population this watch exists to keep
-            # visible. Keyed on `liveness.newest_record_mtime` (the shared
-            # recency-policy helper, AC6) rather than the single `touched.txt`
-            # literal so a future record rename only DEFERS this signal,
-            # never DISABLES it. Conservatively counted as a miss (this
-            # module's own contract, see the "unreadable" branch below)
-            # rather than silently dropped from the denominator, which is
-            # the AC8 gap this branch closes.
-            # Recency-scoped (2026-08-26): only while that record file is
-            # newer than _NO_META_RECENCY_SECONDS. Unscoped, this branch
-            # counted a 223-dir fossil corpus a bulk migration back-filled
-            # and the reaper's fail-closed-to-keep arm can never remove —
-            # see this module's docstring for the measurement. Reuses the
-            # mtime `newest_record_mtime` already returns; no second stat.
-            record_mtime = liveness.newest_record_mtime(str(sdir))
-            if record_mtime is not None and (now - record_mtime) <= _NO_META_RECENCY_SECONDS:
-                checked += 1
-                misses.append({"session": sdir.name, "reason": "no_meta_json"})
+            # visible. Keyed on the touch-record FAMILY (`touch_record.
+            # discover_family` plus its legacy `touched.txt` sibling) rather
+            # than a single literal, so a future record rename only DEFERS
+            # this signal, never DISABLES it. Conservatively counted as a
+            # miss (this module's own contract, see the "unreadable" branch
+            # below) rather than silently dropped from the denominator,
+            # which is the AC8 gap this branch closes.
+            # Recency-scoped (2026-08-26): only while that record is newer
+            # than _NO_META_RECENCY_SECONDS. Unscoped, this branch counted a
+            # 223-dir fossil corpus a bulk migration back-filled — see this
+            # module's docstring for the measurement.
+            # Scoped to directories that have reached the event which OWES
+            # them a `core.init` — a touch — and reached it inside the
+            # window. `meta.json` is written LAZILY, so "no meta.json yet" is
+            # the NORMAL state of a working session for anywhere from three
+            # seconds to forty minutes after it starts; counting that is
+            # reporting a race as a hazard. See `_init_is_owed` for the
+            # measurement and for why this replaced both the
+            # newest-of-any-file mtime key and the directory-age check.
+            if not _init_is_owed(sdir, now):
+                continue
+            checked += 1
+            misses.append({"session": sdir.name, "reason": "no_meta_json"})
             continue
         checked += 1
         try:

@@ -2057,10 +2057,21 @@ def compute_landed_reconciliation_gate(
             "## Acceptance Criteria heading"
         )
     if parsed["total"] == 0:
-        return _landed_reconciliation_indeterminate(
-            f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
-            "Criteria heading has no checkboxes"
-        )
+        # Checkboxes are the HANDOFF spelling; plans overwhelmingly carry their
+        # criteria as `| ACn | criterion | status |` table rows (226 vs 21 over
+        # docs/plans/, measured 2026-08-26). Reading zero checkboxes on a plan
+        # therefore means "wrong grammar", not "nothing to reconcile", and
+        # abstaining here made this gate blind on ~91% of the corpus it guards
+        # -- it reported `indeterminate` against a plan whose every criterion
+        # was visibly met, and that indeterminate now blocks the implemented
+        # stamp. Fall back to the table reader before conceding; only a plan
+        # that carries NEITHER grammar is genuinely unreadable.
+        parsed = directives_session_hygiene.parse_plan_acceptance_criteria_table(source)
+        if parsed is None or parsed["total"] == 0:
+            return _landed_reconciliation_indeterminate(
+                f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
+                "Criteria heading carries neither checkboxes nor | ACn | table rows"
+            )
     if parsed["open"] == 0:
         return LandedReconciliationGate(
             applies=False, open_count=0, total_count=parsed["total"], warn_text=None,

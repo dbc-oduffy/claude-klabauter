@@ -129,6 +129,10 @@ def write_usage(session_id: str, context_window_block: dict[str, Any], *, now: f
     payload = {"context_window": context_window_block, "captured_at": now}
     serialised_payload = json.dumps(payload, sort_keys=True).encode("utf-8")
 
+    # Judged, not overlooked: this sidecar lives under
+    # ``$COORDINATOR_SETTINGS_HOME``, not the session hub — one of the three
+    # session-id-keyed corpora core.ensure_session's negative-spec names as
+    # explicitly NOT sessions. Minting a meta.json here is the inverse defect.
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
     tmp_path.write_bytes(serialised_payload)

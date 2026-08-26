@@ -58,6 +58,23 @@ def _load_module():
 
 _mod = _load_module()
 
+# `_SCOPED_GIT_COMMIT` was removed from percolate-round.py when scoped-git-commit
+# was killed (DR-344); this file still names it in 19 places. The references sat
+# harmless only because the tests reaching them were skipped or returned before
+# the fake `_run`'s if-chain walked that far -- the first decline-path `_run` call
+# added to the module (`_pending_removal_warning`) made four of them evaluate it
+# and die on AttributeError, which reads as a failure in the new code rather than
+# as harness rot.
+#
+# A sentinel that matches no real argv keeps the chain walkable and keeps the
+# rot HONEST: a test asserting a commit fired now fails on its own assertion,
+# naming what it expected, instead of on a missing attribute. Retiring the 19
+# references against `commit_pipeline.run_commit_pipeline` is its own piece of
+# work -- see the bug-backlog entry filed alongside this change.
+_SCOPED_GIT_COMMIT_KILLED = getattr(
+    _mod, "_SCOPED_GIT_COMMIT", "<scoped-git-commit-killed-DR-344-never-matches>"
+)
+
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
@@ -212,7 +229,13 @@ class _SubprocessSpy:
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._dest_ahead_returncode, self._dest_ahead_stdout, "")
 
-        if "status" in cmd and "--porcelain" in cmd:
+        # Matches the flag by PREFIX, not by list membership: the module spells
+        # it `--porcelain` in one caller and `--porcelain=v1` in another
+        # (`_pending_removal_warning` pins the format explicitly), and an
+        # equality test silently misses the pinned spelling -- the stub then
+        # falls through to its unhandled-call assertion, which reads as a defect
+        # in the calling code rather than as a stub that does not know the flag.
+        if "status" in cmd and any(str(c).startswith("--porcelain") for c in cmd):
             return _completed(self._dest_status_returncode, self._dest_status_stdout, "")
 
         if str(_mod._PUBLISH) in joined and "--dry-run" in cmd:
@@ -227,7 +250,7 @@ class _SubprocessSpy:
             return _completed(0, self._parse2_stdout, "")
         if str(_mod._PARSE_DRYRUN) in joined:
             return _completed(0, self._parse1_stdout, "")
-        if str(_mod._SCOPED_GIT_COMMIT) in joined:
+        if str(_SCOPED_GIT_COMMIT_KILLED) in joined:
             if "--pathspec-from-file" in cmd:
                 idx = cmd.index("--pathspec-from-file")
                 self.pathspec_from_file_content = (
@@ -506,7 +529,7 @@ def test_clean_round_pushes_by_default(tmp_path, monkeypatch):
     assert f"Published: pushed to {dest}." in out
 
     commit_idx = next(
-        i for i, c in enumerate(spy.calls) if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)
+        i for i, c in enumerate(spy.calls) if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)
     )
     push_idx = spy.calls.index(push_calls[0])
     assert commit_idx < push_idx
@@ -552,7 +575,7 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
     commit_cmd = commit_calls[0]
 
@@ -637,7 +660,7 @@ def test_large_pathspec_commit_argv_stays_bounded_not_on_argv(tmp_path, monkeypa
         rc = _mod._cmd_round(args)
     assert rc == _mod._EXIT_OK
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
     commit_cmd = commit_calls[0]
 
@@ -667,7 +690,7 @@ def test_commit_ordered_after_ci_smoke_is_false_ci_runs_after_commit(tmp_path, m
                 return i
         raise AssertionError(f"no call matched {marker!r}: {spy.calls!r}")
 
-    commit_idx = _first_index(str(_mod._SCOPED_GIT_COMMIT))
+    commit_idx = _first_index(str(_SCOPED_GIT_COMMIT_KILLED))
     ci_idx = _first_index("run-all-checks.py")
     assert commit_idx < ci_idx
 
@@ -690,7 +713,7 @@ def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
     # The commit itself must still have landed (locally) before the red CI
     # was even observed -- CI-after-commit ordering holds on the FAIL path
     # too, not just the PASS path.
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -717,7 +740,7 @@ def test_gate_fires_with_yes_skips_input_and_prints_evidence(tmp_path, monkeypat
     assert "Step 3 gate fired: 1 medium hit(s)" in out
     assert "Proceed with real publish? [y/N] y (--yes)" in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -734,7 +757,7 @@ def test_gate_fires_with_no_publish_falls_through_and_skips_only_push(tmp_path, 
     assert "Step 3 gate fired: 1 medium hit(s)" in out
     assert "Proceed with real publish? [y/N] y (--yes)" in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
     for call in spy.calls:
@@ -808,7 +831,7 @@ def test_gate_fires_with_invocation_authorized_skips_input_and_proceeds(tmp_path
     assert "Step 3 gate fired: 1 medium hit(s)" in out
     assert "Proceed with real publish? [y/N] y (--invocation-authorized)" in out
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -935,7 +958,7 @@ def test_commit_landed_with_declined_paths_reports_partial_and_fails(tmp_path, m
     assert rc == _mod._EXIT_FAIL
 
     # The commit itself must have run exactly once — it DID land locally.
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
     # CI smoke must never run past a partial-landed commit report.
@@ -1330,7 +1353,7 @@ def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
     assert len(input_calls) == 1
     assert "Proceed with real publish?" in input_calls[0]
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -1387,7 +1410,7 @@ def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
         joined = " ".join(str(c) for c in cmd)
         if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
             order.append("real-run")
-        elif str(_mod._SCOPED_GIT_COMMIT) in joined:
+        elif str(_SCOPED_GIT_COMMIT_KILLED) in joined:
             order.append("commit")
         return spy(cmd, **kwargs)
 
@@ -1413,7 +1436,7 @@ def test_clean_dest_proceeds_through_commit(tmp_path, monkeypatch):
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dest_status_stdout="")
 
     assert rc == _mod._EXIT_OK
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -1539,7 +1562,7 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
         c for c in spy.calls
         if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
     ]
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert real_run_calls == []
     assert commit_calls == []
 
@@ -1606,7 +1629,7 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         ci_exit=None,
     ) == "the real publish run did not succeed"
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
     assert commit_calls == []
     assert ci_calls == []
@@ -2070,7 +2093,7 @@ def test_push_happens_inside_held_lock(tmp_path, monkeypatch):
         joined = " ".join(str(c) for c in cmd)
         if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
             order.append("real-run")
-        elif str(_mod._SCOPED_GIT_COMMIT) in joined:
+        elif str(_SCOPED_GIT_COMMIT_KILLED) in joined:
             order.append("commit")
         elif cmd and str(cmd[0]) == "git" and any(str(t) == "push" for t in cmd):
             order.append("push")
@@ -2112,7 +2135,7 @@ def _commit_call_kwargs(spy):
     return [
         kw
         for c, kw in zip(spy.calls, spy.call_kwargs)
-        if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)
+        if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)
     ]
 
 
@@ -2355,7 +2378,7 @@ def test_commit_uses_resolved_worktree_root_not_dest(tmp_path, monkeypatch):
     )
     # `_run_round` hard-codes its own fixture `dest`; re-derive the commit
     # call directly rather than relying on its returned `dest`.
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert commit_calls, "expected a scoped-git-commit invocation"
     commit_cmd = commit_calls[0]
     repo_idx = commit_cmd.index("--repo")
@@ -2762,7 +2785,7 @@ def test_default_gate_fires_evidence_sourced_from_real_run(tmp_path, monkeypatch
     publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
     assert len(publish_calls) == 1
 
-    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -2937,19 +2960,16 @@ def test_pathspec_from_manifest_names_head_diverged_worktree_equal_path(tmp_path
     assert "stranded.md" in pathspec
 
 
-def test_removal_side_is_gated_off_until_ac1b(tmp_path):
-    """The removal side stays OFF by default (§ `_REMOVAL_SIDE_ENABLED`), and
-    this test is the guard on that gate, not a description of a limitation.
+def test_removal_side_is_live_at_the_shipped_flag_value(tmp_path):
+    """The removal side is ON (§ `_REMOVAL_SIDE_ENABLED`, PM 2026-08-26). This
+    test guarded the closed gate and now guards the open one -- inverted in
+    place rather than deleted, so the flip stays legible here.
 
-    `head_tree - declared_payload` is data loss while either operand is
-    mis-scoped, and both currently are: `head_tree` spans the whole mirror
-    (all nine rows) while `declared_payload` carries only the rows THIS run
-    processed, and `declared_payload` is itself sourced from the percolation
-    SURFACE rather than the full payload. A `--target`-filtered round would
-    mark the rest of the mirror for deletion. If someone flips the constant
-    without also scoping `head_tree` and discharging AC1b's count
-    measurement, this test fails and says why."""
-    assert _mod._REMOVAL_SIDE_ENABLED is False
+    Both operands the old gate named as mis-scoped are fixed: `row_scope`
+    bounds width (§ `manifest.published_dest_dirs`), `_walk_published_payload`
+    bounds narrowness. A path gone from the worktree, tracked at HEAD and
+    declared by nobody is exactly what this leg exists to carry."""
+    assert _mod._REMOVAL_SIDE_ENABLED is True
 
     repo = _init_head_repo(
         tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
@@ -2957,11 +2977,13 @@ def test_removal_side_is_gated_off_until_ac1b(tmp_path):
     (repo / "gone.md").unlink()  # physically gone from the worktree already
 
     manifest = _mod._RoundManifest(
-        round_id="r1", declared_payload=frozenset({"kept.md"})
+        round_id="r1",
+        declared_payload=frozenset({"kept.md"}),
+        published_dest_dirs=frozenset({"."}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
-    assert "gone.md" not in pathspec, (
-        "removal side fired while gated off -- see _REMOVAL_SIDE_ENABLED"
+    assert "gone.md" in pathspec, (
+        "removal side did not fire while enabled -- see _REMOVAL_SIDE_ENABLED"
     )
     assert "kept.md" not in pathspec
 

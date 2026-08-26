@@ -220,7 +220,21 @@ class TestSessionShapeSet:
         sdir = _sdir(repo, "s6")
         shape.session_shape_set("s6", {"pickup": {}}, cwd=str(repo))
         names = sorted(p.name for p in sdir.iterdir())
-        assert names == ["session-shape.json"]
+
+        # The property is NO TEMP LEFTOVERS, which is what this test is named
+        # for. It used to be spelled `names == ["session-shape.json"]`, an
+        # over-tight proxy that also asserted the session directory contained
+        # nothing else. That stopped being true on 2026-08-26: this writer no
+        # longer bare-`mkdir`s the directory, it goes through
+        # `core.ensure_session`, the one constructor, which creates the session
+        # RECORD alongside the directory. `meta.json`/`started_at`/
+        # `head_at_start` beside the shape file are the constructor's correct
+        # postcondition -- pinning their absence would pin a record-less
+        # session directory, exactly the state the constructor exists to make
+        # impossible.
+        assert "session-shape.json" in names
+        leftovers = [n for n in names if ".tmp" in n or n.startswith(".")]
+        assert leftovers == [], f"temp file(s) left behind after the write: {leftovers}"
 
     def test_stale_lock_is_reaped_and_reclaimed(self, tmp_path):
         repo = _make_repo(tmp_path)

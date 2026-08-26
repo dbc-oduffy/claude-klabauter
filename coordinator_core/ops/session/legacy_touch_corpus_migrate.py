@@ -363,6 +363,9 @@ def _apply_dir(outcome: DirOutcome, touched_path: Path, worktree_root: Path) -> 
     if not surviving:
         # No claims to carry forward — still create the sibling so the dir
         # reads as drained (see module docstring's Negative-spec).
+        # Not a session dir (ensure_session): this is the ALREADY-EXISTING dir
+        # the scanned touched.txt lives in; minting a record for a fossil dir
+        # is exactly what this one-shot corpus drain must not do.
         outcome.record_path.parent.mkdir(parents=True, exist_ok=True)
         outcome.record_path.touch(exist_ok=True)
         return

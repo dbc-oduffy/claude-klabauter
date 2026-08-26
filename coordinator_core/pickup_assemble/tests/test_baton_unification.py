@@ -33,7 +33,7 @@ Coverage:
     after step 2 (parents already stamped) — each asserts the resume
     reaches the SAME successor rather than minting a second one (AC8)
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_baton_unification.py -q
 """
 from __future__ import annotations

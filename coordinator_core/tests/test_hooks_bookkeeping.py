@@ -285,7 +285,7 @@ class TestTrackTouchedFiles:
     # The behaviour they guarded did not become unowned. `stable_pid` exists to
     # adjudicate CLAIMS, and claims are made through the claiming ceremony, so the
     # stamp now happens there (`archive_stamp.py::cs_claim_handoff` ->
-    # `session/core.py::ensure_meta`), guarded by
+    # `session/core.py::ensure_session`), guarded by
     # `coordinator_core/tests/test_claim_ceremony_stamps_stable_pid.py`. The
     # population that used to be caught here -- a session dir with no `meta.json`
     # at all -- is kept visible by `session/stable_pid_watch.py::scan_stable_pid_misses`,

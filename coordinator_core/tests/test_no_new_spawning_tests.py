@@ -84,7 +84,8 @@ FOUR RULES
         `test_*`. A `pytest.mark` on a `_helper` or on a `@pytest.fixture`
         is INERT -- pytest applies marks only to what it collects -- so one
         non-test spawner sends the whole file to the module-level form. The
-        live case is `session/tests/test_ensure_meta.py`, whose spawners are
+        live case WAS `session/tests/test_ensure_meta.py` (deleted 2026-08-26
+        with the `ensure_meta` it covered), whose spawners were
         `_init_repo` and the `repo` fixture, with no test function reaching
         them statically: pytest INJECTS a fixture rather than calling it,
         and this collector resolves calls only. Condition (ii) was MISSING
@@ -125,7 +126,7 @@ FOUR RULES
         redundant per-method markers to satisfy a guard that could not see
         the effective ones already in place.
 
-        This does NOT rescue `session/tests/test_ensure_meta.py` (condition
+        This did NOT rescue the since-deleted `session/tests/test_ensure_meta.py` (condition
         (ii)'s named live case, above) even though IT ALSO carries a
         class-level `@pytest.mark.spawns_process`/`@pytest.mark.cadence` --
         a materially different shape from the roadmap/sprint case: its
@@ -146,7 +147,7 @@ FOUR RULES
         in isolation, but tuned to one file's route rather than a general
         rule, and this collector's "skip, don't guess" discipline treats an
         unresolved fixture route the same as any other unresolved route:
-        conservatively red. `test_ensure_meta.py` stays on the module-level
+        conservatively red. `test_ensure_meta.py` stayed on the module-level
         form requirement; its own one-line fix is to promote its existing
         class-level marker to `pytestmark = [pytest.mark.spawns_process,
         pytest.mark.cadence]`, a change to that test file, not this guard.
@@ -1422,7 +1423,8 @@ def _rule4_missing_cadence(path: Path, relpath: str, report: FileSpawnReport) ->
         # the red gate, because the red is at least honest. The per-function form
         # is therefore available ONLY when every spawning function is itself a
         # collectible `test_*`; one non-test spawner sends the whole file to the
-        # module-level form. `session/tests/test_ensure_meta.py` is the live case:
+        # module-level form. `session/tests/test_ensure_meta.py` was the live case
+        # (deleted 2026-08-26 with `ensure_meta`):
         # its spawners are `_init_repo` and the `repo` FIXTURE, and no test
         # function reaches them statically, because pytest INJECTS a fixture
         # rather than calling it and this collector resolves calls only.
@@ -2233,7 +2235,8 @@ def test_rule4_per_function_form_is_refused_when_a_spawner_is_not_collectible(
     take effect there. That accepted inert markers and reported the file
     TIERED while nothing was -- a false pass, strictly worse than the red it
     replaced, because red is at least honest. The live case is
-    `coordinator_core/session/tests/test_ensure_meta.py`, whose spawners are
+    the since-deleted `coordinator_core/session/tests/test_ensure_meta.py`,
+    whose spawners were
     `_init_repo` and the `repo` fixture with NO test function reaching them
     statically (pytest injects a fixture rather than calling it, and this
     collector resolves calls only)."""
@@ -2369,7 +2372,8 @@ def test_class_level_marker_does_not_rescue_a_fixture_mediated_spawn(
     silently regress this pin.
 
     NEGATIVE SPEC: this specimen is synthetic on purpose. It was previously
-    pinned against the live `coordinator_core/session/tests/test_ensure_meta.py`,
+    pinned against the then-live `coordinator_core/session/tests/test_ensure_meta.py`
+    (deleted 2026-08-26),
     which required that in-repo file to stay a standing Rule 4 violation
     forever -- the corpus rule demanded a fix the pin forbade. A shape this
     rule is ABOUT is never pinned to a file the same suite also polices.

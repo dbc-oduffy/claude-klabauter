@@ -21,7 +21,7 @@ self-held ledger claim with an empty/reverted mirror must still satisfy
 `d2` — the branch-switch-revert desync fix this module's docstring credits
 must not regress.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_pickup_claim_stage_stamp_evidence.py -q
 """
 from __future__ import annotations

@@ -800,6 +800,11 @@ def claim_artifact(
     claim_dir = claims_dir / basename
 
     try:
+        # Judged, not overlooked: ``<class>-claims/`` is a claim namespace
+        # under the hub, not a session dir — the session-id-named thing here
+        # is the ``session_id`` FILE inside the claim dir, and the caller's
+        # own session directory is constructed by whoever serves that session
+        # (core.ensure_session), never by the claim primitive.
         claims_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass  # mkdir -p ... 2>/dev/null || true
@@ -1292,6 +1297,8 @@ def relocate_artifact_claim(
         return False
 
     try:
+        # Judged, not overlooked: the claim namespace, not a session dir (see
+        # ``claim_artifact``'s own note on this same mkdir).
         claims_dir.mkdir(parents=True, exist_ok=True)
         os.replace(old_claim_dir, new_claim_dir)
     except OSError as exc:

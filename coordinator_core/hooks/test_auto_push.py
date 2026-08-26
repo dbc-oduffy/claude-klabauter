@@ -128,6 +128,12 @@ CLASSIFY_CASES = [
         "error: src refspec work/machine-a/2026-08-10 does not match any\n"
         "error: failed to push some refs to 'https://github.com/org/repo.git'\n",
     ),
+    # Same class, the branch-shaped-refspec wording -- observed verbatim on
+    # 2026-08-26 when a `work/*` branch was renamed while a push was in flight.
+    (
+        "dead-ref",
+        "fatal: refs/heads/work/machine-b/2026-08-22 cannot be resolved to branch\n",
+    ),
     (
         "gh-transient",
         "error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502\n"

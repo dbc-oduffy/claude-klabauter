@@ -162,6 +162,9 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.bash_guards._override_log_path import (
+    session_audit_log_dir,
+)
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
@@ -293,8 +296,19 @@ def _write_block_log(
     if not session_id or not git_root:
         return
     try:
-        log_dir = Path(git_root) / ".git" / "coordinator-sessions" / session_id
-        log_dir.mkdir(parents=True, exist_ok=True)
+        # A DENY audit line is not a session and must never mint one: this
+        # used to `mkdir(parents=True, exist_ok=True)` `<hub>/<session_id>`,
+        # and `liveness.live_session_ids` enumerates every non-denylisted
+        # child of that hub as a SESSION -- so an audit write manufactured a
+        # phantom, record-less session that claim attribution and scope
+        # computation both read. `session/core.py::ensure_session` is the
+        # ONE constructor. The line is not dropped (it has security content,
+        # unlike `guard_doctrine_surface_edits`'s advisory log): an unknown
+        # session's line lands in the denylisted `no-session` bucket.
+        resolved = session_audit_log_dir(git_root, session_id)
+        if resolved is None:
+            return
+        log_dir = Path(resolved)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(log_dir / "archive-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")

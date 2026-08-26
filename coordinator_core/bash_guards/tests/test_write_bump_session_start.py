@@ -491,3 +491,61 @@ def test_settings_home_still_accepts_a_plain_short_session_id(tmp_path):
     assert session_start.read_session_start_record("abc", cwd=str(root)) == str(root)
     assert session_start.delete_settings_home_session_record("abc") is True
     assert not record.exists()
+
+
+# ---------------------------------------------------------------------------
+# The SessionStart anchor is a session-directory CONSTRUCTOR, and must never
+# leave a half-initialised one (K-006 F0 / no_meta_json)
+# ---------------------------------------------------------------------------
+
+
+def test_write_leaves_no_session_dir_without_meta_json(tmp_path, monkeypatch):
+    """The anchor write is the FIRST thing to reach the per-session hub in a
+    session's life, and `session/core.py::init` has had no SessionStart caller
+    since `session-init.py` was deleted (2026-07-15 hook kill). Before this was
+    routed through `init`, a bare `mkdir` here minted a directory carrying
+    `write_bump_launch_cwd` and nothing else -- no `stable_pid` (K-006's F0
+    hazard), no `started_at`/`head_at_start`, and every later
+    `update_meta_field` write silently no-opping. Measured live on this box
+    2026-08-26: three peer sessions in exactly that shape.
+
+    Fails against the bare-`mkdir` shape: the record is written, so the assert
+    on the anchor still passes, but `meta.json` is absent.
+    """
+    root = _init_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    assert session_start.write_session_start_record("sid-init-constructor") is True
+
+    sdir = root / ".git" / "coordinator-sessions" / "sid-init-constructor"
+    assert (sdir / session_start._RECORD_FILENAME).is_file()
+    assert (sdir / "meta.json").is_file(), (
+        "the anchor minted a session directory with no meta.json -- "
+        "the no_meta_json shape K-006's watch counts"
+    )
+
+
+def test_write_declines_to_mint_a_dir_when_init_cannot_write_the_record(
+    tmp_path, monkeypatch
+):
+    """Fail-open direction: when `init` cannot leave a `meta.json`, the in-repo
+    leg writes NOTHING rather than minting the record-less directory. The
+    settings-home twin -- which `read_session_start_record` consults FIRST -- is
+    unaffected, so the anchor still resolves.
+    """
+    root = _init_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    monkeypatch.setattr(
+        session_start,
+        "_session_init",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("read-only hub")),
+    )
+
+    assert session_start.write_session_start_record("sid-init-fails") is False
+
+    sdir = root / ".git" / "coordinator-sessions" / "sid-init-fails"
+    assert not (sdir / session_start._RECORD_FILENAME).exists()
+    assert not (sdir / "meta.json").exists()
+    # The settings-home leg is independent and still carries the anchor.
+    assert session_start.read_session_start_record("sid-init-fails") == str(root)

@@ -21,7 +21,7 @@ Coverage:
     denied — the check keys on containment under `root`, never on the
     string "cross-repo" appearing in a path
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_cross_repo_pickup_denied.py -q
 """
 

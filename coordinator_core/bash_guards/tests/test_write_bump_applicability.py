@@ -545,8 +545,26 @@ def test_ac12_cd_does_not_change_which_registry_target_is_seen_as_registered(tmp
 # ---------------------------------------------------------------------------
 
 
+def _make_session(root, sid: str):
+    """Create the session the log line is about, through the one constructor.
+
+    These tests used to log against a session id no directory existed for, and
+    the writer's own `mkdir` minted one -- which is the phantom-session defect
+    `session/core.py::ensure_session` closed (a record-less child of the hub is
+    enumerated as a SESSION by `liveness.live_session_ids`). The AC these tests
+    pin is "one appended line per applies event", not "the log writer may mint
+    a session", so the fixture now creates a real session and the fallback gets
+    its own test below.
+    """
+    from coordinator_core.session import core as _core
+
+    _core.reset_sessions_dir_cache()
+    return _core.ensure_session(sid, str(root))
+
+
 def test_ac18_record_applicability_event_appends_a_line(tmp_path):
     root = _init_repo(tmp_path)
+    _make_session(root, "sess-log-1")
 
     applicability.record_applicability_event(
         "sess-log-1", repo="my-repo", target="/some/target", agent_class="em", cwd=str(root)
@@ -563,6 +581,7 @@ def test_ac18_record_applicability_event_appends_a_line(tmp_path):
 
 def test_ac18_record_applicability_event_appends_not_overwrites(tmp_path):
     root = _init_repo(tmp_path)
+    _make_session(root, "sess-log-2")
 
     applicability.record_applicability_event(
         "sess-log-2", repo="repo-a", target="t1", agent_class="em", cwd=str(root)
@@ -576,6 +595,25 @@ def test_ac18_record_applicability_event_appends_not_overwrites(tmp_path):
     assert len(lines) == 2
     assert "repo=repo-a" in lines[0]
     assert "repo=repo-b" in lines[1]
+
+
+def test_ac18_record_applicability_event_never_mints_a_session(tmp_path):
+    """The writer is a diagnostic, not a constructor. A line about a session
+    with no directory lands in the denylisted `no-session` bucket
+    (`liveness._NON_SESSION_DIR_NAMES`) -- preserved, because a dropped
+    applicability line is a bookkeeping loss, but never as a phantom session.
+    The `session=` field in the line itself is what identifies it there."""
+    root = _init_repo(tmp_path)
+    hub = root / ".git" / "coordinator-sessions"
+
+    applicability.record_applicability_event(
+        "sess-never-born", repo="r", target="t", agent_class="em", cwd=str(root)
+    )
+
+    assert not (hub / "sess-never-born").exists()
+    bucket_log = hub / "no-session" / "write_bump_applicability_log"
+    assert bucket_log.is_file()
+    assert "session=sess-never-born" in bucket_log.read_text(encoding="utf-8")
 
 
 def test_ac18_record_applicability_event_never_raises_when_not_in_a_git_repo(tmp_path):

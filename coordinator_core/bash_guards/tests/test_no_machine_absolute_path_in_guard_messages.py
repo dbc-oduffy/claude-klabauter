@@ -141,11 +141,30 @@ NO exception, same as any other guard message:
      agent (e.g. "you tried to write <path>") is doing its job, not
      leaking a doc/root pointer -- so any absolute-path match that is
      either (a) a literal substring of the `CorpusRow.input` text actually
-     fired, or (b) rooted under `tempfile.gettempdir()` (this process's
-     own temp root, covering setup-synthesized scratch paths `row.input`
-     never mentions) is exempted. This is the SAME class as exemption 1,
-     generalized to the corpus's own fixtures rather than one specific
-     literal.
+     fired, or (b) rooted under one of the corpus's FIXTURE SCRATCH ROOTS
+     (covering setup-synthesized scratch paths `row.input` never mentions)
+     is exempted. This is the SAME class as exemption 1, generalized to the
+     corpus's own fixtures rather than one specific literal.
+
+     The fixture roots are identified BY IDENTITY, via the corpus's own
+     `is_fixture_scratch_path`/`FIXTURE_SCRATCH_ROOTS` (its mint root plus
+     this process's `tempfile.gettempdir()`) -- never by "looks like a
+     scratch dir".
+     That distinction is the whole correctness of this exemption, and it is
+     also where this leg broke: the exemption originally keyed on
+     `gettempdir()` alone because that is where the corpus minted, and
+     `d1cf0b986` moved the mint root OUT to a repo sibling (to stop
+     `guard_inprocess_search`'s footer latch writing phantom session dirs
+     into the live `.git/coordinator-sessions/` hub). The CLASS of path did
+     not change -- a fixture-minted tempdir a guard correctly names back --
+     only the root's address did, so the exemption stopped recognizing its
+     own fixtures and reported 15 spans across 13 guards as leaks. Reading
+     the root from the corpus rather than restating a location is what keeps
+     the next relocation from re-reddening this suite. Deliberately NOT a
+     `coordinator-guard-corpus-scratch`-in-the-path substring test: that
+     would exempt any message text merely mentioning such a segment,
+     including one a guard hardcoded, which is the leak class this module
+     exists for.
   3. ``write-guard-corpus-content-literal`` -- two `WRITE_GUARD_ROWS`
      fixtures (`guard_message_corpus._wg_concrete_path_citations_fire`,
      `_wg_settings_json_write_fire`) deliberately write FILE CONTENT
@@ -184,7 +203,6 @@ it' half" (companion to the peer executor's per-site `_helpers.py` fix).
 from __future__ import annotations
 
 import re
-import tempfile
 from typing import Any, Dict, List, Tuple
 
 from coordinator_core.bash_guards._helpers import (
@@ -200,6 +218,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_hook_row,
     fire_row,
     fire_write_guard_row,
+    is_fixture_scratch_path,
 )
 from coordinator_core.session.guard_unlock_sentinel import annotate_deny
 from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
@@ -208,6 +227,7 @@ from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
 from coordinator_core.ops.check_posix_exec_assumptions import (
     _CROSS_PATH_PATTERNS as _TIER_D_CROSS_PATH_PATTERNS,
 )
+from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE
 from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
 
 # ---------------------------------------------------------------------------
@@ -251,6 +271,22 @@ _ABS_PATH_PATTERNS: Tuple[re.Pattern, ...] = tuple(
     # differently for its own purposes.
     re.compile(r"/var/[^\s\"'`]+"),
     re.compile(r"/tmp/[^\s\"'`]+"),
+    # The Windows half of this module's stated predicate, which was ABSENT
+    # while the docstring claimed it twice ("drive-letter, and UNC forms";
+    # "Matches ... Windows (`C:\...`, `C:/...`, UNC `\\server\share\...`)
+    # forms unconditionally"). `_TIER_D_CROSS_PATH_PATTERNS` carries exactly
+    # two patterns at HEAD -- `^/Users/<x>/` and `^/home/<x>/` -- so a
+    # Windows-shaped leak in a rendered guard message passed this suite in
+    # silence, on every host, which is the precise failure mode the module
+    # exists to make impossible. Sourced from `_path_shape_regexes.
+    # WIN_DRIVE_RE` (the same SSOT `guard_foreign_platform_paths` and
+    # `guard_concrete_path_citations` read) rather than a fourth hand-rolled
+    # drive-letter regex: its lookbehind is what keeps `https://` from
+    # matching as drive `s:`, and a copy here would drift off that fix.
+    # Measured before landing: adds zero findings to the current corpus, so
+    # it closes a hole rather than widening a red.
+    re.compile(WIN_DRIVE_RE.pattern + r"[^\s\"'`]*"),
+    re.compile(r"\\\\[A-Za-z0-9_.-]+\\[^\s\"'`]+"),
 )
 
 
@@ -267,7 +303,11 @@ def _find_absolute_paths(text: str) -> List[str]:
 # Exemption mechanism -- see module docstring's numbered list.
 # ---------------------------------------------------------------------------
 
-_TEMP_ROOT = tempfile.gettempdir()
+#: Exemption 2's fixture-root leg -- see module docstring. Deliberately not
+#: defined here: `FIXTURE_SCRATCH_ROOTS` is declared next to the constant the
+#: corpus actually MINTS under, so relocating the mint root carries this
+#: exemption with it instead of leaving it keyed on a location this module
+#: restated. That desync is the whole defect this leg was fixed for.
 
 #: Exemption 5 -- exact literals only, see module docstring. Sourced from
 #: `guard_message_corpus.py`'s own `_wg_concrete_path_citations_fire`/
@@ -316,11 +356,11 @@ def _is_exempt(
     if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
     # 2. Corpus-fixture echo -- either literally present in the fired
-    #    input text, or rooted under this process's own temp directory
+    #    input text, or rooted under one of the corpus's own mint roots
     #    (covers setup-synthesized scratch repos `row_input` never names).
     if row_input and _contains_normalized(row_input, span):
         return True
-    if span.startswith(_TEMP_ROOT):
+    if is_fixture_scratch_path(span):
         return True
     # 3. Write-guard corpus content literals -- see module docstring item 3.
     for literal in _WRITE_GUARD_CORPUS_CONTENT_LITERALS:

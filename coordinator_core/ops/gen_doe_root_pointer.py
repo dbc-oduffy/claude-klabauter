@@ -75,8 +75,10 @@ _PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the Do
 #: Operator kill switch for real-machine-state mutation. Spelled here rather than
 #: imported from `install.substrate` (its definition site) on purpose: this module
 #: is on the install hot path and importing `substrate` for one string would drag
-#: its whole import cost in. `test_gen_doe_root_pointer.py` pins the two spellings
-#: equal, so the duplication cannot drift silently.
+#: its whole import cost in — measured with `python3 -X importtime` on 2026-08-26:
+#: this module 14.97ms cumulative, `install.substrate` 24.94ms, so the import would
+#: cost more than the module it is added to. `test_gen_doe_root_pointer.py` pins the
+#: two spellings equal, so the duplication cannot drift silently.
 _MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 
 #: Opt back IN to writing the operator's live pointer from under pytest.
@@ -236,25 +238,38 @@ def _seed_plugin_mirror_source_path(doe_root: str) -> None:
 def _refuse_live_pointer_write(pointer_file: str) -> Optional[str]:
     """Return a reason to refuse writing ``pointer_file``, or None to proceed.
 
-    A target UNDER the OS temp dir is always allowed: that is the sandbox-
-    redirected shape, and refusing it would break every legitimate tmp-scoped
-    test of this writer. Both refusal triggers therefore apply only OUTSIDE it —
-    `install.substrate._refuse_machine_mutation`'s ``check_temp_path`` reasoning,
-    which this mirrors. That heuristic is sound here because the target is not
-    caller-supplied: ``_pointer_file()`` derives it from ``machine_local_dir()``,
-    and a real install's settings-home never lives under the OS temp dir.
+    Resolution order, and it matters:
 
-    Outside the temp dir, either trigger refuses:
+    0. ``COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE=1`` — the named opt-in, first.
 
-    1. Running under pytest. No test has any business writing the operator's
-       real pointer. This does not depend on the quarantine fixture having run,
-       which is the point: that fixture returns EARLY for
-       ``@pytest.mark.real_home`` — before it sets the kill switch below — so a
+    1. UNDER PYTEST with a temp-rooted target — allowed. This is the sandbox-
+       redirected shape and it must keep working: the suite-root quarantine sets
+       the kill switch below for every test, so honouring that switch here
+       unconditionally refuses ~18 legitimate tmp-scoped tests of this writer.
+       The exemption is scoped to pytest DELIBERATELY (see the divergence note).
+
+    2. ``COORDINATOR_DISABLE_MACHINE_MUTATION=1`` — the operator-facing switch.
+       Now reached regardless of the target path for any non-pytest caller, which
+       is what ``install.substrate``'s module docstring promises of this switch
+       ("regardless of the path involved").
+
+    3. UNDER PYTEST with a target outside the temp dir — refused. No test has
+       business writing the operator's real pointer. This does not depend on the
+       quarantine fixture having run, which is the point: that fixture returns
+       EARLY for ``@pytest.mark.real_home`` — before it sets the switch — so a
        marked test gets the real home AND no switch, though the marker is
        documented as being for read-only oracles.
 
-    2. ``COORDINATOR_DISABLE_MACHINE_MUTATION=1`` — the operator-facing switch,
-       honoured here as it already is across ``install.substrate``.
+    DIVERGENCE FROM ``substrate._refuse_machine_mutation``, stated because an
+    earlier version of this docstring claimed to mirror it and did not: substrate
+    checks the kill switch FIRST, unconditionally, and only then considers the
+    temp path. Here the temp-rooted PYTEST case is exempted ahead of the switch,
+    because substrate's guarded call sites are mutations the sandbox CANNOT
+    redirect (a Windows registry write, an AppX delete) whereas this one it CAN —
+    ``_pointer_file()`` follows ``COORDINATOR_SETTINGS_HOME``/``HOME``, so a
+    sandboxed test genuinely writes inside its own tmpdir. Scoping the exemption
+    to pytest keeps the switch unconditional for every real caller, which is the
+    half of substrate's contract that actually protects an operator.
 
     Escape hatch for a test that genuinely must write the live pointer:
     ``COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE=1``. Deliberately its own key rather
@@ -270,19 +285,23 @@ def _refuse_live_pointer_write(pointer_file: str) -> Optional[str]:
     if os.environ.get(_LIVE_WRITE_ALLOW_ENV) == "1":
         return None
 
+    under_pytest = bool(os.environ.get("PYTEST_CURRENT_TEST"))
     tmp_root = os.path.realpath(tempfile.gettempdir())
     target = os.path.realpath(os.path.dirname(pointer_file) or ".")
-    if target == tmp_root or target.startswith(tmp_root + os.sep):
+    temp_rooted = target == tmp_root or target.startswith(tmp_root + os.sep)
+
+    if under_pytest and temp_rooted:
         return None
 
-    if os.environ.get("PYTEST_CURRENT_TEST"):
+    if os.environ.get(_MUTATION_DISABLE_ENV) == "1":
+        return f"{_MUTATION_DISABLE_ENV}=1"
+
+    if under_pytest:
         return (
             "running under pytest and the target is outside the OS temp dir "
             f"({target!r}) -- set {_LIVE_WRITE_ALLOW_ENV}=1 if this write is "
             "genuinely intended"
         )
-    if os.environ.get(_MUTATION_DISABLE_ENV) == "1":
-        return f"{_MUTATION_DISABLE_ENV}=1"
     return None
 
 
@@ -431,6 +450,18 @@ def main(argv: List[str]) -> int:
     refusal = _refuse_live_pointer_write(pointer_file)
     if refusal:
         print(f"{_PROG}: refusing to write {pointer_file}: {refusal}", file=sys.stderr)
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            # A REAL install reaching this is nearly always an accident — an
+            # ambient COORDINATOR_DISABLE_MACHINE_MUTATION left exported by a
+            # prior debug session or a wrapping harness. `run_required_py` treats
+            # rc 0 as success, so a one-line stderr note inside a "required"
+            # phase is exactly the thing an operator scrolls past. Say it loudly
+            # on STDOUT, where the Phase-7 status table is read.
+            print(
+                f"{_PROG}: WARNING — the .doe-root pointer was NOT written. "
+                f"Unset {_MUTATION_DISABLE_ENV} and re-run if that was not "
+                "deliberate."
+            )
         print("doe_root_pointer: refused (machine mutation disabled)")
         return 0
 

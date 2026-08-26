@@ -269,21 +269,98 @@ def test_front_insert_on_path_body_was_not_modified():
 def test_unimported_hot_path_makes_no_filesystem_call_via_the_wrapper_reporting_seam(
     monkeypatch, tmp_path, clean_sys_path, clean_sys_modules_coordinator_core
 ):
+    # Review: code-reviewer P1 (slice f80de67e1) — an `AssertionError` raised
+    # from inside a monkeypatched `Path.resolve` would be swallowed by
+    # `_report_provenance`'s own outer `except Exception` (a broad catch
+    # required by hard constraint 3), so a trap that RAISES from inside that
+    # function's body can never surface a regression. Count calls instead —
+    # a return value the `except Exception` cannot intercept.
     sys.modules.pop("coordinator_core", None)
 
-    def _forbidden_resolve(self):
-        raise AssertionError(
-            "provenance_against must short-circuit on sys.modules.get before "
-            "ever touching the filesystem via Path.resolve()"
-        )
+    calls = []
+    real_resolve = Path.resolve
 
-    monkeypatch.setattr(Path, "resolve", _forbidden_resolve)
+    def _counting_resolve(self, *args, **kwargs):
+        calls.append(self)
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _counting_resolve)
     root = tmp_path / "root-unimported"
     monkeypatch.setattr(_mod, "resolve_engine_root", lambda script_file: str(root))
 
     returned = _mod.ensure_engine_on_path("irrelevant.py")
 
     assert str(returned) == str(root)
+    assert calls == [], (
+        "provenance_against must short-circuit on sys.modules.get before "
+        f"ever touching the filesystem via Path.resolve() — got {calls!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hard constraint 2 AT WRAPPER SCOPE — asking must never import the engine.
+#
+# AC2 exercises `provenance_against` directly, and it passes even when a
+# wrapper imports `coordinator_core` on the way to the sink: the sink lives
+# under `coordinator_core`, and `_report_provenance`'s outer `except
+# Exception` swallows anything a probe raises from inside it, so neither AC2
+# nor AC9's `Path.resolve` trap can see the import. This is the seam's own
+# failure mode turned on itself — the detector binding the package it exists
+# to observe, and every later call in the process then measuring a binding
+# the detector caused. Asserted here on `sys.modules` directly, which no
+# `except` can hide.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "wrapper_name",
+    [
+        "ensure_engine_on_path",
+        "require_engine_on_path",
+        "require_colocated_engine_on_path",
+    ],
+)
+def test_wrapper_does_not_import_the_engine_when_it_was_not_already_imported(
+    wrapper_name, monkeypatch, tmp_path, clean_sys_path, clean_sys_modules_coordinator_core
+):
+    sys.modules.pop("coordinator_core", None)
+    root = tmp_path / f"unimported-{wrapper_name}"
+    root.mkdir()
+    monkeypatch.setattr(_mod, "resolve_engine_root", lambda script_file: str(root))
+    monkeypatch.setattr(_mod, "resolve_colocated_claude_klabauter_root", lambda script_file: str(root))
+
+    getattr(_mod, wrapper_name)("irrelevant.py")
+
+    assert "coordinator_core" not in sys.modules, (
+        f"{wrapper_name} imported coordinator_core as a side effect of asking "
+        "where coordinator_core came from (hard constraint 2). The sink lives "
+        "under coordinator_core, so the report call must return on an "
+        "`unimported` verdict BEFORE importing it."
+    )
+
+
+def test_seam_present_reporting_binds_no_engine_beyond_its_own_probe(
+    monkeypatch, tmp_path, clean_sys_path, clean_sys_modules_coordinator_core
+):
+    sys.modules.pop("coordinator_core", None)
+    root = tmp_path / "seam-present-unimported"
+    root.mkdir()
+
+    # `_seam_present`'s `find_spec` probe is documented to leave
+    # `coordinator_core` in `sys.modules` when it resolves one — that is the
+    # sanctioned asymmetry, not this test's subject. Subject: a root the probe
+    # CANNOT resolve must leave the engine unbound, so the reporting call
+    # added beside it is not quietly binding what the probe declined to.
+    monkeypatch.setattr(
+        _mod.importlib.util, "find_spec", lambda name: None
+    )
+
+    _mod._seam_present(str(root))
+
+    assert "coordinator_core" not in sys.modules, (
+        "_seam_present's reporting call imported coordinator_core even though "
+        "its own probe resolved nothing (hard constraint 2)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -334,14 +411,23 @@ def test_seam_present_survives_a_raising_provenance_against(
 ):
     root = tmp_path / "seam-present-survives"
     root.mkdir()
-    monkeypatch.setattr(_mod, "provenance_against", _raising_provenance_against)
 
+    # Hard constraint 6: the probe's own answer is NOT asserted against a
+    # literal. `find_spec("coordinator_core.invoke")` can reach an ambient
+    # `coordinator_core` (an editable install, or a repo root pytest put on
+    # `sys.path[0]`) regardless of the empty root injected here, so a
+    # hard-coded `False` pins this box's install layout rather than the
+    # property under test. The property IS invariance: whatever the probe
+    # answers, a raising reporting call must not change it and must not
+    # propagate. Baseline first, with reporting intact, then re-probe.
+    baseline = _mod._seam_present(str(root))
+
+    monkeypatch.setattr(_mod, "provenance_against", _raising_provenance_against)
     result = _mod._seam_present(str(root))
 
-    assert result is False, (
+    assert result == baseline, (
         "_seam_present must still return its own find_spec-derived answer "
-        "unchanged even when the reporting call raises (this root has no "
-        "coordinator_core.invoke on it, so False is the correct probe answer)"
+        "unchanged even when the reporting call raises"
     )
 
 
@@ -430,6 +516,53 @@ def test_a_sys_modules_state_left_by_seam_present_is_not_restored(
         "_seam_present's own return — sys.modules is deliberately not "
         "restored, only sys.path is (see _seam_present's own docstring)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer P1 — `_report_provenance` must pass a real `cwd` to
+# the sink, or `resolve_git_root_cheap(None)`'s `if not cwd: return None`
+# guard fires unconditionally and the counter silently never writes. A test
+# that only mocks the sink and asserts it was called would NOT catch this —
+# the defect is that the REAL sink no-ops. This exercises the real sink
+# against a real git checkout on disk and asserts a record actually landed.
+# ---------------------------------------------------------------------------
+
+
+def test_report_provenance_actually_writes_a_record_through_the_real_sink(
+    monkeypatch, tmp_path, clean_sys_path
+):
+    import json
+
+    fake_repo = tmp_path / "fake-repo-for-real-sink"
+    fake_repo.mkdir()
+    # resolve_git_root_cheap only does os.path.exists(cwd/".git") — a plain
+    # marker file reproduces the same walk without spawning real git.
+    (fake_repo / ".git").mkdir()
+
+    monkeypatch.chdir(fake_repo)
+    monkeypatch.setattr(
+        _mod,
+        "provenance_against",
+        lambda *, root: _mod.EngineProvenance(_mod.PROVENANCE_MATCH, "/x/y.py", root),
+    )
+
+    report = _mod._report_provenance("ensure_engine_on_path", str(fake_repo), "locator")
+
+    assert report.verdict == _mod.PROVENANCE_MATCH
+
+    counts_file = fake_repo / "state" / "engine-provenance-counts.jsonl"
+    assert counts_file.is_file(), (
+        "record_engine_provenance must have written a real record to "
+        "state/engine-provenance-counts.jsonl under the resolved git root — "
+        "if this file does not exist, _report_provenance failed to pass a "
+        "resolvable cwd to the sink and the write silently no-opped"
+    )
+    lines = counts_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["caller"] == "ensure_engine_on_path"
+    assert record["axis"] == "locator"
+    assert record["verdict"] == _mod.PROVENANCE_MATCH
 
 
 def test_publish_time_rename_transform_call_site_still_exists():

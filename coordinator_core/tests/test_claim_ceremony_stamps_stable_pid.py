@@ -7,24 +7,24 @@ cannot silently regress.
 The PM's chosen shape — `cs_claim_handoff` stamps `stable_pid` alongside the
 `claimed_at` it already writes — is a SIDE EFFECT of
 `_record_session_goal_best_effort` calling
-`coordinator_core.session.core.ensure_meta`, itself wrapped in a bare
+`coordinator_core.session.core.ensure_session`, itself wrapped in a bare
 `except Exception`. Nothing states that liveness depends on it, and nothing
 fails if a future edit narrows `_record_session_goal_best_effort` to call
-`update_meta_field` directly instead of `ensure_meta` — this module is that
+`update_meta_field` directly instead of `ensure_session` — this module is that
 statement, made executable.
 
 Two distinct regressions are pinned:
-  1. `ensure_meta`, not a plain `update_meta_field`, is the call the ceremony
+  1. `ensure_session`, not a plain `update_meta_field`, is the call the ceremony
      relies on for a FRESH session (no meta.json yet) — `update_meta_field`
      no-ops on an absent file by contract, so a swap silently drops the
      stamp with no error anywhere.
   2. The repair gap this chunk's brief calls out: a session whose init() ran
      but whose Guard-1 missed (psutil absent, or a partial write) leaves an
      EXISTING meta.json with an empty `stable_pid`. Both other writers on
-     this path (`ensure_meta`'s own former early return, `session/scope.py`
+     this path (`ensure_session`'s own former early return, `session/scope.py`
      `cs_touch`) gate re-stamping on meta.json PRESENCE, not on the stamp
      itself, so that session was PERMANENTLY unstamped before this chunk's
-     `ensure_meta` re-stamp arm. This module also exercises that repair path
+     `ensure_session` re-stamp arm. This module also exercises that repair path
      directly.
 
 Negative-spec: does NOT cover `session/stable_pid_watch.py`'s AC8 branch
@@ -141,7 +141,7 @@ def _force_stable_pid_capture(monkeypatch):
 def test_claim_handoff_stamps_stable_pid_on_fresh_session(tmp_path, monkeypatch, _force_stable_pid_capture):
     """Claiming a handoff in a repo with NO prior session record must leave
     a `meta.json` carrying a non-empty `stable_pid`. Fails if
-    `_record_session_goal_best_effort`'s `ensure_meta` call is replaced with
+    `_record_session_goal_best_effort`'s `ensure_session` call is replaced with
     a plain `update_meta_field` — that call no-ops on the absent file this
     fresh-session path starts from, so `meta.json` would never even be
     created, let alone stamped."""
@@ -155,7 +155,7 @@ def test_claim_handoff_stamps_stable_pid_on_fresh_session(tmp_path, monkeypatch,
 
     sdir = Path(session_core.session_dir(sid, cwd=str(repo)))
     meta_path = sdir / "meta.json"
-    assert meta_path.is_file(), "claim must create meta.json (ensure_meta, not a no-op update_meta_field)"
+    assert meta_path.is_file(), "claim must create meta.json (ensure_session, not a no-op update_meta_field)"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta.get("stable_pid"), "claim must stamp a non-empty stable_pid"
 
@@ -166,7 +166,7 @@ def test_claim_handoff_repairs_preexisting_unstamped_meta(tmp_path, monkeypatch,
     psutil absent, or a partial write) but carries an EMPTY stable_pid must
     be RE-STAMPED by a subsequent claim, not left permanently unstamped.
 
-    Before this chunk's `ensure_meta` re-stamp arm, the early `is_file()`
+    Before this chunk's `ensure_session` re-stamp arm, the early `is_file()`
     return skipped `init()` entirely whenever a record already existed —
     this pins that the claim ceremony now repairs, rather than perpetuates,
     that state."""

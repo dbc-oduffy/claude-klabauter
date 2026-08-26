@@ -129,15 +129,18 @@ def test_residual_report_names_both_numbers_when_they_diverge(capsys):
     assert "1872 change(s) the real run reported were NOT committed" in warning
 
 
-def test_residual_warning_names_the_gated_off_removal_side(capsys):
-    """`_REMOVAL_SIDE_ENABLED` being off is a KNOWN LIMITATION with a
-    visible consequence (a stale mirror that never converges) — an operator
-    must read it as that, not as a successful publish.
-    """
-    assert _mod._REMOVAL_SIDE_ENABLED is False, (
-        "this test pins the message shown WHILE the removal side is gated "
-        "off; re-point it at the post-AC1b behaviour when the gate opens"
-    )
+def test_residual_warning_still_counts_removals_with_the_gate_open(capsys):
+    """Re-pointed at the post-flip behaviour, as its predecessor instructed
+    (`_REMOVAL_SIDE_ENABLED` is now True, PM 2026-08-26).
+
+    The gate-note branch is correctly silent — the flag is no longer why a
+    removal went uncarried — but the DIVERGENCE itself must still be counted
+    and named. That is the whole point of the DoE-claude memo this reporting
+    exists to answer: a round that drops changes and prints a bare PASS. With
+    the gate open a dropped removal means something else (Leg A's on-disk
+    skip, or one of `_filter_commit_pathspec`'s three safety filters), and an
+    operator needs it surfaced just as loudly."""
+    assert _mod._REMOVAL_SIDE_ENABLED is True
     real_changes = [("NEW", "kept.py")] + [
         ("REMOVE", f"whoami/f{i}.py") for i in range(23)
     ]
@@ -146,9 +149,10 @@ def test_residual_warning_names_the_gated_off_removal_side(capsys):
     warning = _mod._report_commit_residual("coordinator-claude", real_changes, pathspec)
 
     assert warning is not None
-    assert "23 of them removal(s)" in warning
-    assert "_REMOVAL_SIDE_ENABLED" in warning
-    assert "_REMOVAL_SIDE_ENABLED" in capsys.readouterr().err
+    assert "23 change(s) the real run reported were NOT committed" in warning
+    # The flag is no longer the explanation, so it must not be blamed.
+    assert "_REMOVAL_SIDE_ENABLED" not in warning
+    assert "intent vs commit pathspec diverge" in capsys.readouterr().err
 
 
 def test_carried_partition_is_by_path_not_by_count():

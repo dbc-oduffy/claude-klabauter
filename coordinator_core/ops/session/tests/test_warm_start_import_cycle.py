@@ -29,10 +29,17 @@ cycle), matching this chunk's brief example verbatim.
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+#: The subprocess must run with the repo root as cwd so the bare
+#: `coordinator_core` package resolves without an installed distribution.
+#: Derived from this file's own location -- a literal root is one machine's
+#: and fails everywhere else.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _run(code: str) -> subprocess.CompletedProcess:
@@ -40,7 +47,7 @@ def _run(code: str) -> subprocess.CompletedProcess:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        cwd="X:/claude-klabauter",
+        cwd=str(_REPO_ROOT),
     )
 
 

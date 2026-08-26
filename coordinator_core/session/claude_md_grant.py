@@ -242,12 +242,15 @@ def write_claude_md_write_grant(
     if not sid:
         return False
 
-    sdir = core.session_dir(sid, cwd)
-    if not sdir:
-        return False
-    try:
-        Path(sdir).mkdir(parents=True, exist_ok=True)
-    except OSError:
+    # `ensure_session`, never `session_dir` + `mkdir`: this writer is about to
+    # put a grant record in a session directory it did not initialize, and a
+    # bare mkdir here mints a record-less session dir (see that function's
+    # docstring for what a session with no `meta.json` costs every peer).
+    # Fail-closed on `isdir` because "or neither" is observable there --
+    # `ensure_session` returns the resolved path even when the create failed,
+    # so this function's existing False return stays reachable.
+    sdir = core.ensure_session(sid, cwd)
+    if not sdir or not os.path.isdir(sdir):
         return False
 
     record = {

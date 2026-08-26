@@ -565,6 +565,14 @@ def append_event(
         session_id=session_id, agent_id=agent_id, verb=verb, path=path, timestamp=timestamp
     )
     sink_path = Path(sink)
+    # Judged, not overlooked: ``sink`` is caller-supplied and serves BOTH
+    # session-keyed and agent-keyed sinks, so this parent is not knowably a
+    # session dir and ``session_id`` here is a record FIELD, not the
+    # directory's identity — routing this through core.ensure_session would
+    # mint a session record for an agent dir. Every caller that does hand a
+    # session-keyed sink owns the construction itself
+    # (``scope.touch``/``hooks.track_touched_files`` call ensure_session;
+    # ``claims.self_claim`` deliberately skips on an absent session dir).
     sink_path.parent.mkdir(parents=True, exist_ok=True)
     _maybe_rotate(sink_path)
     atomic_append.append_line(sink_path, encoded)

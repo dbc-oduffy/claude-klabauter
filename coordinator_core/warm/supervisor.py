@@ -94,6 +94,7 @@ from coordinator_core.warm.http_listener import _collect_response, _frame_from_r
 from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
 
 __all__ = [
+    "record_is_skewed",
     "DISCOVERY_FILENAME",
     "HEALTH_PATH",
     "HOOK_PATH",
@@ -462,6 +463,41 @@ def supervisor_pipe_name(
     root = engine_root if engine_root is not None else _default_engine_clone()
     token = skew.compute_client_token(root)
     return election.pipe_name(f"http.{token}", engine_clone=root, user_sid=user_sid)
+
+
+def record_is_skewed(record: dict, root: Path) -> bool:
+    """PUBLIC alias of `_record_is_skewed`, for a caller that reads discovery
+    DIRECTLY rather than through `ensure_listener`.
+
+    WHY THIS EXISTS, and it closes a real hole rather than tidying a name.
+    `read_discovery` runs no skew check by design -- it is a lock-free hot-path
+    read and callers want the record as written. The skew predicate below is
+    reached from exactly ONE place, `ensure_listener`. So a consumer that reads
+    discovery itself and dials the URL it finds has no sanctioned way to ask
+    "is this record skewed?", and every such consumer gets the failure the
+    predicate exists to prevent:
+
+        `read_discovery` returns a skewed record (not None, parses fine)
+        -> the caller's own no-backend trigger is gated on `record is None`
+        -> so it never calls `ensure_listener`, so this predicate never runs
+        -> the listener IS alive and reachable, so no error arm fires either
+        -> the POST lands, `_serve_line` answers ENGINE_SKEW (-32002)
+        -> the guard does not run, and nothing denies
+
+    That is `DoE-claude http_hook_forwarder.py`'s live shape, traced by
+    `doe-claude-b4` 2026-08-26. The forwarder's own "no backend is a trigger,
+    not just a verdict" doctrine never engages, because the backend DID answer
+    -- with a non-verdict, relayed verbatim, allow included.
+
+    Publishing the predicate is claude-klabauter's half of the fix: a direct reader can
+    now ask the question without duplicating skew logic and without depending
+    on `ensure_listener`'s side effects. The other half is the caller's, and it
+    is a permission decision on their surface, not ours: a `-32002` answer must
+    be treated as NO BACKEND and denied, exactly like the unreachable arm.
+    This function decides nothing and denies nothing -- it only makes the state
+    askable.
+    """
+    return _record_is_skewed(record, root)
 
 
 def _record_is_skewed(record: dict, root: Path) -> bool:

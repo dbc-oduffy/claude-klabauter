@@ -904,6 +904,19 @@ except Exception:
 # timeout still never aborts server-side execution. Never blind-retry a timed-out
 # ceremony; reconcile against real repo state first.
 # ---------------------------------------------------------------------------
+#
+# percolate.build_token_index (2026-08-26, docs/plans/2026-08-26-payload-parity-asks-
+# an-index-not-the-payload.md chunk C3) resolves via the global runaway-guard default
+# below rather than a row here, deliberately: it already bounds its own process time
+# internally at DR-344's 500ms brightline
+# (`coordinator_core.ops.percolate_build_token_index :: _BUDGET_SECS`, derived from
+# `coordinator_core.op_census.timing.PROCESS_TIME_BAR_MS`, not a private literal) via
+# a deadline stamped at entry with each slice sized from the remainder (DR-349 §
+# "Decision" point 4). A per-op row here would only widen its ceiling, which nothing
+# about this op needs — the internal deadline is what makes a breach here evidence of
+# a real defect (a hung stat/read on a bad filesystem) rather than a tight-cap
+# artifact, and a table row would just be a second, looser number to keep in sync
+# with the first.
 _OP_TIMEOUT_OVERRIDES: Dict[str, float] = {}
 
 

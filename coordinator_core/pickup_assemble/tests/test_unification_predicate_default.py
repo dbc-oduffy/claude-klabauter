@@ -18,7 +18,7 @@ directions, deliberately: they pin the routing's behaviour under each arm.
 None of them would notice the shipped literal changing. This one does, and
 does nothing else.
 
-Run: cd X:/claude-klabauter && python -m pytest
+Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_unification_predicate_default.py -q
 """
 from __future__ import annotations
