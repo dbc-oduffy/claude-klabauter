@@ -822,10 +822,21 @@ def ensure_front_door(
     chunk's body names. Returns a live, recognized front door's base URL, or
     `None` if none is reachable THIS call.
 
-    NEVER WAITS, NEVER RAISES (AC10) -- identical contract to `supervisor.
-    ensure_listener`, for the identical reason: a caller on the hook path
-    must see "no reachable front door this call" and fall back to its own
-    existing local path, never hang or raise.
+    NEVER WAITS FOR A BOOT, NEVER RAISES (AC10) -- identical contract to
+    `supervisor.ensure_listener`, for the identical reason: a caller on the
+    hook path must see "no reachable front door this call" and fall back to
+    its own existing local path, never hang or raise.
+
+    IT DOES WAIT UP TO `probe_timeout`, corrected 2026-08-26. The line above
+    read a bare "NEVER WAITS" until the succession investigation checked it
+    against the body: branch 1 calls `probe_existing_holder`, bounded by
+    `PROBE_TIMEOUT_SECS` (2.0s), so a live-pid-but-hung holder costs this
+    call the full timeout. Unlike `ensure_listener`'s identical mismatch,
+    this one is NOT on the pipe server's boot path -- every call site was
+    grepped (`docs/research/2026-08-26-repo-warm-succession.md`, specialist
+    D § 3) and none is reached from `warm/server.py :: _run_guarded`.
+    Preserve that distinction: the two functions share a defect in their
+    documented contract and do not share its cost.
 
     1. A live discovery record (`discovery_is_live`, AC13) whose own
        `door_protocol_version` is at least this module's

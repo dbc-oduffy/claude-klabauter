@@ -40,7 +40,8 @@ def test_sidecar_path_resolves_the_producers_settings_home(monkeypatch, tmp_path
     that was withdrawn before shipping, leaving it pointed at
     `tempfile.gettempdir()/context-usage-<sid>` — a file nothing writes. The
     live producer is DoE-claude's statusline, publishing to
-    `$COORDINATOR_SETTINGS_HOME/state/context-window/<sid>.json`. A reader on
+    the settings home's `state/context-window/` directory, one file per sid.
+        A reader on
     the wrong path fails silently, so this asserts the shape end to end.
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))

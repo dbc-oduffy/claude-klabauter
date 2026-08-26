@@ -186,7 +186,7 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
         pass
 
 
-def _child_env(repo_root: str) -> dict:
+def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
     ahead of anything already there, everything else inherited from this process's own
     `os.environ`.
@@ -208,14 +208,30 @@ def _child_env(repo_root: str) -> dict:
     2026-08-21), so a `repo_root` reachable via `PYTHONPATH` wins the resolution before
     that finder is ever consulted -- deterministically, regardless of both the calling
     process's cwd and this box's ambient editable-install pin.
+
+    `env_extra` adds child-only variables. It exists so a caller can hand the child a
+    value WITHOUT writing to this process's own `os.environ`: an interpreter-global env
+    write outlives the call, is inherited by every later subprocess this process spawns,
+    and so silently mislabels an unrelated child (`warm.client._spawn_once`'s spawn-epoch
+    stamp is the live case -- a stale one inherited by a differently-routed spawn would
+    have produced a FABRICATED boot measurement in the file that exists to settle how
+    long boot takes). The repo's own env-leak fixture catches the write; this parameter
+    is the fix it points at.
     """
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
+    if env_extra:
+        env.update(env_extra)
     return env
 
 
-def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None = None) -> bool:
+def spawn_detached(
+    repo_root: str,
+    script_path: str,
+    args: Sequence[str] | None = None,
+    env_extra: "dict | None" = None,
+) -> bool:
     """Spawn `script_path` as a detached child process, fully disowned from the parent's
     stdio, on both POSIX and Windows -- the shared shape C17's other chunks (C2/C5/C14)
     reuse instead of hand-copying `auto_push.spawn_detached_push`'s Popen block.
@@ -296,7 +312,7 @@ def spawn_detached(repo_root: str, script_path: str, args: Sequence[str] | None 
         subprocess.Popen(
             [python_exe, script_path, *args],
             cwd=repo_root,
-            env=_child_env(repo_root),
+            env=_child_env(repo_root, env_extra),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

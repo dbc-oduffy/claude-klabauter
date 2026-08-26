@@ -1,4 +1,4 @@
-"""Tier T tests for `coordinator_core.ops.ceremony.push_outstanding`.
+"""Tier T tests for `coordinator_core.ops.push_outstanding`.
 
 Scope: this chunk's own writes (`push_outstanding.py` + this file). Uses real
 `git` repos on disk (a work/*-named local branch, an on-disk bare "remote")
@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.ops.ceremony.push_outstanding as push_outstanding_mod
+import coordinator_core.ops.push_outstanding as push_outstanding_mod
 from coordinator_core.ops.ceremony.commit_pipeline import PushOutcome
-from coordinator_core.ops.ceremony.push_outstanding import (
+from coordinator_core.ops.push_outstanding import (
     _gitattributes_declares_lfs_filter,
     _range_touches_lfs_paths,
     push_outstanding,
@@ -129,6 +129,12 @@ def test_outstanding_commit_delegates_to_push_with_retry(monkeypatch, tmp_path):
     assert called_kwargs == {
         "allow_protected_branch": False,
         "protected_branch_override_reason": None,
+        # The ladder's own deadline (2026-08-26) is part of this delegation
+        # contract, not an incidental kwarg: without it the push/fetch/rebase
+        # ladder is bounded only by the wall-clock dispatch guard, which can
+        # fire only mid-leg and yields an `unconfirmed` push instead of a
+        # decided one. Pinned here so dropping it fails loudly.
+        "budget_secs": push_outstanding_mod.PUSH_RETRY_BUDGET_SECS,
     }
 
 
@@ -220,6 +226,7 @@ def test_allow_protected_branch_kwargs_pass_through(monkeypatch, tmp_path):
         {
             "allow_protected_branch": True,
             "protected_branch_override_reason": "release",
+            "budget_secs": push_outstanding_mod.PUSH_RETRY_BUDGET_SECS,
         }
     ]
 

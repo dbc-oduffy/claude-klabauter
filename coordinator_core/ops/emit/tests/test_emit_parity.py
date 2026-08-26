@@ -180,16 +180,26 @@ def _section_normalize_and_sort(records: list) -> list:
 # whole test module exists to close).
 _LIVE_COORDINATOR_STATE_SECTIONS = frozenset({"roadmaps"})
 
-# ``routine_signals`` shares the SAME escape for two (of six) signal kinds only — the
+# ``routine_signals`` shares the SAME escape for three (of seven) signal kinds only — the
 # other four are either genuinely frozen (``docs``/``bug-sweep`` read ``ctx.repo_root``,
 # the fixture tree, which is not a git repo so ``_commits_since_last`` always degrades to
 # its 99-commit sentinel on both golden-capture and re-run) or a static placeholder
 # (``dormant-repo``). ``weekly`` (native ``check_weekly_staleness``, cwd=
 # ``ctx.coordinator_root/"bin"``) and ``distill-backlog`` (``_count_distill_backlog``
 # scans ``ctx.coordinator_root``'s real archive/wiki tree) both read the live checkout.
+#
+# ``deep_spawn_worklist`` reads ``state/baselines/deep-per-item-spawn-worklist.json``,
+# resolved off ``Path(__file__).parents[4]`` — the real checkout, not the fixture tree.
+# That the file is COMMITTED does not make it frozen: the advisory collector rewrites it
+# on every run, so its ``total_sites``/``by_depth``/``generated_at`` move with the corpus
+# exactly as the two signals above move with the checkout. Pinning those values into the
+# golden instead re-arms the drift trap this whole module exists to close — the golden
+# would go stale on the collector's next run rather than on a producer regression.
 # Neutralized per-kind (not section-excluded) so the OTHER four signals keep real parity
 # coverage — see the perturbation proof in this module's own execution report.
-_LIVE_COORDINATOR_STATE_ROUTINE_SIGNAL_KINDS = frozenset({"weekly", "distill-backlog"})
+_LIVE_COORDINATOR_STATE_ROUTINE_SIGNAL_KINDS = frozenset(
+    {"weekly", "distill-backlog", "deep_spawn_worklist"}
+)
 _LIVE_STATE_SENTINEL = "__LIVE_COORDINATOR_STATE_NORMALIZED__"
 
 # ``exec_summary.docs_staleness`` (C6, envelope._stamp_docs_staleness) is a post-collect

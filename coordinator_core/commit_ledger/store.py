@@ -16,6 +16,101 @@ _reap_stale_sessions`` archives any non-dot child of the session hub after
 ``<hub>/<handoff_id>.json`` file, or a non-dot subdirectory, would be swept
 by the reaper or misread as a stale/malformed session directory.
 
+NEGATIVE SPEC — what a sha's ABSENCE from this ledger does NOT mean
+====================================================================
+(2026-08-26, measured at HEAD; asked by a peer session scoping whether
+``workstream_complete.brief()``'s review-scale numbers could come from a
+store instead of shelling to git.)
+
+**Absence is not evidence that the commit does not exist, and this ledger is
+not a census of a branch.** It records commits made THROUGH the contract
+layer, because that is the only place that writes it. :func:`append_entry`
+has exactly two callers in the tree: ``contract/apply_base.py`` (the real
+producer, via ``_ledger_kind_and_weight``) and :func:`mark_reviewed` in this
+module. Nothing else ledgers anything.
+
+So none of the following ever reach this store, and all of them are ordinary
+on a shared branch:
+
+  - a hand-run ``git commit``;
+  - a peer session's commit, contract-routed or not, since the key is the
+    OWNING baton's ``handoff_id``;
+  - any commit made outside a handoff at all — there is no key to file it
+    under even in principle.
+
+Consequences for a caller, in the order they bite:
+
+  - **Do NOT derive a review scale, a diff size, or any completeness verdict
+    from this ledger alone.** It under-reports SILENTLY — there is no
+    degrade signal distinguishing "this baton made two commits" from "this
+    baton made nine and two went through the contract layer" — and it
+    under-reports in the UNSAFE direction, recommending less review than the
+    real diff warrants. A number that is both wrong and confident is worse
+    than the git spawns it would replace.
+  - ``weight_basis`` inherits the same limit: it is written only where the
+    entry is, so an unledgered sha has no weight rather than a zero weight.
+
+**"Silently" is a property of reading this store ALONE, and is escapable.**
+Amendment from claude-klabauter-37, 2026-08-26, who was scoping exactly this
+substitution and corrected an over-broad first draft of this block.
+``oracle.py`` DOES carry a degrade signal this store does not —
+``OracleReport.resolved`` plus ``_pending(reason)``. It is not sufficient on
+its own, and that module says why in its own words: ``resolved=False`` fires
+in exactly one case, no ledger file existing yet. An un-ledgered sha leaves no
+trace at all, so a ledger that is present but partial answers ``resolved=True``
+and wrong.
+
+What would make it self-checking is a DENOMINATOR. A caller that already
+knows this session's sha set from some other source can compare: a ledger
+holding entries for fewer shas than that set names KNOWS it is incomplete,
+without needing to detect the specific missing commit. That converts a silent
+undercount into a loud one. Costed by claude-klabauter-37 as roughly one git
+spawn (the trailer walk ``workstream_complete.brief()`` already pays for)
+rather than zero — an honest failure mode at non-zero price, which is a
+different trade than this block's "do not" and may well be the right one.
+
+THAT NUMBER NOW EXISTS, and it settles both the prohibition and the escape
+hatch against this store. Measured 2026-08-26 over a 3000-commit window on
+``work/machine-a/2026-08-18to20`` (verdict record:
+``docs/research/spike-verdicts/2026-08-26-ledger-backed-review-scale.md``):
+
+  - COVERAGE 26.0% and FALLING — 1422 of 5474 trailer-attributed commits
+    since this store's writer landed (``0e5613bb1``) are ledgered. Scoped to
+    post-writer deliberately: this store is seven days old, and a lifetime
+    average over history it could never have seen is not a coverage rate.
+    Trajectory is the stronger signal and runs the wrong way: 14.4% over the
+    last 24h against 26.0% lifetime, because commit volume is outgrowing
+    contract-routed commits.
+  - 0 of 25 sampled sessions have FULL coverage. The distribution is bimodal,
+    which is the contract-layer boundary showing through: sessions committing
+    through it are nearly complete (29/30, 27/29), sessions that do not are
+    invisible (0 of 346, 0/31, 0/30).
+  - ROW DISAGREEMENT 25 of 25, zero agreements. git resolves row 4; this
+    store cannot reach a row at all and resolves ``unresolved``.
+  - ``weight_basis`` IS NOT A LINE COUNT. All 1432 entries carry a numeric
+    value, but it is a normalised 0.0-2.0 float and 709 of them are exactly
+    0.0. ``decide_review_scale`` needs ``code_loc``/``gross_loc`` in LINES,
+    so the row-4 brightline input is unavailable AT ANY COVERAGE RATE. This
+    one ground does not depend on the other three.
+
+The DENOMINATOR sketch above is retired by the same numbers, and by its own
+author. The mechanism works; it is useless. At 17.1% coverage the check fires
+on essentially every session, so the honest outcome is ``unresolved`` almost
+always — a correct refusal to answer, not a cheaper answer.
+
+Scope of this finding, stated so it is not over-read: it governs SUBSTITUTION
+— sourcing review-scale inputs from this store INSTEAD of git. It says nothing
+about ``decide_review_scale``'s ``oracle_report`` parameter, which is a
+different mechanism: additive, opt-in, provably inert when ``None``
+(``test_directives_review_oracle.py``), and able only to RAISE scale. That arm
+was never measured here and is not prohibited by this block.
+
+Same species as, and deliberately worded to match, the negative spec in
+``session/claim_index.py`` (absence there means "this index cannot say",
+never "unclaimed"). Both modules are authoritative about what they hold and
+silent about what never reached them; the failure mode in both is a caller
+reading silence as a fact.
+
 Entry shape (one JSON object per line)::
 
     {

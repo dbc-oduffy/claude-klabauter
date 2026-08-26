@@ -447,13 +447,28 @@ _DEEP_SPAWN_WORKLIST_STALE_DAYS = 14
 
 def _deep_spawn_worklist_baseline_age_days(generated_at: str) -> Optional[float]:
     """`None` when `generated_at` cannot be parsed -- callers treat that the same as a
-    missing baseline (honesty rule: no fabricated age)."""
+    missing baseline (honesty rule: no fabricated age).
+
+    Two accepted shapes, deliberately, because the WRITER's format string lives in another
+    file (`test_deep_per_item_spawn_worklist.py :: _compute_baseline`) with no shared
+    constant between them. The writer emits `strftime("%Y-%m-%dT%H:%M:%SZ")` today; a future
+    edit switching it to `datetime.isoformat()` would add fractional seconds, and a reader
+    that only knew the first shape would map every baseline to unparseable -- i.e. silently
+    to "stale" forever, with no error anyone would see. Accepting both closes that
+    silent-degradation path without coupling the two files."""
+    if not isinstance(generated_at, str):
+        return None
     try:
         stamp = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=timezone.utc
         )
-    except (ValueError, TypeError):
-        return None
+    except ValueError:
+        try:
+            stamp = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - stamp).total_seconds() / 86400.0
 
 

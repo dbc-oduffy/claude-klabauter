@@ -5,6 +5,7 @@ fallback-chain RUNG ORDER emitted by `_shim_body` / `_append_block` in
 Spec: C7 of docs/plans/2026-08-16-one-engine-for-the-whole-box.md. The
 template used to try the baked absolute-path SCRIPT literal FIRST, with the
 settings-home forwarder rung (`${COORDINATOR_SETTINGS_HOME:-...}/bin/<name>`)
+shell-doc-ok: that rung is the generated forwarder text this test pins.
 only consulted several rungs later. On a box where the baked literal
 (generated at a prior install time, on this machine's own checkout path)
 still happens to exist, every rung after it is dead code — including the

@@ -106,11 +106,13 @@ import json
 import posixpath
 import subprocess
 import sys
+import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional, Sequence, TypedDict
 
+from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NEVER, run_commit_pipeline
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
@@ -1109,34 +1111,83 @@ def _compute_residue(
 async def _commit_group(
     worktree_root: str, group: CommitGroup, session_id: Optional[str] = None
 ) -> GroupResult:
-    """Killed 2026-08-23 (PM ruling, DR-344): this function composed
-    `ceremony.scoped_git_commit` in-process via `ipc.get_op_handler` — that
-    op is now deleted, not suspended, and nothing replaces it. Resolving a
-    permanently-deleted op by name is a defect in itself (the suspension
-    machinery this used to route through, `OpSuspendedError`, presumes a
-    registered-but-refusing op, which is no longer this function's
-    situation), so this no longer attempts resolution at all: every call
-    returns the same `commit_failed` result the old `handler is None`
-    branch did, uncaught, loud, and non-blocking (DR-227 — this function's
-    caller documents that it never raises).
+    """Rewired 2026-08-26 (DR-344 follow-up): `ceremony.scoped_git_commit`
+    was deleted 2026-08-23 with no replacement wired here (see the killed
+    version of this function, git history). The replacement is the SAME
+    in-process pipeline `execute_plan_assemble.close_out_and_stamp` already
+    calls -- `ops.ceremony.commit_pipeline.run_commit_pipeline` -- called
+    directly, never re-resolved by op name (there is no suspension ladder
+    to route through here: a deleted op has no handler to look up).
 
-    This is the ONLY mutating step in this module's auto-commit path
-    (`auto_commit_session_async` / `auto_commit_session`) — with it gone,
-    that path can no longer commit anything; it degrades to reporting
-    every group as a failed commit. See
-    `docs/reference/scoped-commit-guarantees.md` for what a rebuilt
-    committer must guarantee; wiring one back in here is that rebuild's
-    job, not this deletion's.
+    Pathspec scope mirrors `close_out_and_stamp`'s own call site exactly:
+    `stage_paths=group["paths"]` and `caller_paths=set(group["paths"])` --
+    only the group's own paths are ever staged, never a caller-widened or
+    auto-detected scope (constraint 3 of this rewiring's own brief).
+
+    Session attribution (state/bug-backlog/2026-08-18-scoped-git-commit-
+    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): `run_commit_pipeline`'s
+    own `session_id` kwarg is a confirmed DEAD nonce -- unread across its
+    entire body, kept only because `scoped_git_commit.py` also mints one
+    per invocation for a reason unrelated to attribution. A synthetic,
+    call-scoped nonce is minted for it here, same as `close_out_and_stamp`
+    does. `attributed_session_id` is the one that actually stamps the
+    commit's `Session-Id:` trailer -- this passes the REAL caller-supplied
+    `session_id` (this session's own committing identity, threaded in from
+    `auto_commit_session_async`), never the synthetic nonce, so the landed
+    commit is attributed to the session that actually owns the paths.
+
+    `push_mode=PUSH_MODE_NEVER` -- same choice `close_out_and_stamp` makes
+    at its own call site (DR-329 § 7): this module's auto-commit path has
+    never owned a synchronous push (`push_state` was already always
+    reported `None` on every prior real-commit path here), and publication
+    is left to whichever cadence checkpoint runs next. Explicit, never by
+    omission -- an omitted `push_mode` would silently default to
+    `PUSH_MODE_SYNC`.
+
+    Return-contract mapping (constraint 1): every `GroupResult` key is
+    populated from `PipelineResult`, none renamed/dropped/added.
+    `committed` is `pipeline_result.committed_sha is not None` -- a
+    declined/failed/no-op pipeline result never reports `committed: True`
+    (constraint 2); `sha`/`error`/`reason`/`commit_failed` mirror the
+    pipeline's own fields, `push_state` mirrors `push_status` (a rendering
+    label only -- see `GroupResult.push_state`'s own docstring; this call
+    never pushes, so it is always `PUSH_STATUS_NOT_ATTEMPTED` here).
     """
+    session_nonce = f"safe-commit-offer-{uuid.uuid4().hex}"
+    pipeline_result = run_commit_pipeline(
+        worktree_root,
+        session_id=session_nonce,
+        subject=group["message"],
+        prose=group.get("prose", ""),
+        stage_paths=group["paths"],
+        caller_paths=set(group["paths"]),
+        push_mode=PUSH_MODE_NEVER,
+        attributed_session_id=session_id,
+    )
+    error: Optional[str] = None
+    if pipeline_result.commit_failed:
+        error = (
+            "; ".join(pipeline_result.diagnostics)
+            or "commit pipeline reported commit_failed with no diagnostics"
+        )
     return {
         "paths": group["paths"],
         "message": group["message"],
-        "committed": False,
-        "sha": None,
-        "push_state": None,
-        "error": "ceremony.scoped_git_commit was deleted 2026-08-23 (DR-344) and has no replacement wired here yet",
-        "commit_failed": True,
-        "reason": None,
+        "committed": pipeline_result.committed_sha is not None,
+        "sha": pipeline_result.committed_sha,
+        "push_state": pipeline_result.push_status,
+        "error": error,
+        "commit_failed": pipeline_result.commit_failed,
+        # `GroupResult.reason` is the BENIGN-no-op reason only (its own
+        # docstring: "None on a landed commit or a genuine `commit_failed`")
+        # -- `_render_report`'s two branches (line ~1817/1830) depend on
+        # that split to decide "NOT committed" vs the quiet no-op line.
+        # `PipelineResult.reason` is populated on the empty-commit-set
+        # no-op too, but that shape reports `commit_failed=True` under the
+        # rewired pipeline (see this function's own docstring) -- suppress
+        # it here rather than let a `commit_failed` group carry a `reason`
+        # `_render_report` was never written to expect.
+        "reason": None if pipeline_result.commit_failed else (pipeline_result.reason or None),
     }
 
 

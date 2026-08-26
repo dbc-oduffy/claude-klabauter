@@ -7,7 +7,8 @@ green on both sides and surfaces much later as unexplained per-repo variance.
 actually goes red, since a check that has only ever been green proves nothing.
 
 Negative spec: example-retrieval-repo's torchvision pins deliberately diverge between its
-uv overrides file (``>=0.25,<2``) and constraints.txt (``~=0.27.0``, a pip
+uv overrides file (0.25-floor, 2-ceiling) and constraints.txt
+    (``~=0.27.0``, a pip
 resolver-backtracking bound narrowed per AC-A.10). ``test_declared_divergence_
 is_not_flagged`` exists so a later reader does not "repair" that into lockstep.
 

@@ -195,6 +195,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
     derive_push_status,
+    CEREMONY_PUSH_BUDGET_SECS,
     push_with_retry,
     resolve_post_push_sha,
 )
@@ -1203,7 +1204,9 @@ def _commit_and_push_follow_up(
     # main ceremony commit's push and the sibling `post_commit_tail`
     # follow-up push both go through) rather than a second inline
     # resolve/gate call site.
-    push_outcome = push_with_retry(worktree_root)
+    push_outcome = push_with_retry(
+        worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS
+    )
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:

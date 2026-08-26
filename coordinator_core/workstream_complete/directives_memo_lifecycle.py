@@ -654,6 +654,7 @@ def classify_session_authored_files(
     repo_root: Path,
     session_start_time: Optional[datetime],
     known_concurrent_paths: frozenset[str] = frozenset(),
+    known_added_paths: "Optional[frozenset[str]]" = None,
 ) -> list[dict[str, Any]]:
     """Step 2.67's session-authored predicate (`d-classify-session-authored-
     files`): a file is session-authored iff it appears in `git status
@@ -667,12 +668,30 @@ def classify_session_authored_files(
     paths` input is the Step 3.0 case-(b) classification, computed elsewhere
     and handed in, never re-derived here.
 
+    `known_added_paths` (C5, docs/plans/2026-08-26-the-gate-paths-six-spawns-
+    collapse-to-four.md § C5): optional, additive. When supplied (even an
+    empty `frozenset()` — a confirmed "this session added nothing"), predicate
+    (a) is answered from this set directly and `_session_created_paths`'s own
+    `git log --diff-filter=A` spawn is skipped entirely — the caller has
+    already resolved the trailer-attributed add-set from data it fetched for
+    another purpose (`__init__.py`'s `own_numstat_blocks`, see that module's
+    own derivation) and handing it straight through costs this function
+    nothing. `None` (the default) reproduces this function's pre-C5 behaviour
+    exactly: predicate (a) falls through to `_session_created_paths`'s own
+    spawn whenever `session_start_time` is resolvable. A caller unable to
+    derive a trustworthy add-set (no data reached that path, or the data it
+    has cannot distinguish an add from a modify) must pass `None`, never a
+    guessed/partial set — this function does not itself validate the set it
+    is handed.
+
     `session_start_time=None` (both the claim-dir mtime and every fallback in
     `resolve_session_start_time` came up empty) degrades every non-keep-
     listed, non-known-concurrent file to `session_authored: False` — with
     neither (a) nor (b) computable, the predicate cannot affirmatively fire,
     matching the SKILL text's own "fails both (a) and (b) -> not session-
-    authored" fallthrough.
+    authored" fallthrough. This still applies when `known_added_paths` is
+    supplied: (b) is unconditionally unavailable without a resolvable start
+    time, and a file's own mtime has no bearing on predicate (a).
 
     Returns one dict per porcelain-dirty path: `{"path", "session_authored",
     "reason"}`. Files this function marks NOT session-authored still need a
@@ -681,7 +700,9 @@ def classify_session_authored_files(
     only says whether Step 2.67 itself may touch the path.
     """
     session_created_paths: "frozenset[str]" = frozenset()
-    if session_start_time is not None:
+    if known_added_paths is not None:
+        session_created_paths = known_added_paths
+    elif session_start_time is not None:
         session_created_paths = _session_created_paths(repo_root, session_start_time)
 
     results: list[dict[str, Any]] = []

@@ -689,11 +689,32 @@ def evict_on_skew(
     """THE INVERSION, executed. Runs `respond` -> `close_listener` ->
     `drain`, in that fixed order, with no idleness/in-flight/drain-flag
     input anywhere in this signature -- the whole point of C16 (module
-    docstring). `close_listener` running before `drain` is the
-    non-negotiable half: it is what makes every OTHER session on the box
-    see `FileNotFoundError` on its next connect attempt and start a
-    current server, rather than queueing behind a drain that continuous
-    traffic would otherwise keep rearming.
+    docstring). `close_listener` running before `drain` stops this server
+    accepting NEW work while the drain finishes the work it already has.
+
+    WHAT THIS ORDERING DOES NOT DO, corrected 2026-08-26. This docstring
+    previously asserted that `close_listener` "makes every OTHER session on
+    the box see `FileNotFoundError` on its next connect attempt and start a
+    current server." That is false as implemented, and the anti-storm
+    reasoning built on it is false with it. The `close_listener` the server
+    passes here (`warm/server.py :: _ServerContext.close_listener`) flips
+    an in-process boolean; the OS-level close and unlink happen in
+    `_ServerContext._ctx_shutdown`, AFTER the drain, up to a 35s ceiling.
+    Until then the endpoint stays bound: a caller arriving in that window is
+    accepted and dropped with zero bytes (a NON-spawning outcome per
+    `warm/client.py`'s table), and a successor computing the SAME token
+    cannot bind at all -- `ERROR_ACCESS_DENIED` on Windows, `EADDRINUSE` on
+    POSIX with the staleness probe reading the still-bound socket as live.
+    A successor with a DIFFERENT token is unaffected; it binds a different
+    endpoint immediately, which is the case this path was designed around.
+
+    Releasing the endpoint at this step is a candidate fix, not a pending
+    one: it converts the drain window from spawn-suppressing to
+    spawn-triggering for every caller at once, and interacts with
+    `breadcrumb.should_spawn`'s debounce. See
+    `docs/research/2026-08-26-repo-warm-succession-advisory.md` item 3 for
+    the hazards and `docs/research/2026-08-26-repo-warm-succession.md` § 2
+    for the verification.
     """
     respond(build_skew_response(request_id, server_sha, client_token))
     close_listener()

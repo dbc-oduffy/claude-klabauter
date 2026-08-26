@@ -2890,8 +2890,97 @@ class TestDeadHolderResidueWarning:
         monkeypatch.setattr(claims, "_read_holder_claims", _boom)
         claims._warn_dead_holder_residue("plan", "p", "sid", str(tmp_path))
 
+        # Third leg, and the one the first version of this test missed
+        # (reviewer P2): _dirty_paths carries its own internal try/except, so
+        # nothing escapes it TODAY. Exploding it here pins that the OUTER
+        # try/except is what actually carries this leg -- so removing
+        # _dirty_paths's internal guard later cannot quietly make claim-taking
+        # raise.
+        sid = "33333333-4444-5555-6666-777777777777"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        self._holder_record(sdir, sid, "x.py")
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+        monkeypatch.setattr(claims, "_read_holder_claims", lambda sink: ({"x.py"}, True))
+        monkeypatch.setattr(claims, "_dirty_paths", _boom)
+        claims._warn_dead_holder_residue("plan", "p", sid, str(tmp_path))
+
     def test_unresolvable_holder_is_lookup_fail_not_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(tmp_path))
         monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
         assert claims._dead_holder_record_dir("", str(tmp_path)) is None
         assert claims._dead_holder_record_dir("no-such-sid", str(tmp_path)) is None
+
+
+class TestDeadHolderResidueParsing:
+    """The two reviewer-P2 gaps in the residue warning's inputs, pinned.
+
+    Both are false-NEGATIVE shapes in a fail-open advisory: they do not crash,
+    they silently report nothing, which is indistinguishable from "the dead
+    holder left a clean tree" -- the exact conclusion this feature exists to
+    stop a caller reaching by default.
+    """
+
+    def test_rename_reports_both_sides(self, monkeypatch):
+        """`git status --porcelain` renders a rename as `R  old -> new`. Parsed
+        naively that yields the literal "old -> new", matching no real path, so
+        a renamed residue path vanishes from the intersection. Rename-in-progress
+        is a plausible successor-restructuring shape, so both sides count."""
+        out = "R  old/name.py -> new/name.py\n M plain.py\n?? untracked.py\n"
+
+        class _Result:
+            stdout = out
+
+        monkeypatch.setattr(
+            "subprocess.run", lambda *a, **k: _Result()
+        )
+        got = claims._dirty_paths(".")
+        assert "old/name.py" in got, got
+        assert "new/name.py" in got, got
+        assert "plain.py" in got and "untracked.py" in got, got
+        assert not any("->" in p for p in got), f"unsplit rename leaked through: {got}"
+
+    def test_archive_match_is_date_anchored_not_a_bare_prefix(self, tmp_path, monkeypatch):
+        """A session id that is a string-prefix of another must not match its
+        neighbour's archive dir. `bash_guards/_write_bump_marker.py ::
+        sweep_stale_markers` documents this same collision class."""
+        base = tmp_path / ".git" / "coordinator-sessions"
+        archive = base / ".archive"
+        short = "abc123"
+        (archive / f"{short}-2026-08-25").mkdir(parents=True)
+        (archive / f"{short}deadbeef-2026-08-26").mkdir(parents=True)
+        (archive / f"{short}-notadate").mkdir(parents=True)
+        monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(base))
+        monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
+
+        got = claims._dead_holder_record_dir(short, str(tmp_path))
+        assert got == str(archive / f"{short}-2026-08-25"), got
+
+    def test_newest_archive_wins(self, tmp_path, monkeypatch):
+        """Lexicographic == chronological only because the suffix is zero-padded
+        YYYY-MM-DD, which the match pattern now enforces."""
+        base = tmp_path / ".git" / "coordinator-sessions"
+        archive = base / ".archive"
+        sid = "44444444-5555-6666-7777-888888888888"
+        for d in ("2026-08-02", "2026-08-25", "2026-08-09"):
+            (archive / f"{sid}-{d}").mkdir(parents=True)
+        monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(base))
+        monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
+
+        assert claims._dead_holder_record_dir(sid, str(tmp_path)) == str(
+            archive / f"{sid}-2026-08-25"
+        )
+
+    def test_live_dir_wins_over_archive(self, tmp_path, monkeypatch):
+        """A session with BOTH a live dir and an archive entry resolves to the
+        live one -- the archive leg is a fallback, not a preference."""
+        base = tmp_path / ".git" / "coordinator-sessions"
+        sid = "55555555-6666-7777-8888-999999999999"
+        live = base / sid
+        live.mkdir(parents=True)
+        (base / ".archive" / f"{sid}-2026-08-25").mkdir(parents=True)
+        monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(base))
+        monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: str(live))
+
+        assert claims._dead_holder_record_dir(sid, str(tmp_path)) == str(live)

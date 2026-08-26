@@ -179,7 +179,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
     ("coordinator_core.ops.fleet.memo_reconcile_outbox", 'registers "memo.reconcile_outbox"'),
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
-    ("coordinator_core.ops.ceremony.push_outstanding", 'registers "push.outstanding"'),
+    ("coordinator_core.ops.push_outstanding", 'registers "push.outstanding"'),
     ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),
     (
         "coordinator_core.ops.spec_backlink_resolve",
@@ -324,7 +324,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.review_mint.op", 'registers "review.mint_workflow"'),
     ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
     ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),
-    ("coordinator_core.ops.handoff_reconcile", 'registers "handoff.reconcile_open"'),
     ("coordinator_core.ops.handoff_close_origin_stub", 'registers "handoff.close_origin_stub"'),
     ("coordinator_core.ops.session_hierarchy_derive", 'registers "session_hierarchy.derive"'),
     ("coordinator_core.goals.reassess_krs", ""),
@@ -432,6 +431,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.hibernate_machine", 'registers "machine.hibernate"'),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
+    ("coordinator_core.ops.ceremony.commit_op", 'registers "ceremony.commit"'),
     ("coordinator_core.ops.run_pre_ci_hooks", 'registers "percolate.run_pre_ci_hooks"'),
     ("coordinator_core.ops.scan_content_leakage", 'registers "percolate.scan_content_leakage_tiers"'),
     (

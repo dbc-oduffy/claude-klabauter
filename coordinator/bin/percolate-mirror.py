@@ -397,7 +397,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "mirror",
         help=(
-            "Mirror worktree root (X:/claude-klabauter), its bare name "
+            "Mirror worktree root (the path at machine-local key "
+            "`repos.claude_klabauter`), its bare name "
             "(claude-klabauter), or any registered target name landing in it."
         ),
     )

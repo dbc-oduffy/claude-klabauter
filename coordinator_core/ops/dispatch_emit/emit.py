@@ -135,7 +135,8 @@ supplied fragment (DoE's data) — either alone composes nothing.
 Fragment parsing and stage composition are NOT reimplemented here.
 ``review_mint.roster.parse_stages`` (C1) turns the caller-supplied fragment
 dict into an ordered ``[Stage, ...]`` list — a flat ``schema_version 1``
-list reads as one non-gated stage, a staged (``schema_version >= 2``)
+list reads as one non-gated stage, a staged (``schema_version`` of 2 or
+    more)
 fragment reads as its own ordered stages, gate flag and all — and
 ``review_mint.compose.compose`` (C2) turns that stage list into
 ``(phase_title, script_block)`` pairs this module splices straight into its

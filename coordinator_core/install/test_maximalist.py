@@ -2064,6 +2064,8 @@ def test_own_plane_match_is_a_no_op(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_own_root_wins_precedence_not_merely_present(tmp_path):
     """The root must end up FIRST on `sys.path`, not merely somewhere on it.
 

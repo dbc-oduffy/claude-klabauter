@@ -33,7 +33,6 @@ _SWEPT_MODULES = (
     "ops/handoff_archive_transition.py",
     "ops/handoff_close_origin_stub.py",
     "ops/handoff_normalize.py",
-    "ops/handoff_reconcile.py",
     "ops/handoff_repoint_origin.py",
     "ops/handoff_ship_archive.py",
     "ops/records_query.py",

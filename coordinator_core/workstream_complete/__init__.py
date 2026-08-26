@@ -2903,6 +2903,81 @@ def _session_owned_shas(
     return [c["sha"] for c in commits]
 
 
+#: C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
+#: § C5): a `git log --raw` row's change-type letter — the same shape
+#: `coordinator_core.ops.session_commits.resolve_session_commits` already
+#: parses out of its own combined `--raw`+`--numstat` walk (see that
+#: module's own `pending_statuses` handling). Reproduced here, not imported,
+#: since that module's parser is coupled to its own header-sentinel/field-sep
+#: framing and this site's input is a per-sha numstat/raw TEXT BLOCK, not a
+#: raw `git log` stdout stream.
+_RAW_STATUS_ROW_RE = re.compile(r"^:(?:\S+\s+){4}(\S+)")
+
+
+def _added_paths_from_numstat_blocks(blocks: "dict[str, str]") -> "Optional[frozenset[str]]":
+    """C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
+    § C5, Defect 2): derives `classify_session_authored_files`'s optional
+    `known_added_paths` argument from `own_numstat_blocks` — the SAME
+    trailer-attributed `{sha: <git show text>}` map `resolve_known_concurrent_
+    paths`'s `own_session_numstat_out` already populates at zero extra spawn
+    cost (see that function's own docstring) — rather than paying
+    `_session_created_paths`'s dedicated `git log --diff-filter=A --since=
+    <start> --name-only` spawn. Trailer attribution is also strictly SAFER
+    than that spawn's `--since` time window (see this module's own
+    `_session_owned_shas` docstring on why a window sweeps every peer
+    committing in the same interval) — this is a like-for-like or better
+    replacement, never a weaker one, whenever it can actually answer the
+    question.
+
+    Returns `None` — meaning "unavailable, caller must fall back to
+    `_session_created_paths`'s own spawn" — for an empty `blocks` (the
+    `own_session_numstat_out` producer never ran, or ran and found this
+    session owns no commits in the window) OR when NO row in `blocks`
+    carries a `git log --raw` change-type marker at all. The latter is the
+    CURRENT state of every producer on disk today: `directives_commit_tail.
+    chunked_show_numstat_blocks` composes `git show --numstat` alone, no
+    `--raw` — so this function degrades to `None` on every call until a
+    follow-up chunk teaches that producer to compose `--raw` alongside
+    `--numstat` in the same invocation (`ops.session_commits.
+    resolve_session_commits` already does exactly this — see its own
+    docstring paragraph on the two output formats of one walk — this is
+    prior art, not a new technique). This function does NOT invent an
+    add/modify distinction from `--numstat` counts alone (a modified file
+    with zero deletions is indistinguishable from an added one in that
+    shape); returning an under-populated set instead of `None` here would
+    silently under-detect session-created scratch files.
+
+    Positional pairing (mirrors `resolve_session_commits`'s own contract):
+    within one sha's block, `--raw` rows precede the `--numstat` rows for the
+    SAME per-file diff, in the same order — so the Nth raw row's status
+    letter belongs to the Nth numstat row, never matched by path text (which
+    would mispair a rename's differing old/new spellings).
+    """
+    if not blocks:
+        return None
+    added: "set[str]" = set()
+    raw_seen = False
+    for text in blocks.values():
+        pending_statuses: "list[str]" = []
+        for line in text.splitlines():
+            if line.startswith(":"):
+                match = _RAW_STATUS_ROW_RE.match(line)
+                if match and match.group(1):
+                    pending_statuses.append(match.group(1)[0])
+                    raw_seen = True
+                continue
+            numstat_match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
+            if not numstat_match:
+                continue
+            _added_col, _deleted_col, path = numstat_match.groups()
+            status = pending_statuses.pop(0) if pending_statuses else None
+            if status == "A":
+                added.add(_resolve_numstat_row_path(path))
+    if not raw_seen:
+        return None
+    return frozenset(added)
+
+
 # `_resolve_numstat_row_path` (and its two rename regexes) now live in
 # `coordinator_core.coverage` — see the top-of-file import block, which
 # pulls them in alongside `_is_planning_artifact_path`.
@@ -3803,31 +3878,53 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # `_session_owned_shas` below reads THIS session's own shas back out of
     # it instead of re-walking the DAG -- one trailer spawn total, not two.
     #
-    # TRADEOFF, DELIBERATE AND NAMED (not silently accepted): this reorder
-    # means `precomputed_session_shas` is no longer known BEFORE this call,
-    # so it can no longer ride the C1 `extra_shas`/`extra_numstat_out`
-    # merge into the SAME `show --numstat` union this call spawns for peer
-    # attribution -- that merge required knowing the session's own shas in
-    # advance. `shared_numstat_blocks` is therefore never handed to
-    # `_measure_session_review_scale_inputs` below; that function falls
-    # back to its own pre-C1 `git show --numstat` spawn for the session's
-    # own commits when it has any (safe -- see its own docstring's "either
-    # kwarg absent" paragraph). Net spawn count for a session with its own
-    # committed work: one trailer-walk spawn fewer, one numstat spawn more
-    # than the C1-merged shape -- a wash on THIS call site alone; the win is
-    # eliminating the duplicate DAG walk `_session_owned_shas` used to pay
-    # regardless of whether this session had committed anything at all.
+    # C2's TRADEOFF IS CLOSED BY C4 (docs/plans/2026-08-26-the-gate-paths-
+    # six-spawns-collapse-to-four.md § C4). C2's reorder left
+    # `precomputed_session_shas` unknown BEFORE this call, so it could no
+    # longer ride the C1 `extra_shas`/`extra_numstat_out` merge into the
+    # SAME `show --numstat` union this call spawns for peer attribution --
+    # that merge required knowing the session's own shas in advance, and
+    # C2 went net-zero rather than closing a spawn. C4 folds this session's
+    # own shas into that SAME union from the OTHER direction instead:
+    # `resolve_known_concurrent_paths`'s own `own_session_numstat_out`
+    # (below) finds them off the SAME `trailer_map` scan `_committed_paths_
+    # for_sids` already pays for -- no caller-side advance knowledge
+    # needed, closing the circular dependency C2 hit without a second
+    # numstat spawn.
     precomputed_session_shas: Optional[list[str]] = None
+    # C4 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
+    # § C4): `own_numstat_blocks` folds this session's own shas into the SAME
+    # `show --numstat` union `resolve_known_concurrent_paths` already spawns
+    # for peer attribution -- `_committed_paths_for_sids` finds them off the
+    # SAME `trailer_map` scan `trailer_map_out` above already pays for, so no
+    # caller-side advance knowledge of `precomputed_session_shas` is needed
+    # (the circular dependency C2's reorder hit). Left `{}` (never `None`)
+    # so both branches below can hand it to `_measure_session_review_scale_
+    # inputs` uniformly; an empty dict there reproduces that function's own
+    # pre-C1 spawning fallback exactly (see the `shared_numstat_blocks`
+    # assignment below).
+    own_numstat_blocks: dict[str, str] = {}
     if measurement_paths is None:
         trailer_map: dict[str, str] = {}
         known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
             root,
             gate.sid,
             trailer_map_out=trailer_map,
+            own_session_numstat_out=own_numstat_blocks,
         )
         precomputed_session_shas = _session_owned_shas(root, gate.sid, trailer_map=trailer_map)
+        # C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-
+        # four.md § C5): `known_added_paths`, derived from THIS same
+        # `own_numstat_blocks` -- zero extra spawn cost, see
+        # `_added_paths_from_numstat_blocks`'s own docstring for why it
+        # degrades to `None` (spawn as before) rather than guessing whenever
+        # the underlying blocks carry no `--raw` status.
+        known_added_paths = _added_paths_from_numstat_blocks(own_numstat_blocks)
         classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
-            root, session_start_time, known_concurrent_paths=known_concurrent_paths
+            root,
+            session_start_time,
+            known_concurrent_paths=known_concurrent_paths,
+            known_added_paths=known_added_paths,
         )
         measurement_paths = [
             row["path"] for row in classified_session_files if row["session_authored"]
@@ -3852,15 +3949,22 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             uncommitted_paths=measurement_paths,
             commit_slices_out=review_scale_commit_slices,
             precomputed_session_shas=precomputed_session_shas,
-            # C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-
-            # to-four.md § C2): `shared_numstat_blocks` is always `None`
-            # now — see the reorder comment at `precomputed_session_shas`'s
-            # own assignment above for why the C1 numstat-union merge no
-            # longer applies here. This function falls back to its own
-            # self-consistent `_session_owned_shas` + `show --numstat` pair
-            # (byte-identical to its pre-C1 behaviour) whenever the caller
-            # hands it `None`.
-            shared_numstat_blocks=None,
+            # C4 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-
+            # to-four.md § C4): `own_numstat_blocks` -- see its own
+            # assignment/comment above -- is `{}` (falsy) on every path that
+            # never reached `resolve_known_concurrent_paths`'s own trailer
+            # walk (the `measurement_paths is not None` branch above, or a
+            # trailer_map that simply had no entries for `gate.sid`), and
+            # this function's own `shas`/`shared_numstat_blocks` contract
+            # already treats a falsy `shared_numstat_blocks` the same as
+            # `None` would -- `if shared_numstat_blocks is not None:` alone
+            # is guarded here by never handing it a non-empty-but-non-
+            # covering dict: `own_numstat_blocks` is built from the exact
+            # same trailer-map scan `precomputed_session_shas` (via
+            # `_session_owned_shas`/`_session_owned_shas_from_map`) reads,
+            # so whenever it is non-empty it covers `precomputed_session_
+            # shas` exactly.
+            shared_numstat_blocks=own_numstat_blocks or None,
         )
     )
     resolved_gross_loc = decisions.get("gross_loc")

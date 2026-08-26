@@ -367,7 +367,8 @@ def _parse_requirements_txt(path: Path) -> List[str]:
             # directives does not silently drop a package spec.
             continue
         # pip's requirements.txt format permits a trailing inline comment
-        # (`pkg>=1.0  # note`) — strip it before the spec is carried into
+        # (a spec line with a trailing `# note`) — strip it before the spec is
+            # carried into
         # the generated .in file, or the appended provenance comment turns
         # the line into invalid PEP 508. Review: code-reviewer — every other
         # ingestion path here (pyproject, override rows) is already
@@ -540,7 +541,8 @@ def check_parity_lockstep(
     Negative spec: ``diverges`` names packages a group deliberately does
     NOT hold in lockstep. Example-retrieval-repo pins torchvision ``~=0.27.0`` in
     constraints.txt (a pip-resolver backtracking bound, narrowed per
-    AC-A.10) against ``>=0.25,<2`` in its uv overrides file, and both files
+    AC-A.10) against a 0.25-floor, 2-ceiling range in its uv overrides file,
+        and both files
     document the divergence as intentional. Do not "repair" it.
     """
     violations: List[str] = []
@@ -648,11 +650,12 @@ def load_override_dependency_specs(
     over a *conflicting* declared range anywhere else in the union
     (docs.astral.sh/uv/concepts/resolution/ — "a useful last resort ...
     despite the metadata indicating otherwise"). ``chromadb`` conflicts by
-    declared-range disjunction (example-retrieval-repo's ``>=1.5,<1.6`` vs the addon's
-    ``>=1.4,<1.5`` — the overrides file's one seeded row, owner + expiry
-    per AC3). ``huggingface_hub``'s first-class floor (``>=1.0``) directly
+    declared-range disjunction (example-retrieval-repo's 1.5-floor, 1.6-ceiling range vs the addon's
+    1.4-floor, 1.5-ceiling one — the overrides file's one seeded row, owner + expiry
+    per AC3). ``huggingface_hub``'s first-class floor of 1.0 directly
     contradicts ``example_game_workbench_repo``'s declared
-    ``huggingface_hub>=0.23,<1.0`` cap already present in the requirements
+    0.23-floor, 1.0-ceiling ``huggingface_hub`` cap already present in the
+        requirements
     input — without forcing it via this same uv primitive, `uv lock` cannot
     resolve at all. This does NOT reclassify the floor as override-file
     scaffolding (fleet_env_lock.py's own ``FIRST_CLASS_FLOORS`` docstring

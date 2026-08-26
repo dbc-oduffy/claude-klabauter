@@ -767,17 +767,20 @@ def test_explicit_stage_absolute_path_outside_worktree_is_missing(tmp_path):
     assert outcome.missing_caller_paths == [outsider]
 
 
-def test_worktree_deletion_probe_spawns_one_git_per_chunk(tmp_path, monkeypatch):
-    """The fail-loud deletion probe costs exactly ONE git process per chunk.
+def test_worktree_deletion_probe_spawns_exactly_one_git(tmp_path, monkeypatch):
+    """The fail-loud deletion probe costs exactly ONE git process,
+    regardless of batch size.
 
-    Spawn-count guard (2026-08-26, DR-344). The first revision of this probe
-    spawned a second `git ls-files` per chunk to "settle" paths that
-    porcelain-v2 reported nothing for, then discarded its stdout -- measured
-    at 2x the spawns of the `git ls-files --deleted` probe it replaced (8 vs
-    4 on a 600-path batch) for a byte-identical result set. Process creation
-    is the cost on this path, not the query, so a per-chunk spawn multiplier
-    is a budget defect even when the wall-clock delta looks small on a
-    developer-sized batch.
+    Spawn-count guard (2026-08-26, DR-344, second fix). The prior revision
+    of this probe pathspec-scoped and chunked its `git status` read to stay
+    under the Windows argv cap -- but a pathspec on `git status` only
+    filters its OUTPUT, never the WORK: `git status` refreshes the index
+    and walks the whole worktree regardless of pathspec. Chunking therefore
+    bought nothing but spawns (measured on this repo, 36547 tracked files:
+    32 spawns for a 2600-path chunked batch vs 1 spawn for the same call
+    unscoped, at ANY batch size). This is a large-enough batch (400+ long
+    names) that the OLD chunked shape would have needed several `git`
+    processes -- so this test would genuinely have caught the regression.
 
     A silent path is not unresolved here: once the `git status` call has
     SUCCEEDED, silence means git scanned the path and had nothing to report,
@@ -787,7 +790,11 @@ def test_worktree_deletion_probe_spawns_one_git_per_chunk(tmp_path, monkeypatch)
     from coordinator_core.ops.ceremony import git_native as _gn
 
     repo = _init_repo(tmp_path)
-    names = [f"pkg/mod{i // 20}/file{i:03d}.py" for i in range(60)]
+    names = [
+        f"pkg/module_with_a_fairly_long_directory_name_{i // 20}/"
+        f"file_with_a_fairly_long_name_too_{i:04d}.py"
+        for i in range(400)
+    ]
     for name in names:
         _seed_file(repo, name, "v1")
     _git(["add", "-A"], repo)
@@ -803,15 +810,14 @@ def test_worktree_deletion_probe_spawns_one_git_per_chunk(tmp_path, monkeypatch)
         return real_git(*args, **kwargs)
 
     monkeypatch.setattr(_gn, "_git", _counting)
-    deleted = commit_pipeline_mod._worktree_deleted_paths_chunked(repo, names)
+    deleted = commit_pipeline_mod._worktree_deleted_paths(repo, names)
 
-    expected_chunks = len(list(commit_pipeline_mod._chunk_paths(list(names))))
     assert {
         commit_pipeline_mod._worktree_key(repo, n) for n in names[:3]
     } <= deleted
-    assert len(calls) == expected_chunks, (
-        f"deletion probe spawned {len(calls)} git process(es) for "
-        f"{expected_chunks} chunk(s) -- expected exactly one per chunk"
+    assert len(calls) == 1, (
+        f"deletion probe spawned {len(calls)} git process(es) for a "
+        f"{len(names)}-path batch -- expected exactly one, unscoped"
     )
 
 
@@ -1100,7 +1106,7 @@ def test_explicit_stage_indeterminate_divergence_fails_loud_never_readds(tmp_pat
 
 def test_explicit_stage_indeterminate_worktree_deletion_probe_fails_loud(tmp_path, monkeypatch):
     """2026-08-26 fix: the unstaged-deletion classification probe
-    (`_worktree_deleted_paths_chunked`) must fail this call loud
+    (`_worktree_deleted_paths`) must fail this call loud
     (`StageOutcome.exit_code != 0`, populated `failed`) on a genuine `git
     status` failure, never silently degrade to 'no unstaged deletions
     found' the way the old `git ls-files --deleted` probe did -- the
@@ -1116,7 +1122,7 @@ def test_explicit_stage_indeterminate_worktree_deletion_probe_fails_loud(tmp_pat
     def _boom(*args, **kwargs):
         raise commit_pipeline_mod.WorktreeDeletionProbeFailed("simulated git status failure")
 
-    monkeypatch.setattr(commit_pipeline_mod, "_worktree_deleted_paths_chunked", _boom)
+    monkeypatch.setattr(commit_pipeline_mod, "_worktree_deleted_paths", _boom)
 
     outcome = explicit_stage(repo, ["docs/gone.md"], caller_paths={"docs/gone.md"})
 
@@ -2198,18 +2204,22 @@ def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
 ):
     """code-reviewer Finding 1 (fa1aeeeb9187 review), fixed 2026-07-31:
     `explicit_stage()`'s `StageOutcome.acted` used to default to `[]` on
-    ANY `git add` subprocess failure, which only stayed safe if `git add --
-    a b` were atomic on failure -- i.e. never partially staged `a` before
-    erroring on `b`. It is NOT atomic in general (a mixed batch CAN stage
-    some paths before erroring on another). Originally reproduced via a
+    ANY `git add` subprocess failure, which only stayed safe if a single
+    `git add -- a b` call were guaranteed to never partially mutate the
+    index before reporting failure. Originally reproduced via a
     `.gitignore`-blocked path in the batch -- that specific TRIGGER is now
     pre-filtered out of `to_stage` entirely by the 2026-08-03 ignored-path
-    fix (see `explicit_stage`'s own docstring), so this test now drives the
-    same non-atomicity via a monkeypatched `git_native.add_paths` that
-    genuinely stages the first path before reporting a failure for the
-    whole call -- the reconciliation mechanism itself (not its original
-    trigger) is what this test covers. `explicit_stage()` reconciles its
-    failure-branch `acted` against real index state scoped to its own
+    fix (see `explicit_stage`'s own docstring), so this test drives the
+    same partial-mutation-then-failure shape via a monkeypatched
+    `git_native.add_paths` that genuinely stages the first path before
+    reporting a failure for the whole call -- the reconciliation mechanism
+    itself (not its original trigger) is what this test covers. 2026-08-26:
+    `add_paths()` moved to a single `--pathspec-from-file` call, which IS
+    atomic per invocation in practice (see its own docstring) -- this test
+    now exercises the reconciliation as defense-in-depth against any future
+    `add_paths` failure mode that partially mutates the index, not a real
+    trigger this repo can currently produce. `explicit_stage()` reconciles
+    its failure-branch `acted` against real index state scoped to its own
     `to_stage` batch (`git diff --cached --name-only -- <to_stage>`) instead
     of assuming `[]`, so this residue is now visible to a caller's rollback
     bookkeeping (e.g. `run_commit_pipeline`'s `finally`, scoped to
@@ -2232,10 +2242,11 @@ def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
     real_add_paths = git_native.add_paths
 
     def _fake_add_paths(cwd, paths):
-        # Genuinely stage the first path (mirroring the non-atomic partial
-        # batch shape), then report a failure for the whole call.
+        # Genuinely stage the first path (simulating a hypothetical
+        # partial-mutation-then-failure `add_paths` shape), then report a
+        # failure for the whole call.
         real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated non-atomic add failure")
+        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
 
     monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
 
@@ -2285,8 +2296,11 @@ def test_stage_add_paths_partial_failure_residue_reconciles_non_ascii_path(
     real_add_paths = git_native.add_paths
 
     def _fake_add_paths(cwd, paths):
+        # Simulated partial-mutation-then-failure shape -- see the sibling
+        # test above (2026-08-26 update) for why the real `add_paths()` no
+        # longer produces this on its own.
         real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated non-atomic add failure")
+        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
 
     monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
 
@@ -2342,8 +2356,12 @@ def test_stage_add_paths_partial_failure_residue_check_itself_fails_closed(
     real_add_paths = git_native.add_paths
 
     def _fake_add_paths(cwd, paths):
+        # Simulated partial-mutation-then-failure shape -- see
+        # `test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted`
+        # (2026-08-26 update) for why the real `add_paths()` no longer
+        # produces this on its own.
         real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated non-atomic add failure")
+        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
 
     monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
     monkeypatch.setattr(
@@ -2495,77 +2513,73 @@ def test_residue_paths_chunked_partial_chunk_failure_only_taints_that_chunk(monk
     assert other_paths <= residue, "every OTHER chunk's paths must still answer correctly"
 
 
-def test_worktree_deleted_paths_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
-    """`_worktree_deleted_paths_chunked()` (the unstaged-deletion
-    classification probe) never hands a single `status_porcelain_v2_scoped()`
-    call more than the argv budget's worth of pathspec, and each path's
-    deleted/not-deleted answer matches a fake per-path oracle exactly."""
+def test_worktree_deleted_paths_intersects_requested_paths_only(monkeypatch):
+    """`_worktree_deleted_paths()` takes ONE unscoped `git status` read and
+    intersects the result against the CALLER's requested `paths` in-process
+    -- a deletion reported for a path the caller never asked about must
+    never leak into the returned set (behavioural parity with the old
+    pathspec-scoped shape, whose pathspec implicitly limited the answer to
+    exactly the caller's own paths)."""
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
     paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
     deleted_oracle = {p for i, p in enumerate(paths) if i % 73 == 0}
+    foreign_deleted = "unrelated/not-requested.md"
 
     calls: list[list[str]] = []
 
-    def _fake_status_v2(cwd, paths):
-        batch = list(paths)
-        calls.append(batch)
+    def _fake_status_v2(cwd, paths=None):
+        calls.append(list(paths) if paths else [])
         records = []
-        for p in batch:
-            xy = "1 .D N... 100644 100644 100644 abc123 abc123" if p in deleted_oracle else "1 .. N... 100644 100644 100644 abc123 abc123"
+        for p in paths_universe:
+            xy = (
+                "1 .D N... 100644 100644 100644 abc123 abc123"
+                if p in deleted_oracle or p == foreign_deleted
+                else "1 .. N... 100644 100644 100644 abc123 abc123"
+            )
             records.append(f"{xy} {p}")
         return GitResult(returncode=0, stdout="\0".join(records) + "\0", stderr="")
 
-    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _fake_status_v2)
+    paths_universe = paths + [foreign_deleted]
+    monkeypatch.setattr(git_native, "status_porcelain_v2", _fake_status_v2)
 
-    budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
-    deleted = commit_pipeline_mod._worktree_deleted_paths_chunked(Path("/fake/root"), paths)
+    deleted = commit_pipeline_mod._worktree_deleted_paths(Path("/fake/root"), paths)
 
     assert deleted == deleted_oracle
-    assert len(calls) > 1, "2000 paths must not fit in a single status-v2 chunk"
-    for batch in calls:
-        assert sum(len(p) + 1 for p in batch) <= budget
-    seen = [p for batch in calls for p in batch]
-    assert sorted(seen) == sorted(paths)
+    assert foreign_deleted not in deleted, "a foreign deletion outside `paths` must not leak in"
+    assert len(calls) == 1, "exactly one unscoped git status read, regardless of batch size"
+    assert calls[0] == [], "the read must be unscoped -- no pathspec on the call"
 
 
-def test_worktree_deleted_paths_chunked_partial_chunk_failure_raises(monkeypatch):
-    """The unstaged-deletion probe's fail-loud posture, at scale: a genuine
-    probe failure confined to ONE chunk must raise `WorktreeDeletionProbeFailed`
-    rather than degrade that chunk's paths to a permissive 'not deleted'
-    guess -- the 2026-08-26 fix (docs/research/spike-verdicts/2026-08-26-
-    one-porcelain-v2-read-replaces-the-probe-suite.md) that replaces the
-    silent-degrade defect this test used to pin."""
+def test_worktree_deleted_paths_probe_failure_raises(monkeypatch):
+    """The unstaged-deletion probe's fail-loud posture: a genuine `git
+    status` failure must raise `WorktreeDeletionProbeFailed` rather than
+    degrade to a permissive 'not deleted' guess -- the 2026-08-26 fix
+    (docs/research/spike-verdicts/2026-08-26-one-porcelain-v2-read-
+    replaces-the-probe-suite.md) that replaces the silent-degrade defect
+    this test used to pin."""
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
     paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
 
-    calls: list[list[str]] = []
+    def _fake_status_v2(cwd, paths=None):
+        return GitResult(returncode=1, stdout="", stderr="simulated probe failure")
 
-    def _fake_status_v2(cwd, paths):
-        batch = list(paths)
-        calls.append(batch)
-        if len(calls) == 1:
-            return GitResult(returncode=1, stdout="", stderr="simulated chunk failure")
-        records = [f"1 .. N... 100644 100644 100644 abc123 abc123 {p}" for p in batch]
-        return GitResult(returncode=0, stdout="\0".join(records) + "\0", stderr="")
-
-    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _fake_status_v2)
+    monkeypatch.setattr(git_native, "status_porcelain_v2", _fake_status_v2)
 
     with pytest.raises(commit_pipeline_mod.WorktreeDeletionProbeFailed):
-        commit_pipeline_mod._worktree_deleted_paths_chunked(Path("/fake/root"), paths)
+        commit_pipeline_mod._worktree_deleted_paths(Path("/fake/root"), paths)
 
 
-def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_probe(
+def test_explicit_stage_large_batch_unstaged_deletion_classified_via_unscoped_probe(
     tmp_path, monkeypatch
 ):
     """Integration proof for site 2 (the 'could not be classified' defect):
-    a caller-named deletion in a batch large enough to span several
-    `status_porcelain_v2_scoped()` chunks is still correctly staged as a
-    deletion, never declined as 'genuinely absent' merely because the
-    probe's pathspec no longer fits on one argv."""
+    a caller-named deletion in a large batch is still correctly staged as a
+    deletion via the single unscoped `status_porcelain_v2()` read, never
+    declined as 'genuinely absent'."""
     from coordinator_core.ops.ceremony import git_native
 
     repo = _init_repo(tmp_path)
@@ -2581,31 +2595,36 @@ def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_pro
     (repo / "docs/to-delete.md").unlink()
 
     calls: list[list[str]] = []
-    real = git_native.status_porcelain_v2_scoped
+    real = git_native.status_porcelain_v2
 
-    def _spy(cwd, paths):
-        calls.append(list(paths))
+    def _spy(cwd, paths=None):
+        calls.append(list(paths) if paths else [])
         return real(cwd, paths)
 
-    monkeypatch.setattr(git_native, "status_porcelain_v2_scoped", _spy)
+    monkeypatch.setattr(git_native, "status_porcelain_v2", _spy)
 
     outcome = explicit_stage(repo, all_paths, caller_paths={"docs/to-delete.md"})
 
-    assert len(calls) > 1, "1200+ paths must not fit in a single status-v2 chunk"
+    assert len(calls) == 1, "exactly one unscoped status-v2 read, regardless of batch size"
     assert outcome.exit_code == 0
     assert "docs/to-delete.md" in outcome.deletion_paths
     assert "docs/to-delete.md" not in outcome.missing_caller_paths
 
 
-def test_explicit_stage_add_paths_chunked_at_scale_still_reconciles_partial_failure(
+def test_explicit_stage_add_paths_single_call_at_scale_still_reconciles_partial_failure(
     tmp_path, monkeypatch
 ):
-    """Integration proof that chunking the `git add` call itself (the
-    audit-discovered third unbounded site) preserves the existing partial-
-    failure residue reconciliation at scale: a batch spanning several
-    `add_paths()` chunks, where a later chunk fails, still reports every
-    genuinely-staged path (from the chunks that succeeded before the
-    failure) in `acted` -- never silently dropped."""
+    """Integration proof that `explicit_stage()`'s single `add_paths()` call
+    (2026-08-26: `--pathspec-from-file` replaced the chunked argv loop --
+    see `explicit_stage`'s own "Atomicity" docstring note) preserves the
+    existing partial-failure residue reconciliation at scale: even though
+    there is now exactly ONE `git add` spawn regardless of batch size, a
+    simulated partial-mutation-then-failure `add_paths` still reports every
+    genuinely-staged path in `acted` -- never silently dropped. The
+    premise this test used to pin (a batch spanning several `add_paths()`
+    chunks, with a later chunk failing) no longer exists now that staging
+    is one call; this test covers the same reconciliation-at-scale
+    guarantee against the new single-call shape instead."""
     from coordinator_core.ops.ceremony import git_native
     from coordinator_core.ops.ceremony.git_native import GitResult
 
@@ -2624,23 +2643,75 @@ def test_explicit_stage_add_paths_chunked_at_scale_still_reconciles_partial_fail
 
     def _fake_add_paths(cwd, paths):
         add_calls.append(list(paths))
-        if len(add_calls) == 3:
-            return GitResult(returncode=1, stdout="", stderr="simulated chunk add failure")
-        return real_add_paths(cwd, paths)
+        # Simulate a partial-mutation-then-failure `add_paths`: genuinely
+        # stage the first half of the batch, then report failure for the
+        # whole call -- defense-in-depth coverage per the sibling tests'
+        # 2026-08-26 update.
+        half = len(paths) // 2
+        real_add_paths(cwd, paths[:half])
+        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
 
     monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
 
     outcome = explicit_stage(repo, bulk_paths, caller_paths=set())
 
-    assert len(add_calls) >= 3, "1200 paths must not fit in a single `git add` chunk"
+    assert len(add_calls) == 1, "1200 paths must still fit in a single `git add` call"
     assert outcome.failed
-    assert outcome.acted, "chunks staged before the failing one must be reconciled into acted"
+    assert outcome.acted, "paths staged before the simulated failure must be reconciled into acted"
     staged_this_call = set(outcome.acted)
     status_lines = _porcelain(repo)
     for p in staged_this_call:
         assert any(
             line.startswith("A") and line.endswith(p.replace("/", "/")) for line in status_lines
         ), f"{p} reported in acted but not actually staged: {status_lines}"
+
+
+def test_explicit_stage_spawns_exactly_one_git_add(tmp_path, monkeypatch):
+    """`explicit_stage()` issues exactly ONE `git add` process regardless of
+    batch size (2026-08-26, DR-344, mirrors
+    `test_worktree_deletion_probe_spawns_exactly_one_git`'s spawn-count
+    guard shape). `git_native.add_paths()` now delivers its pathspec via
+    `--pathspec-from-file` instead of argv, so the chunk loop that used to
+    call it several times for a large batch (`_chunk_paths`, bounded by the
+    Windows argv cap) is gone -- one call, one spawn, at any batch size.
+    This is a large-enough batch (400+ long names) that the OLD chunked
+    shape would have needed several `git add` processes -- so this test
+    would genuinely have caught the regression."""
+    from coordinator_core.ops.ceremony import git_native as _gn
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    names = [
+        f"pkg/module_with_a_fairly_long_directory_name_{i // 20}/"
+        f"file_with_a_fairly_long_name_too_{i:04d}.py"
+        for i in range(400)
+    ]
+    for name in names:
+        _seed_file(repo, name, "v1")
+
+    add_calls: list = []
+    real_git = _gn._git
+
+    def _counting(argv, *args, **kwargs):
+        if argv and argv[0] == "add":
+            add_calls.append(argv)
+        return real_git(argv, *args, **kwargs)
+
+    monkeypatch.setattr(_gn, "_git", _counting)
+
+    outcome = explicit_stage(repo, names, caller_paths=set())
+
+    assert outcome.exit_code == 0
+    assert not outcome.failed
+    assert len(add_calls) == 1, (
+        f"explicit_stage spawned {len(add_calls)} `git add` process(es) for a "
+        f"{len(names)}-path batch; expected exactly 1"
+    )
+    status_lines = _porcelain(repo)
+    assert sum(1 for line in status_lines if line.startswith("A")) == len(names)
 
 
 def test_commit_log_grep_bounds_argv_on_large_commit_paths(tmp_path, monkeypatch):
@@ -4836,7 +4907,7 @@ def test_pipeline_post_push_peer_race_keeps_own_committed_sha(tmp_path, monkeypa
 
     _seed_file(repo, "tasks/feature/todo.md", "content")
 
-    def fake_push_with_retry(root):
+    def fake_push_with_retry(root, **_kw):
         _seed_file(root, "PEER.md", "peer content")
         _git(["add", "--", "PEER.md"], root)
         _git(["commit", "-q", "-m", "peer commit\n\nSession-Id: peer-session-id"], root)
@@ -5621,3 +5692,176 @@ def test_msys_path_form_is_rejected_not_normalised(tmp_path):
         commit_pipeline_mod.explicit_stage("/X/no-such-drive-path", ["a.py"])
 
     assert "MSYS" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# push_with_retry -- the ladder's own deadline (2026-08-26)
+#
+# The defect these close: before `budget_secs`, the ONLY bound on a push ladder
+# was `ipc._timeout_for`'s wall-clock dispatch guard, which can fire only
+# mid-leg -- and a dispatch timeout does not abort server-side execution, so
+# cutting a push there yields an `unconfirmed` push that may still land. These
+# pin the opposite property: the ladder stops itself BETWEEN attempts, where the
+# state is known, and reports a decided `failed`.
+# ---------------------------------------------------------------------------
+
+
+def _budget_repo(tmp_path):
+    """A `work/*` repo with a real remote configured, past every early return
+    in `push_with_retry` so the retry ladder itself is what runs."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["branch", "-m", "work/budget-probe"], repo)
+    _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
+    return repo
+
+
+def test_push_budget_exhausted_between_attempts_is_failed_not_unconfirmed(tmp_path, monkeypatch):
+    """THE property this budget exists for.
+
+    A ladder stopped by its own deadline must report `failed`, never
+    `unconfirmed`. `unconfirmed` means "we never observed the outcome", and
+    between attempts we did observe it -- the remote rejected us and nothing is
+    in flight. Routing budget exhaustion into `unconfirmed` would re-manufacture
+    the "unknown" state the budget removes.
+    """
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    reject = GitResult(returncode=1, stdout="", stderr="! [rejected] (non-fast-forward)")
+    monkeypatch.setattr(git_native, "push", lambda *a, **kw: reject)
+    monkeypatch.setattr(git_native, "fetch", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr=""))
+
+    outcome = commit_pipeline_mod.push_with_retry(repo, budget_secs=0.0)
+
+    assert outcome.unconfirmed == []
+    assert outcome.failed, "an exhausted budget must still be a reported failure"
+    assert outcome.exit_code != 0
+    assert "budget" in outcome.failed[0]
+    assert "Nothing is in flight" in outcome.failed[0]
+
+
+def test_push_budget_sizes_each_leg_from_the_remainder(tmp_path, monkeypatch):
+    """Each network leg is bounded by what is LEFT, not by a fresh full budget.
+
+    A per-leg timeout re-armed at the full budget would let a three-attempt
+    ladder run to 3x its own deadline -- the ladder would own a number that
+    bounds nothing, which is the shape this replaced.
+    """
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    seen = []
+
+    def _push(*a, **kw):
+        seen.append(kw.get("timeout"))
+        return GitResult(returncode=1, stdout="", stderr="! [rejected] (non-fast-forward)")
+
+    monkeypatch.setattr(git_native, "push", _push)
+    monkeypatch.setattr(git_native, "fetch", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr=""))
+
+    commit_pipeline_mod.push_with_retry(repo, budget_secs=30.0)
+
+    assert seen, "the ladder never reached git_native.push"
+    assert all(x is not None for x in seen), f"a leg ran unbounded under a budget: {seen}"
+    assert all(x <= 30.0 for x in seen)
+    assert seen == sorted(seen, reverse=True), f"leg budgets must shrink, got {seen}"
+
+
+def test_push_without_budget_keeps_every_leg_unbounded(tmp_path, monkeypatch):
+    """`budget_secs=None` is the default and must change nothing.
+
+    Every pre-existing caller (`run_commit_pipeline`, `post_commit_tail`,
+    `consumed_handoff_stamp`) still relies on `git_native.push`/`fetch`'s own
+    defaults. Passing a computed timeout to them here would silently retune
+    callers this parameter was added not to touch.
+    """
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    seen = []
+
+    def _push(*a, **kw):
+        seen.append(kw)
+        return GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "push", _push)
+
+    outcome = commit_pipeline_mod.push_with_retry(repo)
+
+    assert outcome.exit_code == 0
+    assert seen == [{}], f"an unbudgeted ladder passed a timeout: {seen}"
+
+
+def test_push_budget_does_not_bound_a_first_attempt_that_lands(tmp_path, monkeypatch):
+    """A landed push is untouched by the budget beyond sizing its one leg --
+    no extra spawn, no second attempt, and the landed-push fields still fill."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    calls = []
+
+    def _push(*a, **kw):
+        calls.append(kw.get("timeout"))
+        return GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "push", _push)
+
+    outcome = commit_pipeline_mod.push_with_retry(
+        repo, budget_secs=commit_pipeline_mod.PUSH_RETRY_BUDGET_SECS
+    )
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert len(calls) == 1
+    assert 0 < calls[0] <= commit_pipeline_mod.PUSH_RETRY_BUDGET_SECS
+
+
+def test_ceremony_push_budget_fits_inside_the_ceremony_clamp(tmp_path):
+    """A ceremony op's push budget must leave room under `CEREMONY_BUDGET_SECS`.
+
+    The whole point of the ceremony number is that the LADDER stops before the
+    2.0s dispatch clamp does -- a budget at or above the clamp would hand the
+    mid-leg cut straight back, which is the defect it was added to close. The
+    clamp is read live from `ipc` rather than restated, so lowering the ratchet
+    (its only permitted direction, DR-348) fails here instead of silently
+    leaving the push budget above it.
+    """
+    from coordinator_core import ipc
+
+    assert commit_pipeline_mod.CEREMONY_PUSH_BUDGET_SECS < ipc.CEREMONY_BUDGET_SECS
+    assert commit_pipeline_mod.CEREMONY_PUSH_BUDGET_SECS > 0
+    assert (
+        commit_pipeline_mod.CEREMONY_PUSH_BUDGET_SECS
+        < commit_pipeline_mod.PUSH_RETRY_BUDGET_SECS
+    ), (
+        "a ceremony push must be tighter than the cadence ladder -- the ceremony "
+        "buys one attempt, the cadence surface owns the retry ladder"
+    )
+
+
+def test_git_native_push_and_fetch_defaults_are_the_named_remote_guard(tmp_path):
+    """No per-module timeout literal on a remote leg.
+
+    These defaults were a bare `120` -- unreachable behind a 30s-or-tighter
+    dispatch guard, so they read as a bound while bounding nothing. Pinned to
+    DR-349's single remote runaway guard so the next reader finds one number
+    with a rationale instead of a plausible literal.
+    """
+    import inspect
+
+    from coordinator_core.git.run import REMOTE_BUDGET_SECS
+    from coordinator_core.ops.ceremony import git_native
+
+    for fn in (git_native.push, git_native.fetch):
+        default = inspect.signature(fn).parameters["timeout"].default
+        assert default == REMOTE_BUDGET_SECS, (
+            f"{fn.__name__} carries its own timeout literal ({default}) instead of "
+            f"REMOTE_BUDGET_SECS"
+        )

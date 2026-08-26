@@ -149,6 +149,7 @@ from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_pat
 #: not Check 13's `2.0s` advisory default.
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 
@@ -305,6 +306,69 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 _PUSH_RETRY_CLASSES = frozenset({"non-fast-forward"})
 _PUSH_MAX_RETRIES = 3
 
+#: END-TO-END deadline for one `push_with_retry` ladder, opt-in per call.
+#:
+#: THE JOB THIS DOES, and why a dispatch timeout could not do it. Before this
+#: constant the ONLY bound on a push ladder was `ipc._timeout_for`'s wall-clock
+#: `asyncio.wait_for` guard, and that guard can only fire MID-LEG -- inside a
+#: `git push` whose outcome is then never observed. A dispatch timeout does not
+#: abort server-side execution (`ipc.py`'s reconcile-before-retry negative spec),
+#: so cutting a push there does not buy a decided failure, it manufactures a
+#: `PushOutcome.unconfirmed` that may still land afterwards. That is the worst of
+#: the three states and it is the one a runaway guard reaches for first.
+#:
+#: A deadline the ladder owns is checked BETWEEN attempts, where the state is
+#: known: the last push was OBSERVED as rejected and nothing is in flight. So an
+#: exhausted budget reports a genuine `failed`, never `unconfirmed`, and the
+#: caller is not left with "unknown" (`docs/wiki/close-ceremony-residue.md`).
+#:
+#: SIZING, measured 2026-08-26 against `github.com` from this box, quiet:
+#:     git ls-remote origin HEAD        p50 669.5ms  (min 610.3, max 701.3)
+#:     git push --dry-run origin HEAD   p50 753.9ms  (min 610.1, max 796.4)
+#: The full ladder is 3 pushes + 2 fetches = 5 network legs ~= 3.8s, plus a local
+#: rebase and the ladder's own `rev-parse`/`rev-list` spawns. 12.0s is ~3x that
+#: network cost, leaving room for the per-spawn scheduling tax the 50-70-session
+#: load norm imposes (`coordinator_core/git/run.py :: _SPAWN_SCHEDULING_HEADROOM_SECS`).
+#:
+#: A CEILING, NEVER A TARGET, and deliberately well under the 30s dispatch guard
+#: so THIS is what stops the ladder and the guard stays a backstop whose breach
+#: means a real defect -- the same shape `ipc.py`'s `_OP_TIMEOUT_OVERRIDES` block
+#: records for `percolate.build_token_index`. Ratchets DOWN only: the remedy for a
+#: ladder that does not fit is a cheaper ladder, never a wider number here. The
+#: network floor above is the one term nothing in this repo can shrink.
+PUSH_RETRY_BUDGET_SECS: float = 12.0
+
+#: The push budget for a CEREMONY op, which is a different job from the cadence
+#: ladder above and deliberately carries a different number.
+#:
+#: `ipc.CEREMONY_BUDGET_SECS` bounds a whole `ceremony.*` op end to end at 2.0s
+#: (DR-348, a ratchet with no per-op exception). The push is the LAST leg of that
+#: op -- staging, gates, the commit itself and the reporting tail are already
+#: paid by the time it runs -- so it cannot have the whole budget. The headroom
+#: below is what those earlier legs and the tail need; the remainder is what the
+#: push may spend.
+#:
+#: WHAT THIS NUMBER BUYS, read against the same 2026-08-26 measurements behind
+#: `PUSH_RETRY_BUDGET_SECS` (~600-750ms for one network leg, quiet): exactly ONE
+#: honest push attempt and no retry ladder. That is the correct shape for a
+#: ceremony op rather than a shortfall in it. A ceremony op must either land the
+#: push inside its budget or report cleanly and leave -- it may never occupy the
+#: box retrying, because the ~50 peers queued behind it are the load norm
+#: (`docs/wiki/machine-load-norm.md`). Work that genuinely needs the retry ladder
+#: belongs on a cadence surface, which is what `push.outstanding` and
+#: `PUSH_RETRY_BUDGET_SECS` exist to serve.
+#:
+#: THE DEFECT THIS CLOSES, and why it is not merely a tighter number: before it,
+#: these ceremony push paths were bounded ONLY by the 2.0s dispatch clamp, which
+#: `asyncio.wait_for` can fire only mid-leg -- inside a `git push` whose outcome
+#: is then never observed, leaving an `unconfirmed` push that may still land
+#: (`ipc.py`'s reconcile-before-retry negative spec). Landing under the ladder's
+#: own deadline instead means the stop happens between attempts, where the state
+#: is known and the outcome is decided. Same reasoning as
+#: `PUSH_RETRY_BUDGET_SECS`, sized for a different caller.
+_CEREMONY_PUSH_HEADROOM_SECS: float = 0.8
+CEREMONY_PUSH_BUDGET_SECS: float = CEREMONY_BUDGET_SECS - _CEREMONY_PUSH_HEADROOM_SECS
+
 #: Matches `git_native._git()`'s own synthesized `TimeoutExpired` stderr
 #: ("git push ...: timed out after {timeout}s (...)") -- the ONE reason
 #: string that means the push's true outcome was never observed at all,
@@ -347,8 +411,8 @@ class StageOutcome:
             does not touch it -- but it IS in `staged_paths` (it is staged,
             just not by this call). `acted` no longer always mirrors
             `staged_paths` once a diverged path is present in the batch.
-            On a FAILED `git add` (non-atomic partial-batch failure -- see
-            `explicit_stage`'s own docstring), `acted` is NOT unconditionally
+            On a FAILED `git add` (a single atomic call -- see
+            `explicit_stage`'s own docstring's "Atomicity" note), `acted` is NOT unconditionally
             `[]`: it is reconciled against real index state scoped to this
             call's own `to_stage` batch, so any genuinely-partially-staged
             residue is still reported here and still covered by a caller's
@@ -378,7 +442,7 @@ class StageOutcome:
             docstring for the incident (live 2026-08-03 `safe-commit-offer`
             run) this closes: previously an ignored path was invisible to
             this pre-filter and reached `git add`, where it failed the WHOLE
-            batch (non-atomically -- see the "Non-atomicity" section of
+            batch (a single atomic call -- see the "Atomicity" section of
             `explicit_stage`'s docstring) rather than being skipped like a
             missing path already was.
         checked_paths -- the exact path set `diverging_paths()` was scoped
@@ -545,50 +609,6 @@ def _worktree_key(root: Path, p: str) -> str:
         return p
 
 
-def _path_is_scopeable(root: Path, p: str) -> bool:
-    """True iff `p` can be handed to a `git` pathspec under `cwd=root`
-    without git itself hard-failing on the PATH (independent of whether it
-    exists or is tracked).
-
-    Empirically confirmed (2026-08-26): `git status`/`git ls-files` with a
-    pathspec outside the worktree, or one whose containing directory does
-    not exist on disk at all, exits `rc=128` with `fatal: Invalid path
-    '...': No such file or directory` -- a property of the path string
-    itself, not an indeterminate answer about deletion state. Mirrors
-    `_worktree_key`'s own relativization attempts (a relative `p`, or an
-    absolute `p` that resolves under `root`, is scopeable; anything else is
-    not) so the two stay in lockstep -- a path this returns False for is
-    exactly the one `_worktree_key` would return unchanged for, which can
-    never match a git-reported name anyway.
-    """
-    candidate = Path(p)
-    if not candidate.is_absolute():
-        # A RELATIVE path can escape the worktree too (`../outside/x.md`),
-        # and git rejects it with the same rc=128 path-shape fatal as the
-        # absolute case -- confirmed 2026-08-26: "fatal: ../outside/x.md:
-        # '../outside/x.md' is outside repository". Normalise lexically
-        # rather than via `resolve()`: a path being probed for DELETION is
-        # routinely absent from disk, so containment must not depend on the
-        # target existing.
-        normalized = os.path.normpath(os.path.join(str(root), p))
-        try:
-            return os.path.commonpath([normalized, str(root)]) == os.path.normpath(str(root))
-        except ValueError:
-            # Different drive on Windows -- not under `root` by definition.
-            return False
-    for base in (root, root.resolve()):
-        try:
-            candidate.relative_to(base)
-            return True
-        except ValueError:
-            continue
-    try:
-        candidate.resolve().relative_to(root.resolve())
-        return True
-    except (ValueError, OSError):
-        return False
-
-
 def _diverging_paths_chunked(
     paths: Sequence[str],
     cwd: str,
@@ -631,8 +651,8 @@ def _diverging_paths_chunked(
 
 
 class WorktreeDeletionProbeFailed(Exception):
-    """Raised by `_worktree_deleted_paths_chunked` when it cannot answer,
-    rather than degrading to the pre-fix "found nothing" guess.
+    """Raised by `_worktree_deleted_paths` when it cannot answer, rather
+    than degrading to the pre-fix "found nothing" guess.
 
     2026-08-26 fix (docs/research/spike-verdicts/2026-08-26-one-porcelain-
     v2-read-replaces-the-probe-suite.md): the probe this replaces
@@ -640,7 +660,7 @@ class WorktreeDeletionProbeFailed(Exception):
     to "no deletions found" and marked every caller path in it
     `unverifiable_missing_caller_paths` -- a permissive guess a caller
     could not tell apart from a genuine "confirmed absent" answer without
-    reading a second field. Fail-loud closes that: a chunk-level failure
+    reading a second field. Fail-loud closes that: a probe-level failure
     (non-zero rc, timeout, a malformed/unrecognised v2 record, or a `u`
     unmerged record) now raises instead of degrading, so `explicit_stage()`
     refuses the call the same way its divergence check already does on
@@ -649,20 +669,34 @@ class WorktreeDeletionProbeFailed(Exception):
     """
 
 
-def _worktree_deleted_paths_chunked(root: Path, paths: Sequence[str]) -> Set[str]:
-    """Chunked, path-scoped, fail-loud `git status --porcelain=v2 -z
-    --ignored -uall -- <paths>` read for `explicit_stage()`'s unstaged-
-    deletion classification probe -- the fail-loud replacement for the old
-    `git ls-files --deleted` probe (`WorktreeDeletionProbeFailed`'s own
-    docstring covers the incident this closes).
+def _worktree_deleted_paths(root: Path, paths: Sequence[str]) -> Set[str]:
+    """ONE unscoped, fail-loud `git status --no-optional-locks
+    --porcelain=v2 -z` read for `explicit_stage()`'s unstaged-deletion
+    classification probe, intersected in-process against `paths` --
+    the fail-loud replacement for the old `git ls-files --deleted` probe
+    (`WorktreeDeletionProbeFailed`'s own docstring covers that incident).
 
-    Returns the CWD-relative name set of every path in `paths` whose
-    worktree content is missing while its index still matches HEAD (a
-    plain `rm` never followed by `git rm`/`git add` -- the v2 record's `Y`
-    (worktree-vs-index) status is `D`). Chunked exactly like the divergence
-    check: each chunk is an independent, pathspec-bounded call, and a
-    path's membership comes from the ONE chunk it was placed in -- never a
-    whole-batch verdict merged across chunks.
+    Returns the CWD-relative name subset of `paths` whose worktree content
+    is missing while its index still matches HEAD (a plain `rm` never
+    followed by `git rm`/`git add` -- the v2 record's `Y` (worktree-vs-
+    index) status is `D`).
+
+    2026-08-26 second fix (this rewrite,
+    docs/research/spike-verdicts/2026-08-26-one-porcelain-v2-read-replaces-
+    the-probe-suite.md): the prior revision of this function pathspec-
+    scoped and CHUNKED this same read to stay under the Windows argv cap --
+    but a pathspec on `git status` only filters its OUTPUT, never the WORK:
+    `git status` refreshes the index and walks the whole worktree
+    regardless of what pathspec (if any) it is given. Chunking therefore
+    bought nothing but extra spawns -- measured on this repo (36547 tracked
+    files): a 600-path chunked batch cost 8 spawns, a 2600-path batch cost
+    32, while the SAME call unscoped costs exactly 1 spawn at any batch
+    size. This function now takes that one unscoped read and intersects
+    the caller's requested `paths` against it in-process (via
+    `_worktree_key`, so an absolute caller path still matches git's
+    CWD-relative report -- see that helper's own docstring), which costs
+    the identical one walk git was always going to do, for one spawn
+    total instead of one per chunk.
 
     Every record type this read can emit is explicitly dispatched by its
     leading token (spike verdict § U3, confirmed against git
@@ -671,123 +705,88 @@ def _worktree_deleted_paths_chunked(root: Path, paths: Sequence[str]) -> Set[str
     the NEXT NUL-separated field, consumed and discarded here -- this
     probe only answers deletion membership, and a renamed path is handled
     by the separate, deliberately-unscoped `diff_cached_name_status`
-    read), `?` untracked and `!` ignored (path is everything after the
-    2-character prefix), `u` unmerged (raises -- a conflicted path has no
-    safe worktree-deletion answer), `#` header (skipped). Any OTHER
+    read), `?` untracked (path is everything after the 2-character prefix;
+    skipped -- not a deletion), `u` unmerged (raises -- a conflicted path
+    has no safe worktree-deletion answer), `#` header (skipped). Any OTHER
     leading token raises rather than being silently skipped -- an
     unrecognised record is exactly the "this probe cannot vouch for this
-    answer" case fail-loud exists to catch.
+    answer" case fail-loud exists to catch. `--ignored` is deliberately not
+    passed (see `git_native.status_porcelain_v2`'s own docstring), so no
+    `!` record is ever emitted for this call.
 
     The absent-record door (spike verdict § U1): `git status` emits
-    NOTHING for a path that is either CLEAN-TRACKED or MATCHED-NOTHING (an
-    unmatched pathspec) -- both exit 0 with no record, and neither is a
-    deletion, so no record for a requested path in this probe's OWN chunk
-    is not itself an error. Every path with no record in its chunk is
-    still explicitly resolved via a batched `git ls-files -z` membership
-    check (`git_native.ls_files_scoped`) so this function never defaults
-    silence to a classification it never verified -- see that helper's own
-    docstring for why the check is needed at all despite neither outcome
-    changing this probe's answer (both are simply "not deleted").
-
-    A path OUTSIDE `root` (or whose containing directory does not exist on
-    disk at all) is excluded from every git call this function issues --
-    empirically confirmed (2026-08-26) that `git status`/`git ls-files`
-    both hard-fail (`fatal: Invalid path '...': No such file or directory`,
-    rc=128) on such a pathspec, which is a property of the PATH, not an
-    indeterminate answer about deletion state, and must not escalate the
-    whole chunk to `WorktreeDeletionProbeFailed` -- `_worktree_key` already
-    returns such a path unchanged (unresolvable under `root`), so it can
-    never legitimately match a git-reported name anyway; the caller's own
-    fallthrough to "missing" (see `explicit_stage`'s classification loop)
-    is the correct, unweakened answer for it, exactly as it was before this
-    fix (`test_explicit_stage_absolute_path_outside_worktree_is_missing`).
+    NOTHING for a path that is either CLEAN-TRACKED or MATCHED-NOTHING --
+    both exit 0 with no record, and neither is a deletion. A requested
+    path that never appears in the unscoped read's output is therefore
+    correctly absent from the returned set (not a deletion), with no
+    second call needed to distinguish the two silences from each other --
+    unlike the old pathspec-scoped shape, an UNSCOPED read has no
+    "matched nothing" case to disambiguate at all: every tracked/
+    untracked/ignored-excepted path in the whole worktree is walked, so a
+    silent requested path is definitively clean-tracked-or-untouched.
     """
     if not paths:
         return set()
 
+    result = git_native.status_porcelain_v2(root)
+    if not result.ok:
+        raise WorktreeDeletionProbeFailed(
+            "_worktree_deleted_paths: `git status --porcelain=v2` failed or "
+            f"timed out (rc={result.returncode}) -- worktree-deletion "
+            "classification indeterminate "
+            f"({condense_git_diagnostic(result.stderr) or condense_git_diagnostic(result.stdout) or 'no diagnostic output'})"
+        )
+
+    requested = {_worktree_key(root, p) for p in paths}
+
+    fields = result.stdout.split("\0")
+    if fields and fields[-1] == "":
+        fields = fields[:-1]
+
     deleted: Set[str] = set()
-    for chunk in _chunk_paths(list(paths)):
-        scoped_chunk = [p for p in chunk if _path_is_scopeable(root, p)]
-        if not scoped_chunk:
+    i = 0
+    while i < len(fields):
+        record = fields[i]
+        if not record:
+            i += 1
             continue
-        result = git_native.status_porcelain_v2_scoped(root, scoped_chunk)
-        if not result.ok:
+        token = record[0]
+        if token == "1":
+            parts = record.split(" ", 8)
+            if len(parts) < 9 or len(parts[1]) < 2:
+                raise WorktreeDeletionProbeFailed(
+                    f"_worktree_deleted_paths: malformed ordinary v2 record: "
+                    f"{record!r}"
+                )
+            path = parts[8]
+            if parts[1][1] == "D" and path in requested:
+                deleted.add(path)
+            i += 1
+        elif token == "2":
+            parts = record.split(" ", 9)
+            if len(parts) < 10 or i + 1 >= len(fields):
+                raise WorktreeDeletionProbeFailed(
+                    f"_worktree_deleted_paths: malformed rename v2 record: "
+                    f"{record!r}"
+                )
+            # `<origPath>` is the NEXT NUL field -- consumed, not used by
+            # this deletion-only probe (see this function's own docstring).
+            i += 2
+        elif token == "?":
+            i += 1
+        elif token == "u":
             raise WorktreeDeletionProbeFailed(
-                "_worktree_deleted_paths_chunked: `git status --porcelain=v2` "
-                f"failed or timed out (rc={result.returncode}) for {len(scoped_chunk)} "
-                "path(s) -- worktree-deletion classification indeterminate "
-                f"({condense_git_diagnostic(result.stderr) or condense_git_diagnostic(result.stdout) or 'no diagnostic output'})"
+                f"_worktree_deleted_paths: unmerged (conflict) v2 record, "
+                f"no safe deletion answer: {record!r}"
+            )
+        elif token == "#":
+            i += 1
+        else:
+            raise WorktreeDeletionProbeFailed(
+                f"_worktree_deleted_paths: unrecognised v2 record leading "
+                f"token: {record!r}"
             )
 
-        fields = result.stdout.split("\0")
-        if fields and fields[-1] == "":
-            fields = fields[:-1]
-
-        seen: Set[str] = set()
-        i = 0
-        while i < len(fields):
-            record = fields[i]
-            if not record:
-                i += 1
-                continue
-            token = record[0]
-            if token == "1":
-                parts = record.split(" ", 8)
-                if len(parts) < 9 or len(parts[1]) < 2:
-                    raise WorktreeDeletionProbeFailed(
-                        f"_worktree_deleted_paths_chunked: malformed ordinary "
-                        f"v2 record: {record!r}"
-                    )
-                path = parts[8]
-                seen.add(path)
-                if parts[1][1] == "D":
-                    deleted.add(path)
-                i += 1
-            elif token == "2":
-                parts = record.split(" ", 9)
-                if len(parts) < 10 or i + 1 >= len(fields):
-                    raise WorktreeDeletionProbeFailed(
-                        f"_worktree_deleted_paths_chunked: malformed rename "
-                        f"v2 record: {record!r}"
-                    )
-                seen.add(parts[9])
-                # `<origPath>` is the NEXT NUL field -- consumed, not used by
-                # this deletion-only probe (see this function's own
-                # docstring).
-                i += 2
-            elif token in ("?", "!"):
-                seen.add(record[2:])
-                i += 1
-            elif token == "u":
-                raise WorktreeDeletionProbeFailed(
-                    f"_worktree_deleted_paths_chunked: unmerged (conflict) "
-                    f"v2 record, no safe deletion answer: {record!r}"
-                )
-            elif token == "#":
-                i += 1
-            else:
-                raise WorktreeDeletionProbeFailed(
-                    f"_worktree_deleted_paths_chunked: unrecognised v2 record "
-                    f"leading token: {record!r}"
-                )
-
-        # NO absent-record settling spawn here, deliberately -- this probe's
-        # answer domain is "which of `paths` are worktree-deleted", and for
-        # THAT question a silent path is resolved, not defaulted. Once the
-        # `git status` call above has SUCCEEDED, silence means git scanned
-        # the path and had nothing to report, which is definitionally "not
-        # deleted" whether the path is clean-tracked or matched nothing.
-        # Neither outcome is a deletion, so no second read can change the
-        # answer. The permissive-guess failure this function exists to close
-        # was silence after a FAILED probe -- that arm now raises above.
-        #
-        # The present/absent split callers need is settled independently by
-        # `explicit_stage`'s own in-process `(root / p).exists()` check (see
-        # its docstring), which costs no process at all. An earlier revision
-        # spawned `git ls-files` per chunk here and discarded its stdout:
-        # measured 2x the spawns of the probe it replaced (8 vs 4 on a
-        # 600-path batch, +122ms) for an identical result set, which at
-        # percolate scale alone would breach the DR-344 brightline.
     return deleted
 
 
@@ -796,8 +795,8 @@ def _residue_paths_chunked(
 ) -> Tuple[Set[str], bool, Optional["git_native.GitResult"]]:
     """Chunked `git diff --cached --name-only -z -- <to_stage>` for
     `explicit_stage()`'s post-`git add`-failure residue reconciliation --
-    same argv-length hazard `_diverging_paths_chunked` and
-    `_worktree_deleted_paths_chunked` close, one call site over (see
+    same argv-length hazard `_diverging_paths_chunked` closes, one call site
+    over (`_worktree_deleted_paths` no longer chunks -- see
     `explicit_stage()`'s own "Residue reconciliation" comment for what this
     check protects and why `-z` is required).
 
@@ -1045,7 +1044,7 @@ def explicit_stage(
     file is not an anomaly. Before this fix, an untracked ignored path was
     invisible to the `(worktree_root / p).exists()` classification above (it
     exists on disk, it just isn't tracked), so it flowed into `to_stage` and
-    reached `git add`, where -- per the "Non-atomicity" note below -- it
+    reached `git add`, where -- per the "Atomicity" note below -- it
     failed the WHOLE batch rather than being skipped the way a genuinely
     missing path already was. This pre-filter runs a single batched
     `git_native.check_ignore()` call (never per-path, mirroring the existing
@@ -1072,20 +1071,20 @@ def explicit_stage(
     `exit_code=-1` + a `failed` entry -- never propagated past this
     function) and an indeterminate worktree-deletion probe
     (`WorktreeDeletionProbeFailed`, caught the same way -- see
-    `_worktree_deleted_paths_chunked`'s own docstring for the 2026-08-26 fix
-    that made this probe fail loud instead of degrading).
+    `_worktree_deleted_paths`'s own docstring for the 2026-08-26 fix that
+    made this probe fail loud instead of degrading).
 
-    Non-atomicity of `git add` on failure (empirically confirmed
-    2026-07-31): a mixed `git add -- to_stage` batch is NOT atomic --
-    a `.gitignore`-blocked path (invisible to the `(worktree_root / p).
-    exists()` pre-filter above, since an ignored file still exists on disk)
-    can error AFTER an earlier path in the same batch is already staged.
-    On that failure branch, `acted` is NOT unconditionally `[]` -- it is
-    reconciled against real index state scoped to `to_stage` (`git diff
-    --cached --name-only -- <to_stage>`, never a bare/unscoped read that
-    could sweep in a concurrent peer session's own staged work), so any
-    genuinely-partially-staged residue is still visible to a caller's
-    rollback bookkeeping. See `StageOutcome.acted`'s own docstring.
+    Atomicity of `git add` on failure (2026-08-26: `add_paths()` moved from
+    a chunked argv loop to a single `--pathspec-from-file` call -- see its
+    own docstring): a `to_stage` batch now either stages IN FULL or stages
+    NOTHING -- `git add` is atomic per invocation. On the failure branch,
+    `acted` is still NOT unconditionally assumed `[]` -- it is reconciled
+    against real index state scoped to `to_stage` (`git diff --cached
+    --name-only -- <to_stage>`, never a bare/unscoped read that could sweep
+    in a concurrent peer session's own staged work), so this typically
+    finds an empty residue now, but a caller relying on that reconciliation
+    (rather than assuming `[]`) is unaffected either way. See
+    `StageOutcome.acted`'s own docstring.
 
     Deletion staging (2026-08-04 fix -- live incident: a named-in-pathspec
     deletion was silently dropped from the commit set twice in a row,
@@ -1132,14 +1131,14 @@ def explicit_stage(
     # own `paths`, whose worktree content is missing but whose index still
     # matches HEAD (a plain `rm`, never followed by `git rm`/`git add`).
     # Distinct from `swept_delete` above -- see
-    # `_worktree_deleted_paths_chunked`'s own docstring for why the staged
-    # and unstaged cases need two separate git reads. 2026-08-26 fix: this
+    # `_worktree_deleted_paths`'s own docstring for why the staged and
+    # unstaged cases need two separate git reads. 2026-08-26 fix: this
     # probe is now fail-loud (`WorktreeDeletionProbeFailed`), never a
     # silent "found nothing" degrade on failure -- caught immediately below
     # and converted into a `StageOutcome` failure, mirroring the divergence
     # check's own `try`/`except` shape a few lines down.
     try:
-        worktree_deleted = _worktree_deleted_paths_chunked(root, paths)
+        worktree_deleted = _worktree_deleted_paths(root, paths)
     except WorktreeDeletionProbeFailed as exc:
         return StageOutcome(
             exit_code=-1,
@@ -1357,27 +1356,20 @@ def explicit_stage(
             deletion_paths=deletion_paths,
         )
 
-    # Chunked `git add -- <to_stage>` (2026-08-15 sweep): `to_stage` is the
-    # caller's own batch, unbounded by construction, and `add_paths()` puts
-    # it whole on argv -- the same Windows `CreateProcess` cap hazard every
-    # other batched call in this function closes. Chunking `git add` itself
-    # is semantics-preserving in a way chunking a QUERY is not: staging is
-    # additive and commutative across chunks (mirrors running the ORIGINAL
-    # single non-atomic `git add -- to_stage` call, which itself may stage
-    # some paths before failing on a later one -- see the "Residue
-    # reconciliation" comment below), so stopping at the first failing
-    # chunk reproduces the exact "some staged, then one fails, the rest
-    # never attempted" shape a single unchunked call could already produce
-    # -- never a NEW failure mode. The post-failure residue reconciliation
-    # immediately below is unaffected: it reconciles against real index
-    # state over the FULL `to_stage`, not per-chunk, so it still correctly
-    # reports every path this call's chunks actually staged before the
-    # first failure, regardless of chunk boundaries.
-    add_result = git_native.GitResult(returncode=0, stdout="", stderr="")
-    for _add_chunk in _chunk_paths(to_stage):
-        add_result = git_native.add_paths(root, _add_chunk)
-        if not add_result.ok:
-            break
+    # Single `git add -- <to_stage>` (2026-08-26): `add_paths()` now
+    # delivers `to_stage` via `--pathspec-from-file` instead of argv (see
+    # its own docstring), so the Windows `CreateProcess` argv-length cap
+    # that used to force this call into per-chunk `git add` spawns no
+    # longer applies -- one spawn regardless of batch size. `git add` is
+    # atomic per invocation, so this call either stages the WHOLE batch or
+    # stages NOTHING -- there is no longer a partial-batch window between
+    # chunks for a later path in the same call to fail into. The
+    # post-failure residue reconciliation immediately below is unaffected:
+    # it reconciles against real index state over the FULL `to_stage`
+    # either way, so it now typically finds an empty residue (the whole
+    # batch failed, or none of it did) rather than a genuine partial-add
+    # residue -- both are still handled correctly.
+    add_result = git_native.add_paths(root, to_stage)
     if add_result.ok:
         deletion_paths.extend(to_delete)
         return StageOutcome(
@@ -1407,20 +1399,24 @@ def explicit_stage(
     reason = _reason_from_git_result(add_result, attempted=to_stage)
 
     # Residue reconciliation (empirically confirmed 2026-07-31, code-reviewer
-    # Finding 1, fa1aeeeb9187 review): a mixed `git add -- to_stage` batch is
-    # NOT atomic on failure -- a `.gitignore`-blocked path errors AFTER some
-    # earlier paths in the same batch are already staged. Assuming `acted ==
-    # []` on any add failure (the old behavior) leaves that partial residue
-    # invisible to every caller's rollback bookkeeping, including the
-    # widened `run_commit_pipeline` try/finally -- reproducing the exact
-    # staged-and-abandoned defect that `finally` exists to close. Reconcile
-    # against real index state scoped to `to_stage` (the paths THIS call
-    # attempted) via a pathspec-bounded `git diff --cached --name-only --
-    # to_stage`, never a bare/unscoped read -- an unscoped read could sweep
-    # in a concurrent peer session's own staged work on this shared
-    # worktree and misreport it as this call's residue. Diverged paths are
-    # never in `to_stage` (they were filtered out above), so they can never
-    # be misreported as reconciled residue here.
+    # Finding 1, fa1aeeeb9187 review; updated 2026-08-26 -- `add_paths()` is
+    # now a single `--pathspec-from-file` call, atomic per invocation, so
+    # the historical "a mixed batch errors AFTER some earlier paths are
+    # already staged" partial-residue window this reconciliation was built
+    # for no longer exists in the common case). Assuming `acted == []` on
+    # any add failure (the pre-2026-07-31 behavior) would still leave any
+    # residue invisible to every caller's rollback bookkeeping, including
+    # the widened `run_commit_pipeline` try/finally -- reproducing the
+    # exact staged-and-abandoned defect that `finally` exists to close --
+    # so this reconciliation stays load-bearing even though it now
+    # typically finds nothing. Reconcile against real index state scoped to
+    # `to_stage` (the paths THIS call attempted) via a pathspec-bounded
+    # `git diff --cached --name-only -- to_stage`, never a bare/unscoped
+    # read -- an unscoped read could sweep in a concurrent peer session's
+    # own staged work on this shared worktree and misreport it as this
+    # call's residue. Diverged paths are never in `to_stage` (they were
+    # filtered out above), so they can never be misreported as reconciled
+    # residue here.
     #
     # If the reconciliation check itself fails (rare -- `git diff --cached`
     # against an empty/unborn HEAD, etc.), fail closed: report no residue
@@ -3089,11 +3085,50 @@ def _ref_sha_local(root: Path, ref: str) -> Optional[str]:
     return None
 
 
+def _remaining_or_none(deadline: Optional[float]) -> Optional[float]:
+    """Seconds left on *deadline*, or `None` when the caller set no budget.
+
+    `None` is the whole "this call is unbudgeted" signal and must stay
+    distinguishable from `0.0` -- an unbudgeted ladder keeps
+    `git_native.push`/`fetch`'s own defaults, while an exhausted one stops.
+    Collapsing the two would silently put every legacy caller on a zero
+    timeout.
+    """
+    if deadline is None:
+        return None
+    return deadline - time.monotonic()
+
+
+def _budget_exhausted_reason(
+    attempts_made: int, budget_secs: Optional[float], last_reason: Optional[str]
+) -> str:
+    """The reason string for a ladder stopped by its own deadline.
+
+    Names the budget AND the reject that was actually observed, because the
+    two answer different questions for whoever reads this: the budget says
+    why we stopped trying, the reject says what the remote last told us. A
+    reader who sees only the budget cannot tell a wedged remote from an
+    ordinary busy shared branch.
+
+    NEVER routed to `PushOutcome.unconfirmed`: this string is only ever
+    produced BETWEEN attempts, where the previous push's outcome was
+    observed and nothing is in flight. See `PUSH_RETRY_BUDGET_SECS`.
+    """
+    budget_part = "budget" if budget_secs is None else f"{float(budget_secs):g}s budget"
+    tail = f" (last: {last_reason})" if last_reason else ""
+    return (
+        f"git push: stopped after {attempts_made} attempt(s) -- the ladder's own "
+        f"{budget_part} was exhausted before the remote accepted{tail}. Nothing is "
+        f"in flight; reconcile and retry at the next checkpoint."
+    )
+
+
 def push_with_retry(
     worktree_root: Union[str, Path],
     *,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
+    budget_secs: Optional[float] = None,
 ) -> PushOutcome:
     """Push with reject-detect -> fetch -> rebase --onto -> re-push, bounded.
 
@@ -3138,6 +3173,23 @@ def push_with_retry(
     freshly-fetched upstream tip immediately after each successful fetch,
     so the range finally reported on a landed retry names only the commits
     this call itself pushed.
+
+    `budget_secs` (2026-08-26) -- an END-TO-END deadline for this whole
+    ladder, stamped at entry, with every network leg sized from the
+    remainder and the deadline re-checked BETWEEN attempts. `None` (the
+    default) keeps the pre-existing unbudgeted behaviour for every caller
+    that has not opted in, so this parameter changes nothing it is not
+    passed to. See `PUSH_RETRY_BUDGET_SECS` for why the ladder must own a
+    deadline rather than inherit one from the dispatch guard.
+
+    NEGATIVE SPEC -- an exhausted budget is `failed`, never `unconfirmed`.
+    The check happens between attempts, where the previous push was
+    OBSERVED as rejected and no push is in flight, so the outcome is
+    decided and the caller can act on it. Only a leg that actually timed
+    out mid-flight (`_is_indeterminate_push_result`) may set `unconfirmed`,
+    and that path is untouched here. Routing budget exhaustion into
+    `unconfirmed` would re-manufacture the "unknown" state this budget
+    exists to remove.
 
     `allow_protected_branch`/`protected_branch_override_reason` (C4a, AC8/
     AC14) -- a keyword-only, per-call override that, when `True`, skips the
@@ -3203,8 +3255,20 @@ def push_with_retry(
     # control cannot reach the fetch/rebase branches with this still True).
     last_indeterminate = False
 
+    deadline = None if budget_secs is None else time.monotonic() + float(budget_secs)
+
     for attempt in range(_PUSH_MAX_RETRIES):
-        push_result = git_native.push(root)
+        leg_timeout = _remaining_or_none(deadline)
+        if leg_timeout is not None and leg_timeout <= 0:
+            return PushOutcome(
+                exit_code=last_exit_code or 1,
+                failed=[_budget_exhausted_reason(attempt, budget_secs, last_reason)],
+            )
+        push_result = (
+            git_native.push(root)
+            if leg_timeout is None
+            else git_native.push(root, timeout=leg_timeout)
+        )
         if push_result.ok:
             new_sha: Optional[str] = None
             head_result = git_native.rev_parse_head(root)
@@ -3240,7 +3304,16 @@ def push_with_retry(
             )
             break
 
-        fetch_result = git_native.fetch(root, upstream_info.remote_name)
+        fetch_timeout = _remaining_or_none(deadline)
+        if fetch_timeout is not None and fetch_timeout <= 0:
+            last_reason = _budget_exhausted_reason(attempt + 1, budget_secs, last_reason)
+            break
+
+        fetch_result = (
+            git_native.fetch(root, upstream_info.remote_name)
+            if fetch_timeout is None
+            else git_native.fetch(root, upstream_info.remote_name, timeout=fetch_timeout)
+        )
         if not fetch_result.ok:
             fetch_reason = condense_git_diagnostic(fetch_result.stderr) or "fetch failed"
             last_reason = f"git fetch: {fetch_reason}"
@@ -4560,6 +4633,7 @@ def run_commit_pipeline(
                 root,
                 allow_protected_branch=allow_protected_branch,
                 protected_branch_override_reason=protected_branch_override_reason,
+                budget_secs=CEREMONY_PUSH_BUDGET_SECS,
             )
             record_composition_span(
                 composition_id=_composition_id,
@@ -4674,7 +4748,7 @@ def run_commit_pipeline(
             sid=_span_sid,
         )
         _push_t_start = time.time()
-        push_outcome = push_with_retry(root)
+        push_outcome = push_with_retry(root, budget_secs=CEREMONY_PUSH_BUDGET_SECS)
         record_composition_span(
             composition_id=_composition_id,
             name=_COMPOSITION_SPAN_PUSH,

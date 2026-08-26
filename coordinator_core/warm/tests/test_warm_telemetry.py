@@ -66,6 +66,28 @@ def test_record_exit_rejects_unknown_reason():
         t.record_exit("some-other-reason")
 
 
+def test_server_boot_row_carries_both_instants(tmp_path):
+    """THE UNCENSORED MEASUREMENT. Every client-side estimate of boot is
+    bounded by when callers happened to call; this row is written by the
+    booting process itself, with no caller in it. Two instants, because an
+    endpoint that is bound will accept a connection while the op registry is
+    still importing -- reaching the first is not being answered by the
+    second."""
+    telemetry.record_server_boot(listener_secs=0.41, ready_secs=1.87, pid=1234, engine_root=tmp_path)
+
+    rows = telemetry.server_boot_samples(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["listener_secs"] == 0.41
+    assert rows[0]["ready_secs"] == 1.87
+    assert rows[0]["pid"] == 1234
+
+
+def test_server_boot_samples_absent_file_reads_empty(tmp_path):
+    """No rows is not an error, and must not read as a measurement either --
+    an absent file means no stamped spawn has booted yet."""
+    assert telemetry.server_boot_samples(tmp_path / "nothing-here") == []
+
+
 def test_cold_row_carries_op_and_pid_when_supplied(tmp_path):
     """A BURST HAS TO BE ATTRIBUTABLE. 1600 rows in 13 seconds (2026-08-25)
     could name no process and no op, so the defect they reported could not be

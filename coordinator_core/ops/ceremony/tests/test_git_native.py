@@ -1851,3 +1851,136 @@ def test_rewrite_head_spine_prunes_emptied_dirs_like_git(
             f"{gone!r} survived as a phantom directory entry -- git prunes it, "
             f"so an entry here is the empty-tree bug. Tree:\n{listing}"
         )
+
+
+# ---------------------------------------------------------------------------
+# C3 (state/dispatch-briefs/2026-08-26-the-commit-becomes-a-warm-served-op/
+# C3.md): the agree branch's own `git add` + `git commit -F` pair is gone,
+# replaced by `_commit_scoped_private_index` -- the same in-process
+# tree-spine rewrite + `cas_ref` landing route already proven for the
+# diverged branch. These tests pin two of that dispatch's named hazards:
+# a zero-spawn (or one-spawn, for a genuinely new worktree blob) landing on
+# the ordinary loose-ref case, and correct behaviour immediately after
+# `git pack-refs --all` packs the branch ref (the "packed-refs breaks it
+# outright" hazard the spike verdict names -- here it is not a hazard at
+# all, because `_resolve_cas_ref_target` already refuses a non-loose ref
+# and `_commit_scoped_private_index` already falls back to its own
+# `commit-tree`/`update-ref` ladder in that case).
+# ---------------------------------------------------------------------------
+
+
+def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_path, monkeypatch):
+    """AC6: the agree branch (`diverged == []`) must land through
+    `_commit_via_head_spine`'s fast path -- object writes plus a locked
+    `cas_ref`, never a spawned `git add`/`git commit` pair. A brand-new,
+    not-yet-tracked file still costs exactly ONE spawn (`git hash-object -w
+    --stdin-paths`, through git's own clean-filter pipeline) -- the NAMED
+    exception this dispatch's brief carries, never a silent violation of
+    the <=1 budget."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+
+    (repo / "new.txt").write_text("brand new content\n", encoding="utf-8")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("agree branch commit\n", encoding="utf-8")
+
+    argvs: list[list[str]] = []
+    real_run = subprocess.run
+
+    def _spy(args, *a, **kw):
+        argvs.append(list(args))
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(git_native.subprocess, "run", _spy)
+
+    result = git_native.commit_scoped(["new.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    # `commit_scoped`'s own pre-branch-selection divergence check (`git
+    # status`/`git show` -- unrelated to this dispatch, unchanged by it)
+    # still spawns; what this dispatch's AC6 bounds is the LANDING
+    # mechanism itself -- never a bare `add`, never a real `commit`, and at
+    # most one `hash-object` (the named worktree-blob exception).
+    landing_spawns = [
+        a for a in argvs
+        if len(a) > 1 and a[1] in ("add", "commit", "hash-object")
+    ]
+    assert landing_spawns == [["git", "hash-object", "-w", "--stdin-paths"]], landing_spawns
+
+    committed = subprocess.run(
+        ["git", "show", "HEAD:new.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert committed == "brand new content\n"
+
+
+def test_agree_branch_commits_correctly_immediately_after_pack_refs(tmp_path):
+    """Named hazard (spike verdict, "packed-refs breaks it outright"): after
+    `git pack-refs --all` there is no loose ref file for the branch HEAD
+    points at. `_resolve_cas_ref_target` refuses (returns `None`) rather
+    than guessing, so `_commit_via_head_spine`'s fast path is skipped and
+    `_commit_scoped_private_index` falls back to its own `commit-tree` +
+    compare-and-swap `update-ref` ladder -- the commit must still land
+    correctly, not merely fail safely."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "seed"], repo)
+    _real_git(["pack-refs", "--all"], repo)
+
+    branch_ref = repo / ".git" / "refs" / "heads" / _real_git_out(repo, "branch", "--show-current")
+    assert not branch_ref.exists(), "probe shape wrong -- branch ref is still loose after pack-refs"
+
+    (repo / "after_pack.txt").write_text("landed after pack-refs\n", encoding="utf-8")
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("agree branch commit after pack-refs\n", encoding="utf-8")
+
+    result = git_native.commit_scoped(["after_pack.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    committed = subprocess.run(
+        ["git", "show", "HEAD:after_pack.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert committed == "landed after pack-refs\n"
+
+
+def _real_git_out(cwd, *args) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_pathspec_file_is_nul_separated_and_never_dequoted(tmp_path):
+    """A pathspec whose name starts with a quote is never C-dequoted.
+
+    Regression guard (2026-08-26). `_write_pathspec_file` wrote
+    newline-delimited on the premise that no staged path contains a literal
+    newline. True, and beside the point: git's default pathspec-file reader
+    also C-dequotes any line beginning with a double quote, so a line
+    `"plain.txt"` staged `plain.txt` and `"pla\151n.txt"` decoded the octal
+    escape and staged `plain.txt` too -- both at rc=0, which made the
+    mis-stage invisible to every downstream check including the residue
+    reconciliation. Under `--pathspec-file-nul` no dequoting occurs.
+
+    Pins two things: the file is NUL-separated with no trailing separator,
+    and every git invocation reading it passes `--pathspec-file-nul`.
+    """
+    paths = ["alpha.txt", "dir/beta.txt", '"quoted.txt"']
+    spec = git_native._write_pathspec_file(tmp_path, paths)
+    try:
+        raw = spec.read_bytes()
+        assert raw == b"alpha.txt\x00dir/beta.txt\x00" + '"quoted.txt"'.encode()
+        assert b"\n" not in raw
+        assert not raw.endswith(b"\x00"), "trailing NUL is an empty pathspec"
+    finally:
+        spec.unlink(missing_ok=True)
+
+    source = inspect.getsource(git_native)
+    for marker in (
+        'f"--pathspec-from-file={pathspec_file}"',
+    ):
+        assert source.count(marker) == source.count('"--pathspec-file-nul"'), (
+            "every --pathspec-from-file call site must pair with "
+            "--pathspec-file-nul or git will C-dequote the file"
+        )

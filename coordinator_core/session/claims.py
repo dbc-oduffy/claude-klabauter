@@ -575,17 +575,27 @@ def _dead_holder_record_dir(held_sid: str, cwd: Optional[str] = None) -> Optiona
     if not base:
         return None
     archive = os.path.join(base, ".archive")
+    # Anchored to the trailing `-YYYY-MM-DD`, NOT a bare `startswith(sid + "-")`.
+    # Review: coordinator:code-reviewer P2. `bash_guards/_write_bump_marker.py ::
+    # sweep_stale_markers` hit this same collision class -- a session id that is
+    # a string-prefix of another -- and chose exact match deliberately. This is a
+    # read path, so over-matching only misattributes residue rather than deleting
+    # anything, but nothing in this module establishes that ids are never
+    # prefixes of one another, so the loose primitive is not earned.
+    pattern = re.compile(r"^" + re.escape(held_sid) + r"-\d{4}-\d{2}-\d{2}$")
     try:
-        # Archive dirs are `<sid>-<YYYY-MM-DD>`; a session archived more than
-        # once yields several, and the newest is the one whose residue is
-        # still plausibly in the tree.
         matches = sorted(
             entry.path
             for entry in os.scandir(archive)
-            if entry.name.startswith(held_sid + "-") and entry.is_dir()
+            if pattern.match(entry.name) and entry.is_dir()
         )
     except OSError:
         return None
+    # `sorted()[-1]` IS newest-first here, and only because the suffix the
+    # pattern above just enforced is zero-padded `YYYY-MM-DD`, for which
+    # lexicographic and chronological order coincide. That coincidence is the
+    # whole basis for this line -- if the archive naming ever grows a time
+    # component or an unpadded field, this silently picks the wrong directory.
     return matches[-1] if matches else None
 
 
@@ -624,9 +634,11 @@ def _warn_dead_holder_residue(
         residue = sorted(claimed & dirty)
         if not residue:
             return
-        archived = os.path.basename(os.path.dirname(record_dir)) == ".archive" or (
-            os.sep + ".archive" + os.sep
-        ) in record_dir
+        # One check, not a redundant pair: the parent-basename test is a strict
+        # subset of this one for every path `_dead_holder_record_dir` can build,
+        # and a defensive-looking `or` that can never fire independently reads as
+        # covering a case that does not exist (reviewer P-nit).
+        archived = (os.sep + ".archive" + os.sep) in record_dir
         shown = ", ".join(repr(p) for p in residue[:5])
         more = f" (+{len(residue) - 5} more)" if len(residue) > 5 else ""
         print(
@@ -684,11 +696,24 @@ def _dirty_paths(cwd: Optional[str] = None) -> set:
         ).stdout
     except Exception:
         return set()
-    return {
-        line[3:].strip().strip('"')
-        for line in out.splitlines()
-        if len(line) > 3
-    }
+    dirty = set()
+    for line in out.splitlines():
+        if len(line) <= 3:
+            continue
+        entry = line[3:].strip()
+        # A rename renders as `R  old -> new`, so the naive `line[3:]` yields the
+        # literal "old -> new" and matches no real path -- silently dropping a
+        # renamed path from the intersection (reviewer P2). Rename-in-progress is
+        # exactly the mid-edit shape this warning exists to surface, so both
+        # sides are recorded: the old path is what the dead holder's touch record
+        # still names, and the new one is where the work actually sits now.
+        if line[0] in ("R", "C") and " -> " in entry:
+            old, _, new = entry.partition(" -> ")
+            dirty.add(old.strip().strip('"'))
+            dirty.add(new.strip().strip('"'))
+            continue
+        dirty.add(entry.strip('"'))
+    return dirty
 
 
 BRIEF_CLAIM_LEASE_MINUTES = int(

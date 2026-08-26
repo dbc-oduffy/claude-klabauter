@@ -376,7 +376,9 @@ def _strip_trailing_exit0(text: str) -> str:
 # Fix: each gate's emitted block carries a `# gate-version: N` stamp (written
 # by `_gate_block`, immediately below its stable `# --- Gate: ... ---` header
 # comment). "Installed" now splits into two independent questions:
-#   - present?  `gate.marker in existing_text` (unchanged from before).
+#   - present?  `_marker_is_installed(existing_text, gate.marker)` (was the
+#     bare `gate.marker in existing_text` test before the 2026-08-25
+#     comment-only-mention fix; see that function's own docstring).
 #   - current?  the LOCATED region for that marker contains today's
 #     `_gate_version_line(gate)` (new).
 # marker-absent -> append (as before). marker-present + current -> no-op.
@@ -926,21 +928,24 @@ def _marker_is_installed(text: str, marker: str) -> bool:
 
     Presence means either of:
       - a locatable `# --- Gate: ... (<marker>) ---` region, or
-      - the marker on a line that is not a comment.
+      - the marker on the CODE portion of a line — the part before any
+        `#` comment, whether the line is comment-only or code with a
+        trailing inline comment.
 
     The second arm is what preserves the deliberate leave-it-alone behaviour
     for a legacy or hand-authored hook that references the marker inside a
     script PATH on a real command line (see `stale_gates`' own note): those
-    are still treated as present and are never clobbered. Only a
-    comment-only mention now counts as absent.
+    are still treated as present and are never clobbered. Only a mention
+    confined entirely to comment text — whole-line or trailing — now counts
+    as absent, and the match against the code portion is word-bounded so one
+    marker can never cross-match as a substring of another.
     """
     if _find_gate_region(text, marker) is not None:
         return True
+    marker_re = re.compile(r"(?<![\w-])" + re.escape(marker) + r"(?![\w-])")
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if marker in line:
+        code_part = line.split("#", 1)[0]
+        if marker_re.search(code_part):
             return True
     return False
 

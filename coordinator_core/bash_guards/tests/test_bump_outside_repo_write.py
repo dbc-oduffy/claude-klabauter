@@ -1753,6 +1753,7 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
 
 def test_c1_ac7_dollar_var_target_class_stays_out_of_scope_and_unchanged(env, monkeypatch):
     """`echo hi > $D` -- the `$D`-style empty/unexpanded-variable class this
+    shell-doc-ok: that command IS the bash specimen this test asserts on.
     plan's own Out of scope names explicitly -- must stay `None`,
     unaffected by this chunk's addition."""
     _set_anchor(monkeypatch, env, "sess-c1-ac7")

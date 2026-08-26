@@ -543,10 +543,24 @@ def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] 
     point AC10b names: returns a live listener's base URL, or `None` if
     none is reachable THIS call.
 
-    NEVER WAITS -- mirrors `warm.client`'s "NO CLIENT EVER WAITS FOR A
-    SERVER TO BOOT" doctrine verbatim, for the identical reason: with idle
+    NEVER WAITS FOR A BOOT -- mirrors `warm.client`'s "NO CLIENT EVER WAITS
+    FOR A SERVER TO BOOT" doctrine, for the identical reason: with idle
     demotion (this package's `warm.idle`), "no listener yet" is the
     ordinary first call after any quiet period, not a rare cold start.
+
+    IT DOES WAIT UP TO `HEALTH_CHECK_TIMEOUT_SECS`, corrected 2026-08-26.
+    The line above read a bare "NEVER WAITS" until this subsystem's
+    succession investigation checked it against the body: branch 1 calls
+    `check_health`, a SYNCHRONOUS `urllib.request.urlopen` bounded by
+    `HEALTH_CHECK_TIMEOUT_SECS` (2.0s). A discovery record naming a live
+    pid whose HTTP listener has hung therefore costs this call the full
+    timeout. That is not a boot wait, but it is a wait, and it is paid on
+    `warm/server.py :: _run_guarded`'s own boot path -- between the op
+    registry preload and `serve_forever` -- so it lands on the successor's
+    time-to-answerable. See
+    `docs/research/2026-08-26-repo-warm-succession.md` § 4 and the
+    advisory's item 5, which proposes moving the call off that path rather
+    than shortening the timeout.
 
     1. A live, healthy discovery record -> its URL.
     2. Otherwise, if nothing currently vouches for an in-flight boot

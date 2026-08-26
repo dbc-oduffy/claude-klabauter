@@ -274,10 +274,16 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     `cwd = start or Path.cwd()` is the exact shape audited in
     `state/audits/2026-08-26-session-hub-writers-path-resolution.md` as the
     one that reaches a repo no caller named; this instance is safe ONLY
-    because `--show-toplevel` re-anchors the process cwd to the worktree the
-    process is actually inside. Building a path by joining onto `cwd`
-    directly -- or "simplifying" this to return `cwd` when the git call is
-    cheap to skip -- reintroduces that defect silently, and nothing warns.
+    because `show_toplevel` re-anchors `cwd` to the worktree it is actually
+    inside via an in-process upward filesystem walk -- WALKS ONLY, never
+    spawns git (see `git/repo_root.py::show_toplevel`). Building a path by
+    joining onto `cwd` directly -- or "simplifying" this to return `cwd`
+    when the walk is cheap to skip -- reintroduces that defect silently,
+    and nothing warns. A third shape reintroduces it just as silently:
+    re-anchoring on `Path(__file__).resolve().parents[n]` instead of `cwd`
+    still returns *a* repo root, just the wrong one -- the engine's own
+    rather than the caller's -- and is the one live defect the audit found
+    (`bash_guards/dispatch_checks.py::_bt_python3_invocation_cache_path`).
     """
     cwd = start or Path.cwd()
     top = show_toplevel(str(cwd))

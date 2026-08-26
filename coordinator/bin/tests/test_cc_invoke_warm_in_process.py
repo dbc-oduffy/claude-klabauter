@@ -37,7 +37,7 @@ if str(_LIB_DIR) not in sys.path:
 
 import cc_invoke as _mod  # noqa: E402  (import after path setup)
 
-pytestmark = pytest.mark.cadence
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _install_fake_module(monkeypatch, name: str, **attrs: Any) -> types.ModuleType:
@@ -161,3 +161,92 @@ def test_none_scoped_op_omits_origin_worktree(monkeypatch):
 
     assert "_origin_worktree" not in captured_msg
     assert "_caller_cwd" in captured_msg
+
+
+# ---------------------------------------------------------------------------
+# AC7 — the import-graph ratchet.
+#
+# The other AC6/AC7 test above asserts the warm-DISABLED path never binds
+# `warm.client`. AC7 additionally pins the warm-ENABLED path's own dependency
+# set, on two axes the plan names explicitly:
+#
+#   (a) importing it registers NO `coordinator_core.ops.*` module -- the
+#       guarantee `warm/tests/test_client_does_not_import_op_registry.py`
+#       delivers, re-asserted here at this call site because it is the whole
+#       of the 2026-08-06 audit's import-cycle objection (plan section "The
+#       2026-08-06 ruling that named this surface, and why it does not bind").
+#   (b) a ratchet on the COUNT of `coordinator_core.*` modules the helper's
+#       import path pulls, against the 19 pinned in `invoke/__main__.py`'s own
+#       measured comment. A count, never a timing -- AC7 says so.
+#
+# Both run in a FRESH interpreter: this test process has already imported
+# much of `coordinator_core`, so an in-process `sys.modules` read here would
+# measure the test runner, not the helper.
+# ---------------------------------------------------------------------------
+
+#: Pinned in `coordinator_core/invoke/__main__.py`'s measured line-comment as
+#: the module count `warm.client`'s eager imports pull. A ceiling, not an
+#: equality: a DROP is an improvement and must not turn this red. A rise means
+#: the helper's import path grew a new dependency -- re-measure before moving.
+_AC7_MODULE_CEILING = 19
+
+_AC7_PROBE = """
+import sys
+sys.path.insert(0, {repo!r})
+from coordinator_core.warm.settings import is_warm_enabled
+from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+from coordinator_core.warm.client import try_warm_dispatch
+_cc = sorted(m for m in sys.modules if m.startswith("coordinator_core"))
+_ops = [m for m in _cc if m.startswith("coordinator_core.ops")]
+print(len(_cc))
+print("|".join(_ops))
+"""
+
+
+def _run_ac7_probe() -> tuple[int, list[str]]:
+    """Import the helper's dependency set in a fresh interpreter.
+
+    Returns `(coordinator_core_module_count, ops_modules_registered)`.
+    """
+    import subprocess
+
+    repo_root = _BIN_DIR.parent.parent
+    proc = subprocess.run(
+        [sys.executable, "-c", _AC7_PROBE.format(repo=str(repo_root))],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        pytest.skip(
+            "AC7 probe could not import the real coordinator_core in this "
+            f"environment (rc={proc.returncode}): {proc.stderr[-400:]}"
+        )
+    lines = proc.stdout.strip().split("\n")
+    count = int(lines[0])
+    ops = [m for m in (lines[1] if len(lines) > 1 else "").split("|") if m]
+    return count, ops
+
+
+def test_warm_helper_imports_register_no_op_registry_modules():
+    """AC7(a): the helper's dependency set pulls in no `coordinator_core.ops.*`.
+
+    This is the 2026-08-06 audit's stated objection to converting this call
+    site -- "importing it pulls the whole op registry into every
+    coordinator/bin/ CLI". The plan's rebuttal is that it imports
+    `warm.client`, not `coordinator_core.invoke`. This test is what makes
+    that rebuttal falsifiable rather than an assertion.
+    """
+    _count, ops = _run_ac7_probe()
+    assert ops == [], f"helper import path registered op-registry modules: {ops}"
+
+
+def test_warm_helper_import_module_count_stays_under_the_pin():
+    """AC7(b): a ratchet on the `coordinator_core.*` module count, not a timing."""
+    count, _ops = _run_ac7_probe()
+    assert count <= _AC7_MODULE_CEILING, (
+        f"helper import path now pulls {count} coordinator_core modules, "
+        f"above the pinned ceiling of {_AC7_MODULE_CEILING}. A new dependency "
+        "entered the warm-reach path -- re-measure and re-justify before "
+        "raising this number."
+    )

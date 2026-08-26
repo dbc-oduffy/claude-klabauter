@@ -13,6 +13,7 @@ predicates (DR-344 § 6 forbids opening the deleted implementation itself).
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -313,6 +314,58 @@ def test_survey_spinoff_kind_is_exempt_from_governed_plan_precheck(tmp_path, mon
     assert result.dispositions[-1].verdict == mod._VERDICT_RELEASE
 
 
+def test_survey_spinoff_with_parents_shared_deliverable_id_ships_not_holds(tmp_path, monkeypatch):
+    """Pins the WHY behind the `kind != "spinoff"` carve-out, not just its mechanics
+    (see `test_survey_spinoff_kind_is_exempt_from_governed_plan_precheck` above).
+
+    `deliverable_id` is not unique per handoff — a 2026-08-26 whole-corpus census
+    found 168 of 666 ids shared across more than one handoff, including 46 spinoff
+    records sharing an id with a non-spinoff (e.g. a parent plan/session-handoff).
+    A governed-plan-index hit on a spinoff's `deliverable_id` can therefore be the
+    PARENT's implemented plan, not evidence this spinoff's own work shipped.
+    Holding it would freeze a live claim on another artifact's evidence; this test
+    proves the carve-out instead routes it to `ship_check`, where it resolves its
+    OWN ship commit from the completion index and git log rather than being
+    starved by `_VERDICT_SKIP_GOVERNED_PLAN`. If a future change makes the spinoff
+    carve-out unconditional-off (treats the shared id as authoritative for
+    holding), this test goes red instead of the regression shipping silently.
+    """
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    h1 = _write_handoff(
+        handoffs_dir, "a.md", status="consumed", deployment_state="in_flight",
+        consumed_by="dead1", kind="spinoff", deliverable_id="dlv-shared-with-parent",
+    )
+
+    monkeypatch.setattr(mod, "session_live", lambda sid, cwd=None: False)
+    monkeypatch.setattr(mod, "git_common_dir", lambda repo_root: repo_root / ".git")
+    monkeypatch.setattr(mod, "has_live_children_many", _async_return({str(h1.resolve()): 1}))
+    # The parent's plan IS implemented under this same deliverable_id -- the
+    # shared-id case the census found on 46 spinoff records.
+    monkeypatch.setattr(
+        mod, "_build_implemented_plan_index",
+        lambda repo_root: {"dlv-shared-with-parent": {"path": "docs/plans/parent.md", "title": "parent shipped"}},
+    )
+    monkeypatch.setattr(
+        mod, "_build_completion_index",
+        lambda repo_root: {"dead1": [{"frontmatter": {"commits": ["sha-spinoff-own"]}}]},
+    )
+
+    class FakeResult:
+        returncode = 0
+        stdout = "sha-spinoff-own-full 2000\n"
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kwargs: FakeResult())
+
+    result = mod.survey(tmp_path)
+    assert result.would_release == 0
+    assert result.would_reclaim == 1
+    verdicts = [d.verdict for d in result.dispositions]
+    assert mod._VERDICT_SKIP_GOVERNED_PLAN not in verdicts
+    reclaim = [d for d in result.dispositions if d.verdict == mod._VERDICT_RECLAIM_SHIPPED][0]
+    assert reclaim.sha == "sha-spinoff-own"
+
+
 def test_survey_ships_when_completion_commits_resolve_in_git_log(tmp_path, monkeypatch):
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
@@ -458,12 +511,20 @@ def test_apply_release_calls_unclaim_handoff(monkeypatch):
     assert calls == [("state/handoffs/a.md", "dead1")]
 
 
-def test_apply_reclaim_shipped_calls_stamp_then_ship(monkeypatch):
+def test_apply_reclaim_shipped_calls_ship_handoff_exactly_once(monkeypatch):
+    """The reclaim arm must make exactly ONE mutating call — `cs_ship_handoff`
+    alone, which already stamps+flips atomically. A standalone `stamp_shipped_in`
+    pre-write ahead of it reintroduces the incoherent half-state
+    `cs_ship_handoff` exists to close (see apply_dispositions docstring)."""
     calls = []
-    monkeypatch.setattr(mod, "stamp_shipped_in",
-                        lambda path, kind=None, sha=None: (calls.append(("stamp", path, kind, sha)), _Outcome())[1])
     monkeypatch.setattr(mod, "cs_ship_handoff",
                         lambda path, sha=None: (calls.append(("ship", path, sha)), 0)[1])
+
+    def _boom(*a, **k):
+        raise AssertionError("apply_dispositions must not call stamp_shipped_in directly")
+
+    if hasattr(mod, "stamp_shipped_in"):
+        monkeypatch.setattr(mod, "stamp_shipped_in", _boom)
 
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RECLAIM_SHIPPED, "detail", sha="deadbeef")
@@ -472,9 +533,32 @@ def test_apply_reclaim_shipped_calls_stamp_then_ship(monkeypatch):
 
     assert applied == ["state/handoffs/a.md"]
     assert failed == []
-    assert [c[0] for c in calls] == ["stamp", "ship"]
-    assert calls[0] == ("stamp", "state/handoffs/a.md", "ship-commit", "deadbeef")
-    assert calls[1] == ("ship", "state/handoffs/a.md", "deadbeef")
+    assert calls == [("ship", "state/handoffs/a.md", "deadbeef")]
+
+
+def test_apply_reclaim_shipped_guard_retained_leaves_no_stamp(monkeypatch):
+    """A guard-retained ship (`cs_ship_handoff` returns 0 having retained rather
+    than flipped) must not be reported as applied via a leftover standalone
+    stamp — there is no standalone stamp call to leave one behind."""
+    stamp_calls = []
+    if hasattr(mod, "stamp_shipped_in"):
+        def _stamp(*a, **k):
+            stamp_calls.append((a, k))
+            return _Outcome()
+        monkeypatch.setattr(mod, "stamp_shipped_in", _stamp)
+
+    # Retention returns exit_code 0 (retention is never an error) without
+    # flipping anything — the reap must not fabricate a second write around it.
+    monkeypatch.setattr(mod, "cs_ship_handoff", lambda path, sha=None: 0)
+
+    dispositions = [
+        mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RECLAIM_SHIPPED, "detail", sha="deadbeef")
+    ]
+    applied, failed = mod.apply_dispositions(dispositions)
+
+    assert applied == ["state/handoffs/a.md"]
+    assert failed == []
+    assert stamp_calls == []
 
 
 def test_apply_never_spawns_a_subprocess(monkeypatch):
@@ -502,7 +586,6 @@ def test_apply_skip_verdicts_perform_no_write(monkeypatch):
         raise AssertionError("a skip verdict must never write")
 
     monkeypatch.setattr(mod, "cs_unclaim_handoff", _boom)
-    monkeypatch.setattr(mod, "stamp_shipped_in", _boom)
     monkeypatch.setattr(mod, "cs_ship_handoff", _boom)
 
     dispositions = [
@@ -610,4 +693,34 @@ def test_the_real_corpus_is_not_invisible_to_this_module():
     assert stamped, (
         "every record in the live corpus parsed with an EMPTY holder — the module "
         "is reading a field name the corpus does not use"
+    )
+
+
+@pytest.mark.cadence
+def test_survey_holds_the_brightline_on_the_live_corpus():
+    """DR-344 section 1's 500ms bar, pinned rather than measured once.
+
+    Replaces C4's briefed budget-manifest enrolment, which does not apply here:
+    `benchmarks/budget.py` keys `overrides` by REGISTERED OP NAME with an OpClass
+    tier fallback, and this is deliberately a plain in-process module (both callers
+    import it; registering would need `_registry_map.py` plus the eager-module list
+    or ship present-but-dead). A manifest row would be a key nothing resolves.
+
+    Process time, never wall clock -- wall clock on this box measures the ~50
+    concurrent peer sessions, not this code. `cadence`-marked: it reads the real
+    corpus, so it is not fast-tier work.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    if not (repo_root / "state" / "handoffs").is_dir():
+        pytest.skip("no live corpus in this checkout")
+
+    start = time.process_time()
+    result = mod.survey(repo_root)
+    elapsed_ms = (time.process_time() - start) * 1000
+
+    assert result is not None, "survey returned nothing -- read the result before the timing"
+    assert elapsed_ms <= 500, (
+        f"survey took {elapsed_ms:.1f}ms process time against DR-344's 500ms brightline. "
+        "Measured 328.1ms at DR-362. Check for a reader that reopens the corpus: "
+        "one open per file is the whole design."
     )

@@ -1,14 +1,15 @@
 """test_percolate_round_removal_side_scoping -- pins the two-operand fix that
 lets the removal side (`_pathspec_from_manifest`, gated by
 `_REMOVAL_SIDE_ENABLED`) eventually fire without deleting a live file (§ AC4,
-docs/dispatch-briefs/2026-08-26-open-the-percolate-removal-side-without-
-65ff4e/C1.md).
+docs/dispatch-briefs/2026-08-26-open-the-percolate-removal-side/C1.md).
 
-`_REMOVAL_SIDE_ENABLED` stays `False` in `percolate-round.py` itself (AC5) --
-this file monkeypatches it `True` per-test to exercise the derivation the
-flag currently gates, never to flip the shipped default. No test here runs a
-real percolate round or touches a live publish mirror -- every fixture is a
-throwaway `tmp_path` git repo built and torn down within the test.
+`_REMOVAL_SIDE_ENABLED` was `False` when this file was written (AC5) and is
+`True` as of `d4ab9fd79` on a PM ruling. The per-test monkeypatch to `True`
+therefore now sets what is already the shipped default -- it is kept rather
+than dropped so this file still pins the derivation if the flag is ever gated
+again, and so no test here depends on the flag's current value. No test here
+runs a real percolate round or touches a live publish mirror -- every fixture
+is a throwaway `tmp_path` git repo built and torn down within the test.
 
 Negative-spec: this file does not test `RoundManifest`'s own (de)serialization
 (§ `coordinator_core/percolate/tests/test_manifest.py` if one exists) and

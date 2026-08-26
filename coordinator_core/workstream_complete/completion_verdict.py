@@ -533,7 +533,7 @@ def compose_completion_verdict(readings: Mapping[str, GateReading]) -> dict[str,
     AC8: `complete` requires POSITIVE EVIDENCE — a census with zero
     `clean` readings (e.g. all four `not-applicable`) falls into the
     `else` arm above and reads `indeterminate`, never `complete`, because
-    the `elif` guard requires `clean_count >= 1`.
+    the `elif` guard requires a `clean_count` of 1 or more.
 
     `indeterminate_gates[]` names every census gate whose reading is
     `indeterminate`, ALWAYS populated regardless of the top-level

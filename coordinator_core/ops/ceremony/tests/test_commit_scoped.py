@@ -176,13 +176,22 @@ def test_agree_branch_commits_via_explicit_pathspec_add_and_commit(tmp_path):
     assert _committed_content_at_head(repo, "file.txt") == "content\n"
 
 
-def test_agree_branch_does_not_invoke_private_index_mechanism(tmp_path, monkeypatch):
-    """Mechanism-selection assertion, not just an outcome one: the AGREE
-    branch must dispatch through plain `add_paths` + `commit_with_message_
-    file`, never through `_commit_scoped_private_index` -- forcing either
-    branch unconditionally (a mis-selection bug) is otherwise invisible to
-    outcome-only assertions when the private-index path happens to produce
-    the same content for an agree-shaped input.
+def test_agree_branch_takes_worktree_content_through_the_private_index(tmp_path, monkeypatch):
+    """Mechanism-selection assertion, not just an outcome one. This test used
+    to pin the OPPOSITE -- that the agree branch never reached
+    `_commit_scoped_private_index`. That stopped being true when the agree
+    branch was rebuilt onto the in-process object write (`9ed1cbd91`, docs/
+    plans/2026-08-26-the-commit-becomes-a-warm-served-op.md C3): both branches
+    now route through it, at zero spawns.
+
+    The mis-selection bug the old assertion existed to catch is still real, so
+    the discriminator MOVES rather than retires. The branches are no longer
+    told apart by WHICH mechanism runs -- asserting that would now pass for
+    both and catch nothing -- but by WHICH SOURCE each path's content comes
+    from. An agree path must be committed from the WORKTREE and must not be
+    reported as worktree-excluded. `test_diverged_branch_invokes_private_
+    index_mechanism` and `test_large_batch_diverged_path_preserved_amid_agree_
+    bulk` pin the staged-source half.
     """
     repo = real_git_repo(tmp_path)
     make_agree_path(repo, "file.txt", "content\n")
@@ -200,7 +209,9 @@ def test_agree_branch_does_not_invoke_private_index_mechanism(tmp_path, monkeypa
     result = git_native.commit_scoped(["file.txt"], msg_file, repo)
 
     assert result.ok, result.stderr
-    assert calls["count"] == 0
+    assert calls["count"] == 1
+    assert _committed_content_at_head(repo, "file.txt") == "content\n"
+    assert result.worktree_excluded == ()
 
 
 def test_diverged_branch_invokes_private_index_mechanism(tmp_path, monkeypatch):
@@ -1254,14 +1265,21 @@ def test_large_pathspec_commits_as_exactly_one_commit(tmp_path):
     assert set(paths) <= committed
 
 
-def test_argv_stays_bounded_and_uses_pathspec_file_for_add_and_commit(tmp_path, monkeypatch):
+def test_argv_stays_bounded_and_never_carries_the_raw_path_list(tmp_path, monkeypatch):
     """Subprocess argv shape pin (cannot portably assert the literal Windows
     32767-char limit from a non-Windows-specific test, so this asserts the
-    SHAPE that keeps every call under it): the agree branch's `git add` and
-    `git commit` never carry the raw path list on argv -- both carry a
-    `--pathspec-from-file=<f>` token instead -- and every chunked `git diff`
-    call this batch triggers stays under a generous bound, never one
-    unchunked argv holding all 2000+ paths."""
+    SHAPE that keeps every call under it): no command a 2000-path batch
+    triggers may put the raw path list on one argv.
+
+    This test named `git add` and `git commit` and their
+    `--pathspec-from-file=` tokens until `9ed1cbd91` (docs/plans/2026-08-26-
+    the-commit-becomes-a-warm-served-op.md C3) rebuilt the agree branch onto
+    the in-process object write and removed both spawns; the extraction then
+    raised StopIteration. That decay was anticipated in this test's own body,
+    which already said so -- see the retained comment below. The universal
+    loop was always the durable claim, so the per-command assertions are gone
+    and the loop is the whole test.
+    """
     repo = real_git_repo(tmp_path)
     paths = _make_bulk_agree_paths(repo, 2000)
     msg_file = _write_msg(tmp_path)
@@ -1277,29 +1295,40 @@ def test_argv_stays_bounded_and_uses_pathspec_file_for_add_and_commit(tmp_path, 
 
     result = git_native.commit_scoped(paths, msg_file, repo)
     assert result.ok, result.stderr
-
-    add_argv = next(a for a in argvs if len(a) > 1 and a[1] == "add")
-    commit_argv = next(a for a in argvs if len(a) > 1 and a[1] == "commit")
-    assert any(tok.startswith("--pathspec-from-file=") for tok in add_argv), add_argv
-    assert any(tok.startswith("--pathspec-from-file=") for tok in commit_argv), commit_argv
-    # None of the actual path strings sit on the add/commit argv -- they
-    # live in the pathspec file instead.
-    assert not (set(paths) & set(add_argv))
-    assert not (set(paths) & set(commit_argv))
+    committed = set(_committed_files_at_head(repo))
+    assert set(paths) <= committed
 
     # The BOUND is what this test pins, and it survives every rearrangement of
     # which command carries the pathspec. The state read `commit_scoped()`
     # picks its branch from was a `git diff` pair, then one chunked
-    # `git status --porcelain=v2`, and is now in-process
-    # (`git_index.scoped_status`) with no spawn at all. Asserting against
-    # whichever spawn happened to hold it made this test decay each time;
-    # asserting over EVERY spawned argv does not, and is the stronger claim:
-    # no command this batch triggers may put the raw path list on one argv,
-    # whatever that command turns out to be.
+    # `git status --porcelain=v2`, then in-process (`git_index.scoped_status`)
+    # with no spawn at all; the landing leg was `add` + `commit -F` and is now
+    # an in-process object write. Asserting against whichever spawn happened
+    # to hold it made this test decay each time; asserting over EVERY spawned
+    # argv does not, and is the stronger claim: no command this batch
+    # triggers may put the raw path list on one argv, whatever that command
+    # turns out to be -- including none at all.
+    # The per-argv BOUND is the whole claim, and the `set(paths) & set(a)`
+    # clause that used to sit beside it is gone deliberately -- it was a
+    # PROXY for the bound, not the bound itself, and the proxy stopped being
+    # true while the property it stood for held.
+    #
+    # It read "no raw path may appear on any argv", which was satisfiable
+    # only while every path-carrying spawn used `--pathspec-from-file=` or
+    # had been taken in-process. A CHUNKED caller legitimately puts raw paths
+    # on argv -- that is what chunking IS -- so the clause now fails against
+    # code that is correct, which is the definition of a guard that has to go
+    # rather than one to work around. `release_committed_claims` (in
+    # `session/scope.py`) is the current such caller; it was itself an
+    # unbounded 38,044-char argv until it was chunked, and chunking it is
+    # what surfaced this.
+    #
+    # What remains is the property that actually protects the Windows 32767
+    # limit: no single argv this batch triggers may approach it, whatever
+    # command carries the paths and whether it chunks or not.
     for a in argvs:
         total_len = sum(len(tok) for tok in a)
         assert total_len < 20000, f"unchunked-looking argv ({total_len} chars): {a[:6]}"
-        assert not (set(paths) & set(a)), f"raw paths on argv: {a[:6]}"
 
 
 def test_large_batch_diverged_path_preserved_amid_agree_bulk(tmp_path):

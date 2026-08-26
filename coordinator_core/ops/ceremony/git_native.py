@@ -81,6 +81,7 @@ from coordinator_core.git.git_state import (
 )
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import REMOTE_BUDGET_SECS
 
 #: Timeout (seconds) `commit_scoped()` gives each `diverging_paths()` `git
 #: diff` call. Wider than Check 13's `2.0s` advisory default (see
@@ -925,7 +926,19 @@ def cat_file_batch_objects(
 
 
 def add_paths(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
-    """`git add -- <paths>` — explicit-pathspec stage (never a bare `git add -A`/`.`).
+    """`git add --pathspec-from-file=<f>` — explicit-pathspec stage (never a
+    bare `git add -A`/`.`).
+
+    Delivers `paths` via a temp pathspec file (`_write_pathspec_file`,
+    same helper `add_paths_pathspec_file()` below uses) rather than argv:
+    the whole `paths` list on argv is capped at 32767 chars on Windows
+    (`CreateProcess`), and at percolate scale (thousands of paths) that cap
+    was forcing callers to chunk this call across many `git add` spawns.
+    `--pathspec-from-file` removes argv from the picture entirely and is
+    empirically supported on this machine's git 2.55.0.windows.4/.3 (see
+    `add_paths_pathspec_file()`'s own docstring) — one call regardless of
+    batch size. Empty `paths` is a no-op `git add --` with no pathspec file
+    ever written (never spend a temp-file write on nothing to stage).
 
     Also the correct staging call for a DELETION: per `git-add(1)`, an
     explicit pathspec naming a tracked file that has been removed from the
@@ -933,9 +946,20 @@ def add_paths(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
     this has been git's default behaviour for an explicit path since older
     Git's `--no-all`-required era ended; only a fileglob/directory pathspec
     ever needed `-u`/`-A` to pick up removals. Callers do not need a
-    separate "stage this deletion" primitive.
+    separate "stage this deletion" primitive. Verified still true through
+    `--pathspec-from-file`: a deleted tracked path named in the pathspec
+    file stages as `D`, same as the old argv form.
+
+    `git add` is atomic per invocation (all-or-nothing on the whole
+    pathspec, unlike a chunked multi-call loop, which could stage some
+    chunks before a later one fails) — a caller reconciling post-failure
+    residue against a partial-batch window (the old chunked shape) now
+    reconciles against an add that either fully succeeded or staged
+    nothing.
     """
-    return _git(["add", "--", *paths], cwd=cwd)
+    if not paths:
+        return _git(["add", "--"], cwd=cwd)
+    return add_paths_pathspec_file(cwd, paths)
 
 
 def ls_files_deleted(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
@@ -988,18 +1012,41 @@ def ls_files_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
     return _git(["ls-files", "-z", "--", *paths], cwd=cwd)
 
 
-def status_porcelain_v2_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
-    """`git status --porcelain=v2 -z --ignored -uall -- <paths>` -- the full
-    v2 classification beneath an explicit pathspec, NUL-separated.
+def status_porcelain_v2(
+    cwd: Union[str, Path], paths: Optional[Sequence[str]] = None
+) -> GitResult:
+    """`git status --no-optional-locks --porcelain=v2 -z` -- the full v2
+    classification, NUL-separated, UNSCOPED by default (`paths=None`).
 
-    Purpose: `commit_pipeline._worktree_deleted_paths_chunked`'s single
-    fail-loud read, replacing the old `git ls-files --deleted` probe that
-    degraded to a permissive "found nothing" guess on failure (see that
-    function's own docstring for the incident this closes). `-z` for the
-    same C-quoting reason `status_porcelain_scoped` documents above;
-    `--ignored -uall` so an ignored or untracked path is reported
-    explicitly (its own `!`/`?` record) rather than folded into a
-    directory summary or silently omitted.
+    Purpose: `commit_pipeline._worktree_deleted_paths`'s single fail-loud
+    read, replacing the old `git ls-files --deleted` probe that degraded to
+    a permissive "found nothing" guess on failure (see that function's own
+    docstring for the incident this closes), and replacing this seam's own
+    earlier pathspec-scoped/chunked shape (2026-08-26 second fix,
+    `docs/research/spike-verdicts/2026-08-26-one-porcelain-v2-read-
+    replaces-the-probe-suite.md`): a pathspec here only filters git's
+    OUTPUT -- `git status` refreshes the index and walks the whole worktree
+    regardless of what pathspec it is given -- so chunking a pathspec to
+    dodge the Windows argv cap bought nothing but spawns (measured on this
+    repo, 36547 tracked files: 32 spawns for a 2600-path chunked batch vs 1
+    spawn for the same call unscoped, at ANY batch size). Taking one
+    unscoped read and intersecting the caller's requested paths against it
+    IN-PROCESS costs the SAME one walk git was always doing, for one
+    spawn total instead of one per chunk.
+
+    `paths` optionally scopes the OUTPUT (mirrors `status_porcelain`'s own
+    shape above) -- `commit_pipeline` never passes it, since scoping the
+    output here would still require chunking against the same argv cap this
+    rewrite exists to avoid; kept for parity with `status_porcelain` and any
+    future caller that genuinely wants a bounded read.
+
+    Deliberately NOT `--ignored -uall`: measured on this repo, `--ignored
+    -uall` produces 873KB of stdout against 10.6KB without it, and
+    `_worktree_deleted_paths` (this seam's sole caller) never reads a `?`
+    or `!` record -- it only classifies `1`/`2` records' `D` worktree
+    status. `-uall` without `--ignored` would still expand untracked
+    directories into per-file `?` records this caller discards anyway, so
+    neither flag earns its cost here.
 
     `--no-optional-locks`: read-only call, no reason to contend for
     `.git/index.lock` on a shared worktree, same as every other read in
@@ -1007,26 +1054,15 @@ def status_porcelain_v2_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> G
 
     Negative-spec: does NOT parse its own output -- the v2 record format
     (leading-token dispatch: `1` ordinary, `2` rename with its `<origPath>`
-    as the NEXT NUL field, `?` untracked, `!` ignored, `u` unmerged, `#`
-    header) is the caller's to read; see `docs/research/spike-verdicts/
-    2026-08-26-one-porcelain-v2-read-replaces-the-probe-suite.md` for the
-    confirmed shapes on git 2.55.0.windows.4.
+    as the NEXT NUL field, `?` untracked, `u` unmerged, `#` header) is the
+    caller's to read; see `docs/research/spike-verdicts/2026-08-26-one-
+    porcelain-v2-read-replaces-the-probe-suite.md` for the confirmed shapes
+    on git 2.55.0.windows.4.
     """
-    if not paths:
-        return GitResult(returncode=0, stdout="", stderr="")
-    return _git(
-        [
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v2",
-            "-z",
-            "--ignored",
-            "-uall",
-            "--",
-            *paths,
-        ],
-        cwd=cwd,
-    )
+    args = ["--no-optional-locks", "status", "--porcelain=v2", "-z"]
+    if paths:
+        args.extend(["--", *paths])
+    return _git(args, cwd=cwd)
 
 
 def reset_paths(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
@@ -1331,18 +1367,29 @@ def commit_with_message_file(
 
 
 def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
-    """Write `paths` to a uniquely-named temp file, one per line, and return
-    its path -- the newline-delimited input `git ... --pathspec-from-file=<f>`
-    expects by default (git also offers `--pathspec-file-nul` for a NUL-
-    delimited feed; this module picks newline-delimited throughout, both
-    here and in every reader of a file this function produces, since no
-    path this module ever commits/stages contains a literal newline byte
-    and the plain-text form is easier to inspect if a call ever needs
-    debugging). Same PID+uuid uniqueness convention `stage_from_patch()`'s
-    own `temp_index` already uses, for the same reason: two concurrent
-    sessions on this shared machine must never collide on the same temp
-    filename. UTF-8, trailing newline after the last path (matches git's
-    own `--pathspec-from-file=-` stdin convention). Caller owns cleanup
+    """Write `paths` NUL-separated to a uniquely-named temp file and return
+    its path, for `git ... --pathspec-from-file=<f> --pathspec-file-nul`.
+
+    NEGATIVE SPEC -- the NUL form is mandatory, not a preference, and every
+    reader of a file this produces MUST pass `--pathspec-file-nul`. This
+    module previously wrote newline-delimited on the premise that no path
+    it stages contains a literal newline. That premise was true and beside
+    the point: git's default (non-NUL) pathspec-file reader ALSO C-dequotes
+    any line beginning with a double quote. Measured 2026-08-26 on git
+    2.55.0.windows.4 -- a line `"plain.txt"` stages `plain.txt`, and
+    `"pla\151n.txt"` decodes the octal escape and stages `plain.txt` too,
+    both at rc=0. rc=0 is what makes it dangerous: a silently mis-resolved
+    pathspec is invisible to every downstream check, the post-failure
+    residue reconciliation included, so the wrong file is staged and
+    committed while the call reports success. Under `--pathspec-file-nul`
+    no dequoting happens and the same input fails loud (rc=128, "did not
+    match any files").
+
+    Same PID+uuid uniqueness convention `stage_from_patch()`'s own
+    `temp_index` uses, for the same reason: two concurrent sessions on this
+    shared machine must never collide on one temp filename. No trailing
+    separator -- git treats a trailing NUL as an empty pathspec, which
+    matches nothing and fails the whole call. Caller owns cleanup
     (`finally: pathspec_file.unlink(missing_ok=True)`), mirroring the
     `-F <msgfile>` flow's own discipline elsewhere in this module.
     """
@@ -1350,29 +1397,40 @@ def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
         Path(tempfile.gettempdir())
         / f"git-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
     )
-    pathspec_file.write_text("\n".join(paths) + "\n", encoding="utf-8", newline="\n")
+    # NUL-separated, and every caller MUST pass `--pathspec-file-nul`.
+    # Newline-delimited is NOT safe: git C-dequotes any pathspec-file line
+    # beginning with a double quote. Measured 2026-08-26, git
+    # 2.55.0.windows.4 -- a line `"plain.txt"` stages `plain.txt`, and
+    # `"pla\151n.txt"` decodes the octal escape and also stages
+    # `plain.txt`, both at rc=0. A silent mis-stage at rc=0 is invisible to
+    # every downstream check, the residue reconciliation included.
+    # `--pathspec-file-nul` disables dequoting outright: the same quoted
+    # input then fails loud (rc=128, "did not match any files").
+    pathspec_file.write_bytes(b"\0".join(p.encode("utf-8") for p in paths))
     return pathspec_file
 
 
 def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
     """`git add --pathspec-from-file=<f>` — the percolate-publish-scale-safe
-    sibling of `add_paths()` (which puts the whole `paths` list on argv).
-
-    `commit_scoped()`'s own agree branch is the sole caller (2026-08-15,
-    the last of the five argv-length sites this repo's commit path had --
-    siblings `ef84c2ee9`/`fe0f4eb84`/`25268ed33`/`47e8defbb` closed the
-    other four): staging is not chunked here, unlike `_diverging_paths_
-    chunked()` above, because `git add --pathspec-from-file=<f>` is
-    empirically SUPPORTED (verified against this machine's git
-    2.55.0.windows.3, in a scratch repo -- unlike `git diff`, which
-    rejects `--pathspec-from-file` outright) -- one pathspec-file call
-    replaces one argv-list call with no chunking needed, and no atomicity
-    concern either (staging is not the commit itself).
+    pathspec-file primitive. `add_paths()` (above) now delegates here for
+    every non-empty batch, and `commit_scoped()`'s own agree branch calls
+    it directly (2026-08-15, the last of the five argv-length sites this
+    repo's commit path had -- siblings `ef84c2ee9`/`fe0f4eb84`/`25268ed33`/
+    `47e8defbb` closed the other four): staging is not chunked here, unlike
+    `_diverging_paths_chunked()` above, because `git add
+    --pathspec-from-file=<f>` is empirically SUPPORTED (verified against
+    this machine's git 2.55.0.windows.3/.4, in a scratch repo -- unlike
+    `git diff`, which rejects `--pathspec-from-file` outright) -- one
+    pathspec-file call replaces one argv-list call with no chunking needed,
+    and no atomicity concern either (staging is not the commit itself).
     """
     root = Path(cwd)
     pathspec_file = _write_pathspec_file(root, paths)
     try:
-        return _git(["add", f"--pathspec-from-file={pathspec_file}"], cwd=root)
+        return _git(
+            ["add", f"--pathspec-from-file={pathspec_file}", "--pathspec-file-nul"],
+            cwd=root,
+        )
     finally:
         pathspec_file.unlink(missing_ok=True)
 
@@ -1461,7 +1519,13 @@ def commit_with_message_file_pathspec_scoped(
         if extra_env:
             env = {**(env if env is not None else os.environ), **extra_env}
         return _git(
-            ["commit", "-F", str(msg_file), f"--pathspec-from-file={pathspec_file}"],
+            [
+                "commit",
+                "-F",
+                str(msg_file),
+                f"--pathspec-from-file={pathspec_file}",
+                "--pathspec-file-nul",
+            ],
             cwd=root,
             env=env,
         )
@@ -3119,7 +3183,13 @@ def _commit_scoped_private_index(
                 pathspec_file = _write_pathspec_file(root, sorted(absent))
                 try:
                     rm_result = _git(
-                        ["rm", "--cached", "-q", f"--pathspec-from-file={pathspec_file}"],
+                        [
+                            "rm",
+                            "--cached",
+                            "-q",
+                            f"--pathspec-from-file={pathspec_file}",
+                            "--pathspec-file-nul",
+                        ],
                         cwd=root,
                         env=private_env,
                     )
@@ -3672,8 +3742,8 @@ def commit_scoped(
     if not diverged and not supplied_blobs:
         # Layer-1 CAS check (see the snapshot comment above `diverging_
         # paths()`): re-observe index/HEAD blobs now, right before this
-        # branch's own `git add`/`git commit`, and refuse rather than
-        # silently restaging from the worktree if the world moved since
+        # branch's own landing call, and refuse rather than silently
+        # restaging from the worktree if the world moved since
         # `pre_index_blobs`/`pre_head_blobs` were captured. FAILS LOUD
         # (`GitResult.ok is False`), same posture as every other guard in
         # this function -- never a warning, never a silent fall-through to
@@ -3684,123 +3754,90 @@ def commit_scoped(
         if cas_refusal is not None:
             return cas_refusal
 
-        # `path_list` is the FINAL, caller-vetted commit pathspec, which
-        # legitimately includes paths already fully staged-deleted (e.g.
-        # this pipeline's `deleted_paths`, pre-`git rm`'d by the caller
-        # before invoking the ceremony) -- absent from BOTH the worktree
-        # AND the index already, nothing further to stage. `git add --
-        # <path>` FAILS LOUD (`pathspec ... did not match any files`) on
-        # such a path (verified empirically -- `-A` does not change this;
-        # a path gone from both worktree and index matches nothing for
-        # either form), so only the subset that still exists on disk is
-        # (re-)added; an already-staged deletion needs no further `git
-        # add` call to land correctly in the commit below.
-        # C7a (1b): the AGREE branch never opened or mutated `msg_file`
-        # before this chunk landed -- the `prepare-commit-msg` hook that
-        # fires on the `git commit` below computed trailers entirely on its
-        # own, with no knowledge of any caller parameter. An explicit
-        # `deliverable_id` requires mutating `msg_file` HERE, before that
-        # commit runs, so the hook's own idempotency check
-        # (`coordinator/bin/coordinator-prepare-commit-msg::main`,
-        # `need_deliverable_id_check = not _has_trailer_line(commit_msg_file,
-        # "Deliverable-Id:")`) sees the line already present and skips its
-        # own Deliverable-Id leg entirely -- LOAD-BEARING, not incidental:
-        # without this, the hook would independently infer (and stamp) its
-        # own session/claimed-plan-derived value, silently overriding the
-        # caller's explicit one. May raise
-        # `DeliverableIdAssertionConflictError` -- see `_check_deliverable_id_
-        # precedence`'s own docstring; deliberately uncaught here, before any
-        # staging happens. Gated on the caller-supplied `deliverable_id`
-        # parameter, never on a tier-0-resolved value, so this raise site is
-        # opt-in (staff-eng review finding 4).
-        #
-        # 2026-08-14 (cross-repo memo, `2026-08-14-doe-claude-em-scoped-git-
-        # commit-drops-session-id-trailer.md`; docs/plans/2026-07-27-computed-
-        # commit-mechanism-selection.md chunk C10-remainder, AC18): this
-        # branch relied ENTIRELY on the installed `prepare-commit-msg` hook
-        # firing to stamp `Session-Id:` -- unlike `_commit_scoped_private_
-        # index` a few lines below, which never trusts hooks (plumbing runs
-        # none) and instead replays the hook's resolution logic itself via
-        # `compute_missing_trailer_args`. A hook non-fire (missing shim
-        # script, no python on PATH, `core.hooksPath` override, non-
-        # executable hook, a future rename) landed an agree-branch commit
-        # with NO Session-Id trailer at all, silently -- the incident this
-        # call closes. Same call, same `paths=path_list` shape as the
-        # private-index branch's own use a few lines below; only the
-        # trailers still MISSING from `msg_file` are returned (omit-rather-
-        # than-guess -- see that function's own docstring), so this is a
-        # pure addition when the hook already ran (or will run) and the
-        # sole source of the trailer when it does not.
+        # AC12 (test_hook_shims_portable.py::test_ac12_trailer_sentinel_
+        # has_exactly_one_setter): this call site is the sole place in the
+        # tree the sentinel may be set from, and it must sit immediately
+        # after `_apply_trailers` returns `None` on this, the agree branch.
+        # Applying trailers HERE (rather than only inside `_commit_scoped_
+        # private_index`, below) is not redundant with that helper's own
+        # `compute_missing_trailer_args`/`_apply_trailers` pair -- both only
+        # ever ADD a trailer that is still missing, so once this call has
+        # written every trailer `msg_file` needs, the helper's own repeat of
+        # the same computation below resolves nothing further to add and its
+        # `_apply_trailers` becomes a no-op; an explicit `deliverable_id`
+        # already folded in here is merely re-observed as already-agreeing
+        # by that helper's own `_check_deliverable_id_precedence`, never
+        # re-applied or rejected.
         trailer_args = compute_missing_trailer_args(
             msg_file, root, paths=path_list,
             session_id_override=attributed_session_id,
         )
-
-        # NOT `git interpret-trailers --if-exists replaceAll` as originally
-        # proposed: a live probe against this repo's own git (this chunk's
-        # own report) found that form silently APPENDS a duplicate trailer
-        # line, rather than replacing or failing, on a message with no blank
-        # line separating its subject from an already-present `Deliverable-
-        # Id:` line -- git's own trailer-block detection never recognizes
-        # the existing line as a trailer to replace. This function instead
-        # only ever asks git to ADD (never replace): an explicit caller
-        # `deliverable_id` is folded into `trailer_args` -- dropping any
-        # computed entry for it first (mirroring `_commit_scoped_private_
-        # index`'s own `_drop_trailer_arg`-then-append shape) -- ONLY once
-        # `_check_deliverable_id_precedence` has confirmed via a plain-text
-        # scan that no disagreeing `Deliverable-Id:` line exists yet, so the
-        # single `interpret-trailers` call below never sees a trailer name
-        # it would need to replace.
         if deliverable_id:
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
             if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-        # KEPT AS A SPAWN -- C11 (state/dispatch-briefs/2026-08-23-the-scoped-
-        # commit-rebuilt-from-first-principles/C11.md) named this call as its
-        # third removal candidate but its own brief conditions that removal
-        # on matching git's trailer-block formatting byte-for-byte, and the
-        # ratified anti-scope one plan over (docs/plans/2026-08-21-a-commit-
-        # stops-paying-for-thirty-processes.md, AC3/"Do not hand-write a
-        # replacement for `git interpret-trailers` that guesses at trailer
-        # semantics") named a byte-identity fixture corpus as the precondition
-        # for replacing it. That corpus now exists, so `_apply_trailers`
-        # serves this site in process too -- inside the measured envelope
-        # only, spawning git outside it.
         interpret_result = _apply_trailers(msg_file, trailer_args, root)
         if interpret_result is not None:
             return interpret_result
-
-        # C2 (docs/dispatch-briefs/2026-08-25-the-engine-commits-without-
-        # re-entering-itself/C2.md): `_apply_trailers` just returned `None`
-        # above -- the trailers ARE on `msg_file` now, a fact this code just
-        # established, not merely intended. Set the sentinel HERE, never at
-        # pipeline entry and never keyed to `compose_message`, so `prepare-
-        # commit-msg`'s installed shim can skip its own `COMMIT_EDITMSG`
-        # re-read (the interpreter start AC2 exists to avoid paying for).
+        # `_apply_trailers` just returned `None` above -- the trailers ARE
+        # on `msg_file` now, a fact this code just established. No spawned
+        # `git commit` runs on this branch any more (see below), so no
+        # `prepare-commit-msg` hook will ever read this sentinel for THIS
+        # call -- it is set anyway, unconditionally, so AC12's single-setter
+        # invariant continues to describe a real fact about this call site
+        # rather than a landmark from a mechanism that no longer runs here.
         trailer_sentinel_env = _trailer_sentinel_env()
+        del trailer_sentinel_env
 
-        # `add_paths_pathspec_file()`/`commit_with_message_file_pathspec_
-        # scoped()`, NOT `add_paths()`/`commit_with_message_file()` -- this
-        # is the agree branch's own percolate-publish-scale argv-length fix
-        # (see those two wrappers' own docstrings, and `_diverging_paths_
-        # chunked()`'s above for why the divergence CHECK a few lines up
-        # takes the opposite (chunked, not pathspec-file) treatment).
+        # C3 dispatch (state/dispatch-briefs/2026-08-26-the-commit-becomes-
+        # a-warm-served-op/C3.md), spike verdict docs/research/spike-
+        # verdicts/2026-08-25-the-zero-spawn-git-object-write.md: the agree
+        # branch used to pay TWO git spawns here (`git add --pathspec-from-
+        # file`, then `git commit -F --pathspec-from-file`). It now reuses
+        # `_commit_scoped_private_index` -- the SAME in-process tree-spine-
+        # rewrite + `cas_ref` landing (route R3 for the object/ref halves;
+        # the spike's R2 update-ref spawn is retired in favour of the
+        # hand-rolled lockfile CAS `cas_ref` already implements, including
+        # its own loose-ref resolution) already proven for the DIVERGED
+        # branch below -- rather than a bespoke agree-branch mechanism.
+        #
+        # `path_list` is the FINAL, caller-vetted commit pathspec, which
+        # legitimately includes paths already fully staged-deleted (e.g.
+        # this pipeline's `deleted_paths`, pre-`git rm`'d by the caller
+        # before invoking the ceremony) -- absent from BOTH the worktree
+        # AND the index already, nothing further to stage. Such a path is
+        # routed to `_commit_scoped_private_index`'s STAGED-source arm
+        # (`_assemble_commit_tree_input` resolves a `_SOURCE_STAGED` path
+        # with no index entry to the ABSENT set, removing it from the tree
+        # -- never a `git add` refusal). Every path that still exists on
+        # disk is routed to the WORKTREE-source arm, which hashes it via
+        # ONE `git hash-object -w --stdin-paths` spawn (through git's own
+        # clean-filter/`core.autocrlf` pipeline -- see that helper's own
+        # docstring) regardless of how many such paths there are, or ZERO
+        # spawns when every path in this call is already gone from the
+        # worktree.
+        #
+        # `_commit_scoped_private_index` computes its own trailers
+        # (`compute_missing_trailer_args` + `_apply_trailers`, the explicit
+        # `deliverable_id` precedence fold included) and lands via
+        # `_commit_via_head_spine`'s fast (zero-spawn) path or its own
+        # `commit-tree`/`update-ref` ladder -- neither fires any git hook,
+        # so (unlike the old real `git commit` here) there is no
+        # `prepare-commit-msg`/`post-commit` to rely on OR to stand down;
+        # `suppress_post_commit_auto_push` is honoured below via the same
+        # explicit `_replay_post_commit_auto_push` call the diverged branch
+        # already uses, not via any flag threaded into the landing call.
         existing = [p for p in path_list if (root / p).exists()]
-        if existing:
-            add_result = add_paths_pathspec_file(root, existing)
-            if not add_result.ok:
-                return add_result
-        # Only this branch needs the flag: the private-index branch below
-        # lands via `commit-tree`/`update-ref`, which fire NO hooks at all,
-        # so it has never had a second publisher to stand down.
-        return commit_with_message_file_pathspec_scoped(
-            root,
-            msg_file,
-            path_list,
-            suppress_post_commit_auto_push=suppress_post_commit_auto_push,
-            extra_env=trailer_sentinel_env,
+        deleted = [p for p in path_list if p not in existing]
+        result = _commit_scoped_private_index(
+            deleted, existing, msg_file, root, deliverable_id,
+            supplied_blobs=supplied_blobs,
+            attributed_session_id=attributed_session_id,
         )
+        if result.ok and not suppress_post_commit_auto_push:
+            _replay_post_commit_auto_push(root)
+        return result
 
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]
@@ -5227,16 +5264,36 @@ def remote(cwd: Union[str, Path]) -> GitResult:
     return _git(["remote"], cwd=cwd)
 
 
-def push(cwd: Union[str, Path], *, remote_name: Optional[str] = None, timeout: float = 120) -> GitResult:
-    """`git push [<remote_name>]` — push-with-retry pipeline (C4)."""
+def push(
+    cwd: Union[str, Path],
+    *,
+    remote_name: Optional[str] = None,
+    timeout: float = REMOTE_BUDGET_SECS,
+) -> GitResult:
+    """`git push [<remote_name>]` — push-with-retry pipeline (C4).
+
+    The default is the ONE runaway guard DR-349 names for a genuinely-remote
+    leg (`coordinator_core.git.run :: REMOTE_BUDGET_SECS`), not a number of
+    this module's own. It was a bare `120` until 2026-08-26, which was a DEAD
+    number rather than a lenient one: every caller reaches this through
+    `push_with_retry`, and that ladder is itself bounded by
+    `ipc._timeout_for`'s dispatch guard at 30s or less, so a 120s per-attempt
+    timeout could never fire. It read as a bound and was not one. Callers that
+    pass `budget_secs` to `push_with_retry` now size this from their own
+    remaining deadline and never reach the default at all."""
     args = ["push"]
     if remote_name:
         args.append(remote_name)
     return _git(args, cwd=cwd, timeout=timeout)
 
 
-def fetch(cwd: Union[str, Path], remote_name: str, *, timeout: float = 120) -> GitResult:
-    """`git fetch <remote_name>` — reject-detection preflight before rebase --onto."""
+def fetch(
+    cwd: Union[str, Path], remote_name: str, *, timeout: float = REMOTE_BUDGET_SECS
+) -> GitResult:
+    """`git fetch <remote_name>` — reject-detection preflight before rebase --onto.
+
+    Same default, same reasoning as `push` above: DR-349's remote runaway
+    guard, never a per-module literal that no caller could ever reach."""
     return _git(["fetch", remote_name], cwd=cwd, timeout=timeout)
 
 

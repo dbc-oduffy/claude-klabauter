@@ -196,6 +196,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_PUSHED,
     PUSH_STATUS_UNCONFIRMED,
     derive_push_status,
+    CEREMONY_PUSH_BUDGET_SECS,
     push_with_retry,
     resolve_post_push_sha,
 )
@@ -418,7 +419,9 @@ def _commit_and_push_origin_stub_close(
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
-    push_outcome = push_with_retry(worktree_root)
+    push_outcome = push_with_retry(
+        worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS
+    )
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:

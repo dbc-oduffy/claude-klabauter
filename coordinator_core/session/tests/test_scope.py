@@ -4337,3 +4337,59 @@ class TestBackslashedRelativePathspecCommitClearsClaimEndToEnd:
         assert claim_index.lookup(["pkg2/mod.py"], sessions_dir=sessions_dir) == {
             "pkg2/mod.py": []
         }
+
+
+class TestReleaseCommittedClaimsArgvBounded:
+    """Windows argv-length pin: a large committed pathspec (the shape this
+    repo's own archival batches routinely commit) must never put the raw
+    path list on one `git status --porcelain` argv -- measured 38,044 chars
+    on one argv at 2000 paths before this fix, blowing past the Windows
+    32767-char command-line limit (CLAUDE.md: Windows is first-class here).
+    Asserts the SHAPE (argv length bound, chunked spawn count > 1) rather
+    than the literal Windows-only failure, so it runs on every platform."""
+
+    def test_status_argv_stays_bounded_at_scale(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("s-argv", cwd=str(repo))
+
+        paths = []
+        for i in range(2000):
+            rel = f"file_{i:05d}.py"
+            (repo / rel).write_text("x")
+            paths.append(rel)
+            scope.touch("s-argv", rel, cwd=str(repo))
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "commit bulk"], cwd=repo, check=True
+        )
+
+        real_run = subprocess.run
+        argvs: list[list[str]] = []
+
+        def _spy(args, *a, **kw):
+            argvs.append(list(args))
+            return real_run(args, *a, **kw)
+
+        monkeypatch.setattr(scope.subprocess, "run", _spy)
+
+        scope.release_committed_claims("s-argv", paths, cwd=str(repo))
+
+        status_argvs = [a for a in argvs if "status" in a]
+        assert len(status_argvs) > 1, (
+            "expected the status call to be chunked across multiple spawns"
+        )
+        for a in status_argvs:
+            total_len = sum(len(tok) for tok in a)
+            assert total_len < 20000, (
+                f"unchunked-looking status argv ({total_len} chars): {a[:6]}"
+            )
+
+        # A 2000-path touch-record sink rotates (unlike every OTHER fixture
+        # in this file), so the claim state is read via the family-aware
+        # projection rather than `_decode_events`'s deliberately
+        # rotation-naive raw read (see that helper's own docstring).
+        record = _sdir(repo, "s-argv") / "touch-record.jsonl"
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert not (set(paths) & set(projection.claims)), (
+            "every requested path was clean at commit and should have released"
+        )

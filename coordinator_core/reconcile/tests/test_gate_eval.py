@@ -59,10 +59,22 @@ clear. Covers:
     terminus lacking any `blocks:[...]` back-reference to the original
     dependent — only the NAMED blocker's own `blocks:` is consulted.
 
+C6 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md, AC8/AC11)
+wires the `sat`-family rows of `fixtures/stale_record_triage_oracle.yaml`
+(the ported 2026-07-20 audit, `detector_bug: asymmetry_detector_bare_stub_id`)
+directly against `evaluate_gate` using the REAL corpus shape (`kind:
+roadmap-baton`, bare `stub_id`s, no synthesized `id`) rather than the generic
+`hnd-...`-shaped fixture above — confirming the candidate-set identity fix
+(the 2026-07-20 memo Defect 1 fix, already present) resolves all 6 named rows
+to zero asymmetry findings, while a genuinely asymmetric roadmap-baton edge
+still surfaces (AC11).
+
 Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C3
 """
 
 from __future__ import annotations
+
+from typing import Any, Dict, List
 
 import pytest
 
@@ -349,6 +361,90 @@ class TestNamespaceMismatchSymmetricGraphDoesNotSurface:
 
         assert result["verdict"] == "clear"
         assert result["cleared_by_shas"] == ["a" * 40]
+
+
+def _sat_stub(stub_id: str, deployment_state: str, blocked_by, blocks=None, shipped_in=None) -> dict:
+    """Real `sat`-family corpus shape (`state/handoffs/2026-07-28_100000_
+    roadmap-sat-08.md`, `archive/handoffs/2026-07/2026-07-17_160000..160006_
+    roadmap-sat-0{1..7}.md`): `kind: roadmap-baton`, a bare `stub_id`, and NO
+    `id:` frontmatter field of its own (the collector only ever synthesizes a
+    path-stem `id` for these, never `hnd-...`-shaped) — the exact namespace
+    `_has_asymmetry`'s candidate-set fix (`{stub_id, id}` vs. a single key)
+    exists to resolve, unlike `_roadmap_handoff`'s synthetic `hnd-...` shape
+    above."""
+    d: Dict[str, Any] = {
+        "stub_id": stub_id,
+        "kind": "roadmap-baton",
+        "deployment_state": deployment_state,
+        "blocked_by": blocked_by,
+        "blocks": blocks or [],
+    }
+    if shipped_in:
+        d["shipped_in"] = shipped_in
+    return d
+
+
+class TestSatFamilyOracleAsymmetryFalsePositivesGoToZero:
+    """AC8 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md):
+    the 6 `sat`-family rows the ported oracle fixture
+    (`fixtures/stale_record_triage_oracle.yaml`) tags `is_false_positive: true`,
+    `detector_bug: asymmetry_detector_bare_stub_id` — sat-02..sat-07 — must all
+    resolve to NO asymmetry finding against the real, symmetric `sat` graph
+    (reconstructed from the corpus records named in `_sat_stub`'s docstring).
+    AC11 (same chunk): a genuinely asymmetric roadmap-baton edge in the SAME
+    graph shape must still surface — a detector that goes silent on every
+    roadmap-baton edge would pass the six-rows-to-zero half of this test
+    vacuously.
+    """
+
+    def _sat_family_corpus(self) -> "List[Dict[str, Any]]":
+        sat01 = _sat_stub("sat-01", "continued", blocked_by=[], blocks=["sat-02"])
+        sat02 = _sat_stub(
+            "sat-02", "shipped", blocked_by=["sat-01"], blocks=["sat-03", "sat-05"],
+            shipped_in="1" * 40,
+        )
+        sat03 = _sat_stub(
+            "sat-03", "shipped", blocked_by=["sat-02"], blocks=["sat-04"], shipped_in="2" * 40,
+        )
+        sat04 = _sat_stub(
+            "sat-04", "shipped", blocked_by=["sat-03"], blocks=["sat-06", "sat-07"],
+            shipped_in="3" * 40,
+        )
+        sat05 = _sat_stub(
+            "sat-05", "shipped", blocked_by=["sat-02"], blocks=["sat-06"], shipped_in="4" * 40,
+        )
+        # sat-06 at the ported audit's 2026-07-20 date (blocked by BOTH sat-04
+        # and sat-05, per their own `blocks:` lists above) — the live corpus
+        # since cleared this to `blocked_by: []` once the gate freed, but the
+        # audited row is this earlier, still-gated shape.
+        sat06 = _sat_stub("sat-06", "awaiting_gate", blocked_by=["sat-04", "sat-05"], blocks=[])
+        sat07 = _sat_stub("sat-07", "awaiting_gate", blocked_by=["sat-04"], blocks=[])
+        return [sat01, sat02, sat03, sat04, sat05, sat06, sat07]
+
+    @pytest.mark.parametrize("stub_id", ["sat-02", "sat-03", "sat-04", "sat-05", "sat-06", "sat-07"])
+    def test_named_oracle_row_no_longer_surfaces_asymmetry(self, stub_id: str) -> None:
+        corpus = self._sat_family_corpus()
+        dependent = next(h for h in corpus if h["stub_id"] == stub_id)
+
+        result = evaluate_gate(dependent, corpus)
+
+        assert not any("asymmetry" in e for e in result["evidence"]), (
+            f"{stub_id} still surfaces the retired asymmetry_detector_bare_stub_id "
+            f"false positive: {result['evidence']!r}"
+        )
+
+    def test_genuine_roadmap_baton_asymmetry_still_surfaces(self) -> None:
+        # AC11: sat-09 claims sat-06 blocks it, but sat-06's own `blocks:`
+        # list (above) never names sat-09 back — a real data defect in the
+        # SAME roadmap-baton shape the six rows above now clear correctly.
+        corpus = self._sat_family_corpus()
+        sat09 = _sat_stub("sat-09", "awaiting_gate", blocked_by=["sat-06"], blocks=[])
+        corpus = corpus + [sat09]
+
+        result = evaluate_gate(sat09, corpus)
+
+        assert result["verdict"] == "surface"
+        assert any("asymmetry" in e for e in result["evidence"])
 
 
 class TestNarrowWithUnresolvedIdAlsoSurfaces:

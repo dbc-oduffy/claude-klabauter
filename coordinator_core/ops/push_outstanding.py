@@ -1,4 +1,4 @@
-"""coordinator_core.ops.ceremony.push_outstanding -- decide, at ZERO git
+"""coordinator_core.ops.push_outstanding -- decide, at ZERO git
 spawns, whether this worktree has anything to push, and reuse
 `push_with_retry` for the actual push when it does.
 
@@ -97,6 +97,45 @@ is where a future chunk should consume it.
 at 214.1ms / 16 spawns, it pays the same git-lfs startup cost this
 predicate exists to avoid, for no better an answer.
 
+WHY THIS MODULE LIVES OUTSIDE `coordinator_core/ops/ceremony/`, AND WHY
+MOVING IT THERE IS BREAK-CLASS (2026-08-26). Directory placement is a
+BUDGET declaration here, not a filing convention: `ipc.is_ceremony_method`
+resolves ceremony membership as a union of the `ceremony.` method-name
+prefix, `_CEREMONY_PACKAGE_ALIASES`, and the owning module living under
+`coordinator_core.ops.ceremony.`, and every member is clamped to
+`CEREMONY_BUDGET_SECS` (2.0s) -- a one-directional ratchet with no per-op
+exception, no env override, and no widening (DR-348).
+
+This op cannot be born inside that ceiling and must not pretend to be.
+`push_with_retry` is push -> on reject fetch -> `rebase --onto` -> re-push,
+up to `_PUSH_MAX_RETRIES` times; that is one to three genuinely-remote round
+trips plus a local rebase. The 2.0s clamp is enforced by `asyncio.wait_for`,
+i.e. WALL CLOCK, on a box whose design condition is 50-70 concurrent
+sessions -- `coordinator_core/git/run.py` measures a bare `git --version` at
+a 2,891ms p95 wall from spawn scheduling alone, which is why local git work
+there carries `_SPAWN_SCHEDULING_HEADROOM_SECS` (10.0s) on top of its
+process-time budget. A remote leg under a 2.0s wall ceiling therefore fails
+on peer load rather than on any property of the push, and DR-349's
+`REMOTE_BUDGET_SECS` (30.0s) is the runaway guard that actually fits the
+job. Outside the package this op resolves to the global 30s guard,
+identically cold and warm.
+
+It shipped in the ceremony package on 2026-08-25 and inherited the 2.0s
+ceiling by accident of placement -- it has never been named `ceremony.*`.
+The observed cost: a load-order-dependent budget (30.0s in a cold
+interpreter, 2.0s once anything had imported `_registry_map`, because the
+package signal is the only one it matched and that signal never imports),
+and real timeouts at every named push checkpoint on a branch that merely
+needed a fetch first -- reported twice on 2026-08-26,
+`state/bug-backlog/2026-08-26-push-outstanding-times-out-at-its-own-2s-*`
+and `...-push-outstanding-s-budget-is-load-order-*`.
+
+This is NOT the rename bypass `_CEREMONY_PACKAGE_PREFIX` exists to close.
+That bypass is silent by construction; this is the diff that signal was
+designed to force into the open, and the ceremony budget is untouched by it
+-- no widened row, no alias, no exception. The op reaching for a remote is
+the fact; where it sits is the honest declaration of that fact.
+
 NO UPSTREAM REF, OR AN UNRESOLVABLE BRANCH/HEAD: exactly the same "cannot
 be decided at zero spawns" cases the outstanding-work decision above
 already falls through on. This module does not open a second, more
@@ -115,7 +154,11 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.git.git_state import head_branch, head_sha
-from coordinator_core.ops.ceremony.commit_pipeline import PushOutcome, push_with_retry
+from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_RETRY_BUDGET_SECS,
+    PushOutcome,
+    push_with_retry,
+)
 
 __all__ = ["push_outstanding"]
 
@@ -283,6 +326,18 @@ def push_outstanding(
     why this observes rather than acts. A range with no established upstream
     skips the predicate entirely.
 
+    THE LADDER OWNS ITS OWN DEADLINE (2026-08-26). This call passes
+    `budget_secs=PUSH_RETRY_BUDGET_SECS`, so the push/fetch/rebase/re-push
+    ladder stops ITSELF between attempts rather than being cut mid-leg by
+    `ipc._timeout_for`'s dispatch guard. That guard is wall-clock and does
+    not abort server-side execution, so firing it inside a `git push`
+    produces an `unconfirmed` push that may still land; the ladder's own
+    deadline is checked where the previous push was observed and nothing is
+    in flight, so exhaustion reports a decided `failed` instead. The 30s
+    dispatch guard remains as the outer backstop, and a breach of IT now
+    means a real defect rather than an ordinary slow remote -- see
+    `PUSH_RETRY_BUDGET_SECS` for the measurements behind the number.
+
     PM RULING, 2026-08-25: this call PAYS SYNCHRONOUSLY -- no detach is
     built, and none should be re-proposed without new measurement. The
     basis: post-C1 a push event runs ~146ms / ~9.5 spawns (79.7ms / 3.5 for
@@ -325,6 +380,7 @@ def push_outstanding(
         root,
         allow_protected_branch=allow_protected_branch,
         protected_branch_override_reason=protected_branch_override_reason,
+        budget_secs=PUSH_RETRY_BUDGET_SECS,
     )
     if lfs_note:
         outcome.skipped.extend(lfs_note)

@@ -211,7 +211,7 @@ def _read_meta_json(session_dir: Path) -> Optional[dict]:
         return None
 
 
-def _newest_record_mtime(session_dir: Path) -> float:
+def _staleness_basis_mtime(session_dir: Path) -> float:
     """Newest mtime among a session dir's own files, or 0.0 if it cannot be read.
 
     The staleness basis for a session dir carrying NO ``meta.json`` — the same
@@ -219,6 +219,24 @@ def _newest_record_mtime(session_dir: Path) -> float:
     (``_reap_stale_agents``: ``max(entry.stat().st_mtime for entry in files)``),
     reused deliberately rather than re-derived, so both sub-reaps answer "when
     did anything here last happen" the same way.
+
+    NOT ``session/liveness.py :: newest_record_mtime``, and deliberately not
+    routed through it — the two answer different questions and diverge on
+    purpose. This one asks "is it safe to ARCHIVE this directory", so counting
+    every file is the conservative direction: more files means newer means
+    less likely to be reaped, and ``0.0`` fails closed to KEEP. That one asks
+    "did this session do WORK recently", where counting a write-once file
+    manufactures a phantom-live peer, so it excludes ``em-session-id.txt`` and
+    returns ``None`` — a different sentinel with a different contract.
+
+    Named for its own question rather than sharing that function's name (it
+    was ``_newest_record_mtime`` until 2026-08-26) because the collision was
+    the hazard: a grep returned two implementations with opposite exclusion
+    policies and opposite sentinels, and either plausible "de-duplication"
+    silently breaks one caller — pointing this at ``liveness``'s helper swaps
+    the sentinel and starts excluding a file this basis wants counted, while
+    dropping ``liveness``'s exclusion list re-introduces the permanently-recent
+    agent dir its AC6 exists to kill.
 
     0.0 is the same "unknown timestamp" sentinel ``_parse_last_activity``
     returns, and callers must treat it as fail-closed-to-keep. An EMPTY dir
@@ -232,7 +250,7 @@ def _newest_record_mtime(session_dir: Path) -> float:
         return max(e.stat().st_mtime for e in files)
     except OSError as exc:
         print(
-            f"skip: _newest_record_mtime: iterdir/stat failed: {exc}",
+            f"skip: _staleness_basis_mtime: iterdir/stat failed: {exc}",
             file=sys.stderr,
         )
         return 0.0
@@ -406,7 +424,7 @@ def _reap_stale_sessions(
             # 6bf7fc291), so this mtime is the ONLY thing standing between a
             # record-less dir and the archive. It is held to the same 24h
             # threshold as every other session, not a looser one.
-            last_activity_epoch = _newest_record_mtime(sdir)
+            last_activity_epoch = _staleness_basis_mtime(sdir)
         else:
             last_activity_epoch = _parse_last_activity(meta)
         if last_activity_epoch == 0.0:

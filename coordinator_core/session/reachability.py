@@ -109,7 +109,7 @@ available()` below MUST NOT be changed to key on it: the harness's own
 FleetView peer listing uses `peerProtocol` (plus liveness, plus a 24h
 recency window) to decide peer VISIBILITY, a materially looser question
 than the DELIVERABILITY question this module answers -- a peer can be
-`peerProtocol >= 1` and listed while still having no `messaging_socket_
+a `peerProtocol` of 1 or more and listed while still having no `messaging_socket_
 path` and thus no address `SendMessage` could actually reach (that is
 precisely today's box-wide state). `messaging_available()` stays scoped
 to `messaging_socket_path` on purpose.

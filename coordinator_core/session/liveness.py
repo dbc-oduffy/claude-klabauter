@@ -1173,6 +1173,16 @@ def newest_record_mtime(dir) -> Optional[int]:
     DIFFERENT caller, ``session_live``'s Layer 2, and is untouched by this
     function).
 
+    "Single shared implementation" is scoped to the recency question, NOT to
+    every mtime scan of a session dir. ``ops/session/reap.py ::
+    _staleness_basis_mtime`` is a separate, deliberate implementation for the
+    ARCHIVAL question, and must not be collapsed into this one: it counts
+    every file (excluding nothing) and returns ``0.0`` rather than ``None``,
+    because its callers fail closed to KEEP -- counting more files makes a dir
+    look newer and therefore SAFER from the reaper, which is the conservative
+    direction there and the wrong one here. Pointing it at this function would
+    swap its sentinel and start excluding a file its basis wants counted.
+
     WIDEN, DO NOT SWAP (AC6, plan Anti-scope): keying on the newest file
     rather than a single literal name means a future record rename can only
     DEFER a recency decision (the renamed file is still picked up under its

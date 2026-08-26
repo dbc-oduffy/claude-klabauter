@@ -1460,3 +1460,41 @@ def test_marker_on_a_real_command_line_is_still_left_alone(tmp_path, monkeypatch
         "a hand-authored hook referencing the marker on a real command line "
         "must be left alone, not appended to"
     )
+
+
+def test_comment_only_marker_in_a_trailing_inline_comment_does_not_suppress_the_gate(
+    tmp_path, monkeypatch, capsys
+):
+    """Review-found gap: the comment-only-mention fix excluded a WHOLE-LINE
+    comment but still ran `marker in line` on a code line carrying a
+    TRAILING `# ...` comment, so a marker mentioned only after the `#` on an
+    otherwise unrelated command line still counted as installed -- the same
+    bug class the fix exists to close, just for trailing rather than leading
+    comments."""
+    meta = _make_meta_repo(tmp_path, monkeypatch)
+    fake_bin = tmp_path / "fakebin"
+    monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
+    _write_stub_gates(fake_bin)
+
+    gate = _solo_gate()
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    (fake_bin / gate.filename).write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "_GATE_REGISTRY", [gate])
+
+    hook = _hook_path(meta)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        "#!/bin/sh\n"
+        "sh some-other-gate.py  # replaces old fake-solo-gate check\n"
+        "exit 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    assert main([str(meta)]) == 0
+    after = hook.read_text(encoding="utf-8")
+    assert "# --- Gate: fake solo gate (fake-solo-gate) ---" in after, (
+        "a marker mentioned only in a trailing inline comment suppressed "
+        "the gate -- the registry entry can never reach the hook"
+    )
+    assert "appended gate(s)" in capsys.readouterr().err

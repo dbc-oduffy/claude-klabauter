@@ -186,6 +186,13 @@ def begin_shutdown(
     already closed the listener itself -- idle demotion (C24), operator
     request, degraded self-stop.
 
+    STEP 1 STOPS ACCEPTING; IT DOES NOT RELEASE THE ENDPOINT. The
+    `close_listener` production binds here (`warm/server.py ::
+    _ServerContext.close_listener`, read its docstring) flips a flag; the
+    OS-level close and unlink are step 3's, behind the drain. So a
+    same-token successor -- which is what idle demotion always produces --
+    cannot bind until this whole sequence completes.
+
     Single-shot across the whole process: returns False immediately,
     touching none of the four steps, if another trigger already won entry
     (concurrently or earlier). Returns True if this call ran the sequence

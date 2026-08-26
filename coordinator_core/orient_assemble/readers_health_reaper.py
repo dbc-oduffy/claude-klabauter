@@ -56,9 +56,9 @@ Negative-spec:
       left.
     - Does NOT re-implement the deleted prose-parsing regex contract —
       `reap_in_flight_claims.survey()` returns integers directly.
-    - Does NOT ever invoke the reaper's LIVE (non-`--dry-run`) mode, and
-      does NOT invoke `_run_archive_stamp_cli` — mutation stays a
-      `directives[]` entry naming the existing CLI, never performed here.
+    - Does NOT mutate. This reader calls `survey()`, never
+      `apply_dispositions()` — mutation stays a `directives[]` entry naming
+      the CLI, performed by whoever runs that directive, never here.
     - Does NOT re-implement three independent marker-freshness checks —
       `_read_marker_freshness(cadence)` is the single dedup target AC-7
       requires; a finding that re-splits it back into session/day/week

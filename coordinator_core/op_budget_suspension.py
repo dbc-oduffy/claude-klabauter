@@ -269,10 +269,35 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": "8/8 ended in caller_timeout at 30s.",
         "spinoff": None,
     },
-    "fleet.archive_completed_handoffs": {
-        "measured": {"max_ms": 26111.9, "p50_ms": 26111.9, "n": 1},
-        "spinoff": None,
-    },
+    # fleet.archive_completed_handoffs — REMOVED 2026-08-26 by PM ruling, and
+    # pruned from test_op_suspension_ratchet._RATIFIED_SUSPENSIONS in this same
+    # commit (that direction was got wrong once before; see that frozenset's
+    # own comment).
+    #
+    # NOT an op earning its way back — that lane does not exist and this is not
+    # it. The row recorded `max_ms: 26111.9, n: 1` and its refusal text read
+    # "Killed, not suspended — the old implementation does not come back. If
+    # the job is still needed, plan a new one under 500ms." That is exactly
+    # what happened: `ops/fleet/archive_handoffs.py` was DELETED at 648f2e4eb
+    # and the op key re-registered by `ops/fleet/archive_terminal_handoffs.py`,
+    # a from-scratch rebuild. The row was keyed to an op NAME whose
+    # implementation no longer existed, so it had stopped suspending the thing
+    # that was killed and started blocking the replacement the ruling asked
+    # for. Same shape as the `review_trail.write` correction above, on firmer
+    # ground: there the code was unchanged, here it was rebuilt as directed.
+    #
+    # Measured before removal, not after — the rebuilt op through its
+    # registered handler, live corpus, cold interpreter included:
+    # 212.5ms CPU / 267.2ms wall / 4 processes on dry_run, against the row's
+    # 26111.9ms. Two orders of magnitude apart.
+    # → docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md
+    #   § AC-8, and state/audits/2026-08-25-the-handoff-archive-op-earns-its-
+    #   way-back.md § AC-7 re-take 2026-08-26.
+    #
+    # NEGATIVE SPEC for anyone re-adding this key: a suspension row is keyed by
+    # NAME, and a name survives the deletion of the code it named. Before
+    # writing one, check that the implementation you measured is the
+    # implementation the key resolves to today.
 }
 
 

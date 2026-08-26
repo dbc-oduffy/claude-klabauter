@@ -174,11 +174,18 @@ class TestSelfClaim:
         rc = js_bridge_cli.main(["self-claim", "coordinator/bar.py"])
         assert rc == 0
 
-        touched = repo / ".git" / "coordinator-sessions" / "sidA" / "touched.txt"
-        assert touched.is_file()
+        sink = (
+            repo / ".git" / "coordinator-sessions" / "sidA" / scope._TOUCH_RECORD_FILENAME
+        )
+        assert sink.is_file()
         # Review: coordinatorcode-reviewer-7ca5d82a Finding 1 — event-line format,
         # parse rather than assert exact-membership of the bare path.
-        lines = touched.read_text(encoding="utf-8").splitlines()
+        # Read through the C0 union seam rather than the raw sink: `self_claim`
+        # emits the jsonl dialect since C6, and the seam re-renders both
+        # dialects as legacy-format lines, so `parse_touch_event` below still
+        # observes the same guarantee this test was written to observe.
+        lines, degraded = scope._read_touch_record_as_legacy_lines(sink)
+        assert not degraded
         assert len(lines) == 1
         verb, _ts, path = scope.parse_touch_event(lines[0])
         assert (verb, path) == ("T", "coordinator/bar.py")

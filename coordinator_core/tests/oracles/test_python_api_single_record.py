@@ -5,8 +5,15 @@ N calls" is settled by the function's own signature, with nothing imported for s
 nothing spawned, and nothing executed. It cannot be flaky and it cannot be slow.
 
 Where a claim can be pinned this way it should be, in preference to exercising a `main()` -- and
-in preference to spawning the CLI wrapper around it, which is what the exempted call site does
-and what the exemption is about.
+in preference to spawning the CLI wrapper around it.
+
+RE-POINTED 2026-08-26 (DR-362): the call site this file was written for --
+`reap-orphaned-in-flight-handoffs::main -> _run_archive_stamp_cli` -- no longer exists. That CLI
+was deleted at 515.6ms under DR-344 section 6 and rebuilt as a 173-line shell, and its write path
+now calls these verbs IN-PROCESS from
+`coordinator_core.ops.reap_in_flight_claims.apply_dispositions`. The spawn is gone; the
+one-record-per-call property these oracles pin is NOT, because that caller still loops one
+disposition at a time and a batch-capable verb would change what the loop should be.
 """
 
 from __future__ import annotations
@@ -20,8 +27,8 @@ _PLURAL_HINTS = ("list[", "List[", "Sequence[", "Iterable[", "tuple[", "Tuple[",
 
 
 def test_archive_stamp_verbs_take_exactly_one_handoff():
-    """`reap-orphaned-in-flight-handoffs::main -> _run_archive_stamp_cli` spawns the CLI once per
-    orphaned handoff. The claim is that no verb behind it accepts a batch.
+    """`reap_in_flight_claims.apply_dispositions` calls one of these verbs per orphaned handoff
+    (two on the reclaim arm). The claim is that no verb behind it accepts a batch.
 
     Asserted over the FIRST PARAMETER of each verb, which is the record-identity slot -- the
     same discipline the sibling-CLI oracles use, and for the same reason: a verb may take plural
@@ -31,7 +38,7 @@ def test_archive_stamp_verbs_take_exactly_one_handoff():
     missing = [v for v in verbs if not callable(getattr(archive_stamp, v, None))]
     assert not missing, (
         f"archive_stamp no longer exposes {missing} -- the exemption at "
-        "`reap-orphaned-in-flight-handoffs::main` is pinned to verbs that have moved or been "
+        "`reap_in_flight_claims.apply_dispositions` is pinned to verbs that have moved or been "
         "renamed, so it is currently unverified. Re-read the module rather than dropping this."
     )
 

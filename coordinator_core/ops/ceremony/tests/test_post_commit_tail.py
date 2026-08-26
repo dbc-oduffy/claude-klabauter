@@ -667,7 +667,7 @@ def test_origin_stub_close_push_decline_is_not_routed_through_error_channel(tmp_
     declined_outcome = PushOutcome(
         exit_code=0, skipped=["push:branch-policy"], message="declined: not a work/* branch"
     )
-    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root: declined_outcome)
+    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root, **_kw: declined_outcome)
 
     follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
         repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=m.PUSH_MODE_SYNC
@@ -687,7 +687,7 @@ def test_origin_stub_close_genuine_push_failure_still_routes_through_error_chann
     failed_outcome = PushOutcome(
         exit_code=1, failed=["push:rejected"]
     )
-    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root: failed_outcome)
+    monkeypatch.setattr(m, "push_with_retry", lambda worktree_root, **_kw: failed_outcome)
 
     follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
         repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=m.PUSH_MODE_SYNC
@@ -711,7 +711,7 @@ def test_origin_stub_close_push_mode_none_keeps_distinct_not_attempted_shape(tmp
 
     called = False
 
-    def _boom(worktree_root):
+    def _boom(worktree_root, **_kw):
         nonlocal called
         called = True
         raise AssertionError("push_with_retry must not be called under push_mode='none'")

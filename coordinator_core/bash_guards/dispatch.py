@@ -2029,6 +2029,8 @@ def _build_guard_chain(
         # above; the other is `reap-stale-git-lock` immediately below).
         # Ungated chain member (C1 audit finding): guard_offer_git_c.py
         # declares no MATCHERS and carries no tool_name gate of its own.
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("offer-git-c", lambda: _check_offer_git_c(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Self-heal leg of the fleet-wide `.git/index.lock` contention
         # campaign: a stat-gated (zero-subprocess in the common no-lock case)
@@ -2110,9 +2112,18 @@ def _build_guard_chain(
         # position relative to EACH OTHER carries no confinement risk.
         # `inprocess-search` (formerly registered here) moved up ahead of
         # `probe-spray` -- see that entry's own comment above for why.
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
+        # Bash-only is correct by construction, not unconverted -- per-leg
+        # reason (distinct from its dual-declaring sibling `grep-via-bash-
+        # guard`): docs/reference/guard-tool-name-membership.md §8a.
         GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         # `git_root` is threaded here (unlike this row's cat-heredoc sibling
         # above, which needs only `cmd`) because this check's own detection
@@ -2124,6 +2135,8 @@ def _build_guard_chain(
         # here would make the guard permanently silent in production (its
         # own fail-closed contract on an empty/None `git_root`), never
         # firing outside a direct unit-test call.
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("heredoc-repo-write-advise", lambda: _dc.check_heredoc_repo_write_advise(cmd, session_id, payload, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
@@ -2137,9 +2150,15 @@ def _build_guard_chain(
         # rewrite/advisory-only checks carries no confinement risk, and both
         # still sit after every hard-deny above per the chain's own ordering
         # invariant (test_hard_denies_precede_rewrites.py).
+        # Bash-only is correct by construction, not unconverted -- per-leg
+        # reason (distinct from its dual-declaring sibling `multiprobe-
+        # banner`): docs/reference/guard-tool-name-membership.md §8a.
         GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         # Ungated chain member (C1 audit finding): guard_head_tail_rewrite.py
         # declares no MATCHERS and carries no tool_name gate of its own.
+        # NOT a Bucket C member -- Bash-only here is a documented deferral,
+        # not correct-by-construction: docs/reference/guard-tool-name-
+        # membership.md §8b (Bucket D; C9 wires this registration).
         GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
         # Registered in the rewrite band for the same reason as the entries
         # above it (its rewrite is provably params-identical -- see that
@@ -2164,6 +2183,8 @@ def _build_guard_chain(
         # Ungated chain member (C1 audit finding): guard_offer_invoke_params_
         # stdin.py declares no MATCHERS and carries no tool_name gate of its
         # own.
+        # Bash-only is correct by construction, not unconverted -- reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("offer-invoke-params-stdin", lambda: _check_offer_invoke_params_stdin(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # `grep-via-bash-guard` moved from PLATFORM_CONDITIONED_DENY to
         # ADVISORY_REWRITE (H11(a), 2026-07-30, docs/plans/2026-07-30-os-
@@ -2219,6 +2240,10 @@ def _build_guard_chain(
         # docstring "Never denies"), so `fail_closed=False` -- a crash here
         # degrades to allow/no-context, matching every other pure-advisory
         # entry in this band.
+        # Bash-only is correct by construction, not unconverted -- its whole
+        # subject is PowerShell invoked FROM bash, so widening to the
+        # PowerShell tool matches nothing it exists to catch. Reason:
+        # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("powershell-via-bash-guard", lambda: _check_powershell_via_bash(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_powershell_via_bash)),
         # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C5/C7.
         # Both are advisory-only (never deny -- see each module's own "the

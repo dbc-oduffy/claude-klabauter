@@ -4865,7 +4865,7 @@ def test_apply_execute_directives_explicit_repo_root_never_refused(monkeypatch, 
 # waiver files (never review-trail records to begin with) were being counted
 # as malformed quarantine noise. Their deletion is a one-time ~1,913-file step
 # down in `malformed`, not a corpus regression — ~82% of the old 1534 floor
-# was this noise. The bare `>=1534` floor this replaced could never survive
+# was this noise. The bare 1534-line floor this replaced could never survive
 # that step (nor any other net deletion from the corpus), so it is replaced
 # with a floor/ceiling window sized off the OBSERVED post-K-005 malformed
 # count (277) with generous margin, rather than a single point pin — this

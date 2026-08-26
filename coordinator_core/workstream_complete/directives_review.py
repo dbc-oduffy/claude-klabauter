@@ -348,7 +348,7 @@ def _decide_review_scale_core(
     # commit-count arm is a proxy for ACCUMULATED RISK, and a commit with a
     # zero-line diff carries none. `baton-assemble apply` scaffold commits
     # are the reported instance — nine of one session's sixteen, every one
-    # at `diff_loc: 0`, pushing a doc-only close past the `>= 5` threshold.
+    # at `diff_loc: 0`, pushing a doc-only close past the five-line threshold.
     # Subtracted from the brightline's commit arm ONLY: `commit_count`
     # itself stays the honest count of this session's commits everywhere it
     # is REPORTED (row-4 reason string, review trail, commit slices), so

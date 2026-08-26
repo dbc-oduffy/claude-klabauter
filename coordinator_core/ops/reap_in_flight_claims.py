@@ -17,8 +17,9 @@ than off the deleted code:
 This module answers both from ONE corpus pass: `survey()` returns a
 `SurveyResult` carrying the two integers AND the per-candidate
 `Disposition` list the CLI prints; `apply_dispositions()` performs the
-mutations by delegating to the existing, tested `archive-stamp-cli`
-verbs — this module never writes a handoff's frontmatter itself.
+mutations by delegating IN-PROCESS to `coordinator_core.archive_stamp`'s
+existing, tested functions — this module never writes a handoff's
+frontmatter itself.
 
 ONE open per corpus file (AC3): `_build_corpus` reads `state/handoffs/*.md`
 exactly once each, and every downstream question (census, ship-detection)
@@ -39,10 +40,11 @@ Negative-spec:
     - Does NOT re-implement a prose-parsing contract — `survey()` returns
       integers and structured dispositions, never a sentence a caller must
       regex.
-    - Does NOT mutate frontmatter directly. `apply_dispositions()` shells
-      out to `coordinator/bin/archive-stamp-cli.py`'s tested verbs
-      (`unclaim-handoff`, `stamp-shipped-in`, `ship-handoff`) for every
-      write; a single-writer invariant it does not reimplement.
+    - Does NOT mutate frontmatter directly. `apply_dispositions()` delegates
+      every write IN-PROCESS to `coordinator_core.archive_stamp`'s tested
+      functions — `cs_unclaim_handoff` on the release arm, `cs_ship_handoff`
+      alone on the reclaim arm — preserving the single-writer invariant
+      without reimplementing it.
     - Does NOT register a JSON-RPC op — both callers import this module
       in-process (the `reap_orphaned_agent_dirs` shape), so there is
       nothing to dispatch over IPC and no eager-module-list entry is owed.
@@ -67,7 +69,6 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.archive_stamp import (
     cs_ship_handoff,
     cs_unclaim_handoff,
-    stamp_shipped_in,
 )
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.records_query import query_records
@@ -79,17 +80,16 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 #: Both the current and the legacy (DR-084 pre-rename) spellings this census
 #: must recognise as "claimed" — never widened beyond these two, and never
 #: narrowed to just one (a corpus can carry either).
-_CLAIMED_STATUS_VALUES = ("claimed", "consumed")
 
-#: The holder FIELD, both spellings, in live-first order. DR-084 renamed
-#: `consumed_by` -> `claimed_by`; the live `state/handoffs` corpus is 100%
-#: `claimed_by` (66 of 66 holder stamps, 44 of 44 on in_flight records,
-#: measured 2026-08-26) and carries ZERO `consumed_by`. Reading only the
-#: legacy spelling makes this whole module see an empty corpus and report
-#: 0/0 -- which is exactly what it did until AC5's parity diff caught it.
-#: Same shape as `_CLAIMED_STATUS_VALUES` above, which had the rename
-#: applied for the status VALUE while the field was left behind.
-_HOLDER_FIELDS = ("claimed_by", "consumed_by")
+#: DR084-SINGLE-ACCESSOR: this module does NOT re-read the DR-084 lifecycle
+#: vocabulary raw. Holder identity goes through the ONE shared Python accessor
+#: (`coordinator_core.session.claims.handoff_lifecycle().claim_holder`) and
+#: claim-status membership through `is_claimed_status`. A second raw read of
+#: `claimed_by`/`consumed_by` FAILS OPEN -- no error, silently wrong answer --
+#: which is exactly how this module shipped reading only `consumed_by` against
+#: a corpus that is 100% `claimed_by`, and reported 0/0 with 26 tests green.
+#: The wiki tripwire records the reaper doing this once before, in `main()` but
+#: not in `_shipped_orphan_sha()` 180 lines away.
 
 _VERDICT_RELEASE = "release"
 _VERDICT_RECLAIM_SHIPPED = "reclaim_shipped"
@@ -136,21 +136,26 @@ class SurveyResult:
 # ---------------------------------------------------------------------------
 
 
-def _read_holder(fm: str) -> Optional[str]:
-    """The claim holder's session id, reading `claimed_by` then the legacy
-    `consumed_by` (DR-084 pre-rename). Both spellings, live-first.
+def _is_claimed_status(status: Optional[str]) -> bool:
+    """DR-084 claim-status membership via the shared accessor (`consumed` and
+    `claimed` both mean claimed). Never a local tuple -- see DR084-SINGLE-ACCESSOR."""
+    from coordinator_core.session import claims
 
-    Negative-spec: never reads ONE spelling. The live corpus is entirely
-    `claimed_by`, so a single-spelling read of `consumed_by` yields an empty
-    claim set and a silent 0/0 survey -- a defect that unit tests writing
-    their own fixtures cannot see, because they write whichever spelling the
-    implementation reads.
+    return bool(status) and claims.handoff_lifecycle().is_claimed_status(status)
+
+
+def _read_holder(fm: str) -> Optional[str]:
+    """Claim holder via the ONE shared DR-084 accessor, never a raw field read.
+
+    Uses the accessor's frontmatter-TEXT form, added for this caller: the
+    dict and path forms would each cost a second read of bytes already in hand,
+    and this module's whole design is one open per corpus file (AC3). The field
+    names and the precedence rule stay in the accessor, which is the point of
+    DR084-SINGLE-ACCESSOR.
     """
-    for key in _HOLDER_FIELDS:
-        value = read_fm_field_unquoted(fm, key)
-        if value:
-            return value
-    return None
+    from coordinator_core.session import claims
+
+    return claims.handoff_lifecycle().claim_holder_from_fm(fm, read_fm_field_unquoted) or None
 
 
 def _read_text_once(path: Path) -> str:
@@ -194,7 +199,7 @@ def _in_flight_claims(corpus: List[HandoffRecord]) -> List[HandoffRecord]:
     return [
         r
         for r in corpus
-        if r.status in _CLAIMED_STATUS_VALUES
+        if _is_claimed_status(r.status)
         and r.deployment_state == "in_flight"
         and r.holder
     ]
@@ -384,6 +389,16 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
     governed: List[HandoffRecord] = []
     ship_check: List[HandoffRecord] = []
     for r in pending:
+        # `kind != "spinoff"`: `deliverable_id` is NOT unique per handoff — a
+        # 2026-08-26 whole-corpus census (state/handoffs + archive/handoffs)
+        # found 168 of 666 deliverable_ids shared across more than one
+        # handoff (one by 10), sharing crosses the session-handoff/spinoff
+        # boundary, and 46 spinoff records carry a shared id. So for a
+        # spinoff, a governed-plan-index hit can be the PARENT's implemented
+        # plan rather than evidence this spinoff's own work shipped. Holding
+        # it here would freeze a live claim on another artifact's evidence;
+        # routing it to `ship_check` instead resolves its own ship commit
+        # from the completion index and git log. Safety valve, not a hole.
         if (
             r.kind != "spinoff"
             and r.deliverable_id
@@ -450,25 +465,41 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 
 
 # ---------------------------------------------------------------------------
-# apply_dispositions() — delegates every mutation to archive-stamp-cli
+# apply_dispositions() — delegates every mutation in-process to archive_stamp
 # ---------------------------------------------------------------------------
 
 
 def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], List[str]]":
     """Perform every mutating disposition by calling `coordinator_core.archive_stamp`'s
     tested verbs IN-PROCESS — `release` -> `cs_unclaim_handoff`, `reclaim_shipped` ->
-    `stamp_shipped_in` + `cs_ship_handoff`. A skip verdict performs no write.
+    `cs_ship_handoff` ALONE. A skip verdict performs no write.
+
+    Negative-spec: does NOT call `stamp_shipped_in` before `cs_ship_handoff` on the
+    reclaim arm. `cs_ship_handoff` composes `handoff.archive_transition` mode
+    `stamp_only`, whose documented ordering is guard-first-then-stamp-then-flip and
+    whose own docstring names its purpose as closing "the incoherent half-state
+    (shipped_in present while deployment_state stays in_flight) a standalone
+    stamp_shipped_in() call could otherwise leave behind." A standalone pre-stamp
+    ahead of that guard reintroduces exactly that half-state: on a guard-retained or
+    indeterminate/fail-closed handoff, `cs_ship_handoff` returns 0 (retention is never
+    an error) having flipped nothing, so the pre-stamp is left in place on an
+    unclaimed, still-in_flight handoff and the reap still reports it under `applied`.
+    `cs_ship_handoff(path, sha=...)` alone already derives `kind="ship-commit"`
+    internally when a non-empty `sha` is supplied
+    (`handoff_archive_transition._handler`), so the pre-stamp buys nothing.
 
     Negative-spec: does NOT shell out to `coordinator/bin/archive-stamp-cli.py`.
-    A subprocess per disposition is one — two on the reclaim arm — interpreter
-    start per handoff, i.e. N-2N process creations for a reap of N. That is the
-    per-item amplification shape `coordinator_core/tests/
-    test_no_unbatched_per_item_git_spawn.py` is a standing gate against, and
-    DR-344 section 4's "git justifies itself per use" applies to the same cost:
-    process creation, not the work. These are the same functions the CLI's own
-    verbs dispatch to, so delegation is preserved and the spawn is not.
+    A subprocess per disposition would be one interpreter start per handoff, i.e.
+    N process creations for a reap of N. That is the per-item amplification shape
+    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py` is a standing
+    gate against, and DR-344 section 4's "git justifies itself per use" applies to
+    the same cost: process creation, not the work. These are the same functions the
+    CLI's own verbs dispatch to, so delegation is preserved and the spawn is not.
 
-    Returns `(applied_paths, failed_details)`.
+    Returns `(applied_paths, failed_details)`. `len(applied) + len(failed)` is
+    expected to be LESS than `len(dispositions)` whenever skip verdicts
+    (`_VERDICT_SKIP_LIVE_CHILDREN` / `_VERDICT_SKIP_GOVERNED_PLAN`) are present —
+    a skip performs no write and is not accounted in either list.
     """
     applied: List[str] = []
     failed: List[str] = []
@@ -484,16 +515,6 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
             else:
                 failed.append(f"{d.path}: unclaim-handoff failed: rc={rc}")
         elif d.verdict == _VERDICT_RECLAIM_SHIPPED:
-            try:
-                outcome = stamp_shipped_in(d.path, kind="ship-commit", sha=d.sha or None)
-            except Exception as exc:  # noqa: BLE001
-                failed.append(f"{d.path}: stamp-shipped-in raised: {exc}")
-                continue
-            if outcome.exit_code != 0:
-                failed.append(
-                    f"{d.path}: stamp-shipped-in failed: {outcome.error or outcome.exit_code}"
-                )
-                continue
             try:
                 rc = cs_ship_handoff(d.path, sha=d.sha or None)
             except Exception as exc:  # noqa: BLE001

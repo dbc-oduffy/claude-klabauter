@@ -220,7 +220,7 @@ _NETWORK_ERROR_RE = re.compile(
 #: ``whoami_pkg``) but probed here alongside the pip-installed deps.
 #:
 #: ``PyYAML`` is declared here EXPLICITLY even though ``coordinator_whoami``'s
-#: own ``pyproject.toml`` already lists ``PyYAML>=6.0`` as a transitive dep
+#: own ``pyproject.toml`` already floors PyYAML at 6.0 as a transitive dep
 #: (so ``pip install -e {whoami_pkg}/`` already pulls it in today) — several
 #: coordinator-claude hook scripts (``enforce-agent-dispatch-mode.py``,
 #: ``handoff-segment-inject.py``, ``_oss_operative_strings.py``) ``import

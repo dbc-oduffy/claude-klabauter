@@ -145,6 +145,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards import commit_tripwires
+from coordinator_core.bash_guards._dialect import (
+    Dialect,
+    dialect_from_tool_name,
+    resolve_segments_for_dialect,
+)
 from coordinator_core.bash_guards._helpers import operator_override_note
 
 if TYPE_CHECKING:
@@ -1611,7 +1616,14 @@ def check_no_verify(
     vocabulary as a post-filter, so this migration cannot widen (or
     narrow) what the guard matches; it only removes the redundant
     tokenize. `resolved is None` (every caller predating this parameter)
-    takes the original self-contained path below, unchanged.
+    takes the original self-contained path below -- which, as of C2 of
+    `docs/plans/2026-08-26-the-destructive-core-learns-the-shell-it-guards
+    .md`, itself now routes through `_dialect.resolve_segments_for_dialect`
+    (dialect read from `hook_payload["tool_name"]`, defaulting to
+    `Dialect.BASH`) instead of a direct `_bt_tokenize_full_command` +
+    `_bt_segments_from_tokens_simple` pair -- byte-identical for the BASH
+    leg (AC2); see that block's own inline comment for the fail-direction
+    argument (AC4).
     """
     if _override("COORDINATOR_OVERRIDE_NO_VERIFY", payload=hook_payload):
         return None
@@ -1664,23 +1676,54 @@ def check_no_verify(
         # landing in the other -- neither fragment alone carries both, so
         # the bypass silently sailed through undetected. Segmenting via the
         # SAME quote-aware tokenizer already shared by every other guard in
-        # this package (`_bt_tokenize_full_command` + `_bt_segments_from_
-        # tokens_simple`, `_command_tokenizer.py`) instead of a second,
-        # bespoke, quote-blind splitter closes this: an unquoted `;`/`&`/`|`
-        # still yields a clean segment boundary, but one sitting inside a
-        # quoted operand no longer does, so one indivisible git invocation
-        # can never be torn into two innocent-looking halves.
-        bt_tokens = _bt_tokenize_full_command(flat)
-        if bt_tokens is None:
-            # Unparseable (unterminated quote / trailing backslash) -- fail
-            # CLOSED via the original whole-string raw scan, over-inclusive
-            # by construction (never under-blocks a genuine bypass, may
-            # over-block ambiguous prose -- the safe direction for an
-            # unparseable command).
-            if _BYPASS_RE.search(flat):
-                return _nv_bypass_deny()
+        # this package instead of a second, bespoke, quote-blind splitter
+        # closes this: an unquoted `;`/`&`/`|` still yields a clean segment
+        # boundary, but one sitting inside a quoted operand no longer does,
+        # so one indivisible git invocation can never be torn into two
+        # innocent-looking halves.
+        #
+        # Dialect-aware seam (C2, pln-the-destructive-core-learns-the-she):
+        # routed through `_dialect.resolve_segments_for_dialect` instead of
+        # a direct `_bt_tokenize_full_command` + `_bt_segments_from_
+        # tokens_simple` pair -- the same seam the 27 already-dual-declaring
+        # entries use. `dialect` is read from `hook_payload["tool_name"]`
+        # via `dialect_from_tool_name`; an absent `hook_payload` (every
+        # caller predating this parameter -- this module's own test suite
+        # calls `check_no_verify(cmd)` directly) or an unrecognized
+        # `tool_name` falls back to `Dialect.BASH`, preserving this
+        # function's pre-existing bash-only behavior byte-for-byte (AC2) --
+        # this guard's own `MATCHERS` registration is unchanged
+        # (`("Bash",)`), so live dispatch never actually reaches the
+        # PowerShell branch below; it exists for the fixtures this chunk's
+        # own test file drives directly.
+        #
+        # FAIL DIRECTION (AC4): for the BASH leg, `resolve_segments_for_
+        # dialect` returning `None` means `tokenize_full_command` itself
+        # returned `None` (unterminated quote / trailing backslash) --
+        # EXACTLY the prior `bt_tokens is None` condition -- so the
+        # over-inclusive raw-text `_BYPASS_RE` fail-CLOSED scan below still
+        # fires only in that same case. For any OTHER dialect, `None` means
+        # a DIFFERENT thing (a PowerShell parse failure, already recorded
+        # SILENT inside `_powershell_tokens`) and must NOT fall through to
+        # the bash raw-text deny scan -- that would misattribute a
+        # PowerShell parse failure as a bash unparseable-command fail-close,
+        # a different fail shape than today's guard ever produced. Silence
+        # is preserved instead.
+        dialect = dialect_from_tool_name((hook_payload or {}).get("tool_name")) or Dialect.BASH
+        segments = resolve_segments_for_dialect(flat, dialect, guard_name="no-verify")
+        if segments is None:
+            if dialect is Dialect.BASH:
+                # Unparseable (unterminated quote / trailing backslash) --
+                # fail CLOSED via the original whole-string raw scan,
+                # over-inclusive by construction (never under-blocks a
+                # genuine bypass, may over-block ambiguous prose -- the safe
+                # direction for an unparseable command).
+                if _BYPASS_RE.search(flat):
+                    return _nv_bypass_deny()
+            # else: non-BASH dialect that failed to parse -- SILENT already
+            # recorded by `resolve_segments_for_dialect`; do not deny.
         else:
-            for seg_tokens in _bt_segments_from_tokens_simple(bt_tokens):
+            for seg_tokens, _pipe_before in segments:
                 if not seg_tokens:
                     continue
                 seg_text = " ".join(seg_tokens)

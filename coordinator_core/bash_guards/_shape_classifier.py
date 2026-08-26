@@ -636,6 +636,9 @@ def _detect_for_loop_pwsh(tokens: List[str]) -> Optional[ShapeMatch]:
     the command's own first token is (case-insensitively) `foreach`,
     immediately followed by a `(` (the parenthesised `in` clause -- this is
     what distinguishes the statement from the `ForEach-Object`/`foreach`/`%`
+    shell-doc-ok: the measured example below is the PowerShell statement this
+    matcher fires on -- rendering it safely would leave the docstring unable
+    to name the grammar it matches.
     PIPELINE-STAGE alias `_detect_pipeline_foreach_object` matches, which is
     never the command's own first token since a pipeline stage is always
     preceded by a `|`), an `in` token somewhere in that clause, and a brace
@@ -744,6 +747,9 @@ def _block_has_native_call(block_tokens: List[str]) -> bool:
     Where a sub-segment head is ambiguous, this prefers the FALSE
     NEGATIVE (treat it as not-a-call) over a confident wrong verdict --
     this module never denies, so silence on an unmeasured shape is always
+    shell-doc-ok: the measured examples below are the PowerShell sub-segment
+    heads this matcher classifies -- they are the specimens, not prose about
+    them.
     the safer failure than a false positive advisory (the D3
     confident-wrong-verdict failure this fix exists to close).
 
@@ -786,6 +792,9 @@ def _detect_pipeline_foreach_object(
     inspection needed as a result.
 
     Only the FIRST `{`/first `}` pair is taken as the block boundary
+    shell-doc-ok: the measured examples below are the PowerShell pipeline
+    stages this matcher fires on -- they are the specimens, not prose about
+    them.
     (nested braces inside the block are an unmeasured case, not handled
     here).
 

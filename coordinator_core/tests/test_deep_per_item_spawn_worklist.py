@@ -648,7 +648,9 @@ def _attach_parents(root: ast.AST) -> None:
             child.parent = node  # type: ignore[attr-defined]
 
 
-def _terminating_path(fn: ast.FunctionDef | ast.AsyncFunctionDef, lineno: int) -> bool:
+def _terminating_path(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, lineno: int, callee: str | None = None
+) -> bool:
     """True when the per-item call at `lineno` sits inside a block (an `if`/`try`/`except` arm)
     whose LAST statement is `return`/`raise`/`break` -- so however many items the enclosing loop
     is handed, this call fires at most once. `continue` is deliberately excluded (C3's own
@@ -663,13 +665,25 @@ def _terminating_path(fn: ast.FunctionDef | ast.AsyncFunctionDef, lineno: int) -
     suppresses, only tells a reader that this particular row may be cheaper than its depth
     suggests."""
     _attach_parents(fn)
-    call_node = None
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call) and getattr(node, "lineno", None) == lineno:
-            call_node = node
-            break
-    if call_node is None:
+    # `lineno` alone does not identify a call: `f(x); g(y)` on one physical line, or a call
+    # nested as an argument to another (`wrapper(helper(x))`), put several `ast.Call` nodes at
+    # the same lineno, and taking whichever `ast.walk` reaches first annotates the wrong one.
+    # `AmpSite` carries no col_offset, but it does carry `callee` -- so disambiguate on that and
+    # fall back to the first call at the line only when no callee matches (an unparsed callee
+    # shape), which keeps this no worse than it was.
+    candidates = [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call) and getattr(node, "lineno", None) == lineno
+    ]
+    if not candidates:
         return False
+    call_node = candidates[0]
+    if callee:
+        for node in candidates:
+            if _call_callee_name(node) == callee:
+                call_node = node
+                break
 
     current: ast.AST = call_node
     while not isinstance(current, ast.stmt):
@@ -822,28 +836,50 @@ def _advisory_worklist(max_depth: int) -> list[dict]:
     `_call_graph`/`_depths` this function needs for the `depth`/`cache_in_front` columns -- no
     second walk of the corpus for THOSE. `depth1_confirmed_keys` below is the one deliberate,
     documented exception (C4-FIX) -- see its own note just above its use."""
-    files = _discover_scope_files(_gate_scope_paths())
-    records = _load_file_records(files)
-    base = _build_func_index(records)
-    edges = _call_graph(base)
-    depths = _depths(base, edges, max_depth)
-    widened = widened_index(base, depths, max_depth)
-    sites = find_unbatched_per_item_spawns(_gate_scope_paths(), index_transform=lambda _b: widened)
+    # The transform's OWN `base` argument is what feeds `_call_graph`/`_depths`/
+    # `widened_index`, and is captured here for the annotation columns below -- exactly as
+    # `_deep_find_unbatched_per_item_spawns` threads it. Building an index from a separate
+    # `_load_file_records` walk and returning it while DISCARDING `base` is the cross-parse
+    # configuration C0 exists to eliminate: the `ast.Call` nodes the collector visits would
+    # come from its own internal parse while the `func_defs` node identities in the returned
+    # index came from ours, so `_enclosing_loop_of` and discriminators 13/14/15 behind it
+    # silently fail their lookups and stop suppressing (the plan's Problem section measured
+    # exactly that: 31 sites reported against the live gate's 26, five spurious, none lost).
+    captured: dict = {}
+
+    def _widen(base):
+        edges = _call_graph(base)
+        depths = _depths(base, edges, max_depth)
+        captured["base"] = base
+        captured["edges"] = edges
+        captured["depths"] = depths
+        return widened_index(base, depths, max_depth)
+
+    sites = find_unbatched_per_item_spawns(_gate_scope_paths(), index_transform=_widen)
+    base = captured["base"]
+    edges = captured["edges"]
+    depths = captured["depths"]
 
     # C4-FIX, DOCUMENTED DEVIATION FROM "no second walk": widening at `max_depth` can change an
     # EARLIER discriminator's verdict (one that reads wider index state, e.g. discriminator 13's
     # batched-primary-fallback exemption) for a call whose own callee was ALREADY a depth-1
     # direct spawner in `base` -- so a small number of sites structurally computed as depth 1 by
-    # `_site_depth` are not actually sites the live, unwidened gate would ever report (measured:
-    # up to 5 such sites in this corpus, all route `b-local-helper`, none in `_KNOWN_SITES`).
+    # `_site_depth` are not actually sites the live, unwidened gate would ever report.
+    #
+    # HISTORICAL NOTE, kept because it explains a figure earlier revisions recorded: this
+    # divergence was once measured at "up to 5 such sites, all route `b-local-helper`" and
+    # attributed to reasons internal to the gate module. That attribution was wrong. Those five
+    # were the cross-parse artefact -- `_advisory_worklist` was discarding the transform's `base`
+    # and substituting an index from a separate parse, the exact 31-vs-26 five-spurious-site
+    # shape the plan's Problem section measured. The seam above is sound now, so re-measure
+    # before citing any figure here; the check itself stays because C4-FIX requirement 4 is
+    # unconditional, not because a known divergence still needs absorbing.
     # Static analysis over `base`/`depths` alone cannot detect this without re-running the
     # discriminator -- it depends on suppression logic this module deliberately does not
     # re-derive (module docstring's own Anti-scope). A fully independent, freshly-built call to
-    # `find_unbatched_per_item_spawns(_gate_scope_paths())` -- deliberately NOT handed `base` or
-    # any other pre-built index, because this module's own measurement shows a pre-built index
-    # handed back into that call does not reproduce that same function's own from-scratch result
-    # bit-for-bit, for reasons internal to the (out-of-scope, unmodified) gate module -- is the
-    # only way to confirm a depth-1 label is real, and the requirement this closes (C4-FIX
+    # `find_unbatched_per_item_spawns(_gate_scope_paths())` -- handed no index at all, so the
+    # comparison is against the gate's genuine unwidened verdict rather than against another
+    # widened view of it -- is the only way to confirm a depth-1 label is real, and the requirement this closes (C4-FIX
     # requirement 4: no row may be labelled depth 1 unless its key is in the live gate's own key
     # set) is unconditional -- worth the one extra corpus walk this function otherwise avoids.
     # This walk is NOT per-item and NOT a subprocess spawn; this test already runs in "minutes,
@@ -885,7 +921,9 @@ def _advisory_worklist(max_depth: int) -> list[dict]:
                 "cost_ms": _known_cost_ms(site),
                 "reachable_spawn_sites": reachable_spawn_sites,
                 "cache_in_front": _cache_in_front(base, edges, top_level_key, max_depth),
-                "terminating_path": _terminating_path(fn, site.lineno) if fn is not None else False,
+                "terminating_path": (
+                    _terminating_path(fn, site.lineno, site.callee) if fn is not None else False
+                ),
             }
         )
     rows.sort(key=_sort_key)
@@ -903,7 +941,19 @@ _PRECISION_FRAMING = (
     "(roughly 14-61% at depth 2 by the Wilson method) and overlap across strata at this sample "
     "size: this sample can neither establish a floor nor cleanly distinguish the depths. Read "
     "the figures as an order-of-magnitude sanity check on an advisory worklist, not as a "
-    "precision guarantee."
+    "precision guarantee. They were also scored under THIS module's call-graph resolution "
+    "rule (`_call_graph`, route c: a cross-module callee is looked up by the name bound in "
+    "the calling file, alias included), transcribed verbatim from the one-hop gate. That rule is "
+    "CONFIRMED DEFECTIVE on aliased imports, measured 2026-08-26: an aliased import resolves by "
+    "its LOCAL name against `funcs_by_name`, so `from x import y as _z` can match any unrelated "
+    "`_z` in scope. Reproduced at `promote_shipped_in_flight_stubs.py :: _run_promotions`, where "
+    "a walk-only callee is reported as a per-item spawn because the alias collides with a "
+    "genuinely-spawning script in `coordinator/bin/` that the file does not import "
+    "(`state/bug-backlog/2026-08-25-the-amplification-gate-resolves-an-alias-bf22411daeda.yaml`). "
+    "The rule is frozen here precisely BECAUSE these figures were measured under it: fixing it "
+    "SUPERSEDES them rather than improving them, and the figures should be read as an upper "
+    "bound on precision, since every edge in the sample was resolved by a rule now known to "
+    "admit false edges."
 )
 
 

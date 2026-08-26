@@ -147,7 +147,7 @@ def _read_frontmatter_block(path: PathLike) -> Optional[str]:
     file read so far is returned rather than ``None`` for "found a real
     fence pair" — ``extract_frontmatter_scalar`` on that text degrades
     identically to how it always has (it never required a closing fence
-    either; it simply keeps scanning until ``fence_count >= 2`` or EOF).
+    either; it simply keeps scanning until ``fence_count`` reaches 2, or EOF).
     Returns ``None`` only on an ``OSError`` (unreadable file), preserving
     the prior code's "skip on read failure" behavior.
     """

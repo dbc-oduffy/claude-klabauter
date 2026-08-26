@@ -114,8 +114,14 @@ _RATCHET_BAR_MS = 2000.0
 # and this frozenset was not pruned, leaving the guard red until 2026-08-22.
 _RATIFIED_SUSPENSIONS = frozenset({
     "session.boot_sweep",
-    "fleet.archive_completed_handoffs",
     # hooks.cater_subagent_start — REINSTATED 65bbe1323, pruned here 2026-08-22.
+    # fleet.archive_completed_handoffs — row REMOVED by PM ruling 2026-08-26 and
+    # pruned here in the SAME commit. Not an op earning its way back: the row was
+    # keyed to an implementation deleted at 648f2e4eb, so it had stopped
+    # suspending what was killed and started blocking the from-scratch rebuild
+    # the kill ruling asked for. Rebuilt op measured 212.5ms CPU / 267.2ms wall
+    # via its handler against the row's 26111.9ms. See the removal note in
+    # op_budget_suspension.SUSPENDED_OPS for the full reasoning.
 })
 
 

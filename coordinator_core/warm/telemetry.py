@@ -118,6 +118,15 @@ __all__ = [
     "boot_wait_path",
     "record_client_boot_wait",
     "boot_wait_samples",
+    "SPAWN_EPOCH_ENV",
+    "SERVER_BOOT_FILENAME",
+    "server_boot_path",
+    "record_server_boot",
+    "server_boot_samples",
+    "ELECTION_LOST_FILENAME",
+    "election_lost_path",
+    "record_election_lost",
+    "election_lost_samples",
 ]
 
 EXIT_REASON_SKEW = "skew"
@@ -207,6 +216,175 @@ def record_client_cold_fallback(
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         return
+
+
+#: Env var carrying the spawner's `time.time()` at the moment it launched a
+#: warm server, read by that server to measure its OWN boot. Set by
+#: `warm.client._spawn_once`; absent for any other spawn route, which is why
+#: `record_server_boot` omits the row entirely rather than guessing a start.
+SPAWN_EPOCH_ENV = "COORDINATOR_WARM_SPAWN_EPOCH"
+
+SERVER_BOOT_FILENAME = "server-boot.jsonl"
+
+
+def server_boot_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/server-boot.jsonl` -- one row per server that booted from a
+    stamped spawn."""
+    return svc_dir(engine_root) / SERVER_BOOT_FILENAME
+
+
+def record_server_boot(
+    *,
+    listener_secs: float,
+    ready_secs: float,
+    pid: int,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row measuring a warm server's own boot: spawn -> endpoint
+    bound (`listener_secs`) and spawn -> ready to answer (`ready_secs`).
+
+    THE MEASUREMENT THREE OTHER FILES CANNOT PRODUCE. Boot time has been
+    argued all week from proxies, and every proxy is censored by WHEN
+    CALLERS HAPPENED TO CALL: `client-cold.jsonl` samples an outage only
+    when someone dispatched into it (42 of 121 windows hold a single miss
+    and measure 0s, and the two defensible readings of that file disagree
+    9x on the median); `telemetry.jsonl`'s server-succession gaps are
+    bounded the other way, because the next server does not start until a
+    caller arrives to trigger a spawn, so they measure caller absence as
+    much as boot. This row measures the interval directly, inside the
+    process whose boot it is, and no caller appears in it at all.
+
+    Both numbers, not one: an endpoint that is bound will accept a
+    connection, but the op registry preloads AFTER election
+    (`_preload_op_registry`, ~703ms of imports on the first dispatch it
+    exists to spare), so "connectable" and "will answer promptly" are
+    different instants and a client that reaches the first still waits for
+    the second.
+
+    Best-effort: never raises, matching every other recorder here.
+    """
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "listener_secs": round(listener_secs, 3),
+        "ready_secs": round(ready_secs, 3),
+        "pid": pid,
+    }
+    path = server_boot_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.server_boot"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def server_boot_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded server-boot row, oldest first. Absent file reads as an
+    empty list; an unparseable row is skipped, not fatal."""
+    path = server_boot_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+ELECTION_LOST_FILENAME = "election-lost.jsonl"
+
+
+def election_lost_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/election-lost.jsonl` -- one row per spawned server that
+    lost its generation's election and exited without ever serving."""
+    return svc_dir(engine_root) / ELECTION_LOST_FILENAME
+
+
+def record_election_lost(
+    *,
+    endpoint: str,
+    token: Optional[str] = None,
+    pid: Optional[int] = None,
+    lost_secs: Optional[float] = None,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row for a boot that ended at `election.ElectionLost` --
+    the outcome `warm/server.py :: _run_guarded` previously reported ONLY
+    by printing to `sys.stderr`, which `ops.ceremony.detached_spawn.
+    spawn_detached` opens as `subprocess.DEVNULL` for every detached child.
+    A failed succession attempt reached no file on disk at all, so every
+    exit-reason census in the 2026-08-26 succession investigation was blind
+    to them and censored upward
+    (docs/research/2026-08-26-repo-warm-succession.md § 5.1, § 5.5).
+
+    A SEPARATE FILE, not a `telemetry.jsonl` row, for the same reason
+    `client_cold_path` is separate: that file is one row per server LIFE,
+    written by `ServerTelemetry.flush()` from a `_ServerContext` -- and a
+    losing process has no context, deliberately (the context is not
+    constructed until after the election is won). This recorder runs
+    pre-context, like `record_server_boot`, and writes only its own file:
+    a process that lost the election must never touch the winner's
+    artifacts, which is the same invariant `main`'s docstring states for
+    the breadcrumb.
+
+    `lost_secs` is spawn -> loss, available only when the spawner stamped
+    `SPAWN_EPOCH_ENV`; omitted rather than invented otherwise, matching
+    `record_server_boot`'s refusal to guess a start.
+
+    VOLUME. This fires once per LOSING spawn, and losing spawns are most
+    numerous under exactly the conditions that already produced 1600 client
+    misses in 13 seconds
+    (state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-
+    seconds.yaml). Sized for a burst: one small append under the same
+    `held_lock` every writer here uses, and never-raises, so a storm
+    degrades to missing rows rather than to failing exits.
+    """
+    record: dict = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "endpoint": endpoint,
+    }
+    if token is not None:
+        record["token"] = token
+    if pid is not None:
+        record["pid"] = pid
+    if lost_secs is not None:
+        record["lost_secs"] = round(lost_secs, 3)
+    path = election_lost_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.election_lost"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def election_lost_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded election-lost row, oldest first. Absent file reads as
+    an empty list; an unparseable row is skipped, not fatal."""
+    path = election_lost_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
 
 
 BOOT_WAIT_FILENAME = "client-boot-wait.jsonl"

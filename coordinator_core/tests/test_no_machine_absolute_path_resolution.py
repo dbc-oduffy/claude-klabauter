@@ -93,6 +93,8 @@ from coordinator_core.ops.session.guard_concrete_path_citations import (
 )
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Roots holding code that RUNS on a host. See the module docstring's
@@ -108,7 +110,8 @@ _LIVE_ROOTS: Tuple[str, ...] = (
 #: as machine-absolute for the same reason a drive letter is: it is one
 #: operator's box. `/Users/` alone is universal and never matches, and the
 #: account segment is run through the sibling guard's placeholder word list
-#: (`alice`, `me`, `<user>`, `$USER`, ...) so a worked-example home is not a
+#: (`alice`, `me`, a bracketed user placeholder, a USER env-var reference,
+#: ...) so a worked-example home is not a
 #: machine. Reusing that list rather than re-deriving one keeps the two
 #: guards from disagreeing about what counts as a real operator name.
 _POSIX_HOME_RE = re.compile(r"/(?:Users|home)/([A-Za-z0-9_.$<>-]+)/")

@@ -2613,7 +2613,7 @@ def resolve_hook_python_bin() -> str:
 
     The previous policy ("prefer the venv interpreter, unconditionally, on
     every platform") rested on ``yaml`` being "a venv-only package". That was
-    false when it landed: ``PyYAML>=6`` became a declared
+    false when it landed: a PyYAML floor of 6 became a declared
     ``[project].dependencies`` entry in ``912c1648b`` (2026-07-27) --
     installed machine-level by ``scripts/setup.py::provision_deps`` -- a full
     week before this resolver landed in ``520c175ce`` (2026-08-03). Three

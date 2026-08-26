@@ -53,7 +53,7 @@ literal-named sibling that is not a session:
     this guard land in ``no-session`` for exactly that reason.
   - the hub ITSELF (``ops/scope_soak_enable.py``) — creating the hub creates
     no session.
-  - ``state/subagent-share/<sid>``, ``$COORDINATOR_SETTINGS_HOME``'s write-bump
+  - ``state/subagent-share/`` per sid, the settings home's write-bump
     anchor and context-window sidecar, and the tempdir guard-unlock sentinels.
     All three key a directory on a session id and none of them is a session;
     minting a ``meta.json`` for any of them would be the inverse defect.

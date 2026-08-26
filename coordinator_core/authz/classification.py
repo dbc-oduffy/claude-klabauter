@@ -879,43 +879,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # must resolve in-tree before any write (ops/handoff_backfill_claim_stamp.py AC2).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.backfill_claim_stamp": OpClass.MUTATING,
-    # handoff.reconcile_open — MUTATING: orchestrating op that enumerates the open
-    # handoff set and, per handoff, DELEGATES mutation to handoff.ship_and_archive /
-    # handoff.transition gate-cascade-clear (both already classified MUTATING above).
-    # Classified MUTATING itself (not COMPUTE_ONLY) because its act-time (dry_run=false)
-    # path writes disk transitively through those delegated single-file calls.
-    # DR-208 five-question affirmation (citing ops/handoff_reconcile.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES
-    #      (act-time only). handoff_reconcile.py's _handle_auto_ship /
-    #      _handle_gate_cascade dispatch loop invokes _ship_and_archive_handler /
-    #      _handoff_transition_handler per open handoff when dry_run=False; each
-    #      delegate performs its own already-classified write. dry_run=True (the
-    #      default) performs zero writes — computes verdicts only.
-    #   2. Writes into rag's relational store?                                 No.
-    #      All writes are the delegated ops' own state/handoffs/*.md / archive/
-    #      writes; no rag store write. Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             No, directly.
-    #      This handler itself never calls write_text/os.replace; every file-write
-    #      syscall happens inside the delegated handoff.ship_and_archive /
-    #      handoff.transition calls.
-    #   4. Mutates shared mutable state outside its own module?                YES
-    #      (act-time only, via delegation). state/handoffs/*.md is coordinator
-    #      substrate shared across EM sessions — same substrate the delegated ops
-    #      already mutate under their own classification.
-    #   5. Persistent state changes observable across process boundaries?     YES
-    #      (act-time only). Delegated writes/commits are observable by any git
-    #      client or op reading state/handoffs/*.md after return.
-    # DR-212 batch-orchestration argument (why this is NOT the handoff.normalize
-    # batch-mutation carve-out): reconcile_open never itself batch-writes multiple
-    # state/handoffs/*.md files in one call — each delegated call remains its own
-    # independent, already-DR-212-compliant single-file write. The surfaced[]/
-    # reconciled[]/gates_cleared[] accumulation is read-side response bookkeeping
-    # (an in-memory list build), not a cross-file write transaction. See
-    # coordinator_core/ops/handoff_reconcile.py module docstring for the full argument.
-    # Authority: docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C4
-    "handoff.reconcile_open": OpClass.MUTATING,
     # handoff.archive_transition — MUTATING: DR-208-default classification (new op,
     # not yet reviewer-affirmed COMPUTE_ONLY). The handler mutates a handoff's archival
     # transition (git-mv into archive/handoffs/ + frontmatter state), which writes
@@ -3866,6 +3829,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   ceremony.scoped_git_commit — ops/ceremony/scoped_git_commit.py: the
     #     module's entire purpose is a path-scoped `git add && git commit`;
     #     the file's own docstring is explicit throughout.
+    #   ceremony.commit — ops/ceremony/commit_op.py: delegates to
+    #     `run_commit_pipeline`, whose entire purpose is a stage+commit(+push)
+    #     write — landing a git commit (and, in the pipeline's own default
+    #     push mode, pushing it). Classified MUTATING explicitly (docs/plans/
+    #     2026-08-26-the-commit-becomes-a-warm-served-op.md § AC2), never left
+    #     to `_op_may_mutate`'s fail-closed default.
     #   commit.exec_bit_change — ops/ceremony/commit_exec_bit.py: `git commit`
     #     (unrestricted, per DR-151) writing an exec-bit change.
     #   findings.self_persist_fallback — ops/self_persist_findings.py: writes
@@ -3939,6 +3908,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #     the same reading this file already applied to context_pressure_
     #     precompact's tempdir sentinel above.
     "branch.merge_into_workstream": OpClass.MUTATING,
+    "ceremony.commit": OpClass.MUTATING,
     "commit.exec_bit_change": OpClass.MUTATING,
     "findings.self_persist_fallback": OpClass.MUTATING,
     "fleet.archive_paper_trail": OpClass.MUTATING,

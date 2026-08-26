@@ -339,7 +339,7 @@ def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
     assert "could not execute machine-local resolver" in captured.err
 
 
-def test_container_registry_keys_are_not_heal_targets(monkeypatch):
+def test_container_registry_keys_are_not_heal_targets(monkeypatch, tmp_path):
     """A `repos.*` container key must never reach `_classify_target`.
 
     `repos.fleet_root` names the directory the fleet's repos live UNDER, so it
@@ -349,19 +349,21 @@ def test_container_registry_keys_are_not_heal_targets(monkeypatch):
     operators to scroll past fleet-heal output, which is the failure mode
     `_classify_target`'s three-way split exists to prevent.
     """
+    fleet_root = tmp_path / "fleet"
+    (fleet_root / "claude-klabauter").mkdir(parents=True)
     monkeypatch.setattr(
         ghi,
         "_merged_flat_registry",
         lambda: {
-            "repos.fleet_root": "X:/",
-            "repos.claude_klabauter": "X:/claude-klabauter",
+            "repos.fleet_root": str(fleet_root),
+            "repos.claude_klabauter": str(fleet_root / "claude-klabauter"),
         },
     )
 
     roots = ghi._registry_repo_roots("")
 
     assert [key for key, _ in roots] == ["repos.claude_klabauter"]
-    assert ghi._classify_target("X:/") == "missing", (
+    assert ghi._classify_target(str(fleet_root)) == "missing", (
         "guards the premise: fleet_root is excluded because it WOULD warn, "
         "not because it happens to classify cleanly"
     )

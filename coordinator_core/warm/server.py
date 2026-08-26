@@ -1301,6 +1301,23 @@ class _ServerContext:
         self._dispatch_pool_lock = threading.Lock()
 
     def close_listener(self) -> None:
+        """STOPS ACCEPTING; DOES NOT CLOSE THE ENDPOINT. Flips one
+        in-process flag, which the accept-loop guards read to stop
+        replenishing pipe instances / accepting new connections. The
+        OS-level close and unlink are `_ctx_shutdown`'s step 3, AFTER the
+        drain, up to `lifecycle._drain_ceiling_secs` (35s).
+
+        The name is why this docstring exists. Callers -- `skew.
+        evict_on_skew`, `lifecycle.begin_shutdown` -- run it first
+        precisely to release the endpoint early, and both said so in their
+        own docstrings until 2026-08-26. It does not: while the drain runs,
+        the endpoint stays bound, a caller is accepted and dropped with
+        zero bytes (non-spawning per `warm/client.py`'s table), and a
+        SAME-TOKEN successor cannot bind at all. Different-token successors
+        are unaffected -- they bind a different endpoint. See
+        `docs/research/2026-08-26-repo-warm-succession.md` § 2; moving the
+        release here is advisory item 3 and is a plan, not an edit.
+        """
         with self._listening_lock:
             self._listening = False
 
@@ -1967,6 +1984,13 @@ def _run_guarded() -> int:
     this one with a different endpoint under it.
     """
     repo_root = _engine_clone_root()
+    # The spawner's clock at the instant it launched this process, if this
+    # process was launched by a route that stamps it (`warm.client._spawn_once`
+    # does; a SessionStart warm_start does not). None means "unmeasurable from
+    # here", and `_record_own_boot` writes nothing rather than inventing a
+    # start -- an invented t0 would be indistinguishable from a measured one in
+    # the file that exists to settle how long boot takes.
+    spawn_epoch = _spawn_epoch_from_env()
     token = skew.compute_client_token(repo_root)
     on_windows = sys.platform == "win32"
 
@@ -1987,7 +2011,28 @@ def _run_guarded() -> int:
             f"owns this generation's {endpoint_word}, exiting",
             file=sys.stderr,
         )
+        # THE ONE EXIT THAT REACHED NO FILE. The print above is the whole
+        # historical record of a failed succession, and `spawn_detached`
+        # opens this process's stderr as DEVNULL, so it reaches nothing --
+        # every exit-reason census in the 2026-08-26 succession
+        # investigation is over surviving rows only, censored upward
+        # (docs/research/2026-08-26-repo-warm-succession.md § 5.1). A
+        # same-token successor locked out by a draining predecessor lands
+        # here, so this row is the instrument any fix to that ordering is
+        # verified against. Written before, not instead of, the exit-0:
+        # losing is still not an error.
+        telemetry.record_election_lost(
+            endpoint=lost.endpoint,
+            token=token,
+            pid=os.getpid(),
+            lost_secs=(time.time() - spawn_epoch) if spawn_epoch is not None else None,
+            engine_root=repo_root,
+        )
         return 0
+
+    # ELECTION IS THE FIRST INSTANT A CLIENT CAN CONNECT: the endpoint exists
+    # from here on, so this is where "spawn -> connectable" stops running.
+    listener_at = time.time()
 
     version_state = skew.ServerVersionState(repo_root)
 
@@ -2029,6 +2074,13 @@ def _run_guarded() -> int:
     except Exception as exc:  # noqa: BLE001 -- fail-open by construction, see comment above
         print(f"[warm-server] http listener ensure_listener() failed: {exc!r}", file=sys.stderr)
 
+    # ...and this is the first instant a connection gets a PROMPT answer:
+    # `_preload_op_registry` above is the ~703ms of imports that would
+    # otherwise land on whichever caller arrived first. Both instants are
+    # recorded because a client that reaches the first still waits for the
+    # second.
+    _record_own_boot(spawn_epoch, listener_at, repo_root)
+
     ctx = _ServerContext(
         name=elected.endpoint,
         sid=elected.identity,
@@ -2055,6 +2107,50 @@ def _run_guarded() -> int:
             f"election returned no endpoint to serve for {elected.endpoint!r}"
         )
     return 0
+
+
+def _spawn_epoch_from_env() -> "float | None":
+    """This process's spawn instant as stamped by its spawner, or None when
+    unstamped or unparseable. Never raises: a malformed value means the
+    measurement is unavailable, which is exactly what None already says."""
+    raw = os.environ.get(telemetry.SPAWN_EPOCH_ENV)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _record_own_boot(
+    spawn_epoch: "float | None", listener_at: float, repo_root: Path
+) -> None:
+    """Write this server's own boot durations, if its spawn was stamped.
+
+    THE NUMBER NO CLIENT CAN OBSERVE. A client sees only that a server was
+    absent at the moments it happened to ask, so every client-derived estimate
+    of boot is censored by its own call pattern -- which is why
+    `client-cold.jsonl` supports two readings of this box's outages that
+    disagree by 9x on the median, and why the server-succession gaps in
+    `telemetry.jsonl` are bounded the other way (the next server does not start
+    until a caller arrives to trigger a spawn, so those gaps measure caller
+    absence as much as boot). This process is the only one that can time the
+    interval with no caller in it at all.
+
+    Best-effort and silent on failure, matching the breadcrumb write it sits
+    beside: an instrument must never be why a server fails to boot."""
+    if spawn_epoch is None:
+        return
+    try:
+        now = time.time()
+        telemetry.record_server_boot(
+            listener_secs=listener_at - spawn_epoch,
+            ready_secs=now - spawn_epoch,
+            pid=os.getpid(),
+            engine_root=repo_root,
+        )
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"[warm-server] failed to record boot timing: {exc!r}", file=sys.stderr)
 
 
 def _preload_op_registry() -> None:

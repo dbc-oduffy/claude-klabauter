@@ -95,7 +95,8 @@ Measured the same session: every record now additionally carries
 `peerProtocol: <int>` (42/42 records, all `peerProtocol: 1`; 0/42 carried
 `messaging_socket_path`, same gate-off signature as 2026-08-14's 44/44).
 This is a SEPARATE field answering a SEPARATE question — the harness's
-own FleetView peer listing filters on `peerProtocol >= 1` plus liveness
+own FleetView peer listing filters on a `peerProtocol` of 1 or more, plus
+    liveness
 plus a 24h recency window, NOT on the socket, so peer VISIBILITY
 (FleetView listing a peer) and peer DELIVERABILITY (`SendMessage`
 actually reaching it) are two different predicates on this harness

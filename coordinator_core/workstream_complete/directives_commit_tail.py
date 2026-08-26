@@ -482,11 +482,21 @@ _NUMSTAT_ROW_RE = re.compile(r"^(?:-|\d+)\t(?:-|\d+)\t(.+)$")
 def chunked_show_numstat_blocks(
     repo_root: Path, all_shas: "list[str]"
 ) -> "Optional[Dict[str, str]]":
-    """THE single chunked `git show --numstat --format=<sentinel>%H <shas>`
-    spawn this module's peer-paths consumer and `__init__.py`'s session-LOC
-    consumer now both route through (C1: spawn #2's peer-paths walk and
-    spawn #6's session-LOC walk collapse to one `show --numstat`, since
-    `--numstat` is a strict superset of `--name-only`'s rows). Chunked at
+    """THE single chunked `git show --raw --numstat --format=<sentinel>%H
+    <shas>` spawn this module's peer-paths consumer, `__init__.py`'s
+    session-LOC consumer, and (C6, docs/plans/2026-08-26-the-gate-paths-
+    six-spawns-collapse-to-four.md § C6) `__init__.py`'s
+    `_added_paths_from_numstat_blocks` all now route through (C1: spawn #2's
+    peer-paths walk and spawn #6's session-LOC walk collapse to one `show
+    --numstat`, since `--numstat` is a strict superset of `--name-only`'s
+    rows; C6: `--raw` composed alongside `--numstat` in the SAME invocation
+    — one argv gains a flag, no new spawn — mirroring `ops.session_commits.
+    resolve_session_commits`'s own `args.extend(["--raw", "--numstat"])`
+    prior art). Every existing consumer's row parser
+    (`_NUMSTAT_ROW_RE`/`_REVIEW_SCALE_NUMSTAT_ROW_RE`, both anchored on
+    `^(-|\\d+)\\t(-|\\d+)\\t`) skips a `--raw` row rather than mis-parsing
+    it — a `--raw` row begins with `:`, which cannot match either regex.
+    Chunked at
     `_COMMITTED_PATHS_CHUNK` shas per call, never one call per sha (see
     `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`) — a
     union of two callers' sha sets is LARGER than either alone, so this is
@@ -519,7 +529,7 @@ def chunked_show_numstat_blocks(
         chunk = all_shas[i : i + _COMMITTED_PATHS_CHUNK]
         out = _run_git_ok_retrying(
             repo_root,
-            ["show", "--numstat", f"--format={_COMMIT_HEADER_SENTINEL}%H", *chunk],
+            ["show", "--raw", "--numstat", f"--format={_COMMIT_HEADER_SENTINEL}%H", *chunk],
         )
         if out is None:
             return None
@@ -594,6 +604,8 @@ def _committed_paths_for_sids(
     extra_shas: "Sequence[str]" = (),
     extra_blocks_out: "Optional[Dict[str, str]]" = None,
     trailer_map_out: "Optional[Dict[str, str]]" = None,
+    this_session_id: "Optional[str]" = None,
+    own_session_numstat_out: "Optional[Dict[str, str]]" = None,
 ) -> "Dict[str, Set[str]]":
     """The batched replacement for the former per-sha loop: for EVERY sid in
     `sid_to_start`, returns the set of paths touched by ITS OWN commits since
@@ -653,6 +665,25 @@ def _committed_paths_for_sids(
     on every return path, including the ones that never reach the trailer
     walk at all (`not sid_to_start`) -- absence there means "no map was
     built", not "confirmed no matches".
+
+    `this_session_id`/`own_session_numstat_out` (C4, docs/plans/2026-08-26-
+    the-gate-paths-six-spawns-collapse-to-four.md § C4): this function
+    already scans the bulk trailer map it just walked for `sid_to_start`'s
+    peers -- when `this_session_id` is also supplied, that SAME scan is
+    reused to find THIS session's own shas too (never a second trailer
+    walk), and those shas are folded into the SAME `show --numstat` union
+    this function is about to spawn for peer attribution. When not `None`,
+    `own_session_numstat_out` is cleared then populated with `{sha:
+    numstat_text}` for exactly those own-session shas, oldest-first
+    insertion order (mirrors `workstream_complete._session_owned_shas_
+    from_map`'s own oldest-first contract) -- lets a caller read this
+    session's own shas back out via `own_session_numstat_out.keys()`
+    ordering, or simply match them against a `precomputed_session_shas`
+    list resolved the same way. Cleared (never left stale) on every return
+    path, including the ones that never reach the trailer walk at all (`not
+    sid_to_start`) -- absence there means "no walk happened", not
+    "confirmed no own-session commits"; a caller must fall back to its own
+    spawning path exactly as it already does for `trailer_map_out`.
     """
     result: "Dict[str, Set[str]]" = {sid: set() for sid in sid_to_start}
     extra_shas = list(extra_shas)
@@ -665,6 +696,8 @@ def _committed_paths_for_sids(
             # rather than reading "no entries" as "this session committed
             # nothing".
             trailer_map_out.clear()
+        if own_session_numstat_out is not None:
+            own_session_numstat_out.clear()
         if extra_shas and extra_blocks_out is not None:
             # No peer to attribute, but a session-LOC caller still needs its
             # own shas' numstat blocks -- one spawn for its sake alone (still
@@ -729,10 +762,30 @@ def _committed_paths_for_sids(
 
     all_shas = [sha for shas in shas_by_sid.values() for sha in shas]
     peer_sha_set = set(all_shas)
-    union_shas = all_shas + [sha for sha in extra_shas if sha not in peer_sha_set]
+
+    # C4 fold: `own_shas` is the SAME kind of scan `shas_by_sid` above just
+    # did, over the SAME already-in-hand `trailer_map`, for one more sid
+    # (`this_session_id`) that is never itself a member of `sid_to_start`
+    # (peers only -- see this function's own peer-only contract). Reversed
+    # to oldest-first to mirror `_session_owned_shas_from_map`'s own
+    # contract, though ordering here is cosmetic: `own_session_numstat_out`
+    # below is built by iterating `own_shas` directly, not by reading back
+    # `blocks`' own (union-order) key order.
+    own_shas: "list[str]" = []
+    if this_session_id:
+        own_shas = [sha for sha, trailer in trailer_map.items() if trailer == this_session_id]
+        own_shas.reverse()
+
+    extra_only = [sha for sha in extra_shas if sha not in peer_sha_set]
+    own_only = [
+        sha for sha in own_shas if sha not in peer_sha_set and sha not in extra_shas
+    ]
+    union_shas = all_shas + extra_only + own_only
     if not union_shas:
         if extra_blocks_out is not None:
             extra_blocks_out.clear()
+        if own_session_numstat_out is not None:
+            own_session_numstat_out.clear()
         return result
 
     # `-c` (combined diff) is load-bearing for a MERGE sha: plain `git log
@@ -760,6 +813,9 @@ def _committed_paths_for_sids(
         )
     if extra_blocks_out is not None:
         extra_blocks_out.update({sha: blocks[sha] for sha in extra_shas if sha in blocks})
+    if own_session_numstat_out is not None:
+        own_session_numstat_out.clear()
+        own_session_numstat_out.update({sha: blocks[sha] for sha in own_shas if sha in blocks})
     touched_by_sha = _committed_paths_from_blocks(
         {sha: text for sha, text in blocks.items() if sha in peer_sha_set}
     )
@@ -862,6 +918,7 @@ def resolve_known_concurrent_paths(
     extra_shas: "Sequence[str]" = (),
     extra_numstat_out: "Optional[Dict[str, str]]" = None,
     trailer_map_out: "Optional[Dict[str, str]]" = None,
+    own_session_numstat_out: "Optional[Dict[str, str]]" = None,
 ) -> "frozenset[str]":
     """Step 3.0 case-(b)'s peer-exclusion set (`classify_session_authored_
     files`'s `known_concurrent_paths` parameter) — the producer that did not
@@ -952,6 +1009,22 @@ def resolve_known_concurrent_paths(
     own attributed shas back out of the SAME bulk trailer walk this
     function already spawns for peer attribution, instead of re-walking the
     DAG a second time for exactly the same window.
+
+    `own_session_numstat_out` (C4, docs/plans/2026-08-26-the-gate-paths-
+    six-spawns-collapse-to-four.md § C4): optional out-param, threaded
+    straight through to `_committed_paths_for_sids` (see that function's
+    own docstring for the shape). Folds THIS session's own shas -- found by
+    the SAME `trailer_map_out` scan, at zero extra spawns -- into the SAME
+    `show --numstat` union already spawned for peer attribution, closing
+    the circular dependency C2 could not: C2's reorder means a caller no
+    longer knows its own shas BEFORE this call runs, so it can no longer
+    hand them in as `extra_shas`/`extra_numstat_out` (C1's shape) the way
+    a caller with advance knowledge still can. Cleared (never left stale)
+    on every early-return path this function itself takes before ever
+    reaching `_committed_paths_for_sids` (a falsy `this_session_id`, or the
+    degrade-safely branch) -- absence there means "no walk happened", not
+    "confirmed no own-session commits"; a caller must fall back to its own
+    spawning path exactly as it already does for `trailer_map_out`.
     """
     extra_shas = list(extra_shas)
 
@@ -978,6 +1051,8 @@ def resolve_known_concurrent_paths(
     if not this_session_id:
         if trailer_map_out is not None:
             trailer_map_out.clear()
+        if own_session_numstat_out is not None:
+            own_session_numstat_out.clear()
         _resolve_extras_standalone()
         return frozenset()
 
@@ -989,6 +1064,8 @@ def resolve_known_concurrent_paths(
             result.update(_peer_subagent_share_paths(repo_root, sid))
         if trailer_map_out is not None:
             trailer_map_out.clear()
+        if own_session_numstat_out is not None:
+            own_session_numstat_out.clear()
         _resolve_extras_standalone()
         return frozenset(result)
 
@@ -1017,6 +1094,8 @@ def resolve_known_concurrent_paths(
         extra_shas=extra_shas,
         extra_blocks_out=extra_numstat_out,
         trailer_map_out=trailer_map_out,
+        this_session_id=this_session_id,
+        own_session_numstat_out=own_session_numstat_out,
     ).values():
         result.update(paths)
 
@@ -1547,7 +1626,7 @@ def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, An
     5/6), and nothing else in this module's Step 3 push-confirmation tree
     issues `git push` either (`compute_push_landed_gate`'s own docstring:
     "Never issues `git push` itself"). This function is that missing
-    producer, wired to `coordinator_core.ops.ceremony.push_outstanding.
+    producer, wired to `coordinator_core.ops.push_outstanding.
     push_outstanding` -- the SAME primitive the C4-registered `push.
     outstanding` op exposes to the four DoE-owned cadence surfaces (see that
     module's own docstring); this call reaches it in-process, since both
@@ -1573,7 +1652,7 @@ def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, An
     regardless of which caller reached this primitive.
     """
     from coordinator_core.ops.ceremony.commit_pipeline import derive_push_status
-    from coordinator_core.ops.ceremony.push_outstanding import push_outstanding
+    from coordinator_core.ops.push_outstanding import push_outstanding
 
     try:
         outcome = push_outstanding(worktree_root)

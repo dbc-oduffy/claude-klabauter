@@ -173,7 +173,45 @@ def _iter_pack_files(common_dir: Path) -> list[tuple[Path, Path]]:
     return result
 
 
+# Memoizes the PARSE of a `.idx` file, keyed `(path, st_mtime_ns, st_size)`
+# -- never the pack LISTING (`_iter_pack_files` stays uncached; see its own
+# docstring). A rewritten or replaced `.idx` changes its own key, so a stale
+# entry can never be served for content that has since changed; it just
+# becomes an orphaned entry, reclaimed by the LRU cap below like any other.
+# `_parse_pack_index` was previously called once per object lookup instead
+# of once per pack (27 calls to resolve 6 objects on one spine walk in the
+# measured baseline) -- this is a pure lookup-cost fix, not a staleness
+# tradeoff: `_iter_pack_files` still re-lists live on every call, so a pack
+# added or removed between calls is still seen; only the repeated re-parse
+# of an unchanged `.idx` is what gets skipped.
+_PACK_INDEX_CACHE_MAX_ENTRIES = 4096
+_PACK_INDEX_CACHE: "OrderedDict[tuple[str, int, int], Optional[_PackIndex]]" = OrderedDict()
+
+
 def _parse_pack_index(idx_path: Path) -> Optional[_PackIndex]:
+    """Parses a v2 pack `.idx`, memoized by `(path, st_mtime_ns, st_size)`
+    -- see `_PACK_INDEX_CACHE` above for why this is safe against a live
+    `git gc`/fetch despite the warm long-running engine this module sits
+    in. A `stat()` failure (file vanished under us) skips the cache and
+    falls through to the uncached parse, which then degrades to `None` in
+    the usual way."""
+    try:
+        st = idx_path.stat()
+    except OSError:
+        return _parse_pack_index_uncached(idx_path)
+    key = (str(idx_path), st.st_mtime_ns, st.st_size)
+    if key in _PACK_INDEX_CACHE:
+        _PACK_INDEX_CACHE.move_to_end(key)
+        return _PACK_INDEX_CACHE[key]
+    result = _parse_pack_index_uncached(idx_path)
+    _PACK_INDEX_CACHE[key] = result
+    _PACK_INDEX_CACHE.move_to_end(key)
+    while len(_PACK_INDEX_CACHE) > _PACK_INDEX_CACHE_MAX_ENTRIES:
+        _PACK_INDEX_CACHE.popitem(last=False)
+    return result
+
+
+def _parse_pack_index_uncached(idx_path: Path) -> Optional[_PackIndex]:
     """Parses a v2 pack `.idx`: 8-byte header, 256-entry fanout table,
     sorted sha table, CRC32 table (skipped, not needed for object lookup),
     a 32-bit offset table, and -- only when a pack exceeds 2GB -- a 64-bit

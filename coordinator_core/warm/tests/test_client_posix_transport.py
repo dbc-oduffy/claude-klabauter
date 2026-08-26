@@ -54,7 +54,7 @@ def _spawn_recorder(monkeypatch: pytest.MonkeyPatch) -> list:
     monkeypatch.setattr(
         client,
         "spawn_detached",
-        lambda repo_root, script, args=None: spawns.append(script) or True,
+        lambda repo_root, script, args=None, **kwargs: spawns.append(script) or True,
     )
     return spawns
 

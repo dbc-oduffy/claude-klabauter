@@ -470,7 +470,12 @@ def _caller_session_id() -> str:
         return ""
 
 
-def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None) -> bool:
+def spawn_detached(
+    repo_root: str,
+    script_path: str,
+    args: Optional[Any] = None,
+    env_extra: Optional[dict] = None,
+) -> bool:
     """Lazy delegate to `ops.ceremony.detached_spawn.spawn_detached`.
 
     THE IMPORT IS INSIDE THE FUNCTION ON PURPOSE — it is the single most
@@ -510,7 +515,7 @@ def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None)
         spawn_detached as _spawn_detached_impl,
     )
 
-    return _spawn_detached_impl(repo_root, script_path, args)
+    return _spawn_detached_impl(repo_root, script_path, args, env_extra)
 
 
 def _spawn_once() -> None:
@@ -552,7 +557,29 @@ def _spawn_once() -> None:
     if not should_spawn(root):
         return
     _spawned_this_process = True
-    spawn_detached(str(root), SERVER_ENTRY_SCRIPT)
+    # Stamp the spawn instant so the CHILD can measure its own boot. Boot has
+    # been argued from three separate files this week and every one of them is
+    # censored by when callers happened to call -- a client can only observe
+    # that a server was absent at the moments it asked, never how long the
+    # absence ran. The one process that can measure the interval with no caller
+    # in it is the server itself, and it needs this t0 to do it (see
+    # `telemetry.record_server_boot`).
+    #
+    # Passed as CHILD-ONLY env, never written to this process's own
+    # `os.environ`. A global env write outlives this call and is inherited by
+    # every later subprocess, so a differently-routed spawn would boot carrying
+    # a stale t0 and record a FABRICATED boot duration -- the exact invented-t0
+    # failure `_record_own_boot` refuses on the server side. Caught here by the
+    # suite's env-leak fixture, which names the fix: scope the write.
+    import time
+
+    from coordinator_core.warm.telemetry import SPAWN_EPOCH_ENV
+
+    spawn_detached(
+        str(root),
+        SERVER_ENTRY_SCRIPT,
+        env_extra={SPAWN_EPOCH_ENV: repr(time.time())},
+    )
 
 
 #: How long a POSIX `connect()` may take before the server counts as

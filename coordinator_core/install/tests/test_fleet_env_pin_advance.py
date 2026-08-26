@@ -448,7 +448,7 @@ def test_bare_unversioned_spec_yields_no_floor_and_no_crossing_verdict(tmp_path)
 
 def _synthetic_movement_fixture(tmp_path):
     """Shared three-package fixture for the MOVES/NO CHANGE/UNKNOWN
-    classification tests: same declared floor (permissive `>=1.0`,
+    classification tests: same declared floor (permissive, 1.0,
     unattributed by major-crossing alone) but three different installed
     states, so the assertions below isolate movement classification
     from the floor-vs-lock comparison."""
@@ -565,7 +565,8 @@ def test_huggingface_hub_flagged_as_major_advance_against_example_game_repo():
     """The one advance the C7 dispatch brief names explicitly as already
     known and contested: example-game-repo's `gpu_sidecar/requirements.txt` caps
     `huggingface_hub` at `<1.0`; the PM-ruled fleet floor
-    (`FIRST_CLASS_FLOORS = ("huggingface_hub>=1.0",)`) is forced past that
+    (the `FIRST_CLASS_FLOORS` entry flooring ``huggingface_hub`` at 1.0) is
+        forced past that
     cap via C3's `override-dependencies`. AC12 requires this surfaced as a
     major-version advance against example-game-repo, not silently assumed."""
     entries = build_pin_advance_report()

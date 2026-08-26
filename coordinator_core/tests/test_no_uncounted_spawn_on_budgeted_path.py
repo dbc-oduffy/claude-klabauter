@@ -1204,13 +1204,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
     ),
-    "handoff.reconcile_open": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
     "handoff.transition": (
         ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
@@ -1257,7 +1250,6 @@ _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.reconcile_close_terminal": (
         "coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler",
     ),
-    "handoff.reconcile_open": ("coordinator_core/ops/handoff_reconcile.py", "_handler"),
     "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "invoke.from_argv": ("coordinator_core/ops/invoke_from_argv.py", "_invoke_from_argv"),
     "memo.transition": ("coordinator_core/ops/memo_transition.py", "_handler"),
@@ -1507,13 +1499,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
-    "handoff.reconcile_open": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
     "handoff.repoint_origin": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
@@ -1608,7 +1593,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.has_live_children": ("coordinator_core/ops/handoff_children.py", "_handoff_has_live_children"),
     "handoff.lineage_ancestry": ("coordinator_core/ops/handoff_lineage_ancestry.py", "_handler"),
     "handoff.reconcile_close_terminal": ("coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler"),
-    "handoff.reconcile_open": ("coordinator_core/ops/handoff_reconcile.py", "_handler"),
     "handoff.repoint_origin": ("coordinator_core/ops/handoff_repoint_origin.py", "_handler"),
     "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "hooks.cater_subagent_start": ("coordinator_core/hooks/cater_subagent_start.py", "_handler"),
@@ -2030,7 +2014,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.author_fork": ("coordinator_core/ops/handoff_author_fork.py", "_handler"),
     "handoff.columns": ("coordinator_core/ops/handoff_columns_query.py", "_handler"),
     "handoff.reconcile_close_terminal": ("coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler"),
-    "handoff.reconcile_open": ("coordinator_core/ops/handoff_reconcile.py", "_handler"),
     "handoff.scaffold_from_queue": ("coordinator_core/ops/queue_scaffold_baton.py", "_handler"),
     "hooks.cater_subagent_start": ("coordinator_core/hooks/cater_subagent_start.py", "_handler"),
     "memo.fate_backfill": ("coordinator_core/ops/memo_fate_backfill.py", "_handler"),
@@ -2150,10 +2133,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "handoff.reconcile_close_terminal": (
         ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-    ),
-    "handoff.reconcile_open": (
-        ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-        ("coordinator_core/reconcile/commit_reality.py", "_git", "git", 0),
     ),
     "handoff.scaffold_from_queue": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
@@ -2922,7 +2901,8 @@ def test_no_uncounted_spawn_reachable_from_a_budgeted_entrypoint():
     of the four routes above make a spawn visible; the fourth removes the reason it existed. When
     a site lands on this list, ask in that order and stop at the first that applies.
 
-    Every `executed` leg cites a DIRECT measurement -- a call counter asserted `>= 1`, or a
+    Every `executed` leg cites a DIRECT measurement -- a call counter asserted at one
+    or more, or a
     stack-recording `subprocess.run` wrapper attributing each spawn to its origin frame -- never
     an inference from a spawn total matching a budget. That is the leg neither the mechanism nor
     the assertion shape establishes, and the one this gate cannot check statically (see "WHAT
@@ -5609,7 +5589,6 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: live tree post-rebuild, not a guess.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.reconcile_open": 19,
     "handoff.archive_transition": 18,
     "handoff.reconcile_close_terminal": 18,
     "fleet.migrate_handoff_vocabulary": 17,
@@ -5762,7 +5741,6 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: nothing asserts on.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.reconcile_open": 19,
     "handoff.archive_transition": 18,
     "handoff.reconcile_close_terminal": 18,
     "fleet.migrate_handoff_vocabulary": 17,

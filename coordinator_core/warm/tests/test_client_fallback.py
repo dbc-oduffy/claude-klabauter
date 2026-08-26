@@ -104,7 +104,7 @@ def test_file_not_found_spawns_once_and_goes_cold(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append((repo_root, script)) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append((repo_root, script)) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert len(spawns) == 1
@@ -136,7 +136,7 @@ def test_spawn_once_consults_should_spawn_and_skips_when_debounced(
     monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append((repo_root, script)) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append((repo_root, script)) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == [], "should_spawn=False must suppress the spawn"
@@ -150,7 +150,7 @@ def test_backstop_one_spawn_attempt_per_process(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     client.try_warm_dispatch(_MSG)
     client.try_warm_dispatch(_MSG)
@@ -174,7 +174,7 @@ def test_error_pipe_busy_231_as_plain_oserror_never_spawns(monkeypatch: pytest.M
     monkeypatch.setattr(client, "_open_pipe", _raise_busy)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == []
@@ -202,7 +202,7 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     # Undo the module-wide `engine_token` stub for THIS test only, so the
     # real `engine_token()` runs and reaches the (now stubbed)
@@ -366,7 +366,7 @@ def test_einval_without_231_never_spawns_and_never_prints(
     monkeypatch.setattr(client, "_open_pipe", _raise_einval)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == []
@@ -382,7 +382,7 @@ def test_permission_error_someone_elses_pipe_never_spawns(monkeypatch: pytest.Mo
     monkeypatch.setattr(client, "_open_pipe", _raise_denied)
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == []
@@ -406,7 +406,7 @@ def test_broken_pipe_on_both_attempts_goes_cold(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe(raise_on_write=BrokenPipeError()))
     spawns = []
     monkeypatch.setattr(
-        client, "spawn_detached", lambda repo_root, script, args=None: spawns.append(1) or True
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     assert client.try_warm_dispatch(_MSG) is None
     assert spawns == []  # BrokenPipeError is never the spawn trigger

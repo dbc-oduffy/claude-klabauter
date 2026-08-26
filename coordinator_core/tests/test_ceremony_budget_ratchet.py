@@ -190,6 +190,46 @@ def test_ops_implemented_in_the_ceremony_package_are_ceremony_ops():
         assert ipc._timeout_for(op) <= PINNED_CEILING_SECS
 
 
+def test_ceremony_package_membership_survives_a_cold_interpreter():
+    """The package signal alone is NOT enough, and this is what proves it.
+
+    `ipc._owning_module_is_ceremony` reads two tables that must already be
+    resident and is forbidden from importing (`_registry_map` costs a measured
+    470ms, a DR-344 breach on the dispatch hot path). So it answers False in a
+    fresh interpreter, and an op whose ONLY membership signal is its owning
+    module gets 30s cold and 2s warm -- the same op budgeted or not depending on
+    what else the process happened to import, which is verbatim the silent
+    escape `is_ceremony_method`'s docstring says the explicit table exists to
+    make impossible.
+
+    `test_ops_implemented_in_the_ceremony_package_are_ceremony_ops` cannot catch
+    that: it reads `OP_MODULE_MAP` to build its roster, so the map is loaded by
+    the time it asks, and the backstop answers True for exactly the op that is
+    broken cold. This asserts the IMPORT-FREE signals instead -- the name prefix
+    or the alias table -- which are the two that are true everywhere.
+
+    Measured 2026-08-26 on `push.outstanding`: 30.0s cold, 2.0s after
+    `import coordinator_core.ops._registry_map`. It was resolved by moving the
+    op out of the ceremony package (a remote leg cannot live under a 2s wall
+    ceiling; see that module's docstring), not by an alias row -- either
+    resolution satisfies this test, which is the point: it pins determinism, not
+    which budget an op lands in.
+    """
+    for op in _ceremony_package_ops():
+        assert (
+            op.startswith("ceremony.") or op in ipc._CEREMONY_PACKAGE_ALIASES
+        ), (
+            f"{op} lives in {PINNED_CEREMONY_PACKAGE} but is recognised as ceremony "
+            f"ONLY by ipc._owning_module_is_ceremony, which cannot import and so "
+            f"answers False in a cold interpreter. Its budget is therefore "
+            f"load-order dependent: 30s cold, {PINNED_CEILING_SECS}s warm. Fix it in "
+            f"one of the two import-free directions -- add a row to "
+            f"_CEREMONY_PACKAGE_ALIASES if the op belongs inside the budget, or move "
+            f"the implementation out of the ceremony package if it does not (a remote "
+            f"leg does not). Do not leave it resting on the backstop."
+        )
+
+
 def test_a_renamed_ceremony_op_does_not_escape_the_budget(monkeypatch):
     """The bypass itself, driven end to end.
 

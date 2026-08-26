@@ -2001,6 +2001,148 @@ def _reads_operator_input(expr: ast.expr) -> bool:
     return False
 
 
+def _cache_guard_covers(loop: ast.AST, call: ast.Call, name: str) -> bool:
+    """True when *call* is reachable only through an `if <name> is None:` / `if not <name>:`
+    test inside *loop* -- the "have I resolved this yet" gate.
+
+    `is not None` and `!=` are deliberately NOT accepted: a call behind `if cache is not None`
+    runs on every iteration after the first, which is per-item amplification wearing a guard."""
+    for node in ast.walk(loop):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        matches = False
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == name
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Is)
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value is None
+        ):
+            matches = True
+        elif (
+            isinstance(test, ast.UnaryOp)
+            and isinstance(test.op, ast.Not)
+            and isinstance(test.operand, ast.Name)
+            and test.operand.id == name
+        ):
+            matches = True
+        if matches and any(sub is call for stmt in node.body for sub in ast.walk(stmt)):
+            return True
+    return False
+
+
+def _bound_before_loop(
+    fn: "ast.FunctionDef | ast.AsyncFunctionDef", loop: ast.AST, name: str
+) -> bool:
+    """True when *name* is assigned in *fn* strictly BEFORE *loop* and outside it.
+
+    This is the clause that separates a once-per-scan cache from a per-iteration local. A name
+    first bound INSIDE the loop is re-created every pass, so its `is None` test is true every
+    pass and the call fires every pass -- amplification, not memoization."""
+    loop_start = getattr(loop, "lineno", None)
+    if loop_start is None:
+        return False
+    inside_loop = {id(n) for n in ast.walk(loop)}
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        if id(node) in inside_loop:
+            continue
+        if getattr(node, "lineno", loop_start) >= loop_start:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if any(name in _names_in(t) for t in targets):
+            return True
+    return False
+
+
+def _cache_reset_inside_loop(loop: ast.AST, call: ast.Call, name: str) -> bool:
+    """True when *name* is reassigned inside *loop* by anything OTHER than the memoizing call.
+
+    A cache cleared (or rebound) mid-loop is resolved again on the next pass, so the site really
+    does spawn per item. Without this clause the discriminator would silence exactly the shape it
+    must keep reporting."""
+    for node in ast.walk(loop):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is not None and any(sub is call for sub in ast.walk(value)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if any(name in _names_in(t) for t in targets):
+            return True
+    return False
+
+
+def _is_lazily_memoized_resolution(
+    call: ast.Call,
+    loop: ast.AST | None,
+    fn: "ast.FunctionDef | ast.AsyncFunctionDef | None",
+) -> bool:
+    """DISCRIMINATOR 16 -- the call resolves ONCE PER SCAN behind a lazy cache, so the loop it
+    sits in does not multiply it. Reporting it asks for a batching that has already happened.
+
+    The shape, and every clause is load-bearing:
+
+        cache = None                      # bound BEFORE the loop  (`_bound_before_loop`)
+        for item in items:
+            if cache is None:             # unset-test gate        (`_cache_guard_covers`)
+                cache = resolve(...)      # the flagged call, assigned to that same name
+            use(cache, item)              # and never rebound      (`_cache_reset_inside_loop`)
+
+    PROVISIONAL, and load-bearing in a way nobody intended (2026-08-26, claude-klabauter-15
+    `4ca622718`). This discriminator's RULE stands on its own: a single-slot latch resolves once
+    per scan, and that is true independently of any one site. What is NOT settled is why the
+    collector reported the motivating site at all. The P1 that owns it
+    (`state/bug-backlog/2026-08-25-the-amplification-gate-resolves-an-alias-bf22411daeda.yaml`)
+    originally blamed route c resolving an alias to a same-named sibling THAT SPAWNS -- and that
+    mechanism was re-measured and does not hold: all three in-scope `_git_common_dir` siblings
+    are walk-only, and the two that spawn are outside gate scope, so route c cannot reach them.
+    The flag was wrong, but the reason is now genuinely unknown, and this predicate is currently
+    the only thing keeping the site quiet. Treat it as a provisional suppression over an
+    unexplained cause, NOT as that P1's closure: if the real cause is found and fixed, re-check
+    whether this discriminator still earns its place rather than assuming it does.
+
+    Motivating site, and why this is a FALSE POSITIVE rather than debt:
+    `coordinator_core/ops/promote_shipped_in_flight_stubs.py :: _run_promotions` resolves
+    `_git_common_dir` exactly once per scan behind this guard. The memoization is not incidental
+    -- it is a code-reviewer F3 fix with a comment at the site saying so. Neither register could
+    hold it: `_EXEMPT_SITES` requires one of four closed classes that all assert "unbatchable by
+    construction", which is false of a call already batched to one; and `_KNOWN_SITES` means
+    "real debt, batch it later", which invites deleting the reviewer's cache as the repair. The
+    honest fix was for the collector to stop reporting it.
+
+    OUT OF SCOPE, deliberately -- a keyed cache (`if key not in cache: cache[key] = resolve(key)`)
+    is NOT this shape and stays reported. Its call count is bounded by DISTINCT KEYS, which is a
+    function of the iterable and may be N; only a single-slot cache is provably once-per-scan.
+    This SUPPRESSES, so it takes the narrow reading."""
+    if loop is None or fn is None:
+        return False
+
+    cached_names: set[str] = set()
+    for node in ast.walk(loop):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        if not any(sub is call for sub in ast.walk(node.value)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            cached_names |= _names_in(target)
+
+    for name in sorted(cached_names):
+        if not _cache_guard_covers(loop, call, name):
+            continue
+        if not _bound_before_loop(fn, loop, name):
+            continue
+        if _cache_reset_inside_loop(loop, call, name):
+            continue
+        return True
+    return False
+
+
 def _is_operator_gated_spawn(call: ast.Call, loop: ast.AST | None) -> bool:
     """DISCRIMINATOR 15 -- the call is reachable only through a test on a value the operator
     typed DURING this iteration.
@@ -3475,6 +3617,11 @@ def find_unbatched_per_item_spawns(
             # during this iteration -- bounded by keypresses, zero on the modal path.
             if _is_operator_gated_spawn(node, _loop_node):
                 continue
+            # Discriminator 16: the call is memoized behind a single-slot lazy cache bound
+            # before the loop, so it resolves once per scan however long the loop runs. The
+            # batching this gate asks for is already there.
+            if _is_lazily_memoized_resolution(node, _loop_node, _enclosing_fn):
+                continue
             # Discriminator 14: the loop is a linear search for WHICH iteration perturbed some
             # out-of-band state, so collapsing it destroys the attribution that IS the output.
             if _is_attribution_search(
@@ -3933,12 +4080,6 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     ),
     ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_queue_append"): (
         "test_sibling_cli_single_record::test_queue_append_takes_one_record",
-        "fast",
-    ),
-    # --- in-repo Python API takes one record (fast tier, strongest shape available:
-    #     settled by the signature, nothing executed and nothing spawned) ---
-    ("coordinator/bin/reap-orphaned-in-flight-handoffs.py", "main", "_run_archive_stamp_cli"): (
-        "test_python_api_single_record::test_archive_stamp_verbs_take_exactly_one_handoff",
         "fast",
     ),
     # --- act-time TOCTOU rechecks: the property, not a description of it (fast tier) ---
@@ -4564,6 +4705,15 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
     "_is_operator_gated_spawn": (
         "test_discriminator_operator_gate_declines_a_read_before_the_loop",
     ),
+    #: Discriminator 16's three clauses each get their own negative: the gate, the pre-loop
+    #: binding, and the no-rebind requirement. Drop any one and a genuinely per-item spawn goes
+    #: silent, which is why none of them is folded into the others.
+    "_is_lazily_memoized_resolution": (
+        "test_discriminator_lazy_memo_declines_an_unguarded_assignment",
+        "test_discriminator_lazy_memo_declines_a_cache_bound_inside_the_loop",
+        "test_discriminator_lazy_memo_declines_a_cache_rebound_inside_the_loop",
+        "test_discriminator_lazy_memo_declines_a_keyed_cache",
+    ),
     "_is_attribution_search": (
         "test_discriminator_attribution_search_declines_ordinary_fail_fast",
         "test_discriminator_attribution_search_declines_a_loop_target_test",
@@ -4649,7 +4799,8 @@ def _asserts_a_site_is_still_reported(func: ast.FunctionDef) -> bool:
         #: `assert violations` / `assert keys`
         if isinstance(test, ast.Name):
             return True
-        #: `assert len(violations) == 1`, `>= 1`, `== 2` ...
+        #: `assert len(violations) == 1`, or the same shape with a
+        #: greater-or-equal / other constant comparison
         if isinstance(test, ast.Compare) and isinstance(test.left, ast.Call):
             func_node = test.left.func
             if isinstance(func_node, ast.Name) and func_node.id == "len":
@@ -5892,6 +6043,103 @@ def test_discriminator_operator_gate_declines_a_read_before_the_loop(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [site.enclosing for site in violations] == ["review"]
+
+
+def test_discriminator_lazy_memo_not_flagged(tmp_path):
+    """Discriminator 16's positive control -- the shape at
+    `promote_shipped_in_flight_stubs.py :: _run_promotions`. One resolution per scan behind a
+    single-slot cache bound before the loop."""
+    fixture = tmp_path / "disc_lazy_memo.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def promote(stubs, root):\n"
+        "    common_dir = None\n"
+        "    for stub in stubs:\n"
+        "        if common_dir is None:\n"
+        "            common_dir = subprocess.run(['git', 'rev-parse', '--git-common-dir'])\n"
+        "        stamp(stub, common_dir)\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_lazy_memo_declines_an_unguarded_assignment(tmp_path):
+    """Discriminator 16's first load-bearing negative: assignment to a name is not memoization.
+    Without the unset-test clause, every `x = subprocess.run(...)` in a loop goes silent."""
+    fixture = tmp_path / "disc_lazy_memo_unguarded.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def promote(stubs, root):\n"
+        "    common_dir = None\n"
+        "    for stub in stubs:\n"
+        "        common_dir = subprocess.run(['git', 'rev-parse', '--git-common-dir'])\n"
+        "        stamp(stub, common_dir)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["promote"]
+
+
+def test_discriminator_lazy_memo_declines_a_cache_bound_inside_the_loop(tmp_path):
+    """Discriminator 16's second load-bearing negative. A name first bound INSIDE the loop is
+    re-created every pass, so its `is None` test is true every pass and the call fires every
+    pass. The guard is present and means nothing -- this is amplification wearing one."""
+    fixture = tmp_path / "disc_lazy_memo_inner_binding.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def promote(stubs, root):\n"
+        "    for stub in stubs:\n"
+        "        common_dir = None\n"
+        "        if common_dir is None:\n"
+        "            common_dir = subprocess.run(['git', 'rev-parse', '--git-common-dir'])\n"
+        "        stamp(stub, common_dir)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["promote"]
+
+
+def test_discriminator_lazy_memo_declines_a_cache_rebound_inside_the_loop(tmp_path):
+    """Discriminator 16's third load-bearing negative. A cache cleared mid-loop is resolved
+    again on the next pass, so the site really does spawn per item -- N times, not once."""
+    fixture = tmp_path / "disc_lazy_memo_rebound.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def promote(stubs, root):\n"
+        "    common_dir = None\n"
+        "    for stub in stubs:\n"
+        "        if common_dir is None:\n"
+        "            common_dir = subprocess.run(['git', 'rev-parse', '--git-common-dir'])\n"
+        "        stamp(stub, common_dir)\n"
+        "        common_dir = None\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["promote"]
+
+
+def test_discriminator_lazy_memo_declines_a_keyed_cache(tmp_path):
+    """Discriminator 16's scope boundary. A keyed cache resolves once per DISTINCT KEY, and the
+    key set is a function of the iterable -- it may be N. Only a single-slot cache is provably
+    once-per-scan, so the keyed shape stays reported."""
+    fixture = tmp_path / "disc_lazy_memo_keyed.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def promote(stubs, root):\n"
+        "    seen = {}\n"
+        "    for stub in stubs:\n"
+        "        if stub not in seen:\n"
+        "            seen[stub] = subprocess.run(['git', 'log', '-1', stub])\n"
+        "        stamp(stub, seen[stub])\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["promote"]
 
 
 def test_discriminator_attribution_search_not_flagged(tmp_path):

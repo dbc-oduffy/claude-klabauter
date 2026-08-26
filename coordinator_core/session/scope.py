@@ -2816,23 +2816,47 @@ def release_committed_claims(
     if not requested:
         return
 
-    status_out = _git_output(
-        [
-            "-c",
-            "core.quotepath=false",
-            "status",
-            "--porcelain",
-            "--",
-            *sorted(requested),
-        ],
-        cwd,
-    )
-    if status_out is None:
-        return  # git failed — fail-safe RETAIN
+    # `git status --porcelain -- <every requested path>` on one argv blows the
+    # Windows 32767-char command-line limit at exactly the scale this repo's
+    # own archival batches routinely commit (measured 38,044 chars at 2000
+    # paths) -- Windows is first-class here (CLAUDE.md), so an unchunked
+    # argv is break-class, not a nit. Chunked via the shared `_chunk_paths`
+    # packer/budget `ops/ceremony/git_native.py` already established for the
+    # identical shape (`_diverging_paths_chunked`) rather than forking a
+    # second, independently-drifting copy -- function-local import to dodge
+    # the same module-cycle concern the `safe_commit_offer` import below
+    # already routes around (this module is imported widely; `git_native`
+    # is not imported at `scope` module scope anywhere today).
+    #
+    # Fail-safe RETAIN is preserved ACROSS chunks, not merely within one: a
+    # `git status` failure or an unparseable line on ANY chunk fails the
+    # WHOLE call safe (nothing releases this call), exactly like the old
+    # single-call code did for the whole pathspec -- a per-chunk-silent
+    # fail-safe would let chunk 3's failure release claims chunk 1 and 2
+    # would have retained had the old code seen the same partial failure,
+    # which is not a shape the old, unchunked code could ever produce.
+    from coordinator_core.ops.ceremony.git_native import _chunk_paths
 
-    dirty = _porcelain_dirty_paths(status_out)
-    if dirty is None:
-        return  # unparseable line — fail-safe RETAIN for the whole call
+    dirty: Set[str] = set()
+    for chunk in _chunk_paths(sorted(requested)):
+        status_out = _git_output(
+            [
+                "-c",
+                "core.quotepath=false",
+                "status",
+                "--porcelain",
+                "--",
+                *chunk,
+            ],
+            cwd,
+        )
+        if status_out is None:
+            return  # git failed on this chunk — fail-safe RETAIN for the whole call
+
+        chunk_dirty = _porcelain_dirty_paths(status_out)
+        if chunk_dirty is None:
+            return  # unparseable line — fail-safe RETAIN for the whole call
+        dirty |= chunk_dirty
 
     # C1 follow-up (docs/plans/2026-08-11-claim-release-and-the-gate-that-
     # cannot-clear.md): both sides of this set-diff MUST be folded through
@@ -2976,22 +3000,34 @@ def _tracked_at_head(paths: List[str], cwd: Optional[str]) -> Optional[Set[str]]
     """
     if not paths:
         return set()
-    out = _git_output(
-        [
-            "-c",
-            "core.quotepath=false",
-            "ls-tree",
-            "-r",
-            "--name-only",
-            "HEAD",
-            "--",
-            *(_literal_pathspec(p) for p in paths),
-        ],
-        cwd,
-    )
-    if out is None:
-        return None
-    return {line for line in out.splitlines() if line}
+
+    # Same unbounded-argv shape `release_committed_claims` was fixed for
+    # (see that function's docstring) -- this helper runs on the same
+    # post-commit hot path (`release_phantom_claims`) and can see the same
+    # multi-thousand-path batches. Chunked via the shared `_chunk_paths`
+    # packer, matching `release_committed_claims`'s fix; a chunk failure
+    # fails the WHOLE call fail-safe (``None``), never partially.
+    from coordinator_core.ops.ceremony.git_native import _chunk_paths
+
+    tracked: Set[str] = set()
+    for chunk in _chunk_paths(list(paths)):
+        out = _git_output(
+            [
+                "-c",
+                "core.quotepath=false",
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "HEAD",
+                "--",
+                *(_literal_pathspec(p) for p in chunk),
+            ],
+            cwd,
+        )
+        if out is None:
+            return None
+        tracked.update(line for line in out.splitlines() if line)
+    return tracked
 
 
 def _staged_in_index(paths: List[str], cwd: Optional[str]) -> Optional[Set[str]]:
@@ -3018,29 +3054,37 @@ def _staged_in_index(paths: List[str], cwd: Optional[str]) -> Optional[Set[str]]
     """
     if not paths:
         return set()
-    out = _git_output(
-        [
-            "ls-files",
-            "--stage",
-            "--",
-            *(_literal_pathspec(p) for p in paths),
-        ],
-        cwd,
-    )
-    if out is None:
-        return None
+
+    # Same unbounded-argv shape as `_tracked_at_head` (see its own comment,
+    # just above) -- chunked identically via the shared `_chunk_paths`
+    # packer, one chunk failure fails the WHOLE call fail-safe.
+    from coordinator_core.ops.ceremony.git_native import _chunk_paths
+
     staged: Set[str] = set()
-    for line in out.splitlines():
-        if not line:
-            continue
-        # '<mode> <blob-sha> <stage>\t<path>' — split on the FIRST tab only,
-        # matching parse_touch_event's own "never split on structure that
-        # could appear in the path" discipline; the path is everything after
-        # the tab, unescaped. This call only ever receives paths this module
-        # itself already normalized, so no further unquoting is needed.
-        _, _, path = line.partition("\t")
-        if path:
-            staged.add(path)
+    for chunk in _chunk_paths(list(paths)):
+        out = _git_output(
+            [
+                "ls-files",
+                "--stage",
+                "--",
+                *(_literal_pathspec(p) for p in chunk),
+            ],
+            cwd,
+        )
+        if out is None:
+            return None
+        for line in out.splitlines():
+            if not line:
+                continue
+            # '<mode> <blob-sha> <stage>\t<path>' — split on the FIRST tab
+            # only, matching parse_touch_event's own "never split on
+            # structure that could appear in the path" discipline; the path
+            # is everything after the tab, unescaped. This call only ever
+            # receives paths this module itself already normalized, so no
+            # further unquoting is needed.
+            _, _, path = line.partition("\t")
+            if path:
+                staged.add(path)
     return staged
 
 

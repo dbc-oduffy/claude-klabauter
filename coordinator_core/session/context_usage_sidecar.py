@@ -75,7 +75,8 @@ def sidecar_path(session_id: str) -> Path:
 
     Resolves DoE-claude's `coordinator/bin/statusline.py` record — the sole
     live producer, registered as this machine's `statusLine`. It publishes to
-    ``$COORDINATOR_SETTINGS_HOME/state/context-window/<session_id>.json``
+    the settings home's ``state/context-window/`` directory, one
+        ``<session_id>.json`` per session
     (default settings home ``~/.coordinator-claude-settings``), and that path
     plus the record shape below is a cross-plane contract: DoE's withdrawal-memo
     exchange settled it as theirs to hold stable and ours to read.

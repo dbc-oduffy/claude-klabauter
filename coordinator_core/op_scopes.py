@@ -1298,6 +1298,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # same repo; a common_dir key would answer for the wrong worktree's
     # uncommitted diff.
     "bug_sweep.verify_fix_files_changed":       "show_top",
+    # ceremony.commit — common_dir: stages and commits within the CALLER's own
+    # working tree/index via run_commit_pipeline; must resolve
+    # main_worktree_root(common_dir), matching commit.exec_bit_change below.
+    "ceremony.commit":                          "common_dir",
     # commit.exec_bit_change — common_dir: stages and commits within the CALLER's
     # own working tree/index; must resolve main_worktree_root(common_dir), matching
     # commit.anchors' precedent.

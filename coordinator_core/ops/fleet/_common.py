@@ -9,9 +9,13 @@ archive_handoffs, prune_bugs) depend on this module; it has no dependency on the
 The three fleet ops all share:
 - a frozen wire envelope (contract §2.1)
 - the same two-call confirm→act flow (dry_run:true preview / dry_run:false act)
-- a single atomic commit from a private HEAD-seeded GIT_INDEX_FILE per DR-211 D3/D4
-  commit-ownership verdict (amended 2026-07-26 for FORWARD-B: the private index, not
-  a commit pathspec, is the scoping mechanism — see archive_and_commit's docstring)
+- a single atomic commit scoped by construction, not by a commit pathspec, per
+  DR-211 D3/D4 (amended 2026-07-26 for FORWARD-B). `rm_and_commit` still lands
+  its scope through a private HEAD-seeded `GIT_INDEX_FILE`; `archive_and_commit`
+  (2026-08-26) instead assembles its `{path: (mode, sha) | _ABSENT}` tree-delta
+  directly, in process, and lands it via `ops.ceremony.git_native.
+  _commit_via_head_spine` — no private index at all. See each function's own
+  docstring for its mechanism.
 
 Spec backlinks:
   - Plan key decisions: docs/plans/2026-07-04-pcore-11-fleet-invoke-ops.md § Key decisions 2 & 5
@@ -33,7 +37,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     # Type-checking only. `asyncio` is imported at FUNCTION scope by the two
@@ -48,9 +52,21 @@ from coordinator_core.dag import _read_meta, invalidate_git_history_cache
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.git_state import head_sha as _read_head_sha
+from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle import main_worktree_root  # re-export — see note below
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+# Peer-to-peer import, deliberate (2026-08-26, archive_and_commit tree-build
+# chunk): _commit_via_head_spine is the shared "rewrite HEAD's tree spine ->
+# build the commit object -> land it via a locked ref CAS" landing helper
+# ops.ceremony.git_native's own commit seams use; archive_and_commit reuses
+# it rather than re-deriving a second private-index-free commit mechanism.
+# git_native imports nothing from ops.fleet, so this does not create a cycle.
+from coordinator_core.ops.ceremony.git_native import (
+    _ABSENT,
+    _commit_via_head_spine,
+    _hash_object_stdin_paths,
+)
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
@@ -1639,19 +1655,86 @@ def _argv_path_chunks(paths: list, budget: int = _ARGV_PATHSPEC_BUDGET) -> list:
     ]
 
 
+def _assembled_commit_is_noop(
+    worktree_root: Path, assembled: Dict[str, Union[Tuple[int, str], object]]
+) -> bool:
+    """True iff every entry in `assembled` already matches HEAD's tree --
+    the RE-SITED form, for `archive_and_commit`'s assembled-dict commit path,
+    of the guarantee `_empty_private_index_breach` (above) provides for a
+    private-index seam.
+
+    Read `_empty_private_index_breach`'s own docstring first -- it exists
+    because `git write-tree` against a MISSING `GIT_INDEX_FILE` silently
+    returns git's canonical empty tree at rc=0, and a pathspec-less commit of
+    that tree deletes every tracked file (the 2026-08-18 `fbfbd061d`
+    incident). `archive_and_commit` no longer opens a `GIT_INDEX_FILE` at
+    all -- there is no private index left to go missing, so that EXACT
+    failure mode cannot recur here, and this function does NOT reuse
+    `_empty_private_index_breach` (which still guards `rm_and_commit`'s own
+    private-index seam, unchanged, below).
+
+    What survives, re-sited to this mechanism's own shape: a commit whose
+    assembled tree would land byte-identical to HEAD's tree is the same
+    "nothing to commit" case reached a different way -- not the empty-TREE
+    case (`assembled` is never empty here; `archive_and_commit` returns
+    before this point whenever `acted` is empty), but the empty-DELTA case,
+    where every assembled change already matches what HEAD already records.
+    Refusing it here, loud and before the commit, is the same discipline the
+    original guard applied to its own failure mode: never land a no-op
+    archival commit silently.
+
+    Spawn-free: `read_tree_spine` reads loose/packed tree objects in
+    process, never spawns git. Returns False (a real change is present, or
+    HEAD's spine could not be read at all -- not this function's job to
+    refuse that; `_commit_via_head_spine`'s own precondition check does)
+    whenever any entry differs from what `read_tree_spine` reports for it.
+    """
+    spine = read_tree_spine(worktree_root, list(assembled.keys()))
+    if spine is None:
+        return False
+    for path, val in assembled.items():
+        parent, _, leaf = path.rpartition("/")
+        existing = spine.get(parent, {}).get(leaf)
+        if val is _ABSENT:
+            if existing is not None:
+                return False  # a real deletion
+            continue
+        if existing != val:
+            return False  # a real add/change
+    return True
+
+
 async def archive_and_commit(
     worktree_root: Path,
     moves: List[Move],
     subject: str,
 ) -> Tuple[List[dict], List[dict]]:
-    """DR-211 D3/D4 git-archive helper: os.replace each Move in-process, stage
-    + commit the batch through a private index. (F-5 swap, 2026-08-21.)
+    """DR-211 D3/D4 git-archive helper: os.replace each Move in-process, then
+    land the whole batch as ONE commit via `_commit_via_head_spine` (imported
+    from `ops.ceremony.git_native` — peer-to-peer import, deliberate; see the
+    module-level import comment above). (F-5 swap, 2026-08-21; private-index
+    dance retired in favour of `_commit_via_head_spine`, 2026-08-26.)
 
     `git mv` against a private HEAD-seeded GIT_INDEX_FILE used to be the ONE
     genuinely per-item spawn here — 68.65ms/file measured (F-5), against
     0.33ms/file for `os.replace` (209x). The archival mover now does the
-    rename itself, in-process, and uses git only to STAGE the already-moved
-    paths and commit:
+    rename itself, in-process. Staging and committing no longer go through a
+    private `GIT_INDEX_FILE` at all (that dance — `git read-tree HEAD`, a
+    batched `git add -- src dst`, `git write-tree`, `git commit-tree`, `git
+    update-ref` — is GONE): the batch's `{path: (mode, sha) | _ABSENT}`
+    tree-delta is assembled directly, in process, and handed to
+    `_commit_via_head_spine`, which rewrites HEAD's tree spine, builds the
+    commit object, and lands it via a locked `cas_ref` compare-and-swap — the
+    ONLY git spawn left anywhere in this build is the one batched `git
+    hash-object -w --stdin-paths` call that writes every acted dst's blob.
+    For each acted move: dst's blob sha comes from hashing dst's CURRENT
+    on-disk content (never HEAD's — a `restage_src=True` move's content was
+    authored fresh on disk just before this call and may legitimately differ
+    from HEAD's own blob for src); dst's MODE is inherited from HEAD's entry
+    for src, read spawn-free via `read_tree_spine`, which PRESERVES an
+    executable bit (`100755`) HEAD already recorded — a plain `git add`
+    staging pass would silently normalise that bit away under
+    `core.filemode=false` (AC-10). src is marked `_ABSENT` (deleted).
 
     For each Move:
     1. Ensures dst.parent exists (os.replace will not create directories).
@@ -1691,62 +1774,70 @@ async def archive_and_commit(
     queuing the move (e.g. a terminality stamp just written), so drift there
     is expected, not suspicious. See Move.restage_src's docstring.
 
-    After all moves: ONE batched `git add -- <every acted src AND dst>`
-    stages the whole rename set into the private index in a single spawn —
-    an explicitly-named src that is now missing on disk stages as a
-    deletion (no `-A`/`-u` needed), so this one call captures both halves
-    of every rename. HARD CONSTRAINT: a src left out of this pathspec stages
-    only the add half, leaving the old path's deletion unstaged — the
-    artifact is duplicated, not moved. If this batched add fails: every
-    acted move (os.replace already landed on disk) is reversed via
-    `Path.rename` back to src and reclassified to failed[] — the one
-    post-move split-failure point os.replace itself cannot produce.
+    After all moves: the `assembled` tree-delta built directly from the acted
+    moves (see above) IS the exact scope of the commit — an explicitly-keyed
+    src maps to `_ABSENT` (deletion), dst maps to `(mode, sha)` (addition), so
+    this one dict captures both halves of every rename. HARD CONSTRAINT: a
+    move left out of `assembled` (i.e. not in `acted`) contributes nothing —
+    there is no wildcard or implicit scope the way `git add -A` would be. If
+    building `assembled` fails (HEAD's spine unresolvable, the batched
+    `git hash-object` spawn fails, or its output does not align one-to-one
+    with the acted moves): every acted move (os.replace already landed on
+    disk) is reversed via `Path.rename` back to src and reclassified to
+    failed[] — the one post-move split-failure point os.replace itself
+    cannot produce.
 
-    Then ONE git commit from the private index with NO trailing pathspec —
-    the index built by the batched `git add` above is already the exact
-    scope of the commit; a `-- <paths>` pathspec on `git commit` would
-    re-read the WORKTREE for those paths, bypassing the index and reopening
-    the FORWARD-B hazard this function exists to close (see below).
+    Then ONE call to `_commit_via_head_spine` lands `assembled` with NO
+    trailing pathspec — the dict built above is already the exact scope of
+    the commit; a `-- <paths>` pathspec on a `git commit`/`commit-tree` would
+    re-read the WORKTREE for those paths, bypassing the assembled content and
+    reopening the FORWARD-B hazard this function exists to close (see below).
 
-    If the commit fails: all acted items are reversed on disk and reclassified to
-    failed[].
+    If the commit fails (or `_commit_via_head_spine` declines on a
+    precondition, or the re-sited empty-spine-commit guard below refuses):
+    all acted items are reversed on disk and reclassified to failed[].
 
-    Private index is always cleaned up in the finally block regardless of outcome.
+    No private index exists to clean up any more — `_commit_via_head_spine`
+    reads no `GIT_INDEX_FILE` and mutates no index, private or shared.
 
     FORWARD-B hazard (DR-211 D3, amended 2026-07-26): a `git commit -- <paths>` call
-    commits WORKTREE content for the named paths, not index content — so a dirty
-    unrelated edit on a swept path is silently absorbed into this function's commit,
+    commits WORKTREE content for the named paths, not the intended content — so a dirty
+    unrelated edit on a swept path could be silently absorbed into this function's commit,
     misattributing that edit to the archival subject line. This is the same
     worktree-absorption mechanism named in
     state/lessons/0000-00-00-commit-only-your-hunk-when-a-sibling-s-u.yaml (universal,
     EM-fan-out-collision context) — not a defect newly diagnosed here. The fix is to
-    commit from the private index with no trailing pathspec (the index is already
-    scoped by construction), never to add a trailing pathspec to `git commit` itself
-    — that still reads worktree content for the named paths and reproduces the
-    hazard under a different call shape. FORWARD-B is distinct from "the REVERSE
-    residual" (a different, more tolerable hazard: a concurrent op absorbing OUR
-    staged paths, not us absorbing a foreign worktree edit) — do not conflate the
-    two when reasoning about this fix.
+    commit the assembled tree-delta directly with no trailing pathspec (the delta is
+    already scoped by construction), never to add a trailing pathspec to a commit
+    seam — that reads worktree content for the named paths and reproduces the hazard
+    under a different call shape. FORWARD-B is distinct from "the REVERSE residual"
+    (a different, more tolerable hazard: a concurrent op absorbing OUR staged paths,
+    not us absorbing a foreign worktree edit) — do not conflate the two when
+    reasoning about this fix.
 
-    The batched `git add -- <src, dst>` does NOT reopen FORWARD-B: dst's content
-    at staging time IS this function's own os.replace output (content this call
-    itself just placed there), not a third party's worktree edit absorbed from
-    behind our back — the hazard FORWARD-B names is a foreign edit landing on a
-    path we did not just author, and staging our own just-completed rename is
-    the opposite of that.
+    Assembling dst's blob from a fresh `git hash-object -w --stdin-paths` of
+    dst's on-disk content does NOT reopen FORWARD-B: dst's content at hash
+    time IS this function's own os.replace output (content this call itself
+    just placed there), not a third party's worktree edit absorbed from
+    behind our back — the hazard FORWARD-B names is a foreign edit landing on
+    a path we did not just author, and hashing our own just-completed rename
+    is the opposite of that.
 
     NEGATIVE-SPEC:
-    - NEVER uses git add -A or git add . — the private index is scoped by
-      construction via an explicit `git add -- <path...>` naming exactly the
-      acted moves' src and dst, never a wildcard.
+    - NEVER uses git add -A, git add ., or any private-index staging at all —
+      the assembled tree-delta is scoped by construction, keyed exactly to
+      the acted moves' src and dst, never a wildcard.
     - NEVER commits with a trailing `-- <paths>` pathspec — that reads WORKTREE
-      content and reopens FORWARD-B (see above). The private index IS the pathspec.
-    - NEVER uses blocking subprocess.run — all git calls are asyncio.create_subprocess_exec
-      + await (DR-211 D4 async mandate; ipc.py:80 "single asyncio event loop").
+      content and reopens FORWARD-B (see above). The assembled dict IS the pathspec.
+    - NEVER uses blocking subprocess.run for the remaining git spawn (`git
+      hash-object`) — routed through `_hash_object_stdin_paths`, itself
+      `asyncio`-safe (DR-211 D4 async mandate; ipc.py:80 "single asyncio
+      event loop").
     - NEVER uses `git mv` for the rename itself — os.replace is the mover;
       rename detection at diff time is by content similarity and needs no
       index hint. See F-5.
-    - GIT_INDEX_FILE isolates staging; the main index is NEVER modified.
+    - NEVER opens a `GIT_INDEX_FILE` — `_commit_via_head_spine` reads and
+      mutates no index, private or shared, at all.
     - stdout/stderr captured as bytes (not text=True) — decoded with errors="replace" on failure.
 
     Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4);
@@ -1785,59 +1876,26 @@ async def archive_and_commit(
     # Spec: docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
     import asyncio
 
-    # mkstemp: the temp file must exist (even if empty) before we pass it to git as
-    # GIT_INDEX_FILE, so git can detect it is not a valid index and re-initialise from HEAD.
-    idx_fd, idx_path = tempfile.mkstemp(prefix="fleet-git-idx-")
-    os.close(idx_fd)
-
-    # Holder for the in-flight pathspec-less commit, read by the `finally:`
-    # below. Declared out here so it survives into the cancellation unwind.
-    # See `_kill_orphaned_commit`.
-    commit_proc: Optional["asyncio.subprocess.Process"] = None
-
     try:
         # Hardened allowlist env: strips GIT_SSH_COMMAND, GIT_EXEC_PATH,
         # GIT_PROXY_COMMAND, GIT_TEMPLATE_DIR and all other GIT_* execution/hook
-        # redirect vectors (LOW env-hardening fix; see _make_git_env).
-        base_env = _make_git_env(idx_path=idx_path)
+        # redirect vectors (LOW env-hardening fix; see _make_git_env). No
+        # `idx_path` -- this function no longer stages through a private
+        # `GIT_INDEX_FILE`; the drift-check `git diff HEAD -- <paths>` call
+        # below compares the worktree directly against HEAD and is unaffected
+        # by which index (if any) is bound in this env.
+        base_env = _make_git_env()
 
-        # Initialise the private index from HEAD so the batched `git add -- src
-        # dst` below can find src's tracked index entry (needed to record its
-        # deletion, since os.replace has already removed src from disk by the
-        # time that add runs). Without this, the empty temp file is an empty
-        # index and `git add -- <missing src>` fails with "did not match any
-        # files".
-        proc = await asyncio.create_subprocess_exec(
-            "git", "read-tree", "HEAD",
-            cwd=str(worktree_root),
-            env=base_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _out, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            err_msg = stderr.decode(errors="replace").strip()
-            _LOG.error(
-                "archive_and_commit: git read-tree HEAD failed (cwd=%s): %s",
-                worktree_root, err_msg,
-            )
-            return [], [
-                {"id": m.candidate_id, "reason": f"index-init-failed: {err_msg}"}
-                for m in moves
-            ]
-
-        # HEAD-race CAS anchor (b4f0bfe88 etc., 2026-08-18/20): the private
-        # index above was seeded from HEAD at read-tree time, but nothing
-        # bridged that snapshot to the eventual commit -- a peer commit
-        # landing in the drift-check/os.replace/stage window between here
-        # and the commit below used to resolve as this commit's parent via
-        # LIVE HEAD, silently reverting the peer's work (the committed tree
-        # is stale-HEAD-plus-renames; the parent pointer is the peer's own
-        # commit). Captured once, here, alongside the read-tree seed --
-        # spawn-free (reads .git/HEAD directly) -- and used below as both
-        # commit-tree's `-p` parent and update-ref's CAS `<oldvalue>`, so a
-        # HEAD that moved since this line is caught, never silently
-        # inherited.
+        # HEAD-race CAS anchor (b4f0bfe88 etc., 2026-08-18/20): captured once,
+        # here, spawn-free (reads .git/HEAD directly) -- and used below both
+        # as the commit's parent and as `_commit_via_head_spine`'s CAS
+        # `old_head`, so a HEAD that moved since this line is caught, never
+        # silently inherited. (The read-tree-HEAD private-index seed this
+        # comment used to describe is gone -- see the module-level import
+        # note above `_commit_via_head_spine` -- but the race this anchor
+        # closes is the same one: a peer commit landing in the drift-check/
+        # os.replace window between here and the commit below must not be
+        # silently reverted.)
         old_head = _read_head_sha(worktree_root)
         if old_head is None:
             return [], [
@@ -1891,7 +1949,7 @@ async def archive_and_commit(
         drifted_ids: set = set()
         if plain_srcs:
             for chunk in _argv_path_chunks(plain_srcs):
-                diff_argv = ["git", "diff", "--name-only", "--"] + chunk
+                diff_argv = ["git", "diff", "--name-only", "HEAD", "--"] + chunk
                 diff_proc = await asyncio.create_subprocess_exec(
                     *diff_argv,
                     cwd=str(worktree_root),
@@ -2000,183 +2058,152 @@ async def archive_and_commit(
         acted_ids = {a["id"] for a in acted}
         acted_moves = [m for m in moves if m.candidate_id in acted_ids]
 
-        # Stage the rename into the private index: `git add -- <path>` on an
-        # EXPLICITLY named path stages a deletion too when the path is now
-        # missing on disk (no `-A`/`-u` needed, so this does not widen scope
-        # beyond the named paths) — so one batched `git add -- <every acted
-        # src AND dst>` call stages both halves of every rename in one spawn.
-        # This IS "the commit pathspec" the HARD CONSTRAINT names: the
-        # private index built here becomes the pathspec-less commit's exact
-        # scope below, so a src accidentally left out of this batch is a src
-        # left unstaged-as-deleted — duplicated, not moved. See _common.py
-        # module docstring / this function's own docstring for why the
-        # commit itself stays pathspec-less (FORWARD-B).
-        stage_paths: List[Path] = []
-        for m in acted_moves:
-            stage_paths.append(m.src)
-            stage_paths.append(m.dst)
+        # Build `assembled` -- {path: (mode, sha) | _ABSENT} -- directly, in
+        # process: this REPLACES the read-tree-HEAD private index + batched
+        # `git add -- src dst` staging dance entirely. `_commit_via_head_spine`
+        # (imported from ops.ceremony.git_native, see the module-level import
+        # note) lands straight from this dict via a locked ref CAS with ZERO
+        # git spawns of its own -- the only spawn left in this whole build is
+        # the one batched `git hash-object -w --stdin-paths` below.
+        src_rel_by_id = {m.candidate_id: rel_id(m.src, worktree_root) for m in acted_moves}
+        dst_rel_by_id = {m.candidate_id: rel_id(m.dst, worktree_root) for m in acted_moves}
 
-        # `_argv_path_chunks` splits this flat [src, dst, src, dst, ...] list by
-        # raw path count, so a chunk boundary CAN fall between one move's src and
-        # its own dst. That is safe here, unlike in `_argv_group_chunks`, whose
-        # docstring makes pair-locality a requirement for its other callers:
-        # correctness does not depend on the two halves sharing a chunk, because
-        # ANY chunk's failure sets `stage_batch_error`, which reverses every acted
-        # move and returns before the commit runs — and the private index is a
-        # per-call tempfile discarded whole either way. There is no path on which
-        # a half-staged rename reaches a commit. Stated because the asymmetry with
-        # the sibling helper is otherwise a reasonable thing to stop and check.
-        stage_batch_error: Optional[str] = None
-        for chunk in _argv_path_chunks(stage_paths):
-            add_proc = await asyncio.create_subprocess_exec(
-                "git", "add", "--", *chunk,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _out, add_stderr = await add_proc.communicate()
-            if add_proc.returncode != 0:
-                err_msg = add_stderr.decode(errors="replace").strip()
-                stage_batch_error = f"stage-failed: {err_msg}" if err_msg else "stage-failed"
-                break
+        # HEAD's mode for each acted src, spawn-free (`read_tree_spine` reads
+        # loose/packed tree objects in process). Repathing a HEAD-tracked
+        # blob to its new dst this way PRESERVES the mode HEAD recorded for
+        # it (AC-10) -- including `100755` -- which a `git add` staging pass
+        # would silently normalise away under `core.filemode=false`.
+        head_spine = read_tree_spine(worktree_root, list(src_rel_by_id.values()))
 
-        if stage_batch_error is not None:
-            # os.replace already landed on disk for every acted move — this
-            # is the one post-move split-failure point os.replace itself
-            # cannot have (see block docstring above). Reverse every acted
-            # move's disk rename and reclassify to failed[], same shape the
-            # git-mv-failure reversal used to provide.
-            for m in acted_moves:
-                reversal_skipped_reason = None
-                if m.dst.exists() and not m.src.exists():
-                    try:
-                        m.dst.rename(m.src)
-                    except OSError as exc:
-                        _LOG.warning(
-                            "archive_and_commit: could not reverse rename after "
-                            "stage failure %s → %s: %s",
-                            m.dst, m.src, exc,
-                        )
-                elif m.dst.exists():
-                    # src has reappeared — the rename-back cannot run without
-                    # clobbering it, so dst is left as an untracked orphan.
-                    _LOG.warning(
-                        "archive_and_commit: skipping reversal for %s → %s "
-                        "after stage failure — source has reappeared, "
-                        "leaving destination orphaned",
-                        m.src, m.dst,
-                    )
-                    reversal_skipped_reason = "reversal-skipped-src-reappeared"
-                if not m.dst.exists():
-                    _cleanup_created_dirs(created_dirs_by_id[m.candidate_id])
-                reason = stage_batch_error
-                if reversal_skipped_reason:
-                    reason = (
-                        f"{reason}; {reversal_skipped_reason}: "
-                        f"dst {m.dst} orphaned, src {m.src} reappeared"
-                    )
-                failed.append({
-                    "id": m.candidate_id,
-                    "reason": reason,
-                })
-            return [], failed
-
-        # ONE commit from the private index — NO trailing pathspec. The index built
-        # above by the batched `git add -- src dst` already IS the exact scope (both
-        # src-deletion and dst-addition per successful rename); a `-- <paths>` pathspec here would make
-        # git read the WORKTREE for those paths instead, which is FORWARD-B (see the
-        # module/function docstring) — the mechanism that laundered 34 hand-edited
-        # frontmatter changes into fleet-archival commits on 2026-07-26.
-        # Empty-private-index refusal MUST precede the commit: this commit
-        # carries no pathspec, so an index that resolves to git's empty tree
-        # would delete every tracked file rather than commit nothing. See
-        # `_empty_private_index_breach` for the 2026-08-18 incident and for why
-        # the no-pathspec form above is correct and must stay.
-        index_breach, tree_sha = await _empty_private_index_breach(
-            worktree_root, base_env, "archive_and_commit"
+        # Current on-disk content at every acted dst, hashed in ONE spawn
+        # regardless of batch size. Deliberately never HEAD's own blob sha:
+        # a `restage_src=True` move's content was authored fresh on disk
+        # immediately before this call (e.g. a terminality stamp) and may
+        # legitimately differ from what HEAD still has recorded for src --
+        # only the MODE is inherited from HEAD, never the content.
+        # `_hash_object_stdin_paths` is a SYNCHRONOUS wrapper (git_native's
+        # own `_git()`, subprocess.run under the hood) -- this module's own
+        # NEGATIVE-SPEC forbids a blocking call on this coroutine's thread
+        # (DR-211 D4, "single asyncio event loop"), so it is offloaded via
+        # `asyncio.to_thread`, the same pattern this function already uses
+        # for `release_committed_claims` below.
+        dst_rel_list = [dst_rel_by_id[m.candidate_id] for m in acted_moves]
+        hash_result = await asyncio.to_thread(
+            _hash_object_stdin_paths, dst_rel_list, cwd=worktree_root,
         )
-        if index_breach is not None:
-            commit_rc, err_msg = 1, index_breach
+
+        assembled: Dict[str, Union[Tuple[int, str], object]] = {}
+        spine_error: Optional[str] = None
+        if head_spine is None:
+            spine_error = "spine-unresolvable: could not read HEAD's tree spine"
+        elif not hash_result.ok:
+            spine_error = (
+                "hash-object-failed: "
+                + (hash_result.stderr.strip() or "git hash-object -w --stdin-paths failed")
+            )
         else:
-            # HEAD-race CAS landing (see `old_head` capture above): a bare
-            # `git commit` resolves its parent from LIVE HEAD at commit
-            # time, which is exactly the un-bridged gap that let a peer
-            # commit landing in this window get silently reverted. Land via
-            # write-tree + commit-tree -p <old_head> + a 4-arg `update-ref`
-            # instead -- the update-ref lockfile CAS fails atomically if
-            # HEAD no longer points at `old_head`, refusing rather than
-            # reverting. Same shape as
-            # `ops.ceremony.git_native._commit_scoped_private_index`'s
-            # ladder branch. Net +1 spawn over the prior single `git commit`,
-            # not +2: `write-tree` is `_empty_private_index_breach`'s own,
-            # reused rather than re-spawned (2026-08-25) -- that guard already
-            # computes this exact tree sha and used to throw it away, so only
-            # `commit-tree` and `update-ref` are additional. The accepted cost
-            # of atomicity, and not a place to add more.
-            # Message on stdin, not `-m`: it now carries the trailers the
-            # hookless ladder would otherwise drop. See
+            dst_shas = hash_result.stdout.splitlines()
+            if len(dst_shas) != len(acted_moves):
+                spine_error = (
+                    "hash-object-failed: `git hash-object --stdin-paths` "
+                    f"returned {len(dst_shas)} sha(s) for {len(acted_moves)} "
+                    "requested path(s) -- refusing to guess an alignment"
+                )
+            else:
+                for m, dst_sha in zip(acted_moves, dst_shas):
+                    src_rel = src_rel_by_id[m.candidate_id]
+                    dst_rel = dst_rel_by_id[m.candidate_id]
+                    parent, _, leaf = src_rel.rpartition("/")
+                    head_entry = head_spine.get(parent, {}).get(leaf)
+                    # Default to the ordinary file mode when src somehow
+                    # carries no HEAD entry (should not happen for an
+                    # archival move of a tracked file) -- never invent an
+                    # executable bit that was not already there.
+                    mode = head_entry[0] if head_entry is not None else 0o100644
+                    assembled[dst_rel] = (mode, dst_sha)
+                    assembled[src_rel] = _ABSENT
+
+        # Re-sited AC-7 guarantee. `_empty_private_index_breach` refused a
+        # pathspec-less commit whose PRIVATE INDEX resolved to git's empty
+        # tree (read its docstring for the 2026-08-18 incident this guards)
+        # -- this build has no private index left to go missing, so that
+        # exact failure mode cannot recur here. What survives is the
+        # guarantee, re-sited to this mechanism's own shape: a commit whose
+        # assembled tree would land byte-identical to HEAD's tree is the same
+        # "nothing to commit" case reached a different way, and is refused
+        # the same way -- loud, before the commit, never silently landed as
+        # a no-op archival commit. `_empty_private_index_breach` itself is
+        # UNCHANGED and still guards `rm_and_commit`'s own private-index seam
+        # below; this is a second, independent guard for this function only.
+        if spine_error is None and _assembled_commit_is_noop(worktree_root, assembled):
+            spine_error = (
+                "empty-spine-commit: computed tree equals HEAD's tree -- "
+                "nothing to commit; refused (re-sited form of "
+                "_empty_private_index_breach's guarantee for a caller with "
+                "no private index to go missing)"
+            )
+
+        if spine_error is not None:
+            commit_rc, err_msg = 1, spine_error
+        else:
+            # Message on stdin-equivalent (a real temp file, `_commit_via_
+            # head_spine` reads it in process): it carries the trailers the
+            # hookless CAS landing would otherwise drop. See
             # `_message_with_hookless_trailers`.
             message = _message_with_hookless_trailers(
                 subject,
                 worktree_root,
                 [str(m.dst) for m in moves if m.candidate_id in acted_ids],
             )
-            commit_tree_proc = await asyncio.create_subprocess_exec(
-                "git", "commit-tree", tree_sha, "-p", old_head,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            # Publish the child to the `finally:` BEFORE awaiting it — see
-            # `_kill_orphaned_commit`. `commit-tree` is plumbing (runs no
-            # hooks), so this window is far shorter than the old `git
-            # commit` await, but still a real subprocess to guard.
-            commit_proc = commit_tree_proc
-            ct_out, ct_stderr = await commit_tree_proc.communicate(
-                message.encode("utf-8")
-            )
-            if commit_tree_proc.returncode != 0:
-                commit_rc = commit_tree_proc.returncode
-                err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
-            else:
-                new_sha = ct_out.decode(errors="replace").strip()
-                # NOT env-scoped: update-ref moves the real branch ref,
-                # which lives in the shared git-dir regardless of which
-                # private index built the tree it now points at.
-                update_ref_proc = await asyncio.create_subprocess_exec(
-                    "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
-                    cwd=str(worktree_root),
-                    # `_make_git_env()` with NO idx_path: update-ref must
-                    # not inherit the private index, but it must still run
-                    # inside this module's hardened allowlist rather than
-                    # the ambient `os.environ` — an inherited GIT_DIR /
-                    # GIT_COMMON_DIR would move a ref in a different
-                    # git-dir than the one commit-tree just wrote into.
-                    # Same env the commit-failure restore path builds.
-                    env=_make_git_env(),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
+            try:
+                with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(message)
+                # HEAD-race CAS landing (see `old_head` capture above):
+                # `_commit_via_head_spine` rewrites HEAD's tree spine, builds
+                # the commit object, and lands it via a locked `cas_ref` CAS
+                # keyed on `old_head` -- the same atomicity the prior
+                # write-tree + commit-tree -p <old_head> + 4-arg `update-ref`
+                # ladder provided, now with ZERO git spawns for the landing
+                # itself. `create_missing_dirs=True`: archival destinations
+                # live under archive/handoffs/<month>/, which may not exist
+                # in HEAD yet -- without the flag the helper would decline to
+                # the ladder (which no longer exists here) instead of filling
+                # in the new spine level.
+                spine_result = _commit_via_head_spine(
+                    worktree_root,
+                    assembled,
+                    old_head,
+                    msg_path,
+                    create_missing_dirs=True,
+                    caller="archive_and_commit",
                 )
-                commit_proc = update_ref_proc
-                _ur_out, ur_stderr = await update_ref_proc.communicate()
-                commit_rc = update_ref_proc.returncode
-                if commit_rc != 0:
-                    err_msg = (
-                        "compare-and-swap failed -- HEAD moved concurrently "
-                        f"since {old_head} was captured; refusing to land a "
-                        "commit built against a stale parent (a retry needs "
-                        "a tree rebuilt against the new HEAD). "
-                        f"{ur_stderr.decode(errors='replace').strip()}"
-                    )
-                else:
-                    err_msg = ""
-                    # The commit is landed; replay the `post-commit` hook
-                    # the replaced `git commit` used to fire. See
-                    # `_replay_post_commit_hook`.
-                    _replay_post_commit_hook(worktree_root)
+            finally:
+                try:
+                    os.unlink(msg_path)
+                except OSError:
+                    pass
+
+            if spine_result is None:
+                commit_rc, err_msg = 1, (
+                    "spine-commit-preconditions-failed: _commit_via_head_spine "
+                    "declined (unresolvable HEAD tree spine, a structurally "
+                    "missing parent directory, an unresolvable CAS ref "
+                    "target, a lock-held ref, or no resolvable commit "
+                    "identity) -- nothing was committed"
+                )
+            elif not spine_result.ok:
+                commit_rc = spine_result.returncode
+                err_msg = spine_result.stderr.strip() or "spine-commit-failed"
+            else:
+                commit_rc = 0
+                err_msg = ""
+                # The commit is landed; replay the `post-commit` hook the
+                # replaced `git commit`/`update-ref` ladder used to fire.
+                # `_commit_via_head_spine` itself fires no hooks (a direct
+                # locked-ref CAS, same as the `commit-tree` + `update-ref`
+                # plumbing it replaces). See `_replay_post_commit_hook`.
+                _replay_post_commit_hook(worktree_root)
 
         if commit_rc != 0:
             _LOG.error(
@@ -2279,15 +2306,16 @@ async def archive_and_commit(
         return acted, failed
 
     finally:
-        # Order is load-bearing: kill any still-running commit BEFORE the
-        # unlink, or the unlink deletes the index out from under it and the
-        # pathspec-less commit erases the repo. See `_kill_orphaned_commit`.
-        _kill_orphaned_commit(commit_proc, "archive_and_commit")
-        # Always clean up the private index temp file.
-        try:
-            os.unlink(idx_path)
-        except OSError:
-            pass
+        # Nothing to clean up: this function no longer opens a private
+        # GIT_INDEX_FILE temp file or spawns a `commit-tree`/`update-ref`
+        # child of its own -- `_commit_via_head_spine` lands the commit
+        # in process via a locked ref CAS with zero git spawns, so there is
+        # no orphaned-commit race for `_kill_orphaned_commit` to guard here
+        # (unlike `rm_and_commit` below, whose private-index seam this
+        # chunk deliberately does not touch -- see the dispatch brief).
+        # The `try:` is retained rather than removed outright so this
+        # function's body keeps its existing indentation.
+        pass
 
 
 # ---------------------------------------------------------------------------
