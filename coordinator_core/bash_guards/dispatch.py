@@ -1075,6 +1075,44 @@ def _evaluate_payload_json_budgeted(
     if not isinstance(payload, dict):
         return None
 
+    # C1 (docs/plans/2026-08-26-the-http-leg-normalizes-the-tool-name-it-was-
+    # handed.md): a LOCAL, gating-only normalized tool-name value, derived
+    # once here from the single parse above. `payload["tool_name"]` itself is
+    # NEVER written -- every `check_*` below still receives byte-identical
+    # what the caller sent. `check_destructive_git_revert` and
+    # `check_no_verify` gate on `dialect_from_tool_name(payload["tool_name"])
+    # is Dialect.POWERSHELL` to decide whether to run
+    # `expand_start_process_invocations` before their regex pipeline;
+    # mutating the payload would silently disable that path for every
+    # PowerShell-labelled call -- measured live regression, `Start-Process git
+    # -ArgumentList 'stash','drop'` under `tool_name="PowerShell"` denies from
+    # `check_destructive_git_revert` today and goes SILENT under a rewritten
+    # payload (see the plan's "one parse, two values" table). So: one parse,
+    # two values -- this LOCAL one for the two gating reads below, the
+    # untouched `payload` for everything else.
+    #
+    # Every value in `_tool_names.COMMAND_TOOL_NAMES` (today: "Bash" and
+    # "PowerShell") normalizes to `"Bash"` for gating purposes ONLY -- a
+    # guard registered at the `("Bash",)` default now sees a command-shaped
+    # call regardless of which shell relayed it, while a guard already
+    # widened to `COMMAND_TOOL_NAMES` is unaffected (`"Bash"` is a member of
+    # its own declared set either way). A `tool_name` outside that universe
+    # (a non-command tool, or `None`) passes through unchanged, so the
+    # existing "not a command tool" rejection below is untouched.
+    #
+    # NEGATIVE SPEC -- no opt-out. This normalization is unconditional: no
+    # env var, no settings key, no sentinel file, no payload field disables
+    # it. `block_disarm_marker_sentinel_creation` already treats an agent-
+    # writable chain-wide self-disarm sentinel as hostile, and DoE's own
+    # `_rearm_command_tool_name` docstring records a session-keyed opt-out
+    # sentinel that was written and removed again before landing -- harmless
+    # under an opt-in default, but a one-line chain-wide self-disarm the
+    # moment it inverts to opt-out. Do not add a conditional here to
+    # "simplify" this back into that shape; a future guard's own disarm logic
+    # belongs in that guard, never in this domain derivation.
+    _raw_tool_name = payload.get("tool_name")
+    _gating_tool_name = "Bash" if _raw_tool_name in COMMAND_TOOL_NAMES else _raw_tool_name
+
     # C1 master gate (docs/plans/2026-08-07-command-guards-fire-under-both-
     # tool-names.md): union check against the DECLARED-matchers set, NOT
     # against `_tool_names.COMMAND_TOOL_NAMES` (the observable universe) --
@@ -1089,8 +1127,9 @@ def _evaluate_payload_json_budgeted(
     # `("Bash",)` default, this restores today's cheap early exit exactly
     # (a `PowerShell` payload is rejected HERE), and it widens automatically
     # the moment any guard's own `MATCHERS` does, with no edit required at
-    # this call site.
-    if payload.get("tool_name") not in _any_declared_matchers():
+    # this call site. Reads the LOCAL normalized value (C1 above), not
+    # `payload["tool_name"]` directly.
+    if _gating_tool_name not in _any_declared_matchers():
         return None
 
     tool_input = payload.get("tool_input")
@@ -1197,9 +1236,10 @@ def _evaluate_payload_json_budgeted(
 
     for entry in guard_chain:
         name, fn, fail_closed, _band = entry.name, entry.fn, entry.fail_closed, entry.band
-        if payload.get("tool_name") not in entry.matchers:
+        if _gating_tool_name not in entry.matchers:
             # C1 edit 4: this entry's own declared `matchers` excludes the
-            # observed `tool_name` -- skip WITHOUT calling `fn()` at all,
+            # observed (LOCAL-normalized, per the C1 derivation above)
+            # `tool_name` -- skip WITHOUT calling `fn()` at all,
             # same skip-without-invoking shape as the `_disarm` band-
             # suppression skip immediately below (the in-file precedent this
             # edit follows). Deliberately silent (no stderr line, unlike the

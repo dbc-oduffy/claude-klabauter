@@ -3344,6 +3344,18 @@ def _load_entry_point_shim():
 # AST-derived check against the trampoline's own allowlist tuple, so a
 # subcommand added to `main()`'s allowlist without a row here fails loudly
 # instead of never being collected as a test case at all.
+#: Declaration for the register-aging sweep (C5,
+#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
+#: MISMATCH vs the classifier's `symbol` prediction (`state/audits/2026-08-26-the-core-register-
+#: inventory.md`). Each row is `"<subcommand-label>.<callee-name>"` (e.g. `"brief.main"` names the
+#: `brief` SUBCOMMAND's callee `main`, defined in this package's own `__init__.py` -- there is no
+#: `brief.py` module; `"apply.main_apply"`/`"apply.main_drop"` name callees in `apply.py`, but the
+#: leading segment is the subcommand label, not a real module path). Not a fully-qualified dotted
+#: subject the generic AST resolver in `register_rows.py` can check -- that correlation is already
+#: covered, structurally, by `_extract_allowlist_from_entry_point_shim` below. Declared `opaque`
+#: rather than widened to a resolver special-case.
+_EXPECTED_CALLEE_BY_SUBCOMMAND__SUBJECT_CLASS = "opaque"
+
 _EXPECTED_CALLEE_BY_SUBCOMMAND = {
     "brief": "brief.main",
     "mint-run-id": "brief.main",

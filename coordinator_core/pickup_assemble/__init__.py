@@ -53,13 +53,16 @@ Consumes manifest (the Director of Engineering F3, AC16) — orchestrates, reimp
     archive-stamp-cli / session-claim-cli / coordinator-queue-append /
         coordinator-tasks-mirror / refresh-roadmap-callout -> named directives[],
         never invoked in-process (they mutate; this module does not)
-    coordinator_core.reconcile.commit_reality.evaluate_commit_reality -> gates.
-        commit_reality (C2, DR-300 route (d)) — the single-baton HEAD-consistency
-        verdict for the artifact under pickup, called exactly as
-        `handoff_reconcile._handler` constructs it (including
-        `_chain_ancestor_norm_paths`/`_norm_path` ancestor exclusion from the
-        cross-handoff attribution guard's `other_open_handoffs`); never
-        `handoff.reconcile_open` itself (see Negative-spec below)
+    NOT `coordinator_core.reconcile.commit_reality.evaluate_commit_reality` —
+        that symbol is DELETED (C10, `state/kill-ledger.md`, 2026-08-26); DR-300
+        route (d), which named this an in-process call, is superseded (see the
+        dated note on route (d) in
+        `docs/decisions/DR-300-pickup-may-not-call-the-reconcile-orchestrator.md`).
+        This line previously documented unbuilt intent (the plan that was to BUILD
+        this call, `docs/plans/2026-08-13-legible-reconcile-surface-and-single-
+        baton-check.md`, landed its manifest entry ahead of its own AC3) — no
+        import of `commit_reality` ever existed in this package, and none is
+        added now.
 
 Negative-spec:
     - Do NOT add a mutating code path here. A finding that "the assembler should

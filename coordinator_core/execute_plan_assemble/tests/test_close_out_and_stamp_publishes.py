@@ -25,10 +25,12 @@ alone -- it calls `coas.close_out_and_stamp` directly and is the class that
 would fail if the fix at that call site were reverted.
 `TestPreFixCallShapeContrastCase` below does NOT call `close_out_and_stamp`
 at all (see its own docstring): it hand-constructs the PRE-C5
-`run_commit_pipeline` call shape (no `push_mode` argument, so
-`PUSH_MODE_SYNC` applies by omission) and shows the same remote-ref
-assertion flips under that shape. That is a characterisation of
-`run_commit_pipeline`'s own omitted-`push_mode` behaviour, not a second,
+`run_commit_pipeline` call shape -- a synchronous in-pipeline push, spelled
+`push_mode=PUSH_MODE_SYNC` explicitly since 2026-08-26, when the parameter's
+default became `PUSH_MODE_NONE` and omission stopped meaning sync (pinned by
+`ops/ceremony/tests/test_push_mode_default_contract.py`) -- and shows the
+same remote-ref assertion flips under that shape. That is a characterisation
+of `run_commit_pipeline`'s own synchronous-push behaviour, not a second,
 independent regression pin on `close_out_and_stamp`'s real call site -- a
 future edit that reverts `close_out_and_stamp.py`'s own call to omit
 `push_mode` again would NOT be caught by this class, only by
@@ -185,11 +187,11 @@ class TestPreFixCallShapeContrastCase:
     and_stamp` and is not itself a regression pin on that call site; AC6 is
     carried entirely by `TestPublishBoundaryCurrentContract` above. This
     class instead characterises `cp.run_commit_pipeline`'s OWN behaviour
-    when `push_mode` is omitted (the pre-C5 `close_out_and_stamp.py` call
-    shape, reproduced here by hand): it shows the SAME remote-ref assertion
-    `TestPublishBoundaryCurrentContract` makes about the post-fix call shape
-    is false under the omitted-`push_mode` shape, as a side-by-side
-    contrast case for a reader comparing the two. A future edit that drops
+    under a synchronous in-pipeline push (the pre-C5 `close_out_and_stamp.py`
+    call shape, reproduced here by hand): it shows the SAME remote-ref
+    assertion `TestPublishBoundaryCurrentContract` makes about the post-fix
+    call shape is false under the sync shape, as a side-by-side contrast case
+    for a reader comparing the two. A future edit that drops
     `close_out_and_stamp.py`'s own explicit `push_mode=PUSH_MODE_NEVER`
     argument would NOT be caught here -- only `TestPublishBoundaryCurrent
     Contract`, which calls the real module, would fail."""
@@ -215,9 +217,11 @@ class TestPreFixCallShapeContrastCase:
             fh.write("\n<!-- red-proof dirty -->\n")
 
         # Locally reproduce the PRE-C5 call shape: `run_commit_pipeline`
-        # invoked with no `push_mode` at all, taking `PUSH_MODE_SYNC` by
-        # omission -- exactly `close_out_and_stamp.py`'s call shape before
-        # this chunk's fix. Reached the same way the module reaches it
+        # taking a synchronous in-pipeline push -- exactly
+        # `close_out_and_stamp.py`'s call shape before this chunk's fix. It
+        # got there by omission then; omission now yields `PUSH_MODE_NONE`,
+        # so the shape under test is named rather than inherited. Reached the
+        # same way the module reaches it
         # (`_stage_paths_committed_already` False, AC8 auto-resolve dirties
         # `stage_paths`), so this is the real boundary, not a synthetic one.
         session_id = "publish-boundary-red-proof"
@@ -227,6 +231,7 @@ class TestPreFixCallShapeContrastCase:
             subject="red-proof: pre-C5 sync-by-omission call shape",
             stage_paths=["plan.md"],
             caller_paths={"plan.md"},
+            push_mode=cp.PUSH_MODE_SYNC,
         )
 
         assert pipeline_result.commit_failed is False

@@ -83,15 +83,11 @@ Negative-spec:
 
 from __future__ import annotations
 
-import contextlib
-import importlib.util
-import inspect
-import io
 import json
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -105,9 +101,12 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.ceremony_common.cli_dispatch import (
+    invoke_cli_main as _shared_invoke_cli_main,
+    load_cli_module as _shared_load_cli_module,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
-    classify_cli_exit,
     describe_exit_class,
 )
 from coordinator_core.telemetry.composition_record import (
@@ -165,30 +164,31 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     literal path — never a brief-derived import target. Never spawns a
     subprocess. `_resolve_cli` (admission) runs BEFORE the cache check
     (F6, cold review 2026-08-19) so the control is a per-dispatch check,
-    never merely a first-load one."""
+    never merely a first-load one.
+
+    Routes through the shared `ceremony_common.cli_dispatch.load_cli_module`
+    primitive (C1/C5) rather than a private `importlib` copy — this
+    module's own cache (`_LOADED_MODULES`) and `UnrecognizedDirective`-on-
+    failure behaviour are unchanged; only the load mechanics themselves are
+    now the ONE shared implementation. `_resolve_cli` (admission) still runs
+    BEFORE either cache is touched, so a denied `cli` never reaches the
+    shared primitive at all — `ValueError` from a genuinely unloadable spec
+    is translated to `UnrecognizedDirective` to keep this module's own
+    exception contract unchanged for its callers. The shared primitive
+    always passes an explicit `SourceFileLoader` (superset behaviour — see
+    `cli_dispatch`'s own module docstring, Contested behaviour 3), covering
+    the extensionless bareword launcher shims this module's own prior
+    no-explicit-loader call to `spec_from_file_location` could not load."""
     script_path = _resolve_cli(cli_name)
     if cli_name in _LOADED_MODULES:
         return _LOADED_MODULES[cli_name]
     module_name = f"_workday_complete_cli_{cli_name.replace('-', '_')}"
-    spec = importlib.util.spec_from_file_location(module_name, script_path)
-    if spec is None or spec.loader is None:
+    try:
+        module = _shared_load_cli_module(module_name, script_path)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workday_complete.apply: could not load {cli_name!r} from {script_path}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules BEFORE exec — some consumes-manifest scripts
-    # define `@dataclass`-decorated classes whose class-body execution
-    # resolves `sys.modules[cls.__module__]` (dataclasses' own
-    # forward-ref-eval path); an unregistered module makes that lookup
-    # return `None` and crash the load with an unrelated AttributeError.
-    # Mirrors `workweek_complete.apply._load_cli_module`'s own fix (Review:
-    # code-reviewer — Finding 2).
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
+        ) from exc
     _LOADED_MODULES[cli_name] = module
     return module
 
@@ -251,46 +251,21 @@ def _invoke_cli_main(
     `report["results"]`/`report["failed"]` — the one place a caller (the
     skill, the EM) could read it back. `_dispatch_directive` re-emits it
     onto apply's own stderr afterward, mirroring the stdout re-emission, so
-    live console visibility is unchanged."""
-    main_fn: Optional[Callable[..., Any]] = getattr(module, "main", None)
-    if main_fn is None:
+    live console visibility is unchanged.
+
+    Routes through the shared `ceremony_common.cli_dispatch.invoke_cli_main`
+    primitive (C1/C5) — this module's own 4-tuple return shape IS the
+    primitive's superset shape byte-for-byte (this module was the source of
+    truth C1 built the primitive's signature from), so no narrowing or
+    translation is needed here beyond the `ValueError`-on-no-`main`
+    ->`UnrecognizedDirective` mapping this module's own exception contract
+    already required."""
+    try:
+        return _shared_invoke_cli_main(module, args, stdin_text=stdin_text)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workday_complete.apply: {module.__name__} exposes no main() entrypoint"
-        )
-    try:
-        params = inspect.signature(main_fn).parameters
-    except (TypeError, ValueError):
-        params = {}
-
-    stdout_buf = io.StringIO()
-    stderr_buf = io.StringIO()
-    saved_stdin = sys.stdin
-    if stdin_text is not None:
-        sys.stdin = io.StringIO(stdin_text)
-    raised = False
-    try:
-        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-            try:
-                if params:
-                    result = main_fn(list(args))
-                else:
-                    saved_argv = sys.argv
-                    sys.argv = [module.__name__, *args]
-                    try:
-                        result = main_fn()
-                    finally:
-                        sys.argv = saved_argv
-            except SystemExit as exc:
-                raised = True
-                code = exc.code
-                result = int(code) if isinstance(code, int) else (0 if code is None else 1)
-    finally:
-        sys.stdin = saved_stdin
-
-    exit_code = int(result) if isinstance(result, int) else 0
-    stderr_text = stderr_buf.getvalue()
-    exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
-    return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
+        ) from exc
 
 
 def _dispatch_directive(

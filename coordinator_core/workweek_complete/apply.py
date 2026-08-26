@@ -70,16 +70,11 @@ Negative-spec:
 
 from __future__ import annotations
 
-import contextlib
-import importlib.machinery
-import importlib.util
-import inspect
-import io
 import json
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -93,9 +88,12 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.ceremony_common.cli_dispatch import (
+    invoke_cli_main as _shared_invoke_cli_main,
+    load_cli_module as _shared_load_cli_module,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
-    classify_cli_exit,
     describe_exit_class,
 )
 from coordinator_core.telemetry.composition_record import (
@@ -142,6 +140,10 @@ _CLI_DISPATCH: dict[str, Path] = {
     name: _resolve_script_path(name) for name in CONSUMES_MANIFEST
 }
 
+#: Mirrors the shared `cli_dispatch` primitive's own per-process cache so
+#: that `_load_cli_module`'s "no partial dispatch side effect on a denied
+#: cli" contract stays introspectable from this module (an admission
+#: refusal in `_resolve_cli` must never populate this before raising).
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 
@@ -166,113 +168,52 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     literal path — never a brief-derived import target. Never spawns a
     subprocess. `_resolve_cli` (admission) runs BEFORE the cache check
     (F6, cold review 2026-08-19) so the control is a per-dispatch check,
-    never merely a first-load one."""
+    never merely a first-load one.
+
+    Routes through the shared `ceremony_common.cli_dispatch.load_cli_module`
+    primitive (C1/C5) rather than a private `importlib` copy — this
+    module's own cache (`_LOADED_MODULES`) and `UnrecognizedDirective`-on-
+    failure behaviour are unchanged; only the load mechanics themselves are
+    now the ONE shared implementation. `_resolve_cli` (admission) still runs
+    BEFORE either cache is touched, so a denied `cli` never reaches the
+    shared primitive at all — `ValueError` from a genuinely unloadable spec
+    is translated to `UnrecognizedDirective` to keep this module's own
+    exception contract unchanged for its callers."""
     script_path = _resolve_cli(cli_name)
     if cli_name in _LOADED_MODULES:
         return _LOADED_MODULES[cli_name]
     module_name = f"_workweek_complete_cli_{cli_name.replace('-', '_')}"
-    # Some consumes-manifest scripts are bareword launcher shims with no
-    # `.py` suffix — `spec_from_file_location` cannot infer a source loader
-    # from an extensionless path, so pass `SourceFileLoader` explicitly
-    # (mirrors the loader Python itself would pick for a `.py` file).
-    loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
-    spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
-    if spec is None or spec.loader is None:
+    try:
+        module = _shared_load_cli_module(module_name, script_path)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workweek_complete.apply: could not load {cli_name!r} from {script_path}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules BEFORE exec — some consumes-manifest scripts
-    # define `@dataclass`-decorated classes whose class-body execution
-    # resolves `sys.modules[cls.__module__]` (dataclasses' own
-    # forward-ref-eval path); an unregistered module makes that lookup
-    # return `None` and crash the load with an unrelated AttributeError.
-    # `workday_complete.apply._load_cli_module` carries the identical fix
-    # (Review: code-reviewer — Finding 2).
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
+        ) from exc
     _LOADED_MODULES[cli_name] = module
     return module
 
 
 def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, CliExitClass]:
-    """Invokes `module.main` in-process (never a subprocess) — accepts
-    either an `argv`-taking `main(argv)` or a zero-arg `main()`. Returns
-    `(exit_code, stderr, exit_class)`: the resolved integer exit code (`main`'s own
-    return value when it returns one, else the code a `SystemExit` it
-    raises carries, else `0` on a clean fallthrough) paired with everything
-    the call printed to stderr.
-
-    Zero-arg `main()` trampolines (per the 2026-07-26 arg-mismatch audit,
-    systemic finding 2 — mirrors `workday_complete.apply`'s identical fix)
-    are `def main() -> None` wrappers whose body still calls
-    `sys.exit(op_main(sys.argv[1:]))` — they parse `sys.argv` themselves.
-    Calling `main_fn()` bare hands them the APPLY PROCESS's own `sys.argv`,
-    silently discarding `args`. This splices `args` into `sys.argv` (dummy
-    `argv[0]`, restored in `finally`) for the duration of the call so a
-    directive's emitted args reach the op the same way an `argv`-taking
-    `main(argv)` would receive them.
-
-    Stderr capture (2026-07-27 finding, mirrors `workstream_complete.apply`
-    and `workday_complete.apply`'s identical fix): `module`'s own stderr is
-    captured via `contextlib.redirect_stderr` — a non-zero directive's
-    diagnostic text (e.g. `wsc-tail.py`'s exit-2 diagnostics block, printed
-    unconditionally to `sys.stderr`) was previously neither captured nor
-    threaded into `_dispatch_directive`'s result dict at all, so it never
-    reached `report["results"]`/`report["failed"]` — the one place a caller
-    (the skill, the EM) could read it back. `_dispatch_directive` re-emits
-    it onto apply's own stderr afterward so live console visibility is
-    unchanged. This module does not capture stdout (unlike its two
+    """Invokes `module.main` in-process via the shared
+    `ceremony_common.cli_dispatch.invoke_cli_main` primitive (C1/C5) and
+    narrows its 4-tuple superset return (`exit_code, stdout, stderr,
+    exit_class`) down to this module's own 3-tuple `(exit_code, stderr,
+    exit_class)` — this module never captures stdout (unlike its two
     siblings, which thread captured stdout into inter-directive value
-    substitution) — this chunk's directives never consume another
-    directive's stdout, so that capture was never added here; this fix
-    does not change that.
-
-    The third return value is `ceremony_common.cli_rejection.
-    classify_cli_exit`'s verdict over this invocation: `CliExitClass.
-    ARGV_REJECTED` when the callee raised `SystemExit(2)` with
-    argparse-shaped stderr (the argv itself was rejected before any
-    op-level code ran), else `CliExitClass.RETURNED` — including every
-    zero-arg trampoline's own raised, semantic exit. This does not change
-    `exit_code` itself or what a ceremony reports upward; it only names,
-    for the caller, whether the exit code above actually means something
-    the callee decided."""
-    main_fn: Optional[Callable[..., Any]] = getattr(module, "main", None)
-    if main_fn is None:
+    substitution): this chunk's directives never consume another
+    directive's stdout, so that capture was never added here, and the
+    shared primitive's stdout capture is simply discarded rather than
+    threaded through. Stderr capture and re-emission onto apply's own
+    stderr is unchanged (see `_dispatch_directive`). The shared primitive's
+    `ValueError` on a `main()`-less module is translated to
+    `UnrecognizedDirective` to keep this module's own exception contract
+    unchanged for its callers."""
+    try:
+        exit_code, _stdout_text, stderr_text, exit_class = _shared_invoke_cli_main(module, args)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workweek_complete.apply: {module.__name__} exposes no main() entrypoint"
-        )
-    try:
-        params = inspect.signature(main_fn).parameters
-    except (TypeError, ValueError):
-        params = {}
-    stderr_buf = io.StringIO()
-    raised = False
-    with contextlib.redirect_stderr(stderr_buf):
-        try:
-            if params:
-                result = main_fn(list(args))
-            else:
-                saved_argv = sys.argv
-                sys.argv = [module.__name__, *args]
-                try:
-                    result = main_fn()
-                finally:
-                    sys.argv = saved_argv
-        except SystemExit as exc:
-            raised = True
-            code = exc.code
-            exit_code = int(code) if isinstance(code, int) else (0 if code is None else 1)
-            stderr_text = stderr_buf.getvalue()
-            exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
-            return exit_code, stderr_text, exit_class
-    exit_code = int(result) if isinstance(result, int) else 0
-    stderr_text = stderr_buf.getvalue()
-    exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
+        ) from exc
     return exit_code, stderr_text, exit_class
 
 

@@ -1095,7 +1095,10 @@ def _make_handler(ctx: "_ServerContext"):
 def _assert_credential_ready(root: Path) -> None:
     """Generate the cookie if absent, then assert the directory holding it
     excludes other users. Raises `cookie.DirectoryNotPrivateError` if it
-    does not (AC2); the caller turns that into a refusal to serve (AC3).
+    does not (AC2), or `cookie.CookieUnreadableError` if a cookie is
+    present but unreadable; the caller turns either into a refusal to
+    serve (AC3). BOTH refuse rather than replace: an unreadable cookie
+    that gets re-minted strands every session holding the old value.
 
     CALLED BEFORE THE BIND, NEVER BESIDE THE DISCOVERY WRITE. A listener
     that binds first and checks second has already been reachable on a
@@ -1175,7 +1178,7 @@ def main() -> int:
 
     try:
         _assert_credential_ready(root)
-    except cookie.DirectoryNotPrivateError as exc:
+    except (cookie.DirectoryNotPrivateError, cookie.CookieUnreadableError) as exc:
         # FAIL CLOSED, and loudly. Returning non-zero without a discovery
         # record is what makes this a refusal to serve rather than a
         # silently-unprotected listener: no record means no client finds a

@@ -23,6 +23,7 @@ import pytest
 from coordinator_core.ops.ceremony.commit_pipeline import (
     _COMPOSITION_SPAN_PRE_PUSH,
     _COMPOSITION_SPAN_PUSH,
+    PUSH_MODE_SYNC,
     run_commit_pipeline,
 )
 
@@ -70,6 +71,7 @@ def test_pipeline_emits_both_pre_push_and_push_spans(tmp_path):
         subject="commit for span coverage",
         stage_paths=["tasks_feature_todo.md"],
         caller_paths={"tasks_feature_todo.md"},
+        push_mode=PUSH_MODE_SYNC,
     )
 
     assert result.commit_failed is False, result.diagnostics
@@ -115,6 +117,7 @@ def test_pipeline_span_shares_composition_id_across_a_second_invocation(tmp_path
             subject=f"commit {i}",
             stage_paths=[f"f{i}.md"],
             caller_paths={f"f{i}.md"},
+            push_mode=PUSH_MODE_SYNC,
         )
         assert result.commit_failed is False, result.diagnostics
 

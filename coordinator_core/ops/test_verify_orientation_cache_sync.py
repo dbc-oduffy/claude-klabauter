@@ -195,24 +195,29 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
     """Writer/verifier round-trip on the real renderer — the failure shape that
     let ``## Housekeeping`` ship for five days flagging every compliant cache."""
     output = _writer_mod._render_cache(
-        "workday-start",
-        "2026-07-30T00:00:00Z",
-        "abc1234",
-        "",
-        [],
-        [],
-        "`work/x` — 0/0 vs origin/main",
-        [],
-        "",
-        ["- `docs/wiki/` — doctrine/reference material; browse before assuming absence."],
-        ["- `docs/architecture/systems/` — per-subsystem architecture pages: engine"],
-        [],
-        ["- fast test: `python3 -m pytest -q`"],
-        ["- `state/audits/` — existing investigation records"],
-        [],
-        "",
-        [],
-        "",
+        invoker="workday-start",
+        iso_now="2026-07-30T00:00:00Z",
+        git_head="abc1234",
+        uproject_path="",
+        workstreams=[],
+        rechecks=[],
+        branch_line="`work/x` — 0/0 vs origin/main",
+        recent_commits=[],
+        push_health="",
+        wiki_lines=[
+            "- `docs/wiki/` — doctrine/reference material; browse before assuming absence."
+        ],
+        atlas_lines=[
+            "- `docs/architecture/systems/` — per-subsystem architecture pages: engine"
+        ],
+        capability_pointers_lines=[],
+        fast_test_lines=["- fast test: `python3 -m pytest -q`"],
+        audits_lines=["- `state/audits/` — existing investigation records"],
+        hook_cancellation_line="",
+        warm_engine_line="",
+        budget_breach_line="",
+        housekeeping_lines=[],
+        pinboard_final="",
     )
     cache_path = _write(tmp_path, output)
     violations, _ = verify(str(cache_path), str(tmp_path))

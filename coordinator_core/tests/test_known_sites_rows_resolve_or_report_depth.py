@@ -248,6 +248,15 @@ def test_classify_known_site_closure_candidate_when_dark_to_both(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# HORIZON (resolves-or-declares-horizon): `_KNOWN_SITES` is enrolled in
+# `coordinator_core/tests/test_every_register_resolves_or_declares.py`'s core-45 sweep. A green
+# run there establishes only that every `_KNOWN_SITES` row's path/enclosing-symbol subject exists
+# on disk against its declared class -- it does NOT establish that `_KNOWN_SITES` is the right
+# frozen burn-down population, that any future exemption taken here is legitimate, or that a
+# resolving row is still LIVE_DEBT rather than a CLOSURE_CANDIDATE or STALE row this module's own
+# classification below has not yet reported as such.
+
+
 @pytest.mark.cadence
 def test_known_sites_rows_resolve_or_report_depth():
     """AC6: the `_KNOWN_SITES` leg, oracled by the deep collector, with zero writes into the

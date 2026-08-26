@@ -538,6 +538,42 @@
       "p_listener_up_note": "0.0 at n=10 FROM THIS CLONE is structural, not a measurement of production: the is_engine_root gate refuses this unstamped dev tree. Claude-klabauter-fe sampled the stamped publish clone read-only and reports 1.0 at n=36, zero outages over 35 minutes, probe min 1.15ms (sampling continued past the n=21 first read)."
     }
   },
+  "_c1_tool_name_normalization_chain_entry": {
+    "measured_on": "2026-08-26",
+    "code_sha": "02b16751e",
+    "against": "docs/plans/2026-08-26-the-http-leg-normalizes-the-tool-name-it-was-handed.md C2/AC8: process time and spawn count of C1's landed change (a LOCAL normalized tool-name value derived at `_evaluate_payload_json_budgeted`'s chain entry, `coordinator_core/bash_guards/dispatch.py`), never wall clock.",
+    "seam_note": "`_hook_seam_http_transport` above measures the HTTP transport arm (client -> resident listener -> `_make_handler`). C1's change does not land there -- it lands in `bash_guards.dispatch::_evaluate_payload_json_budgeted`, the in-process guard-chain entry point the HTTP leg (and the cold-chain CLI leg) both eventually call into. This block's numbers belong to the CHAIN-ENTRY arm, not the transport arm; no `_hook_seam_http_transport` row is amended or superseded by this one.",
+    "method": "coordinator_core.benchmarks.bash_dispatch_probe.measure_derived_floor(k=20) for the floor components (process_time.py::batched_process_time_ms, Windows job-object primitive, root-inclusive), plus the same primitive against the `powershell_get_childitem` corpus payload (full guard chain, `tool_name=\"PowerShell\"`, the dialect this plan's fix targets) via `_dispatch_cmd`/`_verify_single_invocation_succeeds`. Isolated in-process microbenchmark of the normalization line itself (`timeit`, n=1,000,000, `'Bash' if raw in COMMAND_TOOL_NAMES else raw` against `_tool_names.COMMAND_TOOL_NAMES`) to separate the marginal cost of C1's own line from the pre-existing floor these process-time samples cannot resolve below the ~15.6ms Windows scheduler tick.",
+    "process_time_ms": {
+      "bare_interpreter": {"process_time_ms": 25.0, "procs_per_call": 1.0, "k": 20},
+      "import_closure": {"process_time_ms": 92.969, "procs_per_call": 1.0, "k": 20},
+      "chain_spawns_nothing": {
+        "process_time_ms": 87.5,
+        "procs_per_call": 1.0,
+        "k": 20,
+        "note": "INERT payload (tool_name outside COMMAND_TOOL_NAMES) -- master-gate short-circuit before the guard chain is built. C1's normalization line runs unconditionally before this gate, so its marginal cost is already baked into this figure, not additive on top of it."
+      },
+      "powershell_get_childitem_full_chain": {
+        "process_time_ms": 106.25,
+        "procs_per_call": 1.0,
+        "k": 20,
+        "note": "tool_name=\"PowerShell\", full guard chain executed -- the dialect C1's fix targets (COMMAND_TOOL_NAMES membership -> Bash-normalized gating value)."
+      }
+    },
+    "spawn_count_raw_procs_per_call": {
+      "bare_interpreter": 1.0,
+      "import_closure": 1.0,
+      "chain_spawns_nothing": 1.0,
+      "powershell_get_childitem_full_chain": 1.0,
+      "reading": "root-inclusive, per this manifest's own spawn_count_note convention: 1.0 = the interpreter itself and zero children. C1 adds no subprocess spawn on any arm -- procs_per_call is identical (1.0) across the inert floor and the full PowerShell chain."
+    },
+    "isolated_normalization_line_microbenchmark": {
+      "shape": "in-process timeit, n=1000000, `'Bash' if raw in COMMAND_TOOL_NAMES else raw`",
+      "per_call_us": 0.02237,
+      "reading": "Confirms the AC8 prediction directly rather than by inference from process-time noise: the line itself costs ~22 nanoseconds per call, several orders of magnitude below the ~15.6ms Windows scheduler-tick quantization the process-time arms above cannot resolve under. No measurable delta -- one local string/set-membership comparison after an existing parse, no subprocess, no disk read, no new import, exactly as predicted."
+    },
+    "verdict": "AC8 MET as predicted: zero measurable process-time or spawn-count delta from C1. The chain-entry arm (not the http-transport arm _hook_seam_http_transport measures) is the one C1's change actually lands on; recorded here as a new block rather than amending _hook_seam_http_transport, which stays an accurate account of a seam this change does not touch."
+  },
   "_ac8_subagent_start_relay_remeasure": {
     "measured_on": "2026-08-25",
     "code_sha": "8d5003196cb8f4755809b8dacd2c642347c37a3b",

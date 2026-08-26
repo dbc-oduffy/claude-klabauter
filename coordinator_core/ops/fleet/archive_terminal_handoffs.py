@@ -78,20 +78,25 @@ Negative-spec:
     loose objects and packed `.idx` files directly, bounded and
     dependency-free (no dulwich/pygit2, no `.git/index` DIRC parser — see
     that function's own docstring for the fail-closed degradation contract).
-    The worktree-dirty rail keeps its single `git status --porcelain`
-    spawn on the standalone/op path (`known_dirty_relpaths=None`); a future
+    The worktree-dirty rail (C3, classify-first) keeps its single `git
+    status --porcelain` spawn on the standalone/op path
+    (`known_dirty_relpaths=None`), scoped to the SURVIVING candidates
+    classification already narrowed the corpus to — zero survivors means
+    zero spawns for this rail, not merely a smaller pathspec. A future
     in-plane caller that already computed divergence via
     `commit_pipeline`/`commit_scoped` passes it through
-    `known_dirty_relpaths=` instead, so `plan_sweep` spawns 1 git process on
-    the standalone path (worktree-dirty only) and 0 on the in-plane path.
-    (On the act path) the existing `archive_and_commit` helper's own single
-    `git add` + single `git commit`. Spawn count does not scale with
-    candidate count (AC-5).
+    `known_dirty_relpaths=` instead, so `plan_sweep` spawns at most 1 git
+    process on the standalone path (worktree-dirty only, 0 when nothing
+    survives classification) and 0 on the in-plane path. (On the act path)
+    the existing `archive_and_commit` helper's own single `git add` +
+    single `git commit`. Spawn count does not scale with candidate count
+    (AC-5).
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 import time
@@ -104,7 +109,10 @@ from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, build_reverse_edge_index
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
-from coordinator_core.ops.ceremony.git_native import status_porcelain
+from coordinator_core.ops.ceremony.git_native import (
+    _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS,
+    status_porcelain,
+)
 from coordinator_core.ops.fleet._common import (
     Move,
     _is_identical_duplicate,
@@ -393,30 +401,60 @@ def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Dict[str
     return {sha: _object_exists_no_spawn(common_dir, sha) for sha in distinct}
 
 
-def _dirty_handoff_relpaths(worktree: Path) -> set:
-    """ONE `git status --porcelain -- state/handoffs` call; returns the set of
-    repo-relative paths under state/handoffs/ that carry uncommitted worktree
-    changes.
+def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) -> set:
+    """ONE scoped `git status --porcelain` call over `survivor_relpaths` —
+    the classify-first reorder (C3): this is only invoked once classification
+    has already narrowed the corpus to its surviving candidates, so the
+    pathspec is bounded by the survivor count rather than the whole
+    `state/handoffs` tree.
 
-    A dirty candidate is retained rather than archived this pass — moving and
-    committing a handoff whose on-disk content has diverged from HEAD risks
-    either committing content nobody has reviewed/staged themselves, or
-    landing on `archive_and_commit`'s own disk/HEAD drift refusal at act time
-    (a wasted move attempt this classification-time check avoids queuing in
-    the first place). Degrades safe (empty set — no exclusion) on any git
-    failure; a classification pass must never crash because status could not
-    be read, and an over-inclusive candidate set here is still subject to
-    every other check plus `archive_and_commit`'s own drift refusal downstream.
+    PATHSPEC-BOUNDED, NEVER CHUNKED (staff-eng Finding 8): passing one
+    pathspec argument per survivor risks the Windows argv cap once
+    classification admits more than a few dozen candidates. Rather than
+    chunk into multiple `git status` spawns (which would break the "at most
+    one spawn" contract this rail exists to hold), a survivor set whose
+    total pathspec byte cost exceeds `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`
+    falls back to the CURRENT unscoped call
+    (`git status --porcelain -- state/handoffs`) — semantically identical to
+    the predecessor's own corpus-wide call, still exactly one spawn, no new
+    fail-open path.
+
+    Returns the set of repo-relative paths (drawn from `survivor_relpaths`,
+    or discovered in the unscoped fallback's own output) that carry
+    uncommitted worktree changes. A dirty candidate is retained rather than
+    archived this pass — moving and committing a handoff whose on-disk
+    content has diverged from HEAD risks either committing content nobody
+    has reviewed/staged themselves, or landing on `archive_and_commit`'s own
+    disk/HEAD drift refusal at act time (a wasted move attempt this
+    classification-time check avoids queuing in the first place).
+
+    FAIL-CLOSED on any git failure (staff-eng Finding 8): a non-zero exit or
+    launch failure on EITHER form returns `set(survivor_relpaths)` — every
+    survivor refused as dirty — never an empty set. An empty dirty set from a
+    failed git call would be fail-open (every survivor sails through
+    unexcluded because the check that was supposed to gate them silently
+    answered "nothing is dirty"), which is exactly the mode this rail exists
+    to refuse.
     """
-    scoped_dir = "state/handoffs"
-    result = status_porcelain(worktree, [scoped_dir])
+    if not survivor_relpaths:
+        return set()
+
+    ordered = sorted(set(survivor_relpaths))
+    total_chars = sum(len(p) + 1 for p in ordered)
+    if total_chars <= _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS:
+        scoped_paths: List[str] = ordered
+    else:
+        scoped_paths = ["state/handoffs"]
+
+    result = status_porcelain(worktree, scoped_paths)
     if not result.ok:
         _LOG.warning(
             "archive_terminal_handoffs: git status --porcelain -- %s failed "
-            "(rc=%s) — degrading to empty dirty-set (no exclusion)",
-            scoped_dir, result.returncode,
+            "(rc=%s) — degrading to fail-closed (all %d survivor(s) treated "
+            "as dirty)",
+            scoped_paths, result.returncode, len(ordered),
         )
-        return set()
+        return set(ordered)
     dirty: set = set()
     for line in result.stdout.splitlines():
         if len(line) < 4:
@@ -432,6 +470,182 @@ def _dirty_handoff_relpaths(worktree: Path) -> set:
         else:
             dirty.add(rel.strip('"'))
     return dirty
+
+
+# ---------------------------------------------------------------------------
+# Cheap frontmatter pre-filter (C4, AC-12) — a byte-level answer to
+# `_classify_branch`'s own `status` / `deployment_state` question, paid
+# BEFORE `dag._read_meta`'s full read+sha256+YAML parse, for the ~96% of
+# records that question alone refuses.
+#
+# Spec backlink: state/dispatch-briefs/2026-08-26-the-sweep-stops-paying-
+# for-a-room-it-nev/C4.md (staff-eng Finding 2, option (a); Finding 6's
+# closed fall-through enumeration).
+#
+# THE PRE-FILTER LIVES ENTIRELY HERE. It never replaces, wraps, or narrows
+# `dag._read_meta` — it only decides, per record, whether to call it at all.
+# It may only ever produce a SUPERSET of what `_classify_branch` over a full
+# parse would admit: uncertain always falls through to the full parse, and
+# `_prefilter_qualifies` below mirrors `_classify_branch`'s own True/False
+# formula rather than re-deriving a parallel rule that could drift from it.
+#
+# Negative-spec: does NOT resolve `shipped_in` (Branch B's "shipped"
+# sub-case) — a `deployment_state` already in the terminal set always
+# survives the pre-filter (returns None, "cannot disqualify") regardless of
+# `shipped_in`, deferring that refinement to the full parse + `_classify_
+# branch` exactly as today. Does NOT implement YAML 1.1's yes/no/on/off or
+# timestamp resolution — this repo's own `dag._parse_scalar` doesn't either
+# (only null/~, true/false, int, float), so `_prefilter_plain_scalar` mirrors
+# THAT parser, not the YAML spec.
+# ---------------------------------------------------------------------------
+
+# Bounded read for the pre-filter's own file open — independent of, and
+# never a substitute for, `dag._read_meta`'s full `read_bytes()` (which a
+# pre-filter survivor still pays in full). Sized generously above a normal
+# handoff's frontmatter block; a block-scalar/long-frontmatter file that
+# doesn't fit inside this budget simply finds no closing delimiter and falls
+# through (never guesses).
+_PREFILTER_READ_BYTES = 4096
+
+# Scalar tokens `dag._parse_scalar` resolves to a NON-string value — a
+# pre-filter value equal to one of these (case-sensitive: `_parse_scalar`
+# itself only matches the lowercase literal) is never compared as if it were
+# that literal text.
+_PREFILTER_NON_STRING_SCALARS = frozenset({"null", "~", "true", "false"})
+
+
+def _prefilter_plain_scalar(raw: str) -> Optional[str]:
+    """Return `raw` unchanged iff it is a plain, single-line scalar that
+    `dag._parse_scalar` would ALSO resolve to that exact string — else None
+    (ambiguous; caller must fall through to the full parse).
+
+    Refuses (returns None) a quoted scalar, a block scalar (`|`/`>`), a flow
+    collection (`[`/`{`), an anchor/alias/tag (`&`/`*`/`!`), anything
+    carrying a `#` (a possible inline comment — conservatively refused
+    rather than re-implementing comment-stripping), and anything
+    `_parse_scalar` would coerce to null/bool/int/finite-float rather than a
+    string. A non-finite float (`_parse_scalar`'s own sha-like-string
+    carve-out, e.g. `229e792` overflowing to `inf`) is intentionally NOT
+    refused here — `_parse_scalar` itself falls through to string handling
+    for it, so this function must match that, not merely be more cautious.
+    """
+    if not raw or "#" in raw or raw[0] in "'\"|>[{&*!":
+        return None
+    if raw in _PREFILTER_NON_STRING_SCALARS:
+        return None
+    try:
+        int(raw)
+        return None
+    except ValueError:
+        pass
+    try:
+        as_float = float(raw)
+        if math.isfinite(as_float):
+            return None
+    except ValueError:
+        pass
+    return raw
+
+
+def _prefilter_qualifies(status_lower: str, deployment_lower: str) -> bool:
+    """Mirror `_classify_branch`'s own True/False qualify decision, using
+    ONLY the two keys the pre-filter extracts — never a re-derived rule.
+
+    Over-admits deliberately: a `deployment_state` already in the terminal
+    set always returns True here even for the "shipped" sub-case (which
+    `_classify_branch` may still refuse on an unresolvable `shipped_in`) —
+    that refinement needs the full parse, and this function's only
+    obligation is superset-safety, not the final answer.
+    """
+    if deployment_lower in _TERMINAL_DEPLOYMENT_STATES:
+        return True
+    if status_lower in ("claimed", "consumed"):
+        return deployment_lower != "in_flight"
+    return False
+
+
+def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
+    """Cheap byte-level pre-check answering `_classify_branch`'s own
+    disqualifying question without paying for `dag._read_meta`'s full
+    read+hash+YAML parse.
+
+    Returns a `_SCAN_REASON_NOT_TERMINAL`-prefixed refusal reason when both
+    `status` and `deployment_state` are readable as plain, top-level,
+    single-line scalars whose values definitively fail `_prefilter_
+    qualifies` — else returns None, meaning "uncertain, fall through to the
+    full parse". THE FALL-THROUGH LIST IS CLOSED (staff-eng Finding 6): no
+    leading `---` on line 1; no closing delimiter within the read budget; a
+    value that is not a plain unquoted single-line scalar (quoted, block,
+    flow, anchor/alias/tag, or one `dag._parse_scalar` would coerce to a
+    non-string); a tab in the frontmatter block's indentation; a duplicate
+    key; or either target key absent. Every one of those returns None here,
+    never a guessed reason.
+    """
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(_PREFILTER_READ_BYTES)
+    except OSError:
+        return None
+
+    if not chunk.startswith(b"---"):
+        return None  # covers a leading BOM too — the BOM byte(s) shift the
+        # decoded first line away from a literal "---" match below.
+
+    text = chunk.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if lines[0].rstrip("\r") != "---":
+        return None
+
+    close_idx: Optional[int] = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r") == "---":
+            close_idx = i
+            break
+    if close_idx is None:
+        return None  # closing delimiter not found inside the read budget
+
+    block_lines = lines[1:close_idx]
+    if any("\t" in ln for ln in block_lines):
+        return None
+
+    found_raw: Dict[str, str] = {}
+    for ln in block_lines:
+        stripped = ln.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip(" "))
+        if indent != 0:
+            continue  # nested line — not a top-level key, irrelevant here
+        colon_idx = stripped.find(":")
+        if colon_idx == -1:
+            continue
+        key = stripped[:colon_idx].strip()
+        if key not in ("status", "deployment_state"):
+            continue
+        if key in found_raw:
+            return None  # duplicate key — ambiguous, fall through
+        found_raw[key] = stripped[colon_idx + 1:].strip()
+
+    if "status" not in found_raw or "deployment_state" not in found_raw:
+        return None
+
+    status_scalar = _prefilter_plain_scalar(found_raw["status"])
+    deployment_scalar = _prefilter_plain_scalar(found_raw["deployment_state"])
+    if status_scalar is None or deployment_scalar is None:
+        return None
+
+    status_lower = status_scalar.strip().lower()
+    deployment_lower = deployment_scalar.strip().lower()
+
+    if _prefilter_qualifies(status_lower, deployment_lower):
+        return None  # cannot disqualify — the full parse decides the rest
+
+    if deployment_lower == "in_flight" and status_lower in ("claimed", "consumed"):
+        return f"{_SCAN_REASON_NOT_TERMINAL}: deployment_state=in_flight — not terminal (archive-safety)"
+    return (
+        f"{_SCAN_REASON_NOT_TERMINAL}: status={status_scalar!r} (not claimed) and "
+        f"deployment_state={deployment_scalar!r} (not terminal)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -529,16 +743,32 @@ def _scan_terminal(
     (which candidates are the ones this cap will act on next) and dry_run:false
     act (which candidate_ids this invocation is willing to move).
 
+    CLASSIFY FIRST, DIRTY-CHECK ONLY THE SURVIVORS (C3, staff-eng Finding 1).
+    Branch A/B classification runs over the WHOLE corpus first — it is pure
+    in-memory frontmatter comparison, no git spawn — and only the surviving
+    candidate relpaths are handed to Rail 1's worktree-dirty check, so the
+    dirty check's pathspec (and, on the standalone path, the ONE `git
+    status --porcelain` spawn it costs) scales with the survivor count, not
+    the corpus. A record refused by classification never reaches the dirty
+    rail: for a record that is BOTH worktree-dirty AND non-terminal this is
+    a DESIGNED reason-precedence change from the predecessor (not-terminal
+    now wins, per AC-5's amended assertion), not a regression. The reverse-
+    edge index build and `resolve_live_session_ids()` call below are
+    similarly deferred (lazy) until at least one candidate survives both the
+    classification and dirty-check passes — a scan with zero survivors never
+    pays either cost.
+
     `known_dirty_relpaths` (C10, AC-11): the standalone/op path leaves this
-    None and this function spawns its own `git status --porcelain` (Rail 1,
-    `_dirty_handoff_relpaths`) — unchanged. An in-plane caller that has
-    ALREADY computed worktree divergence for these same paths this
-    invocation (`commit_pipeline`/`commit_scoped`'s own
-    `_diverging_paths_chunked`/`diverging_paths` pass) passes that answer
-    through here instead, so this rail spawns nothing — reusing the
-    existing computation rather than asking the same question twice. Do NOT
-    reimplement this rail's own git-status logic on the in-plane path; feed
-    it the candidate set's divergence answer.
+    None and this function spawns its own scoped `git status --porcelain`
+    over the survivor set (Rail 1, `_dirty_handoff_relpaths`) — unchanged in
+    spawn count (still exactly one). An in-plane caller that has ALREADY
+    computed worktree divergence for these same paths this invocation
+    (`commit_pipeline`/`commit_scoped`'s own `_diverging_paths_chunked`/
+    `diverging_paths` pass) passes that answer through here instead, so this
+    rail spawns nothing — reusing the existing computation rather than
+    asking the same question twice. Do NOT reimplement this rail's own
+    git-status logic on the in-plane path; feed it the candidate set's
+    divergence answer.
 
     `skipped` — opt-in out-param. When a list is supplied, every rail that
     refuses a candidate appends `{id, reason}` to it, so a refusal is
@@ -547,14 +777,21 @@ def _scan_terminal(
     (the bulk of it), so it is deliberately NOT wired to any wire-building
     caller — see the `_SCAN_REASON_*` block's negative spec.
 
-    ONE frontmatter pass over collect_live_handoff_paths(worktree_root)
-    populates: (a) the metas dict fed to dag.build_reverse_edge_index (Check
-    3's index — no second scan), (b) the shipped_in shas needing the ONE
-    batch resolvability check, and (c) Branch A/B qualification per candidate.
-    resolve_live_session_ids() (Check 4's fallback key) is called ONCE,
-    hoisted out of the per-candidate loop, exactly like consumed_by's
-    live-session lookup in the killed module's own Check 4 — the difference
-    here is the hoist, not the key.
+    ONE pass over collect_live_handoff_paths(worktree_root), pre-filtered
+    (C4, `_prefilter_scan_disqualifies`): the cheap byte-level pre-check
+    answers `_classify_branch`'s own disqualifying question for the ~96% of
+    records it can, so `dag._read_meta`'s full read+hash+parse is paid only
+    for a pre-filter survivor here. If (and only if) a candidate survives
+    classification + the dirty check, a backfill loop tops up `metas` for
+    every remaining live node before `dag.build_reverse_edge_index` runs —
+    still no SECOND WALK of collect_live_handoff_paths, just a deferred
+    completion of the same one. The shipped_in shas needing the ONE batch
+    resolvability check, and Branch A/B qualification per candidate, both
+    come from the pre-filter survivor set. resolve_live_session_ids() (Check
+    4's fallback key) is called ONCE, hoisted out of the per-candidate loop,
+    exactly like consumed_by's live-session lookup in the killed module's
+    own Check 4 — the difference here is the hoist (now lazy behind the
+    survivor set), not the key.
     """
     results: List[Tuple[Path, str, str, Optional[str]]] = []
     try:
@@ -571,54 +808,109 @@ def _scan_terminal(
     if not live_paths:
         return results
 
-    # ONE frontmatter pass — metas keyed by str(abspath), matching
-    # build_reverse_edge_index's own metas= key convention.
+    # metas keyed by str(abspath), matching build_reverse_edge_index's own
+    # metas= key convention. Populated LAZILY (C4): a record the cheap
+    # pre-filter can already refuse never pays `dag._read_meta`'s full
+    # read+hash+parse here — only a pre-filter SURVIVOR does. If at least one
+    # candidate survives classification + the dirty check, the reverse-edge
+    # index build below needs full frontmatter for every live node (a
+    # pre-filter-refused record can still be some OTHER candidate's live
+    # child), so the backfill loop just above that call fills in whatever
+    # this pass left unread — paying the same total cost the corpus-wide
+    # eager read always did in that branch, never more.
     metas: Dict[str, dict] = {}
     live_set_str: List[str] = [str(p) for p in live_paths]
-    for p, key in zip(live_paths, live_set_str):
-        metas[key] = _read_meta(str(p)) or {}
-
-    # Rail 2 — bounded, git-spawn-free existence reader for every shipped_in
-    # value across the corpus (C10, AC-11).
-    shipped_in_shas = [
-        str(meta.get("shipped_in")).strip()
-        for meta in metas.values()
-        if (meta.get("deployment_state") or "").strip().lower() == "shipped" and meta.get("shipped_in")
-    ]
-    shipped_in_resolved = _batch_resolve_shipped_in(common_dir, shipped_in_shas)
-
-    # Rail 1 — worktree-dirty exclusion. known_dirty_relpaths (in-plane
-    # reuse) short-circuits the git status spawn entirely; see this
-    # function's own docstring.
-    if known_dirty_relpaths is not None:
-        dirty_relpaths = known_dirty_relpaths
-    else:
-        dirty_relpaths = _dirty_handoff_relpaths(worktree_root)
-
-    # ONE reverse-edge index build over the metas already read above — no
-    # second per-node frontmatter scan.
-    index = build_reverse_edge_index(live_set_str, handoff_dir=str(worktree_root / "state" / "handoffs"), metas=metas)
-
-    # ONE resolve_live_session_ids() call, hoisted out of the per-candidate loop.
-    live_sids = resolve_live_session_ids()
 
     def _refuse(candidate_id: str, reason: str) -> None:
         if skipped is not None:
             skipped.append({"id": candidate_id, "reason": reason})
 
+    # Pass 1 — classify-first (C3, staff-eng Finding 1), now pre-filtered
+    # (C4). Branch A/B qualification is pure-memory (no git spawn, no
+    # reverse-edge index, no live-session resolution), so it runs over the
+    # WHOLE corpus first and collects only the survivors the remaining,
+    # costlier rails need to see. A record refused here (the bulk of the
+    # live corpus) never reaches the dirty rail below — for a record that is
+    # BOTH worktree-dirty AND non-terminal this is a DESIGNED
+    # reason-precedence change (not-terminal wins), not a regression; see
+    # this module's own plan citation.
+    prefilter_survivors: List[Tuple[Path, str, dict]] = []
     for p, key in zip(live_paths, live_set_str):
-        meta = metas[key]
         rel = rel_id(p, worktree_root)
-
-        if rel in dirty_relpaths:
-            _refuse(rel, _SCAN_REASON_WORKTREE_DIRTY)
+        prefilter_reason = _prefilter_scan_disqualifies(p)
+        if prefilter_reason is not None:
+            _refuse(rel, prefilter_reason)
             continue
+        meta = _read_meta(str(p)) or {}
+        metas[key] = meta
+        prefilter_survivors.append((p, rel, meta))
 
+    # Rail 2 — bounded, git-spawn-free existence reader for every shipped_in
+    # value across the corpus (C10, AC-11). Every "shipped" record survives
+    # the pre-filter above (deployment_state is already in the terminal set),
+    # so scoping this to prefilter_survivors' metas is equivalent to scoping
+    # it to the whole corpus's metas, never a narrower set of shas.
+    shipped_in_shas = [
+        str(meta.get("shipped_in")).strip()
+        for _p, _rel, meta in prefilter_survivors
+        if (meta.get("deployment_state") or "").strip().lower() == "shipped" and meta.get("shipped_in")
+    ]
+    shipped_in_resolved = _batch_resolve_shipped_in(common_dir, shipped_in_shas)
+
+    survivors: List[Tuple[Path, str, dict, str, bool]] = []
+    for p, rel, meta in prefilter_survivors:
         qualifies, reason, status_label, branch_b_qualified = _classify_branch(meta, shipped_in_resolved)
         if not qualifies:
             _refuse(rel, f"{_SCAN_REASON_NOT_TERMINAL}: {reason}")
             continue
+        survivors.append((p, rel, meta, status_label, branch_b_qualified))
 
+    if not survivors:
+        return results
+
+    # Rail 1 — worktree-dirty exclusion, scoped to SURVIVORS ONLY (C3).
+    # known_dirty_relpaths (in-plane reuse) short-circuits the git status
+    # spawn entirely; see this function's own docstring.
+    if known_dirty_relpaths is not None:
+        dirty_relpaths = known_dirty_relpaths
+    else:
+        dirty_relpaths = _dirty_handoff_relpaths(worktree_root, [rel for _p, rel, _m, _s, _b in survivors])
+
+    remaining: List[Tuple[Path, str, dict, str, bool]] = []
+    for p, rel, meta, status_label, branch_b_qualified in survivors:
+        if rel in dirty_relpaths:
+            _refuse(rel, _SCAN_REASON_WORKTREE_DIRTY)
+            continue
+        remaining.append((p, rel, meta, status_label, branch_b_qualified))
+
+    if not remaining:
+        return results
+
+    # Backfill (C4): a candidate reaching here means the reverse-edge index
+    # below must see EVERY live node's frontmatter, including one the
+    # pre-filter refused above (it may still be some OTHER node's live
+    # `predecessor`/`forked_from` child) — an empty `{}` placeholder for a
+    # refused-but-unread record would silently drop it from Check 3's
+    # reverse-edge view, which is the exact under-retention this chunk's
+    # negative-spec forbids. This is the SAME full-corpus `dag._read_meta`
+    # cost the pre-C4 code always paid in this branch — no regression here,
+    # only in the (`if not survivors`) short-circuit above.
+    for key in live_set_str:
+        if key not in metas:
+            metas[key] = _read_meta(key) or {}
+
+    # ONE reverse-edge index build over the metas backfilled above — no
+    # second per-node frontmatter scan. Deferred (lazy) until at least one
+    # candidate has survived classification + the dirty check: a pass with
+    # zero survivors never pays this build (or the backfill above) at all.
+    index = build_reverse_edge_index(live_set_str, handoff_dir=str(worktree_root / "state" / "handoffs"), metas=metas)
+
+    # ONE resolve_live_session_ids() call, hoisted out of the per-candidate
+    # loop (do NOT un-hoist — see this function's own docstring) and, like
+    # the reverse-edge index above, deferred until a candidate survives.
+    live_sids = resolve_live_session_ids()
+
+    for p, rel, meta, status_label, branch_b_qualified in remaining:
         # Check 3: childlessness, DR-324-narrowed for a Branch-B-qualified
         # candidate (succession-only edge kinds — a live succession child no
         # longer retains; a live forked_from spinoff still does).

@@ -25,6 +25,12 @@ from unittest.mock import patch
 
 import coordinator_core.benchmarks.shim_fanin_measure as shim_fanin_measure
 
+#: Declaration for the register-aging sweep (C5,
+#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
+#: every row of `_MODULES` names a whole importable module, never a symbol living inside a
+#: parent module.
+_MODULES__SUBJECT_CLASS = "module"
+
 _MODULES = (
     "coordinator_core.ops.check_harvest_debt",
     "coordinator_core.ops.check_auto_memory_drained",

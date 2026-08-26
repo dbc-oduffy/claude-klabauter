@@ -1141,8 +1141,11 @@ async def _commit_group(
     never owned a synchronous push (`push_state` was already always
     reported `None` on every prior real-commit path here), and publication
     is left to whichever cadence checkpoint runs next. Explicit, never by
-    omission -- an omitted `push_mode` would silently default to
-    `PUSH_MODE_SYNC`.
+    omission -- an omitted `push_mode` would now default to
+    `PUSH_MODE_NONE` (2026-08-26), which leaves the in-pipeline push
+    skipped but the post-commit hook still armed, rather than firing a
+    synchronous push; still not the intent here, so the explicit kwarg
+    stays.
 
     Return-contract mapping (constraint 1): every `GroupResult` key is
     populated from `PipelineResult`, none renamed/dropped/added.

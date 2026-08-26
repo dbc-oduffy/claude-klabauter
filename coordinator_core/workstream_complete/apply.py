@@ -245,11 +245,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import contextlib
-import importlib.machinery
-import importlib.util
-import inspect
-import io
 import json
 import re
 import sys
@@ -273,9 +268,12 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.ceremony_common.cli_dispatch import (
+    invoke_cli_main as _shared_invoke_cli_main,
+    load_cli_module as _shared_load_cli_module,
+)
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
-    classify_cli_exit,
     describe_exit_class,
 )
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _determine_shipped
@@ -385,35 +383,31 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     catches that as an ordinary per-directive dispatch failure.
     `_resolve_cli` (admission) runs BEFORE the cache check (F6, cold
     review 2026-08-19) so the control is a per-dispatch check, never
-    merely a first-load one."""
+    merely a first-load one.
+
+    Routes through the shared `ceremony_common.cli_dispatch.load_cli_module`
+    primitive (C1/C5) rather than a private `importlib` copy — this
+    module's own cache (`_LOADED_MODULES`) is unchanged; only the load
+    mechanics themselves are now the ONE shared implementation. This module
+    already always passed an explicit `SourceFileLoader` (matching the
+    shared primitive's own superset behaviour — `cli_dispatch`'s module
+    docstring, Contested behaviour 3), so no capability changes here. The
+    shared primitive's `ValueError` on an unloadable spec is translated to
+    `UnrecognizedDirective` to keep this module's own exception contract
+    unchanged for its callers (`_dispatch_directive`, via
+    `_execute_directives`, still catches it as an ordinary per-directive
+    dispatch failure — same as the `FileNotFoundError` case this
+    docstring's first paragraph already documents)."""
     script_path = _resolve_cli(cli_name)
     if cli_name in _LOADED_MODULES:
         return _LOADED_MODULES[cli_name]
     module_name = f"_workstream_complete_cli_{cli_name.replace('-', '_').replace('.', '_')}"
-    # Some consumes-manifest scripts are bareword launcher shims with no
-    # `.py` suffix — `spec_from_file_location` cannot infer a source loader
-    # from an extensionless path, so pass `SourceFileLoader` explicitly
-    # (mirrors `workweek_complete.apply._load_cli_module`'s identical fix).
-    loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
-    spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
-    if spec is None or spec.loader is None:
+    try:
+        module = _shared_load_cli_module(module_name, script_path)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workstream_complete.apply: could not load {cli_name!r} from {script_path}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules BEFORE exec — some consumes-manifest scripts
-    # define `@dataclass`-decorated classes whose class-body execution
-    # resolves `sys.modules[cls.__module__]` (dataclasses' own
-    # forward-ref-eval path); an unregistered module makes that lookup
-    # return `None` and crash the load with an unrelated AttributeError.
-    # `workday_complete.apply`/`workweek_complete.apply`'s `_load_cli_module`
-    # carry the identical fix (Review: code-reviewer — Finding 2).
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
+        ) from exc
     _LOADED_MODULES[cli_name] = module
     return module
 
@@ -467,41 +461,22 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
     zero-arg trampoline's own raised, semantic exit. This does not change
     `exit_code` itself or what a ceremony reports upward; it only names,
     for the caller, whether the exit code above actually means something
-    the callee decided."""
-    main_fn: Optional[Callable[..., Any]] = getattr(module, "main", None)
-    if main_fn is None:
+    the callee decided.
+
+    Routes through the shared `ceremony_common.cli_dispatch.invoke_cli_main`
+    primitive (C1/C5) — this module's own 4-tuple return shape and stdout/
+    stderr capture behaviour ARE the primitive's superset shape (`stdin_
+    text` is simply never passed here — this module threads inter-directive
+    data via captured stdout and `_resolve_arg_tokens`, never stdin, see the
+    module docstring's deviation 3), so no narrowing is needed beyond the
+    `ValueError`-on-no-`main` ->`UnrecognizedDirective` mapping this
+    module's own exception contract already required."""
+    try:
+        return _shared_invoke_cli_main(module, args)
+    except ValueError as exc:
         raise UnrecognizedDirective(
             f"workstream_complete.apply: {module.__name__} exposes no main() entrypoint"
-        )
-    try:
-        params = inspect.signature(main_fn).parameters
-    except (TypeError, ValueError):
-        params = {}
-
-    stdout_buf = io.StringIO()
-    stderr_buf = io.StringIO()
-    raised = False
-    with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-        try:
-            if params:
-                result = main_fn(list(args))
-            else:
-                saved_argv = sys.argv
-                sys.argv = [module.__name__, *args]
-                try:
-                    result = main_fn()
-                finally:
-                    sys.argv = saved_argv
-        except SystemExit as exc:
-            raised = True
-            code = exc.code
-            exit_code = int(code) if isinstance(code, int) else (0 if code is None else 1)
-        else:
-            exit_code = int(result) if isinstance(result, int) else 0
-
-    stderr_text = stderr_buf.getvalue()
-    exit_class = classify_cli_exit(raised=raised, code=exit_code, stderr_text=stderr_text)
-    return exit_code, stdout_buf.getvalue(), stderr_text, exit_class
+        ) from exc
 
 
 #: Matches the three inter-directive token shapes this manifest emits, all

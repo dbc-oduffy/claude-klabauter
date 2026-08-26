@@ -43,20 +43,25 @@ ROW RESOLUTION (AC1, AC7). Every core-45 row falls into one of two buckets:
 
 EXEMPTIONS. `_EXEMPTION_CLASSES` is a CLOSED vocabulary (modelled on `_EXEMPTION_CLASSES` in
 `test_no_unbatched_per_item_git_spawn.py`): a register may only be exempted from row resolution
-under one of these named reasons, never a bare skip. `_EXEMPTED_REGISTERS` is empty today --
-none of the committed 45 need one -- and stays that way unless a future register genuinely is an
-adversarial/fixture input register or names a subject in another repo. Do NOT add an entry here
-to absorb a sweep failure C5 has not yet dispositioned; that inverts the mechanism the plan
-exists to build (see the chunk body's own anti-scope line).
+under one of these named reasons, never a bare skip. `_EXEMPTED_REGISTERS` holds exactly ONE
+entry -- `_SCHEMA_PARAMS` in `coordinator_core/ops/tests/test_queue_parity.py`, under
+`input-fixture-not-a-subject` -- and the constant's own comment carries the evidence for it. Do
+NOT add an entry here to absorb an undispositioned sweep failure; that inverts the mechanism the
+plan exists to build (see the chunk body's own anti-scope line). The discriminator is whether the
+register was READ and its rows established as something other than references: `_SCHEMA_PARAMS`
+was, and the entry records why. A register added here to turn a red run green has not been.
 
 OPAQUE AGES TOO. `SubjectClass.OPAQUE` rows are, by `register_rows.resolve_row`, always reported
 `unadjudicable` without inspecting the string -- so an opaque CLAIM could silently rot into a
 LIE if the underlying subject started looking exactly like a resolvable path or dotted symbol.
 `_assert_opaque_rows_have_not_aged_out` asserts the CRITERION instead of trusting the claim: it
 force-classifies each opaque row's subject under every tractable class and fails if ANY of them
-would now resolve. No core-45 register declares `opaque` today (`test_no_opaque_registers_have_
-aged_out_of_their_claim` runs over zero rows and passes vacuously for that reason, not because
-the check is a no-op) -- the helper exists so the day one lands, re-verification is nearly free.
+would now resolve. One core-45 register declares `opaque` today:
+`_EXPECTED_CALLEE_BY_SUBCOMMAND` in `coordinator_core/test_backlog_grind_assemble.py`, which C5
+declared after the inventory's predicted `symbol` proved wrong. So
+`test_no_opaque_registers_have_aged_out_of_their_claim` now runs over real rows rather than
+passing vacuously -- if any of that register's subjects ever starts resolving as a tractable
+class, the opaque claim has aged out and must be re-declared rather than quietly kept.
 
 CANARY (AC2, "reads as THE OLD VALUE"). `_CANARY` is asserted present in `_CORE_45()`'s ids.
 Ruled by the EM 2026-08-26 (see the dispatch brief for this chunk, "EM RULING -- the canary set,
@@ -140,11 +145,30 @@ _EXEMPTION_CLASSES: frozenset[str] = frozenset(
     }
 )
 
-#: No core-45 register claims an exemption today. Kept explicit (not simply absent) so the next
-#: reader sees the closed vocabulary is wired up and ready, rather than wondering whether
-#: exemption support was ever built. Do NOT add an entry here to absorb an undispositioned sweep
-#: failure -- see the module docstring's EXEMPTIONS section.
-_EXEMPTED_REGISTERS: dict[RegisterId, str] = {}
+#: Exactly one core-45 register claims an exemption. Do NOT add an entry here to absorb an
+#: undispositioned sweep failure -- see the module docstring's EXEMPTIONS section. The entry
+#: below is a DISPOSITION, not an absorption: the register was read, its rows were established
+#: as fixture payloads rather than references, and the claim is typed from the closed vocabulary.
+_EXEMPTED_REGISTERS: dict[RegisterId, str] = {
+    # `_SCHEMA_PARAMS` is a dict of queue-append FIELD PAYLOADS, one per schema, sitting under
+    # its own comment header "Schema-specific test fixtures". Its string leaves are values fed
+    # INTO the op under test -- `source: daily-review/2026-01-15`, a `memo:` path, a `surface:`
+    # path -- never references to subjects this repo is expected to hold. Two of them
+    # (`daily-review/2026-01-15`, `cross-repo/archive/2026-01-15-example-memo.md`) are
+    # deliberately synthetic and must never resolve; a third
+    # (`coordinator_core/ops/queue_append.py`) happens to name a real file, but it is a fixture
+    # value like the rest, not a guarded reference -- which is why the exemption is taken at
+    # register level rather than per row.
+    #
+    # AC9 NOTE: the committed inventory predicted this register path-only, needing no
+    # declaration. That prediction was wrong, and this is the SECOND classifier mismatch in the
+    # core 45 (the first: `_EXPECTED_CALLEE_BY_SUBCOMMAND` needed `opaque` over the predicted
+    # `symbol`). Two of 45 is the published mismatch count -- low enough that the five-class
+    # vocabulary stands, per the plan's own falsifier reading.
+    RegisterId(
+        "coordinator_core/ops/tests/test_queue_parity.py", "_SCHEMA_PARAMS"
+    ): "input-fixture-not-a-subject",
+}
 
 #: AC2/AC7's canary -- see the module docstring's CANARY section for the full ruling.
 _CANARY: frozenset[RegisterId] = frozenset(
@@ -154,6 +178,48 @@ _CANARY: frozenset[RegisterId] = frozenset(
         RegisterId("coordinator/tests/test_cold_path_remediation_is_runnable.py", "COLD_PATH_MODULES"),
     }
 )
+
+#: What a green run of THIS sweep does and does not establish (C6, the baton's last AC). A
+#: citation site naming this module as its enforcement mechanism must publish this qualifier in
+#: its own citing block -- mirrors `COVERAGE_HORIZON` / `_HORIZON_CITERS` in
+#: `test_no_unbatched_per_item_git_spawn.py`, and
+#: `test_the_resolution_horizon_is_published_where_this_sweep_is_cited` below plays the role
+#: `test_the_one_hop_horizon_is_published_where_this_gate_is_cited` plays there.
+#: Deliberately a triple-quoted string, not a parenthesized concatenation: this module's own
+#: leg-1 candidate regex (`_CANDIDATE_LINE_RE`) fires on any module-level uppercase name whose
+#: FIRST line opens with `frozenset(`/`dict(`/`(`/`[`/`{` -- a bookkeeping string that happened to
+#: start with an open paren would falsely enrol itself as a new register candidate and desync
+#: `register_population.json`, an artifact outside this chunk's `writes:` scope to regenerate.
+COVERAGE_HORIZON = """resolves-or-declares-horizon: a green run of this sweep establishes only \
+that every ENROLLED row's subject exists against its declared class. It does NOT establish that \
+the derived population is the right population, that an exempted register \
+(_EXEMPTED_REGISTERS) is legitimately exempt, or that a row still describes real debt rather \
+than merely resolving. Nor does it close residual regex recall-from-birth: leg 2 \
+(test_leg2_population_artifact_matches_current_candidates) only catches drift against its OWN \
+frozen snapshot -- a register the leg-1 regex never recognized as a candidate in the first place \
+stays invisible to both legs (see test_leg1_regex_matches_the_ast_census_once_at_land, which \
+guards new recall gaps but cannot retroactively close ones already present)."""
+
+#: Closed list of citation sites that lean on this sweep as their derivation/enforcement
+#: mechanism -- each must carry the `_HORIZON_MARKER` in the same citing block that names this
+#: module, so a green run here is never read as "nothing to guard" at the site that cites it. This
+#: register is ITSELF hand-maintained, the exact recursion `_HORIZON_CITERS` in
+#: `test_no_unbatched_per_item_git_spawn.py` already carries -- see that module's own citer note.
+#: `tuple(...)` wrapping (not a bare `(`-opening literal), for the same leg-1-candidate-recall
+#: reason `COVERAGE_HORIZON` above is a triple-quoted string rather than a parenthesized one: this
+#: is bookkeeping FOR the sweep, not a register the sweep enrols, and the AST census
+#: (`test_leg1_regex_matches_the_ast_census_once_at_land`) does not recognize a bare `tuple(...)`
+#: call as a collection literal either, so this stays consistent across both legs rather than
+#: opening a real leg-1/AST divergence.
+_HORIZON_CITERS: tuple[str, ...] = tuple(
+    [
+        "coordinator/tests/test_dr084_single_accessor_guard.py",
+        "coordinator_core/tests/test_known_sites_rows_resolve_or_report_depth.py",
+    ]
+)
+
+#: The marker every citer's block must carry alongside this file's name.
+_HORIZON_MARKER = "resolves-or-declares-horizon"
 
 _INVENTORY_LINE_RE = re.compile(r"^([A-Za-z0-9_./-]+\.py)::(\w+)$")
 _INVENTORY_ROWS_RE = re.compile(r"rows=\s*(\d+)\s+predicted_class=(\S+)")
@@ -533,14 +599,20 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
                 continue
             for stmt in tree.body:
                 names: list[str] = []
+                value: ast.expr | None = None
                 if isinstance(stmt, ast.Assign):
                     names = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+                    value = stmt.value
                 elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
                     names = [stmt.target.id]
+                    # An annotation with no assignment (`X: tuple[str, ...]`) has no value at
+                    # all; it declares a name rather than binding a register.
+                    value = stmt.value
+                if value is None:
+                    continue
                 for name in names:
                     if not (name.lstrip("_").isupper() and name.lstrip("_")[:1].isalpha()):
                         continue
-                    value = stmt.value
                     is_collection_literal = isinstance(value, (ast.Tuple, ast.List, ast.Dict, ast.Set))
                     is_collection_call = (
                         isinstance(value, ast.Call)
@@ -551,7 +623,7 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
                         continue
                     leaves = [
                         n.value
-                        for n in ast.walk(stmt.value)
+                        for n in ast.walk(value)
                         if isinstance(n, ast.Constant) and isinstance(n.value, str)
                     ]
                     if any(_is_subject_leaf(leaf) for leaf in leaves):
@@ -587,6 +659,44 @@ def test_canary_members_are_actually_declared_core_by_the_committed_inventory() 
         assert register.repo_relative_path.startswith(("coordinator/", "coordinator_core/")), (
             f"canary member {register!r} is outside the census roots"
         )
+
+
+# ---------------------------------------------------------------------------
+# C6 -- the resolution horizon is published where this sweep is cited
+# ---------------------------------------------------------------------------
+
+
+def test_the_resolution_horizon_is_published_where_this_sweep_is_cited() -> None:
+    """C6's own AC: a green run of THIS sweep must not read as "nothing to guard" at any site
+    that cites it as a derivation/enforcement mechanism. Same shape as
+    `test_the_one_hop_horizon_is_published_where_this_gate_is_cited` in
+    `test_no_unbatched_per_item_git_spawn.py`: a CLOSED citer list, scoped to the citing BLOCK
+    (blank-line-delimited) rather than the whole file, so the qualifier cannot silently drift out
+    of the bullet that actually names this module while surviving elsewhere in the citer.
+
+    Deliberately an assertion, not prose: a whole-file substring check passes vacuously the
+    moment the citing block loses its qualifier while the marker text lingers in some unrelated
+    section of the same file."""
+    this_file_name = Path(__file__).name
+    missing: list[str] = []
+    for rel in _HORIZON_CITERS:
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            missing.append(f"{rel} -- listed citer does not exist")
+            continue
+        blocks = re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))
+        citing = [block for block in blocks if this_file_name in block]
+        if not citing:
+            missing.append(f"{rel} -- no longer cites this sweep; drop it from _HORIZON_CITERS")
+        elif not any(_HORIZON_MARKER in block for block in citing):
+            missing.append(
+                f"{rel} -- cites this sweep without naming the {_HORIZON_MARKER} horizon"
+            )
+    assert not missing, (
+        "the sweep's resolution horizon is not published where it is cited:\n"
+        + "\n".join(f"  {row}" for row in missing)
+        + f"\n\nhorizon: {COVERAGE_HORIZON}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -4755,8 +4755,9 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
     fire on crash or kill, so a crashed/killed session's agent dirs are NOT
     dropped here. That path belongs to
     ``coordinator_core.ops.session.reap._reap_stale_agents``'s cadence
-    sub-reap (currently unregistered — see memo
-    ``2026-08-14-claude-klabauter-em-session-reaper-lost-its-caller.md``) and
+    sub-reap (registered again since 2026-08-25 — the memo
+    ``2026-08-14-claude-klabauter-em-session-reaper-lost-its-caller.md`` was
+    actioned, and the caller is DoE-claude's ``sweep-boot.py`` leg) and
     to ``coordinator_core.ops.reap_orphaned_agent_dirs``'s four-rail orphan
     sweep. Do not read this function's presence as full coverage.
     """

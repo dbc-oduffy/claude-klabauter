@@ -58,8 +58,16 @@ Cadence decoupling — SUPERSEDED (C3, see "Boot backstop cull removal" above):
   the 12h gate here. session.boot_sweep still does NOT invoke session.reap
   directly (shape (b), folding claim-reap into boot_sweep, remains REJECTED:
   it would mix Class-B untracked rm-rf into boot_sweep's DR-211 tracked-archival
-  safety identity) — session.reap is invoked by session-init (boot cadence),
-  and after C3 that boot-path invocation performs no irreversible cull.
+  safety identity) — session.reap is invoked by DoE-claude's SessionStart
+  trampoline coordinator/hooks/scripts/sweep-boot.py :: _reap_sessions (boot
+  cadence, registered 6c17f8275 on 2026-08-25), and after C3 that boot-path
+  invocation performs no irreversible cull. That leg pre-gates on an 11h
+  .last-reap mtime, deliberately SHORTER than _CADENCE_SECONDS below, so this
+  op stays the authority: a drifted constant there can only over-spawn, never
+  suppress. The prior caller, session-init, was deleted 2026-07-15 and this op
+  ran on nothing at all for six weeks before that leg landed
+  (state/bug-backlog/2026-08-15-session-archive-dir-grows-without-a-prune-0b5c80ee.yaml);
+  the caller living in a sibling repo is why that outage was silent here.
 
 Self-registration: importing this module calls
 register_op("session.reap", _handler) as a side-effect, and (C5)

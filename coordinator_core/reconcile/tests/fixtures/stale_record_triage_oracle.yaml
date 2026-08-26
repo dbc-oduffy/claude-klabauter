@@ -192,6 +192,12 @@ rows:
   # --- commit_reality sub-table ---
   - id: "2026-07-02-audit-and-sequence-coordinator-ceremonies"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "audit-and-sequence-coordinator-ceremonies"
     audit_verdict: NEEDS-PM
     is_false_positive: false
@@ -201,6 +207,12 @@ rows:
 
   - id: "2026-07-06_210000_strang-10-family-C-orientation-renderers"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "strang-10 family-C orientation renderers"
     audit_verdict: EXECUTE
     is_false_positive: false
@@ -213,6 +225,12 @@ rows:
 
   - id: "2026-07-06_210100_strang-10-family-D-deliverable-spine"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "strang-10 family-D deliverable spine"
     audit_verdict: EXECUTE
     is_false_positive: false
@@ -223,6 +241,12 @@ rows:
 
   - id: "2026-07-08_010048_538049e1"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "538049e1 attribution"
     audit_verdict: EXECUTE
     is_false_positive: false
@@ -234,6 +258,12 @@ rows:
 
   - id: "2026-07-10_141605_roadmap-qsub-02"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "roadmap-qsub-02"
     audit_verdict: EXECUTE
     is_false_positive: false
@@ -244,6 +274,12 @@ rows:
 
   - id: "2026-07-12_123218_workflow-skeleton-stamper"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "workflow-skeleton-stamper"
     audit_verdict: FLIP-TO-IMPLEMENTED
     is_false_positive: true
@@ -254,6 +290,12 @@ rows:
 
   - id: "2026-07-15_082943_spike-result-coverage-gate-graph-walk"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "spike-result-coverage-gate-graph-walk"
     audit_verdict: FLIP-TO-IMPLEMENTED
     is_false_positive: true
@@ -264,6 +306,12 @@ rows:
 
   - id: "2026-07-15_150901_auto-push-windows-spike-and-doe-cutover"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "auto-push-windows-spike-and-doe-cutover"
     audit_verdict: NO-ACTION
     is_false_positive: true
@@ -274,6 +322,12 @@ rows:
 
   - id: "2026-07-16-execute-wsc-pure-python-tail-rebuild"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "execute-wsc-pure-python-tail-rebuild"
     audit_verdict: FLIP-TO-IMPLEMENTED
     is_false_positive: true
@@ -284,6 +338,12 @@ rows:
 
   - id: "2026-07-20_103000_spike-result-windows-ssh-agent-auto-push"
     detector: commit_reality
+    excluded_from_fp_denominator: true
+    excluded_from_fp_denominator_reason: >
+      commit_reality's evaluate_commit_reality verdict is deleted (C10,
+      state/kill-ledger.md, 2026-08-26); this row stays on disk so AC14 can
+      enumerate it, but a deleted detector must never be credited with a
+      clean sheet by a false-positive-rate denominator that no longer runs it.
     subject: "spike-result-windows-ssh-agent-auto-push"
     audit_verdict: EXECUTE
     is_false_positive: false

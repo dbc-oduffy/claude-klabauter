@@ -1433,8 +1433,10 @@ def run_close_commit(
     absolutely: this always calls `run_commit_pipeline` (never
     `git_native.commit_scoped` directly, which gets staging safety and
     silently skips `commit_gates.carry_gate` and every other gate) at
-    `push_mode=PUSH_MODE_NEVER` (never the default `PUSH_MODE_SYNC`, a
-    synchronous network push, and never `"deferred"` — `_PUSH_MODES_
+    `push_mode=PUSH_MODE_NEVER` (never omitted, which now defaults to
+    `PUSH_MODE_NONE` since 2026-08-26, not `PUSH_MODE_SYNC` — and never
+    `PUSH_MODE_SYNC` itself, a synchronous network push, and never
+    `"deferred"` — `_PUSH_MODES_
     SUPPRESSING_POST_COMMIT_HOOK == frozenset({SYNC, NEVER})` leaves the
     post-commit hook's push armed under `"deferred"`). A caller wanting a
     push does so as its own separate, later step; this function never

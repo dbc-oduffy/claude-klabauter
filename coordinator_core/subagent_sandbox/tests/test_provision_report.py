@@ -747,6 +747,12 @@ def test_build_doc_text_divergence_is_object_not_array() -> None:
 #: producer takes no args and returns the full frontmatter+body doc text --
 #: closing the class (both provisioners that write a divergence-shaped
 #: field) rather than just this module's own instance.
+#: Declaration for the register-aging sweep (C5,
+#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
+#: every dotted-shaped row in `_DIVERGENCE_EMITTERS` names a symbol living inside a parent
+#: module (e.g. `provision_report._build_doc_text`), not a whole importable module of its own.
+_DIVERGENCE_EMITTERS__SUBJECT_CLASS = "symbol"
+
 _DIVERGENCE_EMITTERS = [
     (
         "provision_report._build_doc_text",
@@ -758,7 +764,7 @@ _DIVERGENCE_EMITTERS = [
         lambda: _build_sidecar_text(
             agent_type=REPORT_SIDECAR_TYPE,
             spawned_at="2026-07-13T00:00:00Z",
-            plan_path="docs/plans/example.md",
+            plan_path="example-plan-fixture-not-a-real-path",
             chunk_id="C1",
             dispatched_by="lead-session",
         ),

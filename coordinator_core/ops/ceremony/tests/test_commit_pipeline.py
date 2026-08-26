@@ -2000,6 +2000,7 @@ def test_pipeline_landed_but_unverified_reports_not_failed_and_pushes(tmp_path, 
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
         on_committed=on_committed_calls.append,
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.commit_failed is False
@@ -2156,6 +2157,7 @@ def test_pipeline_landed_but_unverified_failed_push_reports_integrity_breach(
         subject="workstream-complete: unverified landing failed push",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.commit_failed is False
@@ -4101,6 +4103,7 @@ def test_pipeline_normal_path_branch_policy_decline_push_status_and_no_breach(
         subject="workstream-complete: declined push, normal path",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.commit_failed is False
@@ -4129,6 +4132,7 @@ def test_pipeline_normal_path_unresolvable_branch_decline_push_status_and_no_bre
         subject="workstream-complete: declined push, unresolvable branch",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.push_status == commit_pipeline_mod.PUSH_STATUS_DECLINED
@@ -4161,6 +4165,7 @@ def test_pipeline_normal_path_push_failed_reports_push_status_failed_and_breach(
         subject="workstream-complete: failed push, normal path",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.push_status == commit_pipeline_mod.PUSH_STATUS_FAILED
@@ -4200,6 +4205,7 @@ def test_pipeline_landed_but_unverified_branch_policy_decline_no_breach(tmp_path
         subject="workstream-complete: declined push, unverified sha path",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.sha_unverified is True
@@ -4238,6 +4244,7 @@ def test_pipeline_landed_but_unverified_push_failed_still_reports_breach(tmp_pat
         subject="workstream-complete: unverified landing failed push, push_status",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     assert result.push_status == commit_pipeline_mod.PUSH_STATUS_FAILED
@@ -4509,6 +4516,7 @@ def test_pipeline_landed_push_populates_pushed_range_and_count(tmp_path):
         subject="workstream-complete: C3b pushed-range",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
     new_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
@@ -4951,6 +4959,7 @@ def test_pipeline_post_push_peer_race_keeps_own_committed_sha(tmp_path, monkeypa
         subject="workstream-complete: peer race regression",
         stage_paths=["tasks/feature/todo.md"],
         caller_paths={"tasks/feature/todo.md"},
+        push_mode=commit_pipeline_mod.PUSH_MODE_SYNC,
     )
 
     own_sha = result.commit.committed_sha
@@ -5769,6 +5778,69 @@ def test_push_budget_exhausted_between_attempts_is_failed_not_unconfirmed(tmp_pa
     assert outcome.exit_code != 0
     assert "budget" in outcome.failed[0]
     assert "Nothing is in flight" in outcome.failed[0]
+
+
+def test_push_budget_exhausted_at_the_fetch_leg_never_fetches(tmp_path, monkeypatch):
+    """The fetch-leg deadline check, with the budget genuinely run down MID-ladder.
+
+    Its siblings above exhaust at attempt 0 (nothing was ever sent) or hold the
+    budget wide open and mock `fetch` to always succeed, so the one branch that
+    stops a ladder which has ALREADY pushed -- `fetch_timeout <= 0` before
+    `git_native.fetch` is ever called -- was reachable by neither. Reported by
+    the 2026-08-26 partitioned review (slice 2, P2) and unpinned until now.
+
+    Driven by a fake clock rather than a real sleep: the property is arithmetic
+    on the deadline, and a ladder that idles for its own budget is exactly the
+    peer-disrupting shape this repo's load norm forbids in a test.
+
+    Red proof: delete the `fetch_timeout <= 0` break and the fetch runs with a
+    negative timeout -- `fetch_calls` goes to 1 and the reason stops naming the
+    budget."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _budget_repo(tmp_path)
+    # `_budget_repo` configures a remote but no tracking ref, and the ladder
+    # breaks on an unresolvable upstream one branch EARLIER than the fetch leg
+    # -- same attempt, just before it. A real bare origin with a real upstream
+    # is what puts control on the branch under test.
+    _git(["init", "-q", "--bare", str(tmp_path / "origin.git")], tmp_path)
+    _git(["push", "-q", "-u", "origin", "work/budget-probe"], repo)
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(commit_pipeline_mod.time, "monotonic", lambda: clock["now"])
+
+    def _push(*a, **kw):
+        # One leg that spends the WHOLE budget and comes back rejected: the
+        # outcome is observed, nothing is in flight, and there is no time left
+        # to fetch. Exactly the state the between-attempts stop exists for.
+        clock["now"] += 6.0
+        return GitResult(returncode=1, stdout="", stderr="! [rejected] (non-fast-forward)")
+
+    fetch_calls = []
+
+    def _fetch(*a, **kw):
+        fetch_calls.append(kw.get("timeout"))
+        return GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "push", _push)
+    monkeypatch.setattr(git_native, "fetch", _fetch)
+
+    outcome = commit_pipeline_mod.push_with_retry(repo, budget_secs=5.0)
+
+    assert fetch_calls == [], f"the fetch leg ran on an exhausted budget: {fetch_calls}"
+    assert outcome.unconfirmed == []
+    assert outcome.failed
+    assert "5s budget" in outcome.failed[0]
+    # One attempt was made and observed -- not the "stopped before any attempt"
+    # wording, which would claim a remote declined us when one had answered.
+    assert "stopped after 1 attempt(s)" in outcome.failed[0]
+    assert "rejected" in outcome.failed[0], "the reject the remote actually reported is dropped"
+    # One `git push: ` prefix, not two. `in`-substring assertions cannot see a
+    # doubled prefix, so the branch this test pins shipped `"git push: git
+    # push: stopped after ..."` while its attempt-0 sibling said it once
+    # (2026-08-26 review, slice 2).
+    assert outcome.failed[0].count("git push: ") == 1, outcome.failed[0]
 
 
 def test_push_budget_sizes_each_leg_from_the_remainder(tmp_path, monkeypatch):

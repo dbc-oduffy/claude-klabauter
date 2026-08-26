@@ -303,6 +303,12 @@ def test_build_ceremony_halt_exit_codes_matches_workday_and_workweeks_literal_la
 # inspection test idiom — e.g. `test_no_unbatched_per_item_git_spawn.py`).
 # ---------------------------------------------------------------------------
 
+#: Declaration for the register-aging sweep (C5,
+#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
+#: every row of `_CEREMONY_APPLY_MODULES` names a whole importable module, never a symbol
+#: living inside a parent module.
+_CEREMONY_APPLY_MODULES__SUBJECT_CLASS = "module"
+
 _CEREMONY_APPLY_MODULES = (
     "coordinator_core.workday_complete.apply",
     "coordinator_core.workweek_complete.apply",

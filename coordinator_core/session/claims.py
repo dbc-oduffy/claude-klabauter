@@ -1805,25 +1805,50 @@ def _release_from_touch_record(
     so a rotated member is not missed) and writes through
     ``touch_record.append_event`` (the only sanctioned appender for this
     plane). Never hand-formats a jsonl line.
+
+    THE T-CHECK IS UNION-AWARE, THE ATTRIBUTION IS NOT. ``_read_stream_claims``
+    sees the jsonl family only, so while the compat union lives a claim that
+    exists ONLY in a sibling ``touched.txt`` is invisible to it and the release
+    silently no-ops -- the same defect class this function was written to fix,
+    one plane over. The T-decision therefore reads
+    ``scope._read_touch_record_as_legacy_lines``, the union seam every other
+    reader of this record already goes through, so a legacy-only claim is
+    still released while that arm exists. The jsonl stream is still consulted,
+    but only to recover the ``agent`` attribution for the ``R`` event: a
+    legacy-dialect line carries no agent id, and fabricating one would be
+    worse than recording none.
     """
+    try:
+        lines, degraded = scope._read_touch_record_as_legacy_lines(sink_path)
+    except Exception:
+        return
+    if degraded:
+        return  # fail-safe RETAIN -- an unreadable plane never force-releases
+    last_verb: Optional[str] = None
+    last_raw: Optional[str] = None
+    for line in lines:
+        verb, _ts, raw_path = scope.parse_touch_event(line)
+        if claim_index._normalize_key(raw_path) == normalized_target:
+            last_verb = verb
+            last_raw = raw_path
+    if last_verb != "T" or last_raw is None:
+        return
+    agent_id = None
     try:
         claims_by_path, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
     except Exception:
-        return
-    event = None
+        claims_by_path = {}
     for recorded_path, recorded in claims_by_path.items():
         if claim_index._normalize_key(recorded_path) == normalized_target:
-            event = recorded
+            agent_id = getattr(recorded, "agent", None)
             break
-    if event is None or getattr(event, "verb", None) != "T":
-        return
     try:
         touch_record.append_event(
             sink_path,
             session_id=claimant_sid,
-            agent_id=getattr(event, "agent", None),
+            agent_id=agent_id,
             verb="R",
-            path=getattr(event, "path", path),
+            path=last_raw,
         )
     except Exception:
         return

@@ -74,6 +74,20 @@ def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
     assert directive["args"] == ["fast"]
 
 
+def test_reap_claims_for_repos_directive_present() -> None:
+    """Sub-reap (iii), the orphaned-claim-dir cull, has NO production caller
+    other than this directive (`session.reap_claims_for_repos` was cut out
+    of `session.reap`'s `_handler` by PM ruling 2026-08-22 and relocated
+    here) -- deleting this directive silently disables the orphaned-claim
+    cull with no other signal that it happened."""
+    clis = {d["cli"] for d in wwc_brief._build_directives()}
+    assert "reap-claims-for-repos" in clis, (
+        "reap-claims-for-repos directive missing from workweek-complete: "
+        "sub-reap (iii), the orphaned-claim-dir cull, has no other "
+        "production caller -- deleting this directive silently disables it"
+    )
+
+
 def test_step4c_ubt_directive_exists_and_hard_blocks() -> None:
     """The Step 4c UBT pending-record merge gate must exist and emit
     `hard_block: true` -- DoE's PM cut the compensating ceremony prose on the

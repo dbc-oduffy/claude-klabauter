@@ -2045,6 +2045,22 @@
       "_MERGE_CLI_VERBS"
     ],
     [
+      "coordinator_core/merge_assemble/tests/test_no_interpreter_spawn.py",
+      "_CONVERGED_HANDLER_NAMES"
+    ],
+    [
+      "coordinator_core/merge_assemble/tests/test_no_interpreter_spawn.py",
+      "_STILL_SPAWNING_HANDLER_NAMES"
+    ],
+    [
+      "coordinator_core/merge_assemble/tests/test_warm_ceremony_brightline.py",
+      "_OP_IDS"
+    ],
+    [
+      "coordinator_core/merge_assemble/tests/test_warm_ceremony_brightline.py",
+      "_OP_PATH_SWEEP_EXEMPT_FILES"
+    ],
+    [
       "coordinator_core/message_register/tests/test_codename_classes.py",
       "_EXEMPTION_FIXTURES"
     ],
@@ -3298,11 +3314,7 @@
     ],
     [
       "coordinator_core/reconcile/tests/test_commit_reality.py",
-      "_DEFAULT_POLICY"
-    ],
-    [
-      "coordinator_core/reconcile/tests/test_commit_reality.py",
-      "_EXPLICIT_SHIP_CLAIM_SCOPE_OVERLAP_MARKER"
+      "_MECHANICAL_DENYLIST"
     ],
     [
       "coordinator_core/reconcile/tests/test_no_second_gate_verdict_walk.py",
@@ -4937,7 +4949,7 @@
       "_VALID_FM"
     ]
   ],
-  "candidate_ids_sha256": "0d65cc3645c334266ab7ca5250366aad76f1305009e4f4bdb98f0e8f9cbf8827",
+  "candidate_ids_sha256": "d128d08beb359d35db3d2113b9975181f9f66a33290cfe42b792d6ac9555ea9c",
   "candidate_roots": [
     "coordinator/tests",
     "coordinator_core"

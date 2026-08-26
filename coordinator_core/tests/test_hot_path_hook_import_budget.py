@@ -293,6 +293,12 @@ class _Target:
     cpu_floor_ms: float = 0.0
 
 
+#: Declaration for the register-aging sweep (C5,
+#: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
+#: every row of `_TARGETS` names a whole importable module (`_Target.import_path`), never a
+#: symbol living inside a parent module.
+_TARGETS__SUBJECT_CLASS = "module"
+
 _TARGETS: Sequence[_Target] = (
     _Target(
         name="bash_guards_dispatch",

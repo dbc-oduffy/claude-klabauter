@@ -151,6 +151,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workday-complete-reconcile",
     "workday-complete-step2_5-dirty-tree",
     "reap-orphaned-in-flight-handoffs",
+    "reap-claims-for-repos",
     "workday-complete-step3-consolidate",
     "workday-complete-backfill-scan",
     "workday-complete-backfill-anchor",
@@ -469,6 +470,17 @@ def _build_directives(
         _directive(
             "d_step2_65_reap_orphans",
             cli="reap-orphaned-in-flight-handoffs",
+            args=[],
+        ),
+        _directive(
+            # Sub-reap (iii), the orphaned-claim-dir cull, was cut out of
+            # `session.reap`'s `_handler` by PM ruling 2026-08-22 (an
+            # irreversible `rm -rf` at boot, the busiest moment) and
+            # relocated to `session.reap_claims_for_repos` — this directive
+            # is the destination it was relocated to. No `depends_on`: an
+            # orphan cull has no live ask to wait on.
+            "d_step2_66_reap_claims",
+            cli="reap-claims-for-repos",
             args=[],
         ),
         _directive(

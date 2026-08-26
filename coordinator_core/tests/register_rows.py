@@ -120,7 +120,15 @@ class SubjectClass(enum.Enum):
     OPAQUE = "opaque"
 
 
-_DOTTED_CLASSES = frozenset({SubjectClass.MODULE, SubjectClass.SYMBOL})
+DOTTED_CLASSES = frozenset({SubjectClass.MODULE, SubjectClass.SYMBOL})
+"""The classes `resolve_row` adjudicates by dotted subject rather than index lookup.
+
+Exported because a caller deciding whether a register needs an adjacent
+`__SUBJECT_CLASS` declaration is asking exactly this question, and a second
+hand-maintained copy of the membership is the shape this module exists to
+retire. `MODULE` and `SYMBOL` resolve by different routes -- see
+`_resolve_module` on why they must not share one.
+"""
 
 
 class RegisterId(NamedTuple):
@@ -209,44 +217,96 @@ class TrackedFileIndex:
     def paths_for_basename(self, basename: str) -> tuple[str, ...]:
         return self._by_basename.get(basename, ())
 
+    def paths_for_dotted_module(self, dotted: str) -> tuple[str, ...]:
+        """Every tracked file a dotted module name could denote, repo-rooted or not.
 
-def _resolve_dotted(subject: str, index: TrackedFileIndex, repo_root: Path) -> Resolution:
-    """Resolve a `module` or `symbol` row by parsing its containing file's AST.
+        Register rows name modules the way a reader does -- `ipc`,
+        `warm.engine_root`, `dispatch.provision` -- not as repo-rooted import
+        paths. Anchoring only at the repo root reports those live modules
+        ABSENT, so the tail is matched at any package depth.
 
-    The candidate file is located via the tracked-file index (never a fresh
-    git call), then parsed once. No subject is ever imported.
+        Returns EVERY match rather than the first: one match is an answer, and
+        more than one is a genuine ambiguity the caller must report as
+        unadjudicable rather than resolve by picking. Silently taking the first
+        would let the sweep attest a subject it never actually located.
+        """
+        tail = dotted.replace(".", "/")
+        return tuple(
+            sorted(
+                relpath
+                for relpath in self._paths
+                if relpath in (f"{tail}.py", f"{tail}/__init__.py")
+                or relpath.endswith((f"/{tail}.py", f"/{tail}/__init__.py"))
+            )
+        )
+
+
+def _resolve_module(subject: str, index: TrackedFileIndex) -> Resolution:
+    """Resolve a `module` row: the WHOLE dotted path names a file, not a member.
+
+    A module row is a pure index lookup -- no parse, no member search. This
+    is deliberately not `_resolve_symbol` with a different argument: treating
+    a module's final segment as a member name looks for `supervisor` inside
+    `coordinator_core/warm.py` and reports `absent` while
+    `coordinator_core/warm/supervisor.py` sits tracked on disk. That is a
+    false dead-row report, the reads-as-CLOSURE failure inverted -- the sweep
+    accusing a live subject -- and a gate that cries dead on live rows is the
+    low-precision predicate this plan's anti-scope refuses to ship.
+    """
+    matches = index.paths_for_dotted_module(subject)
+    if len(matches) == 1:
+        return Resolution(ResolutionKind.RESOLVED, detail=matches[0])
+    if matches:
+        return Resolution(
+            ResolutionKind.UNADJUDICABLE,
+            detail=f"ambiguous module {subject!r}: {', '.join(matches)}",
+        )
+    return Resolution(ResolutionKind.ABSENT, detail=f"module not tracked: {subject}")
+
+
+def _resolve_symbol(subject: str, index: TrackedFileIndex, repo_root: Path) -> Resolution:
+    """Resolve a `symbol` row by parsing its containing module's AST.
+
+    The final dotted segment is the member name; everything before it locates
+    the file via the tracked-file index (never a fresh git call), matched at
+    any package depth for the same reason `paths_for_dotted_module` explains.
+    The file is parsed once. No subject is ever imported.
     """
     parts = subject.split(".")
     if len(parts) < 2:
         return Resolution(ResolutionKind.UNADJUDICABLE, detail=f"not dotted: {subject!r}")
 
     module_parts, member_name = parts[:-1], parts[-1]
-    candidate_relpaths = [
-        "/".join(module_parts) + ".py",
-        "/".join(module_parts) + "/__init__.py",
-    ]
-    for relpath in candidate_relpaths:
-        if index.has_path(relpath):
-            file_path = repo_root / relpath
-            try:
-                tree = ast.parse(file_path.read_text(encoding="utf-8"))
-            except (OSError, SyntaxError, UnicodeDecodeError) as exc:
-                return Resolution(ResolutionKind.UNADJUDICABLE, detail=f"parse failed: {exc}")
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    if node.name == member_name:
-                        return Resolution(ResolutionKind.RESOLVED)
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name) and target.id == member_name:
-                            return Resolution(ResolutionKind.RESOLVED)
-                if isinstance(node, ast.AnnAssign):
-                    if isinstance(node.target, ast.Name) and node.target.id == member_name:
-                        return Resolution(ResolutionKind.RESOLVED)
-            return Resolution(ResolutionKind.ABSENT, detail=f"not found in {relpath}")
-
     module_dotted = ".".join(module_parts)
-    return Resolution(ResolutionKind.ABSENT, detail=f"module not tracked: {module_dotted}")
+    candidate_relpaths = index.paths_for_dotted_module(module_dotted)
+    if len(candidate_relpaths) > 1:
+        return Resolution(
+            ResolutionKind.UNADJUDICABLE,
+            detail=f"ambiguous module {module_dotted!r}: {', '.join(candidate_relpaths)}",
+        )
+    if not candidate_relpaths:
+        return Resolution(ResolutionKind.ABSENT, detail=f"module not tracked: {module_dotted}")
+
+    relpath = candidate_relpaths[0]
+    file_path = repo_root / relpath
+    try:
+        tree = ast.parse(file_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        return Resolution(ResolutionKind.UNADJUDICABLE, detail=f"parse failed: {exc}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == member_name:
+                return Resolution(ResolutionKind.RESOLVED, detail=relpath)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == member_name:
+                    return Resolution(ResolutionKind.RESOLVED, detail=relpath)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == member_name:
+                return Resolution(ResolutionKind.RESOLVED, detail=relpath)
+
+    return Resolution(ResolutionKind.ABSENT, detail=f"not found in {relpath}")
 
 
 def resolve_row(row: Row, index: TrackedFileIndex, repo_root: Path) -> Resolution:
@@ -274,8 +334,11 @@ def resolve_row(row: Row, index: TrackedFileIndex, repo_root: Path) -> Resolutio
             return Resolution(ResolutionKind.RESOLVED, detail=",".join(matches))
         return Resolution(ResolutionKind.ABSENT, detail=f"no tracked file named: {row.subject}")
 
-    if declared in _DOTTED_CLASSES:
-        return _resolve_dotted(row.subject, index, repo_root)
+    if declared is SubjectClass.MODULE:
+        return _resolve_module(row.subject, index)
+
+    if declared is SubjectClass.SYMBOL:
+        return _resolve_symbol(row.subject, index, repo_root)
 
     return Resolution(ResolutionKind.UNADJUDICABLE, detail=f"unknown class: {declared}")
 

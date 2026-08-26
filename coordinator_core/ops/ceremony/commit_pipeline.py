@@ -99,13 +99,16 @@ Negative-spec (hard-won):
     `close_out_and_stamp.py` (not itself a cadence surface) also passes
     `push_mode=PUSH_MODE_NEVER` explicitly, deferring publication to
     whichever cadence checkpoint runs next rather than owning a synchronous
-    push of its own. `push_mode`'s own default parameter value
-    (`PUSH_MODE_SYNC`) is UNCHANGED by this DR -- it is the explicit
-    call-site contract that changed, not the function signature -- so a
-    hypothetical new caller that omits `push_mode` still gets `"sync"` by
-    construction; DR-329 does not forbid that, it only requires every
-    NAMED existing caller above to pass `PUSH_MODE_NEVER` explicitly rather
-    than relying on the default.
+    push of its own. `push_mode`'s own default parameter value was left
+    at `PUSH_MODE_SYNC` by that DR -- it changed the explicit call-site
+    contract, not the function signature -- and was flipped to
+    `PUSH_MODE_NONE` separately on 2026-08-26, because an omitting
+    cross-repo caller was inheriting a synchronous push inside a
+    `ceremony.*` op under the 2.0s wall-clock clamp. See the
+    `_PUSH_MODES` comment block above for why `none` and not `never`, and
+    `tests/test_push_mode_default_contract.py` for the pin. DR-329's own
+    requirement is unaffected: every NAMED caller above passes
+    `PUSH_MODE_NEVER` explicitly rather than relying on any default.
   - A directory pathspec in `stage_paths` is refused BEFORE `explicit_stage()`
     ever runs (session fb5fa766, 2026-07-31 incident, closed 2026-07-31) --
     `commit_scoped()`'s own directory refusal, further down the pipeline,
@@ -3176,6 +3179,14 @@ def _budget_exhausted_reason(
     NEVER routed to `PushOutcome.unconfirmed`: this string is only ever
     produced BETWEEN attempts, where the previous push's outcome was
     observed and nothing is in flight. See `PUSH_RETRY_BUDGET_SECS`.
+
+    Returns the reason ALONE, without the `"git push: "` prefix every
+    `PushOutcome` message in this module carries -- the two call sites own
+    that, because one of them reaches `PushOutcome` through `last_reason` and
+    the shared prefix at the end of the ladder. Embedding it here made the
+    fetch-leg exhaustion read `"git push: git push: stopped after ..."` while
+    the attempt-0 exhaustion read it once: the same event, spelled two ways,
+    depending on which branch produced it (2026-08-26 review, slice 2).
     """
     budget_part = "budget" if budget_secs is None else f"{float(budget_secs):g}s budget"
     tail = f" (last: {last_reason})" if last_reason else ""
@@ -3188,7 +3199,7 @@ def _budget_exhausted_reason(
         else f"stopped after {attempts_made} attempt(s)"
     )
     return (
-        f"git push: {made} -- the ladder's own {budget_part} was exhausted "
+        f"{made} -- the ladder's own {budget_part} was exhausted "
         f"before the remote accepted{tail}. Nothing is in flight; reconcile "
         f"and retry at the next checkpoint."
     )
@@ -3338,7 +3349,10 @@ def push_with_retry(
         if leg_timeout is not None and leg_timeout <= 0:
             return PushOutcome(
                 exit_code=last_exit_code or 1,
-                failed=[_budget_exhausted_reason(attempt, budget_secs, last_reason)],
+                failed=[
+                    f"git push: "
+                    f"{_budget_exhausted_reason(attempt, budget_secs, last_reason)}"
+                ],
             )
         push_result = (
             git_native.push(root)
@@ -4049,7 +4063,7 @@ def run_commit_pipeline(
     stage_paths: Sequence[str] = (),
     caller_paths: Optional[Set[str]] = None,
     on_committed: Optional[Callable[[str], None]] = None,
-    push_mode: str = PUSH_MODE_SYNC,
+    push_mode: str = PUSH_MODE_NONE,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     deliverable_id: Optional[str] = None,

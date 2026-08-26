@@ -129,6 +129,21 @@ def test_goal_close_day_only_emitted_when_open_rows_present() -> None:
     assert "goal-close-day" in present_clis
 
 
+def test_reap_claims_for_repos_directive_present() -> None:
+    """Sub-reap (iii), the orphaned-claim-dir cull, has NO production caller
+    other than this directive (`session.reap_claims_for_repos` was cut out
+    of `session.reap`'s `_handler` by PM ruling 2026-08-22 and relocated
+    here) -- deleting this directive silently disables the orphaned-claim
+    cull with no other signal that it happened."""
+    directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
+    clis = {d["cli"] for d in directives}
+    assert "reap-claims-for-repos" in clis, (
+        "reap-claims-for-repos directive missing from workday-complete: "
+        "sub-reap (iii), the orphaned-claim-dir cull, has no other "
+        "production caller -- deleting this directive silently disables it"
+    )
+
+
 def test_dirty_tree_scan_directive_always_present_but_gate_is_conditional() -> None:
     """`d_step2_5_dirty_tree_scan` (the auto-disposition run) fires every
     time regardless of verdict; `d_step3_consolidate`'s `depends_on` is

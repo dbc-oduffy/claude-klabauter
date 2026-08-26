@@ -55,6 +55,7 @@ __all__ = [
     "COOKIE_HEADER",
     "curl_config_path",
     "DirectoryNotPrivateError",
+    "CookieUnreadableError",
     "cookie_path",
     "mint",
     "ensure",
@@ -76,6 +77,19 @@ CURL_CONFIG_FILENAME = "warm.curlrc"
 
 #: The request header the cookie travels in.
 COOKIE_HEADER = "X-Coordinator-Cookie"
+
+
+class CookieUnreadableError(Exception):
+    """A cookie file is PRESENT but could not be read.
+
+    Distinct from absent on purpose. `read()` collapses both to None by
+    design -- it is a degrade-to-no-information reader -- but a boot path
+    must not, because the two have opposite correct responses: absent
+    means generate one, present-but-unreadable means REFUSE. Re-minting
+    over an unreadable file rotates the secret out from under every live
+    session on what may be a transient I/O error, and serving without
+    reading it authenticates nobody.
+    """
 
 
 class DirectoryNotPrivateError(Exception):
@@ -173,17 +187,31 @@ def ensure(engine_root: Optional[Path] = None) -> str:
     Rotation is an operator action bounded by the longest live session --
     `clear()` then this -- never a boot side-effect.
 
-    A cookie that exists but is unreadable is NOT silently replaced:
-    `read()` returns None only for a missing or unreadable file, and
-    replacing an unreadable one would rotate the secret out from under
-    every live session on a transient read error. The narrow race of two
-    engines booting together is safe by construction -- both write via
-    `os.replace`, so a reader sees one whole token or the other, never a
-    tear.
+    A cookie that exists but is unreadable RAISES
+    `CookieUnreadableError` rather than being replaced -- replacing it
+    would rotate the secret out from under every live session on what may
+    be a transient read error. `read()` alone cannot make this
+    distinction (it returns None for missing AND unreadable), so the
+    existence check is done separately and deliberately.
+
+    CONCURRENT BOOT, STATED NARROWLY: two engines can both read absent
+    and both mint, and the second `os.replace` supersedes the first. No
+    reader ever sees a torn token -- that much IS by construction -- but
+    "exactly one final cookie" is not guaranteed here; it is guaranteed
+    upstream, by the election lock that admits one supervisor per root.
     """
     existing = read(engine_root)
     if existing is not None:
         return existing
+    # PRESENT-BUT-UNREADABLE IS NOT ABSENT, AND `read()` CANNOT TELL YOU
+    # WHICH -- it returns None for both, by design. Asking the filesystem
+    # directly is what separates "generate one" from "refuse": re-minting
+    # over a file that exists but would not read rotates the secret out
+    # from under every live session, on what may be a transient error.
+    if cookie_path(engine_root).exists():
+        raise CookieUnreadableError(
+            f"cookie exists but could not be read: {cookie_path(engine_root)}"
+        )
     return mint(engine_root)
 
 

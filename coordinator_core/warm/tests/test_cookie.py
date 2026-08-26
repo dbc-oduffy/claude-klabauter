@@ -380,6 +380,45 @@ def test_ensure_does_not_rotate_an_existing_cookie(tmp_path: Path) -> None:
         assert cookie.ensure(tmp_path) == first
 
 
+def test_ensure_refuses_a_present_but_unreadable_cookie(tmp_path: Path) -> None:
+    """THE CASE THE HAPPY-PATH TEST DOES NOT REACH. `read()` returns None
+    for a missing file AND for an unreadable one, so an `ensure` that
+    branches on `read()` alone re-mints over a cookie that is merely
+    unreadable -- rotating the secret out from under every live session on
+    what may be a transient I/O error. Refuse, never replace."""
+    cookie.cookie_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    cookie.cookie_path(tmp_path).write_bytes(bytes([0xFF, 0xFE]) + b" not ascii")
+    with pytest.raises(cookie.CookieUnreadableError):
+        cookie.ensure(tmp_path)
+
+
+def test_ensure_does_not_replace_the_bytes_of_an_unreadable_cookie(
+    tmp_path: Path,
+) -> None:
+    """Refusing is only half of it -- the file must still be there,
+    untouched, for an operator to inspect or recover."""
+    path = cookie.cookie_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    corrupt = bytes([0xFF, 0xFE]) + b" not ascii"
+    path.write_bytes(corrupt)
+    with pytest.raises(cookie.CookieUnreadableError):
+        cookie.ensure(tmp_path)
+    assert path.read_bytes() == corrupt
+
+
+def test_a_refused_boot_on_an_unreadable_cookie_does_not_serve(
+    tmp_path: Path,
+) -> None:
+    """The guard must propagate the refusal, not swallow it into a mint."""
+    from coordinator_core.warm import supervisor
+
+    path = cookie.cookie_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes([0xFF, 0xFE]) + b" not ascii")
+    with pytest.raises(cookie.CookieUnreadableError):
+        supervisor._assert_credential_ready(tmp_path)
+
+
 def test_ensure_keeps_the_curlrc_in_step_on_first_generation(tmp_path: Path) -> None:
     token = cookie.ensure(tmp_path)
     assert token in cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
@@ -427,6 +466,14 @@ def test_the_guard_runs_before_the_bind() -> None:
     from coordinator_core.warm import supervisor
 
     src = inspect.getsource(supervisor.main)
+    # Anchors checked for PRESENCE first: a rename or a refactor that wraps
+    # the bind in a helper would otherwise raise an opaque ValueError from
+    # `index` instead of failing as the ordering violation it is.
+    assert "_assert_credential_ready" in src, "the credential guard left `main`"
+    assert "ThreadingHTTPServer(" in src, (
+        "the bind is no longer a literal in `main` -- this ordering test has "
+        "gone blind and needs rewriting against the new shape"
+    )
     guard = src.index("_assert_credential_ready")
     bind = src.index("ThreadingHTTPServer(")
     assert guard < bind, "the credential guard must precede the bind"
@@ -442,6 +489,9 @@ def test_a_refused_boot_returns_nonzero_before_binding() -> None:
     from coordinator_core.warm import supervisor
 
     src = inspect.getsource(supervisor.main)
+    assert "_assert_credential_ready" in src and "ThreadingHTTPServer(" in src, (
+        "an anchor moved -- this test has gone blind and needs rewriting"
+    )
     guard_block = src[
         src.index("_assert_credential_ready") : src.index("ThreadingHTTPServer(")
     ]

@@ -5587,20 +5587,30 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: these ops' own `_LEGITIMIZED_SITES`/spawn-budget companions (where they exist) still gate what
 #: actually runs. Every value below is a fresh `_measure_static_spawn_counts` read against the
 #: live tree post-rebuild, not a guess.
+#: TIGHTENED 2026-08-26 (D7 dispatch, `test_static_spawn_count_pins_that_have_gone_loose`): the
+#: 648f2e4eb rebuild's own pins above had gone slack against further shared-helper trimming on
+#: `archive_terminal_handoffs.py` -- handoff.archive_transition/reconcile_close_terminal 18->13,
+#: fleet.migrate_handoff_vocabulary/handoff.transition 17->12, fleet.archive_completed_handoffs
+#: 15->10, fleet.reap_integrated_findings/reap_unintegrated_findings 15->14, and the five
+#: remaining fleet.archive_*/prune_closed_bugs ops 13->9, each a fresh
+#: `_measure_static_spawn_counts` read, not a guess. `ceremony.commit` is a NEWLY-appeared live
+#: op with no prior pin (`test_static_spawn_count_pins_cover_every_unlegitimized_residual_op`'s
+#: own missing leg), pinned at its measured 10.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.archive_transition": 18,
-    "handoff.reconcile_close_terminal": 18,
-    "fleet.migrate_handoff_vocabulary": 17,
-    "handoff.transition": 17,
-    "fleet.archive_completed_handoffs": 15,
-    "fleet.reap_integrated_findings": 15,
-    "fleet.reap_unintegrated_findings": 15,
-    "fleet.archive_paper_trail": 13,
-    "fleet.archive_queue_entry": 13,
-    "fleet.archive_release_accumulator": 13,
-    "fleet.archive_terminal_sizings": 13,
-    "fleet.prune_closed_bugs": 13,
+    "handoff.archive_transition": 13,
+    "handoff.reconcile_close_terminal": 13,
+    "fleet.migrate_handoff_vocabulary": 12,
+    "handoff.transition": 12,
+    "fleet.reap_integrated_findings": 14,
+    "fleet.reap_unintegrated_findings": 14,
+    "fleet.archive_completed_handoffs": 10,
+    "ceremony.commit": 10,
+    "fleet.archive_paper_trail": 9,
+    "fleet.archive_queue_entry": 9,
+    "fleet.archive_release_accumulator": 9,
+    "fleet.archive_terminal_sizings": 9,
+    "fleet.prune_closed_bugs": 9,
     "deliverable.cascade_terminal": 10,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
@@ -5741,20 +5751,21 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: nothing asserts on.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.archive_transition": 18,
-    "handoff.reconcile_close_terminal": 18,
-    "fleet.migrate_handoff_vocabulary": 17,
-    "handoff.transition": 17,
-    "fleet.archive_completed_handoffs": 15,
-    "fleet.reap_integrated_findings": 15,
-    "fleet.reap_unintegrated_findings": 15,
-    "fleet.archive_paper_trail": 13,
-    "fleet.archive_queue_entry": 13,
-    "fleet.archive_release_accumulator": 13,
-    "fleet.archive_terminal_sizings": 13,
-    "fleet.prune_closed_bugs": 13,
+    "fleet.reap_integrated_findings": 14,
+    "fleet.reap_unintegrated_findings": 14,
+    "handoff.archive_transition": 13,
+    "handoff.reconcile_close_terminal": 13,
+    "fleet.migrate_handoff_vocabulary": 12,
+    "handoff.transition": 12,
+    "fleet.archive_completed_handoffs": 10,
+    "ceremony.commit": 10,
     "deliverable.cascade_terminal": 10,
     "warm_guard.evaluate": 10,
+    "fleet.archive_paper_trail": 9,
+    "fleet.archive_queue_entry": 9,
+    "fleet.archive_release_accumulator": 9,
+    "fleet.archive_terminal_sizings": 9,
+    "fleet.prune_closed_bugs": 9,
     "distill.apply_disposal": 9,
     "memo.transition": 9,
 }

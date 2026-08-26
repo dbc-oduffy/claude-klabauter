@@ -56,13 +56,19 @@ from unittest.mock import patch
 import pytest
 
 import coordinator_core.ops.fleet._common as _common_mod
+from coordinator_core.ops.ceremony.git_native import (
+    _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS,
+    GitResult,
+)
 from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     _REASON_DEST_CONFLICT,
     _SCAN_REASON_CONSUMED_BY_LIVE,
     _SCAN_REASON_LIVE_CHILD,
     _SCAN_REASON_LIVE_CLAIM,
+    _SCAN_REASON_MEMBERSHIP_ERROR,
     _SCAN_REASON_NOT_TERMINAL,
     _SCAN_REASON_WORKTREE_DIRTY,
+    _dirty_handoff_relpaths,
     _handle_act,
     _handler,
     _object_exists_no_spawn,
@@ -139,7 +145,13 @@ def _cid(name: str) -> str:
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    # `plan_sweep`/`_handle_act`/`_handler` are SYNCHRONOUS (C2) — this
+    # helper predates that migration and always assumed a coroutine. Accept
+    # a plain return value unchanged so every existing call site here keeps
+    # working without an s/_run(x)/x/ rewrite across the whole file.
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 @pytest.fixture
@@ -738,4 +750,228 @@ def test_ac4_scan_reasons_never_reach_the_cockpit_wire(repo: Path):
     wire_ids = [item.get("id") for item in act.get("skipped", [])]
     assert _cid(name) not in wire_ids, (
         f"a record the caller never named must not appear on the wire; got {act!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C3: classify first, dirty-check only the survivors
+# ---------------------------------------------------------------------------
+
+
+def test_c3_zero_survivors_spawns_zero_git_processes(repo: Path):
+    """AC-2's amended form: a pass where classification yields zero
+    survivors spawns ZERO processes for the worktree-dirty rail — not merely
+    a narrower pathspec. Every seeded record here is non-terminal, so no
+    candidate ever reaches Rail 1.
+    """
+    for i in range(5):
+        _seed(repo, f"2026-05-{i + 1:02d}-non-terminal.md", "status: open\ndeployment_state: ready_to_fire")
+    common_dir = _common_dir(repo)
+
+    with patch("subprocess.run", wraps=subprocess.run) as plan_spy:
+        moves, skipped = _run(plan_sweep(repo, common_dir, cap=50))
+
+    assert not moves, f"fixture sanity: nothing here should qualify; got {moves!r}"
+    assert plan_spy.call_count == 0, (
+        f"zero survivors must spawn zero git processes for the worktree-dirty "
+        f"rail (C3); got {plan_spy.call_count}"
+    )
+
+
+def test_c3_dirty_and_non_terminal_reason_precedence_is_not_terminal(repo: Path):
+    """DESIGNED reason-precedence change (staff-eng Finding 1, C3): a record
+    that is BOTH worktree-dirty AND non-terminal now surfaces `not-terminal:
+    ...` and never reaches the dirty rail, because classification runs
+    first. This is a deliberate reorder effect, not a regression.
+    """
+    name = "2026-05-10-dirty-and-non-terminal.md"
+    path = _seed(repo, name, "status: open\ndeployment_state: ready_to_fire")
+    path.write_text(path.read_text(encoding="utf-8") + "uncommitted edit\n", encoding="utf-8")
+
+    reason = _scan_reasons(repo).get(_cid(name))
+
+    assert reason is not None, "the record must still be named, not dropped"
+    assert reason.startswith(_SCAN_REASON_NOT_TERMINAL), (
+        f"classify-first means not-terminal wins over worktree-dirty for a "
+        f"record that is both; got {reason!r}"
+    )
+    assert reason != _SCAN_REASON_WORKTREE_DIRTY
+
+
+def test_ac10_membership_error_rail_names_itself(repo: Path):
+    """AC-10: the sixth `_SCAN_REASON_*` rail (`_SCAN_REASON_MEMBERSHIP_ERROR`,
+    the fail-closed `reverse_membership` ValueError arm) previously had no
+    covering `test_ac2_*_rail_names_itself` test.
+    """
+    name = "2026-05-11-membership-error.md"
+    _seed(repo, name, "status: claimed")
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs.reverse_membership",
+        side_effect=ValueError("boom"),
+    ):
+        reason = _scan_reasons(repo).get(_cid(name))
+
+    assert reason is not None, "a reverse_membership error must be named, not dropped (fail-closed)"
+    assert reason.startswith(_SCAN_REASON_MEMBERSHIP_ERROR), reason
+
+
+def test_c3_dirty_check_pathspec_scoped_to_survivors_only(repo: Path):
+    """The dirty check's pathspec is bounded by the SURVIVOR set, not the
+    whole `state/handoffs` tree — a non-terminal record's path must never
+    appear in the scoped `git status --porcelain` pathspec.
+    """
+    survivor_name = "2026-05-12-survivor.md"
+    _seed(repo, survivor_name, "status: claimed")
+    non_terminal_name = "2026-05-13-non-terminal.md"
+    _seed(repo, non_terminal_name, "status: open\ndeployment_state: ready_to_fire")
+    common_dir = _common_dir(repo)
+
+    with patch("subprocess.run", wraps=subprocess.run) as spy:
+        _run(plan_sweep(repo, common_dir, cap=50))
+
+    dirty_calls = [c for c in spy.call_args_list if "status" in c.args[0]]
+    assert len(dirty_calls) == 1, f"expected exactly one git status call; got {dirty_calls!r}"
+    argv = dirty_calls[0].args[0]
+    assert _cid(survivor_name) in argv, f"the survivor's path must be in the scoped pathspec; got {argv!r}"
+    assert _cid(non_terminal_name) not in argv, (
+        f"a non-terminal record must never appear in the survivor-scoped "
+        f"pathspec; got {argv!r}"
+    )
+
+
+def test_c3_fallback_to_unscoped_call_above_pathspec_budget():
+    """staff-eng Finding 8: above the pathspec byte budget, the dirty check
+    falls back to the CURRENT unscoped call (`git status --porcelain --
+    state/handoffs`) rather than risking the Windows argv cap or spawning
+    one chunk per budget-full of survivors.
+    """
+    huge_survivor_set = [f"state/handoffs/{'x' * 200}-{i}.md" for i in range(100)]
+    assert sum(len(p) + 1 for p in huge_survivor_set) > _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        return_value=GitResult(returncode=0, stdout="", stderr=""),
+    ) as spy:
+        dirty = _dirty_handoff_relpaths(Path("."), huge_survivor_set)
+
+    assert not dirty
+    spy.assert_called_once()
+    called_paths = spy.call_args.args[1]
+    assert called_paths == ["state/handoffs"], (
+        f"over-budget survivor set must fall back to the unscoped call, "
+        f"still exactly one spawn; got {called_paths!r}"
+    )
+
+
+def test_c3_fail_closed_on_git_status_failure_treats_survivors_as_dirty():
+    """staff-eng Finding 8: a non-zero git exit or launch failure on the
+    dirty-check rail must be FAIL-CLOSED (every survivor refused as dirty),
+    never an empty dirty set — an empty set from a failed git call is
+    exactly the fail-open mode this rail exists to refuse.
+    """
+    survivors = ["state/handoffs/2026-05-20-a.md", "state/handoffs/2026-05-21-b.md"]
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        return_value=GitResult(returncode=1, stdout="", stderr="fatal: boom"),
+    ):
+        dirty = _dirty_handoff_relpaths(Path("."), survivors)
+
+    assert dirty == set(survivors), (
+        f"a failed git status call must fail-closed to 'every survivor is "
+        f"dirty', never an empty set; got {dirty!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C4 (AC-12): the cheap frontmatter pre-filter
+# ---------------------------------------------------------------------------
+
+
+def _write_fm(path: Path, block: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(block, encoding="utf-8", newline="")
+    return path
+
+
+def test_c4_disqualifies_a_plain_non_terminal_pair(tmp_path: Path):
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_NOT_TERMINAL,
+        _prefilter_scan_disqualifies,
+    )
+
+    p = _write_fm(tmp_path / "h.md", "---\nstatus: open\ndeployment_state: in_progress\n---\n\nBody.\n")
+    reason = _prefilter_scan_disqualifies(p)
+    assert reason is not None and reason.startswith(_SCAN_REASON_NOT_TERMINAL)
+
+
+def test_c4_disqualifies_claimed_but_in_flight(tmp_path: Path):
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _prefilter_scan_disqualifies
+
+    p = _write_fm(tmp_path / "h.md", "---\nstatus: claimed\ndeployment_state: in_flight\n---\n\nBody.\n")
+    reason = _prefilter_scan_disqualifies(p)
+    assert reason is not None and "in_flight" in reason
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "---\nstatus: claimed\ndeployment_state: active\n---\n\nBody.\n",  # Branch A qualifies
+        "---\nstatus: open\ndeployment_state: shipped\n---\n\nBody.\n",  # Branch B qualifies
+        "no leading fence at all\n",  # no leading '---' on line 1
+        "---\nstatus: open\ndeployment_state: in_progress\n",  # no closing delimiter
+        "﻿---\nstatus: open\ndeployment_state: in_progress\n---\n\nBody.\n",  # BOM
+        "---\nstatus: \"open\"\ndeployment_state: in_progress\n---\n\nBody.\n",  # quoted scalar
+        "---\nstatus: |\n  open\ndeployment_state: in_progress\n---\n\nBody.\n",  # block scalar
+        "---\nstatus: [open]\ndeployment_state: in_progress\n---\n\nBody.\n",  # flow collection
+        "---\nstatus: &anchor open\ndeployment_state: in_progress\n---\n\nBody.\n",  # anchor
+        "---\nstatus:\topen\ndeployment_state: in_progress\n---\n\nBody.\n",  # tab in indentation
+        "---\nstatus: open\nstatus: open\ndeployment_state: in_progress\n---\n\nBody.\n",  # duplicate key
+        "---\ndeployment_state: in_progress\n---\n\nBody.\n",  # status key absent
+        "---\nstatus: open\n---\n\nBody.\n",  # deployment_state key absent
+    ],
+)
+def test_c4_closed_fall_through_enumeration_never_refuses(tmp_path: Path, block: str):
+    """Every case in the closed fall-through list (staff-eng Finding 6) must
+    return None (uncertain -> full parse decides), never a guessed refusal —
+    including the two genuinely-qualifying shapes, which must also come back
+    None since the pre-filter never refuses a record the full parse admits.
+    """
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _prefilter_scan_disqualifies
+
+    p = _write_fm(tmp_path / "h.md", block)
+    assert _prefilter_scan_disqualifies(p) is None
+
+
+def test_ac12_prefilter_never_disqualifies_a_full_parse_admit():
+    """AC-12's mechanical assertion, over the full live corpus: for every
+    on-disk handoff frontmatter, either the pre-filter admits it (defers to
+    the full parse) or the full parse itself would have refused it too.
+    A passing result is what makes this chunk safe to ship; a failing one is
+    what makes it safe to drop (see the module's own C4 docstring block).
+    """
+    from coordinator_core import dag as dag_mod
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _classify_branch,
+        _prefilter_scan_disqualifies,
+    )
+
+    repo_root = Path(__file__).resolve().parents[4]
+    handoffs_dir = repo_root / "state" / "handoffs"
+    paths = sorted(handoffs_dir.glob("*.md"))
+    assert paths, f"expected a live handoffs corpus under {handoffs_dir}"
+
+    failures = []
+    for path in paths:
+        prefilter_admits = _prefilter_scan_disqualifies(path) is None
+        meta = dag_mod._read_meta(str(path)) or {}
+        qualifies, _reason, _label, _branch_b = _classify_branch(meta, {})
+        full_parse_admits = bool(qualifies)
+        if not (prefilter_admits or not full_parse_admits):
+            failures.append((path.name, meta.get("status"), meta.get("deployment_state")))
+
+    assert not failures, (
+        f"pre-filter disqualified a record the full parse would have "
+        f"admitted (under-archive risk): {failures!r}"
     )

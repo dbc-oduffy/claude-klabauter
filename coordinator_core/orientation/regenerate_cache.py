@@ -210,6 +210,7 @@ from coordinator_core.hooks.auto_push import (
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
+from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
 from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
@@ -1195,6 +1196,7 @@ def _render_cache(
     audits_lines: List[str],
     hook_cancellation_line: str,
     warm_engine_line: str,
+    budget_breach_line: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1242,6 +1244,9 @@ def _render_cache(
 
     if warm_engine_line:
         parts.append("\n## Warm engine\n" + warm_engine_line + "\n")
+
+    if budget_breach_line:
+        parts.append("\n## Budget breaches\n" + budget_breach_line + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1325,6 +1330,7 @@ def build_cache(
     audits_lines = emit_audits_index(state_root)
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
+    budget_breach_line = emit_budget_breaches(repo_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1352,6 +1358,7 @@ def build_cache(
         audits_lines,
         hook_cancellation_line,
         warm_engine_line,
+        budget_breach_line,
         housekeeping_lines,
         pinboard_final,
     )
@@ -1513,8 +1520,25 @@ once already).
 
 # Never truncated -- small by construction, load-bearing for orientation.
 _CACHE_PROTECTED_SECTIONS = frozenset({
-    "Branch", "Rechecks due ≤7 days", "Pinboard",
+    "Branch", "Rechecks due ≤7 days", "Pinboard", "Budget breaches",
 })
+# "Budget breaches" is PROTECTED, breaking from the one-informational-line
+# precedent that put "Warm engine" and "Hook cancellation miss rate" in the
+# elastic set below, and the break is the point. Those two are rates an agent
+# can miss at no cost. This one renders ONLY when an op is failing DR-344's kill
+# bar on real evidence (emit_budget_breaches' two thresholds), which makes it a
+# defect report, and it exists specifically because such a report went unread
+# for 28 hours: `ceremony.commit` timed out on 28 of 31 calls and was found by
+# accident, while the instrument that would have named it sat uncalled.
+#
+# Elastic would reproduce that bug on a timer. The byte budget bites when the
+# cache is crowded -- a busy repo, many workstreams, a flooding housekeeping
+# section -- which is the same condition under which ops breach their budgets.
+# A breach line trimmed largest-first, exactly on the sessions where it is
+# truest, is a line nobody ever reads. It qualifies for protection on the set's
+# own stated terms: one line, small by construction, and absent entirely on a
+# healthy box, so it costs a well-behaved repo nothing to protect it.
+# → coordinator_core.orientation.budget_breach_signal
 # Trimmed under pressure, largest-first, before anything protected is touched.
 _CACHE_ELASTIC_SECTIONS = frozenset({
     "Housekeeping", "Active workstreams", "Auto-push health",

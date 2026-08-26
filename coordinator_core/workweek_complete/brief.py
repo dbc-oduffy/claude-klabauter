@@ -119,6 +119,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "detect-initiative-candidates",
     "coordinator-initiative",
     "cruft-sweep",
+    "reap-claims-for-repos",
     "check-wsc-inline-budget",
     "reassess-goal-krs",
     "workweek-complete-drift-guards",
@@ -515,6 +516,23 @@ def _build_directives(
             args=["--list"],
         ),
         _directive("d_step4_counts_cruft_sweep", cli="cruft-sweep", args=[]),
+        _directive(
+            # Sub-reap (iii), the orphaned-claim-dir cull, was cut out of
+            # `session.reap`'s `_handler` by PM ruling 2026-08-22 (an
+            # irreversible `rm -rf` at boot, the busiest moment) and
+            # relocated to `session.reap_claims_for_repos` — this directive
+            # is the destination it was relocated to. No `depends_on`: an
+            # orphan cull has no live ask to wait on. Idempotent (removes
+            # orphans, does not re-create them), so it is safe to fire again
+            # here even on a week where /workday-complete already ran it —
+            # /workweek-complete does NOT invoke /workday-complete itself
+            # (no reference to workday_complete anywhere in this module or
+            # its apply half), so today the two never double-fire in the
+            # same ceremony chain regardless.
+            "d_step4_counts_reap_claims",
+            cli="reap-claims-for-repos",
+            args=[],
+        ),
         _directive(
             "d_step4_counts_wsc_budget", cli="check-wsc-inline-budget", args=[]
         ),

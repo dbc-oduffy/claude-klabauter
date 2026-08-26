@@ -39,7 +39,15 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import claim_neighbours, claims, core, scope, shape, touch_record
+from coordinator_core.session import (
+    claim_index,
+    claim_neighbours,
+    claims,
+    core,
+    scope,
+    shape,
+    touch_record,
+)
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -1457,6 +1465,82 @@ class TestReleaseArtifactArtifactClass:
             touched.read_text(encoding="utf-8").splitlines()[-1]
         )
         assert verb == "T"  # a peer's claim -- release_artifact never touches it
+
+
+# ---------------------------------------------------------------------------
+# _release_path_claim_everywhere (2026-08-26-the-claim-release-path-releases-
+# nothing.md, C1). AC1's originally-described defect (a pure jsonl-plane
+# claimant never actually gets released) is ALREADY GREEN at HEAD — commit
+# 41d8c7e4a landed `_release_from_touch_record` + `_is_touch_record_sink`
+# earlier the same day this plan was authored, and the modern-claimant test
+# below documents that fixed behaviour rather than pinning a red. AC4's
+# defect is still live: `_release_from_touch_record` reads only the jsonl
+# family (`touch_record._read_stream_claims`), never the sibling
+# `touched.txt`, so a claim whose T event lives ONLY in the legacy file is
+# invisible to the release path. Asserted through the module's own read
+# paths (`claim_index.lookup` / `scope._read_touch_record_as_legacy_lines`),
+# never by grepping file bytes for an "R"/"T" character.
+# ---------------------------------------------------------------------------
+
+
+class TestReleasePathClaimEverywhere:
+    def test_modern_claimant_release_actually_releases(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        scope.touch("mine", "a.py", cwd=str(repo))
+        base = core.sessions_dir(cwd=str(repo))
+        assert claim_index.lookup(["a.py"], sessions_dir=base, cwd=str(repo)) == {
+            "a.py": ["mine"]
+        }
+
+        claims._release_path_claim_everywhere("a.py", {"mine"}, base, cwd=str(repo))
+
+        assert claim_index.lookup(["a.py"], sessions_dir=base, cwd=str(repo)) == {
+            "a.py": []
+        }
+
+    @staticmethod
+    def _last_verb_via_union_read(sink_path, path):
+        """Read *path*'s last recorded verb through the SAME production
+        union adapter (`scope._read_touch_record_as_legacy_lines`) the fix
+        under test is required to route through — never a bespoke format
+        assumption, and never a raw byte-grep for an "R"/"T" character."""
+        lines, degraded = scope._read_touch_record_as_legacy_lines(str(sink_path))
+        last_verb = None
+        target = claim_index._normalize_key(path)
+        for line in lines:
+            verb, _ts, raw_path = scope.parse_touch_event(line)
+            if claim_index._normalize_key(raw_path) == target:
+                last_verb = verb
+        return last_verb, degraded
+
+    def test_legacy_only_claim_still_resolves_while_union_lives(self, tmp_path):
+        """AC4: a claimant whose T event for *path* lives ONLY in the legacy
+        `touched.txt` sibling (the modern `touch-record.jsonl` sink exists,
+        claiming an unrelated path, so the enumerator reaches this claimant
+        at all) must still be released while `scope._read_touch_record_as_
+        legacy_lines`'s compat union lives. Today `_release_from_touch_
+        record` reads only the jsonl family (`touch_record._read_stream_
+        claims`), never the sibling `touched.txt`, so this claim is
+        invisible to the release path and is never released."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        scope.touch("mine", "other.py", cwd=str(repo))  # ensures the jsonl sink exists
+        sdir = Path(core.session_dir("mine", cwd=str(repo)))
+        with open(sdir / "touched.txt", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(scope.format_touch_event("T", "legacy_only.py") + "\n")
+        base = core.sessions_dir(cwd=str(repo))
+        sink_path = sdir / scope._TOUCH_RECORD_FILENAME
+
+        before, _degraded = self._last_verb_via_union_read(sink_path, "legacy_only.py")
+        assert before == "T"
+
+        claims._release_path_claim_everywhere(
+            "legacy_only.py", {"mine"}, base, cwd=str(repo)
+        )
+
+        after, _degraded = self._last_verb_via_union_read(sink_path, "legacy_only.py")
+        assert after == "R"
 
 
 # ---------------------------------------------------------------------------
