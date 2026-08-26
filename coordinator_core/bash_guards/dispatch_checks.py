@@ -7766,6 +7766,63 @@ def _bt_solo_bare_commit_index_nonempty(
     return bool([ln for ln in out.splitlines() if ln])
 
 
+#: Sequencer states in which git itself refuses a scoped commit, mapped to the
+#: verb that finishes each one. `git commit -- <paths>` -- the remediation every
+#: deny branch below offers -- exits 128 ("cannot do a partial commit during a
+#: merge") in all three, so a deny that offers only that shape is a dead end.
+_BT_SEQUENCER_CONTINUE_VERBS: Tuple[Tuple[str, str], ...] = (
+    ("MERGE_HEAD", "git merge --continue"),
+    ("CHERRY_PICK_HEAD", "git cherry-pick --continue"),
+    ("REVERT_HEAD", "git revert --continue"),
+)
+
+
+def _bt_git_sequencer_in_progress(seg_tokens: List[str]) -> Optional[Tuple[str, str]]:
+    """Return `(state_name, continue_verb)` when a merge/cherry-pick/revert is
+    mid-flight for the repo this command targets, else None.
+
+    Why this exists as a separate probe rather than another clause inside the
+    predicates below: those ask "can this command prove the staged content is
+    its own?", and during a sequencer operation the question is malformed. The
+    index IS the operation's result -- `git merge` wrote it, and git forbids
+    narrowing it (`--` pathspec, `--only`, `--include` all refuse). So the
+    honest answer is not "unverifiable, therefore deny": there is no scoped
+    shape to fall back to, and the existing deny's own remediation cannot run.
+    A guard whose remedy is unrunnable in the state that triggered it teaches
+    nothing and blocks the only route through -- which is what happened
+    finishing the machine-a merge, 2026-08-26 (state/bug-backlog/2026-08-26-the-
+    bare-commit-guard-has-no-merge-head-carve-out.yaml).
+
+    Note the peer-sweep concern does NOT survive into merge state the way it
+    does for an ordinary bare commit: git refuses to start a second merge in a
+    worktree whose index is already mid-merge, so the session that opened this
+    one owns it. What a peer can still do is `git add` into the shared index
+    mid-merge, which is why the caller downgrades to an advisory rather than
+    dropping the signal entirely.
+
+    Fails CLOSED (returns None, preserving the deny) on any probe failure or a
+    spent probe budget -- an undetected sequencer state costs the operator one
+    confusing deny, while a falsely-detected one would silently retire the
+    guard for every ordinary bare commit.
+    """
+    cwd = _bt_git_dash_c_value(seg_tokens)
+    for state_name, verb in _BT_SEQUENCER_CONTINUE_VERBS:
+        rc, out = _run_git(["rev-parse", "--git-path", state_name], cwd=cwd)
+        if rc != 0:
+            return None
+        probe = out.strip()
+        if not probe:
+            return None
+        if not os.path.isabs(probe) and cwd:
+            probe = os.path.join(cwd, probe)
+        try:
+            if os.path.exists(probe):
+                return (state_name, verb)
+        except OSError:
+            return None
+    return None
+
+
 def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
     """C1's worktree-union escalation predicate: the sweep-all (`-a`/`-am`/
     `--all`) mirror of `_bt_solo_bare_commit_index_nonempty`, not of C7's
@@ -8042,6 +8099,29 @@ def check_git_commit_safe_commit_advise(
             "To fix a message without rewriting:\n"
             "  git notes add -f -m \"<correction>\" <sha>"
         )
+        # A sequencer operation (merge/cherry-pick/revert) is the one state in
+        # which every deny below offers a remediation git itself rejects -- see
+        # `_bt_git_sequencer_in_progress` for why the "prove it is yours"
+        # question does not apply to an index git wrote and forbids narrowing.
+        # Downgraded to an advisory naming the verb that actually finishes the
+        # operation, rather than dropped: a peer can still `git add` into the
+        # shared index mid-merge, so the scope warning is not vacuous, it just
+        # has no scoped alternative to point at.
+        _sequencer = _bt_git_sequencer_in_progress(seg_tokens)
+        if _sequencer is not None:
+            _state_name, _continue_verb = _sequencer
+            return _advisory(
+                (
+                    "Advisory: %s exists — this commit concludes an in-progress "
+                    "operation, so its content is the whole index by "
+                    "construction and git refuses to narrow it. A peer's "
+                    "concurrent 'git add' into this shared index would still be "
+                    "swept in.\n\n"
+                    "Use instead:\n"
+                    "  %s" % (_state_name, _continue_verb)
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
         if _bt_c7_index_holds_foreign_paths(seg_tokens, segments, seg_index):
             return _deny(
                 (

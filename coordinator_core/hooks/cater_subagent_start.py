@@ -233,7 +233,7 @@ def _compose_sidecar_offer_text(sidecar_path: str) -> str:
     )
 
 
-def _compose_sidecar_miss_text(sentinel_path: str = "") -> str:
+def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = False) -> str:
     """Parameterized over two authored bodies (`docs/plans/2026-08-25-a-
     missed-sidecar-leaves-a-file-the-em-ca.md` AC3), replacing the retired
     single-body `enforce-agent-dispatch-mode.py ::
@@ -255,6 +255,26 @@ def _compose_sidecar_miss_text(sentinel_path: str = "") -> str:
             "but a sentinel scaffold was written for you -- persist your "
             "findings there as normal, and say in them that provisioning "
             "missed.\n" + SIDECAR_PATH_MARKER_PREFIX + sentinel_path
+        )
+    if is_named:
+        # A NAMED teammate's final assistant text is NOT returned to the
+        # dispatcher -- delivery is an explicit `SendMessage`, per that
+        # tool's own contract ("Your plain text output is NOT visible to
+        # other agents"). The unnamed body below tells the child to report
+        # "inline in your reply", which for this population names the one
+        # channel that goes nowhere: six named `general-purpose` agents
+        # dispatched 2026-08-26 each wrote a complete 7-13K report, ended
+        # `stop_reason: end_turn`, surfaced to the EM as a bare idle notice,
+        # and were recovered only by reading their transcripts off disk.
+        # They followed this instruction exactly.
+        return (
+            "\n\nSidecar provisioning did not complete for this dispatch -- "
+            "no scaffold exists on disk, and you are a NAMED teammate, whose "
+            "final reply text is not returned to the dispatcher. Deliver your "
+            "findings with SendMessage to the session that dispatched you, "
+            "and say in them that provisioning missed. Ending your turn "
+            "without sending delivers nothing.\n"
+            + SIDECAR_MISS_MARKER
         )
     return (
         "\n\nSidecar provisioning did not complete for this dispatch -- no "
@@ -736,7 +756,7 @@ def _resolve_sidecar_leg(
         sentinel_path = ""
         if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
             sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
-        return sentinel_path, _compose_sidecar_miss_text(sentinel_path)
+        return sentinel_path, _compose_sidecar_miss_text(sentinel_path, is_named=True)
 
     policy = load_policy(None)
 
@@ -757,7 +777,9 @@ def _resolve_sidecar_leg(
     sentinel_path = ""
     if agent_id and _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
         sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
-    return sentinel_path, _compose_sidecar_miss_text(sentinel_path)
+    return sentinel_path, _compose_sidecar_miss_text(
+        sentinel_path, is_named=bool(agent_id and _is_named_teammate_agent_id(agent_id))
+    )
 
 
 def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> str:

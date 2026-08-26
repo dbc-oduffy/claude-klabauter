@@ -209,7 +209,7 @@ def _claude_klabauter_state() -> str:
     if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:
         resolution_class = classify_env_resolved_root(claude_klabauter_root)
     if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
-        live_root = _live_engine_source_root()
+        live_root = _live_engine_source_root(claude_klabauter_root)
         if live_root:
             return _state_of(live_root)
         raise StateRootError(
@@ -226,7 +226,7 @@ def _claude_klabauter_state() -> str:
     return _state_of(claude_klabauter_root)
 
 
-def _live_engine_source_root() -> Optional[str]:
+def _live_engine_source_root(refused_root: str) -> Optional[str]:
     """Resolve the LIVE engine working tree for a state WRITE whose execution
     root is the published mirror, or None when no live tree is reachable.
 
@@ -252,20 +252,42 @@ def _live_engine_source_root() -> Optional[str]:
          resolves the mirror to ITSELF, the exact laundering that lost two
          working files before it was caught.
 
-    NEGATIVE SPEC — this does NOT relax the published-mirror guard. Every
-    rung is mirror-checked and a mirror answer yields None, which returns the
-    caller to its refusal. It supplies the "write here instead" leg the guard
-    never had, never a "write there anyway" one.
+    `refused_root` is the root the caller just classified as the published
+    mirror, and every rung is checked against it FIRST. That check is the load-
+    bearing one, because `is_published_engine_mirror` fail-OPENS by contract —
+    it answers False on an unreadable registry or an unstamped mirror, which is
+    correct for the refuse-on-True callers it was written for and exactly wrong
+    in an accept-on-False position like this one. Under the publish transform
+    `repos.claude_klabauter` is rewritten to name the mirror, so a fail-open there
+    would hand back the mirror path as "the live tree" and land state in the
+    published mirror — the precise leak this guard exists to prevent, reopened
+    by its own fallback (review: code-reviewer, P1). Comparing against the root
+    already known to be the mirror needs no registry read and cannot fail open.
+
+    NEGATIVE SPEC — this does NOT relax the published-mirror guard. Every rung
+    must clear both the identity check against `refused_root` and the mirror
+    predicate; a failure of either yields None, which returns the caller to its
+    refusal. It supplies the "write here instead" leg the guard never had, never
+    a "write there anyway" one.
     """
-    source_root = engine_source_root()
-    if source_root:
-        return source_root
+    from coordinator_core.win_portability import same_path
+
+    def _usable(candidate: Optional[str]) -> Optional[str]:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return None
+        if same_path(candidate, refused_root):
+            return None
+        if is_published_engine_mirror(candidate):
+            return None
+        return candidate
+
+    live = _usable(engine_source_root())
+    if live:
+        return live
     from coordinator_core.machine_resolver import registry_get
 
-    candidate = (registry_get("repos.claude_klabauter") or "").strip()
-    if candidate and not is_published_engine_mirror(candidate):
-        return candidate
-    return None
+    return _usable(registry_get("repos.claude_klabauter"))
 
 
 def _resolve_git_root(git_root: Optional[str] = None) -> str:

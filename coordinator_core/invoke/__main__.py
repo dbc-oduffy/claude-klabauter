@@ -624,10 +624,20 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     no-working-commit-863135e32339.yaml). An unknown op now falls
     #     through to dispatch, which answers Method-not-found honestly.
     if args.repo is not None and args.op not in WORKTREE_SCOPED_OPS:
+        from coordinator_core.op_scopes import OP_KEY_SCOPE
         from coordinator_core.ops._registry_map import resolves as _op_resolves
 
-        if _op_resolves(args.op):
-            from coordinator_core.op_scopes import OP_KEY_SCOPE
+        # Fall through ONLY for an op unknown to BOTH tables. `resolves()` alone
+        # was too narrow: its second leg reads `ipc._REGISTRY`, which is empty in
+        # this cold CLI process because registration is lazy, so it reduces to
+        # "is it in OP_MODULE_MAP" here -- and that module's own docstring admits
+        # a dispatchable op legitimately absent from the map. Gating on
+        # `resolves()` alone therefore skipped the DR-279 refusal for such an op
+        # exactly as for a nonexistent one, restoring the silent --repo no-op
+        # DR-279 was built to kill under a new trigger (review: code-reviewer,
+        # P1). Requiring BOTH tables to disclaim the op keeps the refusal
+        # wherever anything knows about it.
+        if _op_resolves(args.op) or args.op in OP_KEY_SCOPE:
             op_scope = OP_KEY_SCOPE.get(args.op, "none")
             _fatal_stderr(
                 f"--repo is meaningless for op {args.op!r} (scope={op_scope!r}): this op "

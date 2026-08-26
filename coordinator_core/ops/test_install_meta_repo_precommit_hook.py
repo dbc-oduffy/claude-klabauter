@@ -297,6 +297,46 @@ def test_missing_gate_script_blocks_loudly_and_stops_the_chain(tmp_path, monkeyp
     assert ran == [f"RAN:{_GATE_REGISTRY[0].filename}"]
 
 
+def test_missing_gate_script_remediation_names_a_runnable_script(tmp_path, monkeypatch):
+    """A hook outlives the tree it was generated from, so "missing script" has
+    two causes: a partial install, and a later commit RETIRING the gate. The
+    remediation has to be runnable in BOTH, which "re-run the coordinator
+    installer" was not -- C3 deleted `detect-staged-rollback` together with its
+    installer, so every unmerged clone blocked under a pointer to something
+    that no longer existed (state/bug-backlog/2026-08-26-a-deleted-gate-script-
+    blocks-every-commit-in-an-unmerged-clone.yaml).
+
+    Pins the runnability, not the wording: every path the message names must
+    exist on disk right now.
+    """
+    meta = _make_meta_repo(tmp_path, monkeypatch)
+    fake_bin = tmp_path / "fakebin"
+    monkeypatch.setattr(_mod, "_bin_dir", lambda: fake_bin)
+    _write_stub_gates(fake_bin)
+    assert main([str(meta)]) == 0
+    (fake_bin / _GATE_REGISTRY[0].filename).unlink()
+
+    result = _run_hook(_hook_path(meta), meta)
+    assert result.returncode == 1
+    assert "remediation:" in result.stderr
+
+    named = [
+        token.rstrip(".,")
+        for token in result.stderr.split()
+        if token.startswith("coordinator/bin/") and token.endswith(".py")
+    ]
+    assert named, f"remediation names no runnable script: {result.stderr!r}"
+    repo_root = Path(__file__).resolve().parents[2]
+    for rel in named:
+        assert (repo_root / rel).is_file(), (
+            f"remediation names {rel}, which does not exist -- the retired-gate "
+            "case cannot be remediated from the error text"
+        )
+    assert any("remove-" in rel for rel in named), (
+        "remediation must offer the retired-gate route, not only re-install"
+    )
+
+
 def test_missing_python_interpreter_blocks_loudly(tmp_path, monkeypatch):
     meta = _make_meta_repo(tmp_path, monkeypatch)
     fake_bin = tmp_path / "fakebin"

@@ -283,8 +283,13 @@ def _gate_block(gate: _Gate) -> List[str]:
         f'_gate_script="{script_path}"',
         'if [ ! -f "$_gate_script" ]; then',
     ]
+    # See install_meta_repo_precommit_hook's own note at the same branch:
+    # name the runnable script, because a retired gate's vague remediation can
+    # point at an installer the retiring commit deleted.
     lines += _cannot_proceed_branch(
-        "missing script $_gate_script", "re-run the coordinator installer to restore it"
+        "missing script $_gate_script",
+        "run coordinator/bin/install-doe-claude-precommit-hook.py to restore it, "
+        "or coordinator/bin/remove-claude-klabauter-precommit-hook.py if this gate was retired",
     )
     lines.append('elif [ -z "$_py" ]; then')
     lines += _cannot_proceed_branch(

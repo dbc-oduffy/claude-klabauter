@@ -64,7 +64,7 @@ def stub_peers(monkeypatch):
     # a fail-loud test raises -- green on a box with no claude-klabauter key, red on a
     # developer box that has one. Tests that exercise the fallback stub it
     # themselves.
-    monkeypatch.setattr(sr, "_live_engine_source_root", lambda: None)
+    monkeypatch.setattr(sr, "_live_engine_source_root", lambda _refused: None)
     return monkeypatch
 
 
@@ -139,7 +139,7 @@ def test_resolved_engine_falls_back_to_registered_live_tree(stub_peers):
         "coordinator_engine_root_with_class",
         lambda: ("/repos/claude-klabauter", "resolved-engine"),
     )
-    stub_peers.setattr(sr, "_live_engine_source_root", lambda: _LIVE_TREE)
+    stub_peers.setattr(sr, "_live_engine_source_root", lambda _refused: _LIVE_TREE)
     assert sr.coordinator_state_root(central=True) == _state(_LIVE_TREE)
     assert (
         sr.coordinator_state_root(central=True, subject="engine")
@@ -153,7 +153,7 @@ def test_live_tree_fallback_prefers_transform_proof_key(stub_peers):
     rewritten to name the mirror. Rung order must put the survivor first."""
     stub_peers.setattr(sr, "engine_source_root", lambda: _LIVE_TREE)
     stub_peers.setattr(sr, "is_published_engine_mirror", lambda _r: False)
-    assert _REAL_LIVE_ENGINE_SOURCE_ROOT() == _LIVE_TREE
+    assert _REAL_LIVE_ENGINE_SOURCE_ROOT("/repos/claude-klabauter") == _LIVE_TREE
 
 
 def test_live_tree_fallback_refuses_a_mirror_valued_registry_key(stub_peers):
@@ -167,7 +167,7 @@ def test_live_tree_fallback_refuses_a_mirror_valued_registry_key(stub_peers):
     import coordinator_core.machine_resolver as mr
 
     stub_peers.setattr(mr, "registry_get", lambda _k: mirror)
-    assert _REAL_LIVE_ENGINE_SOURCE_ROOT() is None
+    assert _REAL_LIVE_ENGINE_SOURCE_ROOT(mirror) is None
 
 
 def test_rule4_fail_loud_when_resolved_engine_is_published_mirror(stub_peers):
@@ -560,3 +560,39 @@ def test_engine_source_root_refuses_a_key_pointed_at_the_mirror(monkeypatch):
 
     monkeypatch.setattr(er, "_load_shim", lambda: _Shim)
     assert er.engine_source_root() is None
+
+
+def test_live_tree_fallback_survives_a_fail_open_mirror_predicate(stub_peers):
+    """`is_published_engine_mirror` fail-OPENS by contract -- False on an
+    unreadable registry or an unstamped mirror. That is right for the
+    refuse-on-True callers it was built for and wrong in this accept-on-False
+    position, and under the publish transform `repos.claude_klabauter` names the
+    mirror. Without the identity check against the root already refused, that
+    combination hands back the mirror as "the live tree" and lands state in a
+    published mirror -- the leak the guard exists to prevent, reopened by its
+    own fallback (review: code-reviewer, P1)."""
+    mirror = "/repos/claude-klabauter"
+    stub_peers.setattr(sr, "engine_source_root", lambda: None)
+    stub_peers.setattr(sr, "is_published_engine_mirror", lambda _r: False)  # fail-open
+    import coordinator_core.machine_resolver as mr
+
+    stub_peers.setattr(mr, "registry_get", lambda _k: mirror)
+    assert _REAL_LIVE_ENGINE_SOURCE_ROOT(mirror) is None
+
+
+def test_resolved_engine_still_refuses_when_only_the_mirror_is_registered(stub_peers):
+    """End-to-end shape of the above: the guard must still raise."""
+    mirror = "/repos/claude-klabauter"
+    stub_peers.setattr(
+        sr,
+        "coordinator_engine_root_with_class",
+        lambda: (mirror, "resolved-engine"),
+    )
+    stub_peers.setattr(sr, "engine_source_root", lambda: None)
+    stub_peers.setattr(sr, "is_published_engine_mirror", lambda _r: False)
+    stub_peers.setattr(sr, "_live_engine_source_root", _REAL_LIVE_ENGINE_SOURCE_ROOT)
+    import coordinator_core.machine_resolver as mr
+
+    stub_peers.setattr(mr, "registry_get", lambda _k: mirror)
+    with pytest.raises(sr.StateRootError):
+        sr.coordinator_state_root(central=True)

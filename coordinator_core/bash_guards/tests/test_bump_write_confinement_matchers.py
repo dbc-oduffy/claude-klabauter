@@ -415,14 +415,34 @@ _DEST_SETUP_BY_LEG = {
     "bump-foreign-repo-write": lambda tmp_path: (tmp_path / "foreign").resolve(),
 }
 
-_UNPARSEABLE_SEGMENT_TEMPLATES = [
+#: SPLIT (2026-08-26). This was one six-template corpus asserting every
+#: member "never denies". Three of the six DO deny on the foreign leg, and
+#: the deny is a TRUE POSITIVE: the tokenizer parses around the wrapper
+#: syntax, lifts a real literal `-FilePath` target, and that target is inside
+#: a foreign repo. Denying it is the guard doing its job. The corpus'''s own
+#: inline review note claimed all six "still land a real Out-File candidate"
+#: -- correct for these three, wrong for the other three, and it was the
+#: sentence holding the wrong half together.
+#:
+#: These three extract nothing: the head token is `$x` / `{` and no cmdlet is
+#: ever reached, so there is no candidate to judge and `None` is the only
+#: honest answer.
+_NO_CANDIDATE_TEMPLATES = [
     pytest.param("$x = @'\nhello\n'@\nOut-File -FilePath {dest}", id="single-quote-here-string"),
     pytest.param('$x = @"\nhello\n"@\nOut-File -FilePath {dest}', id="double-quote-here-string"),
-    pytest.param("Out-File -FilePath {dest} `n -Append", id="backtick-escape"),
     pytest.param("& {{ Out-File -FilePath {dest} }}", id="ampersand-call-operator"),
+]
+
+#: These three DO extract a literal target despite the awkward syntax. They
+#: belong to a positive corpus: the property worth pinning is that awkward
+#: PowerShell does not become a bypass.
+_EXTRACTS_LITERAL_TARGET_TEMPLATES = [
+    pytest.param("Out-File -FilePath {dest} `n -Append", id="backtick-escape"),
     pytest.param("$env:X = 'y'; Out-File -FilePath {dest}", id="dollar-variable-assignment"),
     pytest.param("@(1,2,3) | Out-File -FilePath {dest}", id="at-array-literal"),
 ]
+
+_UNPARSEABLE_SEGMENT_TEMPLATES = _NO_CANDIDATE_TEMPLATES
 
 
 @pytest.mark.parametrize("guard_leg_name", list(_GUARD_LEGS))
@@ -471,6 +491,49 @@ def test_ac11_unparseable_segment_never_denies(
         "corpus is documented to exercise and belongs in the fully-"
         "unparseable corpus instead: cmd=%r" % (cmd,)
     )
+
+
+@pytest.mark.parametrize("segment_template", _EXTRACTS_LITERAL_TARGET_TEMPLATES)
+def test_ac11_extracted_literal_target_does_bump(segment_template, tmp_path, monkeypatch):
+    """The other half of the split: when awkward PowerShell still yields a
+    real literal target inside a FOREIGN repo, the guard must bump it.
+
+    Asserted on the foreign leg only, deliberately. The outside leg returns
+    `None` for these same three, but not because it declined to extract --
+    its destination is under the system temp dir, which
+    `_target_is_always_allowed` short-circuits via `target_is_bare_temp_
+    scratch` before any verdict is reached. Asserting "does bump" there would
+    pin the tmp-scratch allowance, not the extraction property, and asserting
+    "never bumps" there is vacuous for the same reason. One leg, one property.
+    """
+    guard_leg_name = "bump-foreign-repo-write"
+    home = tmp_path / "home"
+    home.mkdir()
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+    (anchor / ".git").mkdir()
+    target_root = _DEST_SETUP_BY_LEG[guard_leg_name](tmp_path)
+    target_root.mkdir()
+    (target_root / ".git").mkdir()
+    dest = target_root / "target.txt"
+
+    cmd = segment_template.format(dest=dest.as_posix())
+    session_id = "sess-ac11-pos-%s" % abs(hash(cmd))
+    _set_anchor(monkeypatch, home, anchor, session_id)
+
+    result = _GUARD_LEGS[guard_leg_name](
+        cmd, session_id, str(anchor), {"tool_name": "PowerShell"}
+    )
+
+    assert result is not None, (
+        "awkward PowerShell that still lands a literal -FilePath target "
+        "inside a foreign repo must be bumped, not waved through -- a "
+        "`None` here is the bypass this corpus exists to catch: cmd=%r"
+        % (cmd,)
+    )
+    assert (
+        result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    ), result
 
 
 # ---------------------------------------------------------------------------

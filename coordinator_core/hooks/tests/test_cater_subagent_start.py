@@ -1014,3 +1014,35 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     )
     rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
     assert (tmp_path / rel_path).is_file()
+
+
+def test_named_dispatch_miss_notice_names_a_channel_that_delivers():
+    """The no-path miss body must not tell a NAMED teammate to reply inline.
+
+    A named teammate's final assistant text is never returned to the
+    dispatcher -- SendMessage's own contract says so ("Your plain text output
+    is NOT visible to other agents"). The unnamed body's "report your findings
+    inline in your reply" is correct for an ordinary subagent and names the one
+    dead channel for this population.
+
+    Not hypothetical: on 2026-08-26 six named `general-purpose` agents each
+    wrote a complete 7-13K diagnosis, ended `stop_reason: end_turn`, reached
+    the dispatching EM as a bare idle notification, and were recovered only by
+    reading their transcript jsonl off disk. They had followed this
+    instruction exactly. Silence was indistinguishable from having done
+    nothing, which is the expensive part -- the EM re-did all six by hand.
+    """
+    named = _compose_sidecar_miss_text("", is_named=True)
+    assert "SendMessage" in named
+    assert "inline in your reply" not in named
+    assert SIDECAR_MISS_MARKER in named
+
+    unnamed = _compose_sidecar_miss_text("")
+    assert "inline in your reply" in unnamed
+    assert "SendMessage" not in unnamed
+
+    # A sentinel path outranks both: there IS a file, so the channel question
+    # does not arise and the body is shared.
+    assert _compose_sidecar_miss_text("/x/y.md", is_named=True) == (
+        _compose_sidecar_miss_text("/x/y.md")
+    )

@@ -796,8 +796,22 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
         script_line,
         'if [ ! -f "$_gate_script" ]; then',
     ]
+    # Names the runnable script, never "the coordinator installer": a hook
+    # is generated once and then outlives the tree it was generated from, so
+    # the two ways a gate script goes missing are a partial install and a
+    # later commit RETIRING that gate. In the second case a vague pointer
+    # sends the operator at an installer the retiring commit may itself have
+    # deleted -- which is exactly what happened when C3 removed
+    # `detect-staged-rollback` together with its installer, leaving every
+    # unmerged clone blocked under a remediation naming something that no
+    # longer existed (state/bug-backlog/2026-08-26-a-deleted-gate-script-
+    # blocks-every-commit-in-an-unmerged-clone.yaml). Naming both routes,
+    # restore and remove, keeps the retired-gate case runnable from the
+    # error text alone.
     lines += _cannot_run_branch(
-        "missing script $_gate_script", "re-run the coordinator installer to restore it"
+        "missing script $_gate_script",
+        "run coordinator/bin/install-meta-repo-precommit-hook.py to restore it, "
+        "or coordinator/bin/remove-claude-klabauter-precommit-hook.py if this gate was retired",
     )
 
     if gate.kind == "python":
