@@ -97,7 +97,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.declared_writes import declare_write
@@ -606,10 +606,24 @@ def append_dispositions(
     return {"path": str(sidecar_path), "already_dispositioned": False}
 
 
-def _split_ids(value: Optional[str]) -> List[str]:
+def _split_ids(value: Union[str, List[str], None]) -> List[str]:
+    """Flattens one bucket flag's ids, preserving order and dropping duplicates.
+
+    Accepts a list because every bucket flag is `action="append"`: a caller that
+    passes `--applied 1 --applied 2` means BOTH, and an earlier plain-`store`
+    spelling silently kept only the last occurrence while still exiting 0 —
+    a disposition record that read complete and was not.
+    """
     if not value:
         return []
-    return [tok.strip() for tok in value.split(",") if tok.strip()]
+    chunks = [value] if isinstance(value, str) else value
+    out: List[str] = []
+    for chunk in chunks:
+        for tok in chunk.split(","):
+            tok = tok.strip()
+            if tok and tok not in out:
+                out.append(tok)
+    return out
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -627,20 +641,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the reviewer's review-findings sidecar (state/subagent-share/<session>/*.md).",
     )
-    parser.add_argument("--applied", default=None, help="Comma-separated finding ids: applied.")
+    parser.add_argument("--applied", action="append", default=None, help="Comma-separated finding ids: applied.")
     parser.add_argument(
-        "--escalated-disagree", default=None, help="Comma-separated finding ids: escalated-disagree."
+        "--escalated-disagree", action="append", default=None, help="Comma-separated finding ids: escalated-disagree."
     )
     parser.add_argument(
-        "--escalated-ask", default=None, help="Comma-separated finding ids: escalated-ask."
+        "--escalated-ask", action="append", default=None, help="Comma-separated finding ids: escalated-ask."
     )
     parser.add_argument(
-        "--escalated-p0", default=None, help="Comma-separated finding ids: escalated-p0."
+        "--escalated-p0", action="append", default=None, help="Comma-separated finding ids: escalated-p0."
     )
-    parser.add_argument("--deferred", default=None, help="Comma-separated finding ids: deferred.")
+    parser.add_argument("--deferred", action="append", default=None, help="Comma-separated finding ids: deferred.")
     parser.add_argument(
         "--verified-no-action",
-        default=None,
+        action="append", default=None,
         help="Comma-separated finding ids: verified-no-action.",
     )
     parser.add_argument(

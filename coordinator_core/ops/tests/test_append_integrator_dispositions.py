@@ -1041,3 +1041,36 @@ class TestFencePairingSurvivesAnUnterminatedFence:
         result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
         assert result["already_dispositioned"] is False
         assert mod._DISPOSITIONS_HEADING in sidecar.read_text(encoding="utf-8")
+
+def test_repeated_bucket_flag_accumulates_rather_than_overwriting():
+    """A repeated `--applied` means BOTH sets, not the last one.
+
+    Regression: every bucket flag was a plain `store`, so
+    `--applied 1,2 --applied 3` silently kept only `3` and still exited 0 —
+    a disposition record that read complete while half the ids were gone.
+    Found by a review-integrator that hit it live, 2026-08-26.
+    """
+    from coordinator_core.ops.append_integrator_dispositions import (
+        _build_arg_parser,
+        _split_ids,
+    )
+
+    args = _build_arg_parser().parse_args(
+        ["--sidecar", "x", "--applied", "1,2", "--applied", "3"]
+    )
+    assert _split_ids(args.applied) == ["1", "2", "3"]
+
+
+def test_single_bucket_flag_use_is_unchanged_and_dedupes():
+    from coordinator_core.ops.append_integrator_dispositions import (
+        _build_arg_parser,
+        _split_ids,
+    )
+
+    parser = _build_arg_parser()
+    assert _split_ids(parser.parse_args(["--sidecar", "x", "--applied", "1,2"]).applied) == [
+        "1",
+        "2",
+    ]
+    assert _split_ids(parser.parse_args(["--sidecar", "x"]).applied) == []
+    assert _split_ids(["1,2", "2,3"]) == ["1", "2", "3"]

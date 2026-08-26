@@ -200,15 +200,21 @@ class TestDestructiveGitOrphanForcePush:
         tokens) but is resolved cleanly by tree-sitter-pwsh's own escape
         handling, then rewritten back to plain `git ...` text by
         `_ps_git_bypass_segments` before the existing regex ladder ever
-        sees it. `_ps_git_bypass_segments` runs unconditionally
-        (`check_destructive_rm`'s own precedent: "Deliberately NOT gated
-        on `dialect_from_tool_name`" -- the DoE-claude rearm relabels a
-        genuine PowerShell call's `tool_name` to `"Bash"` before this
-        dispatcher ever sees it), so this denies under BOTH declared
-        `tool_name` values, not only `"PowerShell"`."""
+        sees it.
+
+        AC2a RETIRED (2026-08-26). This row used to assert a deny under
+        BOTH declared `tool_name` values, because `_ps_git_bypass_
+        segments` ran unconditionally -- forced, while DoE-claude's
+        `_rearm_command_tool_name` relabeled genuine PowerShell payloads
+        to `"Bash"` ahead of dispatch. That relabel is gone (their D1,
+        `47f4aedfe`), so the scan gates on the declared dialect and
+        `"Bash"` is once again evidence the caller really used bash.
+        Under real bash a backtick inside `git` is command substitution,
+        which would never have run `git push --force` -- the Bash-leg
+        silence restores pre-change behaviour, it does not lose a deny."""
         cmd = "g`it push --force origin main"
-        assert _denies(cmd, "Bash", repo_cwd)
         assert _denies(cmd, "PowerShell", repo_cwd)
+        assert not _denies(cmd, "Bash", repo_cwd)
 
     def test_unparseable_powershell_does_not_deny(self, repo_cwd) -> None:
         """AC4: a command that is BOTH backtick-broken (so the raw
@@ -255,14 +261,15 @@ class TestDestructiveGitCleanLoadBearing:
     itself, or a backtick-escaped invocation would short-circuit to
     `None` before ever reaching the segment walk."""
 
-    def test_backtick_escaped_git_clean_denies_under_both_dialects(self, fresh_git_repo) -> None:
-        """`_gc_ps_segments` runs unconditionally (same rationale as
-        `TestDestructiveGitOrphanForcePush`'s own backtick row), so this
-        denies under both declared `tool_name` values."""
+    def test_backtick_escaped_git_clean_denies_on_the_powershell_leg_only(self, fresh_git_repo) -> None:
+        """`_gc_ps_segments` gates on the declared dialect (same rationale
+        as `TestDestructiveGitOrphanForcePush`'s own backtick row -- AC2a
+        retired 2026-08-26 once DoE's relabel was removed), so this denies
+        on the PowerShell leg and is silent on the Bash leg."""
         cmd = "g`it clean -fdx"
         cwd = str(fresh_git_repo)
-        assert _denies(cmd, "Bash", cwd)
         assert _denies(cmd, "PowerShell", cwd)
+        assert not _denies(cmd, "Bash", cwd)
 
     def test_plain_git_clean_denies_under_both_dialects(self, fresh_git_repo) -> None:
         cmd = "git clean -fdx"
@@ -290,13 +297,13 @@ class TestBlanketGitAdd:
     no-ops, which is a test-harness artifact, not a guard defect (read-
     only oracle, per this marker's own docstring)."""
 
-    def test_backtick_escaped_git_add_denies_under_both_dialects(self, repo_cwd) -> None:
-        """`_ga_ps_segments` runs unconditionally (same rationale as the
-        two sibling classes above), so this denies under both declared
-        `tool_name` values."""
+    def test_backtick_escaped_git_add_denies_on_the_powershell_leg_only(self, repo_cwd) -> None:
+        """`_ga_ps_segments` gates on the declared dialect (same rationale
+        as the two sibling classes above -- AC2a retired 2026-08-26), so
+        this denies on the PowerShell leg and is silent on the Bash leg."""
         cmd = "g`it add -A"
-        assert _denies(cmd, "Bash", repo_cwd)
         assert _denies(cmd, "PowerShell", repo_cwd)
+        assert not _denies(cmd, "Bash", repo_cwd)
 
     def test_plain_git_add_dash_a_denies_under_both_dialects(self, repo_cwd) -> None:
         cmd = "git add -A"

@@ -251,7 +251,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,

@@ -54,11 +54,10 @@ async def _merge_assemble_brief(params: dict[str, Any], repo_root: Optional[Path
         decisions:  optional dict, forwarded to `brief(decisions=...)`.
         tag_prefix: optional str, default "v", forwarded to `brief(tag_prefix=...)`.
     """
-    result = _brief(
-        decisions=params.get("decisions"),
-        repo_root=repo_root,
-        tag_prefix=params.get("tag_prefix", "v"),
-    )
+    brief_kwargs: dict[str, Any] = {"decisions": params.get("decisions"), "repo_root": repo_root}
+    if "tag_prefix" in params:
+        brief_kwargs["tag_prefix"] = params["tag_prefix"]
+    result = _brief(**brief_kwargs)
     return {"exit_code": result.exit_code, "decision_object": result.decision_object}
 
 
@@ -75,11 +74,13 @@ async def _merge_assemble_apply(params: dict[str, Any], repo_root: Optional[Path
         force:      optional bool, default False, forwarded to `apply(force=...)`.
         tag_prefix: optional str, default "v", forwarded to `apply(tag_prefix=...)`.
     """
-    exit_code, report = _apply(
-        session_id=params.get("session_id"),
-        repo_root=repo_root,
-        decisions=params.get("decisions"),
-        force=bool(params.get("force", False)),
-        tag_prefix=params.get("tag_prefix", "v"),
-    )
+    apply_kwargs: dict[str, Any] = {
+        "session_id": params.get("session_id"),
+        "repo_root": repo_root,
+        "decisions": params.get("decisions"),
+        "force": bool(params.get("force", False)),
+    }
+    if "tag_prefix" in params:
+        apply_kwargs["tag_prefix"] = params["tag_prefix"]
+    exit_code, report = _apply(**apply_kwargs)
     return {"exit_code": exit_code, "report": report}

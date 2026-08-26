@@ -1158,13 +1158,12 @@ def build_deletion_blocks_check_directive(
         # Normalised to repo-relative forward slashes because `gate_scope`
         # membership is exact-string matching against `git diff --cached
         # --name-status` output, which always spells paths that way. A caller
-        # handing over Windows separators would drop silently OUT of the
-        # scope while the same value still drove the commit pathspec (git
-        # accepts both there) -- the gate would then be NARROWER than the
-        # commit, which is the one direction that weakens it, and silently
-        # (2026-08-26 review, slice 4). Done here rather than trusting an
-        # upstream guarantee: `decisions` is operator-supplied JSON and
-        # carries no such contract.
+        # handing over Windows separators would drop silently OUT of the scope
+        # while the same value still drove the commit pathspec (git accepts
+        # both there) -- the gate would then be narrower than the commit,
+        # which is the one direction that weakens it (2026-08-26 review,
+        # slice 4). Doing it here rather than trusting an upstream guarantee:
+        # `decisions` is operator-supplied JSON and carries no such contract.
         args.append("--")
         args.extend(str(path).replace("\\", "/") for path in stage_paths)
     return _directive(
@@ -3959,102 +3958,52 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # path, and on this shared worktree the dirty set reaches five figures:
     # measured live at 18,555 entries, which wedged this op past a 7-minute
     # client timeout on a close whose own file set was already committed.
-    known_concurrent_paths: "Optional[frozenset[str]]" = None
-    classified_session_files: Optional[list[dict[str, Any]]] = None
     measurement_paths = decisions.get("stage_paths")
-    # C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
-    # § C2): `resolve_known_concurrent_paths` now runs FIRST (was: AFTER
-    # `_session_owned_shas`, which paid its OWN separate trailer-walk spawn
-    # for exactly the same `--since=<earliest live peer start>` window the
-    # peer-attribution call below already walks via `bulk_trailer_session_
-    # map`). `trailer_map` captures that RAW walk (`trailer_map_out`), and
-    # `_session_owned_shas` below reads THIS session's own shas back out of
-    # it instead of re-walking the DAG -- one trailer spawn total, not two.
+    # THE REVIEW SCOPE OF A COMMIT CANNOT BE MEASURED BEFORE THE CALLER HAS
+    # SAID WHAT IS IN IT. Measured 2026-08-26, n=3 interleaved A/B, real repo,
+    # hooks live, job-accounted
+    # (`state/audits/2026-08-26-gate-path-without-the-review-scale-question.py`):
+    # 677.1ms / 7 processes / 3 git spawns WITH the block that used to stand
+    # here, 224.0ms / 1 process / 0 spawns without it -- 66.9% of the whole
+    # gate path, and the process tree collapses to the interpreter alone.
     #
-    # C2's TRADEOFF IS CLOSED BY C4 (docs/plans/2026-08-26-the-gate-paths-
-    # six-spawns-collapse-to-four.md § C4). C2's reorder left
-    # `precomputed_session_shas` unknown BEFORE this call, so it could no
-    # longer ride the C1 `extra_shas`/`extra_numstat_out` merge into the
-    # SAME `show --numstat` union this call spawns for peer attribution --
-    # that merge required knowing the session's own shas in advance, and
-    # C2 went net-zero rather than closing a spawn. C4 folds this session's
-    # own shas into that SAME union from the OTHER direction instead:
-    # `resolve_known_concurrent_paths`'s own `own_session_numstat_out`
-    # (below) finds them off the SAME `trailer_map` scan `_committed_paths_
-    # for_sids` already pays for -- no caller-side advance knowledge
-    # needed, closing the circular dependency C2 hit without a second
-    # numstat spawn.
+    # `stage_paths is None` is call 1 of the ceremony: the caller has not yet
+    # named its file set. What stood here existed to GUESS that set -- to
+    # reconstruct "which dirty paths are mine" out of a worktree ~50 peer
+    # sessions write, via a trailer walk over the live-peer window, a whole-
+    # worktree `git status --porcelain`, and a `show --numstat` union. It was
+    # a reconstruction of an answer the caller supplies directly one call
+    # later, and it was the sole reader of every value it produced.
+    #
+    # WHAT DISCHARGES THE REQUIREMENT NOW, per AC5 -- named before the cut,
+    # not after it:
+    #   - The review-scale VERDICT was never this call's to make.
+    #     `ops/ceremony/branch_resolution.py` derives its own `diff_loc`,
+    #     `commit_count` and `surface_count` over a real sha range, applies
+    #     the same `_BRIGHTLINE_*` thresholds, and never receives these
+    #     numbers. `build_directives` accepts `partition_mandatory` and never
+    #     reads it. Measured parity with the block gone: identical
+    #     `directives[]`, identical `partition_mandatory`.
+    #   - The file set comes back as `decisions["stage_paths"]` on call 2,
+    #     from the caller that actually knows it. Every consumer below then
+    #     runs against that, and against real shas.
+    #   - The `stage_paths` template pre-fill this chain might be assumed to
+    #     serve is a gravestone: `stage_paths_candidates` is unconditionally
+    #     `None` (see its own assignment), so the guess fed no template.
+    #   - It was also the machinery behind the peer-attribution defect: the
+    #     trailer window is bounded by other sessions' start times, so a
+    #     session whose commits straddle the boundary was silently truncated
+    #     (measured on session 8bb305c5: 7 owned commits, the map held 4, and
+    #     the 3 it dropped carried the code). Not reconstructing beats
+    #     reconstructing correctly.
+    #
+    # Negative-spec: the quadruple stays UNRESOLVED on call 1 -- `None`,
+    # NEVER zeros. A zeroed quadruple reads as a resolved, trivially-small
+    # diff and argues for reviewing LESS, the one direction a missing
+    # measurement may never argue for. `jp-review-scale` fires instead and
+    # says the inputs are unresolved out loud.
     precomputed_session_shas: Optional[list[str]] = None
-    # C4 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
-    # § C4): `own_numstat_blocks` folds this session's own shas into the SAME
-    # `show --numstat` union `resolve_known_concurrent_paths` already spawns
-    # for peer attribution -- `_committed_paths_for_sids` finds them off the
-    # SAME `trailer_map` scan `trailer_map_out` above already pays for, so no
-    # caller-side advance knowledge of `precomputed_session_shas` is needed
-    # (the circular dependency C2's reorder hit). Left `{}` (never `None`)
-    # so both branches below can hand it to `_measure_session_review_scale_
-    # inputs` uniformly; an empty dict there reproduces that function's own
-    # pre-C1 spawning fallback exactly (see the `shared_numstat_blocks`
-    # assignment below).
-    own_numstat_blocks: dict[str, str] = {}
-    if measurement_paths is None:
-        trailer_map: dict[str, str] = {}
-        window_start: list[str] = []
-        known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
-            root,
-            gate.sid,
-            trailer_map_out=trailer_map,
-            own_session_numstat_out=own_numstat_blocks,
-            window_start_out=window_start,
-        )
-        # THE MAP IS TRUSTED ONLY WHERE IT CAN BE PROVEN TO HAVE SEEN US.
-        #
-        # `resolve_known_concurrent_paths` builds `trailer_map` over
-        # `--since=<earliest LIVE PEER start>` -- a window bounded by other
-        # sessions' start times, with no relationship to when THIS session
-        # first committed. `_session_owned_shas_from_map` guards the case
-        # where that map holds NO entry for this session (absence of evidence
-        # -> None -> spawning fallback) but cannot guard a PARTIAL one: a
-        # session whose commits straddle the boundary is silently truncated,
-        # and the fallback never fires because the map did answer.
-        #
-        # These shas become `commit_slices`, which IS the review scope, so a
-        # truncated answer does not read as a smaller measurement -- it reads
-        # as a partitioned review that covered every commit while the ones
-        # outside the window went unreviewed and unnamed. Measured on session
-        # 8bb305c5 (2026-08-26): 7 owned commits, the map held 4, and the 3 it
-        # dropped were the ones carrying the code.
-        #
-        # The completeness test is free, which is why this is a gate and not a
-        # blanket refusal of the fast path (that cost a 5th spawn and broke
-        # `test_gate_path_spawn_budget.py`'s ceiling of 4): if this session
-        # STARTED at or after the window opened, every commit it could
-        # possibly have made is inside the window, so the map is complete by
-        # construction. Only a session older than the window -- or one whose
-        # start or window cannot be resolved -- pays the authoritative walk.
-        if _map_window_covers_session(window_start, session_start_time):
-            precomputed_session_shas = _session_owned_shas(
-                root, gate.sid, trailer_map=trailer_map
-            )
-        else:
-            precomputed_session_shas = _session_owned_shas(root, gate.sid)
-        # C5 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-
-        # four.md § C5): `known_added_paths`, derived from THIS same
-        # `own_numstat_blocks` -- zero extra spawn cost, see
-        # `_added_paths_from_numstat_blocks`'s own docstring for why it
-        # degrades to `None` (spawn as before) rather than guessing whenever
-        # the underlying blocks carry no `--raw` status.
-        known_added_paths = _added_paths_from_numstat_blocks(own_numstat_blocks)
-        classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
-            root,
-            session_start_time,
-            known_concurrent_paths=known_concurrent_paths,
-            known_added_paths=known_added_paths,
-        )
-        measurement_paths = [
-            row["path"] for row in classified_session_files if row["session_authored"]
-        ]
-    else:
+    if measurement_paths is not None:
         precomputed_session_shas = _session_owned_shas(root, gate.sid)
 
     # A (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
@@ -4066,32 +4015,42 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # "unresolvable", read off `measured_commit_count is None` below, since
     # this list stays empty either way until that distinction is known.
     review_scale_commit_slices: list[dict[str, Any]] = []
-    measured_gross_loc, measured_code_loc, measured_commit_count, measured_surface_count = (
-        _measure_session_review_scale_inputs(
+    # CALL 1 DOES NOT ASK AT ALL -- it does not merely pass empty inputs.
+    # `_measure_session_review_scale_inputs` carries its OWN fallback for an
+    # absent `uncommitted_paths` (its `if uncommitted_paths is None:` branch),
+    # which rebuilds the same guess from `classify_session_authored_files` +
+    # `resolve_known_concurrent_paths` internally. Handing it `None` therefore
+    # does not retire the guess: it relocates it one frame down AND drops the
+    # shared-numstat reuse the caller used to supply, which measured as a
+    # REGRESSION from 4 to 6 git spawns -- caught by
+    # `test_gate_path_spawn_budget.py`, which is why that file asserts a
+    # process count rather than trusting a call site to have been removed.
+    #
+    # So the call is gated, not merely fed. The quadruple stays `None` on
+    # call 1 -- never zeros; see the negative-spec above.
+    measured_gross_loc: Optional[int] = None
+    measured_code_loc: Optional[int] = None
+    measured_commit_count: Optional[int] = None
+    measured_surface_count: Optional[int] = None
+    if measurement_paths is not None:
+        (
+            measured_gross_loc,
+            measured_code_loc,
+            measured_commit_count,
+            measured_surface_count,
+        ) = _measure_session_review_scale_inputs(
             root,
             session_start_time,
             gate.sid,
             uncommitted_paths=measurement_paths,
             commit_slices_out=review_scale_commit_slices,
             precomputed_session_shas=precomputed_session_shas,
-            # C4 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-
-            # to-four.md § C4): `own_numstat_blocks` -- see its own
-            # assignment/comment above -- is `{}` (falsy) on every path that
-            # never reached `resolve_known_concurrent_paths`'s own trailer
-            # walk (the `measurement_paths is not None` branch above, or a
-            # trailer_map that simply had no entries for `gate.sid`), and
-            # this function's own `shas`/`shared_numstat_blocks` contract
-            # already treats a falsy `shared_numstat_blocks` the same as
-            # `None` would -- `if shared_numstat_blocks is not None:` alone
-            # is guarded here by never handing it a non-empty-but-non-
-            # covering dict: `own_numstat_blocks` is built from the exact
-            # same trailer-map scan `precomputed_session_shas` (via
-            # `_session_owned_shas`/`_session_owned_shas_from_map`) reads,
-            # so whenever it is non-empty it covers `precomputed_session_
-            # shas` exactly.
-            shared_numstat_blocks=own_numstat_blocks or None,
+            # `own_numstat_blocks` died with the call-1 guess that produced it.
+            # `None` is this parameter's documented "spawn as before" value and
+            # is correct on call 2, where the caller has named its own paths.
+            shared_numstat_blocks=None,
         )
-    )
+
     resolved_gross_loc = decisions.get("gross_loc")
     if resolved_gross_loc is None:
         resolved_gross_loc = measured_gross_loc

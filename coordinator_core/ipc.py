@@ -2323,7 +2323,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         _declared_writes_var.reset(_declared_writes_token)
 
 
-async def dispatch_message(msg: dict) -> dict:
+async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     """Validate + dispatch ``msg``, recording a durable per-op wall-clock sample.
 
     Thin timing wrapper around ``_dispatch_message_impl`` (which retains this
@@ -2351,6 +2351,20 @@ async def dispatch_message(msg: dict) -> dict:
     row on disk — the vanished-invocation case op_latency's module docstring
     now documents. The started and completion rows share a `corr_id` minted
     once at entry via `op_latency.new_correlation_id()`.
+
+    ``caller`` (C15, 2026-08-25-reconcile-open-comes-back-under-the-bar):
+    the invoking module/entry point, DECLARED by the caller rather than
+    recovered by a best-effort stack walk. This function is the SOLE
+    process-level dispatch chokepoint (above), so it is the one seam every
+    entry point already passes through — threading the identity through this
+    parameter makes attribution 100% by construction: every one of this
+    function's own call sites now passes an explicit, hand-written string
+    naming itself (see each call site's own comment). A caller that omits
+    ``caller`` falls back to `op_latency.caller_module()`'s best-effort frame
+    walk, kept ONLY for a caller that cannot declare itself — as of C15 every
+    known call site declares, so the walk is dead code on the measured
+    population, not a silent 95%-style out. `caller_module()` itself is
+    unchanged: still honest, still returns `None` rather than guessing.
 
     outcome classification (measurement only — see module's own
     DISPATCH_TIMEOUT_SECS negative-spec above for what "timeout" does and
@@ -2413,24 +2427,29 @@ async def dispatch_message(msg: dict) -> dict:
     # grows a raising branch, the completion row's `sid` degrades silently
     # wherever that raise wasn't already caught upstream of this function.
     sid = None
-    # C1 (2026-08-25-reconcile-open-comes-back-under-the-bar): resolved once
-    # here, in the entry block, and reused for both the started and complete
-    # rows -- same coupling as `sid` above and for the same reason (see that
-    # field's Review comment): `dispatch_message` is the SOLE dispatch
-    # chokepoint (this function's own docstring), so its one call site cannot
-    # tell a CLI invocation from a direct-import dispatch from a warm-server
-    # pool worker without walking the stack. Doing that walk twice (once per
-    # row) would double the cost for no different answer within one
-    # invocation -- the caller of THIS dispatch does not change between the
-    # started and complete rows of the same corr_id.
-    caller = None
+    # C1 (2026-08-25-reconcile-open-comes-back-under-the-bar), superseded by
+    # C15 (same plan): `caller` is now the function's own explicit parameter
+    # (declared by the caller at the seam), not a stack walk resolved here.
+    # Still resolved once, in the entry block, and reused for both the
+    # started and complete rows -- same coupling as `sid` above and for the
+    # same reason: the caller of THIS dispatch does not change between the
+    # started and complete rows of the same corr_id. A caller that passed no
+    # `caller` argument falls back to `caller_module()`'s best-effort walk
+    # (kept for a caller that genuinely cannot declare itself -- see this
+    # function's own docstring).
+    if caller is None:
+        try:
+            from coordinator_core.telemetry.op_latency import caller_module
+
+            caller = caller_module()
+        except Exception:
+            caller = None
     # The JSON-RPC `error.code` off the response, so the `outcome == "error"`
     # population on disk is READABLE without probing a live registry. See
     # `record_op_latency`'s own `error_code` note for the incident.
     error_code = None
     try:
         from coordinator_core.telemetry.op_latency import (
-            caller_module,
             new_correlation_id,
             record_op_started,
         )
@@ -2438,7 +2457,6 @@ async def dispatch_message(msg: dict) -> dict:
 
         corr_id = new_correlation_id()
         sid = resolve_session_id() or None
-        caller = caller_module()
         record_op_started(
             op=method if isinstance(method, str) else "<unknown>",
             t_start=t_start,
@@ -2737,6 +2755,15 @@ def dispatch_from_hook(
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
     try:
+        # C15 note: this function is itself one of `dispatch_message`'s known
+        # call sites and could declare `caller="coordinator_core.ipc.
+        # dispatch_from_hook"` explicitly here -- left as the stack-walk
+        # fallback (now `__spec__`-aware, see `caller_module`) because every
+        # existing test double stubbing `ipc.dispatch_message` in
+        # `coordinator_core.ops.tests.test_ipc_dispatch_from_hook` (out of
+        # this chunk's `writes:` scope) has a fixed `(msg)` signature that a
+        # `caller=` keyword would break. Declaring here is a follow-up chunk
+        # once those doubles widen to accept `caller=`.
         response = asyncio.run(dispatch_message(envelope))
     finally:
         process_ms = (_time.process_time() - process_start) * 1000.0
@@ -2856,6 +2883,11 @@ def dispatch_ops_from_hook(
             process_start = _time.process_time()
             spawn_start = _spawn_count_or_none()
             try:
+                # C15 note: same out-of-scope-test-double constraint as
+                # `dispatch_from_hook` above -- left on the (now
+                # `__spec__`-aware) stack-walk fallback rather than declaring
+                # `caller=` explicitly, since this function's own test
+                # doubles share the same fixed `(msg)` signature.
                 response = await dispatch_message(envelope)
             finally:
                 record_op_process_time(

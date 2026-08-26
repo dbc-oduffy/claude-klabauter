@@ -55,7 +55,11 @@ script exactly as ambient); any module-level side effect the invoked
 script's own top-level code performs at `exec_module` time; and any
 non-`SystemExit` exception raised either at import time (`exec_module`) or
 from `main()` itself — both propagate straight to this module's caller,
-uncaught.
+uncaught; and concurrency — `invoke_cli_main` swaps `sys.argv`/
+`sys.stdin` at process-global scope for the duration of a call
+(restored in `finally`), so this primitive requires single-threaded,
+non-reentrant callers. Two concurrent `invoke_cli_main` calls race on
+both globals.
 
 Contested behaviours across the trio (named per `docs/wiki/record-at-
 write-time.md` § Two negative lessons — a lift that silently picks a
@@ -101,6 +105,24 @@ winner on a genuine conflict is the failure that doctrine names):
        AttributeError if the module isn't registered yet). This module
        carries the same order for the same reason; do not re-derive it.
 
+TWO CACHE LAYERS, NOT ONE (post-C5 note — the trio is now repointed at
+this module; the paragraph above describing "ADDITIVE ONLY... nothing in
+the trio is repointed" is C1-era history, not current state). Each trio
+member (`workday_complete`/`workstream_complete`/`workweek_complete`)
+still keeps its OWN private `_LOADED_MODULES` dict, keyed by `cli_name`
+(the caller-chosen manifest name) — that per-module cache is checked
+FIRST and short-circuits before this module is ever called, so this
+module's own `_LOADED_MODULES` (below) is only consulted on a per-module
+cache MISS. The two layers are keyed on DIFFERENT axes: the trio's
+per-module caches key by `cli_name`/`module_name` (a caller-chosen
+string); this module's cache keys by the RESOLVED ABSOLUTE `script_path`.
+Neither cache is ever cleared, and clearing one does NOT clear or
+invalidate the other — a script edited on disk mid-process can be stale
+in one layer, both, or (in principle, if a future caller varies
+`module_name` for the same path) neither in sync with the other. Do not
+"fix" one layer's staleness without accounting for the other; they are
+independent, not a single logical cache split across two dicts.
+
 Spec backlink:
 docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md, chunk C1
 
@@ -136,10 +158,19 @@ from coordinator_core.ceremony_common.cli_rejection import (
     classify_cli_exit,
 )
 
-#: Per-process cache of already-loaded CLI modules, keyed by the caller-
-#: chosen `module_name` (each trio member already namespaces this per-CLI,
-#: e.g. `_workday_complete_cli_<name>` — this module does not impose its
-#: own naming scheme, it only caches whatever key the caller passes).
+#: Per-process cache of already-loaded CLI modules, keyed by the RESOLVED
+#: ABSOLUTE `script_path` (`str(Path.resolve())`) — never by the caller-
+#: chosen `module_name`, which is passed only into
+#: `spec_from_file_location`/`SourceFileLoader` and plays no part in the
+#: cache key. This is defence-in-depth, not a fix for a live defect: today
+#: every trio caller resolves scripts from this module's own
+#: `resolve_cli_script_root` (a fixed `coordinator/bin` under an explicit
+#: `repo_root`), so two different on-disk scripts never collide under one
+#: `module_name` in practice. Keying by path anyway means a future change
+#: to how callers resolve scripts can't silently reintroduce a stale-cache
+#: hit. Neither mtime nor file content participates in the key — a script
+#: edited on disk between two calls with the same resolved path still
+#: returns the first call's already-executed module.
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 
@@ -153,9 +184,10 @@ def resolve_cli_script_root(repo_root: Path) -> Path:
 
 
 def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
-    """Loads (once, cached under `module_name`) the script at `script_path`
-    via `importlib.util.spec_from_file_location`, in-process — never a
-    subprocess. Uses an explicit `importlib.machinery.SourceFileLoader`
+    """Loads (once, cached under `script_path`'s resolved absolute path —
+    see `_LOADED_MODULES`, never under `module_name`) the script at
+    `script_path` via `importlib.util.spec_from_file_location`, in-process
+    — never a subprocess. Uses an explicit `importlib.machinery.SourceFileLoader`
     (superset behaviour — see module docstring, Contested behaviour 3) so
     an extensionless bareword launcher shim loads exactly as a `.py`
     script would; this is a strict superset of `spec_from_file_location`'s
@@ -173,8 +205,9 @@ def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     execution resolves `sys.modules[cls.__module__]` during `exec_module`
     and crashes with an unrelated `AttributeError` if the module is not
     registered yet)."""
-    if module_name in _LOADED_MODULES:
-        return _LOADED_MODULES[module_name]
+    cache_key = str(script_path.resolve())
+    if cache_key in _LOADED_MODULES:
+        return _LOADED_MODULES[cache_key]
     loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
     spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
     if spec is None or spec.loader is None:
@@ -188,7 +221,7 @@ def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     except BaseException:
         sys.modules.pop(module_name, None)
         raise
-    _LOADED_MODULES[module_name] = module
+    _LOADED_MODULES[cache_key] = module
     return module
 
 
@@ -203,7 +236,10 @@ def invoke_cli_main(
     when it returns one, else the code a `SystemExit` it raises carries,
     else `0` on a clean fallthrough) paired with everything the call
     printed to stdout and, separately, to stderr (superset return shape —
-    see module docstring, Contested behaviour 1).
+    see module docstring, Contested behaviour 1). A `SystemExit` carrying a
+    non-int, non-`None` code (e.g. `sys.exit("some message")`) collapses to
+    exit code `1`; the message itself is not captured into stderr or
+    otherwise surfaced.
 
     Zero-arg `main()` trampolines are `def main() -> None` wrappers whose
     body still calls `sys.exit(op_main(sys.argv[1:]))` — they parse

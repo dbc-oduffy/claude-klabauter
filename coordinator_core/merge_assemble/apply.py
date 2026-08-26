@@ -157,8 +157,10 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str], repo_root:
     subprocess, ever, for the three callers of this function.
 
     Absent-producer mapping (C2 AC, named explicitly per the chunk body):
-    a missing script raises `UnrecognizedDirective` here (`load_cli_module`
-    cannot build a spec for a path that does not exist) — a DIFFERENT
+    a missing script raises `UnrecognizedDirective` here — this function's
+    own existence check (`if not script_path.is_file()`) raises before
+    `load_cli_module` is ever called with a bad path, so `load_cli_module`'s
+    own failure mode on a missing path is never exercised — a DIFFERENT
     exception type than today's nonzero-interpreter-exit `RuntimeError`
     from `_dispatch_result`, carrying the SAME "this verb did not run" fact.
     In the one caller where this actually matters — `portability-sweep`'s
@@ -232,8 +234,13 @@ def _anchor_merge_recovery_config_path(args: list[str], repo_root: Path) -> list
 
 
 def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d1`/`d2` — IN-PROCESS (C2 AC3). The two directives that share this
-    `cli` name take DIFFERENT argument paths for their repo root, verified
+    """`d1`/`d2` — IN-PROCESS (C2 AC3). `merge-recovery-and-tag-cut.py` has
+    THREE subcommands (`recovery-branch`, `resolve-tag-prefix`, `cut-tag`);
+    only `d1`/`resolve-tag-prefix` and `d2`/`cut-tag` are ever routed through
+    this `cli` key — `build_directives` never emits a `recovery-branch`
+    directive here (confirmed by grep), so that subcommand is dead code from
+    this dispatch table's perspective. The two directives that ARE routed
+    here take DIFFERENT argument paths for their repo root, verified
     against `merge-recovery-and-tag-cut.py`'s own argparse setup rather than
     assumed uniform:
 
@@ -260,8 +267,15 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
     subcommand = args[0] if args else None
     if subcommand == "resolve-tag-prefix":
         resolved_args = _anchor_merge_recovery_config_path(args, repo_root)
-    else:
+    elif subcommand == "cut-tag":
         resolved_args = [*args, "--repo-root", str(repo_root)]
+    else:
+        raise UnrecognizedDirective(
+            "merge-recovery-and-tag-cut: unrecognized subcommand "
+            f"{subcommand!r} — only 'resolve-tag-prefix' and 'cut-tag' are "
+            "routed through this cli key ('recovery-branch' exists on the "
+            "script but is never dispatched here)"
+        )
     return _dispatch_in_process(
         "merge-recovery-and-tag-cut", "merge-recovery-and-tag-cut", resolved_args, repo_root
     )

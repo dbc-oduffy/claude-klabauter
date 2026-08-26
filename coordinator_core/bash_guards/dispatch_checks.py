@@ -1778,11 +1778,41 @@ def _no_verify_rescan_shell_c_and_heredoc(
     return None
 
 
-def _ps_git_bypass_segments(cmd: str, guard_name: str) -> Optional[List[str]]:
+def _ps_git_bypass_segments(
+    cmd: str,
+    guard_name: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[List[str]]:
     """Shared PowerShell anti-bypass surface for the git-shaped Bucket A
     checks (`destructive-git-orphan`, `destructive-git-clean`,
     `blanket-git-add` -- C3, `docs/plans/2026-08-26-the-destructive-core-
     learns-the-shell-it-guards.md`).
+
+    GATED ON THE DECLARED DIALECT (AC2a retired, 2026-08-26). This scan used
+    to run regardless of `tool_name`, and that was FORCED rather than chosen:
+    DoE-claude's `_rearm_command_tool_name` rewrote a genuine PowerShell
+    payload to `tool_name: "Bash"` before dispatch, so gating here would have
+    left this surface blind on exactly the relabeled row the plan's § Problem
+    measured as load-bearing. The cost was a measured Bash-leg divergence --
+    `` g`it clean -fdx `` was silent at pre-change HEAD and denied after --
+    recorded as AC2a's ratified deviation with the removal of that relabel
+    named as its re-open trigger. DoE's D1 removed it (`47f4aedfe`; their
+    `coordinator/tests/test_preuse_bash_dispatch_rearm.py` now asserts the
+    symbol's ABSENCE), so a payload declaring `"Bash"` is once again evidence
+    that the caller really used bash, and gating is both possible and correct.
+
+    Returns `[]` -- never `None` -- for a non-PowerShell payload: `None` is
+    reserved for "PowerShell text that failed to parse", which callers treat
+    as AC4's fail-open silence. Conflating the two would work today only
+    because every caller writes `or []`, and would break the moment one of
+    them started distinguishing them.
+
+    An ABSENT payload still scans. Direct callers (tests, and any future
+    in-process caller that has a command but no hook envelope) declare no
+    dialect at all, and for them the pre-D1 posture -- scan and let the
+    bash-shaped ladder judge -- is the conservative one. This is deliberately
+    not a `.get("tool_name", "Bash")` default, which would silently convert
+    "no envelope" into a positive claim of bash.
 
     Per that plan's own body: git's own argv is byte-identical across
     dialects (the 2026-08-07 audit's "foreign-binary-argv" refinement), so
@@ -1817,6 +1847,11 @@ def _ps_git_bypass_segments(cmd: str, guard_name: str) -> Optional[List[str]]:
     it -- same shape `check_destructive_rm` already established for its
     own PowerShell leg.
     """
+    if payload is not None and dialect_from_tool_name(
+        payload.get("tool_name")
+    ) is not Dialect.POWERSHELL:
+        return []
+
     segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name=guard_name)
     if segments is None:
         return None
@@ -2220,7 +2255,9 @@ def check_destructive_git_orphan(
     # keeping them costs a false deny on ordinary commit prose, which is the
     # worse direction on a CONFINEMENT_DENY entry. The two sibling call
     # sites (`destructive-git-clean`, `blanket-git-add`) already pass `cmd`.
-    _orphan_ps_segments = _ps_git_bypass_segments(cmd, "destructive-git-orphan") or []
+    _orphan_ps_segments = _ps_git_bypass_segments(
+        cmd, "destructive-git-orphan", payload
+    ) or []
 
     for seg in list(_split_segments(cmd)) + _orphan_ps_segments:
         if not seg.strip():
@@ -3443,7 +3480,9 @@ def check_destructive_git_clean(
     # surface, not a new vocabulary. `None` (unparseable PowerShell) is
     # treated the same as "found nothing" for gate purposes -- the bash
     # leg's own regex gate still governs whether this returns None here.
-    _gc_ps_segments = _ps_git_bypass_segments(cmd, "destructive-git-clean") or []
+    _gc_ps_segments = _ps_git_bypass_segments(
+        cmd, "destructive-git-clean", payload
+    ) or []
 
     if (not re.search(r"\bgit\b", cmd) or not re.search(r"\bclean\b", cmd)) and not _gc_ps_segments:
         return None
@@ -4622,7 +4661,9 @@ def check_blanket_git_add(
 
     # C3: see `_ps_git_bypass_segments` docstring -- git's own argv is
     # unchanged across dialects; only the anti-bypass surface is new here.
-    _ga_ps_segments = _ps_git_bypass_segments(cmd, "blanket-git-add") or []
+    _ga_ps_segments = _ps_git_bypass_segments(
+        cmd, "blanket-git-add", hook_payload
+    ) or []
 
     if not _GIT_ADD_GATE_RE.search(cmd) and not _ga_ps_segments:
         return None

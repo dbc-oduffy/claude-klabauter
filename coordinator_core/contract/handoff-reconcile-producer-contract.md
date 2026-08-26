@@ -1,11 +1,21 @@
 # `handoff.reconcile_open` producer contract (TURNABLE-ON, op name RATIFIED)
 
 > **What this is.** The producer-side wire contract for claude-klabauter's `handoff.reconcile_open` op —
-> the auto-reconcile orchestrator that enumerates every currently-open handoff, evaluates each
-> against the DEC-1 commit-reality matcher (C2) and the unified gate evaluator (C3), and either
-> drives a transition (auto-ship / structured gate-cascade-clear) or surfaces the handoff for EM
-> judgment. This doc pins the op's params/return shape, the DEC-1 policy-as-DoE-owned-data
-> boundary, the C3 clear-predicate spec, and the recommended invocation cadence.
+> the auto-reconcile orchestrator that enumerates every currently-open handoff and evaluates each
+> against the unified gate evaluator (C3), driving a structured gate-cascade-clear transition or
+> surfacing the handoff for EM judgment. This doc pins the op's params/return shape, the C3
+> clear-predicate spec, and the recommended invocation cadence.
+>
+> **REBUILT 2026-08-26 (C4, this plan) after DR-344's kill-bar deleted the prior 2,721-line
+> implementation at 5,546.9 ms process time — 11x the 500 ms brightline.** The rebuild's REDUCED
+> BUILD TARGET is gate-evaluation only: **C10 killed the DEC-1 commit-reality shipped-ness matcher
+> (`commit_reality.py::evaluate_commit_reality`) outright, permanently (`state/kill-ledger.md`) —
+> not deferred, not narrowed.** `auto-ship`, the `reconciled[]` array, and every DEC-1/commit-reality
+> routing path documented below in the pre-rebuild sections are **GONE**, not reduced — there is no
+> shipping-verdict half left to call. Measured (AC5, `benchmarks/process_time.py`,
+> `k=20`/`k=7`): **431.25 ms cold CLI, 140.6 ms warm median (k=7), 0 spawns, `procs_per_call` 1.0** —
+> under the 500 ms brightline on both instruments, warm being the serving path for DoE-claude, the
+> only live consumer.
 >
 > **Status: WIRED AND FIRING, observation-only.** The op, the `reconcile/` compute package, and
 > the DoE-owned policy-YAML grammar pin are all shipped and green.
@@ -18,17 +28,21 @@
 > op-latency sink: **65 fires in 24 h, all `outcome=ok`, across 5 sessions**.
 >
 > **The call site and the arming flip were never coupled** — observation-only was *designed* to
-> run and surface, so "wired" does not mean "armed". `dry_run`/`auto_ship_enabled` still gate every
-> mutation exactly as § 6 and the grammar describe, and DoE has not flipped them.
+> run and surface, so "wired" does not mean "armed". `dry_run` still gates every mutation exactly
+> as § 6 and the grammar describe, and DoE has not flipped it. `auto_ship_enabled` is a DEAD ROUTE
+> as of the rebuild above: the auto-ship path it gated no longer exists in this op, so the key has
+> nothing left to arm — see § 1.1/§ 1.3 below.
 >
 > **Two open facts a reader should not mistake for settled.** (i) DoE accounts for exactly ONE fire
 > per `/workday-start`, and § 1.10.6 is the only `reconcile_open` call site in their whole plugin
 > tree — measured usage is ~13 per session, so ~12 fires per session are unattributed and are
 > presumed claude-klabauter-side. The sink cannot currently name them: `origin` is null on 63 of those 65
-> rows, so it records that an op fired and not who asked. (ii) Each fire costs **5,546 ms of
-> process time** (0 spawns), 11x this repo's 500 ms brightline —
+> rows, so it records that an op fired and not who asked. (ii) **Pre-rebuild**, each fire cost
+> **5,546 ms of process time** (0 spawns), 11x this repo's 500 ms brightline —
 > `state/audits/2026-08-25-the-steady-state-residual-evaporated-and-the-cpu-blind-spot-behind-it.md`.
-> At ~13 fires that is ~70 s of CPU per session, which is what a rebuild is actually buying down.
+> At ~13 fires that was ~70 s of CPU per session — the cost the rebuild's 140.6 ms warm figure
+> (above) buys down. This 5,546 ms figure describes the deleted implementation, kept for the
+> before/after record, not a current measurement.
 >
 > The op name `handoff.reconcile_open` is
 > **RATIFIED** by DoE (2026-07-13, `cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md`),
@@ -40,9 +54,12 @@
 > the policy** (the threshold/data — the `auto-reconcile-policy.yaml` file DoE authors against
 > claude-klabauter's grammar pin, `coordinator_core/contract/auto-reconcile-policy.grammar.md`). The
 > superseded 2026-07-03 tri-plane-ownership-boundary doc is NOT the citation for this split — DR-047
-> is. Concretely: the DEC-1 conservative auto-ship policy is **DoE-owned data pinned by the C9
-> grammar**, not a claude-klabauter-hardcoded named constant — a DoE-side threshold edit (e.g. widening the
-> mechanical-commit denylist) changes matcher behavior with zero claude-klabauter code change.
+> is. Concretely: `dry_run` resolution is **DoE-owned data pinned by the C9 grammar**, not a
+> claude-klabauter-hardcoded named constant — a DoE-side policy edit changes the op's mutation-gating
+> behavior with zero claude-klabauter code change. **The DEC-1 conservative auto-ship policy this paragraph
+> used to cite as the concrete instance is dead** — C10 killed the matcher it gated (§ 1.3, § 3
+> below) — so `mechanical_commit_denylist`/`cross_handoff_attribution` are now DoE-owned keys
+> describing a route this op no longer serves, not a live example of the boundary.
 >
 > **Spec backlinks.**
 > - Plan (source of truth): `docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md` § C4/C5
@@ -63,19 +80,22 @@
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `dry_run` | bool | no | **`true`** | When true (the default), the op computes every verdict but performs ZERO transitions — no `ship_and_archive` call, no `gate-cascade-clear` call. Caller must pass `dry_run=false` explicitly to transition anything. Non-bool values are coerced to `true` (fail-conservative on malformed input). |
+| `dry_run` | bool | no | **`true`** | When true (the default), the op computes every verdict but performs ZERO transitions — no `gate-cascade-clear` call. (Pre-rebuild this also gated a `ship_and_archive` call; that call site is gone with the auto-ship path — § 1.2/§ 1.3.) Caller must pass `dry_run=false` explicitly to transition anything. Non-bool values are coerced to `true` (fail-conservative on malformed input). |
 | `policy_path` | str | no | — | Override path forwarded to `reconcile.policy_loader.load_policy`. Test/CLI injection seam; production callers omit this and let the loader resolve via its own env-var/default-path chain (see the grammar pin doc § "Fail-closed contract"). |
 
 `dry_run` **defaults to `true`** — this is the resolved outcome of the Staff Engineer review finding index 4:
 conservatism parity with DEC-1's surface-never-guess invariant. Auto-mutation of work-state
-warrants opt-in until DoE ratifies flipping the default via the C6 co-memo (§ 6 below).
+warrants opt-in until DoE ratifies flipping the default via the C8 proposal memo (§ 7 below).
 
 ### 1.2 Return shape
 
+**REBUILT 2026-08-26 — the `reconciled[]` array is GONE, not reduced.** C10 killed the DEC-1
+commit-reality shipped-ness matcher permanently (`state/kill-ledger.md`); there is no shipping
+verdict left to populate `reconciled[]` with, so the rebuilt op returns two arrays where the
+pre-rebuild op returned three.
+
 ```json
 {
-  "reconciled": [ { "handoff_id": "...", "handoff_path": "...", "action": "ship_and_archive",
-                     "candidate_sha": "...", "dry_run": true, "applied": false } ],
   "gates_cleared": [ { "handoff_id": "...", "handoff_path": "...", "action": "gate-cascade-clear",
                         "verdict": "clear"|"narrow", "blocker_ids": ["..."], "dry_run": true,
                         "applied": false } ],
@@ -86,10 +106,9 @@ warrants opt-in until DoE ratifies flipping the default via the C6 co-memo (§ 6
 
 | Field | Grain | Meaning |
 |---|---|---|
-| `reconciled` | one entry per handoff routed by a C2 `verdict=="auto-ship"` | `action` is always `"ship_and_archive"`. `applied` is `false` on the dry-run path (and whenever `dry_run` is true) — `true` only after a live `handoff.ship_and_archive` call reports success. On a live call, `exit_code`/`message` echo that op's own result. |
 | `gates_cleared` | one entry per handoff routed by a C3 verdict in `{clear, narrow}` | `action` is always `"gate-cascade-clear"`. `verdict` echoes C3's structured verdict. `blocker_ids` is the set of `blocked_by` members resolved as newly-shipped (the removal candidates C8 re-verifies at act-time — see § 3). `applied` is `false` on dry-run or when `blocker_ids` is empty. |
-| `surfaced` | one entry per handoff that needed EM judgment | Populated for: C3 `verdict=="surface"`; the C2 verdict falling below the auto-ship bar (`surface`/`no-match`) on a non-`awaiting_gate` handoff; and the C3 **narrow+surface composite** (a `narrow` verdict whose `remaining_blockers` includes an `abandoned` id — see § 4). Each entry carries `reason` (a short machine string) and `evidence` (the underlying matcher/evaluator evidence list). |
-| `exit_code` | op-level | Always `0` — this op never fails loud for an individual handoff's verdict. A per-handoff mutation failure (e.g. a live `ship_and_archive`/`gate-cascade-clear` call error) is captured inside that handoff's `reconciled`/`gates_cleared` entry (`exit_code`/`message` fields), not surfaced as an op-level failure. The only op-level non-zero exit is the `repo_root is None` guard (no socket-authoritative common_dir), which returns `exit_code: 1` with all three arrays empty. |
+| `surfaced` | one entry per handoff that needed EM judgment | Populated for: C3 `verdict=="surface"`; and the C3 **narrow+surface composite** (a `narrow` verdict whose `remaining_blockers` includes an `abandoned` id — see § 4). (Pre-rebuild, this array was also populated for a C2 verdict falling below the auto-ship bar on a non-`awaiting_gate` handoff — that source is gone with the matcher, § 3.) Each entry carries `reason` (a short machine string) and `evidence` (the underlying evaluator evidence list). |
+| `exit_code` | op-level | Always `0` — this op never fails loud for an individual handoff's verdict. A per-handoff mutation failure (e.g. a live `gate-cascade-clear` call error) is captured inside that handoff's `gates_cleared` entry (`exit_code`/`message` fields), not surfaced as an op-level failure. The only op-level non-zero exit is the `repo_root is None` guard (no socket-authoritative common_dir), which returns `exit_code: 1` with both arrays empty. |
 
 **Not surfaced, not acted on:** a handoff whose C3 verdict is `not-cleared` (every `blocked_by`
 member legitimately still open/awaiting_gate) receives NO entry in any of the three arrays — the
@@ -98,14 +117,16 @@ are simply, correctly, still waiting would drown the real signal.
 
 ### 1.3 Verdict routing table
 
-| C2/C3 verdict | Handoff state | Route |
+**REBUILT 2026-08-26 — the `C2 auto-ship` row below is GONE, not reduced.** C10 killed the DEC-1
+commit-reality matcher permanently; there is no C2 verdict left to route. The table now carries
+only C3's four gate-evaluator verdict values.
+
+| C3 verdict | Handoff state | Route |
 |---|---|---|
-| C2 `auto-ship` | any | `reconciled[]`; live call invokes `handoff.ship_and_archive` (never hand-stamped) |
 | C3 `clear` | `awaiting_gate` | `gates_cleared[]`; live call invokes C8's `gate-cascade-clear` verb; full flip to `ready_to_fire` |
 | C3 `narrow` | `awaiting_gate` | `gates_cleared[]`; live call invokes C8's `gate-cascade-clear` verb; `blocked_by` narrows, stays `awaiting_gate`; ALSO appended to `surfaced[]` when `also_surface` is true (narrow+surface composite, § 4) |
 | C3 `surface` | `awaiting_gate` | `surfaced[]` only, no transition |
 | C3 `not-cleared` | `awaiting_gate` | no action, NOT surfaced (benign steady state) |
-| C2 `{surface, no-match}` | not `awaiting_gate` | `surfaced[]` only |
 
 A **prose** `gate_dependency` gate never auto-transitions regardless of its clear/surface verdict
 — `gate_eval`'s structured-vs-prose split already enforces this upstream (§ 4); this op simply
@@ -117,28 +138,37 @@ DoE alignment reply's item 3.
 ## 2. DR-212 batch-orchestration compliance
 
 `handoff.reconcile_open` loops over every open handoff and, per handoff, invokes
-`handoff.ship_and_archive` or `handoff.transition gate-cascade-clear` — an orchestrating op calling
-per-file mutators in a loop. This is **DR-212-compliant**, and is **NOT** the batch-mutation
-pattern DR-212 reserves solely for `handoff.normalize` (D2(ii)/Invariant-3: *"Future batch-mutation
-ops with different semantics or different target nouns would require their own DR and cannot
-inherit this carve-out"*):
+`handoff.transition gate-cascade-clear` — an orchestrating op calling a per-file mutator in a
+loop. (Pre-rebuild, this also invoked `handoff.ship_and_archive` on the now-deleted auto-ship
+path; that call site is gone with C10, § 1.3.) This is **DR-212-compliant**, and is **NOT** the
+batch-mutation pattern DR-212 reserves solely for `handoff.normalize` (D2(ii)/Invariant-3:
+*"Future batch-mutation ops with different semantics or different target nouns would require
+their own DR and cannot inherit this carve-out"*):
 
 `reconcile_open` never itself batch-writes multiple `state/handoffs/*.md` files in one call — each
-`ship_and_archive`/`gate-cascade-clear` invocation remains its own independent,
-already-DR-212-compliant single-file `handoff.ship_and_archive`/`handoff.transition` call, per
-D2(ii)'s **"N independent per-file idempotent writes... not a compound transaction"** language —
-the same distinction DR-212 already validates for `handoff.normalize`'s internal loop, applied
-here to an *orchestrating* op rather than a single *mutating* op. The `surfaced[]`/`reconciled[]`/
-`gates_cleared[]` accumulation this handler builds is **read-side response bookkeeping** (assembling
-a return list in local memory), not a cross-file write transaction — the thing D2(ii)/Invariant-3
-actually guards against. No new DR is needed for this op on this basis.
+`gate-cascade-clear` invocation remains its own independent, already-DR-212-compliant single-file
+`handoff.transition` call, per D2(ii)'s **"N independent per-file idempotent writes... not a
+compound transaction"** language — the same distinction DR-212 already validates for
+`handoff.normalize`'s internal loop, applied here to an *orchestrating* op rather than a single
+*mutating* op. The `surfaced[]`/`gates_cleared[]` accumulation this handler builds is **read-side
+response bookkeeping** (assembling a return list in local memory), not a cross-file write
+transaction — the thing D2(ii)/Invariant-3 actually guards against. No new DR is needed for this
+op on this basis.
 
 ---
 
-## 3. DEC-1 — the commit-reality matcher (C2)
+## 3. DEC-1 — the commit-reality matcher (C2) — **KILLED 2026-08-26, removed permanently**
 
-`coordinator_core/reconcile/commit_reality.py::evaluate_commit_reality` decides `verdict:
-"auto-ship"` iff ALL THREE signals hold, per handoff:
+**This section describes a deleted code path, kept for historical/before-after record.** C10
+killed `coordinator_core/reconcile/commit_reality.py::evaluate_commit_reality` outright and
+permanently (`state/kill-ledger.md`) — `handoff.reconcile_open` never calls it, and the module no
+longer exposes it (only unrelated helper residue two other modules import directly survives; see
+the module's own docstring). The `auto-ship` verdict, `reconciled[]` array, and the routing row
+this section fed all left the contract with it (§ 1.2, § 1.3 above). What follows is the design
+this repo shipped and then deleted before it ever fired an auto-ship in production:
+
+`coordinator_core/reconcile/commit_reality.py::evaluate_commit_reality` (DELETED) decided
+`verdict: "auto-ship"` iff ALL THREE signals held, per handoff:
 
 1. **SUBJECT MATCH** — `git log --pretty=format:"%H %s" --since=<created> -- <scope-paths>` yields
    a commit whose subject contains a noun token derived from the handoff's scope basenames/title,
@@ -179,7 +209,7 @@ one-liner on other handoff kinds). Load-bearing rules, converging with
   now likely-false/moot and needs EM judgment, not a silent auto-flip. **This rule (abandoned→
   surface) is a claude-klabauter extension flagged to DoE as a proposed spec addition** — the canonical
   status-propagation-primitive spec (§68-73) covers the shipped/asymmetry/gate_cleared_by rules but
-  is silent on the abandoned-blocker case (see the C6 memo, § 6).
+  is silent on the abandoned-blocker case (see the C8 memo, § 7).
 - **Partial-satisfaction → narrow, never fire-on-first-edge.** AND-reduce over EVERY member: when
   some-but-not-all are shipped, the reported `remaining_blockers` drops the shipped edges and
   `verdict=narrow` (caller stays `awaiting_gate`, `blocked_by` mutates down via C8). This is the
@@ -241,8 +271,9 @@ genuinely heavier than the per-tool-call consumer DR-215 guards the cold-start b
 gating to once-daily `workday-start` keeps the op invisible at the cadence DR-215 protects, rather
 than paying a heavier-than-59ms scan on every session boot.
 
-There is **no live caller today** — this is a recommendation for the C6 co-memo (§ 6) to carry to
-DoE, who wires the call site on receipt.
+**Already live** — DoE's `workday-start.md` § 1.10.6 wires this cadence today (see the header's
+CORRECTED status). This section's DEC-2 rationale for *why* `workday-start`-gating rather than
+`session.boot_sweep` is the right cadence stands unchanged by the rebuild.
 
 ---
 
@@ -268,32 +299,42 @@ from `state/lessons.md` commit `a8b2aba0` 2026-06-27 (DoE-claude repo):
 > check the plan/handoff doc path for commits.")* Apply this check alongside the existing
 > closure-signal sources above, not instead of them.
 
-DEC-1's three-signal matcher (§ 3 above) is the **op-shaped generalization** of this exact
-heuristic prose — same deliverable-scope-glob + commit-reachability logic, machine-executed and
+**DEC-1's three-signal matcher (§ 3 above) was the op-shaped generalization of this exact
+heuristic prose** — same deliverable-scope-glob + commit-reachability logic, machine-executed and
 guarded by the mechanical-commit denylist + cross-handoff attribution demotion this hand-rolled
-`/pickup` check does not itself carry.
+`/pickup` check does not itself carry. **That generalization is dead with the matcher (§ 3, C10
+kill):** the structured `blocked_by`-edge retirement this section leads with is unaffected (C3/C8
+never depended on DEC-1), but the deliverable-scope-glob shortcut DEC-1 offered on top of it no
+longer exists — `/pickup` Step 3d's manual deliverable-scope check has no machine-executed
+replacement to retire it against.
 
 ---
 
-## 7. What DoE receives via the C6 proposal memo
+## 7. What DoE receives via the C8 proposal memo
 
-This contract doc is the artifact the C6 cross-repo memo (kind: `proposal`, to `claude-central-em`)
-points at when it asks DoE to ratify: (1) this op's params/return shape; (2) the
-`auto-reconcile-policy.yaml` grammar pin DoE authors against; (3) the `gate_eval` clear-predicate
-spec including the abandoned-surfaces extension flagged as a proposed spec addition (§ 4); plus the
-routing asks — `strangle_route` DoE's `handoff-transition.js gate-recheck`/`repark` to the new
-Claude-klabauter verbs, and the partial `/pickup` Step 3d retirement described in § 6. See the plan's C6 task
-body for the full memo composition spec; this contract doc is cited by, not a substitute for, that
-memo.
+**AMENDED 2026-08-26 — this was the C6 memo; C6 is superseded and the memo ships from C8 instead,**
+carrying a different lead. Sent via `coordinator/bin/cross-repo-memo` (never hand-written into
+DoE's tree), it leads with the kill — the C2 shipped-ness verdict, the `auto-ship` routing value,
+and the `reconciled[]` array this contract described above are gone, not reduced — then carries,
+in order: (1) AC5's measured process-time figure for the rebuilt op (431.25 ms cold CLI / 140.6 ms
+warm median, 0 spawns); (2) AC10's `gate_eval` false-positive rate (1 of 14 surviving rows); (3)
+the `gate_eval` clear-predicate spec including the abandoned-surfaces extension flagged as a
+proposed spec addition (§ 4). **It does not ask DoE to author an arming overlay** — the auto-ship
+route the overlay would have armed no longer exists. `auto-reconcile-policy.grammar.md`'s
+`auto_ship_enabled` key is DoE-owned data describing that now-dead route; the memo states the fact
+and proposes nothing about DoE's grammar file. Sending it is external-facing and requires PM
+clearance before it goes out. This contract doc is cited by, not a substitute for, that memo.
 
 ---
 
 ## 8. Out of scope
 
-- **Wiring the `workday-start` call site.** DoE's to land on receipt of the C6 memo — not part of
+- **Wiring the `workday-start` call site.** DoE's to land on receipt of the C8 memo — not part of
   this op's ship.
-- **Flipping the `dry_run` default to `false`.** Requires DoE ratification via the C6 co-memo;
-  this contract pins the current (conservative) default only.
+- **Flipping the `dry_run` default to `false`.** Requires DoE ratification; this contract pins the
+  current (conservative) default only.
+- **Authoring or requesting a DoE-side arming overlay for auto-ship.** There is nothing left to
+  arm — C10 killed the auto-ship path this overlay would have gated (§ 1.3, § 3, § 7).
 - **`handoff.transition`'s `gate-recheck`/`repark`/`gate-cascade-clear` verb internals.** Owned by
   `coordinator_core/ops/handoff_transition.py` (C1/C8); this doc describes only how
   `handoff.reconcile_open` calls into them.
@@ -304,4 +345,6 @@ memo.
 ---
 
 <!-- producer-contract: claude-klabauter handoff.reconcile_open op — turnable-on, op name RATIFIED (DoE 2026-07-13),
-     no live caller yet. Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C5. -->
+     rebuilt 2026-08-26 (C4, gate-eval only, auto-ship/reconciled[] deleted with DEC-1/C10), live
+     caller is DoE's workday-start.md § 1.10.6. Spec backlinks: pln-claude-klabauter-auto-reconcile-pass-off-425848
+     § C5; docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md § C4/C8/C10/C12. -->

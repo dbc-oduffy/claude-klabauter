@@ -38,8 +38,10 @@ the question the two collectors already answer by finding (or not finding) the s
 violation, not a question this module's path/symbol check re-derives.
 
 The oracle (the deep collector) stays ADVISORY, exactly as its own plan requires. This module
-consumes its existing public entry point (`_deep_find_unbatched_per_item_spawns`); it adds no new
-discriminator and does not promote the oracle to gating. Nothing in this module asserts that any
+consumes its `deep_find_with_site_depths` entry point -- the same collector and the same
+discriminators as `_deep_find_unbatched_per_item_spawns`, returning each site's own lowest-visible
+depth from ONE walk instead of requiring a walk per depth; it adds no new discriminator and does
+not promote the oracle to gating. Nothing in this module asserts that any
 particular row must be one classification or another -- the one exception is the two AC6 cases
 below, which were located by hand this session specifically to prove the four-way split actually
 discriminates, not to freeze every row's disposition.
@@ -65,7 +67,7 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     find_unbatched_per_item_spawns,
 )
 from coordinator_core.tests.test_deep_per_item_spawn_worklist import (
-    _deep_find_unbatched_per_item_spawns,
+    deep_find_with_site_depths,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -265,17 +267,25 @@ def test_known_sites_rows_resolve_or_report_depth():
     Cadence-marked: this walks the same corpus the standing one-hop gate and the deep advisory
     module already each pay for separately (tens of seconds per collector run, per both modules'
     own docstrings), so it runs at cadence gates rather than per-commit -- matching its siblings in
-    `test_deep_per_item_spawn_worklist.py`."""
+    `test_deep_per_item_spawn_worklist.py`.
+
+    ONE deep walk, not one per depth. `deep_find_with_site_depths` returns each site's own
+    lowest-visible depth from a single `max_depth` walk, so the per-depth sets below are filtered
+    rather than re-collected. That is worth 206156.2ms -> 70546.9ms of process time here, and the
+    equivalence is not assumed: `test_site_depths_reproduce_the_per_depth_walks` in the advisory
+    module asserts the filtered sets equal real per-depth walks exactly. If that test ever reds,
+    this consumer is recording depths a real walk would dispute -- rows silently moving between
+    PAST_HORIZON and CLOSURE_CANDIDATE -- so fix it there rather than working around it here."""
     index = TrackedFileIndex.build(_REPO_ROOT)
 
     one_hop_violations = find_unbatched_per_item_spawns(_gate_scope_paths())
     one_hop_keys = frozenset(site.key for site in one_hop_violations)
 
+    deep_sites, deep_site_depth = deep_find_with_site_depths(_gate_scope_paths(), _MAX_DEPTH)
+
     deep_keys_by_depth: dict[int, frozenset[KnownSiteKey]] = {}
     for depth in range(2, _MAX_DEPTH + 1):
-        deep_violations = _deep_find_unbatched_per_item_spawns(
-            _gate_scope_paths(), max_depth=depth
-        )
+        deep_violations = [site for site in deep_sites if deep_site_depth(site) <= depth]
         deep_keys_by_depth[depth] = frozenset(site.key for site in deep_violations)
 
     assessments = {

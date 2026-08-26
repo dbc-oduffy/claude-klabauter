@@ -224,7 +224,7 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
 
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": True}}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
@@ -408,3 +408,106 @@ def test_caller_module_never_raises_at_the_top_of_the_stack(monkeypatch):
 
     monkeypatch.setattr(op_latency.sys, "_getframe", _boom)
     assert op_latency.caller_module() is None
+
+
+# --- C15: attribution by construction, not by stack walk ------------------
+# (2026-08-25-reconcile-open-comes-back-under-the-bar)
+
+
+def test_dispatch_message_explicit_caller_wins_over_the_stack_walk(tmp_path, monkeypatch):
+    """A caller that declares itself via `dispatch_message(msg, caller=...)`
+    is attributed to THAT declared string, never to the frame-walk's answer
+    (which would otherwise resolve to this test module, per the test above)."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
+
+    msg = {
+        "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {},
+        "_origin_worktree": str(tmp_path),
+    }
+    asyncio.run(ipc.dispatch_message(msg, caller="coordinator_core.ops.check_auto_reconcile"))
+
+    entries = _read_entries(_sink(common_dir))
+    started = [e for e in entries if e.get("kind") == "started"]
+    complete = [e for e in entries if e.get("kind") == "complete"]
+    assert started[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    assert complete[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    # Declared identity is real caller-asserted attribution, not `cwd`-style
+    # inference -- the row must never read the useless stack-walk fallback.
+    assert started[0]["caller"] != __name__
+
+
+def test_dispatch_message_falls_back_to_the_walk_when_no_caller_declared(tmp_path, monkeypatch):
+    """A caller that omits `caller=` (not yet migrated to declare itself)
+    still gets SOME attribution via the retained `caller_module()` fallback
+    -- the walk is dead code on the measured, migrated population, not a
+    removed capability for an undeclared one."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
+
+    msg = {
+        "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {},
+        "_origin_worktree": str(tmp_path),
+    }
+    asyncio.run(ipc.dispatch_message(msg))
+
+    entries = _read_entries(_sink(common_dir))
+    started = [e for e in entries if e.get("kind") == "started"]
+    assert started[0]["caller"] == __name__
+
+
+def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
+    """The measured C15 finding: a module executed as the process entry point
+    (`python -m ...`) carries `__name__ == "__main__"` in its OWN frame --
+    a correct answer to "which module" and a useless one to "which call
+    site". `__spec__.name` carries the real dotted name for exactly this
+    case (import machinery sets it identically for `-m` execution and normal
+    import); `caller_module()` must prefer it over the dunder when present."""
+    from coordinator_core.telemetry.op_latency import caller_module
+
+    class _FakeSpec:
+        name = "coordinator_core.invoke.__main__"
+
+    class _FakeFrame:
+        def __init__(self, f_globals, f_back):
+            self.f_globals = f_globals
+            self.f_back = f_back
+
+    caller_frame = _FakeFrame({"__name__": "__main__", "__spec__": _FakeSpec()}, None)
+    entry_frame = _FakeFrame({"__name__": "coordinator_core.ipc"}, caller_frame)
+
+    import coordinator_core.telemetry.op_latency as op_latency_mod
+
+    original_getframe = op_latency_mod.sys._getframe
+    try:
+        op_latency_mod.sys._getframe = lambda depth: entry_frame
+        assert caller_module() == "coordinator_core.invoke.__main__"
+    finally:
+        op_latency_mod.sys._getframe = original_getframe
+
+
+def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
+    """A frame with no `__spec__` at all (e.g. code executed via `exec`, or
+    an older/synthetic frame) must still resolve via the plain `__name__`
+    lookup -- the `__spec__` preference is a strict widening, not a
+    narrowing of what the walk could already resolve."""
+    from coordinator_core.telemetry.op_latency import caller_module
+
+    class _FakeFrame:
+        def __init__(self, f_globals, f_back):
+            self.f_globals = f_globals
+            self.f_back = f_back
+
+    caller_frame = _FakeFrame({"__name__": "coordinator_core.ops.check_auto_reconcile"}, None)
+    entry_frame = _FakeFrame({"__name__": "coordinator_core.ipc"}, caller_frame)
+
+    import coordinator_core.telemetry.op_latency as op_latency_mod
+
+    original_getframe = op_latency_mod.sys._getframe
+    try:
+        op_latency_mod.sys._getframe = lambda depth: entry_frame
+        assert caller_module() == "coordinator_core.ops.check_auto_reconcile"
+    finally:
+        op_latency_mod.sys._getframe = original_getframe

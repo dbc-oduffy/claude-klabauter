@@ -3335,3 +3335,118 @@ class TestDeriveReadinessBatch:
         assert results[0] == derive_readiness(freed, all_handoffs)
         assert results[1] == derive_readiness(blocked, all_handoffs)
         assert results[2] == derive_readiness(off_axis, all_handoffs)
+
+
+class TestGateIndexBuiltOnceForSweep:
+    """C13 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md
+    § C13): `_index_by_id(live_and_archived_handoffs)` must be built ONCE per
+    sweep, not once per structured-eligible/prose-dominance-with-staleness-
+    check handoff — the measured redundancy was 7 rebuilds over 21
+    `awaiting_gate` handoffs sharing the SAME `live_and_archived_handoffs`
+    list object. `_memoized_index_by_id` is the fix; these tests assert its
+    memo behaviour directly (call-count reduction, no leak across distinct
+    corpus objects, no leak past a corpus object's own lifetime) rather than
+    the ms-scale timing the brief itself says not to re-measure with a single
+    draw."""
+
+    def test_repeated_evaluate_gate_calls_share_one_index_build(self, monkeypatch) -> None:
+        import coordinator_core.reconcile.gate_eval as gate_eval_mod
+
+        real_index_by_id = gate_eval_mod._index_by_id
+        calls: List[int] = []
+
+        def _counting_index_by_id(handoffs):
+            calls.append(1)
+            return real_index_by_id(handoffs)
+
+        monkeypatch.setattr(gate_eval_mod, "_index_by_id", _counting_index_by_id)
+
+        tc1 = _blocker(
+            "hnd-tc1-000010",
+            "shipped",
+            shipped_in="d" * 40,
+            blocks=["hnd-a-000010", "hnd-b-000010"],
+        )
+        a = _roadmap_handoff("hnd-a-000010", blocked_by=["hnd-tc1-000010"])
+        b = _roadmap_handoff("hnd-b-000010", blocked_by=["hnd-tc1-000010"])
+        corpus = [tc1, a, b]
+
+        result_a = evaluate_gate(a, corpus)
+        result_b = evaluate_gate(b, corpus)
+
+        assert result_a["verdict"] == "clear"
+        assert result_b["verdict"] == "clear"
+        assert len(calls) == 1, "expected exactly one _index_by_id build shared across the sweep"
+
+    def test_distinct_corpus_objects_never_share_a_memo_entry(self, monkeypatch) -> None:
+        import coordinator_core.reconcile.gate_eval as gate_eval_mod
+
+        real_index_by_id = gate_eval_mod._index_by_id
+        calls: List[int] = []
+
+        def _counting_index_by_id(handoffs):
+            calls.append(1)
+            return real_index_by_id(handoffs)
+
+        monkeypatch.setattr(gate_eval_mod, "_index_by_id", _counting_index_by_id)
+
+        tc1 = _blocker("hnd-tc1-000011", "shipped", shipped_in="e" * 40, blocks=["hnd-a-000011"])
+        a = _roadmap_handoff("hnd-a-000011", blocked_by=["hnd-tc1-000011"])
+
+        # Two DIFFERENT list objects with equal contents — a second sweep's
+        # freshly-collected corpus must never be served the first sweep's
+        # cached index merely because the contents happen to match.
+        corpus_sweep_1 = [tc1, a]
+        corpus_sweep_2 = [tc1, a]
+
+        evaluate_gate(a, corpus_sweep_1)
+        evaluate_gate(a, corpus_sweep_2)
+
+        assert len(calls) == 2, "distinct corpus objects must each build their own index"
+
+    def test_memo_holds_a_strong_reference_so_id_reuse_cannot_stale_hit(self) -> None:
+        """A bare `list` is not weak-referenceable in CPython (`weakref.ref`/
+        `finalize` on one raises `TypeError`), so the memo instead holds a
+        STRONG reference to the corpus object alongside its index — the
+        `id()` of a corpus list still present in the memo can therefore never
+        be reused by an unrelated object while that entry lives (see the
+        `_index_by_id_memo` module docstring). This test locks in the
+        surface of that guarantee: a distinct object that is content-equal to
+        (but not the same object as) an already-memoized corpus never reads
+        the other's cached index — `entry[0] is handoffs` identity, not
+        equality, gates every hit."""
+        import coordinator_core.reconcile.gate_eval as gate_eval_mod
+
+        tc1 = _blocker("hnd-tc1-000012", "shipped", shipped_in="f" * 40, blocks=["hnd-a-000012"])
+        a = _roadmap_handoff("hnd-a-000012", blocked_by=["hnd-tc1-000012"])
+
+        corpus_1 = [tc1, a]
+        corpus_2 = [tc1, a]  # content-equal, distinct object
+
+        index_1 = gate_eval_mod._memoized_index_by_id(corpus_1)
+        index_2 = gate_eval_mod._memoized_index_by_id(corpus_2)
+
+        assert gate_eval_mod._index_by_id_memo[id(corpus_1)][0] is corpus_1
+        assert gate_eval_mod._index_by_id_memo[id(corpus_2)][0] is corpus_2
+        assert index_1 is not index_2
+
+    def test_memo_evicts_least_recently_used_beyond_maxsize(self) -> None:
+        import coordinator_core.reconcile.gate_eval as gate_eval_mod
+
+        gate_eval_mod._index_by_id_memo.clear()
+        maxsize = gate_eval_mod._GATE_INDEX_MEMO_MAXSIZE
+        corpora = []
+        for n in range(maxsize + 1):
+            tc1 = _blocker(
+                f"hnd-tc1-lru-{n:03d}", "shipped", shipped_in="0" * 40, blocks=[f"hnd-a-lru-{n:03d}"]
+            )
+            a = _roadmap_handoff(f"hnd-a-lru-{n:03d}", blocked_by=[f"hnd-tc1-lru-{n:03d}"])
+            corpus = [tc1, a]
+            corpora.append(corpus)
+            gate_eval_mod._memoized_index_by_id(corpus)
+
+        assert len(gate_eval_mod._index_by_id_memo) == maxsize
+        # The FIRST (least-recently-used) corpus must have been evicted to
+        # make room for the (maxsize + 1)th.
+        assert id(corpora[0]) not in gate_eval_mod._index_by_id_memo
+        assert id(corpora[-1]) in gate_eval_mod._index_by_id_memo

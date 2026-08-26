@@ -5232,11 +5232,58 @@ def test_commit_count_measured_path_carries_no_scope_clause(monkeypatch, tmp_pat
             check=True,
         )
     _patch_gate(monkeypatch, _gate("single-session"))
-    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    # `stage_paths: []` -- an ANSWER ("no uncommitted files"), not an absent
+    # one. Since 2026-08-26 the measurement runs on the call where the caller
+    # has NAMED its file set; call 1 no longer reconstructs it (see
+    # `brief()`'s own block comment and `test_gate_path_spawn_budget.py`).
+    # This test's subject is the scope-clause formatting on the MEASURED path,
+    # which is that call -- its sibling below owns call 1's behaviour.
+    decision_object = wsc.brief(decisions={"stage_paths": []}, repo_root=tmp_path)
     review_scale = decision_object["gates"]["review_scale"]
     assert review_scale["row"] == 4, "6 own commits >= _BRIGHTLINE_COMMITS(5) must still trip row 4"
     assert "commits=6" in review_scale["reason"]
     assert "commit_count_scope" not in review_scale["reason"]
+
+
+def test_commit_count_unmeasured_on_call_one_never_argues_for_less_review(
+    monkeypatch, tmp_path
+):
+    """The safety half of the 2026-08-26 change, on the SAME 6-commit fixture
+    as the test above: call 1 does not measure, and what it reports instead
+    must never read as a resolved, trivially-small diff.
+
+    This is the direction that matters. A session with 6 own commits trips row
+    4 once measured; if call 1 answered `commit_count=0` it would report a
+    SMALLER scope than the truth and argue for reviewing LESS -- the one
+    direction a missing measurement may never argue for. It reports unresolved
+    and says row 4 cannot be ruled out, which is the safe direction and is
+    what `jp-review-scale` exists to surface.
+    """
+    own_sid = "testsid123"
+    _init_git_repo(tmp_path)
+    for i in range(6):
+        name = f"f{i}.py"
+        (tmp_path / name).write_text(f"{i}\n", encoding="utf-8")
+        subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"c{i}", "--trailer", f"Session-Id: {own_sid}"],
+            cwd=tmp_path,
+            check=True,
+        )
+    _patch_gate(monkeypatch, _gate("single-session"))
+    review_scale = wsc.brief(decisions={}, repo_root=tmp_path)["gates"]["review_scale"]
+
+    assert review_scale["resolved"] is False
+    assert review_scale["row"] is None, (
+        "an unmeasured call must not name a brightline row -- naming one would "
+        f"assert a scope it never measured: {review_scale}"
+    )
+    assert review_scale["partition_mandatory"] is False
+    assert "not yet resolved" in review_scale["reason"], review_scale["reason"]
+    assert "cannot be ruled out" in review_scale["reason"], (
+        "the unresolved reason must say row 4 is NOT ruled out; anything softer "
+        f"reads as a small diff: {review_scale['reason']}"
+    )
 
 
 def test_commit_count_scope_strips_unsafe_characters_and_caps_length(monkeypatch, tmp_path):

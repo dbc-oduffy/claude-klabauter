@@ -118,6 +118,37 @@ DEFAULT_OP_NAME = "warm_guard.evaluate"
 #: HOOK op, never `ceremony.*` or a mutating fleet op. Widen this only with a named reason.
 ROUTABLE_OP_PREFIXES = ("hooks.", "session.", "warm_guard.")
 
+#: WIDENED 2026-08-26 (C4), AND THE ORDER MATTERED. The comment above says
+#: "reachable by anything that can open a loopback socket" -- that was true
+#: when it was written and is not any more: `supervisor.parse_request` now
+#: requires the boot cookie on every non-health request (`_cookie_is_valid`,
+#: landed `34a0a556e`), so reaching this fence at all means holding a secret
+#: only this user can read. The fence was the ONLY thing bounding blast
+#: radius while the listener was unauthenticated, which is why it could not
+#: move first and did not.
+#:
+#: What the prefixes could never express: an op CLI wants its READ ops served
+#: warm, and read ops do not share a namespace -- they are spread across
+#: every prefix. So the widening is by CLASS, not by more strings.
+#: `authz.classification.classify` is the authority, its MUTATING default is
+#: fail-closed, and an unclassified op raises `KeyError` which its own
+#: docstring requires HTTP dispatch to treat as DENY. Both are honoured
+#: below.
+#:
+#: STILL NEVER REACHABLE, AND THE SECOND ONE COST A TEST TO FIND: anything
+#: MUTATING, and anything under `ceremony.*` regardless of its class. The
+#: comment above bounds the blast radius of a REWRITTEN REGISTRATION -- a
+#: confused-deputy threat, not a network one -- by naming `ceremony.*`
+#: explicitly. Class alone does not honour that: four ceremony ops classify
+#: COMPUTE_ONLY and a class-only widening quietly admitted them. The
+#: credential answers "who is calling"; it does not answer "was this hook
+#: client aimed somewhere it should not be", so the namespace bound survives
+#: the credential landing and is kept as an explicit denial below.
+#:
+#: Widening past "authenticated reads, outside ceremony" needs its own named
+#: reason and its own review.
+DENIED_OP_PREFIXES = ("ceremony.",)
+
 #: Keys an op result may set that Claude Code splices into the session rather than reading as
 #: a verdict. `systemMessage` reaches the operator; `suppressOutput` is a display hint. Both
 #: are read at the TOP LEVEL of the response body.
@@ -294,9 +325,39 @@ def op_for_path(path: str) -> Optional[str]:
     op = trimmed[len(prefix):]
     if not op or "/" in op:
         return None
-    if not any(op.startswith(p) for p in ROUTABLE_OP_PREFIXES):
+    if any(op.startswith(p) for p in DENIED_OP_PREFIXES):
+        # Checked BEFORE the allow tests, never after: a denial that a later
+        # allow can overturn is not a denial.
         return None
+    if not any(op.startswith(p) for p in ROUTABLE_OP_PREFIXES):
+        if not _is_compute_only(op):
+            return None
     return op
+
+
+def _is_compute_only(op: str) -> bool:
+    """True iff `op` is classified COMPUTE_ONLY and may therefore be served
+    over the authenticated HTTP transport.
+
+    FAIL CLOSED TWICE OVER, deliberately. `classify` already defaults
+    unknown-to-MUTATING at registration time, and it RAISES `KeyError` for an
+    op absent from the map entirely -- its docstring requires HTTP dispatch
+    to read that as DENY, never as COMPUTE_ONLY, because silently treating an
+    unclassified op as a read is the actual privilege-escalation path. Both
+    the MUTATING answer and the raise return False here.
+
+    Imported inside the function, not at module scope: this module is on the
+    hook hot path and `authz.classification` is a 278-entry map that a hook
+    fire has no reason to pay for when the prefix check already answered.
+    """
+    try:
+        from coordinator_core.authz.classification import OpClass, classify
+
+        return classify(op) is OpClass.COMPUTE_ONLY
+    except KeyError:
+        return False
+    except Exception:  # noqa: BLE001 -- an unavailable classifier denies, never admits
+        return False
 
 
 def deny_response(event_name: str, reason: str) -> Dict[str, Any]:

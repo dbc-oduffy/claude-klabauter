@@ -245,6 +245,65 @@ def widened_index(
     return widened
 
 
+def deep_find_with_site_depths(roots, max_depth: int):
+    """One walk at `max_depth`, returning `(sites, depth_of)` -- the per-depth sets without
+    a walk per depth.
+
+    WHY THIS EXISTS. A consumer that needs the LOWEST depth at which each site appears used to
+    have no route but to call `_deep_find_unbatched_per_item_spawns` once per depth, re-parsing
+    the whole corpus each time: the collector parses on every call, and the depth `_depths`
+    computes was folded away by `widened_index` before any caller saw it. Measured over the gate
+    scope, the per-depth loop costs 206156.2ms of process time against 70546.9ms for one walk.
+
+    `depth_of(site)` returns the depth at which that site first becomes visible, so
+    `{s for s in sites if depth_of(s) <= k}` reproduces a walk at `max_depth=k` EXACTLY. That
+    equivalence is asserted, not assumed, by
+    `test_site_depths_reproduce_the_per_depth_walks` -- it is the whole warrant for this
+    function and must stay green.
+
+    THE ATTRIBUTION RULE, and three wrong versions of it, recorded because each looks right:
+      - NOT the enclosing function's own depth. A function's BFS distance can be reached through
+        a different callee than the one the site names, so that overshoots at low depths and
+        undershoots at high ones -- measured wrong in BOTH directions.
+      - NOT the minimum over every same-named definition. That ignores route c's import
+        resolution and matches unrelated namesakes, yielding a strict superset.
+      - The depth of the callee def THIS enclosing function actually calls, read off
+        `_call_graph`'s own edge set so route c's resolution is used once rather than copied.
+        A nested function's enclosing name is dotted (`outer.inner`) while edges are keyed by
+        TOP-LEVEL function -- `_call_graph` walks nested bodies as part of the outer function --
+        so the lookup strips to the top-level name. Missing that left exactly two sites
+        mis-attributed to depth 1.
+
+    A site whose callee reaches no depth-bearing def is depth 1: a direct spawner the standing
+    one-hop gate already reports.
+
+    This does NOT promote the deep collector to gating and does not touch the gate module; it is
+    the same advisory result, annotated.
+    """
+    edges: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    depths: dict[tuple[str, str], int] = {}
+
+    def _transform(base):
+        built_edges = _call_graph(base)
+        built_depths = _depths(base, built_edges, max_depth)
+        edges.update(built_edges)
+        depths.update(built_depths)
+        return widened_index(base, built_depths, max_depth)
+
+    sites = find_unbatched_per_item_spawns(roots, index_transform=_transform)
+
+    def depth_of(site) -> int:
+        top_level = site.enclosing.split(".")[0]
+        reached = [
+            callee_def
+            for callee_def in edges.get((site.path, top_level), ())
+            if callee_def[1] == site.callee and callee_def in depths
+        ]
+        return min(depths[d] for d in reached) if reached else 1
+
+    return sites, depth_of
+
+
 def _deep_find_unbatched_per_item_spawns(roots, max_depth: int):
     """Collection entry point: C0's `index_transform` seam, widening the collector's own
     single-parse `base` index in place of a second copy of the discriminator logic. The
@@ -1454,4 +1513,42 @@ def test_worklist_rows_never_carry_a_fabricated_time_unit():
         )
         assert row["cost_ms"] is None or row["cost_ms"] in known_costs, (
             f"row for {row['site'].key} carries a cost_ms not sourced from _KNOWN_SITE_COST_MS"
+        )
+
+
+@pytest.mark.cadence
+def test_site_depths_reproduce_the_per_depth_walks():
+    """`deep_find_with_site_depths` must reproduce a walk per depth, EXACTLY.
+
+    This is the entire warrant for collapsing the per-depth loop into one walk. If it ever goes
+    red, the one-walk shape is not equivalent any more and its consumers are recording depths
+    that a real walk at that depth would not agree with -- which, for `_KNOWN_SITES`, means rows
+    silently moving between PAST_HORIZON and CLOSURE_CANDIDATE. Fix the attribution or revert the
+    consumers to the loop; do NOT relax this to a subset check.
+
+    Deliberately expensive: it pays BOTH shapes (a walk per depth plus the one-walk) so the
+    comparison is real rather than a re-derivation of the thing under test. That cost is why it
+    is cadence-marked, and why it is the only place that pays it -- the consumers get the cheap
+    shape precisely because this test stands behind it.
+
+    Three attribution rules were measured wrong before this one passed; `deep_find_with_site_
+    depths`' own docstring records them so the next reader does not re-derive a refuted shape.
+    """
+    roots = _gate_scope_paths()
+    max_depth = 4
+
+    sites, depth_of = deep_find_with_site_depths(roots, max_depth)
+
+    for depth in range(2, max_depth + 1):
+        from_loop = frozenset(
+            site.key for site in _deep_find_unbatched_per_item_spawns(roots, max_depth=depth)
+        )
+        from_depths = frozenset(site.key for site in sites if depth_of(site) <= depth)
+
+        assert from_depths == from_loop, (
+            f"one-walk depth attribution diverges from a real walk at max_depth={depth}: "
+            f"{len(from_depths - from_loop)} site(s) only in the attribution "
+            f"({sorted(from_depths - from_loop)[:4]}), "
+            f"{len(from_loop - from_depths)} only in the walk "
+            f"({sorted(from_loop - from_depths)[:4]})"
         )

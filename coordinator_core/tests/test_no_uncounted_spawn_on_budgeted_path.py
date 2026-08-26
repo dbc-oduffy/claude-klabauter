@@ -5763,6 +5763,23 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "handoff.has_live_children": 1,
     "handoff.lineage_ancestry": 1,
     "handoff.repoint_origin": 1,
+    # ADDED 2026-08-26 (C14, pln-reconcile-open-comes-back-under-the-bar): the C4 measurement
+    # note above (this file, ~line 947) already found `handoff.reconcile_open`'s reachable set
+    # NON-EMPTY -- one site, `coordinator_core/git/run.py:426 run_git`, reached via
+    # `handoff_transition._read_gate_evidence_resolved` -> `sibling_fact.resolve_leg`'s
+    # `gate_evidence` leg -- but left it an unpinned residual, which is what left this guard RED
+    # (four failing tests, not the one C4 reported). Reachable-but-unexercised is the honest
+    # disposition here, not empty-and-safe: an in-process subprocess.run/Popen spy over a full
+    # warm sweep on the live corpus observed 0 spawns (resolve_leg's own cache served all 21
+    # handoffs from 3 entries, so `run_git` was never called), which is a measured absence of
+    # EXECUTION, not of REACHABILITY. Pinning that count at 1 here (this section's own D7 ratchet,
+    # a reachable-SITE-count ceiling, never execution evidence) reports the site rather than
+    # silently enrolling the op with an empty legitimization it does not have -- exactly the
+    # "empty measurement is worse than an unresolved site" trap named in
+    # state/bug-backlog/2026-08-26-ops-with-spawn-evidence-cannot-see-a-spa-0f0dad490422.yaml
+    # (a different blind spot -- a by-reference dispatch dict, not present on this op's path --
+    # but the same principle: an empty reading must never stand in for "genuinely spawn-free").
+    "handoff.reconcile_open": 1,
     "handoff.scaffold_from_queue": 1,
     "hooks.context_pressure_precompact": 1,
     "hooks.subagent_fabrication_check": 1,

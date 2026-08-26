@@ -379,6 +379,29 @@ class TestWarmCeremonyBrightline:
             "inside apply()'s own re-brief), not the op-path adapter itself"
         )
 
+    def test_warm_op_probe_rejects_unrecognized_mode(
+        self, _throwaway_repo: Path, _warm_op_probe: Path
+    ) -> None:
+        """Not a brightline measurement — covers the probe's own
+        `elif mode != "real":` guard (code-reviewer finding: that branch
+        was unreachable from this module, since every other test here only
+        ever passes "brief-only" or "stub"). A single plain subprocess
+        call, no batching: asserts the probe's documented `argv[2]`
+        contract ("stub" | "real", never anything else) is actually
+        enforced, not merely asserted in its own docstring."""
+        _require_windows_or_darwin()
+
+        completed = subprocess.run(
+            [sys.executable, str(_warm_op_probe), str(_throwaway_repo), "bogus-mode"],
+            cwd=str(_throwaway_repo),
+            env=_spawn_env(),
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert completed.returncode == 2, completed
+        assert "unrecognized mode" in completed.stderr, completed
+
     @pytest.mark.real_home
     def test_cold_forwarder_brief_process_time(self, _throwaway_repo: Path) -> None:
         """COLD FORWARDER PATH (`coordinator/bin/merge-assemble.py brief`,

@@ -424,7 +424,21 @@ _CALLER_WALK_MAX_FRAMES = 20
 
 
 def caller_module() -> Optional[str]:
-    """Best-effort ``__name__`` of the invoking module/entry point.
+    """Best-effort dotted module name of the invoking module/entry point.
+
+    SUPERSEDED AS THE PRIMARY ATTRIBUTION PATH BY C15
+    (2026-08-25-reconcile-open-comes-back-under-the-bar). C1's own docstring
+    (below, kept for provenance) staked attribution entirely on this walk;
+    measured 2026-08-26 against the live sink it delivered 70% "carrying a
+    caller" against a 95% bar while only 11% of rows actually resolved to a
+    call site -- the remaining 89% of "attributed" rows read the useless
+    literal ``"__main__"``. C15 restates the AC as 100% by construction: every
+    KNOWN `dispatch_message` call site now declares its own identity via that
+    function's `caller` parameter (the seam `dispatch_message`'s own
+    docstring names), and this function is retained ONLY as the fallback for
+    a caller that does not (or cannot) pass one -- an unattributed row still
+    stays unattributed rather than fabricating an identity, per this
+    function's own long-standing contract below.
 
     Caller provenance (why C1 exists): `dispatch_message` is the SOLE
     process-level dispatch chokepoint (see its own docstring), so its one
@@ -435,8 +449,21 @@ def caller_module() -> Optional[str]:
     carried no attribution at all before this. Walking the call stack from
     inside the dispatch chokepoint is the only way to answer "who fired
     this" without threading a new parameter through every existing caller
-    (out of this chunk's `writes:` scope) -- see `_CALLER_SKIP_PREFIXES` for
-    which frames are the chokepoint's own plumbing rather than the answer.
+    (out of C1's `writes:` scope) -- see `_CALLER_SKIP_PREFIXES` for which
+    frames are the chokepoint's own plumbing rather than the answer.
+
+    ``__spec__.name`` preferred over ``__name__`` (C15): a module executed as
+    the process entry point (``python -m coordinator_core.invoke``) runs with
+    ``__name__ == "__main__"`` in its own frame -- a correct answer to "which
+    module" and a useless one to "which call site", and the single largest
+    contributor to the 89% `__main__` population C15 measured. `__spec__` (set
+    by the import machinery whenever a module was located via a spec -- true
+    for both a normal import and a ``-m`` entry point, absent only for a
+    frame with no import machinery behind it, e.g. code executed via `exec`)
+    carries the REAL dotted module name in `__spec__.name` regardless of how
+    that frame's own `__name__` reads. Falls back to `__name__` when `__spec__`
+    is absent, not `None`, so this is a strict widening of what resolves, not
+    a narrowing of any previously-working case.
 
     Traced shape for an event-loop-mediated caller (e.g.
     ``loop.run_until_complete(dispatch_message(msg))``): the frame that
@@ -446,10 +473,10 @@ def caller_module() -> Optional[str]:
     the `asyncio` prefix (rather than only this module's own) is what lets
     the walk reach past that scheduling machinery to the real caller.
 
-    Returns the first frame's `__name__` that is not itself skipped, or
-    ``None`` if the walk is exhausted (`_CALLER_WALK_MAX_FRAMES`) or the
-    module cannot be determined -- never a free-text label, and never a
-    guess: an unattributed row stays unattributed rather than fabricating
+    Returns the first frame's resolved module name that is not itself
+    skipped, or ``None`` if the walk is exhausted (`_CALLER_WALK_MAX_FRAMES`)
+    or the module cannot be determined -- never a free-text label, and never
+    a guess: an unattributed row stays unattributed rather than fabricating
     an identity for it.
 
     Never raises: `sys._getframe(1)` raising ``ValueError`` (called with no
@@ -464,7 +491,9 @@ def caller_module() -> Optional[str]:
         return None
     depth = 0
     while frame is not None and depth < _CALLER_WALK_MAX_FRAMES:
-        name = frame.f_globals.get("__name__")
+        spec = frame.f_globals.get("__spec__")
+        spec_name = getattr(spec, "name", None)
+        name = spec_name if isinstance(spec_name, str) else frame.f_globals.get("__name__")
         if isinstance(name, str) and not any(
             name == prefix or name.startswith(prefix + ".") for prefix in _CALLER_SKIP_PREFIXES
         ):

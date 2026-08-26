@@ -575,7 +575,8 @@ by` as a SIXTH bucket, `disposed_ids`, split out of `unresolved_ids`):
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
@@ -743,6 +744,79 @@ def _index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
         if basename:
             by_path_basename[basename] = h
     return _TypedHandoffIndex(by_handoff_id, by_stub_id, by_path_basename)
+
+
+#: C13 (docs/plans/2026-08-25-reconcile-open-comes-back-under-the-bar.md § C13):
+#: `_index_by_id(live_and_archived_handoffs)` was being rebuilt from scratch on
+#: EVERY `evaluate_gate`/`evaluate_gate_triage` call over the SAME corpus list
+#: within one sweep (measured: 7 rebuilds over 21 `awaiting_gate` handoffs in one
+#: warm sweep, 29 ms cumulative) — the walk producing `live_and_archived_handoffs`
+#: itself was already built once per sweep by the caller; only the INDEX over
+#: that walk was not. `handoff_reconcile.py`'s sweep loop (the caller driving this
+#: redundancy) is outside this chunk's writes: scope — see the module docstring's
+#: writes-scope note — so this memo lives here, INSIDE gate_eval.py, keyed on the
+#: caller-supplied list's OWN object identity rather than requiring every caller
+#: to thread an extra parameter through. An explicit passed-in index (the
+#: dispatch brief's stated preference) would need every call site across
+#: `handoff_reconcile.py`/`handoff_gate_aging.py`/`ac27_differential_oracle.py` to
+#: change; this module-level memo achieves the identical "build once per sweep"
+#: outcome without widening this chunk's writes: scope, at the cost the brief
+#: itself calls out for a module-level cache: proving a second sweep's corpus can
+#: never be served the first sweep's stale index.
+#:
+#: SCOPING (never-leak-across-sweeps). Keyed on `id(handoffs)`, but — unlike a
+#: naive `id()`-keyed dict — each entry ALSO holds a STRONG reference to the
+#: `handoffs` list object itself (`Tuple[handoffs, index]`, never just the
+#: index). A plain `list` is not weak-referenceable in CPython (`weakref.ref`/
+#: `weakref.finalize` on a bare `list` raises `TypeError`), so the usual
+#: weakref-eviction idiom is unavailable here; holding the strong reference
+#: instead is what makes `id()` reuse safe: CPython can only reuse an id after
+#: an object's refcount reaches zero, and this cache's own strong reference
+#: means that can never happen while the entry is still present under that
+#: key. The eviction path (`_GATE_INDEX_MEMO_MAXSIZE`, LRU via `OrderedDict`)
+#: is therefore the ONLY way an entry's strong reference is ever dropped — and
+#: dropping the reference and dropping the key happen in the exact same
+#: `popitem` call, so the id can never be "free to be reused" while a stale
+#: key for it still lives in the dict. `handoff_reconcile.py`'s `_handler`
+#: constructs a brand-new `all_handoffs` list via `_collect_all_handoffs_for_
+#: gate_index` on every sweep invocation, so a second sweep's corpus is a
+#: DIFFERENT object with a DIFFERENT `id()` in the overwhelmingly common case
+#: regardless of this cache's eviction policy; the strong-reference-plus-LRU
+#: design is the defense for the narrower id-reuse edge case, not the primary
+#: mechanism keeping sweeps apart. The `entry[0] is handoffs` identity check
+#: in `_memoized_index_by_id` is belt-and-braces on top of that: even if some
+#: future caller's id() collision logic changed, a look-up that hits a
+#: differently-identified object at the same key rebuilds rather than trusting
+#: the key alone.
+_GATE_INDEX_MEMO_MAXSIZE = 8
+_index_by_id_memo: "OrderedDict[int, Tuple[Sequence[Dict[str, Any]], _TypedHandoffIndex]]" = (
+    OrderedDict()
+)
+
+
+def _memoized_index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
+    """`_index_by_id(handoffs)`, memoized per caller-supplied list identity for
+    up to `_GATE_INDEX_MEMO_MAXSIZE` most-recently-used corpus objects (see the
+    memo docstring above `_index_by_id_memo` for the full never-leak-across-
+    sweeps derivation, including why a strong reference is held rather than a
+    weakref). Every one of this module's own internal call sites
+    (`evaluate_gate`, `evaluate_gate_triage`, `_all_blocked_by_shipped_
+    evidence`) routes through this function instead of calling `_index_by_id`
+    directly, so a single sweep's repeated calls over the SAME `live_and_
+    archived_handoffs` object share one index build regardless of which of
+    those three entry points is hit first.
+    """
+    key = id(handoffs)
+    entry = _index_by_id_memo.get(key)
+    if entry is not None and entry[0] is handoffs:
+        _index_by_id_memo.move_to_end(key)
+        return entry[1]
+    index = _index_by_id(handoffs)
+    _index_by_id_memo[key] = (handoffs, index)
+    _index_by_id_memo.move_to_end(key)
+    while len(_index_by_id_memo) > _GATE_INDEX_MEMO_MAXSIZE:
+        _index_by_id_memo.popitem(last=False)
+    return index
 
 
 def _blocker_deployment_state(blocker: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1756,7 +1830,7 @@ def evaluate_gate(
         return result
 
     if structured_eligible:
-        all_index = _index_by_id(live_and_archived_handoffs)
+        all_index = _memoized_index_by_id(live_and_archived_handoffs)
         return _evaluate_structured_gate(
             handoff,
             all_index,
@@ -1929,7 +2003,7 @@ def _all_blocked_by_shipped_evidence(
     blocked_by_ids = [b for b in blocked_by_ids if isinstance(b, str)]
     if not blocked_by_ids:
         return None
-    all_index = _index_by_id(live_and_archived_handoffs)
+    all_index = _memoized_index_by_id(live_and_archived_handoffs)
     (
         shipped_ids,
         _shipped_shas,
@@ -2661,7 +2735,7 @@ def evaluate_gate_triage(
             "evidence": ["blocked_by is empty — nothing to evaluate"],
         }
 
-    all_index = _index_by_id(live_and_archived_handoffs)
+    all_index = _memoized_index_by_id(live_and_archived_handoffs)
 
     if _has_asymmetry(handoff, blocked_by_ids, all_index):
         return {
@@ -2960,16 +3034,16 @@ def derive_readiness_batch(
     is ~148 live handoffs per repo and fleet-wide across siblings).
 
     `evaluate_gate_triage` itself takes the prewalked `all_handoffs` sequence
-    per call and re-derives its own index internally (`_index_by_id`) each
-    time — this function does not attempt to hoist THAT index construction
-    out from under `evaluate_gate_triage`, since doing so would require
-    reaching into its private `_index_by_id` call, i.e. a second place
-    deciding how the index is built (the exact sibling-evaluator shape this
-    module exists to avoid). What this function DOES hoist is `all_handoffs`
-    itself: callers building a corpus-keyed batch pass the SAME sequence
-    once, in the SAME order, for every record in `handoffs` — the cheap half
-    of "build once, project over the set" available without touching
-    `evaluate_gate_triage`'s own internals.
+    per call; as of C13 (docs/plans/2026-08-25-reconcile-open-comes-back-
+    under-the-bar.md § C13) its internal index build (`_memoized_index_by_id`)
+    is memoized per `all_handoffs` object identity, so passing the SAME
+    sequence once, in the SAME order, for every record in `handoffs` (which
+    this function already does) also means the index build itself is now
+    shared across the whole batch — not merely `all_handoffs` iteration. This
+    function still does not reach into `evaluate_gate_triage`'s internals
+    directly (that remains the sibling-evaluator shape this module exists to
+    avoid); the sharing falls out of the memo keyed on the object this
+    function was already hoisting.
 
     Returns one `derive_readiness`-shaped dict per handoff in `handoffs`, in
     the same order.

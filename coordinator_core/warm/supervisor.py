@@ -101,7 +101,11 @@ from coordinator_core.warm import (
     skew,
     telemetry,
 )
-from coordinator_core.warm.http_listener import _collect_response, _frame_from_request
+from coordinator_core.warm.http_listener import (
+    ENGINE_TOKEN_HEADER,
+    _collect_response,
+    _frame_from_request,
+)
 from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
 
 __all__ = [
@@ -913,6 +917,75 @@ def _make_handler(ctx: "_ServerContext"):
                 return False
             return True
 
+        def _refuse_stale_caller(self, caller_token: str) -> bool:
+            """True iff this caller was refused (and the response written).
+
+            § Refusal semantics row 2. THE AXIS DISTINCTION THE COMPARISON
+            CANNOT MAKE: `ServerVersionState.is_skewed` is a plain
+            inequality, so a token mismatch reads identically whether the
+            CALLER is behind or this SERVER is stranded. On the named pipe
+            that ambiguity is harmless -- the token is part of the pipe
+            name, so a stale caller dials a name that does not exist and
+            goes cold. A fixed published port has no such binding, so the
+            transport has to supply the distinction, and this is it.
+
+            Server current + caller behind (axis 1) -> REFUSE THIS CALLER
+            with `ENGINE_SKEW` so it retries cold. Never
+            `close_listener`/`drain`: the server is fine, the caller is
+            behind, and evicting would take the warm engine down for every
+            session on the box -- measured at 16.8s under a 17s drain.
+
+            Server itself stale (axis 2) -> return False and let the
+            request through to `_serve_line`, whose eviction is CORRECT
+            there and is deliberately left unchanged: that axis is the
+            server judging itself stale, which is true regardless of who
+            asked.
+
+            Fail-open on an unreadable live token, deliberately: if the
+            live stamp cannot be computed we cannot know the caller is
+            behind, and refusing every caller on a stamp-read failure
+            would be an outage of its own. The cookie gate upstream is the
+            control that fails closed.
+            """
+            if self._token_is_stale_server_side():
+                return False
+            try:
+                live = skew.compute_client_token(ctx.engine_root)
+            except Exception:  # noqa: BLE001 -- see the docstring's fail-open note
+                return False
+            if caller_token == live:
+                return False
+            body = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": skew.ENGINE_SKEW,
+                        "message": (
+                            "engine generation changed; recompute "
+                            "skew.compute_client_token() and retry cold"
+                        ),
+                    },
+                }
+            ).encode("utf-8")
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return True
+
+        def _token_is_stale_server_side(self) -> bool:
+            """Axis 2: is THIS server's own boot stamp behind the live one?
+
+            Delegates to the context's own check so the watchdog and this
+            request path can never disagree about which axis fired.
+            """
+            try:
+                return bool(ctx._token_is_stale())
+            except Exception:  # noqa: BLE001 -- a stamp read must not fail a request
+                return False
+
         def _cookie_is_valid(self) -> bool:
             """True iff this request carries the boot cookie.
 
@@ -1122,7 +1195,28 @@ def _make_handler(ctx: "_ServerContext"):
                 # § Refusal semantics -- consume it, do not re-derive it here.
                 # Guard: `warm/tests/test_http_caller_token_cannot_evict.py`, whose first
                 # assertion is DESIGNED to go red when this line goes.
-                request_frame = _frame_from_request(request_frame, ctx.engine_token)
+                #
+                # C5, 2026-08-26 -- THE LINE IS GONE AND THE REFUSAL IS HERE.
+                # A caller's OWN token is now honoured when it sends one, which
+                # is what an op CLI needs; the eviction that made honouring it
+                # unsafe is prevented above rather than by overwriting the
+                # token. `_refuse_stale_caller` supplies the axis distinction
+                # `is_skewed` cannot: server current + caller behind is the
+                # CALLER's problem and is refused; server stale is axis 2 and
+                # still evicts, unchanged.
+                #
+                # A TOKENLESS request still gets the server's stamp, so the
+                # hook-fire path (which sends no token) keeps working exactly
+                # as before. Refusing it would be a separate decision with its
+                # own blast radius, and `_serve_line` already has an opinion
+                # about tokenless callers on the pipe.
+                caller_token = self.headers.get(ENGINE_TOKEN_HEADER)
+                if caller_token is not None and self._refuse_stale_caller(caller_token):
+                    _release_once()
+                    return
+                request_frame = _frame_from_request(
+                    request_frame, caller_token or ctx.engine_token
+                )
 
                 # `record_invocation` / `record_exit` were falling through to
                 # `_serve_line`'s own no-op lambda defaults, which is how a

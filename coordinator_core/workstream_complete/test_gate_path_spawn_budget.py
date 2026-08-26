@@ -195,28 +195,34 @@ def test_brief_git_spawn_budget_is_at_most_four(repo, monkeypatch):
     )
 
 
-def test_brief_spends_a_fifth_spawn_when_the_window_cannot_cover_us(repo, monkeypatch):
-    """The other branch of the same contract, and the reason it is worth a spawn.
+def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, monkeypatch):
+    """SUCCESSOR to `test_brief_spends_a_fifth_spawn_when_the_window_cannot_
+    cover_us`, retired 2026-08-26 with the mechanism it pinned.
 
-    `brief()` reads this session's owned shas from the peer trailer map when
-    that map provably saw all of them, and pays an authoritative
-    `git log --grep=Session-Id` walk when it cannot prove that. The proof is
-    `_map_window_covers_session`: the map is built over
-    `--since=<earliest live peer start>`, so a session that started BEFORE
-    that peer may have commits the window never held.
+    That test bought an authoritative `git log --grep=Session-Id` walk to stop
+    the peer trailer map silently TRUNCATING the review scope: the map is built
+    over `--since=<earliest live peer start>`, so a session older than that
+    peer may own commits the window never held, and a truncated `commit_slices`
+    surfaces not as a smaller measurement but as a partitioned review claiming
+    full coverage while the dropped commits go unreviewed and unnamed (measured
+    on session 8bb305c5: 7 owned commits, the map held 4, the 3 it dropped
+    carried the code).
 
-    Why the extra spawn is the right purchase: these shas become
-    `commit_slices`, which IS the review scope. A truncated list does not
-    surface as a smaller measurement -- it surfaces as a partitioned review
-    reporting full coverage while the commits outside the window go
-    unreviewed and unnamed. Measured on session 8bb305c5 (2026-08-26): 7
-    owned commits, the map held 4, and the 3 it dropped carried the code.
+    That hazard is now retired at its source rather than paid for. `brief()`
+    call 1 -- `stage_paths` absent, the caller has not yet named its file set --
+    no longer reconstructs the session's own paths or shas at all, so there is
+    no scope for the window to truncate. The caller names the set on call 2 and
+    the measurement runs against that.
 
-    Fixture inverts the sibling test's ordering deliberately: this session's
-    claim dir is created FIRST, so the session predates its own live peer and
-    the window cannot be proven to cover it. Asserting the walk FIRED (not
-    merely that the count rose) is what keeps this from passing for an
-    unrelated reason.
+    THE FIXTURE IS THE OLD TEST'S, DELIBERATELY UNCHANGED: this session's claim
+    dir is backdated an hour behind its live peer, which is precisely the
+    unprovable-window case the old test existed for. The assertion is that the
+    dangerous state is now unreachable, on the exact input that used to reach
+    it.
+
+    Asserts the honest-unresolved shape, not merely a low count: a present-but-
+    empty `commit_slices` would read as "this session owns zero commits" -- an
+    answer -- where the truth is "not measured here". The key must be ABSENT.
     """
     sid = "22222222-2222-2222-2222-222222222222"
     peer_sid = "33333333-3333-3333-3333-333333333333"
@@ -224,11 +230,6 @@ def test_brief_spends_a_fifth_spawn_when_the_window_cannot_cover_us(repo, monkey
     claim_dir.mkdir(parents=True)
     peer_claim_dir = repo / ".git" / "coordinator-sessions" / peer_sid
     peer_claim_dir.mkdir(parents=True)
-    # Backdate THIS session an hour. Creation order alone cannot express
-    # "older than the window": both dirs land in the same clock tick, the two
-    # timestamps compare equal, and `>=` reads that as covered. Setting the
-    # time explicitly is what makes this fixture the unprovable case rather
-    # than a race that usually resolves the other way.
     import os as _os
 
     _hour_ago = _os.path.getmtime(peer_claim_dir) - 3600
@@ -248,15 +249,19 @@ def test_brief_spends_a_fifth_spawn_when_the_window_cannot_cover_us(repo, monkey
     _patch_gate_with_sid(monkeypatch, sid)
     calls = _wrap_popen_for_git_spawn_count(monkeypatch)
 
-    wsc.brief(decisions={}, repo_root=repo)
+    envelope = wsc.brief(decisions={}, repo_root=repo)
 
-    walked = [c for c in calls if any("--grep=^Session-Id:" in str(a) for a in c)]
-    assert walked, (
-        "the authoritative sha walk did not fire for a session the map's window "
-        "cannot be proven to cover -- review scope may be silently truncated: "
-        f"{calls}"
+    assert calls == [], (
+        f"call 1 must issue no git spawn at all; got {len(calls)}: {calls}"
     )
-    assert len(calls) <= 5, (
-        f"expected at most 5 git spawns on the unprovable-window path, got "
-        f"{len(calls)}: {calls}"
+
+    review_scale = envelope["gates"]["review_scale"]
+    assert review_scale["resolved"] is False, (
+        "call 1 must report the review scale UNRESOLVED, never a verdict built "
+        f"from inputs it did not measure: {review_scale}"
+    )
+    assert "commit_slices" not in review_scale, (
+        "an absent measurement must OMIT commit_slices, never emit it empty -- "
+        "an empty list reads as 'this session owns zero commits', which is an "
+        f"answer, and the wrong one: {review_scale}"
     )

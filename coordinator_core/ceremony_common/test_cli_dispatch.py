@@ -58,11 +58,27 @@ def test_load_cli_module_registers_in_sys_modules_before_exec(tmp_path: Path):
         sys.modules.pop(module_name, None)
 
 
-def test_load_cli_module_caches_on_module_name(tmp_path: Path):
+def test_load_cli_module_caches_on_resolved_script_path(tmp_path: Path):
     script = _write_script(tmp_path, "cached.py", "def main(argv):\n    return 0\n")
     first = load_cli_module("test_cli_dispatch_cached", script)
     second = load_cli_module("test_cli_dispatch_cached", script)
     assert first is second
+
+
+def test_load_cli_module_does_not_collide_across_script_paths_sharing_a_module_name(
+    tmp_path: Path,
+):
+    # Review: coordinator:code-reviewer (Finding 1) — the cache is keyed by
+    # resolved script path, not caller-chosen module_name; two different
+    # on-disk scripts loaded under the same module_name must not alias.
+    first_script = _write_script(tmp_path, "first.py", "def main(argv):\n    return 1\n")
+    second_script = _write_script(tmp_path, "second.py", "def main(argv):\n    return 2\n")
+    shared_name = "test_cli_dispatch_shared_module_name"
+    first = load_cli_module(shared_name, first_script)
+    second = load_cli_module(shared_name, second_script)
+    assert first is not second
+    assert first.main([]) == 1
+    assert second.main([]) == 2
 
 
 def test_load_cli_module_propagates_import_time_exception(tmp_path: Path):

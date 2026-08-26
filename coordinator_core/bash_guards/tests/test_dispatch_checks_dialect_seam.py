@@ -151,3 +151,45 @@ class TestNoDialectDefaultsToBash:
 
     def test_empty_hook_payload_still_denies_bypass(self) -> None:
         assert _denied("git commit -m wip --no-verify", hook_payload={})
+
+
+class TestPsGitBypassSegmentsDialectGate:
+    """AC2a retired (2026-08-26): `_ps_git_bypass_segments` gates its
+    PowerShell anti-bypass scan on the DECLARED dialect, which only became
+    correct once DoE-claude's `_rearm_command_tool_name` stopped relabeling
+    genuine PowerShell payloads to `tool_name: "Bash"` ahead of dispatch
+    (their D1, `47f4aedfe`).
+
+    The absent-payload row is the one this gate could plausibly get wrong
+    and no other test covers: a direct in-process caller declares no
+    dialect at all, and must keep the pre-gate posture (scan, and let the
+    bash-shaped ladder judge) rather than being silently read as a
+    positive claim of bash.
+    """
+
+    def test_declared_powershell_recovers_the_hidden_git_argv(self) -> None:
+        segs = guard._ps_git_bypass_segments(
+            "g`it clean -fdx", "destructive-git-clean", {"tool_name": "PowerShell"}
+        )
+        assert segs == ["git clean -fdx"]
+
+    def test_declared_bash_does_not_scan(self) -> None:
+        segs = guard._ps_git_bypass_segments(
+            "g`it clean -fdx", "destructive-git-clean", {"tool_name": "Bash"}
+        )
+        assert segs == []
+
+    def test_absent_payload_still_scans(self) -> None:
+        segs = guard._ps_git_bypass_segments(
+            "g`it clean -fdx", "destructive-git-clean"
+        )
+        assert segs == ["git clean -fdx"]
+
+    def test_declared_bash_returns_empty_not_none(self) -> None:
+        """`None` is reserved for "PowerShell that failed to parse", which
+        callers treat as AC4's fail-open silence. Conflating the two works
+        today only because every call site writes `or []`."""
+        segs = guard._ps_git_bypass_segments(
+            "g`it clean -fdx", "destructive-git-clean", {"tool_name": "Bash"}
+        )
+        assert segs is not None

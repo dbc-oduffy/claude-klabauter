@@ -25,6 +25,12 @@ processes" claim. That claim is AC7, discharged separately via
 `coordinator_core.benchmarks.process_time.batched_process_time_ms` over the
 real published-engine invocation (state/lessons/2026-08-20-a-process-
 boundary-ac-cannot-be-discharged-by-pytest.md), not by this pytest module.
+The guard now also flags any `import subprocess` / `from subprocess import
+...` inside a converged handler body, closing the import-aliasing gap
+(e.g. `from subprocess import run as _r`) that the dotted-path and
+bare-name checks alone could not see — a materially easier evasion than
+the transitive-spawn gap above, so it is named here rather than left
+implicit.
 
 The three EXCLUDED handlers (`_dispatch_merge_gate_and_pr`,
 `_dispatch_merge_release_notes_derive`, `_dispatch_orphan_branch_sweep`) and
@@ -102,6 +108,22 @@ def _attribute_dotted_paths(node: ast.AST) -> set[str]:
     return paths
 
 
+def _imports_subprocess(node: ast.AST) -> bool:
+    """True if `node` contains an `import subprocess` (bare or aliased) or a
+    `from subprocess import ...` (aliased or not) anywhere in its body —
+    closes the aliasing gap where `from subprocess import run as _r` evades
+    both the dotted-path check (no `subprocess.` attribute access) and the
+    bare-name check (no reference to the literal name `subprocess`)."""
+    for child in ast.walk(node):
+        if isinstance(child, ast.Import):
+            if any(alias.name == "subprocess" for alias in child.names):
+                return True
+        elif isinstance(child, ast.ImportFrom):
+            if child.module == "subprocess":
+                return True
+    return False
+
+
 def _function_defs_by_name(tree: ast.Module) -> dict[str, ast.FunctionDef]:
     return {
         node.name: node
@@ -166,6 +188,13 @@ def test_converged_handler_body_has_no_interpreter_spawn_reference(
         f"{handler_name}: calls _run_py_script (the module's own "
         "interpreter-spawning helper) — this handler is supposed to be "
         "converged in-process"
+    )
+    assert not _imports_subprocess(fn), (
+        f"{handler_name}: imports `subprocess` (directly or via `from "
+        "subprocess import ...`, aliased or not) inside a converged "
+        "(in-process) handler body — this evades the dotted-path and "
+        "bare-name checks above and is not a legitimate way to reintroduce "
+        "a spawn"
     )
 
 
