@@ -252,7 +252,9 @@ def run_cold_control_invocation(op: str, *, repo_root: Path, params: Optional[di
         "params": params or {},
         "_origin_worktree": str(repo_root),
     }
-    asyncio.run(dispatch_message(msg))
+    asyncio.run(
+        dispatch_message(msg, caller="coordinator_core.install.door_route_signal")
+    )
 
     row = _newest_matching_row(op, repo_root=repo_root, since=since)
     if row is None:

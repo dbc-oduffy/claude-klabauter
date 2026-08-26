@@ -73,7 +73,11 @@ Self-registration: importing this module calls
 register_op("session.reap", _handler) as a side-effect, and (C5)
 register_op("session.reap_claims_for_repos", _handler_reap_claims_for_repos) — the
 per-repo claim-reap primitive (target-root-parameterized, op scope "none"; see
-"Per-repo claim-reap PRIMITIVE" section below).
+"Per-repo claim-reap PRIMITIVE" section below) — and
+register_op("session.audit_unreapable", _handler_audit_unreapable), the read-only
+observability half of the uuid-shape gate: session.reap reports the gate-rejected
+population as a DEBUG count by D1 contract, and that op reports its NAMES,
+mutating nothing.
 Add this module to coordinator_core/ops/__init__.py (C5) to trigger registration.
 
 Spec backlinks:
@@ -305,6 +309,30 @@ def _parse_last_activity(meta: dict) -> float:
 # Sub-reaper (i): stale sessions
 # ---------------------------------------------------------------------------
 
+def _log_gate_rejected(count: int) -> None:
+    """Emit the uuid-shape-gate rejection tally, count-only and spawn-free.
+
+    Shared by BOTH loops in `_reap_stale_sessions` — the ordinary candidate
+    loop and the fail-closed liveness-error loop. The two applied the same
+    gate but only one counted it, so under a liveness failure the
+    gate-rejected population vanished from the op's output with zero signal;
+    a shared emitter is what keeps that asymmetry from re-opening.
+
+    Stays a count, never a list, per D1 (docs/plans/2026-08-26-the-reaper-
+    identifies-sessions-positively.md): `session.reap`'s reporting contract is
+    count-only and spawn-free. The NAMES are the separate, read-only
+    `session.audit_unreapable` op's job — an operator diagnosing hub growth
+    reads that, not a widened reap envelope.
+    """
+    if count:
+        _LOG.debug(
+            "session.reap: uuid-shape gate rejected %d non-session candidate(s) "
+            "(count only, not a list — this is the permanently-unreapable "
+            "population; names via the session.audit_unreapable op)",
+            count,
+        )
+
+
 def _reap_stale_sessions(
     sessions_dir: Path,
     live_sids: frozenset,
@@ -346,15 +374,25 @@ def _reap_stale_sessions(
         # (C2) so this defers[] list stops naming non-session stores it can
         # never reap anyway — it defers everything, so it cannot cull a
         # store, but it must not report one as a deferred session either.
+        gate_rejected_count = 0
         for sdir in sorted(sessions_dir.iterdir()):
             if not sdir.is_dir():
                 continue
+            if sdir.name.startswith("."):
+                # Traversal skip, ordered BEFORE the gate exactly as in the
+                # main loop: `.archive`/`.agents`/`.last-reap` are not session
+                # candidates at all, so they are not gate rejections either.
+                # Absent this skip the two loops report different populations
+                # under the same name, which is worse than reporting none.
+                continue
             if not _SESSION_UUID_RE.match(sdir.name):
+                gate_rejected_count += 1
                 continue
             deferred.append({
                 "id": sdir.name,
                 "reason": f"resolve_live_session_ids failed — deferred (fail-closed): {liveness_error}",
             })
+        _log_gate_rejected(gate_rejected_count)
         return reaped, deferred, failed
 
     now_epoch = _now_utc_epoch()
@@ -536,13 +574,7 @@ def _reap_stale_sessions(
             else:
                 failed.append({"id": sid, "reason": f"mv failed: {exc}"})
 
-    if gate_rejected_count:
-        _LOG.debug(
-            "session.reap: uuid-shape gate rejected %d non-session candidate(s) "
-            "(count only, not a list — this is the permanently-unreapable "
-            "population, kept countable)",
-            gate_rejected_count,
-        )
+    _log_gate_rejected(gate_rejected_count)
 
     return reaped, deferred, failed
 
@@ -1224,3 +1256,127 @@ async def _handler_reap_claims_for_repos(
         "results": results,
         "errors": errors,
     }
+
+
+# ---------------------------------------------------------------------------
+# Op handler: session.audit_unreapable (read-only observability for the
+# permanently-unreapable population D1 accepted)
+# ---------------------------------------------------------------------------
+
+@register_op("session.audit_unreapable")
+async def _handler_audit_unreapable(
+    params: dict, repo_root: Optional[Path] = None
+) -> dict:
+    """session.audit_unreapable — read-only: NAME the hub children session.reap
+    can never reap.
+
+    Why this op exists rather than a wider `session.reap` envelope: D1
+    (docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md)
+    accepted, as a priced cost, that the positive uuid-shape gate makes every
+    non-uuid-shaped hub child permanently unreapable, and fixed that op's
+    reporting contract at a count, not a list — "cheap, spawn-free". That
+    leaves an operator diagnosing hub growth with a number and no name. This
+    op is the missing half: the same gate, run read-only, reporting the names.
+    Splitting it keeps the reap op's contract intact — a reporting need is
+    discharged by a read-only op, never by teaching a destructive op to say
+    more on a path a ceremony runs unattended.
+
+    Mutates NOTHING: no move, no rm, no `.last-reap` touch, no cadence gate
+    (a cadence gate is for work that costs something; this is a directory
+    listing plus one `stat` per entry). `_collect_unreapable` itself — the
+    part this op's contract is about — is unconditionally spawn-free. The
+    handler wrapping it can still shell out: `check_repo_root` reaches
+    `git_common_dir` (a subprocess) whenever a caller supplies
+    `params["repo_root"]`, same D3 consistency check `session.reap`'s own
+    `_handler` runs and pays the identical cost for (see its docstring's
+    `repo_root` param note) — worth it because the check is what catches a
+    caller-supplied root that disagrees with the engine-resolved one.
+
+    Population reported = exactly what `_reap_stale_sessions`'s gate rejects:
+    directory children of the hub that are NOT dot-prefixed (those are
+    traversal skips — `.archive`, `.agents`, `.last-reap` — never session
+    candidates in the first place) and do NOT match `_SESSION_UUID_RE`. Any
+    divergence between this predicate and the reap loop's is the bug this op
+    is meant to expose, so it is deliberately the same two tests in the same
+    order, not a re-derivation.
+
+    params:
+      repo_root (str, optional): D3 consistency check only — NOT the path source.
+
+    repo_root handler arg: git common dir supplied by the engine
+    (`_OP_KEY_SCOPE` = "common_dir"), same substrate derivation as session.reap.
+
+    Wire output (session.audit_unreapable-specific — NOT the frozen fleet envelope):
+      exit_code    int   0=ok, 1=setup-error
+      sessions_dir str   the hub that was audited
+      count        int   len(unreapable) — the same tally session.reap logs at DEBUG
+      unreapable   [dict] {"name": str, "age_days": float}
+                          one per gate-rejected child, sorted by name.
+    """
+    if repo_root is None:
+        _LOG.error("session.audit_unreapable: repo_root handler arg is None")
+        return {
+            "exit_code": 1,
+            "sessions_dir": "",
+            "count": 0,
+            "unreapable": [],
+            "error": "repo_root handler arg is None",
+        }
+
+    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
+
+    mismatch = check_repo_root(params.get("repo_root"), common_dir)
+    if mismatch:
+        _LOG.error("session.audit_unreapable setup error: %s", mismatch)
+        return {
+            "exit_code": 1,
+            "sessions_dir": "",
+            "count": 0,
+            "unreapable": [],
+            "error": mismatch,
+        }
+
+    sessions_dir = _sessions_dir(common_dir)
+
+    unreapable = await asyncio.to_thread(_collect_unreapable, sessions_dir)
+    return {
+        "exit_code": 0,
+        "sessions_dir": str(sessions_dir),
+        "count": len(unreapable),
+        "unreapable": unreapable,
+    }
+
+
+def _collect_unreapable(sessions_dir: Path) -> List[dict]:
+    """Sync: name every hub child the uuid-shape gate permanently rejects.
+
+    Same two tests, same order, as `_reap_stale_sessions`'s candidate loop —
+    dot-prefix traversal skip first, then `_SESSION_UUID_RE`. An absent hub is
+    not an error: it reports an empty population, matching the reaper's own
+    `sessions_dir.is_dir()` early return.
+    """
+    if not sessions_dir.is_dir():
+        return []
+
+    now_epoch = _now_utc_epoch()
+    rows: List[dict] = []
+    for sdir in sorted(sessions_dir.iterdir()):
+        if not sdir.is_dir():
+            continue
+        if sdir.name.startswith("."):
+            continue
+        if _SESSION_UUID_RE.match(sdir.name):
+            continue
+        try:
+            age_days = round(max(0.0, (now_epoch - sdir.stat().st_mtime)) / 86400.0, 2)
+        except OSError as exc:
+            print(
+                f"skip: _collect_unreapable: sdir.stat() failed for {sdir.name}: {exc}",
+                file=sys.stderr,
+            )
+            age_days = -1.0
+        rows.append({
+            "name": sdir.name,
+            "age_days": age_days,
+        })
+    return rows

@@ -37,6 +37,7 @@ how a real budget gets quietly retired.
 import json
 import os
 import shutil
+import sys
 import subprocess
 import threading
 import time
@@ -184,7 +185,11 @@ def test_the_delivery_costs_one_spawn_and_beats_an_interpreter_start(
         "curl", "--silent", "--config", str(cookie.curl_config_path(root)),
         "--output", null, url,
     ]
-    interp_argv = ["python", "-c", "pass"]
+    # `sys.executable`, never a bare "python": on many POSIX installs only
+    # `python3` is on PATH, so the bare name would raise FileNotFoundError
+    # rather than skip. It is also the more honest floor -- the interpreter
+    # this repo actually pays for, not whatever PATH resolves to.
+    interp_argv = [sys.executable, "-c", "pass"]
 
     # One warm-up each, discarded: the first spawn pays page-cache and loader
     # costs that no steady-state caller pays, and including it would flatter

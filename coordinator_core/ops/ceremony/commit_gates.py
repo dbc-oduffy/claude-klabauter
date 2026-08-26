@@ -169,7 +169,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence, Set, Union
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.git.git_state import IndexParseError, head_blobs, read_index
@@ -358,6 +358,65 @@ def _parse_name_status_rename_sources(name_status_stdout: str) -> List[str]:
     return sources
 
 
+def _staged_deletions_and_renames_in_process(
+    cwd: Union[str, Path], gate_scope: Set[str]
+) -> Tuple[Set[str], Set[str]]:
+    """`(staged_deletions, rename_sources)` for `gate_scope`, in-process (no
+    `git` spawn) -- the POST-`git add` counterpart of `commit_pipeline.
+    _swept_rename_delete_paths` (same exact-(mode,sha)-match rename test),
+    with its OWN fresh read of the CURRENT (post-add) index rather than
+    reusing `explicit_stage`'s pre-add snapshot -- byte-identical `git diff
+    --cached --name-status --find-renames` argv, but a different index state
+    either side of the `git add` (2026-08-26, C2b of docs/dispatch-briefs/
+    2026-08-26-the-commit-op-stops-asking-git-eleven-times/C2b.md).
+
+    A `gate_scope` member present at HEAD but absent from the current index
+    is either a swept DELETE or a swept RENAME: an exact `(mode, sha)` match
+    against some OTHER current-index path is a spawn-free proof of a
+    100%-identical rename (an ordinary `git mv`/add+rm of unmodified
+    content); no exact match reads as a plain delete.
+
+    Never called with an empty `gate_scope` -- there is no bounded candidate
+    set to check `head_blobs` against without walking the whole HEAD tree,
+    so the caller keeps the unscoped `diff_cached_name_status` spawn for
+    that case (mirroring `deletion_block_gate`'s own unscoped/`whole_index`
+    branch).
+
+    Raises `IndexParseError` on an unmerged (mid-merge-conflict) index --
+    caller decides the fallback, mirroring `_swept_rename_delete_paths`'s
+    own contract.
+    """
+    staged_deletions: Set[str] = set()
+    rename_sources: Set[str] = set()
+    if not gate_scope:
+        return staged_deletions, rename_sources
+
+    index_snapshot = read_index(cwd)
+    scoped_paths = sorted(gate_scope)
+    head_result = head_blobs(cwd, scoped_paths)
+    if not head_result:
+        return staged_deletions, rename_sources
+
+    sha_to_paths: Dict[str, List[str]] = {}
+    for ip, entry in index_snapshot.items():
+        sha_to_paths.setdefault(entry.sha, []).append(ip)
+
+    for p in scoped_paths:
+        head_entry = head_result.get(p)
+        if head_entry is None:
+            continue
+        if p in index_snapshot:
+            continue
+        _, head_sha_value = head_entry
+        candidates = [ip for ip in sha_to_paths.get(head_sha_value, []) if ip != p]
+        if candidates:
+            rename_sources.add(p)
+        else:
+            staged_deletions.add(p)
+
+    return staged_deletions, rename_sources
+
+
 def deletion_block_gate(
     msg_text: str,
     gate_paths: Sequence[str],
@@ -413,27 +472,41 @@ def deletion_block_gate(
 
     parsed = parse_step267_blocks(msg_text)
 
-    name_status_result: GitResult = diff_cached_name_status(cwd, find_renames=True)
-    all_staged_deletions = _parse_name_status_deletions(name_status_result.stdout)
-    staged_deletions = (
-        [p for p in all_staged_deletions if p in gate_scope]
-        if gate_scope
-        else all_staged_deletions
-    )
-    staged_deletions_set = set(staged_deletions)
-
     # Assertion-1 needs a WIDER set than Assertion-3 does (2026-08-06 fix --
     # see `_parse_name_status_rename_sources`'s own docstring for the
     # incident): a Deleted-claimed path whose old location git paired into a
     # rename (identical/near-identical content staged at a new path in the
     # SAME batch) has genuinely vacated that path in the staged tree, even
     # though it is not a bare `D` line. Scoped by `gate_scope` the same way
-    # `staged_deletions` is, immediately above.
-    all_rename_sources = _parse_name_status_rename_sources(name_status_result.stdout)
-    rename_sources = (
-        [p for p in all_rename_sources if p in gate_scope] if gate_scope else all_rename_sources
-    )
-    staged_or_renamed_away_set = staged_deletions_set | set(rename_sources)
+    # `staged_deletions` is.
+    #
+    # In-process (`_staged_deletions_and_renames_in_process`, no `git`
+    # spawn) whenever `gate_scope` is non-empty -- the common, scoped
+    # caller shape. `IndexParseError` (mid-merge-conflict index) falls back
+    # to the original unscoped `diff --cached --name-status --find-renames`
+    # spawn, filtered client-side, mirroring `_swept_rename_delete_paths`'s
+    # own fallback contract. The unscoped case (`gate_scope` empty --
+    # `whole_index=True`'s no-pathspec mode) has no bounded candidate set to
+    # check `head_blobs` against, so it keeps the spawn unconditionally.
+    if gate_scope:
+        try:
+            staged_deletions_set, rename_sources_set = _staged_deletions_and_renames_in_process(
+                cwd, gate_scope
+            )
+        except IndexParseError:
+            name_status_result = diff_cached_name_status(cwd, find_renames=True)
+            all_staged_deletions = _parse_name_status_deletions(name_status_result.stdout)
+            staged_deletions_set = {p for p in all_staged_deletions if p in gate_scope}
+            all_rename_sources = _parse_name_status_rename_sources(name_status_result.stdout)
+            rename_sources_set = {p for p in all_rename_sources if p in gate_scope}
+        staged_deletions = sorted(staged_deletions_set)
+    else:
+        name_status_result = diff_cached_name_status(cwd, find_renames=True)
+        staged_deletions = _parse_name_status_deletions(name_status_result.stdout)
+        staged_deletions_set = set(staged_deletions)
+        rename_sources_set = set(_parse_name_status_rename_sources(name_status_result.stdout))
+
+    staged_or_renamed_away_set = staged_deletions_set | rename_sources_set
 
     # Assertion-2's two reads answer ONE question -- does a Kept-claimed path
     # still exist -- and nothing else in this function consumes either set, so

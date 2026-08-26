@@ -381,7 +381,7 @@ def test_run_dispatch_opens_per_request_state(monkeypatch):
     empty declared-writes collection per call, closed again on return."""
     captured: dict[str, object] = {}
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         captured["active_during"] = list(declared_writes.active_declarations() or [])
         declared_writes.declare_write("inner.txt")
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
@@ -402,7 +402,7 @@ def test_run_dispatch_captures_handler_stdout_into_stderr_field(monkeypatch):
     field `warm.client` already pops and relays, the same field the
     pre-existing `diagnostics` mechanism uses."""
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         print("handler stdout line")
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
 
@@ -421,7 +421,7 @@ def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypa
     the ONLY point that can relay a handler's `print()` warm-served through
     the pool."""
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         print("pool worker stdout line")
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": "ok"}
 
@@ -448,7 +448,7 @@ def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkey
     call sites -- must still arrive in the `_stderr` sibling field warm
     dispatch already relays."""
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         import sys as _sys
 
         _sys.stderr.write("refusing op: scoped_to.sha does not resolve\n")
@@ -465,7 +465,7 @@ def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkey
 def test_pool_dispatch_worker_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
     """Same contract as `_run_dispatch`, for the process-pool worker target."""
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         import sys as _sys
 
         _sys.stderr.write("pool worker refusal: receiver unresolvable\n")
@@ -501,7 +501,7 @@ def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeyp
         _cc_invoke_path_setup.path.insert(0, lib_dir)
     import cc_invoke
 
-    async def fake_dispatch_message(msg: dict) -> dict:
+    async def fake_dispatch_message(msg: dict, *, caller: str | None = None) -> dict:
         import sys as _sys
 
         _sys.stderr.write("fleet op setup error: the receiver is not registered\n")
@@ -887,7 +887,7 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
 
     session_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         return {"jsonrpc": "2.0", "id": msg["id"], "result": session_core.resolve_session_id()}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)

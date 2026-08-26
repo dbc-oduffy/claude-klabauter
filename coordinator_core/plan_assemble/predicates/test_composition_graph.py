@@ -262,8 +262,281 @@ def test_cross_plan_conflict_finds_scope_overlap(tmp_path):
         {
             "plan_path": "docs/plans/sibling-plan.md",
             "overlapping_paths": ["some/shared/", "some/shared/file.py"],
+            # Both sides declared these in `scope:`, so this is a hit the
+            # scope-only scan also produced — nothing beyond it.
+            "beyond_declared_scope": [],
         }
     ]
+
+
+_SPINE_SIBLING = """---
+scope:
+  - coordinator_core/session/touched.py
+---
+
+## Tasks
+
+```yaml plan-tasks
+- id: AC13
+  title: teach the reaper the new record shape
+  surface: coordinator_core/ops/session/reap.py
+  writes:
+    - coordinator_core/ops/session/reap.py
+```
+"""
+
+_AC_SIBLING = """---
+scope:
+  - elsewhere/other.py
+---
+
+## Acceptance Criteria
+
+| # | criterion | state |
+|---|---|---|
+| AC1 | `pkg/mod.py` grows a positive gate, proven by `_some_symbol`. | open |
+"""
+
+_CITATION_OUTSIDE_AC_SIBLING = """---
+scope:
+  - elsewhere/other.py
+---
+
+## Problem
+
+`pkg/mod.py` is where the symptom shows up.
+
+## Anti-scope
+
+Do not touch `pkg/mod.py`.
+"""
+
+_MALFORMED_SPINE_SIBLING = """---
+scope:
+  - pkg/mod.py
+---
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  writes: not-a-list
+  depends_on: [{nope: true}]
+```
+"""
+
+
+def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path):
+    """The gap this row was widened to close, in its original shape.
+
+    `docs/plans/2026-08-26-the-reaper-identifies-sessions-positively.md`
+    recorded a live co-edit of `coordinator_core/ops/session/reap.py` by a
+    sibling plan whose frontmatter `scope:` did not list that file — the
+    sibling declared it in its `## Tasks` spine instead. The scope-only scan
+    could not surface that to either side; a hand-written Concurrency
+    paragraph was the only thing that caught it, which is not a mechanism.
+    """
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text(
+        "---\nscope:\n  - coordinator_core/ops/session/reap.py\n---\nbody\n",
+        encoding="utf-8",
+    )
+    (plans_dir / "sibling-plan.md").write_text(_SPINE_SIBLING, encoding="utf-8")
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["coordinator_core/ops/session/reap.py"]},
+        plan_body="body\n",
+    )
+    result = cross_plan_conflict(ctx)
+
+    assert result["hits"] == [
+        {
+            "plan_path": "docs/plans/sibling-plan.md",
+            "overlapping_paths": ["coordinator_core/ops/session/reap.py"],
+            # The sibling's own `scope:` never named it — this is exactly the
+            # overlap class the old scan was structurally blind to.
+            "beyond_declared_scope": ["coordinator_core/ops/session/reap.py"],
+        }
+    ]
+
+
+def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path):
+    """A backtick-cited path in the Acceptance Criteria counts as a declared
+    write site; a bare symbol name in the same cell does not."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text("---\nscope:\n  - pkg/mod.py\n---\nbody\n", encoding="utf-8")
+    (plans_dir / "sibling-plan.md").write_text(_AC_SIBLING, encoding="utf-8")
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["pkg/mod.py"]},
+        plan_body="body\n",
+    )
+    result = cross_plan_conflict(ctx)
+
+    assert result["hits"] == [
+        {
+            "plan_path": "docs/plans/sibling-plan.md",
+            "overlapping_paths": ["pkg/mod.py"],
+            "beyond_declared_scope": ["pkg/mod.py"],
+        }
+    ]
+
+
+def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path):
+    """A file a Problem section argues about, or an Anti-scope names precisely
+    to disclaim, is not a declared write site — harvesting the whole body would
+    invent conflicts out of citations."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text("---\nscope:\n  - pkg/mod.py\n---\nbody\n", encoding="utf-8")
+    (plans_dir / "sibling-plan.md").write_text(
+        _CITATION_OUTSIDE_AC_SIBLING, encoding="utf-8"
+    )
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["pkg/mod.py"]},
+        plan_body="body\n",
+    )
+
+    assert cross_plan_conflict(ctx)["hits"] == []
+
+
+def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path):
+    """A sibling nobody in this process controls must not be able to blank out
+    the answer for the plan under scan — the tolerant reader takes what parses
+    and the frontmatter `scope:` overlap still lands."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text("---\nscope:\n  - pkg/mod.py\n---\nbody\n", encoding="utf-8")
+    (plans_dir / "sibling-plan.md").write_text(
+        _MALFORMED_SPINE_SIBLING, encoding="utf-8"
+    )
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["pkg/mod.py"]},
+        plan_body="body\n",
+    )
+    result = cross_plan_conflict(ctx)
+
+    assert [hit["plan_path"] for hit in result["hits"]] == ["docs/plans/sibling-plan.md"]
+    assert result["hits"][0]["overlapping_paths"] == ["pkg/mod.py"]
+
+
+def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(tmp_path):
+    """`_head`'s bucketing must not diverge from `_paths_overlap`'s own
+    normalizer — a `./`-prefixed citation on the SIBLING side used to bucket
+    under `"."` instead of the real first component, silently dropping a
+    genuine overlap. Review: coordinator:code-reviewer (WSC-B, a676367b)."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text(
+        "---\nscope:\n  - coordinator_core/x.py\n---\nbody\n", encoding="utf-8"
+    )
+    sibling = plans_dir / "sibling-plan.md"
+    sibling.write_text(
+        "---\nscope:\n  - ./coordinator_core/x.py\n---\nsibling body\n", encoding="utf-8"
+    )
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["coordinator_core/x.py"]},
+        plan_body="body\n",
+    )
+    result = cross_plan_conflict(ctx)
+
+    assert result["hits"] == [
+        {
+            "plan_path": "docs/plans/sibling-plan.md",
+            "overlapping_paths": ["./coordinator_core/x.py", "coordinator_core/x.py"],
+            "beyond_declared_scope": [],
+        }
+    ]
+
+
+def test_cross_plan_conflict_finds_overlap_when_own_site_carries_dot_slash(tmp_path):
+    """Same failure mode, mirrored onto the OWN side of the comparison."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text(
+        "---\nscope:\n  - ./coordinator_core/y.py\n---\nbody\n", encoding="utf-8"
+    )
+    sibling = plans_dir / "sibling-plan.md"
+    sibling.write_text(
+        "---\nscope:\n  - coordinator_core/y.py\n---\nsibling body\n", encoding="utf-8"
+    )
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["./coordinator_core/y.py"]},
+        plan_body="body\n",
+    )
+    result = cross_plan_conflict(ctx)
+
+    assert result["hits"] == [
+        {
+            "plan_path": "docs/plans/sibling-plan.md",
+            "overlapping_paths": ["./coordinator_core/y.py", "coordinator_core/y.py"],
+            "beyond_declared_scope": [],
+        }
+    ]
+
+
+def test_cross_plan_conflict_stops_ac_section_at_malformed_next_heading(tmp_path):
+    """`_NEXT_H2_RE` bounds the AC section on ANY `##` line regardless of
+    spacing — early truncation is the priced failure mode, not over-running
+    a malformed heading (`##Anti-scope`, no space) into the next section and
+    harvesting its deliberately-disclaimed citation as a write site.
+    Review: coordinator:code-reviewer (WSC-B, a676367b)."""
+    plans_dir = tmp_path / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+
+    this_plan = plans_dir / "this-plan.md"
+    this_plan.write_text("---\nscope:\n  - pkg/mod.py\n---\nbody\n", encoding="utf-8")
+
+    sibling = plans_dir / "sibling-plan.md"
+    sibling.write_text(
+        "---\nscope:\n  - elsewhere/other.py\n---\n\n"
+        "## Acceptance Criteria\n\n"
+        "| # | criterion | state |\n"
+        "|---|---|---|\n"
+        "| AC1 | nothing cited here | open |\n"
+        "##Anti-scope\n\n"
+        "Do not touch `pkg/mod.py`.\n",
+        encoding="utf-8",
+    )
+
+    ctx = _ctx(
+        tmp_path,
+        plan_path=this_plan,
+        plan_frontmatter={"scope": ["pkg/mod.py"]},
+        plan_body="body\n",
+    )
+
+    assert cross_plan_conflict(ctx)["hits"] == []
 
 
 def test_cross_plan_conflict_skips_closed_sibling(tmp_path):

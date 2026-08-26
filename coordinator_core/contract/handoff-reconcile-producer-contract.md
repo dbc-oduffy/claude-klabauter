@@ -13,7 +13,7 @@
 > not deferred, not narrowed.** `auto-ship`, the `reconciled[]` array, and every DEC-1/commit-reality
 > routing path documented below in the pre-rebuild sections are **GONE**, not reduced — there is no
 > shipping-verdict half left to call. Measured (AC5, `benchmarks/process_time.py`,
-> `k=20`/`k=7`): **431.25 ms cold CLI, 140.6 ms warm median (k=7), 0 spawns, `procs_per_call` 1.0** —
+> `k=20`/`k=7`): **431.25 ms cold CLI, 125.0 ms warm median (k=7, min 109.4), 0 spawns, `procs_per_call` 1.0** —
 > under the 500 ms brightline on both instruments, warm being the serving path for DoE-claude, the
 > only live consumer.
 >
@@ -40,7 +40,7 @@
 > rows, so it records that an op fired and not who asked. (ii) **Pre-rebuild**, each fire cost
 > **5,546 ms of process time** (0 spawns), 11x this repo's 500 ms brightline —
 > `state/audits/2026-08-25-the-steady-state-residual-evaporated-and-the-cpu-blind-spot-behind-it.md`.
-> At ~13 fires that was ~70 s of CPU per session — the cost the rebuild's 140.6 ms warm figure
+> At ~13 fires that was ~70 s of CPU per session — the cost the rebuild's 125.0 ms warm figure
 > (above) buys down. This 5,546 ms figure describes the deleted implementation, kept for the
 > before/after record, not a current measurement.
 >
@@ -316,14 +316,37 @@ replacement to retire it against.
 carrying a different lead. Sent via `coordinator/bin/cross-repo-memo` (never hand-written into
 DoE's tree), it leads with the kill — the C2 shipped-ness verdict, the `auto-ship` routing value,
 and the `reconciled[]` array this contract described above are gone, not reduced — then carries,
-in order: (1) AC5's measured process-time figure for the rebuilt op (431.25 ms cold CLI / 140.6 ms
+in order: (1) AC5's measured process-time figure for the rebuilt op (431.25 ms cold CLI / 125.0 ms
 warm median, 0 spawns); (2) AC10's `gate_eval` false-positive rate (1 of 14 surviving rows); (3)
 the `gate_eval` clear-predicate spec including the abandoned-surfaces extension flagged as a
-proposed spec addition (§ 4). **It does not ask DoE to author an arming overlay** — the auto-ship
-route the overlay would have armed no longer exists. `auto-reconcile-policy.grammar.md`'s
-`auto_ship_enabled` key is DoE-owned data describing that now-dead route; the memo states the fact
-and proposes nothing about DoE's grammar file. Sending it is external-facing and requires PM
-clearance before it goes out. This contract doc is cited by, not a substitute for, that memo.
+proposed spec addition (§ 4).
+
+**CORRECTED 2026-08-27 (EM) — an earlier draft of this section said the memo "does not ask DoE to
+author an arming overlay" because "there is nothing left to arm." That conflated two independent
+keys and was wrong in the direction that would have retired live DoE work.** The overlay arms
+BOTH keys, and only one of them died:
+
+| key | gates | status |
+|---|---|---|
+| `auto_ship_enabled` | the auto-ship route (shipped-ness verdict → `ship_and_archive`) | **DEAD** — C10 deleted the verdict; nothing computes `auto-ship`, so the key has nothing to trigger |
+| `dry_run` | **every mutation**, i.e. whether `_gate_cascade_clear` is actually invoked | **LIVE** — the rebuilt op still calls it (`handoff_reconcile.py :: _resolve_dry_run` → `_gate_cascade_clear`), policy-authoritative, fail-closed default `true` |
+
+So arming is still a real, open decision — it is just a NARROWER one than before the kill:
+gate-cascade-clear only, never auto-ship. The memo must say that, and must not tell DoE their
+arming work is moot.
+
+**Measured on this repo, 2026-08-27**, because "armed" and "firing" are different claims and this
+workstream has confused them before: `load_policy()` resolves `dry_run: False` /
+`auto_ship_enabled: True` from the rung-3 repo overlay, so the gate-cascade path is **armed here
+right now** and the rebuilt op honours it. A live fire returned `gates_cleared: 0` against
+`surfaced: 17` — nothing has transitioned, not because the switch is off but because no handoff on
+the current corpus meets the `clear` predicate. Armed, honoured, and idle are three separate
+facts.
+
+`auto-reconcile-policy.grammar.md`'s `auto_ship_enabled` key is DoE-owned data now describing a
+dead route; the memo states that and proposes nothing about DoE's grammar file. Sending it is
+external-facing and requires PM clearance before it goes out. This contract doc is cited by, not a
+substitute for, that memo.
 
 ---
 

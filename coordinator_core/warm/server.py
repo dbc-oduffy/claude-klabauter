@@ -526,10 +526,11 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
+    _caller = "coordinator_core.warm.server._run_dispatch"
     try:
         with per_request_state(session_id=session_id, diagnostics=diagnostics):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg))
+                response = asyncio.run(dispatch_message(msg, caller=_caller))
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -543,6 +544,7 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
             repo_root=_repo_root,
             sid=session_id or None,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
+            caller=_caller,
         )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
@@ -632,10 +634,11 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
+    _caller = "coordinator_core.warm.server._pool_dispatch_worker"
     try:
         with per_request_state(session_id=session_id, diagnostics=diagnostics):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg))
+                response = asyncio.run(dispatch_message(msg, caller=_caller))
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -649,6 +652,7 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
             repo_root=_repo_root,
             sid=session_id or None,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
+            caller=_caller,
         )
 
     # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:

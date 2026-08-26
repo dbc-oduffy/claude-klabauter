@@ -52,7 +52,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_NOT_ATTEMPTED,
     PipelineResult,
 )
-from coordinator_core.session import claim_index, core, scope
+from coordinator_core.session import claim_index, core, scope, touch_record
 from coordinator_core.ops.session import safe_commit_offer
 
 
@@ -108,6 +108,39 @@ def _make_repo(tmp_path):
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
     return tmp_path
+
+
+def _agent_claim(agent_dir, *paths, owner_sid=None):
+    """Record an agent dir's claims in the one dialect its readers read.
+
+    A bare-path ``touched.txt`` stopped being a claim surface when the compat
+    union came out (2026-08-26), so a fixture that writes one claims nothing.
+    A ``'<verb> <ts> <path>'`` journal line is decoded into a real event, which
+    is how these tests express release ordering.
+    """
+    agent_dir = Path(agent_dir)
+    if owner_sid is None:
+        backptr = agent_dir / "em-session-id.txt"
+        owner_sid = (
+            backptr.read_text(encoding="utf-8").splitlines()[0].strip()
+            if backptr.is_file()
+            else agent_dir.name
+        )
+    sink = agent_dir / scope._TOUCH_RECORD_FILENAME
+    for entry in paths:
+        verb, _ts, parsed = scope.parse_touch_event(entry)
+        if verb in (touch_record.VERB_TOUCH, touch_record.VERB_RELEASE) and parsed != entry:
+            path, event_verb = parsed, verb
+        else:
+            path, event_verb = entry, touch_record.VERB_TOUCH
+        touch_record.append_event(
+            sink,
+            session_id=owner_sid,
+            agent_id=agent_dir.name,
+            verb=event_verb,
+            path=path,
+        )
+    return sink
 
 
 def _agent_dir(repo, aid):
@@ -358,8 +391,7 @@ class TestComputeOffer:
         core.init("mine", cwd=str(repo))
         agent = _agent_dir(repo, "aid-mine")
         (agent / "em-session-id.txt").write_text("mine")
-        (agent / "touched.txt").write_text("coordinator/agent_file.py\n")
-        agent_touched_file = agent / "touched.txt"
+        agent_touched_file = _agent_claim(agent, "coordinator/agent_file.py")
         before = agent_touched_file.read_text()
 
         safe_commit_offer.compute_offer("mine", cwd=str(repo))
@@ -384,11 +416,11 @@ class TestExactModeOnly:
 
         my_agent = _agent_dir(repo, "aid-mine")
         (my_agent / "em-session-id.txt").write_text("mine")
-        (my_agent / "touched.txt").write_text("coordinator/mine_file.py\n")
+        _agent_claim(my_agent, "coordinator/mine_file.py")
 
         sibling_agent = _agent_dir(repo, "aid-sibling")
         (sibling_agent / "em-session-id.txt").write_text("sibling-em")
-        (sibling_agent / "touched.txt").write_text("coordinator/sibling_file.py\n")
+        _agent_claim(sibling_agent, "coordinator/sibling_file.py")
 
         candidates = safe_commit_offer._resolve_agent_touched_candidates(
             "mine", cwd=str(repo)
@@ -413,11 +445,11 @@ class TestExactModeOnly:
 
         my_agent = _agent_dir(repo, "aid-mine")
         (my_agent / "em-session-id.txt").write_text("mine")
-        (my_agent / "touched.txt").write_text("coordinator/mine_file.py\n")
+        _agent_claim(my_agent, "coordinator/mine_file.py")
 
         sibling_agent = _agent_dir(repo, "aid-sibling")
         (sibling_agent / "em-session-id.txt").write_text("sibling-em")
-        (sibling_agent / "touched.txt").write_text("coordinator/sibling_file.py\n")
+        _agent_claim(sibling_agent, "coordinator/sibling_file.py")
 
         # live_session_ids() gates on recent meta.json activity; both
         # sessions were just core.init()'d so both are live -- this is what
@@ -444,10 +476,11 @@ class TestExactModeOnly:
 
         agent = _agent_dir(repo, "aid-mine")
         (agent / "em-session-id.txt").write_text("mine")
-        (agent / "touched.txt").write_text(
-            "T 2026-08-03T23:18:56.014950Z coordinator/kept.py\n"
-            "T 2026-08-03T23:18:57.000000Z coordinator/released.py\n"
-            "R 2026-08-03T23:20:00.000000Z coordinator/released.py\n"
+        _agent_claim(
+            agent,
+            "T 2026-08-03T23:18:56.014950Z coordinator/kept.py",
+            "T 2026-08-03T23:18:57.000000Z coordinator/released.py",
+            "R 2026-08-03T23:20:00.000000Z coordinator/released.py",
         )
 
         candidates = safe_commit_offer._resolve_agent_touched_candidates(
@@ -1377,9 +1410,7 @@ class TestPeerAgentClaimStillShadowsPostC2Dialect:
         # POST-C2 dialect: the fixed writer emits a clean repo-relative
         # entry directly -- no `../` prefix, no plugin-dir join needed by
         # the reader.
-        (agent_dir / "touched.txt").write_text(
-            "peer_agent_owned.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "peer_agent_owned.py")
         (repo / "peer_agent_owned.py").write_text("z")
 
         result = scope.compute_scope("bystander", cwd=str(repo))

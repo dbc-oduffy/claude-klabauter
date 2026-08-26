@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import core, shape
+from coordinator_core.session import core, scope, shape, touch_record
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -363,8 +363,16 @@ class TestSessionShapeMagnitude:
     def test_files_touched_dedups(self, tmp_path):
         repo = _make_repo(tmp_path)
         sdir = _sdir(repo, "m4")
-        # 5 lines, 3 distinct (matches sort -u | wc -l).
-        (sdir / "touched.txt").write_text("a\nb\na\nc\nb\n")
+        # 5 claim events, 3 distinct paths (the record folds last-verb-wins).
+        sink = sdir / scope._TOUCH_RECORD_FILENAME
+        for entry in ("a", "b", "a", "c", "b"):
+            touch_record.append_event(
+                sink,
+                session_id="m4",
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=entry,
+            )
         assert json.loads(shape.session_shape_magnitude("m4", cwd=str(repo)))["files_touched"] == 3
 
     def test_files_touched_empty_file_zero(self, tmp_path):

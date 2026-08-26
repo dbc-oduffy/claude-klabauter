@@ -449,4 +449,93 @@ def test_function_granular_width_probe_timing():
     # Soft sanity only -- the width probe's job is to PRODUCE the number for
     # C2's own decision, not to gate on one here.
     assert single_closure_s >= 0
-    assert all(elapsed >= 0 for elapsed in timings.values())
+
+
+# --------------------------------------------------------------------------
+# D8 -- the by-reference dispatch-table edge: merge_assemble.apply is the
+# oracle (state/bug-backlog/2026-08-26-ops-with-spawn-evidence-cannot-see-a-
+# spa-0f0dad490422.yaml).
+# --------------------------------------------------------------------------
+
+
+def test_ops_with_spawn_evidence_function_granular_follows_a_dispatch_table(tmp_path, monkeypatch):
+    """Synthetic mirror of the D8 oracle at `ops_with_spawn_evidence` level: `handler_a` spawns
+    only by LOADING a module-level dict of function references and handing it BY REFERENCE to
+    `runner.execute`, which invokes it by runtime key lookup -- never a literal `ast.Call` on the
+    spawning function itself. `handler_b` in the same module never touches the table. Before D8
+    this pattern measured EMPTY at function granularity (this test's own regression pin); after
+    it, `handler_a`'s op carries the site and `handler_b`'s does not, proving the edge is keyed
+    on the (op, site) pair, not "some op in this module reaches it."""
+    root = _synthetic_scope(monkeypatch, tmp_path)
+    owner = root / "dispatch_owner.py"
+    owner.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _spawn_handler(args):\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "\n"
+        "_DISPATCH = {\n"
+        "    'verb': _spawn_handler,\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    runner = root / "dispatch_runner.py"
+    runner.write_text(
+        "def execute(table, args):\n"
+        "    return table[args[0]](args)\n",
+        encoding="utf-8",
+    )
+    entry = root / "dispatch_entry.py"
+    entry.write_text(
+        "from coordinator_core.dispatch_owner import _DISPATCH\n"
+        "import coordinator_core.dispatch_runner as dispatch_runner\n"
+        "\n"
+        "def handler_a(args):\n"
+        "    return dispatch_runner.execute(_DISPATCH, args)\n"
+        "\n"
+        "def handler_b(args):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    entrypoints = {
+        "op.a": OpEntrypoint("op.a", "coordinator_core/dispatch_entry.py", "handler_a"),
+        "op.b": OpEntrypoint("op.b", "coordinator_core/dispatch_entry.py", "handler_b"),
+    }
+
+    function_granular = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert set(function_granular) == {"op.a"}
+    assert function_granular["op.a"][0].enclosing == "_spawn_handler"
+
+
+def test_merge_assemble_apply_measures_non_empty_at_function_granularity():
+    """AC21b -- the exact oracle the bug-backlog row names: `merge_assemble.apply` dispatches
+    every one of its subprocess-spawning handlers through its own closed `_CLI_DISPATCH` dict,
+    passed BY REFERENCE into `apply_base.execute_directives`. Derives the count live against the
+    real tree rather than writing one to match: asserts the reachable set is non-empty and
+    contains at least one spawn site whose enclosing function is one of `_CLI_DISPATCH`'s own
+    handlers -- never enrolls the op with an empty tuple, which would just relocate this bug one
+    layer down."""
+    from coordinator_core.merge_assemble import apply as apply_module
+
+    entrypoints = spawn_bearing_ops.resolve_op_entrypoints(["merge_assemble.apply"])
+    ep = entrypoints["merge_assemble.apply"]
+    assert ep.relpath is not None and ep.function_name is not None, (
+        "merge_assemble.apply did not resolve to a live top-level entrypoint -- fix resolution "
+        "before trusting this oracle"
+    )
+
+    result = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
+    assert "merge_assemble.apply" in result, (
+        "merge_assemble.apply still measures EMPTY at function granularity -- the by-reference "
+        "dispatch-table edge (D8) is not reaching its own _CLI_DISPATCH handlers"
+    )
+
+    handler_names = {fn.__name__ for fn in apply_module._CLI_DISPATCH.values()}
+    sites = result["merge_assemble.apply"]
+    assert sites, "merge_assemble.apply resolved but carries no spawn sites"
+    assert any(site.enclosing.split(".")[0] in handler_names for site in sites), (
+        "merge_assemble.apply's reachable spawn sites do not attribute to any of its own "
+        "_CLI_DISPATCH handlers -- evidence: "
+        f"{[(s.path, s.enclosing) for s in sites]}"
+    )

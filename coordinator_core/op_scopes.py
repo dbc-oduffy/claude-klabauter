@@ -868,6 +868,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session_baton.mint":                    "none",
     "session_baton.promote":                 "none",
     "session.reap":                          "common_dir",
+    # session.audit_unreapable — read-only naming of the permanently-unreapable
+    # hub population session.reap's uuid-shape gate rejects (count-only there by
+    # D1 contract). Same substrate derivation as session.reap — sessions_dir is
+    # <common_dir>/coordinator-sessions/ — so it takes the same "common_dir"
+    # scope. Mutates nothing.
+    "session.audit_unreapable":               "common_dir",
     # session.boot_sweep — rebuilt boot-time archival backstop (C5, docs/plans/
     # 2026-08-22-the-boot-backstop-asks-git-nothing.md), module coordinator_core/
     # ops/session/boot_backstop.py — op id preserved, module renamed from

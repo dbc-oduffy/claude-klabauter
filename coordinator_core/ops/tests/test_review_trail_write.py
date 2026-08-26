@@ -62,6 +62,8 @@ from coordinator_core.ops.review_trail_write import (  # noqa: E402
     _diagnose_zero_chain_terminal_credit,
     _dispatch_id_resolvable,
     _load_bearing_fields_diverge,
+    normalize_reviewer,
+    review_enum_errors,
     _VALID_REVIEWERS,
     _walk_range_commit_session_trailers,
     _ZERO_CREDIT_KEY,
@@ -437,7 +439,7 @@ class TestValidation:
         silently.md: `scope='partitioned'` is the natural wrong guess from a caller
         who just read `gates.review_scale` (`decide_review_scale`'s `scale`
         vocabulary), not `scope`'s own coverage-breadth axis. The rejection must
-        name that collision explicitly, mirroring `_bare_reviewer_hint`'s own
+        name that collision explicitly, mirroring `normalize_reviewer`'s own
         precedent for the reviewer field."""
         with pytest.raises(ValueError, match="partition-strategy"):
             write_review_trail_entry(
@@ -2712,3 +2714,92 @@ def test_delegate_reviewers_arms_the_commit_ledger_mark():
         assert subagent_review_mark._is_reviewer(non_reviewer) is False, (
             f"{non_reviewer!r} must not arm a commit-ledger review mark"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: namespaced reviewer names are accepted and stored bare
+# ---------------------------------------------------------------------------
+
+
+class TestNamespacedReviewerAccepted:
+    """`coordinator:code-reviewer` — the fleet's own agent-type spelling — is a
+    legal way to name a reviewer, and normalizes to the bare name on disk.
+
+    Measured 2026-08-26 against `.git/coordinator-sessions/logs/op-latency.jsonl`:
+    `review_trail.write` completed 3764 calls at a 52.4% error rate across 126
+    sessions, every failure instant (p50 1.7ms) — a validation refusal, never
+    work. The op computed the bare name only to say "did you mean ...?" and
+    refused anyway, while its highest-volume caller
+    (`freeze-review-diff.py :: _open_pending_trail_record`) swallows the refusal
+    by design, so the open-loop record just went unwritten and nothing reported
+    it.
+    """
+
+    @pytest.mark.parametrize(
+        "supplied,expected",
+        [
+            ("coordinator:code-reviewer", "code-reviewer"),
+            ("agent:staff-eng", "staff-eng"),
+            ("coordinator:code-reviewer+staff-eng", "code-reviewer+staff-eng"),
+        ],
+    )
+    def test_namespaced_reviewer_is_stored_bare(
+        self, tmp_path, monkeypatch, supplied, expected
+    ):
+        monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
+        monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+        monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+        result = write_review_trail_entry(
+            sha_range=_TEST_SHA_RANGE,
+            reviewer=supplied,
+            scope="chain",
+            verdict="pending",
+            diff_loc=10,
+            session_id=_TEST_SESSION,
+            workstream=None,
+        )
+        assert result["reviewer"] == expected
+        on_disk = json.loads(Path(result["out_path"]).read_text(encoding="utf-8"))
+        assert on_disk["reviewer"] == expected, (
+            "the record must never carry a namespaced reviewer — every by-value "
+            "consumer of this field reads the bare vocabulary"
+        )
+
+    def test_vocabulary_stays_closed_under_a_prefix(self):
+        """A prefix is stripped only when what remains is already legal: an
+        unknown reviewer is refused with or without one, so this widens the
+        accepted spellings of a legal name, never the set of legal names."""
+        with pytest.raises(ValueError, match="reviewer"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="coordinator:not-a-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+
+    def test_assemble_gate_and_writer_agree(self):
+        """`review_enum_errors` (assemble-time) and the writer must accept the
+        same set — a value one admits and the other refuses is the partial-
+        mutation failure that gate exists to prevent."""
+        assert review_enum_errors(
+            reviewer="coordinator:staff-eng",
+            scope="chain",
+            verdict="ok",
+            scope_kind="diff",
+        ) == []
+        assert review_enum_errors(
+            reviewer="coordinator:not-a-reviewer",
+            scope="chain",
+            verdict="ok",
+            scope_kind="diff",
+        ) != []
+
+    def test_normalize_is_identity_on_bare_names(self):
+        """No previously-accepted value changes meaning."""
+        for name in _VALID_REVIEWERS:
+            assert normalize_reviewer(name) == name

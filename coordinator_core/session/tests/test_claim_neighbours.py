@@ -17,8 +17,12 @@ import os
 import pytest
 import yaml
 
+from datetime import datetime, timezone
+
 from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
+from coordinator_core.session import scope
+from coordinator_core.session import touch_record
 
 
 def _write(path, content):
@@ -33,7 +37,30 @@ def _write_artifact(path, frontmatter: dict, body: str = "\n# body\n"):
 
 
 def _session_touched(base, sid, lines):
-    _write(os.path.join(str(base), sid, "touched.txt"), "\n".join(lines) + "\n")
+    """Write the fixture's claims in the record dialect the readers actually
+    read. ``_touch_line`` still renders the legacy shape because that is what
+    these tests read most legibly; it is decoded back into events here."""
+    sink = os.path.join(str(base), sid, scope._TOUCH_RECORD_FILENAME)
+    os.makedirs(os.path.dirname(sink), exist_ok=True)
+    for line in lines:
+        verb, ts, path = scope.parse_touch_event(line)
+        touch_record.append_event(
+            sink,
+            session_id=sid,
+            agent_id=None,
+            verb=verb,
+            path=path,
+            timestamp=_epoch(ts),
+        )
+
+
+def _epoch(ts):
+    if not ts:
+        return None
+    parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _touch_line(verb, path, when="2026-08-16T10:00:00.000000Z"):

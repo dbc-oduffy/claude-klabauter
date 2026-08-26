@@ -82,6 +82,15 @@ module's own docstring (deeper relative imports, longer alias chains) — this
 is why the property this module now asks for is keyed on the `(op, site)`
 PAIR, never "does some op reach this site": a site a same-module sibling op
 reaches by a visible path must never stand in for "this op reaches it too."
+A THIRD gap the walker's docstring did not previously name — a by-reference
+dispatch table (a module-level container literal whose members are function
+references, loaded by name rather than called directly, e.g.
+`merge_assemble/apply.py::_CLI_DISPATCH` passed into `apply_base.
+execute_directives`) — is now RESOLVED: `_module_callable_tables`/
+`_direct_call_targets`'s table-load edge (D8) makes a reachable function
+that LOADS such a table reach every function that table's own literal
+resolves, with the same same-file-first/precise-alias resolution every
+other hop in that gate uses.
 
 Negative-spec:
     - This module holds no `_LEGITIMIZED_SITES`-shaped exemption table and no
@@ -495,7 +504,7 @@ def _ops_with_spawn_evidence_function_granular(
     silent fall-back to module granularity. Local import to break the
     circular dependency: the gate module imports this module by name."""
     from coordinator_core.tests.test_no_uncounted_spawn_on_budgeted_path import (
-        _build_corpus,
+        _build_corpus_with_dispatch_tables,
         _on_path_spawn_sites,
         _reachable_functions,
     )
@@ -506,7 +515,9 @@ def _ops_with_spawn_evidence_function_granular(
         import_aliases_by_file,
         func_aliases_by_file,
         local_aliases_by_file,
-    ) = _build_corpus()
+        module_callable_tables_by_file,
+        table_aliases_by_file,
+    ) = _build_corpus_with_dispatch_tables()
 
     reached_sites_by_entry: Dict[Tuple[str, str], Tuple[SpawnSite, ...]] = {}
     out: Dict[str, Tuple[SpawnSite, ...]] = {}
@@ -523,6 +534,8 @@ def _ops_with_spawn_evidence_function_granular(
                 import_aliases_by_file,
                 func_aliases_by_file,
                 local_aliases_by_file,
+                module_callable_tables_by_file,
+                table_aliases_by_file,
             )
             reached_sites_by_entry[entry_key] = tuple(
                 _on_path_spawn_sites(reached, spawn_sites_by_file, frozenset())

@@ -1419,9 +1419,41 @@ def explicit_stage(
     # index-aware behavior already excludes tracked paths on its own, and why
     # this runs before the divergence check / `to_stage` is built. One
     # batched call, never per-path.
+    # C2c: ASK ONLY ABOUT THE PATHS THAT COULD POSSIBLY ANSWER YES.
+    #
+    # The docstring above already establishes the property this narrowing
+    # rests on, and it is git's behaviour rather than an inference:
+    # `check_ignore()`'s plain (non-`--no-index`) form is index-aware, so a
+    # TRACKED path is never reported ignored -- `git add` on an
+    # already-tracked path succeeds regardless of a later-added ignore
+    # pattern. A path with an index entry therefore cannot be in
+    # `ignored_set`, whatever `.gitignore` says about it.
+    #
+    # So the spawn is only needed for the UNTRACKED remainder, and index
+    # membership is now a free in-process read. The ordinary commit -- every
+    # path already tracked -- asks nothing and spawns nothing. A commit that
+    # introduces a new file still pays the one batched call for that file.
+    #
+    # NOT an attempt to reimplement gitignore. Pattern semantics are
+    # precedence-ordered across nested `.gitignore` files,
+    # `.git/info/exclude` and `core.excludesFile`, with negation,
+    # directory-only and trailing-space rules; a partial reimplementation
+    # that silently disagreed with git would be worse than the ~22ms it
+    # saves. Where a real pattern question remains, THE SPAWN ANSWERS IT.
+    # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2c
     ignored_caller_paths: List[str] = []
+    ignore_candidates = existing
     if existing:
-        ignore_result = git_native.check_ignore(root, existing)
+        try:
+            _ignore_index = read_index(root)
+        except IndexParseError:
+            _ignore_index = None
+        if _ignore_index is not None:
+            ignore_candidates = [
+                p for p in existing if _worktree_key(root, p) not in _ignore_index
+            ]
+    if ignore_candidates:
+        ignore_result = git_native.check_ignore(root, ignore_candidates)
         if ignore_result.returncode in (0, 1):
             ignored_set = {
                 match[3]

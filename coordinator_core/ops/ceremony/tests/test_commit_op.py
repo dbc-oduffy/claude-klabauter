@@ -638,6 +638,57 @@ class _PopenSpawnRecorder:
         return self._real_popen(argv, *args, **kwargs)
 
 
+def test_modify_only_commit_asks_git_nothing_about_ignores(
+    monkeypatch: pytest.MonkeyPatch, _repo: Path
+) -> None:
+    """C2c: `check-ignore` is asked ONLY about untracked paths.
+
+    `check_ignore()`'s plain form is index-aware -- a tracked path is never
+    reported ignored, because `git add` on an already-tracked path succeeds
+    regardless of a later-added ignore pattern. So a path with an index
+    entry cannot change the answer, and asking about it buys nothing.
+
+    This is the shape the sibling spawn-count test CANNOT observe: that one
+    commits a NEW file, which is exactly the untracked residual where the
+    spawn is still the honest answer. A modify-only commit -- the ordinary
+    case -- must not pay for it at all. Without this test, narrowing the
+    candidate set to untracked paths would look identical to not narrowing
+    it, since the only fixture in play always has an untracked path in it."""
+    from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+
+    file_name = "already_tracked.txt"
+    (_repo / file_name).write_text("first\n", encoding="utf-8")
+    _git(["add", "--", file_name], _repo)
+    _git(["commit", "-q", "-m", "seed tracked path"], _repo)
+
+    # Now MODIFY it: every staged path is tracked, so nothing can be ignored.
+    (_repo / file_name).write_text("second\n", encoding="utf-8")
+
+    recorder = _PopenSpawnRecorder(subprocess.Popen)
+    monkeypatch.setattr(subprocess, "Popen", recorder)
+
+    result = run_commit_pipeline(
+        _repo,
+        session_id="c2c-tracked-only-session",
+        subject="C2c tracked-only probe",
+        stage_paths=[file_name],
+        push_mode="none",
+    )
+
+    assert not result.commit_failed and result.committed_sha, (
+        f"pipeline call under measurement must actually commit: {result!r}"
+    )
+
+    argvs = [list(map(str, argv)) for argv in recorder.calls]
+    ignore_calls = [argv for argv in argvs if "check-ignore" in argv]
+    assert ignore_calls == [], (
+        "a commit whose every staged path is already tracked must not spawn "
+        "`git check-ignore` -- a tracked path cannot be reported ignored, so "
+        "the question has a free in-process answer. Got %r; full argv list: %r"
+        % (ignore_calls, argvs)
+    )
+
+
 def test_run_commit_pipeline_spawn_count_is_gated(
     monkeypatch: pytest.MonkeyPatch, _repo: Path
 ) -> None:

@@ -688,20 +688,34 @@ def _verify_reviewer_evidence(
     logger.warning("review_trail.write advisory (would refuse if enforcing): %s", message)
 
 
-def _bare_reviewer_hint(reviewer: str) -> str:
-    """`" — did you mean 'code-reviewer'?"` when *reviewer* is a valid name
-    wearing its agent-id or subagent-type dress (``coordinator:code-reviewer``,
-    ``agent:staff-eng``), else ``""``.
+def normalize_reviewer(reviewer: str) -> str:
+    """*reviewer* with its agent-id/subagent-type namespace prefix removed when
+    the bare remainder is a member of `_VALID_REVIEWERS`; unchanged otherwise.
 
-    `_VALID_REVIEWERS` holds BARE names; the value nearest to hand at a
-    ceremony seam is the id the EM just dispatched, which differs from the
-    accepted value only by a namespace prefix. Naming the intended value beats
-    making the caller diff their string against the full allow-list.
+    `_VALID_REVIEWERS` holds BARE names, but the value nearest to hand at a
+    ceremony seam is the id the EM just dispatched
+    (``coordinator:code-reviewer``, ``agent:staff-eng``), which differs from
+    the accepted value only by that prefix. The op used to compute the bare
+    name solely to say "did you mean 'code-reviewer'?" and then refuse anyway
+    — a refusal that names its own remedy is a path the caller should not have
+    to walk twice, and every caller of the open-loop record write
+    (``coordinator/bin/freeze-review-diff.py :: _open_pending_trail_record``)
+    swallows the refusal by design, so the round trip was never taken and the
+    record simply went unwritten.
+
+    The vocabulary stays CLOSED: a prefix is stripped only when what remains
+    is already legal, so an unknown reviewer is rejected with or without one.
+    ``coordinator:staff-eng`` is accepted and stored as ``staff-eng``; the
+    on-disk record therefore never carries a namespaced name, and every
+    by-value consumer of the ``reviewer`` field keeps working unmodified.
+
+    Mirrors ``hooks.subagent_review_mark``'s own prefix-stripping, which reads
+    the same closed vocabulary off this module.
     """
     _prefix, sep, bare = reviewer.rpartition(":")
     if sep and bare in _VALID_REVIEWERS:
-        return f" — did you mean {bare!r}?"
-    return ""
+        return bare
+    return reviewer
 
 
 def review_enum_errors(
@@ -724,11 +738,14 @@ def review_enum_errors(
     em-review-trail-write-enums-undiscoverable-until-apply.md § 1.
     """
     errors: list[str] = []
-    if reviewer not in _VALID_REVIEWERS:
+    # Normalized, not raw: this function and `write_review_trail_entry` must
+    # agree on what is legal, or the assemble-time gate passes a value the
+    # apply-time writer then refuses. `normalize_reviewer` is a no-op on
+    # anything already legal, so no previously-accepted value changes meaning.
+    if normalize_reviewer(reviewer) not in _VALID_REVIEWERS:
         errors.append(
             f"review_trail.write: reviewer {reviewer!r} is invalid; "
             f"allowed: {' | '.join(sorted(_VALID_REVIEWERS))}"
-            f"{_bare_reviewer_hint(reviewer)}"
         )
     if scope not in _VALID_SCOPES:
         errors.append(
@@ -751,7 +768,7 @@ def review_enum_errors(
 
 
 def _scale_shaped_scope_hint(scope: str) -> str:
-    """`_bare_reviewer_hint`'s sibling for `scope`: `""` unless *scope* is a
+    """`normalize_reviewer`'s sibling for `scope`: `""` unless *scope* is a
     member of `decide_review_scale`'s `scale` vocabulary (`none` |
     `code-reviewer` | `partitioned` | `unresolved`), in which case names the
     axis collision explicitly rather than leaving the caller to notice it
@@ -2549,6 +2566,11 @@ def write_review_trail_entry(
         ValueError  — invalid/missing required field or enum value.
         RuntimeError — trail directory unresolvable (no caller_worktree and no env override).
     """
+    # Before validation, so every downstream reader — the evidence check, the
+    # sidecar-derived execution_basis, the commit-ledger mark, and the on-disk
+    # record itself — sees the bare name and never a namespaced one.
+    reviewer = normalize_reviewer(reviewer)
+
     # Validate inputs.
     _validate(sha_range, reviewer, scope, verdict, diff_loc, scope_kind)
     # Review: code-reviewer — Finding 5 (P2): validate entry type before the char

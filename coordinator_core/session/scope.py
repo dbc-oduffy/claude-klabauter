@@ -1586,78 +1586,47 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
     seam (``touch_record._read_stream_claims`` -- C3's own family-discovery +
     decode + last-verb-wins fold, never re-implemented here) and re-renders
     each surviving event as an OLD-dialect ``'<verb> <ts> <path>'`` line via
-    :func:`format_touch_event`. Then, if a SIBLING ``touched.txt`` exists
-    next to ``sink_path`` (same directory — the old-dialect writer's own
-    filename), its lines are PREPENDED ahead of the jsonl-derived lines
-    before returning — legacy first, so the downstream last-verb-wins fold
-    (``project_self_scope``/``project_peer_claims``/``_last_verb_map``) still
-    favours a LATER event in the new record over an earlier one only the
-    legacy file recorded. This is the ONE union every caller in this module
-    now goes through — no call site is a single-dialect parser anymore (see
-    this chunk's brief: AC21's inlined ``compute_scope`` Step 1 block, and
-    the four agent-dir branches, previously each grew their own legacy arm;
-    all now route through here instead).
+    :func:`format_touch_event`. Every caller in this module reads through
+    here; no call site parses a line dialect of its own.
 
-    WHY THIS UNION IS STILL HERE — RE-DERIVED 2026-08-26, and NOT for the
-    reason AC9 recorded. AC9 retained it because ``claims.atomic_dedup_append``
-    was believed to be a REACHABLE legacy writer via the CLI ``claim-path``
-    seam. **That premise is false at HEAD and appears to have been false when
-    written.** Traced end to end: ``atomic_dedup_append``'s only caller is
-    ``js_bridge_cli._cmd_claim_path``; that command's only caller is
-    ``coordinator/lib/coordinator_session.py::claim_path``; and ``claim_path``
-    has no caller outside its own tests. Its intended consumer was the Node
-    shim ``coordinator/lib/coordinator_session.js``, which
-    ``js_bridge_cli``'s OWN docstring records as deleted on 2026-07-27, along
-    with the named example caller ``coordinator/bin/refresh-queries.js`` —
-    whose Python successor now calls ``claims.self_claim()`` in process. C6
-    migrated ``self_claim`` itself onto the new dialect. So that seam is a CLI
-    entrypoint built for a future Node caller that had already been retired.
+    THE COMPAT UNION IS GONE (2026-08-26). Until this date a sibling
+    ``touched.txt`` was read and PREPENDED ahead of the jsonl-derived lines.
+    Deleting a read arm while records still carry the old dialect is the
+    mistake C7b made once -- it dropped ``claim_index``'s legacy read on the
+    premise that C7c would retire the writer, C7c was reverted, and a live
+    session's claim then read as unclaimed, the one answer that authorizes a
+    write. So this deletion waited on evidence rather than on a writer flip,
+    and all three arms (this one and ``claim_index``'s two) came out in one
+    change, because splitting them IS that failure:
 
-    NEITHER ORIGINAL CONDITION IS WHAT KEEPS THIS ARM ALIVE. Both were
-    stated as clocks ("no code change advances either"); re-derived
-    2026-08-26, one is discharged and the other was never a clock at all.
+    - THE WRITERS ARE GONE, each individually retired, not assumed:
+      ``hooks.track_touched_files`` emits ``T`` events on both the
+      session-keyed and agent-keyed planes (C7, ``c4b8aa188``);
+      ``claims.self_claim`` migrated in C6; both release writers migrated
+      (``488b68a6a`` and ``c4b8aa188``, the latter deleting
+      ``_release_from_touched_file`` outright); and the CLI ``claim-path``
+      seam -- the last reachable caller of ``claims.atomic_dedup_append`` --
+      now appends through ``touch_record.append_event`` as well.
+    - THE CORPUS IS DRAINED, measured rather than inferred.
+      ``ops.session.legacy_touch_corpus_migrate`` was applied (135 dirs,
+      1294 events written, 177 dropped as foreign-worktree entries), and
+      BOTH checks read zero across the same 135 dirs -- the existence-level
+      ``legacy_touch_corpus_drain_check`` and the content-level
+      ``legacy_touch_corpus_straggler_check``, which walks session dirs AND
+      ``.agents/<aid>/`` and excludes ``.archive``. Neither alone is the
+      gate: ``migrate`` and ``drain_check`` both key on sibling EXISTENCE
+      and can never reopen a drained dir, so their green says nothing about
+      content.
+    - THE ENGINE THAT SERVES PEERS CARRIES THE MIGRATED WRITERS. Live
+      sessions import from the published mirror, so a writer flip only
+      takes effect fleet-wide once it is published AND no pre-publish
+      server is still resident. Verified rather than waited out: the mirror
+      carried ``c4b8aa188``, and the only breadcrumb-holding warm server
+      was started after that publish.
 
-    (b) THE UNDRAINED CORPUS IS DISCHARGED. It was never time-dependent —
-    only an unrun migration. ``ops.session.legacy_touch_corpus_migrate`` was
-    applied (135 dirs, 1294 events written, 177 dropped as foreign-worktree
-    entries); ``ops.session.legacy_touch_corpus_drain_check`` reports 135
-    drained / 0 undrained; re-running is a no-op by construction.
-
-    (a) "PRE-PUBLISH PROCESSES RUNNING OLD CODE" IS FALSE. The Edit/Write
-    hook is ``python3 -c "exec(open(bootstrap).read())"`` — a FRESH process
-    per tool call that re-reads the script from disk every fire, dispatching
-    the op in-process (``ipc.dispatch_ops_from_hook``), never through the
-    warm server. No long-lived process holds this module's code, so a
-    session's age cannot determine which dialect it writes, and no cohort has
-    to die for anything.
-
-    THE LEGACY WRITERS ARE NOW ALL GONE. Every legacy event observed after the
-    publish was an ``R``, batched with one timestamp across several agent dirs
-    — a release pass, never a session's Edit hook. Both release writers have
-    since been migrated onto the record: ``claims._release_path_claim_
-    everywhere`` (``488b68a6a``, union-aware T-decision, ``append_event``
-    write) and the agent-dir arm, which used to write
-    ``.agents/<aid>/touched.txt`` through a ``_release_from_touched_file``
-    helper that is now DELETED, not left dormant — ``release_committed_claims``
-    calls ``_release_from_touch_record`` with the agent's own id instead.
-
-    SO WHAT KEEPS THIS ARM ALIVE IS NOW ONLY THE EXISTING CORPUS, and that is a
-    READ concern, not a write one. Records already on disk in the old dialect
-    stay readable only through here, and ``claim_index`` carries the matching
-    pair of arms (``_has_claim_surface``, and the legacy fold in its own
-    ``_read_stream_claims``) for the same reason. A legacy-only claim is still
-    reachable and still releasable — there is a test pinning exactly that.
-
-    DELETION PRECONDITION, restated now that the writer half is discharged:
-    re-run ``ops.session.legacy_touch_corpus_migrate`` to sweep whatever the
-    old writers emitted before they were migrated, confirm
-    ``legacy_touch_corpus_drain_check`` reports zero undrained, and then delete
-    THIS arm and ``claim_index``'s two arms in ONE change. Deleting a read arm
-    while records still carry the old dialect is the mistake C7b already made
-    once: it dropped ``claim_index``'s legacy read on the premise that C7c
-    would retire the writer, C7c was reverted, and a live session's claim then
-    read as unclaimed — the one answer that authorizes a write. Do not trust
-    this paragraph's counts, only its method.
+    Anything still on disk in the old dialect is now readable only by
+    ``bash_guards/dispatch_checks.py``, which keeps a union of its own and
+    is advisory -- never a claim authority.
 
     Why re-render rather than hand callers ``TouchEvent`` objects directly:
     the projection policies this module's OTHER callers still share
@@ -1745,23 +1714,7 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
         for event in claims.values()
     ]
 
-    legacy_path = Path(sink_path).parent / "touched.txt"
-    legacy_lines: List[str] = []
-    if legacy_path.is_file():
-        try:
-            legacy_lines = [
-                ln for ln in legacy_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                if ln
-            ]
-        except OSError as exc:
-            degraded = True
-            print(
-                f"cs_compute_scope: failed to read {legacy_path} "
-                f"(non-fatal, scope may be incomplete): {exc}",
-                file=sys.stderr,
-            )
-
-    return legacy_lines + jsonl_lines, degraded
+    return jsonl_lines, degraded
 
 
 def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[str], bool]:
@@ -1803,23 +1756,7 @@ def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[L
         event.path for event in claims.values() if event.verb == touch_record.VERB_TOUCH
     ]
 
-    legacy_path = Path(sink_path).parent / "touched.txt"
-    legacy_lines: List[str] = []
-    if legacy_path.is_file():
-        try:
-            legacy_lines = [
-                ln for ln in legacy_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                if ln
-            ]
-        except OSError as exc:
-            degraded = True
-            print(
-                f"cs_compute_scope: failed to read {legacy_path} "
-                f"(non-fatal, scope may be incomplete): {exc}",
-                file=sys.stderr,
-            )
-
-    return legacy_lines + jsonl_lines, degraded
+    return jsonl_lines, degraded
 
 
 def _agent_touch_activity(agent_dir: Path) -> Tuple[bool, float]:

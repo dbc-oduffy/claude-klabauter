@@ -111,7 +111,9 @@ def get_response() -> Optional[Dict[str, Any]]:
 
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(dispatch_message(msg))
+        return loop.run_until_complete(
+            dispatch_message(msg, caller="coordinator_core.ops.check_auto_reconcile")
+        )
     except Exception:
         print(f"skip: get_response: return loop.run_until_complete(dispatch_message(msg)) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None

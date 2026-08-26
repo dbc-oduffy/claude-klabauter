@@ -175,6 +175,19 @@ def diverging_paths(
     to print an advisory warning) can tell "clean" apart from "indeterminate"
     and refuse to silently guess. See `DivergenceCheckFailed` for the
     incident this distinction closes.
+
+    KEEP THE SPAWN (examined, not narrowed -- 2026-08-26, C2b of
+    docs/dispatch-briefs/2026-08-26-the-commit-op-stops-asking-git-eleven-
+    times/C2b.md): the `Y` half of this predicate (worktree-vs-index) is a
+    genuine on-disk-bytes content comparison, exactly the axis
+    `coordinator_core/git/git_state.py`'s module docstring forbids
+    approximating with a stat/hash check (326/400 clean tracked files
+    MISMATCH on this repo under `core.autocrlf=true` -- the reverted
+    `da156a723` incident). There is no in-process reduction available for
+    `Y` alone, and computing only `X` (index-vs-HEAD, answerable via
+    `read_index`/`head_blobs`) in-process would still require a second,
+    scoped `git` call for `Y` on every `X`-positive candidate -- no fewer
+    spawns in the worst case this predicate exists for. This spawn stays.
     """
     if not paths:
         return []

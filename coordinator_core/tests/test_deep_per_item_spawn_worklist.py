@@ -1516,39 +1516,190 @@ def test_worklist_rows_never_carry_a_fabricated_time_unit():
         )
 
 
-@pytest.mark.cadence
-def test_site_depths_reproduce_the_per_depth_walks():
-    """`deep_find_with_site_depths` must reproduce a walk per depth, EXACTLY.
+# ---------------------------------------------------------------------------
+# `deep_find_with_site_depths`' attribution rule, over synthetic corpora.
+#
+# These are `tmp_path` fixtures rather than a full-corpus comparison ON PURPOSE. The rule was
+# DERIVED by diffing one walk against a walk-per-depth over the real gate scope, and three
+# candidate rules were measured wrong that way (see `deep_find_with_site_depths`' docstring).
+# That comparison was the right DISCOVERY instrument and the wrong REGRESSION test: it costs
+# ~300s per run because it re-executes the very per-depth loop this function exists to delete,
+# so keeping it would have left the cadence tier net SLOWER than before the optimisation --
+# paying forever to re-derive a proof about deterministic code.
+#
+# What needs guarding is the rule's BRANCHES, and each has a shape small enough to state
+# directly: a direct spawner, a same-module chain, an imported callee competing with a
+# same-named stranger, a chain past the bound, and a NESTED enclosing function -- whose dotted
+# name misses the top-level-keyed edge map. That last one was the final bug the full-corpus diff
+# caught, and it is exactly what a fixture written from the rule's description alone would omit.
+# ---------------------------------------------------------------------------
 
-    This is the entire warrant for collapsing the per-depth loop into one walk. If it ever goes
-    red, the one-walk shape is not equivalent any more and its consumers are recording depths
-    that a real walk at that depth would not agree with -- which, for `_KNOWN_SITES`, means rows
-    silently moving between PAST_HORIZON and CLOSURE_CANDIDATE. Fix the attribution or revert the
-    consumers to the loop; do NOT relax this to a subset check.
 
-    Deliberately expensive: it pays BOTH shapes (a walk per depth plus the one-walk) so the
-    comparison is real rather than a re-derivation of the thing under test. That cost is why it
-    is cadence-marked, and why it is the only place that pays it -- the consumers get the cheap
-    shape precisely because this test stands behind it.
+def _write_module(tmp_path, relpath, source):
+    target = tmp_path / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source, encoding="utf-8")
 
-    Three attribution rules were measured wrong before this one passed; `deep_find_with_site_
-    depths`' own docstring records them so the next reader does not re-derive a refuted shape.
+
+def _site_depths(tmp_path, max_depth):
+    sites, depth_of = deep_find_with_site_depths((tmp_path,), max_depth)
+    return {site.key: depth_of(site) for site in sites}
+
+
+_SPAWNER = (
+    "import subprocess\n"
+    "\n"
+    "def _spawn(path):\n"
+    "    subprocess.run(['git', 'add', path], cwd='/repo')\n"
+    "\n"
+)
+
+
+def test_site_depth_is_one_for_a_direct_spawner_the_one_hop_gate_already_sees(tmp_path):
+    """Depth 1 means NOT past the horizon -- the standing one-hop gate reports it unaided."""
+    _write_module(
+        tmp_path,
+        "direct.py",
+        _SPAWNER + "def check(paths):\n    for p in paths:\n        _spawn(p)\n",
+    )
+
+    assert _site_depths(tmp_path, 4)[("direct.py", "check", "_spawn")] == 1
+
+
+def test_site_depth_counts_hops_along_a_same_module_chain(tmp_path):
+    """`check -> mid -> _spawn`: `mid` is one hop from the spawner, so the site is depth 2."""
+    _write_module(
+        tmp_path,
+        "chain.py",
+        _SPAWNER
+        + "def mid(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def check(paths):\n    for p in paths:\n        mid(p)\n",
+    )
+
+    assert _site_depths(tmp_path, 4)[("chain.py", "check", "mid")] == 2
+
+
+def test_site_depth_reads_a_nested_enclosing_function_via_its_top_level_owner(tmp_path):
+    """A nested function's enclosing name is dotted while edges key on the TOP-LEVEL function.
+
+    Without the top-level strip the edge lookup misses and every nested-function site falls back
+    to the depth-1 default -- reported as already visible to the one-hop gate when it is in fact
+    past the horizon. Two real sites were mis-attributed exactly this way before it was fixed.
     """
-    roots = _gate_scope_paths()
+    _write_module(
+        tmp_path,
+        "nested.py",
+        _SPAWNER
+        + "def mid(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def outer(paths):\n"
+        + "    def inner():\n"
+        + "        for p in paths:\n"
+        + "            mid(p)\n"
+        + "    return inner\n",
+    )
+
+    depths = _site_depths(tmp_path, 4)
+    nested = {key: d for key, d in depths.items() if key[1].startswith("outer.")}
+
+    assert nested, "expected a site whose enclosing function is nested"
+    for key, depth in nested.items():
+        assert depth == 2, (
+            f"{key} attributed depth {depth}; a nested enclosing name must resolve through its "
+            "top-level owner's edges rather than fall back to the depth-1 default"
+        )
+
+
+def test_a_chain_beyond_max_depth_is_not_attributed_a_depth_within_it(tmp_path):
+    """Filtering by `depth_of(s) <= k` is only sound if a depth never understates the bound."""
+    _write_module(
+        tmp_path,
+        "deep.py",
+        _SPAWNER
+        + "def h1(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def h2(path):\n    h1(path)\n"
+        + "\n"
+        + "def h3(path):\n    h2(path)\n"
+        + "\n"
+        + "def check(paths):\n    for p in paths:\n        h3(p)\n",
+    )
+
+    assert ("deep.py", "check", "h3") not in _site_depths(tmp_path, 2), (
+        "a chain four hops from its spawner must not appear in a max_depth=2 walk"
+    )
+    assert _site_depths(tmp_path, 4)[("deep.py", "check", "h3")] == 4
+
+
+def test_filtering_by_site_depth_matches_a_real_walk_at_that_depth(tmp_path):
+    """The equivalence the one-walk shape rests on, over a corpus with chains at 1, 2 and 3.
+
+    This is the full-corpus comparison's job done against a synthetic corpus, so it costs
+    milliseconds rather than ~300s, and it asserts the property consumers actually depend on:
+    `{s for s in sites if depth_of(s) <= k}` equals a real walk at `max_depth=k`.
+    """
+    _write_module(
+        tmp_path,
+        "mixed.py",
+        _SPAWNER
+        + "def one_hop(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def two_hop(path):\n    one_hop(path)\n"
+        + "\n"
+        + "def at_depth_one(paths):\n    for p in paths:\n        _spawn(p)\n"
+        + "\n"
+        + "def at_depth_two(paths):\n    for p in paths:\n        one_hop(p)\n"
+        + "\n"
+        + "def at_depth_three(paths):\n    for p in paths:\n        two_hop(p)\n",
+    )
+
     max_depth = 4
+    sites, depth_of = deep_find_with_site_depths((tmp_path,), max_depth)
 
-    sites, depth_of = deep_find_with_site_depths(roots, max_depth)
-
-    for depth in range(2, max_depth + 1):
-        from_loop = frozenset(
-            site.key for site in _deep_find_unbatched_per_item_spawns(roots, max_depth=depth)
+    for depth in range(1, max_depth + 1):
+        from_walk = frozenset(
+            site.key
+            for site in _deep_find_unbatched_per_item_spawns((tmp_path,), max_depth=depth)
         )
-        from_depths = frozenset(site.key for site in sites if depth_of(site) <= depth)
-
-        assert from_depths == from_loop, (
-            f"one-walk depth attribution diverges from a real walk at max_depth={depth}: "
-            f"{len(from_depths - from_loop)} site(s) only in the attribution "
-            f"({sorted(from_depths - from_loop)[:4]}), "
-            f"{len(from_loop - from_depths)} only in the walk "
-            f"({sorted(from_loop - from_depths)[:4]})"
+        from_attribution = frozenset(s.key for s in sites if depth_of(s) <= depth)
+        assert from_attribution == from_walk, (
+            f"at max_depth={depth}: only-in-attribution "
+            f"{sorted(from_attribution - from_walk)}, only-in-walk "
+            f"{sorted(from_walk - from_attribution)}"
         )
+
+
+def test_site_depth_is_the_callees_own_not_the_nearest_thing_its_caller_touches(tmp_path):
+    """The discriminator between the shipped rule and the first two refuted ones.
+
+    `check` calls BOTH `near` (2 hops from a spawner) and `far` (4). The per-item site names
+    `far`, so its depth is 4. Two wrong rules give 2 here:
+      - the enclosing function's own depth, which BFS reaches through `near`;
+      - the minimum over every depth-bearing callee `check` touches, ignoring which one the
+        site actually names.
+    Both were measured wrong against the real corpus; this is the shape that makes them wrong
+    in a fixture, and without it either passes.
+    """
+    _write_module(
+        tmp_path,
+        "fork.py",
+        _SPAWNER
+        + "def near(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def mid(path):\n    near(path)\n"
+        + "\n"
+        + "def far(path):\n    mid(path)\n"
+        + "\n"
+        + "def check(paths):\n"
+        + "    near(paths[0])\n"
+        + "    for p in paths:\n"
+        + "        far(p)\n",
+    )
+
+    depths = _site_depths(tmp_path, 4)
+
+    assert depths[("fork.py", "check", "far")] == 4, (
+        "the depth must come from the callee the site NAMES (far, 4 hops), not from the "
+        "shallowest depth-bearing callee its enclosing function happens to also call (near, 2)"
+    )

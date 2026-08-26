@@ -4455,19 +4455,16 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "compute_readjudication_report",
         "_full_range_shas",
     ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
-    # --- the spawn FLOOR is a measured constant, not a per-item cost (cadence tier) ---
-    #: `archive_and_commit`'s loop issues one `git mv` per move because git mv takes one src/dst
-    #: pair, and the surrounding ceremony contributes a fixed constant on top. Prose could assert
-    #: "M + C"; only the oracle pins what C actually is, and it ships an explicit
-    #: fails-when-a-per-move-spawn-regresses leg so the claim cannot rot into a description.
-    (
-        "coordinator_core/ops/fleet/_common.py",
-        "archive_and_commit",
-        "create_subprocess_exec",
-    ): (
-        "test_archive_and_commit_spawn_floor::test_mixed_batch_spawns_exactly_m_plus_six",
-        "cadence",
-    ),
+    # --- the spawn FLOOR claim is RETIRED 2026-08-26: the site it named no longer fires ---
+    #: `_common.py::archive_and_commit::create_subprocess_exec` claimed a measured spawn floor
+    #: ("M + C") for a loop issuing one `git mv` per move. A peer's spawn-free rework of the
+    #: archival landing path removed the spawn entirely (`cf2574ee4`, `dccf2fc01`, then
+    #: `cffa6e99f` "retire drift gate, use single hash-object call" and `fc97db465`), so the
+    #: function's body now holds no `create_subprocess_exec` call at all and the key can never be
+    #: observed again. Deleted rather than left to age, per
+    #: `test_oracle_claims_still_name_live_sites`'s own ruling: a claim whose site no longer fires
+    #: silently pre-approves whatever next takes that key. The oracle test named above still
+    #: stands on its own; only this claim binding is gone.
     # --- batched default, per-item OVERRIDE seam, and the split is the property (fast tier) ---
     #: The default callee already carries N queue files in ONE spawn; what the collector counts is
     #: the operator-supplied override CLI, which is an arbitrary third-party program with no batch

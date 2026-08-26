@@ -1736,6 +1736,15 @@ def test_head_entry_falls_back_to_head_blobs_when_the_spine_is_unreadable(tmp_pa
 
     from coordinator_core.git import git_state as _git_state_module
 
+    # `head_blobs` reads the spine ITSELF now (C2b retired its `ls-tree` for
+    # the ordinary case), so patching only `git_native`'s binding no longer
+    # reaches the read this test exists to fail. Patch both bindings: the
+    # assertion below is unchanged and means exactly what it always meant --
+    # an unreadable spine must still produce exactly one `ls-tree`, never a
+    # silent empty answer. `head_blobs` returning `{}` here is precisely the
+    # "silent third state" the docstring names.
+    monkeypatch.setattr(_git_state_module, "read_tree_spine", lambda *a, **kw: None)
+
     real_run_git = _git_state_module.run_git
     run_git_argvs = []
 
@@ -2071,6 +2080,201 @@ def test_hash_worktree_blobs_mixed_paths_preserve_input_order(tmp_path):
         _real_git_out(repo, "hash-object", "clean.txt"),
     ]
     assert result.stdout.splitlines() == expected
+
+
+# ---------------------------------------------------------------------------
+# _hash_worktree_blobs -- C3c autocrlf=true in-process checkin normalizer.
+# docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md.
+# `_autocrlf_checkin_normalize` was verified byte-identical to real
+# `git hash-object` over a corpus of CRLF/LF/mixed/lone-CR/NUL/>8000-byte
+# content BEFORE this branch was wired in (spike, not re-derived here).
+# ---------------------------------------------------------------------------
+
+
+def test_hash_worktree_blobs_autocrlf_true_crlf_content_writes_in_process_no_spawn(tmp_path):
+    """Under `core.autocrlf=true` and no attribute pin, CR-carrying content
+    is now written IN PROCESS -- zero spawns -- and matches real git's own
+    checkin-side CRLF normalization exactly."""
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    (repo / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
+
+    real_git = git_native._git
+    spawned = []
+
+    def _spy(args, **kwargs):
+        spawned.append(list(args))
+        return real_git(args, **kwargs)
+
+    with patch.object(git_native, "_git", side_effect=_spy):
+        result = git_native._hash_worktree_blobs(["crlf.txt"], cwd=repo)
+
+    assert result.ok is True
+    assert spawned == [], f"autocrlf=true CRLF content must be in process, no spawn: {spawned}"
+    with open(repo / "crlf.txt", "rb") as fh:
+        real_stdin_sha = subprocess.run(
+            ["git", "hash-object", "--path=crlf.txt", "--stdin"],
+            cwd=str(repo), input=fh.read(), capture_output=True, check=True,
+        ).stdout.decode().strip()
+    assert result.stdout.splitlines() == [real_stdin_sha]
+
+
+def test_hash_worktree_blobs_autocrlf_true_binary_nul_content_left_verbatim(tmp_path):
+    """A NUL byte anywhere marks content binary under `text=auto` -- left
+    byte-for-byte untouched even though it also carries CRLF pairs."""
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    content = b"abc\r\n\x00def\r\n"
+    (repo / "bin.dat").write_bytes(content)
+
+    result = git_native._hash_worktree_blobs(["bin.dat"], cwd=repo)
+
+    assert result.ok is True
+    real_sha = subprocess.run(
+        ["git", "hash-object", "--path=bin.dat", "--stdin"],
+        cwd=str(repo), input=content, capture_output=True, check=True,
+    ).stdout.decode().strip()
+    assert result.stdout.splitlines() == [real_sha]
+
+
+def test_hash_worktree_blobs_autocrlf_true_lone_cr_blocks_whole_buffer_conversion(tmp_path):
+    """A lone CR (not followed by LF) ANYWHERE in the buffer blocks
+    conversion of the entire buffer, including an earlier well-formed CRLF
+    pair -- not merely the offending line."""
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    content = b"abc\r\ndef\r"
+    (repo / "lonecr.txt").write_bytes(content)
+
+    result = git_native._hash_worktree_blobs(["lonecr.txt"], cwd=repo)
+
+    assert result.ok is True
+    real_sha = subprocess.run(
+        ["git", "hash-object", "--path=lonecr.txt", "--stdin"],
+        cwd=str(repo), input=content, capture_output=True, check=True,
+    ).stdout.decode().strip()
+    assert result.stdout.splitlines() == [real_sha]
+
+
+def test_hash_worktree_blobs_autocrlf_true_text_attribute_pin_falls_back_to_spawn(tmp_path):
+    """A path with an explicit `.gitattributes` `eol=`/`text` pin is a
+    disposition C3c's spike never measured (forced text ignores the NUL
+    heuristic; `-text` never converts) -- refused to the spawn ladder even
+    though `core.autocrlf=true` and the content carries CR."""
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    (repo / ".gitattributes").write_text("*.sha text eol=lf\n", encoding="utf-8")
+    (repo / "digest.sha").write_bytes(b"abc\r\ndef\r\n")
+
+    real_git = git_native._git
+    spawned = []
+
+    def _spy(args, **kwargs):
+        spawned.append(list(args))
+        return real_git(args, **kwargs)
+
+    with patch.object(git_native, "_git", side_effect=_spy):
+        result = git_native._hash_worktree_blobs(["digest.sha"], cwd=repo)
+
+    assert result.ok is True
+    assert any(a[:2] == ["hash-object", "-w"] for a in spawned), (
+        f"attribute-pinned path must fall back to the spawn ladder: {spawned}"
+    )
+    expected_sha = _real_git_out(repo, "hash-object", "digest.sha")
+    assert result.stdout.splitlines() == [expected_sha]
+
+
+def test_repo_autocrlf_true_reads_repo_local_config(tmp_path, monkeypatch):
+    """`_repo_autocrlf_true` resolves from repo-local config, case-
+    insensitively, and is `False` for any other value or when unset.
+
+    HERMETIC ON PURPOSE (C3d). This test previously asserted `False` for a
+    fresh repo with the ambient machine config still in play, which passed
+    only because the probe could not SEE the system layer -- on a stock Git
+    for Windows box, `core.autocrlf=true` lives there and real git applies
+    it, so `False` was the bug's own answer being pinned as the spec.
+    `GIT_CONFIG_NOSYSTEM` isolates the layer actually under test here; the
+    system layer gets its own test below."""
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setattr(git_native.Path, "home", staticmethod(lambda: tmp_path / "nohome"))
+
+    repo = _init_real_repo(tmp_path)
+    assert git_native._repo_autocrlf_true(repo) is False
+
+    _real_git(["config", "core.autocrlf", "input"], repo)
+    assert git_native._repo_autocrlf_true(repo) is False
+
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    assert git_native._repo_autocrlf_true(repo) is True
+
+
+def test_repo_autocrlf_true_sees_the_system_layer(tmp_path, monkeypatch):
+    """THE TEST THAT WOULD HAVE CAUGHT C3d. Git for Windows writes
+    `core.autocrlf=true` into the SYSTEM config, not the repo config and not
+    `~/.gitconfig`. A probe reading only the latter two resolves `False` on a
+    stock install, so C3c's verified-correct in-process blob write never
+    executed and `git hash-object` spawned on every commit -- a correct
+    mechanism behind a precondition that never held."""
+    system_config = tmp_path / "system-gitconfig"
+    system_config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
+    monkeypatch.setattr(git_native.Path, "home", staticmethod(lambda: tmp_path / "nohome"))
+
+    repo = _init_real_repo(tmp_path)
+    assert git_native._repo_autocrlf_true(repo) is True, (
+        "autocrlf set ONLY in the system layer must resolve True -- real git "
+        "applies it, so a spawn-free reader that cannot see it disagrees with "
+        "the tool it is reproducing"
+    )
+
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    assert git_native._repo_autocrlf_true(repo) is False, (
+        "GIT_CONFIG_NOSYSTEM must suppress the system layer, as it does for git"
+    )
+
+
+def test_repo_local_autocrlf_false_beats_a_system_true(tmp_path, monkeypatch):
+    """Git's precedence is LAST WINS across layers -- system, then global,
+    then repo-local. A first-hit walk in that order would return the system
+    value and normalize content the repo explicitly asked to be left alone,
+    which is a wrong blob rather than a missed optimisation."""
+    system_config = tmp_path / "system-gitconfig"
+    system_config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
+    monkeypatch.setattr(git_native.Path, "home", staticmethod(lambda: tmp_path / "nohome"))
+
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "false"], repo)
+    assert git_native._repo_autocrlf_true(repo) is False, (
+        "a repo-local false must beat a system true"
+    )
+
+
+def test_autocrlf_checkin_normalize_matches_real_git_corpus(tmp_path):
+    """Direct unit coverage of the pure transform against the exact corpus
+    the C3c spike ran, independent of the `_hash_worktree_blobs` wiring."""
+    repo = _init_real_repo(tmp_path)
+    _real_git(["config", "core.autocrlf", "true"], repo)
+    corpus = [
+        b"line1\r\nline2\r\nline3\r\n",
+        b"line1\nline2\nline3\n",
+        b"line1\r\nline2\nline3\r\n",
+        b"abc\r\n\x00def\r\n",
+        b"abc\x00def",
+        (b"a\r\n" * 5000),
+        b"abc\r\ndef\r",
+        b"",
+        b"\r\n",
+    ]
+    for content in corpus:
+        got = git_native._autocrlf_checkin_normalize(content)
+        real_sha = subprocess.run(
+            ["git", "hash-object", "--path=x.txt", "--stdin"],
+            cwd=str(repo), input=content, capture_output=True, check=True,
+        ).stdout.decode().strip()
+        import hashlib
+        got_sha = hashlib.sha1(b"blob " + str(len(got)).encode() + b"\0" + got).hexdigest()
+        assert got_sha == real_sha, f"mismatch for {content!r}"
 
 
 def test_hash_worktree_blobs_empty_paths_is_a_documented_noop_no_spawn(tmp_path):

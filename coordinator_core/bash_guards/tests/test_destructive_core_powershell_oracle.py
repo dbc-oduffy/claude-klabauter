@@ -11,11 +11,20 @@ swallowed slot or a `matchers` gate that never actually widened.
 
 Before this chunk, one of the eight rows denied: `Bash` / `rm -rf .git`.
 After this chunk, every `Remove-Item`/`ri` spelling of the identical intent
-denies under BOTH `tool_name` values -- `Bash` (the `tool_name: "Bash"`
-carrying PowerShell-native command text shape DoE-claude's own
-`_rearm_command_tool_name` produces, per the plan's own "Row 2 is the
-load-bearing row") and `PowerShell` (the harness's own native tool_name,
-once every declared-matchers/master-gate seam actually admits it).
+denies under BOTH `tool_name` values.
+
+Those rows stayed dual-legged when AC2a was retired on 2026-08-26 and the
+git-shaped anti-bypass scan started gating on the declared dialect, and the
+distinction is the point: `check_destructive_rm`'s PowerShell verb scan is
+what makes `Remove-Item -Recurse -Force .git` deny under a `"Bash"` label,
+so gating IT would have dropped this oracle from 8/8 to 5/8. The dialect
+gate belongs on `_ps_git_bypass_segments`, which only ever ADDED a Bash-leg
+deny, never carried one of these. The original justification for both
+running ungated -- DoE-claude's `_rearm_command_tool_name` relabeling
+genuine PowerShell payloads to `"Bash"` ahead of dispatch -- is gone with
+that symbol (their D1, `47f4aedfe`); these rows survive on their own merit,
+which is that PowerShell removal vocabulary in a bash-labeled payload is
+still a removal nobody should get to perform.
 
 Spec backlink: pln-the-destructive-core-learns-the-she § C3, AC5
 """
@@ -24,21 +33,21 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 
 import pytest
 
 from coordinator_core.bash_guards import dispatch
 
-#: `fresh_git_repo` below spawns real `git` from a `@pytest.fixture`, not
-#: from a collectible `test_*` -- the spawn ratchet's per-function
-#: `@pytest.mark.spawns_process`/`cadence` form is INERT for a spawner
-#: pytest reaches only via fixture injection (`coordinator_core/tests/
-#: test_no_new_spawning_tests.py` § Rule 4, condition (ii)), so this file
-#: uses the module-level form instead, tiering every test in it (including
-#: the pre-existing, non-spawning `Remove-Item` oracle tests above) onto
-#: the cadence gate rather than leaving them falsely reported as tiered.
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+#: NO module-level `cadence`/`spawns_process` mark. Every test below runs
+#: against `repo_cwd` (this checkout, read-only) and spawns nothing, so
+#: these rows belong on the fast tier. The one oracle class that DID need a
+#: real `git init` -- `destructive-git-clean` -- moved to
+#: `test_destructive_core_powershell_oracle_git_clean.py` on 2026-08-26,
+#: which carries the module-level mark for the reason that file's docstring
+#: gives. Before that split its fixture tiered all sixteen rows here onto
+#: `cadence`, and retiring AC2a changed three of them while the fast tier
+#: reported green -- a gate pinning cross-plane guard behaviour has to run
+#: on the tier people actually run.
 
 
 #: The four spellings of "delete the git store" from the plan's own oracle
@@ -227,63 +236,6 @@ class TestDestructiveGitOrphanForcePush:
         assert not _denies("g`it push --force origin main @'", "PowerShell", repo_cwd)
         assert not _denies("g`it push --force origin main @'", "Bash", repo_cwd)
 
-
-@pytest.fixture()
-def fresh_git_repo(tmp_path, monkeypatch):
-    """An isolated, freshly-`git init`ed repo -- `check_destructive_git_
-    clean`'s oracle resolves the process cwd (no `-C` in the synthetic
-    segment), so this fixture `chdir`s into it for the test's duration
-    rather than fabricating output. NOT a fleet-registered repo (see
-    `_is_hazard_repo`), so unsuitable for `blanket-git-add` tests -- those
-    use `repo_cwd` (this checkout) instead."""
-    subprocess.run(
-        ["git", "init", "-q"], cwd=str(tmp_path), check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    subprocess.run(
-        ["git", "config", "user.email", "oracle@example.invalid"], cwd=str(tmp_path), check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "oracle"], cwd=str(tmp_path), check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "scratch.txt").write_text("load-bearing per _GC_LOADBEARING_PREFIXES")
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-class TestDestructiveGitCleanLoadBearing:
-    """C3: `destructive-git-clean`'s own top-of-function gate (`\\bgit\\b`
-    AND `\\bclean\\b` over raw `cmd`) is a second bypass point beyond the
-    per-segment scan -- widened via `_gc_ps_segments` alongside the loop
-    itself, or a backtick-escaped invocation would short-circuit to
-    `None` before ever reaching the segment walk."""
-
-    def test_backtick_escaped_git_clean_denies_on_the_powershell_leg_only(self, fresh_git_repo) -> None:
-        """`_gc_ps_segments` gates on the declared dialect (same rationale
-        as `TestDestructiveGitOrphanForcePush`'s own backtick row -- AC2a
-        retired 2026-08-26 once DoE's relabel was removed), so this denies
-        on the PowerShell leg and is silent on the Bash leg."""
-        cmd = "g`it clean -fdx"
-        cwd = str(fresh_git_repo)
-        assert _denies(cmd, "PowerShell", cwd)
-        assert not _denies(cmd, "Bash", cwd)
-
-    def test_plain_git_clean_denies_under_both_dialects(self, fresh_git_repo) -> None:
-        cmd = "git clean -fdx"
-        cwd = str(fresh_git_repo)
-        assert _denies(cmd, "Bash", cwd)
-        assert _denies(cmd, "PowerShell", cwd)
-
-    def test_unparseable_powershell_does_not_deny(self, fresh_git_repo) -> None:
-        """AC4: backtick-broken (defeats the raw top-of-function gate) AND
-        an unterminated here-string (`resolve_segments_for_dialect`
-        returns `None`) -- silence under both dialects, never a deny."""
-        cwd = str(fresh_git_repo)
-        assert not _denies("g`it clean -fdx @'", "PowerShell", cwd)
-        assert not _denies("g`it clean -fdx @'", "Bash", cwd)
 
 
 @pytest.mark.real_home

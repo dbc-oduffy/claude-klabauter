@@ -609,6 +609,7 @@ def test_leg1_notices_an_organic_write_for_every_register_shape(
     )
 
 
+@pytest.mark.cadence
 def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
     """Cross-check leg 1's byte regex against a true AST census, over the real corpus.
 
@@ -618,6 +619,13 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
     because it only exercises shapes the regex already recognizes. Residual regex recall is
     named as a fourth non-claim in C6; this check exists so any NEW gap is caught here rather
     than silently joining that residual.
+
+    CADENCE-MARKED: it parses the whole corpus twice over (byte scan plus full AST census) at
+    5.40s, and its own name says what it is -- a land-time audit, not a per-commit gate. The
+    thing it guards is the regex's recall, which changes when someone edits the regex or adds a
+    register shape, not on an average commit. Its fast-tier siblings (leg 1's own discovery at
+    0.32s, the organic-write parametrization) stay per-commit and cover the shapes the regex
+    already knows.
     """
     regex_found = _discover_candidate_ids(_CANDIDATE_ROOTS, REPO_ROOT)
 

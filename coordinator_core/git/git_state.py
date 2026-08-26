@@ -1,7 +1,12 @@
-"""coordinator_core.git.git_state -- an in-process reader for the two pieces
-of git state a commit-path caller actually needs (staged index, HEAD sha),
-with exactly ONE retained spawn for the third (HEAD tree blobs), isolated
-behind a single call site.
+"""coordinator_core.git.git_state -- an in-process reader for the pieces of
+git state a commit-path caller actually needs (staged index, HEAD sha, HEAD
+tree blobs). `head_blobs` (HEAD tree blobs) was, until 2026-08-26 (C2b,
+docs/dispatch-briefs/2026-08-26-the-commit-op-stops-asking-git-eleven-times/
+C2b.md), this module's one deliberately retained spawn (`git ls-tree`); it
+now routes through `read_tree_spine`'s in-process tree-spine walk instead --
+see that function's own call site in `head_blobs` for the mode-admission
+rule a former `ls-tree` consumer still needs (gitlink `160000` is a blob-
+equivalent leaf, not a directory to descend into).
 
 Why this exists: the census behind
 `docs/plans/2026-08-16-one-engine-for-the-whole-box.md` found the commit
@@ -15,11 +20,7 @@ against 319ms wall for the spawn it replaces. See
 `state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-without-spawning-git/C1.md`
 for the measurement and the reviewer-gate ACs it binds.
 
-MANDATORY REUSE, both BLOCKING:
-    - The one retained spawn (`head_blobs`) routes through
-      `coordinator_core.git.run::run_git`, never a private `subprocess.run`
-      -- `coordinator_core/tests/test_shared_git_runner.py` fails any new
-      non-test module reaching a bare `["git", ...]` argv.
+MANDATORY REUSE, BLOCKING:
     - Path resolution routes through `coordinator_core.git.git_dir`, never a
       hand-joined `<repo_root>/.git/...`. `index` and `HEAD` are
       WORKTREE-PRIVATE (`resolve_git_dir`); `refs/heads/*` (loose) and
@@ -627,36 +628,32 @@ _HEAD_BLOBS_CACHE_MAX = 64
 
 
 def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[int, str]]:
-    """`{path: (mode, sha)}` for `paths` as they exist in HEAD's tree. THE
-    ONE RETAINED SPAWN in this module (`git ls-tree`, via `run_git`) --
-    isolated behind this single call site. This was written believing no
-    in-process packfile/loose-object reader existed; one now does
-    (`coordinator_core.git.git_objects._read_object`, extracted in C2 and
-    used directly by `head_tree_sha`/`read_tree_spine` above), so "exactly
-    one place to change" no longer describes a future replacement -- it
-    describes THIS call site, today, as the one spot left where a caller
-    still prefers `git ls-tree`'s own path-to-entry resolution over walking
-    the tree spine itself. Argv-chunked via
-    `_chunk_paths` so a large batch cannot overrun the Windows argv cap.
+    """`{path: (mode, sha)}` for `paths` as they exist in HEAD's tree.
 
-    A path absent from HEAD (untracked, or repo has no commits yet) is
-    simply absent from the result -- never raises.
+    Routes through `read_tree_spine` -- an in-process walk of only the
+    directory components `paths` actually need, via
+    `coordinator_core.git.git_objects._read_object` -- rather than spawning
+    `git ls-tree` (2026-08-26, C2b of docs/dispatch-briefs/2026-08-26-the-
+    commit-op-stops-asking-git-eleven-times/C2b.md; `read_tree_spine` itself
+    was extracted in C2, but this call site kept spawning `ls-tree` until
+    now). No `git` process, and no Windows argv-length concern -- there is
+    no argv to chunk once the walk never leaves this process.
+
+    A path's own leaf entry is taken directly from its PARENT directory's
+    tree dict (never descended into, regardless of its mode -- matching
+    `read_tree_spine`'s own contract for a path's last `/`-segment). Mode
+    `0o40000` (a directory/tree entry -- reachable only if a caller passes a
+    directory pathspec) is excluded; every other mode -- a regular file, a
+    symlink (`120000`), or a gitlink/submodule (`160000`) -- is admitted
+    as a leaf, mirroring the former `git ls-tree` reader's own "blob or
+    commit object type" admission rule (see `test_commit_gates.py`'s
+    `gitlink_160000` regression: a `160000` entry MUST be admitted here,
+    never silently dropped as "not a blob").
+
+    A path absent from HEAD (untracked, repo has no commits yet, or HEAD's
+    own tree is unreadable/corrupt) is simply absent from the result --
+    never raises.
     """
-    # Function-local import: `git_native` carries `contextvars`/`tempfile`/
-    # `uuid` and the ceremony layer's own transitive weight, which a module
-    # under `coordinator_core/git/` (on `ipc`'s cold-start path, per
-    # `run.py`'s IMPORT COST section) must not pay just to expose the
-    # signature -- only a caller that actually reaches the one retained
-    # spawn pays for the shared packer. `_chunk_paths` itself now lives in
-    # `coordinator_core.git.argv_batch` (2026-08-26, C1 of docs/plans/
-    # 2026-08-26-the-archival-commit-helper-computes-its-own-tree.md,
-    # retiring the `git/` -> `ops/` edge this import used to cross) -- kept
-    # function-scoped regardless: measured 1.84ms p50 import self-time, and
-    # this module is on the commit hot path via `commit_trailers`, so
-    # hoisting would hand that cost to every importer, including ones that
-    # never call `head_blobs`.
-    from coordinator_core.git.argv_batch import _chunk_paths
-
     paths = [p for p in paths if p]
     if not paths:
         return {}
@@ -696,29 +693,69 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
             return dict(cached)
 
     result: Dict[str, Tuple[int, str]] = {}
-    for chunk in _chunk_paths(paths):
-        gr = run_git(["ls-tree", "-z", "HEAD", "--", *chunk], cwd=str(repo))
-        if not gr.ok:
-            continue
-        for record in gr.stdout.split("\x00"):
-            if not record:
+    spine = read_tree_spine(repo, paths)
+    if spine is None:
+        # THE SPAWN IS THE FALLBACK, AND IT IS NOT OPTIONAL. `read_tree_spine`
+        # returns None when it cannot read HEAD's tree -- an unreadable or
+        # unsupported packfile, a corrupt object, a shape `_read_object`
+        # declines. Continuing here with an empty `result` would return `{}`,
+        # which is BYTE-IDENTICAL to the honest answer "none of these paths
+        # exist in HEAD" and is consumed as exactly that:
+        #
+        #   `commit_gates.deletion_block_gate`'s Kept-claim leg reads an
+        #   absent entry as "not at HEAD" and BLOCKS a legitimate commit;
+        #   `dirty_tree_gate` recomputes staged-ness against this dict and
+        #   misclassifies every staged path at once.
+        #
+        # Worse, the memo below would then cache that empty answer under
+        # HEAD's own sha, so one unreadable read poisons every caller until
+        # HEAD moves. A silent wrong answer where a correct one was available
+        # is not a spawn saved; it is a defect bought at 22ms discount.
+        #
+        # So: fall through to `ls-tree`. This is the rare arm -- the spine
+        # serves the ordinary case at zero spawns, which is the whole point of
+        # C2b -- but the op must never be LESS able to answer than it was
+        # before the cut. → docs/plans/2026-08-26-the-commit-op-stops-asking-
+        # git-eleven-times.md C2b.
+        from coordinator_core.git.argv_batch import _chunk_paths
+
+        for chunk in _chunk_paths(paths):
+            gr = run_git(["ls-tree", "-z", "HEAD", "--", *chunk], cwd=str(repo))
+            if not gr.ok:
                 continue
-            meta, _, path = record.partition("\t")
-            mode_str, obj_type, sha = meta.split(" ")
-            # "blob" covers regular files AND symlinks (mode 120000 is a
-            # blob). "commit" is a submodule gitlink (mode 160000) -- it
-            # MUST be admitted here: `_is_staged`'s caller in commit_gates.py
-            # treats an absent `head_entry` as "no HEAD counterpart", which
-            # is correct for an untracked/new path but silently misreports a
-            # genuinely dirty *tracked* gitlink as staged (see
-            # coordinator_core/ops/ceremony/tests/test_commit_gates.py's
-            # gitlink_160000 regression). Only "tree" (a directory entry,
-            # reachable if a caller ever passes a directory pathspec) is
-            # excluded -- it is neither a leaf blob nor a gitlink and no
-            # caller here compares against tree identity.
-            if obj_type not in ("blob", "commit"):
+            for record in gr.stdout.split("\x00"):
+                if not record:
+                    continue
+                meta, _, path = record.partition("\t")
+                mode_str, obj_type, sha = meta.split(" ")
+                # "blob" covers regular files AND symlinks (120000).
+                # "commit" is a submodule gitlink (160000) and MUST be
+                # admitted -- see the spine arm's own mode note below and
+                # test_commit_gates.py's `gitlink_160000` regression. Only
+                # "tree" is excluded.
+                if obj_type not in ("blob", "commit"):
+                    continue
+                result[path] = (int(mode_str, 8), sha)
+    else:
+        for path in paths:
+            parts = path.split("/")
+            dirpath = "/".join(parts[:-1])
+            leaf = parts[-1]
+            entries = spine.get(dirpath)
+            if entries is None:
                 continue
-            result[path] = (int(mode_str, 8), sha)
+            entry = entries.get(leaf)
+            if entry is None:
+                continue
+            mode, sha = entry
+            # `0o40000` is a directory/tree entry -- excluded, matching the
+            # former `ls-tree` reader's own "tree" exclusion (see this
+            # function's docstring). Every other mode -- blob, symlink
+            # (120000), or gitlink/submodule (160000) -- is a leaf and is
+            # admitted.
+            if mode == 0o40000:
+                continue
+            result[path] = (mode, sha)
 
     if cache_key is not None:
         _HEAD_BLOBS_CACHE[cache_key] = dict(result)

@@ -2364,7 +2364,7 @@ def _import_module_aliases(record: _FileRecord, module_index: dict[str, str]) ->
 def _import_function_aliases(
     record: _FileRecord,
     module_index: dict[str, str],
-    func_defs: dict[tuple[str, str], object],
+    func_defs: typing.Mapping[tuple[str, str], object],
 ) -> dict[str, tuple[str, str]]:
     """alias name -> `(relpath, func_name)`, for `from X import func` where `func` is a
     top-level FUNCTION defined in X (not a submodule -- that shape is `_import_module_aliases`'s
@@ -2407,7 +2407,7 @@ def _import_function_aliases(
 def _local_module_attr_aliases(
     record: _FileRecord,
     import_aliases: dict[str, str],
-    func_defs: dict[tuple[str, str], object],
+    func_defs: typing.Mapping[tuple[str, str], object],
 ) -> dict[str, tuple[str, str]]:
     """Module-level `name = alias.attr` bindings (C-08 audit op 5, hop 4:
     `_claude_klabauter_root = cli_shared.claude_klabauter_root`), where `alias` resolves to an in-scope module and
@@ -2502,6 +2502,114 @@ def _resolve_bare_or_attr_callee(
     return None
 
 
+def _module_callable_tables(
+    record: "_FileRecord",
+    index: _FuncIndex,
+    aliases_here: dict[str, str],
+    func_aliases_here: dict[str, tuple[str, str]],
+    local_here: dict[str, tuple[str, str]],
+) -> dict[str, frozenset[tuple[str, str]]]:
+    """Module-level `NAME = {...}` / `NAME: T = {...}` (also `[...]`/`(...)`/`{...}`-set)
+    literal bindings whose members resolve to top-level functions this corpus already knows --
+    a BY-REFERENCE dispatch table (`coordinator_core/merge_assemble/apply.py::_CLI_DISPATCH` is
+    the oracle: a closed `dict[str, Callable]` passed BY REFERENCE into `apply_base.
+    execute_directives`, which invokes its values by key lookup, never by a literal `ast.Call`
+    this walker's ordinary one-hop edge already sees).
+
+    Each container element is resolved through `_resolve_bare_or_attr_callee` -- the SAME
+    precise, same-file-or-tracked-alias-only resolution every other hop in this gate uses, never
+    a looser repo-wide bare-name lookup (module docstring's measured false-positive section: that
+    class of imprecision inflated one op's reachable set from 0 to ~40 on its first live run). A
+    member that does not resolve is skipped -- an accepted false negative, named, never a
+    fall-back to a looser lookup. A table with zero resolving members is omitted entirely."""
+    out: dict[str, frozenset[tuple[str, str]]] = {}
+    for node in record.tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target_name = node.targets[0].id
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            target_name = node.target.id
+            value = node.value
+        else:
+            continue
+
+        if isinstance(value, ast.Dict):
+            elements = list(value.values)
+        elif isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            elements = list(value.elts)
+        else:
+            continue
+
+        members: set[tuple[str, str]] = set()
+        for elt in elements:
+            resolved = _resolve_bare_or_attr_callee(
+                elt, record.relpath, index, aliases_here, func_aliases_here, local_here
+            )
+            if resolved is not None:
+                members.add(resolved)
+        if members:
+            out[target_name] = frozenset(members)
+    return out
+
+
+def _module_callable_tables_by_file(
+    records: list["_FileRecord"],
+    index: _FuncIndex,
+    import_aliases_by_file: dict[str, dict[str, str]],
+    func_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
+    local_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
+) -> dict[str, dict[str, frozenset[tuple[str, str]]]]:
+    """`_module_callable_tables` over every file in `records`, keyed by relpath. A file with no
+    recognised table is simply absent from the result (never an empty-dict placeholder)."""
+    out: dict[str, dict[str, frozenset[tuple[str, str]]]] = {}
+    for record in records:
+        tables = _module_callable_tables(
+            record,
+            index,
+            import_aliases_by_file.get(record.relpath, {}),
+            func_aliases_by_file.get(record.relpath, {}),
+            local_aliases_by_file.get(record.relpath, {}),
+        )
+        if tables:
+            out[record.relpath] = tables
+    return out
+
+
+def _import_table_aliases(
+    record: "_FileRecord",
+    module_index: dict[str, str],
+    module_callable_tables_by_file: dict[str, dict[str, frozenset[tuple[str, str]]]],
+) -> dict[str, tuple[str, str]]:
+    """alias name -> `(relpath, table_name)`, for `from X import TABLE` where `TABLE` is a
+    module-level callable-container table `_module_callable_tables` recognises in `X`. Mirrors
+    `_import_function_aliases`'s precision contract exactly -- pinned to the specific module
+    named in the import statement, never a repo-wide bare-name lookup -- so a table referenced
+    across modules resolves the same strict way a cross-module function callee does."""
+    out: dict[str, tuple[str, str]] = {}
+    pkg = _package_dotted(record.relpath)
+    for node in ast.walk(record.tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0:
+            base = node.module or ""
+        elif node.level == 1 and pkg is not None:
+            base = pkg if not node.module else f"{pkg}.{node.module}"
+        else:
+            continue
+        target_relpath = module_index.get(base)
+        if not target_relpath:
+            continue
+        tables_there = module_callable_tables_by_file.get(target_relpath, {})
+        for alias in node.names:
+            if alias.name in tables_there:
+                out[alias.asname or alias.name] = (target_relpath, alias.name)
+    return out
+
+
 def _direct_call_targets(
     func_node,
     relpath: str,
@@ -2509,6 +2617,8 @@ def _direct_call_targets(
     import_aliases_by_file: dict[str, dict[str, str]],
     func_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
     local_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
+    module_callable_tables_by_file: "dict[str, dict[str, frozenset[tuple[str, str]]]] | None" = None,
+    table_aliases_by_file: "dict[str, dict[str, tuple[str, str]]] | None" = None,
 ) -> set[tuple[str, str]]:
     """Every top-level `(relpath, func_name)` `func_node`'s body calls, one hop: same-module
     direct call, a PRECISE cross-module function import (`_import_function_aliases` -- pinned to
@@ -2519,43 +2629,64 @@ def _direct_call_targets(
     (`_import_module_aliases`). ALSO resolves a thread-hop call (`asyncio.to_thread(fn, ...)`,
     `loop.run_in_executor(None, fn, ...)`) by taking its callee ARGUMENT through the same
     resolver (`_resolve_bare_or_attr_callee`) -- see `_UNRESOLVED_THREAD_HOP_CALLEES` for what
-    happens when that argument is not statically resolvable."""
+    happens when that argument is not statically resolvable.
+
+    `module_callable_tables_by_file`/`table_aliases_by_file` add ONE more edge kind (this
+    chunk): a BY-REFERENCE dispatch table LOADED as a plain `ast.Name` (not called) anywhere in
+    `func_node`'s body reaches every function that table's own `_module_callable_tables` entry
+    resolved -- same-file table first, then a precise cross-module import alias
+    (`_import_table_aliases`), so a same-named local never collides with an imported table. Both
+    default to `None` (treated as empty) so every EXISTING caller that does not pass them keeps
+    today's byte-for-byte behaviour -- this is a strictly additive edge, never a replacement for
+    the call-based edges above."""
     out: set[tuple[str, str]] = set()
     aliases_here = import_aliases_by_file.get(relpath, {})
     func_aliases_here = func_aliases_by_file.get(relpath, {})
     local_here = local_aliases_by_file.get(relpath, {})
+    tables_here = (module_callable_tables_by_file or {}).get(relpath, {})
+    table_aliases_here = (table_aliases_by_file or {}).get(relpath, {})
     for node in ast.walk(func_node):
-        if node is func_node or not isinstance(node, ast.Call):
+        if node is func_node:
             continue
-        callee = node.func
-        if isinstance(callee, ast.Name):
-            name = callee.id
-            if (relpath, name) in index.func_defs:
-                out.add((relpath, name))
-            elif name in local_here:
-                out.add(local_here[name])
-            elif name in func_aliases_here:
-                out.add(func_aliases_here[name])
-        elif isinstance(callee, ast.Attribute):
-            if isinstance(callee.value, ast.Name):
-                target_relpath = aliases_here.get(callee.value.id)
-                if target_relpath and (target_relpath, callee.attr) in index.func_defs:
-                    out.add((target_relpath, callee.attr))
-            if callee.attr in _THREAD_HOP_ATTRS:
-                arg = _thread_hop_callee_arg(node, callee.attr)
-                resolved = (
-                    _resolve_bare_or_attr_callee(
-                        arg, relpath, index, aliases_here, func_aliases_here, local_here
+        if isinstance(node, ast.Call):
+            callee = node.func
+            if isinstance(callee, ast.Name):
+                name = callee.id
+                if (relpath, name) in index.func_defs:
+                    out.add((relpath, name))
+                elif name in local_here:
+                    out.add(local_here[name])
+                elif name in func_aliases_here:
+                    out.add(func_aliases_here[name])
+            elif isinstance(callee, ast.Attribute):
+                if isinstance(callee.value, ast.Name):
+                    target_relpath = aliases_here.get(callee.value.id)
+                    if target_relpath and (target_relpath, callee.attr) in index.func_defs:
+                        out.add((target_relpath, callee.attr))
+                if callee.attr in _THREAD_HOP_ATTRS:
+                    arg = _thread_hop_callee_arg(node, callee.attr)
+                    resolved = (
+                        _resolve_bare_or_attr_callee(
+                            arg, relpath, index, aliases_here, func_aliases_here, local_here
+                        )
+                        if arg is not None
+                        else None
                     )
-                    if arg is not None
-                    else None
+                    if resolved is not None:
+                        out.add(resolved)
+                    else:
+                        _UNRESOLVED_THREAD_HOP_CALLEES.append(
+                            (relpath, func_node.name, node.lineno)
+                        )
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            name = node.id
+            if name in tables_here:
+                out.update(tables_here[name])
+            elif name in table_aliases_here:
+                t_relpath, t_name = table_aliases_here[name]
+                out.update(
+                    (module_callable_tables_by_file or {}).get(t_relpath, {}).get(t_name, frozenset())
                 )
-                if resolved is not None:
-                    out.add(resolved)
-                else:
-                    _UNRESOLVED_THREAD_HOP_CALLEES.append(
-                        (relpath, func_node.name, node.lineno)
-                    )
     return out
 
 
@@ -2565,11 +2696,18 @@ def _reachable_functions(
     import_aliases_by_file: dict[str, dict[str, str]],
     func_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
     local_aliases_by_file: dict[str, dict[str, tuple[str, str]]],
+    module_callable_tables_by_file: "dict[str, dict[str, frozenset[tuple[str, str]]]] | None" = None,
+    table_aliases_by_file: "dict[str, dict[str, tuple[str, str]]] | None" = None,
 ) -> set[tuple[str, str]]:
     """Transitive closure (plain worklist BFS) over `_direct_call_targets`'s one-hop edges,
     seeded at `entry_funcs`. Terminates: `seen` grows monotonically over the finite domain of
     `(relpath, func_name)` pairs `index.func_defs` defines, so a round that adds nothing halts
-    the loop -- same termination argument the reused module's own route-g fixed point makes."""
+    the loop -- same termination argument the reused module's own route-g fixed point makes.
+
+    `module_callable_tables_by_file`/`table_aliases_by_file` (this chunk) are threaded straight
+    through to `_direct_call_targets` -- see that function's own docstring. Both default to
+    `None`, so an EXISTING caller passing only the first five arguments walks exactly the edges
+    it always has."""
     seen: set[tuple[str, str]] = set(entry_funcs)
     queue: list[tuple[str, str]] = list(entry_funcs)
     while queue:
@@ -2584,6 +2722,8 @@ def _reachable_functions(
             import_aliases_by_file,
             func_aliases_by_file,
             local_aliases_by_file,
+            module_callable_tables_by_file,
+            table_aliases_by_file,
         ):
             if target not in seen:
                 seen.add(target)
@@ -2620,11 +2760,14 @@ def _scope_roots() -> tuple[pathlib.Path, ...]:
     return tuple(_REPO_ROOT / root for root in _GATE_SCOPE_ROOTS)
 
 
-def _build_corpus():
-    """One shared corpus build: scope files, `_FileRecord`s, the reused repo-wide `_FuncIndex`,
-    and this gate's own import/local-alias indexes, each computed exactly once. Returns
-    `(index, spawn_sites_by_file, import_aliases_by_file, func_aliases_by_file,
-    local_aliases_by_file)`.
+def _build_corpus_with_dispatch_tables():
+    """The full corpus build: everything `_build_corpus()` returns, PLUS the by-reference
+    dispatch-table indexes this chunk adds (`module_callable_tables_by_file`,
+    `table_aliases_by_file`). `_build_corpus()` is a stable slice of this same computation --
+    refactored to share the scan rather than pay it twice -- so every EXISTING caller of
+    `_build_corpus()` keeps its exact 5-tuple return shape and cost. Returns `(index,
+    spawn_sites_by_file, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file,
+    module_callable_tables_by_file, table_aliases_by_file)`.
 
     Clears `_UNRESOLVED_THREAD_HOP_CALLEES` at the start of every build -- `_reachable_functions`
     calls made against this corpus append to that list as they walk, and a caller inspecting it
@@ -2652,6 +2795,15 @@ def _build_corpus():
             record, import_aliases_by_file[record.relpath], index.func_defs
         )
 
+    module_callable_tables_by_file = _module_callable_tables_by_file(
+        records, index, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file
+    )
+    table_aliases_by_file: dict[str, dict[str, tuple[str, str]]] = {}
+    for record in records:
+        table_aliases_by_file[record.relpath] = _import_table_aliases(
+            record, module_index, module_callable_tables_by_file
+        )
+
     spawn_sites_by_file = {record.relpath: record.spawn_sites for record in records}
     return (
         index,
@@ -2659,7 +2811,20 @@ def _build_corpus():
         import_aliases_by_file,
         func_aliases_by_file,
         local_aliases_by_file,
+        module_callable_tables_by_file,
+        table_aliases_by_file,
     )
+
+
+def _build_corpus():
+    """One shared corpus build: scope files, `_FileRecord`s, the reused repo-wide `_FuncIndex`,
+    and this gate's own import/local-alias indexes, each computed exactly once. Returns
+    `(index, spawn_sites_by_file, import_aliases_by_file, func_aliases_by_file,
+    local_aliases_by_file)` -- a stable slice of `_build_corpus_with_dispatch_tables()`, which
+    also computes the by-reference dispatch-table indexes this chunk adds. Kept as its own name
+    (rather than inlining a `[:5]` at every call site) so every EXISTING caller's signature and
+    cost stay byte-for-byte unchanged."""
+    return _build_corpus_with_dispatch_tables()[:5]
 
 
 def _format_violation(op_key: str, site) -> str:
@@ -3126,6 +3291,93 @@ def _module_index_for_test(records: list[_FileRecord]) -> dict[str, str]:
         if record.relpath.endswith(".py"):
             out[record.relpath[:-3]] = record.relpath
     return out
+
+
+def test_reachable_functions_follows_by_reference_dispatch_table(tmp_path):
+    """D8 self-contained planted fixture, pinned independently of the live tree's own
+    `merge_assemble.apply::_CLI_DISPATCH` shape: `owner.py` defines a spawn handler and names it
+    (by reference, never called) inside a module-level dict literal; `entry.py` imports that
+    dict and passes it BY REFERENCE into `runner.execute`, which is the ONLY place that ever
+    calls the handler, via a runtime key lookup this static walker cannot follow. Before this
+    chunk's edge, `_entrypoint`'s reachable set is EMPTY of the spawn site (the bare-Call walk
+    never sees a container VALUE); after it, `_entrypoint` reaches `owner.py::_spawn_handler`
+    because it LOADS the cross-module table by name."""
+    owner_mod = tmp_path / "owner.py"
+    owner_mod.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _spawn_handler(args):\n"
+        "    return subprocess.run(['git', 'status'])\n"
+        "\n"
+        "_DISPATCH = {\n"
+        "    'verb': _spawn_handler,\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    runner_mod = tmp_path / "runner.py"
+    runner_mod.write_text(
+        "def execute(table, args):\n"
+        "    return table[args[0]](args)\n",
+        encoding="utf-8",
+    )
+    entry_mod = tmp_path / "entry3.py"
+    entry_mod.write_text(
+        "from owner import _DISPATCH\n"
+        "import runner\n"
+        "\n"
+        "def _entrypoint(args):\n"
+        "    return runner.execute(_DISPATCH, args)\n",
+        encoding="utf-8",
+    )
+
+    files = _discover_scope_files((tmp_path,))
+    records = _load_file_records(files)
+    index = _build_func_index(records)
+    module_index = _module_index_for_test(records)
+    import_aliases_by_file = {r.relpath: _import_module_aliases(r, module_index) for r in records}
+    func_aliases_by_file = {
+        r.relpath: _import_function_aliases(r, module_index, index.func_defs) for r in records
+    }
+    local_aliases_by_file = {
+        r.relpath: _local_module_attr_aliases(r, import_aliases_by_file[r.relpath], index.func_defs)
+        for r in records
+    }
+    spawn_sites_by_file = {r.relpath: r.spawn_sites for r in records}
+
+    # BEFORE the edge: the 5-argument call (no table indexes passed) is byte-for-byte the
+    # walker's prior behaviour -- the spawn site stays invisible.
+    reached_before = _reachable_functions(
+        {("entry3.py", "_entrypoint")},
+        index,
+        import_aliases_by_file,
+        func_aliases_by_file,
+        local_aliases_by_file,
+    )
+    assert ("owner.py", "_spawn_handler") not in reached_before
+    assert _on_path_spawn_sites(reached_before, spawn_sites_by_file, set()) == []
+
+    # AFTER the edge: threading the by-reference dispatch-table indexes through reaches it.
+    module_callable_tables_by_file = _module_callable_tables_by_file(
+        records, index, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file
+    )
+    table_aliases_by_file = {
+        r.relpath: _import_table_aliases(r, module_index, module_callable_tables_by_file)
+        for r in records
+    }
+    reached_after = _reachable_functions(
+        {("entry3.py", "_entrypoint")},
+        index,
+        import_aliases_by_file,
+        func_aliases_by_file,
+        local_aliases_by_file,
+        module_callable_tables_by_file,
+        table_aliases_by_file,
+    )
+    assert ("owner.py", "_spawn_handler") in reached_after
+    violations = _on_path_spawn_sites(reached_after, spawn_sites_by_file, set())
+    assert len(violations) == 1
+    assert violations[0].path == "owner.py"
+    assert violations[0].enclosing == "_spawn_handler"
 
 
 def test_legitimized_site_suppresses_a_reachable_violation(tmp_path):

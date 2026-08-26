@@ -354,9 +354,10 @@ def _is_compute_only(op: str) -> bool:
         from coordinator_core.authz.classification import OpClass, classify
 
         return classify(op) is OpClass.COMPUTE_ONLY
-    except KeyError:
-        return False
-    except Exception:  # noqa: BLE001 -- an unavailable classifier denies, never admits
+    except Exception:  # noqa: BLE001 -- see docstring; KeyError included
+        # ONE CATCH, NOT TWO. `KeyError` is an `Exception`, so splitting them
+        # read as two behaviours where there is one: everything that is not a
+        # confirmed COMPUTE_ONLY answer denies.
         return False
 
 

@@ -85,11 +85,20 @@ _ENTRY_FIXED_LEN = 62
 
 
 class IndexStatusEntry(NamedTuple):
-    """One index entry's stat identity: `(mode, size, mtime_seconds)`."""
+    """One index entry's stat identity: `(mode, size, mtime_seconds,
+    mtime_nanoseconds)`.
+
+    `mtime_nsec` is the sub-second half of the index's 8-byte mtime field.
+    It is `0` both when the entry genuinely landed on a second boundary and
+    when the writing git had no sub-second stat to record at all, so a
+    reader cannot tell those apart -- see `scoped_status` for why that
+    forces the comparison to be guarded rather than unconditional.
+    """
 
     mode: int
     size: int
     mtime: int
+    mtime_nsec: int = 0
 
 
 class IndexParseError(ValueError):
@@ -160,7 +169,7 @@ def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexStatus
         if offset + _ENTRY_FIXED_LEN > len(raw):
             raise IndexParseError(f"{index_path}: truncated entry at offset {offset}")
 
-        mtime_sec = struct.unpack(">I", raw[offset + 8 : offset + 12])[0]
+        mtime_sec, mtime_nsec = struct.unpack(">II", raw[offset + 8 : offset + 16])
         mode = struct.unpack(">I", raw[offset + 24 : offset + 28])[0]
         size = struct.unpack(">I", raw[offset + 36 : offset + 40])[0]
         flags = struct.unpack(">H", raw[offset + 60 : offset + 62])[0]
@@ -195,7 +204,9 @@ def _parse_index_bytes(raw: bytes, *, index_path: Path) -> Dict[str, IndexStatus
         offset = nul + 1 + padding
 
         path = name.decode("utf-8", "surrogateescape")
-        entries[path] = IndexStatusEntry(mode=mode, size=size, mtime=mtime_sec)
+        entries[path] = IndexStatusEntry(
+            mode=mode, size=size, mtime=mtime_sec, mtime_nsec=mtime_nsec
+        )
 
     return entries
 
@@ -208,7 +219,30 @@ def scoped_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str
     (same size, same mtime-second as the index entry) reads `"clean"`
     WITHOUT its bytes ever being read. A stat MISMATCH (size or mtime
     differs) reads `"candidate"` -- settling it needs a content hash,
-    which is the caller's job, not this function's. A path present in the
+    which is the caller's job, not this function's.
+
+    THE MTIME COMPARISON IS TO THE NANOSECOND, not the second. A
+    second-granularity compare is the racily-clean hole git's own
+    `is_racy_timestamp` exists to plug: a same-size rewrite landing inside
+    the index entry's own mtime-second matches on `(size, mtime_sec)` and
+    reads a false `"clean"`. That is not hypothetical here -- the archival
+    path writes via `os.replace` and asks immediately after, squarely
+    inside that window. Git settles a racy entry by hashing the worktree
+    bytes; this module cannot (see the negative-spec), so it closes the
+    window at the source instead, on the sub-second half of the index's
+    8-byte mtime field that a second-granularity read was discarding.
+
+    GUARDED ON A NONZERO STORED `mtime_nsec`. A git that recorded no
+    sub-second stat writes `0` there, and comparing that against a real
+    worktree nanosecond would read every clean path as `"candidate"` --
+    which is NOT the harmless conservative direction it looks like:
+    `git_native :: _v2_state_records_chunked` maps `"candidate"` to a
+    non-`.` `y`, so a blanket false-`candidate` reads as worktree
+    divergence on every freshly-staged path and fails the commit loud.
+    A zero therefore falls back to the second-granularity compare, keeping
+    the pre-existing (narrower) exposure rather than inventing a wider one.
+
+    A path present in the
     index but absent on disk reads `"deleted"`. A path absent from the
     index entirely reads `"untracked"`, regardless of whether it exists on
     disk (an untracked file that happens to exist is still `"untracked"`;
@@ -235,10 +269,12 @@ def scoped_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str
             verdicts[rel] = "untracked"
             continue
 
-        if cached.size == (st.st_size & 0xFFFFFFFF) and cached.mtime == int(st.st_mtime):
-            verdicts[rel] = "clean"
-        else:
-            verdicts[rel] = "candidate"
+        stat_matches = cached.size == (st.st_size & 0xFFFFFFFF) and cached.mtime == int(
+            st.st_mtime
+        )
+        if stat_matches and cached.mtime_nsec:
+            stat_matches = cached.mtime_nsec == st.st_mtime_ns % 1_000_000_000
+        verdicts[rel] = "clean" if stat_matches else "candidate"
 
     return verdicts
 

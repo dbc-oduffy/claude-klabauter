@@ -124,6 +124,9 @@ def _resolved_sid() -> Optional[str]:
         return None
 
 
+_CALLER = "coordinator_core.invoke.__main__"
+
+
 def _record_dispatch_process_time(msg: dict, t_start: float, process_start: float) -> None:
     """Append one process-time sample for this module's cold dispatch branch.
 
@@ -158,6 +161,7 @@ def _record_dispatch_process_time(msg: dict, t_start: float, process_start: floa
             t_start=t_start,
             repo_root=resolve_request_repo(msg) or resolve_caller_cwd(msg),
             sid=_resolved_sid(),
+            caller=_CALLER,
         )
     except Exception:
         pass
@@ -1179,7 +1183,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         _pt_process_start = _time.process_time()
         try:
             with contextlib.redirect_stdout(_handler_stdout):
-                response = loop.run_until_complete(dispatch_message(msg))
+                response = loop.run_until_complete(dispatch_message(msg, caller=_CALLER))
         finally:
             _record_dispatch_process_time(msg, _pt_t_start, _pt_process_start)
             loop.close()

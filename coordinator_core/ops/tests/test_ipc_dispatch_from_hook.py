@@ -83,7 +83,7 @@ def test_happy_path_returns_handler_result(_register_test_ops):
 def test_origin_worktree_stamped_when_supplied(_register_test_ops, monkeypatch):
     captured = {}
 
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         captured["msg"] = msg
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -100,7 +100,7 @@ def test_origin_worktree_omitted_when_absent_or_empty(
 ):
     captured = {}
 
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         captured["msg"] = msg
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -114,6 +114,23 @@ def test_origin_worktree_omitted_when_absent_or_empty(
         "empty/absent identically, so carrying '' would be a no-op change but a "
         "deviation from the chosen contract."
     )
+
+
+def test_dispatch_from_hook_declares_its_own_caller(_register_test_ops, monkeypatch):
+    """C16: `dispatch_from_hook` is one of `dispatch_message`'s own call
+    sites and must declare `caller=` explicitly rather than relying on the
+    stack-walk fallback."""
+    captured = {}
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        captured["caller"] = caller
+        return {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+    monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
+
+    ipc.dispatch_from_hook(_ENVELOPE_CAPTURE_OP, {})
+
+    assert captured["caller"] == "coordinator_core.ipc.dispatch_from_hook"
 
 
 def test_unknown_op_raises_hook_dispatch_error_method_not_found():
@@ -133,7 +150,7 @@ def test_handler_exception_surfaces_as_hook_dispatch_error(_register_test_ops):
 
 
 def test_absent_result_key_returns_empty_dict(_register_test_ops, monkeypatch):
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         # Simulate a (hypothetical) success response missing "result" entirely.
         return {"jsonrpc": "2.0", "id": 1}
 
@@ -184,7 +201,7 @@ def test_ops_run_sequentially_in_order_under_one_loop(_register_test_ops, monkey
     run_calls = {"n": 0}
     real_run = asyncio.run
 
-    async def _recording_dispatch_message(msg):
+    async def _recording_dispatch_message(msg, *, caller=None):
         seen.append(msg["method"])
         loop_ids.append(id(asyncio.get_running_loop()))
         return {"jsonrpc": "2.0", "id": 1, "result": {"m": msg["method"]}}
@@ -212,7 +229,7 @@ def test_ops_origin_worktree_follows_omit_empty_rule(
 ):
     captured: list = []
 
-    async def _fake_dispatch_message(msg):
+    async def _fake_dispatch_message(msg, *, caller=None):
         captured.append(msg)
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -225,6 +242,25 @@ def test_ops_origin_worktree_follows_omit_empty_rule(
     assert len(captured) == 2
     for msg in captured:
         assert msg.get("_origin_worktree") == expected
+
+
+def test_dispatch_ops_from_hook_declares_its_own_caller(_register_test_ops, monkeypatch):
+    """C16 sibling: `dispatch_ops_from_hook` declares its own caller string,
+    distinct from `dispatch_from_hook`'s, for each op in the batch."""
+    captured: list = []
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        captured.append(caller)
+        return {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+    monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
+
+    ipc.dispatch_ops_from_hook([(_ECHO_OP, {}), (_ECHO_OP, {})])
+
+    assert captured == [
+        "coordinator_core.ipc.dispatch_ops_from_hook",
+        "coordinator_core.ipc.dispatch_ops_from_hook",
+    ]
 
 
 def test_empty_ops_returns_empty_without_opening_a_loop(monkeypatch):

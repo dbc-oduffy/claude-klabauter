@@ -107,11 +107,14 @@ before the JS shim was deleted).
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import List, Optional
 
 from coordinator_core.session import claims
 from coordinator_core.session import liveness
+from coordinator_core.session import scope
+from coordinator_core.session import touch_record
 
 
 def _cmd_live_session_ids(_args: List[str]) -> int:
@@ -134,13 +137,54 @@ def _cmd_claim_path(args: List[str]) -> int:
             f"pass a repo-relative path or use `self-claim <path>`\n"
         )
         return 0
+    # The caller names a legacy ``touched.txt``; the claim goes to that dir's
+    # ``touch-record.jsonl`` sink instead. No claim reader unions the old
+    # dialect any more (2026-08-26) -- a write in it would be a claim nothing
+    # can see, which is the inverted-safety shape ``claim_index`` was repaired
+    # for.
+    #
+    # ``session_id`` is REQUIRED and validated by ``encode_line``: an empty one
+    # is a malformed line the reader degrades on, so an agent dir takes its
+    # OWNER's id from the ``em-session-id.txt`` back-pointer beside it (the same
+    # identity ``claim_index`` attributes an agent's claims to) and its own dir
+    # name as ``agent_id``. No back-pointer means no attributable claimant --
+    # refused and named, never written under a guessed id.
+    claim_dir = os.path.dirname(touched_file)
+    dir_name = os.path.basename(claim_dir)
+    is_agent_dir = os.path.basename(os.path.dirname(claim_dir)) == ".agents"
+    if is_agent_dir:
+        session_id = _agent_owner_sid(claim_dir)
+        if not session_id:
+            sys.stderr.write(
+                f"js_bridge_cli: agent dir {claim_dir!r} has no readable "
+                f"em-session-id.txt — not claiming {entry!r}\n"
+            )
+            return 0
+    else:
+        session_id = dir_name
+    sink = os.path.join(claim_dir, scope._TOUCH_RECORD_FILENAME)
     try:
-        claims.atomic_dedup_append(touched_file, normalized or "")
+        touch_record.append_event(
+            sink,
+            session_id=session_id,
+            agent_id=dir_name if is_agent_dir else None,
+            verb=touch_record.VERB_TOUCH,
+            path=normalized or "",
+        )
     except (OSError, ValueError) as exc:
         sys.stderr.write(
-            f"js_bridge_cli: atomic_dedup_append failed — skipping self-claim for {entry}: {exc}\n"
+            f"js_bridge_cli: claim append failed — skipping self-claim for {entry}: {exc}\n"
         )
     return 0
+
+
+def _agent_owner_sid(agent_dir: str) -> str:
+    """First line of the agent dir's ``em-session-id.txt``, or ``""``."""
+    try:
+        with open(os.path.join(agent_dir, "em-session-id.txt"), encoding="utf-8") as fh:
+            return fh.readline().strip()
+    except OSError:
+        return ""
 
 
 def _cmd_self_claim(args: List[str]) -> int:

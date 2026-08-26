@@ -48,6 +48,7 @@ import pytest
 
 from coordinator_core.session import claims
 from coordinator_core.session import core
+from coordinator_core.session import js_bridge_cli
 from coordinator_core.session import liveness
 from coordinator_core.session import scope
 
@@ -185,29 +186,35 @@ class TestLiveSessionIdsTransport:
 
 
 class TestClaimPathTransport:
-    def test_appends_entry_matches_in_process_dedup_append(self, tmp_path):
+    def test_appends_entry_matches_in_process_claim(self, tmp_path):
         repo = _make_repo(tmp_path)
         entry = "coordinator/foo.py"
-        touched_inprocess = repo / "touched-inprocess.txt"
-        touched_subprocess = repo / "touched-subprocess.txt"
+        inprocess_dir = repo / "inprocess"
+        subprocess_dir = repo / "subprocess"
+        inprocess_dir.mkdir()
+        subprocess_dir.mkdir()
+        touched_inprocess = inprocess_dir / "touched.txt"
+        touched_subprocess = subprocess_dir / "touched.txt"
 
         # In-process oracle for THIS input (not an external oracle — the
-        # library function this CLI is a thin adapter over).
-        claims.atomic_dedup_append(str(touched_inprocess), entry)
-        claims.atomic_dedup_append(str(touched_inprocess), entry)  # dedup
+        # library entry point this CLI transport is a thin shell over).
+        js_bridge_cli.main(["claim-path", str(touched_inprocess), entry])
+        js_bridge_cli.main(["claim-path", str(touched_inprocess), entry])
 
         result1 = _run_cli(repo, ["claim-path", str(touched_subprocess), entry])
         result2 = _run_cli(repo, ["claim-path", str(touched_subprocess), entry])
 
         assert result1.returncode == 0
         assert result2.returncode == 0
-        # Review: coordinatorcode-reviewer-7ca5d82a Finding 1 — event-line format
-        # (scope.format_touch_event), not a bare path. Keep this as an equivalence
-        # assertion between the CLI transport and the in-process oracle (the point
-        # of this test) — parse both sides via scope.parse_touch_event rather than
-        # pinning either to a literal (timestamped) line.
-        lines_subprocess = touched_subprocess.read_text(encoding="utf-8").splitlines()
-        lines_inprocess = touched_inprocess.read_text(encoding="utf-8").splitlines()
+        # Both sides write the record, not the legacy file, and both fold to a
+        # single surviving claim at the read — the repeated call is deduped by
+        # last-verb-wins rather than at the write.
+        lines_subprocess, _d1 = scope._read_touch_record_as_legacy_lines(
+            subprocess_dir / scope._TOUCH_RECORD_FILENAME
+        )
+        lines_inprocess, _d2 = scope._read_touch_record_as_legacy_lines(
+            inprocess_dir / scope._TOUCH_RECORD_FILENAME
+        )
         assert len(lines_subprocess) == len(lines_inprocess) == 1
         parsed_subprocess = scope.parse_touch_event(lines_subprocess[0])
         parsed_inprocess = scope.parse_touch_event(lines_inprocess[0])
@@ -243,11 +250,15 @@ class TestSelfClaimTransport:
         )
         assert result.returncode == 0
 
-        touched = repo / ".git" / "coordinator-sessions" / "sidA" / "touched.txt"
-        assert touched.is_file()
-        # Review: coordinatorcode-reviewer-7ca5d82a Finding 1 — event-line format,
-        # parse rather than assert exact-membership of the bare path.
-        lines = touched.read_text(encoding="utf-8").splitlines()
+        # `self_claim` has written the record, not the retired `touched.txt`,
+        # since C6; the seam re-renders it as an event line to parse.
+        sink = (
+            repo / ".git" / "coordinator-sessions" / "sidA" / scope._TOUCH_RECORD_FILENAME
+        )
+        assert sink.is_file()
+        assert not (sink.parent / "touched.txt").exists()
+        lines, degraded = scope._read_touch_record_as_legacy_lines(sink)
+        assert not degraded
         assert len(lines) == 1
         verb, _ts, parsed_path = scope.parse_touch_event(lines[0])
         assert (verb, parsed_path) == ("T", path)

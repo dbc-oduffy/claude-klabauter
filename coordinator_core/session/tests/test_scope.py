@@ -69,6 +69,35 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 # ---------------------------------------------------------------------------
 
 
+def _agent_claim(agent_dir, *paths, owner_sid=None):
+    """Record an agent dir's claims in the one dialect its readers read.
+
+    Was a bare-path ``touched.txt`` write until the compat union came out
+    (2026-08-26); such a file is now inert, so a fixture that writes one
+    silently claims nothing. ``owner_sid`` defaults to the dir's own
+    ``em-session-id.txt`` back-pointer, which is the identity every reader
+    attributes an agent's claims to.
+    """
+    agent_dir = Path(agent_dir)
+    if owner_sid is None:
+        backptr = agent_dir / "em-session-id.txt"
+        owner_sid = (
+            backptr.read_text(encoding="utf-8").splitlines()[0].strip()
+            if backptr.is_file()
+            else agent_dir.name
+        )
+    sink = agent_dir / scope._TOUCH_RECORD_FILENAME
+    for entry in paths:
+        touch_record.append_event(
+            sink,
+            session_id=owner_sid,
+            agent_id=agent_dir.name,
+            verb=touch_record.VERB_TOUCH,
+            path=entry,
+        )
+    return sink
+
+
 def _make_repo(tmp_path):
     # Review: staff-eng F12 — check=True on every fixture-setup git call: a
     # silent fixture-setup failure (e.g. a misconfigured test-runner git)
@@ -1793,9 +1822,7 @@ class TestComputeScope:
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
         # Clean repo-relative entry, post-C2 dialect.
-        (agent_dir / "touched.txt").write_text(
-            "coordinator/agent_owned.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "coordinator/agent_owned.py")
 
         # The dirty file itself lives at that same repo-relative path.
         (repo / "coordinator").mkdir()
@@ -1807,13 +1834,21 @@ class TestComputeScope:
         assert "coordinator/agent_owned.py" not in result.orphans
         assert ("coordinator/agent_owned.py", "em-owner") in result.skipped
 
-    def test_unreadable_agent_touched_txt_withholds_uncontested_candidate(
-        self, tmp_path, monkeypatch
+    def test_undecodable_agent_claim_record_withholds_uncontested_candidate(
+        self, tmp_path
     ):
-        """Finding 3 (C8 fail-closed regression): an unreadable INDIVIDUAL
-        agent touched.txt under .agents/<aid>/ must withhold the otherwise-
-        uncontested candidate from my_scope, mirroring the per-session
-        unreadable-touched.txt tests above."""
+        """Finding 3 (C8 fail-closed regression), re-pinned on the record
+        dialect: an agent claim record under .agents/<aid>/ that cannot be read
+        in full must withhold the otherwise-uncontested candidate from my_scope,
+        mirroring the per-session unreadable-claim tests above.
+
+        The degrade is triggered by a line that will not decode rather than by a
+        chmod: it is the same typed AC6 signal an unreadable family member
+        raises, and unlike a permission denial it behaves identically on
+        Windows. What must never happen is the quiet collapse of "I could not
+        read this claimant" into "this claimant holds nothing" -- a negative is
+        the only answer that authorizes a write.
+        """
         repo = _make_repo(tmp_path)
         core.init("em-owner", cwd=str(repo))
         core.init("bystander", cwd=str(repo))
@@ -1822,19 +1857,12 @@ class TestComputeScope:
         agent_dir = base / ".agents" / "agent-unreadable"
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
-        agent_touched = agent_dir / "touched.txt"
-        agent_touched.write_text("maybe_foreign.py\n", encoding="utf-8")
+        sink = _agent_claim(agent_dir, "maybe_foreign.py")
+        with open(sink, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("{not json at all}\n")
 
         scope.touch("bystander", "maybe_foreign.py", cwd=str(repo))
 
-        orig_read_text = Path.read_text
-
-        def _boom(self, *a, **k):
-            if self == agent_touched:
-                raise OSError("simulated read failure")
-            return orig_read_text(self, *a, **k)
-
-        monkeypatch.setattr(Path, "read_text", _boom)
         result = scope.compute_scope("bystander", cwd=str(repo))
 
         assert "maybe_foreign.py" not in result.my_scope
@@ -1946,9 +1974,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         agent_dir.mkdir(parents=True)
         backptr = agent_dir / "em-session-id.txt"
         backptr.write_text("em-owner\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text(
-            "maybe_foreign.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "maybe_foreign.py")
 
         scope.touch("bystander", "maybe_foreign.py", cwd=str(repo))
 
@@ -1969,12 +1995,24 @@ class TestC0AgentDirJsonlOnlyUnion:
     def test_peer_agent_dot_agents_directory_entry_expands_to_owning_em_session(
         self, tmp_path
     ):
-        """Finding 4: a directory entry (trailing "/") in a peer agent's
-        touched.txt must expand via _dirty_files_under and resolve a dirty
-        file under that directory to skipped with the owning em-session-id
-        -- pinned at THIS call site (Step 3b), not just safe_commit_offer's
-        own suite. Post-C2, the entry is a clean repo-root-relative
-        directory path -- same dialect as a session's own touched.txt."""
+        """Was Finding 4's pin that a directory entry (trailing "/") in a peer
+        agent's claim record expands via _dirty_files_under. THE RECORD DIALECT
+        CANNOT EXPRESS ONE: ``touch_record.encode_line`` canonicalizes the
+        trailing separator away, so "coordinator/agent_dir_owned/" is recorded
+        as the FILE path "coordinator/agent_dir_owned" and expands to nothing.
+
+        That is not a regression this test should fail on. A directory claim
+        could only ever come from the bare-path legacy dialect, whose corpus is
+        drained and whose writers are gone; ``track_touched_files`` records one
+        edited FILE per fire and has never emitted a directory. What is pinned
+        now is the shape that remains: the dirty file under that directory is
+        NOT silently adopted into a bystander's scope. It lands in orphans --
+        unclaimed, which is what it now genuinely is -- rather than being
+        attributed to the agent's owner.
+
+        If a directory-shaped claim is ever needed again, it needs a real
+        representation in the record dialect first; do not restore it by
+        reviving a second reader for a dialect nothing writes."""
         repo = _make_repo(tmp_path)
         core.init("em-owner", cwd=str(repo))
         core.init("bystander", cwd=str(repo))
@@ -1984,9 +2022,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
         # Clean repo-relative directory entry (trailing slash), post-C2 dialect.
-        (agent_dir / "touched.txt").write_text(
-            "coordinator/agent_dir_owned/\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "coordinator/agent_dir_owned/")
 
         (repo / "coordinator" / "agent_dir_owned").mkdir(parents=True)
         (repo / "coordinator" / "agent_dir_owned" / "inner.py").write_text("z")
@@ -1995,11 +2031,9 @@ class TestC0AgentDirJsonlOnlyUnion:
         result = scope.compute_scope("bystander", cwd=str(repo))
 
         assert "coordinator/agent_dir_owned/inner.py" not in result.my_scope
-        assert "coordinator/agent_dir_owned/inner.py" not in result.orphans
-        assert (
-            "coordinator/agent_dir_owned/inner.py",
-            "em-owner",
-        ) in result.skipped
+        assert "coordinator/agent_dir_owned/inner.py" in result.orphans
+        skipped_paths = {path for path, _owner in result.skipped}
+        assert "coordinator/agent_dir_owned/inner.py" not in skipped_paths
 
     def test_missing_backptr_with_recent_agent_activity_fails_closed_not_swept(
         self, tmp_path
@@ -2036,9 +2070,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         agent_dir.mkdir(parents=True)
         # Real, synchronously-written activity — no em-session-id.txt yet.
         # Freshly written -> mtime is "now", well inside the recency window.
-        (agent_dir / "touched.txt").write_text(
-            "test_handoff_author_fork.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "test_handoff_author_fork.py")
 
         (repo / "test_handoff_author_fork.py").write_text("z")
         (repo / "sweeper_own_unrelated.py").write_text("z")
@@ -2084,9 +2116,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         base = Path(core.sessions_dir(cwd=str(repo)))
         agent_dir = base / ".agents" / "agent-inflight"
         agent_dir.mkdir(parents=True)
-        (agent_dir / "touched.txt").write_text(
-            "race_window_file.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "race_window_file.py")
         (repo / "race_window_file.py").write_text("z")
 
         result = scope.compute_scope("sweeper", cwd=str(repo))
@@ -2151,9 +2181,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         agent_dir = base / ".agents" / "agent-background-done"
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("solo-bg\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text(
-            "background_agent_authored.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "background_agent_authored.py")
 
         (repo / "background_agent_authored.py").write_text("z")
 
@@ -2207,9 +2235,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         agent_dir = base / ".agents" / "agent-mine"
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("solo\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text(
-            "subagent_authored.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "subagent_authored.py")
 
         (repo / "subagent_authored.py").write_text("z")
 
@@ -2278,9 +2304,7 @@ class TestComputeScopeLiveness:
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
         # Clean repo-relative entry, post-C2 dialect (matches the on-disk
         # dirty file's own path -- see test_peer_agent_dot_agents_claim_...).
-        (agent_dir / "touched.txt").write_text(
-            "coordinator/agent_owned.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "coordinator/agent_owned.py")
         (repo / "coordinator").mkdir()
         (repo / "coordinator" / "agent_owned.py").write_text("z")
 
@@ -2711,9 +2735,7 @@ class TestComputeScopeLiveness:
         agent_dir = base / ".agents" / "agent-xyz"
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text(
-            "coordinator/agent_owned.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "coordinator/agent_owned.py")
         (repo / "coordinator").mkdir()
         (repo / "coordinator" / "agent_owned.py").write_text("z")
 
@@ -2838,9 +2860,7 @@ class TestAttribution:
         agent_dir = base / ".agents" / "agent-xyz"
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text(
-            "coordinator/agent_owned.py\n", encoding="utf-8"
-        )
+        _agent_claim(agent_dir, "coordinator/agent_owned.py")
         (repo / "coordinator").mkdir()
         (repo / "coordinator" / "agent_owned.py").write_text("z")
 

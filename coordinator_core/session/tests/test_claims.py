@@ -1389,13 +1389,48 @@ class TestClearClaimIfDead:
 # ---------------------------------------------------------------------------
 
 
+def _write_agent_claims(agent_dir, agent_id, owner_sid, paths):
+    """Record an agent's claims in the one dialect its readers read.
+
+    The bare-path ``touched.txt`` these fixtures used until 2026-08-26 stopped
+    being a claim surface when the compat union came out, so a fixture writing
+    it now records nothing at all — silently, which is why this is a helper and
+    not four inline writes.
+    """
+    sink = Path(agent_dir) / scope._TOUCH_RECORD_FILENAME
+    for entry in paths:
+        # Callers pass either a bare path or a `'<verb> <ts> <path>'` journal
+        # line; the latter is how these tests express release and re-claim
+        # ordering, so it is decoded into a real event rather than recorded as
+        # a path that happens to start with "T ".
+        verb, _ts, parsed = scope.parse_touch_event(entry)
+        if verb in (touch_record.VERB_TOUCH, touch_record.VERB_RELEASE) and parsed != entry:
+            path, event_verb = parsed, verb
+        else:
+            path, event_verb = entry, touch_record.VERB_TOUCH
+        touch_record.append_event(
+            sink,
+            session_id=owner_sid,
+            agent_id=agent_id,
+            verb=event_verb,
+            path=path,
+        )
+    return sink
+
+
 def _write_touch_claim(repo, sid, path, when=None):
     sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
-    touched = sdir / "touched.txt"
-    with open(touched, "a", encoding="utf-8") as fh:
-        fh.write(scope.format_touch_event("T", path, when) + "\n")
-    return touched
+    sink = sdir / scope._TOUCH_RECORD_FILENAME
+    touch_record.append_event(
+        sink,
+        session_id=sid,
+        agent_id=None,
+        verb=touch_record.VERB_TOUCH,
+        path=path,
+        timestamp=when.timestamp() if hasattr(when, "timestamp") else when,
+    )
+    return sink
 
 
 class TestClearClaimIfDeadArtifactClass:
@@ -1518,33 +1553,35 @@ class TestReleasePathClaimEverywhere:
                 last_verb = verb
         return last_verb, degraded
 
-    def test_legacy_only_claim_still_resolves_while_union_lives(self, tmp_path):
-        """AC4: a claimant whose T event for *path* lives ONLY in the legacy
-        `touched.txt` sibling (the modern `touch-record.jsonl` sink exists,
-        claiming an unrelated path, so the enumerator reaches this claimant
-        at all) must still be released while `scope._read_touch_record_as_
-        legacy_lines`'s compat union lives. Today `_release_from_touch_
-        record` reads only the jsonl family (`touch_record._read_stream_
-        claims`), never the sibling `touched.txt`, so this claim is
-        invisible to the release path and is never released."""
+    def test_legacy_only_claim_is_not_a_claim_surface(self, tmp_path):
+        """The retired half of AC4, kept as its negative. A sibling
+        ``touched.txt`` line used to be a real claim, readable only through
+        ``scope._read_touch_record_as_legacy_lines``' compat union; since that
+        union came out (2026-08-26) it records nothing.
+
+        This is safe ONLY because no writer can produce one and none is left on
+        disk -- both proven before the union was deleted, and both re-provable:
+        ``ops.session.legacy_touch_corpus_drain_check`` (existence) and
+        ``ops.session.legacy_touch_corpus_straggler_check`` (content, walking
+        ``.agents/<aid>/`` too) each read zero. If either ever reads non-zero
+        again, a writer came back and this test is pinning a live hole, not a
+        retired dialect."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        scope.touch("mine", "other.py", cwd=str(repo))  # ensures the jsonl sink exists
+        scope.touch("mine", "other.py", cwd=str(repo))
         sdir = Path(core.session_dir("mine", cwd=str(repo)))
-        with open(sdir / "touched.txt", "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(scope.format_touch_event("T", "legacy_only.py") + "\n")
-        base = core.sessions_dir(cwd=str(repo))
+        (sdir / "touched.txt").write_text(
+            scope.format_touch_event("T", "legacy_only.py") + "\n", encoding="utf-8"
+        )
         sink_path = sdir / scope._TOUCH_RECORD_FILENAME
 
-        before, _degraded = self._last_verb_via_union_read(sink_path, "legacy_only.py")
-        assert before == "T"
+        verb, _degraded = self._last_verb_via_union_read(sink_path, "legacy_only.py")
+        assert verb is None
 
-        claims._release_path_claim_everywhere(
-            "legacy_only.py", {"mine"}, base, cwd=str(repo)
-        )
-
-        after, _degraded = self._last_verb_via_union_read(sink_path, "legacy_only.py")
-        assert after == "R"
+        base = core.sessions_dir(cwd=str(repo))
+        assert claim_index.lookup(["legacy_only.py"], sessions_dir=base)[
+            "legacy_only.py"
+        ] == []
 
 
 # ---------------------------------------------------------------------------
@@ -1702,7 +1739,7 @@ class TestMyAgentTouched:
         adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / aid
         adir.mkdir(parents=True, exist_ok=True)
         (adir / "em-session-id.txt").write_text(em_sid + "\n")
-        (adir / "touched.txt").write_text("\n".join(paths) + "\n")
+        _write_agent_claims(adir, aid, em_sid, paths)
         return adir
 
     def test_required_arg_raises(self):
@@ -1860,23 +1897,17 @@ class TestMyAgentTouched:
         out = claims.my_agent_touched("my-sid", mode="exact", cwd=str(repo))
         assert out == ["src/jsonl_only.py"]
 
-    def test_both_dialects_resolve_from_same_agent_dir(self, tmp_path):
-        """Both a legacy `touched.txt` line and a `touch-record.jsonl` event
-        for the same agent dir surface — the union seam's contract, not a
-        single-dialect parser."""
-        from coordinator_core.session import touch_record
-
+    def test_legacy_sibling_beside_a_record_contributes_nothing(self, tmp_path):
+        """Was ``test_both_dialects_resolve_from_same_agent_dir``, which pinned
+        the union's contract. With the union gone the record is the only claim
+        surface: a legacy sibling in the SAME agent dir is inert, and the agent
+        dir's own record still resolves normally."""
         repo = _make_repo(tmp_path)
-        adir = self._make_agent(repo, "a1", "my-sid", ["src/legacy.py"])
-        touch_record.append_event(
-            adir / scope._TOUCH_RECORD_FILENAME,
-            session_id="my-sid",
-            agent_id="a1",
-            verb=touch_record.VERB_TOUCH,
-            path="src/jsonl.py",
-        )
+        adir = self._make_agent(repo, "a1", "my-sid", ["src/jsonl.py"])
+        (adir / "touched.txt").write_text("src/legacy.py\n", encoding="utf-8")
+
         out = claims.my_agent_touched("my-sid", mode="exact", cwd=str(repo))
-        assert set(out) == {"src/legacy.py", "src/jsonl.py"}
+        assert out == ["src/jsonl.py"]
 
     def test_empty_agents_dir_is_genuinely_silent(self, tmp_path, capsys):
         """The negative case for the above: a genuinely-empty (but readable)

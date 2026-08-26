@@ -45,6 +45,7 @@ from __future__ import annotations
 import contextvars
 import ntpath
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -2842,6 +2843,214 @@ def _hash_object_stdin_paths(
     )
 
 
+def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
+    """Best-effort `[core] autocrlf = ...` read from one git config file --
+    same simple line-scanning shape as `_read_config_user_section` above,
+    for the same reason: a full git-config parser is out of scope for a
+    fast-path check whose failure just means "take the ladder", never a
+    wrong blob. Returns the LAST `autocrlf` value found in the `[core]`
+    section (git's own last-wins precedence within one file), lower-cased,
+    or `None` if the file is unreadable or carries no such key."""
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    value: Optional[str] = None
+    in_core = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_core = stripped.lower().startswith("[core]")
+            continue
+        if in_core and "=" in stripped:
+            key, _, raw_value = stripped.partition("=")
+            if key.strip().lower() == "autocrlf":
+                value = raw_value.strip().strip('"').lower()
+    return value
+
+
+def _system_gitconfig_paths() -> Tuple[Path, ...]:
+    """Candidate SYSTEM git config locations, resolved without a spawn.
+
+    C3d, and it is why C3c's normalizer was dead code on arrival: Git for
+    Windows writes `core.autocrlf=true` into the SYSTEM config
+    (`<install>/etc/gitconfig`), NOT into the repo config and NOT into
+    `~/.gitconfig`. Measured on the box this was found on:
+
+        $ git config --show-origin --get-all core.autocrlf
+        file:<git-install-prefix>/etc/gitconfig    true  # abs-path-ok: quoted git output
+        $ git config --global --get core.autocrlf   # exit 1, unset
+
+    A chain that reads only repo-local and global therefore resolves
+    `False` on a stock Windows install, the caller refuses every CR-bearing
+    path, and a verified-correct in-process blob write never executes. The
+    ordering `shutil.which` gives us also covers a non-default install
+    prefix, which a hardcoded `C:\\Program Files` would miss."""
+    candidates: List[Path] = []
+    git_exe = shutil.which("git")
+    if git_exe:
+        # <prefix>/bin/git.exe -> <prefix>/etc/gitconfig, and Git for
+        # Windows' own <prefix>/mingw64/etc/gitconfig.
+        bin_dir = Path(git_exe).resolve().parent
+        prefix = bin_dir.parent
+        candidates.append(prefix / "etc" / "gitconfig")
+        candidates.append(prefix / "mingw64" / "etc" / "gitconfig")
+        candidates.append(prefix.parent / "etc" / "gitconfig")
+    candidates.append(Path("/etc/gitconfig"))
+    seen: Set[str] = set()
+    ordered: List[Path] = []
+    for path in candidates:
+        key = str(path).lower()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(path)
+    return tuple(ordered)
+
+
+def _repo_autocrlf_true(root: Path) -> bool:
+    """Is `core.autocrlf` resolvable, from sources this module can read
+    without a spawn, to exactly `true`? Reads git's full layer stack in
+    git's own precedence -- system, then global `~/.gitconfig`, then
+    repo-local (`core.*` is not worktree-private, same COMMON-dir reasoning
+    as `_resolve_commit_identity`) -- with LAST WINS, so a repo-local
+    `false` beats a system `true`. `GIT_CONFIG_SYSTEM` and
+    `GIT_CONFIG_NOSYSTEM` are honoured because real git honours them and a
+    spawn-free reader that ignored them would disagree with the tool it is
+    reproducing.
+
+    Deliberately narrow: `autocrlf=input` performs the SAME checkin-side
+    CRLF->LF conversion `true` does (they differ only at checkout, which
+    this module never touches), but only `true` has been verified
+    byte-identical against real `git hash-object` (C3c spike,
+    docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md)
+    -- widening to `input` without its own corpus run would be exactly
+    the un-spiked claim that spike exists to forbid. `false`/unset/any
+    other value (including a read failure) returns `False`, which routes
+    the caller to the spawn ladder -- never a silent wrong guess."""
+    if os.environ.get("GIT_CONFIG_NOSYSTEM"):
+        system_paths: Tuple[Path, ...] = ()
+    elif os.environ.get("GIT_CONFIG_SYSTEM"):
+        system_paths = (Path(os.environ["GIT_CONFIG_SYSTEM"]),)
+    else:
+        system_paths = _system_gitconfig_paths()
+
+    # LAST WINS, which is git's own precedence and the opposite of a
+    # first-hit return. Read every layer low-to-high and keep overwriting:
+    # system, then global, then repo-local. A repo that pins
+    # `core.autocrlf=false` locally MUST beat a system `true`, and a
+    # first-hit walk in this order would have returned the system value and
+    # normalized content the repo asked to be left alone.
+    value: Optional[str] = None
+    for config_path in (
+        *system_paths,
+        Path.home() / ".gitconfig",
+        resolve_git_common_dir(root) / "config",
+    ):
+        found = _read_config_core_autocrlf(config_path)
+        if found is not None:
+            value = found
+    return value == "true"
+
+
+def _text_attribute_pinned(root: Path, normalized: str) -> Optional[str]:
+    """`None` when no repo-local attributes file assigns `text`, `-text`,
+    `text=...`, or `eol=...` to `normalized`, else a diagnostic naming the
+    file and the pattern that does.
+
+    Same traversal, same candidate ordering, same safe-direction bias as
+    `_clean_filter_may_apply` (carried, not re-derived) -- an `[attr]`
+    macro line carrying any of these tokens refuses the path outright,
+    same as that function's `filter=` macro case, for the same reason:
+    resolving macro expansion is a second pass this function does not
+    implement. `_autocrlf_checkin_normalize`'s corpus was only run
+    against paths with NO forced text/eol/binary attribute (git's default
+    `text=auto` disposition under `core.autocrlf=true`) -- a path this
+    function flags is a disposition the spike never measured, so
+    `_hash_worktree_blobs` refuses it to the spawn ladder rather than
+    guessing that the auto heuristic still applies."""
+    parent = Path(normalized).parent
+    parts = [] if parent == Path(".") else list(parent.parts)
+
+    candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
+    for depth in range(len(parts) + 1):
+        candidates.append(
+            (
+                root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME,
+                "/".join(normalized.split("/")[depth:]),
+            )
+        )
+
+    for candidate, rel_to_attrs_dir in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            code = line.split("#", 1)[0].strip()
+            if not code:
+                continue
+            tokens = code.split()
+            attr_tokens = tokens[1:] if len(tokens) > 1 else []
+            has_text_directive = any(
+                tok in ("text", "-text") or tok.startswith("text=") or tok.startswith("eol=")
+                for tok in attr_tokens
+            )
+            if not has_text_directive:
+                continue
+            if code.startswith("[attr]"):
+                return (
+                    f"{candidate} defines an `[attr]` macro carrying a "
+                    "text/eol directive -- macro expansion is not resolved "
+                    "here, so the path is refused rather than guessed"
+                )
+            pattern = tokens[0]
+            if _attributes_pattern_matches(pattern, rel_to_attrs_dir):
+                return (
+                    f"{candidate} routes {pattern!r} through a text/eol "
+                    "attribute, and that pattern matches this path"
+                )
+    return None
+
+
+def _autocrlf_checkin_normalize(content: bytes) -> bytes:
+    """Reproduce git's `core.autocrlf=true`, default-attribute (`text=
+    auto`) checkin-side normalization for `content`, IN PROCESS, to
+    byte-identity with `git hash-object --path=<p> --stdin < <p>` (C3c
+    spike, docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-
+    times.md -- verified against a corpus of CRLF-only, LF-only, mixed,
+    lone-CR, NUL-containing, and >8000-byte content run against a real
+    `git hash-object` subprocess, byte-identical in every case; this is
+    NOT a re-derivation of git's own convert.c logic, it is the transform
+    that reproduced it).
+
+    Two refusal-shaped no-ops, matching what real git leaves untouched:
+    a NUL byte ANYWHERE in `content` (not sampled/truncated -- the spike's
+    >8000-byte-with-late-NUL case confirmed a full-buffer scan, not
+    xdiff's diff-heuristic sample) marks the blob binary, so it passes
+    through verbatim; a CR byte not immediately followed by LF, ANYWHERE
+    in `content`, blocks conversion of the WHOLE buffer, not just the
+    offending line (the spike's `trailing_lone_cr_at_end` case: a single
+    well-formed CRLF pair earlier in the same buffer was left
+    unconverted once a later lone CR appeared). Only when neither
+    condition holds does git convert every `\\r\\n` pair to `\\n` --
+    exactly `bytes.replace`, with lone CR/LF bytes elsewhere in the
+    buffer already ruled out by the two checks above.
+
+    Caller's responsibility, not this function's: this is only correct
+    for a path with NO repo-local `text`/`-text`/`eol=` attribute pin
+    (`_text_attribute_pinned`) under a repo-config-resolved
+    `core.autocrlf=true` (`_repo_autocrlf_true`) -- this function does no
+    attribute or config reading of its own and trusts its caller for
+    both preconditions."""
+    import re
+
+    if b"\x00" in content:
+        return content
+    if re.search(rb"\r(?!\n)", content):
+        return content
+    return content.replace(b"\r\n", b"\n")
+
+
 def _hash_worktree_blobs(
     paths: Sequence[str],
     *,
@@ -2858,17 +3067,29 @@ def _hash_worktree_blobs(
     spawns without narrowing what this branch can commit.
 
     Per path, read `cwd/path`'s bytes off disk and apply the SAME two
-    refusals `commit_authored_new_file` carries verbatim (carried, not
-    re-derived, per this chunk's brief): a CR byte in the content refuses
-    the in-process write (CR-free content is a fixed point of `text`/
-    `core.autocrlf` clean normalization, so its absence makes the eol
-    machinery provably a no-op rather than merely unlikely), and a
-    repo-local `filter=` attribute pattern matching the path refuses it
-    too (`_clean_filter_may_apply`, path-scoped, not repo-scoped -- an
-    LFS repo stays deliverable for a markdown memo). An unreadable path
-    (already deleted, now a directory, permission error) also refuses,
-    since only `git hash-object` itself can report that failure the way
-    every existing caller of this branch already expects.
+    base refusals `commit_authored_new_file` carries verbatim (carried,
+    not re-derived, per this chunk's brief): a repo-local `filter=`
+    attribute pattern matching the path refuses it (`_clean_filter_may_
+    apply`, path-scoped, not repo-scoped -- an LFS repo stays deliverable
+    for a markdown memo), and an unreadable path (already deleted, now a
+    directory, permission error) also refuses, since only `git
+    hash-object` itself can report that failure the way every existing
+    caller of this branch already expects.
+
+    CR-free content is unconditionally written in-process (a fixed point
+    of `text`/`core.autocrlf` clean normalization, so its absence makes
+    the eol machinery provably a no-op rather than merely unlikely). CR-
+    containing content is handled in-process too, as of C3c
+    (docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-
+    times.md), but only when BOTH hold: `core.autocrlf` resolves to
+    exactly `true` (`_repo_autocrlf_true`) and no attributes file pins a
+    `text`/`-text`/`eol=` disposition for the path (`_text_attribute_
+    pinned`) -- git's default `text=auto` disposition, the only one
+    C3c's spike measured against real `git hash-object`. Under those two
+    conditions `_autocrlf_checkin_normalize` reproduces git's checkin-side
+    CRLF normalization byte-for-byte; either condition failing (autocrlf
+    not `true`, or the path has an explicit text/eol/binary pin) refuses
+    to the spawn ladder rather than guessing.
 
     A refused path is never dropped: it is queued into the SAME
     `git hash-object -w --stdin-paths` spawn today's ladder already
@@ -2891,6 +3112,8 @@ def _hash_worktree_blobs(
     root = Path(cwd)
     in_process_shas: Dict[str, str] = {}
     refused: List[str] = []
+    autocrlf_true: Optional[bool] = None
+    common_dir = resolve_git_common_dir(root)
 
     for path in paths:
         try:
@@ -2898,13 +3121,21 @@ def _hash_worktree_blobs(
         except OSError:
             refused.append(path)
             continue
-        if b"\r" in content:
+        normalized = path.replace("\\", "/")
+        if _clean_filter_may_apply(root, normalized) is not None:
             refused.append(path)
             continue
-        if _clean_filter_may_apply(root, path.replace("\\", "/")) is not None:
-            refused.append(path)
+        if b"\r" not in content:
+            in_process_shas[path] = write_object(common_dir, b"blob", content)
             continue
-        in_process_shas[path] = write_object(resolve_git_common_dir(root), b"blob", content)
+        if autocrlf_true is None:
+            autocrlf_true = _repo_autocrlf_true(root)
+        if autocrlf_true and _text_attribute_pinned(root, normalized) is None:
+            in_process_shas[path] = write_object(
+                common_dir, b"blob", _autocrlf_checkin_normalize(content)
+            )
+            continue
+        refused.append(path)
 
     if refused:
         spawn_result = _hash_object_stdin_paths(refused, cwd=root, timeout=timeout)

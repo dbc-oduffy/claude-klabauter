@@ -26,7 +26,7 @@ Steps (see the dispatch brief for the full staff-eng-review-cited rationale
 behind each):
     1. Gate on the finishing agent being a REVIEWER — ``agent_type``'s bare
        form (stripped of any ``coordinator:``/``agent:`` namespace prefix,
-       mirroring ``review_trail_write._bare_reviewer_hint``'s own stripping
+       mirroring ``review_trail_write.normalize_reviewer``'s own stripping
        convention) must be a member of ``review_trail_write._DELEGATE_REVIEWERS``
        — the SAME closed reviewer vocabulary ``review_trail.write`` already
        enforces for the ``reviewer`` field, reused rather than re-derived.
@@ -145,7 +145,7 @@ GENERATES: list = []
 
 def _bare_type(value: str) -> str:
     """Strip a ``coordinator:``/``agent:``-shaped namespace prefix, mirroring
-    ``review_trail_write._bare_reviewer_hint``'s own stripping convention —
+    ``review_trail_write.normalize_reviewer``'s own stripping convention —
     the reviewer vocabulary is spelled bare (``code-reviewer``, ``staff-eng``,
     ...), never namespaced."""
     _prefix, sep, bare = value.rpartition(":")

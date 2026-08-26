@@ -185,6 +185,24 @@ def mint(engine_root: Optional[Path] = None, port: Optional[int] = None) -> str:
     return token
 
 
+def _probe_presence(path: Path) -> None:
+    """Raise `FileNotFoundError` if `path` is genuinely absent; return if it
+    is present; raise another `OSError` if that cannot be determined.
+
+    A NAMED SEAM, not an inlined `path.lstat()`, so a test can make presence
+    unknowable without monkeypatching `Path.lstat` for the whole process.
+    That distinction is not cosmetic: this suite runs live listener threads,
+    and patching a stdlib method globally poisons every one of them for the
+    duration -- observed as failures wandering between unrelated modules
+    depending on test order.
+
+    `lstat`, never `stat` or `exists()`: `exists()` swallows every `OSError`
+    into False, and both follow symlinks. A dangling symlink is PRESENT and
+    must not be minted through.
+    """
+    path.lstat()
+
+
 def ensure(engine_root: Optional[Path] = None) -> str:
     """Return the existing cookie, minting one only if none is there.
 
@@ -220,11 +238,31 @@ def ensure(engine_root: Optional[Path] = None) -> str:
     # directly is what separates "generate one" from "refuse": re-minting
     # over a file that exists but would not read rotates the secret out
     # from under every live session, on what may be a transient error.
-    if cookie_path(engine_root).exists():
+    path = cookie_path(engine_root)
+    try:
+        _probe_presence(path)
+    except FileNotFoundError:
+        # GENUINELY ABSENT -- the only case that mints.
+        return mint(engine_root)
+    except OSError as exc:
+        # `Path.exists()` WOULD HAVE SWALLOWED THIS AND MINTED. A stat that
+        # fails for any reason other than "not there" -- a directory whose
+        # permissions changed, a filesystem error -- tells us nothing about
+        # whether a cookie exists, and minting on no information is the
+        # rotation this function exists to prevent. Refuse.
         raise CookieUnreadableError(
-            f"cookie exists but could not be read: {cookie_path(engine_root)}"
-        )
-    return mint(engine_root)
+            f"cookie presence could not be determined: {path} ({exc})"
+        ) from exc
+    # `lstat`, never `stat`: a DANGLING SYMLINK at this path is present, and
+    # `exists()` (which follows links) would call it absent and mint THROUGH
+    # the link onto whatever it targets. Present-and-unusable is refused, not
+    # written over.
+    raise CookieUnreadableError(
+        f"cookie exists but could not be read: {path}. "
+        "It was NOT replaced -- re-minting over an unreadable cookie would "
+        "strand every live session holding the old value. Inspect it, then "
+        "remove it deliberately to have a new one generated."
+    )
 
 
 def read(engine_root: Optional[Path] = None) -> Optional[str]:

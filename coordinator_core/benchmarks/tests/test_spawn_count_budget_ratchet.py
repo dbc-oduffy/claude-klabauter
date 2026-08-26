@@ -101,6 +101,35 @@ _SPAWN_COUNT_HIGH_WATER = {
             "reason": _BASELINE_REASON,
         },
     },
+    "fleet.archive_and_commit": {
+        "op_total_20_move_batch_sync_push_git_spawns": {
+            "ceiling": 2,
+            "reason": (
+                "Both remaining git spawns on the archival path are disclosed "
+                "and neither belongs to archive_and_commit: `git restore "
+                "--staged` (the shared-index resync, the unfinished half of "
+                "our own hand-rolled commit -- see "
+                "`_resync_main_index_for_moves`' docstring) and `git status "
+                "--porcelain` (session/scope.py's claim release). Spy-counted "
+                "argv, never a job-object process count: that count includes "
+                "non-deterministic conhost.exe pairing and reads 3.0/5.0/7.0 "
+                "for identical code on one box."
+            ),
+        },
+        "op_total_20_move_batch_sync_push_own_git_spawns": {
+            "ceiling": 0,
+            "reason": (
+                "Floor of 0: a restage_src=False archival move is a rename, so "
+                "the blob sha comes from read_tree_spine's HEAD entry and there "
+                "is nothing to hash (C1, `cffa6e99f`). A restage_src=True batch "
+                "spends exactly one `hash-object` over that subset alone -- "
+                "pinned separately by "
+                "test_archival_commit_ac1_zero_then_one_own_spawn, which "
+                "carries its own two known-point control arms because a "
+                "derived spawn_count cannot distinguish zero from one."
+            ),
+        },
+    },
     "bin.reap_integrated_review_findings.tracked_untracked_split": {
         "per_reap_call": {"ceiling": 1, "reason": _BASELINE_REASON},
     },

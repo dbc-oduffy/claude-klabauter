@@ -953,6 +953,12 @@ def _make_handler(ctx: "_ServerContext"):
                 live = skew.compute_client_token(ctx.engine_root)
             except Exception:  # noqa: BLE001 -- see the docstring's fail-open note
                 return False
+            # Plain `==`, not `compare_digest`, deliberately: this is a
+            # GENERATION STAMP, not a bearer secret. Nothing is granted by
+            # matching it -- the cookie gate upstream is the auth boundary
+            # and does use `compare_digest`. A timing signal here leaks only
+            # which engine build is running, which the caller computed
+            # itself to get here.
             if caller_token == live:
                 return False
             body = json.dumps(
@@ -983,7 +989,13 @@ def _make_handler(ctx: "_ServerContext"):
             """
             try:
                 return bool(ctx._token_is_stale())
-            except Exception:  # noqa: BLE001 -- a stamp read must not fail a request
+            except Exception:  # noqa: BLE001 -- see below
+                # Swallowing here is BENIGN, and the reason is worth stating
+                # rather than leaving as an unexplained catch: reporting
+                # "not stale" only means we decline to skip the axis-1
+                # check, and axis 2 is still evaluated independently by
+                # `_serve_line`'s own `is_skewed`. Nothing is lost, and a
+                # stamp-read failure must not fail a request.
                 return False
 
         def _cookie_is_valid(self) -> bool:
@@ -1170,53 +1182,41 @@ def _make_handler(ctx: "_ServerContext"):
                     event = {**event, "env": header_env}
 
                 request_frame = hook_http.build_request(event, op_name)
-                # NEGATIVE SPEC -- THIS LINE IS LOAD-BEARING SECURITY AND DOES NOT LOOK IT.
-                # Stamping the SERVER's own token here is what keeps a CALLER's token out of
-                # `server._serve_line`, whose skew branch does NOT refuse a wrong token: it
-                # calls `skew.evict_on_skew`, which closes the listener and drains. That takes
-                # the warm engine down for every session on this box, and the outage is
-                # load-proportional -- MEASURED at 16.8s under a 17s drain, 0.05s with no
-                # in-flight work (`docs/research/2026-08-26-18h35-warm-succession-workdir/
-                # experiment-results-lockout.md`, 1df224ef7). The lockout is the drain, not the
-                # eviction.
+                # THE CALLER'S TOKEN IS CHECKED HERE AND NEVER FORWARDED.
+                # Both halves matter and the second is what closes a race.
                 #
-                # `ServerVersionState.is_skewed` is a plain inequality and cannot tell a stale
-                # CALLER from a stale SERVER. On the named pipe that ambiguity is harmless,
-                # because the token is a COMPONENT OF THE PIPE NAME -- a stale caller dials a
-                # name that does not exist and goes cold, never reaching `_serve_line`. The
-                # HTTP endpoint is a fixed published port with no such binding, and this
-                # overwrite is the only thing standing in for it.
+                # Checked here: an op CLI needs its own token honoured, or a
+                # stale caller is served silently by a stale generation
+                # instead of `ENGINE_SKEW`. `_refuse_stale_caller` is that
+                # check, and it supplies the axis distinction
+                # `ServerVersionState.is_skewed` cannot make.
                 #
-                # Removing this is exactly what the op-CLI widening must do -- an op CLI needs
-                # its own token honoured or it is served silently by a stale generation instead
-                # of `ENGINE_SKEW`. Do NOT remove it as a redundant-looking assignment: the
-                # refusal gate must land in the SAME change. Semantics are specified once, in
-                # docs/research/spike-verdicts/2026-08-26-loopback-op-dispatch-credential-shape.md
-                # § Refusal semantics -- consume it, do not re-derive it here.
-                # Guard: `warm/tests/test_http_caller_token_cannot_evict.py`, whose first
-                # assertion is DESIGNED to go red when this line goes.
+                # Never forwarded: the frame carries THIS SERVER's own boot
+                # token onward, so `_serve_line`'s own skew check compares
+                # server against server. That comparison can then only ever
+                # fire on axis 2 -- this server's source having gone stale
+                # since boot -- where `skew.evict_on_skew` closing the
+                # listener and draining is the CORRECT remedy and stays
+                # untouched.
                 #
-                # C5, 2026-08-26 -- THE LINE IS GONE AND THE REFUSAL IS HERE.
-                # A caller's OWN token is now honoured when it sends one, which
-                # is what an op CLI needs; the eviction that made honouring it
-                # unsafe is prevented above rather than by overwriting the
-                # token. `_refuse_stale_caller` supplies the axis distinction
-                # `is_skewed` cannot: server current + caller behind is the
-                # CALLER's problem and is refused; server stale is axis 2 and
-                # still evicts, unchanged.
+                # Forwarding the caller's token instead would reopen the
+                # exact outage this exists to prevent, narrowed to a race:
+                # `_serve_line` re-reads the live stamp, so a publish landing
+                # between our read and its read makes a legitimately-current
+                # caller read as skewed, and it evicts the box for everyone
+                # (measured 16.8s under a 17s drain,
+                # `docs/research/2026-08-26-18h35-warm-succession-workdir/
+                # experiment-results-lockout.md`, 1df224ef7). Row 2 of
+                # § Refusal semantics says "never" with no window caveat.
                 #
-                # A TOKENLESS request still gets the server's stamp, so the
-                # hook-fire path (which sends no token) keeps working exactly
-                # as before. Refusing it would be a separate decision with its
-                # own blast radius, and `_serve_line` already has an opinion
-                # about tokenless callers on the pipe.
+                # A TOKENLESS request is unchanged: nothing to check, and the
+                # same server stamp goes on, so the hook-fire path is
+                # untouched.
                 caller_token = self.headers.get(ENGINE_TOKEN_HEADER)
                 if caller_token is not None and self._refuse_stale_caller(caller_token):
                     _release_once()
                     return
-                request_frame = _frame_from_request(
-                    request_frame, caller_token or ctx.engine_token
-                )
+                request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
                 # `record_invocation` / `record_exit` were falling through to
                 # `_serve_line`'s own no-op lambda defaults, which is how a

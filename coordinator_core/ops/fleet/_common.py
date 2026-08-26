@@ -1330,9 +1330,46 @@ async def _resync_main_index_for_moves(
 ) -> None:
     """Resync the MAIN index (real .git/index) to the new HEAD for archive_and_commit's moved paths.
 
-    The private-index commit advanced HEAD but left the main index holding stale
-    entries at src paths.  git status --porcelain would therefore report orphaned
-    staged residue (AC4/AC10 clean-index requirement).
+    A commit that advances HEAD without touching `.git/index` leaves the main
+    index holding stale entries at src paths.  git status --porcelain therefore
+    reports orphaned residue (AC4/AC10 clean-index requirement).
+
+    MEASURED 2026-08-26, and stated MECHANISM-INDEPENDENTLY on purpose.  The
+    original wording named the private-index commit as the thing that desynced
+    the index.  That mechanism is gone -- `dccf2fc01` deleted the private index
+    and `_commit_via_head_spine` now lands a direct locked-ref CAS -- and the
+    EM on the successor plan reasoned from its absence that this resync had
+    become vestigial.  It has not.  The desync source was never the private
+    index; it is that HEAD advances and `.git/index` does not, which is true of
+    every commit mechanism this function has ever run behind.
+
+    Probed rather than argued, because the vestigial reading was plausible and
+    wrong: one real 20-move `restage_src=False` batch with this function stubbed
+    to a no-op leaves **40 dirty `git status --porcelain` lines** -- an `RD`
+    (rename in index, deleted in worktree) for every src and a `??` for every
+    dst.  With this function running: **zero**.  ~50 peer sessions share this
+    index and read `git status`, so that residue is theirs, not ours.
+
+    WHAT THIS SPAWN ACTUALLY IS: THE UNFINISHED HALF OF OUR OWN COMMIT.  A
+    plain `git commit` updates `.git/index` as part of committing, which is why
+    no ordinary caller has to think about this at all.  We do not use
+    `git commit`: `_commit_via_head_spine` hand-rolls one -- assemble a tree
+    from the spine, CAS the ref -- specifically to avoid git's process cost.
+    The index update is the part of git's commit we did not reimplement, so we
+    spawn git to do that one leftover piece.  This resync is not an inherent
+    cost of committing and not a separate concern; it is the step our own
+    commit mechanism stops short of.
+
+    Two conclusions follow, and they are NOT the same conclusion.  (1) Do not
+    delete the call site on the argument that the private-index commit is gone:
+    that argument is about a mechanism, the requirement outlived it, and the
+    40-vs-0 above is what deleting it actually costs the ~50 peers sharing this
+    index.  (2) Do not treat it as permanent either.  The correct retirement is
+    to FINISH the mechanism -- write `.git/index` back in-process, the way
+    git's own commit would have -- which owes `TREE`/`UNTR` extension
+    preservation and races `index.lock` against the whole fleet, and so needs
+    its own spike before anyone attempts it.  Finish the commit; do not keep
+    paying git to clean up after it, and do not simply stop cleaning up.
 
     Path-scoped index-from-HEAD restore (2026-08-11, C2; batched 2026-08-19,
     amplification burn-down C4) — ONE call for the ENTIRE batch of moved files,

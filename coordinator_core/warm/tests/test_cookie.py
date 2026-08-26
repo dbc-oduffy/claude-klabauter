@@ -413,6 +413,43 @@ def test_ensure_refuses_a_present_but_unreadable_cookie(tmp_path: Path) -> None:
         cookie.ensure(tmp_path)
 
 
+def test_ensure_refuses_when_presence_cannot_be_determined(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """THE BRANCH THE DECODE-FAILURE TESTS NEVER REACH. All the other
+    unreadable-cookie tests fabricate the same failure -- non-ASCII bytes, a
+    UnicodeDecodeError. The costlier real-world shapes are `OSError`:
+    permission denied, a locked file, a filesystem error. `Path.exists()`
+    swallows every one of those and reports False, which would send us down
+    the mint path on no information at all."""
+    def _boom(_path):
+        raise PermissionError(13, "access denied")
+
+    # The module's own seam, NOT `Path.lstat`: this suite runs live listener
+    # threads, and patching a stdlib method process-wide breaks whichever
+    # unrelated tests happen to be running beside it.
+    monkeypatch.setattr(cookie, "_probe_presence", _boom)
+    with pytest.raises(cookie.CookieUnreadableError):
+        cookie.ensure(tmp_path)
+
+
+def test_ensure_refuses_a_dangling_symlink_rather_than_minting_through_it(
+    tmp_path: Path,
+) -> None:
+    """`exists()` follows links, so a dangling symlink at the cookie path
+    reads as absent and `mint` would write THROUGH it onto whatever it
+    targets. `lstat` sees the link itself."""
+    path = cookie.cookie_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.symlink_to(tmp_path / "nowhere-at-all")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable (Windows without developer mode)")
+    with pytest.raises(cookie.CookieUnreadableError):
+        cookie.ensure(tmp_path)
+    assert path.is_symlink(), "the link must survive the refusal, not be replaced"
+
+
 def test_ensure_does_not_replace_the_bytes_of_an_unreadable_cookie(
     tmp_path: Path,
 ) -> None:

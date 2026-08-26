@@ -67,6 +67,12 @@ class TestUsageAndDispatch:
         assert "unknown subcommand" in capsys.readouterr().err
 
 
+def _sink_for(touched):
+    """The record `claim-path` actually writes, given the legacy path its
+    caller still names."""
+    return touched.parent / scope._TOUCH_RECORD_FILENAME
+
+
 class TestClaimPath:
     def test_appends_entry_and_dedups(self, tmp_path, capsys):
         touched = tmp_path / "touched.txt"
@@ -74,11 +80,12 @@ class TestClaimPath:
         assert rc == 0
         rc = js_bridge_cli.main(["claim-path", str(touched), "coordinator/foo.py"])
         assert rc == 0
-        lines = touched.read_text(encoding="utf-8").splitlines()
-        # Review: coordinatorcode-reviewer-7ca5d82a Finding 1 — atomic_dedup_append
-        # now writes an event line (scope.format_touch_event), not a bare path;
-        # parse via scope.parse_touch_event rather than pinning the literal
-        # (timestamped) line.
+        # The seam, not the file: `claim-path` writes the jsonl record next to
+        # the `touched.txt` it is handed, and the read folds last-verb-wins, so
+        # a repeated claim resolves to one entry rather than deduping at the
+        # write.
+        lines, degraded = scope._read_touch_record_as_legacy_lines(_sink_for(touched))
+        assert not degraded
         assert len(lines) == 1
         verb, _ts, path = scope.parse_touch_event(lines[0])
         assert (verb, path) == ("T", "coordinator/foo.py")
@@ -97,7 +104,7 @@ class TestClaimPath:
 
         assert js_bridge_cli.main(["claim-path", str(touched), r"coordinator\a\b.py"]) == 0
 
-        lines = touched.read_text(encoding="utf-8").splitlines()
+        lines, _degraded = scope._read_touch_record_as_legacy_lines(_sink_for(touched))
         assert len(lines) == 1
         verb, _ts, path = scope.parse_touch_event(lines[0])
         assert (verb, path) == ("T", "coordinator/a/b.py")
@@ -111,7 +118,8 @@ class TestClaimPath:
         js_bridge_cli.main(["claim-path", str(touched), r"coordinator\a\b.py"])
         js_bridge_cli.main(["claim-path", str(touched), "coordinator/a/b.py"])
 
-        assert len(touched.read_text(encoding="utf-8").splitlines()) == 1
+        lines, _degraded = scope._read_touch_record_as_legacy_lines(_sink_for(touched))
+        assert len(lines) == 1
 
     @pytest.mark.parametrize(
         "absolute_entry",
@@ -135,6 +143,7 @@ class TestClaimPath:
 
         assert rc == 0
         assert not touched.exists()
+        assert not _sink_for(touched).exists()
         err = capsys.readouterr().err
         assert "is absolute" in err
         assert repr(absolute_entry) in err  # the refused path is NAMED, not just counted
@@ -160,7 +169,7 @@ class TestClaimPath:
             == 0
         )
 
-        lines = touched.read_text(encoding="utf-8").splitlines()
+        lines, _degraded = scope._read_touch_record_as_legacy_lines(_sink_for(touched))
         assert [scope.parse_touch_event(line)[2] for line in lines] == ["pkg/mod.py"]
 
 

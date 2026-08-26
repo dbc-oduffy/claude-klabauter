@@ -134,6 +134,20 @@ def test_a_repeated_cookie_header_is_refused(live_listener):
     assert "401" in status
     assert _still_serving(port, token)
 
+    # CASE-FOLDING, ASSERTED RATHER THAN ASSUMED. `get_all` is case-insensitive
+    # per the stdlib, which is what makes one lower-cased duplicate still count
+    # as a repeat -- the refusal leans on that and should say so.
+    lowered = _request(
+        port,
+        supervisor.HOOK_PATH,
+        [
+            f"{cookie.COOKIE_HEADER}: {token}",
+            f"{cookie.COOKIE_HEADER.lower()}: {'0' * 64}",
+        ],
+    )
+    assert "401" in lowered
+    assert _still_serving(port, token)
+
 
 def test_the_listener_survives_a_burst_of_refusals(live_listener):
     """THE EVICTION-BY-ANOTHER-NAME CHECK, REPEATED. One refusal leaving the
@@ -165,7 +179,13 @@ def test_an_unreadable_expected_cookie_refuses_every_caller(live_listener, tmp_p
             port, supervisor.HOOK_PATH, [f"{cookie.COOKIE_HEADER}: {token}"]
         )
     finally:
-        cookie.mint(tmp_path)
+        restored = cookie.mint(tmp_path)
+    # THE STILL-SERVING HALF, ON THE BRANCH THAT MOST NEEDS IT. This is the
+    # one refusal driven by the SERVER's own state rather than the caller's
+    # header, so "did the listener survive it" is least obvious here and was
+    # the assertion originally missing. Checked after the mint, because
+    # `_still_serving` presents a cookie and there has to be one to present.
+    assert _still_serving(port, restored)
 
 
 def test_the_gate_is_not_defeated_by_an_unrouted_path(live_listener):

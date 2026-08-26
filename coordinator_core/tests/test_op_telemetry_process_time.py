@@ -55,6 +55,7 @@ def test_record_op_process_time_shape(tmp_path, monkeypatch):
         repo_root=tmp_path,
         sid="sid-abc",
         corr_id="corr-1",
+        caller="coordinator_core.ops.check_auto_reconcile",
     )
 
     entries = _read_entries(_sink(common_dir))
@@ -68,8 +69,29 @@ def test_record_op_process_time_shape(tmp_path, monkeypatch):
     assert entry["pid"] == os.getpid()
     assert entry["sid"] == "sid-abc"
     assert entry["corr_id"] == "corr-1"
+    assert entry["caller"] == "coordinator_core.ops.check_auto_reconcile"
     # elapsed_ms is a DIFFERENT key -- process_ms never masquerades as it.
     assert "elapsed_ms" not in entry
+
+
+def test_record_op_process_time_caller_defaults_to_none(tmp_path, monkeypatch):
+    """A caller that omits `caller=` (pre-C16) gets `caller: null`, never a
+    raise -- purely additive, same contract as `record_op_latency`'s own
+    optional `caller` field."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+
+    ipc.record_op_process_time(
+        op="ping",
+        process_ms=1.0,
+        measurement_scope=ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        source_path="pool_worker",
+        t_start=1.0,
+        repo_root=tmp_path,
+    )
+
+    entries = _read_entries(_sink(common_dir))
+    assert entries[0]["caller"] is None
 
 
 def test_record_op_process_time_never_raises_on_unresolvable_repo(tmp_path, monkeypatch):
@@ -171,7 +193,10 @@ def test_pool_dispatch_worker_records_per_op_process_time(tmp_path, monkeypatch)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
 
-    async def _fake_dispatch_message(msg):
+    captured_caller = {}
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        captured_caller["caller"] = caller
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
@@ -188,6 +213,8 @@ def test_pool_dispatch_worker_records_per_op_process_time(tmp_path, monkeypatch)
     assert entries[0]["measurement_scope"] == "per_op_process"
     assert entries[0]["source_path"] == "pool_worker"
     assert entries[0]["process_ms"] >= 0.0
+    assert entries[0]["caller"] == "coordinator_core.warm.server._pool_dispatch_worker"
+    assert captured_caller["caller"] == "coordinator_core.warm.server._pool_dispatch_worker"
 
 
 def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
@@ -202,7 +229,10 @@ def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
 
-    async def _fake_dispatch_message(msg):
+    captured_caller = {}
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        captured_caller["caller"] = caller
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
@@ -217,6 +247,8 @@ def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
     assert len(entries) == 1
     assert entries[0]["measurement_scope"] == "process_wide"
     assert entries[0]["source_path"] == "accept_thread"
+    assert entries[0]["caller"] == "coordinator_core.warm.server._run_dispatch"
+    assert captured_caller["caller"] == "coordinator_core.warm.server._run_dispatch"
 
 
 def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, monkeypatch):
@@ -224,7 +256,10 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
 
+    captured_caller = {}
+
     async def _fake_dispatch_message(msg, *, caller=None):
+        captured_caller["caller"] = caller
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": True}}
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
@@ -236,6 +271,8 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     assert entries[0]["op"] == "ping"
     assert entries[0]["measurement_scope"] == "per_op_process"
     assert entries[0]["source_path"] == "one_shot_cli"
+    assert entries[0]["caller"] == "coordinator_core.ipc.dispatch_from_hook"
+    assert captured_caller["caller"] == "coordinator_core.ipc.dispatch_from_hook"
 
 def test_process_time_rows_carry_a_session_id(tmp_path, monkeypatch):
     """A process-time row must be joinable to the session that produced it.
@@ -300,6 +337,7 @@ def test_invoke_cli_dispatch_records_a_process_time_row(tmp_path, monkeypatch):
     # scope costs a reader confidence; over-claiming costs them a conclusion.
     assert entries[0]["measurement_scope"] == "process_wide"
     assert entries[0]["sid"] == "sid-invoke-cli"
+    assert entries[0]["caller"] == "coordinator_core.invoke.__main__"
     assert "elapsed_ms" not in entries[0]
 
 
@@ -330,7 +368,9 @@ def test_invoke_cli_cold_branch_still_calls_the_recorder():
     import coordinator_core.invoke.__main__ as invoke_main
 
     source = Path(invoke_main.__file__).read_text(encoding="utf-8")
-    finally_block = source.split("response = loop.run_until_complete(dispatch_message(msg))")[1]
+    finally_block = source.split(
+        "response = loop.run_until_complete(dispatch_message(msg, caller=_CALLER))"
+    )[1]
     finally_block = finally_block.split("_captured = _handler_stdout.getvalue()")[0]
     assert "_record_dispatch_process_time(" in finally_block
     assert "loop.close()" in finally_block

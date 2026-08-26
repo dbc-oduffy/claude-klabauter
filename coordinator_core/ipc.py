@@ -2609,6 +2609,7 @@ def record_op_process_time(
     sid: Optional[str] = None,
     corr_id: Optional[str] = None,
     spawns: Optional[int] = None,
+    caller: Optional[str] = None,
 ) -> None:
     """Append one durable process-time sample, alongside (never replacing) the
     wall-clock `elapsed_ms` row `dispatch_message` already records.
@@ -2650,6 +2651,7 @@ def record_op_process_time(
             "sid": sid,
             "kind": "process_time",
             "corr_id": corr_id,
+            "caller": caller,
         }
         # The brightline's second axis, omitted rather than zero-filled when the
         # caller did not measure it: a missing `spawns` key means "not counted
@@ -2754,17 +2756,16 @@ def dispatch_from_hook(
     t_start = _time.time()
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
+    _caller = "coordinator_core.ipc.dispatch_from_hook"
     try:
-        # C15 note: this function is itself one of `dispatch_message`'s known
-        # call sites and could declare `caller="coordinator_core.ipc.
-        # dispatch_from_hook"` explicitly here -- left as the stack-walk
-        # fallback (now `__spec__`-aware, see `caller_module`) because every
-        # existing test double stubbing `ipc.dispatch_message` in
-        # `coordinator_core.ops.tests.test_ipc_dispatch_from_hook` (out of
-        # this chunk's `writes:` scope) has a fixed `(msg)` signature that a
-        # `caller=` keyword would break. Declaring here is a follow-up chunk
-        # once those doubles widen to accept `caller=`.
-        response = asyncio.run(dispatch_message(envelope))
+        # C16 (following up C15's honest PARTIAL): this function IS one of
+        # `dispatch_message`'s own call sites, and now declares itself
+        # explicitly rather than relying on the stack-walk fallback -- the
+        # out-of-scope test doubles that previously pinned a fixed `(msg)`
+        # signature (`coordinator_core.ops.tests.test_ipc_dispatch_from_hook`)
+        # are in THIS row's `writes:` and have been widened to accept
+        # `caller=`.
+        response = asyncio.run(dispatch_message(envelope, caller=_caller))
     finally:
         process_ms = (_time.process_time() - process_start) * 1000.0
         request_repo = resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
@@ -2777,6 +2778,7 @@ def dispatch_from_hook(
             repo_root=request_repo,
             sid=_telemetry_sid(),
             spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
+            caller=_caller,
         )
     return _unwrap_hook_response(op_name, response)
 
@@ -2882,13 +2884,12 @@ def dispatch_ops_from_hook(
             t_start = _time.time()
             process_start = _time.process_time()
             spawn_start = _spawn_count_or_none()
+            _caller = "coordinator_core.ipc.dispatch_ops_from_hook"
             try:
-                # C15 note: same out-of-scope-test-double constraint as
-                # `dispatch_from_hook` above -- left on the (now
-                # `__spec__`-aware) stack-walk fallback rather than declaring
-                # `caller=` explicitly, since this function's own test
-                # doubles share the same fixed `(msg)` signature.
-                response = await dispatch_message(envelope)
+                # C16 (following up C15's honest PARTIAL): declares itself
+                # explicitly now that this function's own test doubles
+                # (in this row's `writes:`) accept `caller=`.
+                response = await dispatch_message(envelope, caller=_caller)
             finally:
                 record_op_process_time(
                     op=op_name,
@@ -2901,6 +2902,7 @@ def dispatch_ops_from_hook(
                         resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
                     ),
                     spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
+                    caller=_caller,
                 )
             try:
                 results.append(_unwrap_hook_response(op_name, response))
