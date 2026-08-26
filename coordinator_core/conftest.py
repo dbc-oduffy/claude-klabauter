@@ -792,11 +792,19 @@ def exercise_suspended_op(monkeypatch):
 #     this guard mid-run on 2026-08-26, attributed to whichever test happened
 #     to straddle a peer's lock acquisition. A lock file is not a session
 #     directory and can never be the leak this guard names.
-#   - Does NOT attribute a new DIRECTORY to the test that saw it appear. A
-#     peer's own leaking test minting a fixture-named dir concurrently reads
-#     here as this test's leak (`altlive-isolation-fixture-session`, observed
-#     the same run). Real detection, wrong owner. Tracked in
-#     `state/bug-backlog/` rather than solved with an mtime/pid heuristic.
+#   - DOES now attribute a new DIRECTORY by recorded owner, closing the
+#     wrong-owner half this spec previously deferred (`altlive-isolation-
+#     fixture-session`, and `c7-cold-fwd-probe` observed 2026-08-26 21:40:54Z
+#     mid-run and blamed on whichever test straddled it). The deferral said
+#     "rather than solved with an mtime/pid heuristic", and that still holds:
+#     what is read below is not a heuristic but the owning session's own
+#     `meta.json` stamp. See `_dir_is_ours`.
+#   - Still does NOT attribute a dir carrying NO `meta.json`. That is the
+#     fail-closed arm and it is the historically-correct one: all three
+#     original leaks (`sess-1`, `sess-abc`, `altlive-probe`) held a single log
+#     file and no `meta.json`, because a fixture leak is minted by a log-
+#     appending guard rather than by session init. No stamp means no owner
+#     means flag it.
 #   - Lives HERE rather than in the repo-root `conftest.py` because
 #     `coordinator_core/pytest.ini` wins as configfile for any invocation
 #     whose path argument sits under `coordinator_core/`, which makes that
@@ -804,6 +812,7 @@ def exercise_suspended_op(monkeypatch):
 #     where the leaking tests are. The root conftest re-exports the fixture
 #     by name so the `coordinator/` testpaths are covered too.
 
+import json
 import uuid as _uuid
 
 import pytest as _pytest
@@ -833,6 +842,38 @@ def _live_hub_session_dirs() -> set:
         return {e.name for e in entries if e.is_dir()}
 
 
+def _dir_is_ours(name: str) -> bool:
+    """`True` when this process's own harness session minted `name`, `False`
+    when a DIFFERENT session did, and `True` (fail-closed — flag it) whenever
+    ownership cannot be established.
+
+    The discriminator is `meta.json`'s `stable_pid`: `session/core.py` stamps it
+    with the owning `claude.exe` PID taken from `CLAUDE_PID`, which every child
+    this session spawns inherits. So a directory minted by a test in THIS
+    session — in-process, or by any CLI it shells out to — carries our
+    `CLAUDE_PID`, and one minted by a concurrent peer carries theirs. That is a
+    recorded ownership stamp, not the mtime/pid heuristic this guard's spec
+    declined; nothing here guesses from timing.
+
+    Every unprovable case returns `True` so the guard keeps its teeth: no
+    `meta.json` at all (the shape all three original leaks had), an unreadable
+    or stampless one, or a `CLAUDE_PID` absent from our own environment. The
+    exemption is narrow by construction — it fires only on a positive,
+    disagreeing stamp."""
+    ours = os.environ.get("CLAUDE_PID")
+    if not ours:
+        return True
+    meta = os.path.join(_LIVE_HUB, name, "meta.json")
+    try:
+        with open(meta, "r", encoding="utf-8") as fh:
+            stamped = json.load(fh).get("stable_pid")
+    except (OSError, ValueError, AttributeError):
+        return True
+    if not stamped:
+        return True
+    return str(stamped) == str(ours)
+
+
 @_pytest.fixture(autouse=True)
 def _no_new_live_session_hub_entries():
     try:
@@ -858,7 +899,9 @@ def _no_new_live_session_hub_entries():
     leaked = sorted(
         name
         for name in new_entries
-        if name not in live and not _looks_like_a_harness_session_id(name)
+        if name not in live
+        and not _looks_like_a_harness_session_id(name)
+        and _dir_is_ours(name)
     )
     assert not leaked, (
         "test created entries in the REAL repo's session hub "
