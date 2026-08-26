@@ -429,24 +429,33 @@ def test_survey_ambiguous_holder_falls_through_to_release(tmp_path, monkeypatch)
 
 
 # ===========================================================================
-# apply_dispositions() — delegates every mutation to archive-stamp-cli
+# apply_dispositions() — calls archive_stamp's verbs IN-PROCESS, never spawns
 # ===========================================================================
+class _Outcome:
+    def __init__(self, exit_code=0, error=None):
+        self.exit_code = exit_code
+        self.error = error
+
+
 def test_apply_release_calls_unclaim_handoff(monkeypatch):
     calls = []
-    monkeypatch.setattr(mod, "_run_archive_stamp_cli", lambda args: (calls.append(args), (True, ""))[1])
+    monkeypatch.setattr(mod, "cs_unclaim_handoff",
+                        lambda path, reaped_from=None: (calls.append((path, reaped_from)), 0)[1])
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
     applied, failed = mod.apply_dispositions(dispositions)
 
     assert applied == ["state/handoffs/a.md"]
     assert failed == []
-    assert calls[0][0] == "unclaim-handoff"
-    assert calls[0][1] == "state/handoffs/a.md"
+    assert calls == [("state/handoffs/a.md", "dead1")]
 
 
 def test_apply_reclaim_shipped_calls_stamp_then_ship(monkeypatch):
     calls = []
-    monkeypatch.setattr(mod, "_run_archive_stamp_cli", lambda args: (calls.append(args), (True, ""))[1])
+    monkeypatch.setattr(mod, "stamp_shipped_in",
+                        lambda path, kind=None, sha=None: (calls.append(("stamp", path, kind, sha)), _Outcome())[1])
+    monkeypatch.setattr(mod, "cs_ship_handoff",
+                        lambda path, sha=None: (calls.append(("ship", path, sha)), 0)[1])
 
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RECLAIM_SHIPPED, "detail", sha="deadbeef")
@@ -455,15 +464,38 @@ def test_apply_reclaim_shipped_calls_stamp_then_ship(monkeypatch):
 
     assert applied == ["state/handoffs/a.md"]
     assert failed == []
-    verbs = [c[0] for c in calls]
-    assert verbs == ["stamp-shipped-in", "ship-handoff"]
-    assert "deadbeef" in calls[0]
-    assert "deadbeef" in calls[1]
+    assert [c[0] for c in calls] == ["stamp", "ship"]
+    assert calls[0] == ("stamp", "state/handoffs/a.md", "ship-commit", "deadbeef")
+    assert calls[1] == ("ship", "state/handoffs/a.md", "deadbeef")
+
+
+def test_apply_never_spawns_a_subprocess(monkeypatch):
+    """The standing amplification gate's own property, asserted locally: a reap of
+    N dispositions must create ZERO processes on the write path. This is what a
+    per-disposition archive-stamp-cli shell-out cost (N-2N interpreter starts)."""
+    import subprocess as _sp
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None: 0)
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("apply_dispositions must not create a process")))
+    monkeypatch.setattr(_sp, "Popen", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("apply_dispositions must not create a process")))
+
+    dispositions = [
+        mod.Disposition(f"state/handoffs/{n}.md", "dead1", mod._VERDICT_RELEASE, "detail")
+        for n in "abcde"
+    ]
+    applied, failed = mod.apply_dispositions(dispositions)
+    assert applied == [f"state/handoffs/{n}.md" for n in "abcde"]
+    assert failed == []
 
 
 def test_apply_skip_verdicts_perform_no_write(monkeypatch):
-    monkeypatch.setattr(mod, "_run_archive_stamp_cli", lambda args: (_ for _ in ()).throw(
-        AssertionError("a skip verdict must never call archive-stamp-cli")))
+    def _boom(*a, **k):
+        raise AssertionError("a skip verdict must never write")
+
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", _boom)
+    monkeypatch.setattr(mod, "stamp_shipped_in", _boom)
+    monkeypatch.setattr(mod, "cs_ship_handoff", _boom)
 
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_SKIP_LIVE_CHILDREN, "detail"),
@@ -475,11 +507,29 @@ def test_apply_skip_verdicts_perform_no_write(monkeypatch):
 
 
 def test_apply_reports_failure_without_raising(monkeypatch):
-    monkeypatch.setattr(mod, "_run_archive_stamp_cli", lambda args: (False, "boom"))
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None: 3)
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
     applied, failed = mod.apply_dispositions(dispositions)
     assert applied == []
+    assert len(failed) == 1
+    assert "rc=3" in failed[0]
+
+
+def test_apply_reports_a_raising_verb_without_aborting_the_reap(monkeypatch):
+    """One bad row must not strand the remaining dispositions."""
+    def _raise_on_first(path, reaped_from=None):
+        if path.endswith("a.md"):
+            raise RuntimeError("boom")
+        return 0
+
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", _raise_on_first)
+    dispositions = [
+        mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail"),
+        mod.Disposition("state/handoffs/b.md", "dead1", mod._VERDICT_RELEASE, "detail"),
+    ]
+    applied, failed = mod.apply_dispositions(dispositions)
+    assert applied == ["state/handoffs/b.md"]
     assert len(failed) == 1
     assert "boom" in failed[0]
 

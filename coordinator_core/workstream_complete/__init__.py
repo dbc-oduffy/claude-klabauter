@@ -2792,7 +2792,48 @@ def _resolve_base_sha_after_session_start(
     return shas, base_out.strip()
 
 
-def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
+def _session_owned_shas_from_map(
+    trailer_map: "Optional[dict[str, str]]", session_id: str
+) -> Optional[list[str]]:
+    """C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
+    § C2): reads this session's own attributed shas out of a RAW
+    `{sha: trailer-value}` map already in hand (`directives_commit_tail.
+    resolve_known_concurrent_paths`'s `trailer_map_out`) instead of paying a
+    second trailer-walk spawn for exactly the same window (`_session_owned_
+    shas`'s own `resolve_session_commits` call).
+
+    Returns `None` -- never `[]` -- whenever the map cannot be trusted to
+    answer "this session owns zero commits": an absent/empty `trailer_map`
+    (the producer never built one, or built one covering no sessions at
+    all), OR a map that simply has no entry for `session_id`. The latter is
+    deliberately NOT read as "confirmed zero" (absence of evidence is not
+    evidence of no commits, per this chunk's brief): the map's window is
+    `--since=<earliest LIVE PEER start>`, which is not guaranteed to reach
+    back to THIS session's own first commit. A caller seeing `None` here
+    must fall back to `_session_owned_shas`'s own spawning path.
+
+    Oldest-first, matching `resolve_session_commits`'s own contract
+    (`handoff_close_origin_stub._session_derived_sha` scans the result in
+    reverse to take the most recent toucher -- an order regression here
+    would silently pick the wrong shipping commit). `trailer_map` itself
+    carries no ordering guarantee a caller should rely on directly, but its
+    producer (`bulk_trailer_session_map`, via a plain `git log`, no
+    `--reverse`) walks newest-first and Python dicts preserve insertion
+    order, so the matched shas come out newest-first here and are reversed
+    before returning.
+    """
+    if not trailer_map or not session_id:
+        return None
+    shas = [sha for sha, sid in trailer_map.items() if sid == session_id]
+    if not shas:
+        return None
+    shas.reverse()
+    return shas
+
+
+def _session_owned_shas(
+    root: Path, session_id: str, trailer_map: "Optional[dict[str, str]]" = None
+) -> Optional[list[str]]:
     """This session's OWN commits, oldest-first, selected by `Session-Id`
     commit trailer rather than by time window. `None` on any git failure or
     an absent `session_id` — never `[]`, which a caller would read as a
@@ -2832,9 +2873,27 @@ def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
     primitive's module docstring for why unanchored was chosen for every
     caller). This also closes the anchored/unanchored split against
     `review_brightline_gate._compute_session_oracle_single`, which reads
-    this same primitive."""
+    this same primitive.
+
+    `trailer_map` (C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-
+    collapse-to-four.md § C2): optional, additive. When supplied and it
+    covers `session_id` (see `_session_owned_shas_from_map`'s own
+    docstring for exactly what "covers" means), this session's own shas
+    are read off that already-in-hand map instead of spawning this
+    function's own `resolve_session_commits` trailer walk -- a second walk
+    of the SAME window `directives_commit_tail.resolve_known_concurrent_
+    paths` already spawned (via its `trailer_map_out`) for peer
+    attribution. Absent, empty, or non-covering `trailer_map` falls
+    through to the spawning path unchanged -- byte-identical to this
+    function's pre-C2 behaviour. The four callers with no map in hand
+    (`quick_wrap_assemble`, `baton_assemble`, `handoff_close_origin_stub`,
+    `branch_resolution`) are unaffected; they never pass `trailer_map` and
+    always take the spawning path."""
     if not session_id:
         return None
+    from_map = _session_owned_shas_from_map(trailer_map, session_id)
+    if from_map is not None:
+        return from_map
     try:
         commits = _resolve_session_commits_primitive(
             root, session_id, sha_only=True
@@ -3735,28 +3794,46 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     known_concurrent_paths: "Optional[frozenset[str]]" = None
     classified_session_files: Optional[list[dict[str, Any]]] = None
     measurement_paths = decisions.get("stage_paths")
-    # C1 (spawn-collapse dispatch brief `.../C1.md`): resolved once, up
-    # front, so it can ride along on the SAME `show --numstat` union
-    # `resolve_known_concurrent_paths` below spawns for peer attribution —
-    # `_session_owned_shas` itself is a separate (unmerged) trailer-walk
-    # spawn, unchanged; only the LATER `show --numstat` LOC spawn (#6)
-    # collapses into the peer-paths spawn (#2).
-    precomputed_session_shas = _session_owned_shas(root, gate.sid)
-    shared_numstat_blocks: Optional[dict[str, str]] = None
+    # C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
+    # § C2): `resolve_known_concurrent_paths` now runs FIRST (was: AFTER
+    # `_session_owned_shas`, which paid its OWN separate trailer-walk spawn
+    # for exactly the same `--since=<earliest live peer start>` window the
+    # peer-attribution call below already walks via `bulk_trailer_session_
+    # map`). `trailer_map` captures that RAW walk (`trailer_map_out`), and
+    # `_session_owned_shas` below reads THIS session's own shas back out of
+    # it instead of re-walking the DAG -- one trailer spawn total, not two.
+    #
+    # TRADEOFF, DELIBERATE AND NAMED (not silently accepted): this reorder
+    # means `precomputed_session_shas` is no longer known BEFORE this call,
+    # so it can no longer ride the C1 `extra_shas`/`extra_numstat_out`
+    # merge into the SAME `show --numstat` union this call spawns for peer
+    # attribution -- that merge required knowing the session's own shas in
+    # advance. `shared_numstat_blocks` is therefore never handed to
+    # `_measure_session_review_scale_inputs` below; that function falls
+    # back to its own pre-C1 `git show --numstat` spawn for the session's
+    # own commits when it has any (safe -- see its own docstring's "either
+    # kwarg absent" paragraph). Net spawn count for a session with its own
+    # committed work: one trailer-walk spawn fewer, one numstat spawn more
+    # than the C1-merged shape -- a wash on THIS call site alone; the win is
+    # eliminating the duplicate DAG walk `_session_owned_shas` used to pay
+    # regardless of whether this session had committed anything at all.
+    precomputed_session_shas: Optional[list[str]] = None
     if measurement_paths is None:
-        shared_numstat_blocks = {}
+        trailer_map: dict[str, str] = {}
         known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
             root,
             gate.sid,
-            extra_shas=precomputed_session_shas or (),
-            extra_numstat_out=shared_numstat_blocks,
+            trailer_map_out=trailer_map,
         )
+        precomputed_session_shas = _session_owned_shas(root, gate.sid, trailer_map=trailer_map)
         classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
             root, session_start_time, known_concurrent_paths=known_concurrent_paths
         )
         measurement_paths = [
             row["path"] for row in classified_session_files if row["session_authored"]
         ]
+    else:
+        precomputed_session_shas = _session_owned_shas(root, gate.sid)
 
     # A (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
     # C-followup, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-
@@ -3775,17 +3852,15 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             uncommitted_paths=measurement_paths,
             commit_slices_out=review_scale_commit_slices,
             precomputed_session_shas=precomputed_session_shas,
-            # Only trusted together: `shared_numstat_blocks` is a partition
-            # of the union spawned FOR `precomputed_session_shas` specifically
-            # (see the `extra_shas=` call above) -- if that resolution came
-            # back `None` (unresolvable), the union was never keyed to the
-            # right shas, so this function must fall back to its own
+            # C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-
+            # to-four.md § C2): `shared_numstat_blocks` is always `None`
+            # now — see the reorder comment at `precomputed_session_shas`'s
+            # own assignment above for why the C1 numstat-union merge no
+            # longer applies here. This function falls back to its own
             # self-consistent `_session_owned_shas` + `show --numstat` pair
-            # rather than pairing a stale/empty blocks dict with a
-            # DIFFERENT shas list it resolves internally.
-            shared_numstat_blocks=(
-                shared_numstat_blocks if precomputed_session_shas is not None else None
-            ),
+            # (byte-identical to its pre-C1 behaviour) whenever the caller
+            # hands it `None`.
+            shared_numstat_blocks=None,
         )
     )
     resolved_gross_loc = decisions.get("gross_loc")

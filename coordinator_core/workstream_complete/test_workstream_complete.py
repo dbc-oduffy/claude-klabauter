@@ -5056,6 +5056,72 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
         )
 
 
+def test_session_owned_shas_from_map_returns_none_when_map_absent_or_empty():
+    """(C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-
+    four.md § C2) Absence of evidence is not evidence of no commits: a
+    `None`/empty `trailer_map`, or one with no entry for `session_id`,
+    must fall through to the spawning path (`None`) rather than being read
+    as "this session owns zero commits"."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    assert wsc._session_owned_shas_from_map(None, sid) is None
+    assert wsc._session_owned_shas_from_map({}, sid) is None
+    assert wsc._session_owned_shas_from_map({"deadbeef": "other-sid"}, sid) is None
+    assert wsc._session_owned_shas_from_map({"deadbeef": sid}, "") is None
+
+
+def test_session_owned_shas_from_map_sorts_oldest_first():
+    """`bulk_trailer_session_map`'s producer (`git log`, no `--reverse`)
+    walks newest-first and a Python dict preserves insertion order, so a
+    map-derived answer must be reversed before returning -- `_session_
+    owned_shas_from_map` docstring's own ordering paragraph, and the same
+    contract `resolve_session_commits`'s oldest-first return promises
+    (`handoff_close_origin_stub._session_derived_sha` scans in reverse to
+    take the most recent toucher; an order regression here would silently
+    pick the wrong shipping commit)."""
+    sid = "11111111-1111-1111-1111-111111111111"
+    other = "22222222-2222-2222-2222-222222222222"
+    # Insertion order mirrors `git log`'s newest-first walk.
+    trailer_map = {"newest": sid, "middle-peer": other, "middle": sid, "oldest": sid}
+    assert wsc._session_owned_shas_from_map(trailer_map, sid) == [
+        "oldest",
+        "middle",
+        "newest",
+    ]
+
+
+def test_session_owned_shas_map_path_agrees_with_spawn_path(tmp_path):
+    """AC3 (this chunk's identity requirement): `_session_owned_shas`'s new
+    map-fed path and its pre-existing `resolve_session_commits` spawn path
+    must agree, byte-for-byte, oldest-first, for the SAME session over the
+    SAME window -- a caller must never see a different answer depending on
+    which of the two mechanisms happened to resolve it."""
+    from coordinator_core import session_attribution
+
+    own_sid = "11111111-1111-1111-1111-111111111111"
+    peer_sid = "22222222-2222-2222-2222-222222222222"
+    _init_git_repo(tmp_path)
+    _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
+
+    spawn_path = wsc._session_owned_shas(tmp_path, own_sid)
+    assert spawn_path is not None and len(spawn_path) == 2
+
+    def _run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        return result.returncode, result.stdout, result.stderr
+
+    trailer_map = session_attribution.bulk_trailer_session_map(
+        "HEAD", str(tmp_path), _run, include_merges=True
+    )
+    map_path = wsc._session_owned_shas(tmp_path, own_sid, trailer_map=trailer_map)
+
+    assert map_path == spawn_path, (
+        "the trailer-map-derived path and the spawn path disagree on this "
+        "session's own oldest-first sha list -- AC3 violated"
+    )
+
+
 def test_commit_count_override_wins_unconditionally_and_records_supplied_scope(monkeypatch, tmp_path):
     """C7 candidate (a), reproduction + fix. Reproduction: `tmp_path` here
     is not even a git repo (measurement fails closed to `None`), yet the

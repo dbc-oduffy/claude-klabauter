@@ -6,6 +6,17 @@ Spec backlink: `pln-kill-the-n-1-git-spawn-class-a-88897a`,
 in a later wave over this same file). Widened past git by
 `docs/plans/2026-08-15-composition-invocation-budgets.md` chunk C11 (AC11).
 
+TWO LEGS, ONLY ONE OF THEM A GATE. Read a failure line before believing a failure count.
+`test_no_new_amplification_sites_outside_known_inventory` is the STANDING gate: unmarked, in
+the fast tier, and red only when a site outside `_KNOWN_SITES` exists.
+`test_burn_down_known_preexisting_amplification_sites` carries `@pytest.mark.designed_red`,
+is deselected from the fast tier, and is red BY DESIGN over a ~40-entry list its own plan
+(`docs/plans/2026-08-15-composition-invocation-budgets.md`) calls "a non-gating burn-down
+list, not budgets". An unfiltered run of this file therefore reports `2 failed` in the healthy
+state, and the burn-down leg's diff dwarfs the standing leg's -- two peers independently read
+that as ~42 new violations on 2026-08-26 when the real answer was four. The standing leg's
+site list is the only one that means "something regressed".
+
 EVERY SPAWN VERB, NOT JUST GIT (AC11). This collector was built for the N+1 GIT spawn class and
 counted only calls whose argv0 resolved to the literal "git". A composition budget cares about
 processes, and the ops census's single most expensive per-item site is `[sys.executable, "-m",

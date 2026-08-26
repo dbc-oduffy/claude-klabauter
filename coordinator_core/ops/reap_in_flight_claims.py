@@ -56,7 +56,6 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -65,15 +64,17 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.archive_stamp import (
+    cs_ship_handoff,
+    cs_unclaim_handoff,
+    stamp_shipped_in,
+)
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.handoff_children import has_live_children_many
 from coordinator_core.session.liveness import session_live
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_ARCHIVE_STAMP_CLI = (
-    Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "archive-stamp-cli.py"
-)
 
 #: Both the current and the legacy (DR-084 pre-rename) spellings this census
 #: must recognise as "claimed" — never widened beyond these two, and never
@@ -426,23 +427,19 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 # ---------------------------------------------------------------------------
 
 
-def _run_archive_stamp_cli(args: List[str]) -> "tuple[bool, str]":
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(_ARCHIVE_STAMP_CLI), *args],
-            capture_output=True,
-            text=True,
-            creationflags=_NO_WINDOW,
-        )
-    except OSError as exc:
-        return False, str(exc)
-    return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
-
-
 def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], List[str]]":
-    """Perform every mutating disposition by delegating to `archive-stamp-cli`'s
-    tested verbs — `release` -> `unclaim-handoff`, `reclaim_shipped` ->
-    `stamp-shipped-in` + `ship-handoff`. A skip verdict performs no write.
+    """Perform every mutating disposition by calling `coordinator_core.archive_stamp`'s
+    tested verbs IN-PROCESS — `release` -> `cs_unclaim_handoff`, `reclaim_shipped` ->
+    `stamp_shipped_in` + `cs_ship_handoff`. A skip verdict performs no write.
+
+    Negative-spec: does NOT shell out to `coordinator/bin/archive-stamp-cli.py`.
+    A subprocess per disposition is one — two on the reclaim arm — interpreter
+    start per handoff, i.e. N-2N process creations for a reap of N. That is the
+    per-item amplification shape `coordinator_core/tests/
+    test_no_unbatched_per_item_git_spawn.py` is a standing gate against, and
+    DR-344 section 4's "git justifies itself per use" applies to the same cost:
+    process creation, not the work. These are the same functions the CLI's own
+    verbs dispatch to, so delegation is preserved and the spawn is not.
 
     Returns `(applied_paths, failed_details)`.
     """
@@ -450,29 +447,33 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
     failed: List[str] = []
     for d in dispositions:
         if d.verdict == _VERDICT_RELEASE:
-            ok, detail = _run_archive_stamp_cli(
-                ["unclaim-handoff", d.path, "--reaped-from", d.holder]
-            )
-            if ok:
-                applied.append(d.path)
-            else:
-                failed.append(f"{d.path}: unclaim-handoff failed: {detail}")
-        elif d.verdict == _VERDICT_RECLAIM_SHIPPED:
-            ok, detail = _run_archive_stamp_cli(
-                ["stamp-shipped-in", d.path, "--sha", d.sha or "", "--kind", "ship-commit"]
-            )
-            if not ok:
-                failed.append(f"{d.path}: stamp-shipped-in failed: {detail}")
+            try:
+                rc = cs_unclaim_handoff(d.path, reaped_from=d.holder)
+            except Exception as exc:  # noqa: BLE001 - one bad row must not abort the reap
+                failed.append(f"{d.path}: unclaim-handoff raised: {exc}")
                 continue
-            ok, detail = _run_archive_stamp_cli(["ship-handoff", d.path, "--sha", d.sha or ""])
-            if ok:
+            if rc == 0:
                 applied.append(d.path)
             else:
-                failed.append(f"{d.path}: ship-handoff failed: {detail}")
+                failed.append(f"{d.path}: unclaim-handoff failed: rc={rc}")
+        elif d.verdict == _VERDICT_RECLAIM_SHIPPED:
+            try:
+                outcome = stamp_shipped_in(d.path, kind="ship-commit", sha=d.sha or None)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{d.path}: stamp-shipped-in raised: {exc}")
+                continue
+            if outcome.exit_code != 0:
+                failed.append(
+                    f"{d.path}: stamp-shipped-in failed: {outcome.error or outcome.exit_code}"
+                )
+                continue
+            try:
+                rc = cs_ship_handoff(d.path, sha=d.sha or None)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{d.path}: ship-handoff raised: {exc}")
+                continue
+            if rc == 0:
+                applied.append(d.path)
+            else:
+                failed.append(f"{d.path}: ship-handoff failed: rc={rc}")
     return applied, failed
-
-
-# ---------------------------------------------------------------------------
-# main() — a thin CLI convenience, not the C3 rebuild (out of this chunk's
-# scope; C3 owns `coordinator/bin/reap-orphaned-in-flight-handoffs.py`).
-# ---------------------------------------------------------------------------

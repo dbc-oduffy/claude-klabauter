@@ -593,6 +593,7 @@ def _committed_paths_for_sids(
     *,
     extra_shas: "Sequence[str]" = (),
     extra_blocks_out: "Optional[Dict[str, str]]" = None,
+    trailer_map_out: "Optional[Dict[str, str]]" = None,
 ) -> "Dict[str, Set[str]]":
     """The batched replacement for the former per-sha loop: for EVERY sid in
     `sid_to_start`, returns the set of paths touched by ITS OWN commits since
@@ -643,10 +644,27 @@ def _committed_paths_for_sids(
     concurrent_paths`'s own CORRECTNESS BAR forbids. See `session_
     attribution.GitLogFailed`'s own docstring for the precedent this
     mirrors one layer down.
+
+    `trailer_map_out` (C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-
+    collapse-to-four.md § C2): optional, mirrors `extra_blocks_out`'s
+    out-param idiom. When not `None`, populated in place with the RAW
+    `bulk_trailer_session_map` result -- every {sha: trailer-value} the
+    bulk walk saw, unfiltered by `sid_to_start`. Cleared (never left stale)
+    on every return path, including the ones that never reach the trailer
+    walk at all (`not sid_to_start`) -- absence there means "no map was
+    built", not "confirmed no matches".
     """
     result: "Dict[str, Set[str]]" = {sid: set() for sid in sid_to_start}
     extra_shas = list(extra_shas)
     if not sid_to_start:
+        if trailer_map_out is not None:
+            # No peer window to walk, so the bulk trailer map below is never
+            # built -- absent, not empty-and-confident (C2, docs/plans/2026-
+            # 08-26-the-gate-paths-six-spawns-collapse-to-four.md § C2): a
+            # caller reading this dict must fall back to its own spawn
+            # rather than reading "no entries" as "this session committed
+            # nothing".
+            trailer_map_out.clear()
         if extra_shas and extra_blocks_out is not None:
             # No peer to attribute, but a session-LOC caller still needs its
             # own shas' numstat blocks -- one spawn for its sake alone (still
@@ -684,6 +702,21 @@ def _committed_paths_for_sids(
             f"bulk_trailer_session_map failed while resolving peer-committed paths "
             f"for {len(sid_to_start)} sid(s): {exc}"
         ) from exc
+
+    if trailer_map_out is not None:
+        # RAW, unfiltered {sha: trailer-value} -- every sid the bulk walk
+        # saw in `--since=<earliest live peer start>`'s window, not just
+        # `sid_to_start`'s peers. This is what lets a caller holding this
+        # session's OWN id (never a member of `sid_to_start` -- see this
+        # function's own peer-only contract) read ITS OWN shas back out
+        # without a second trailer-walk spawn (C2, docs/plans/2026-08-26-
+        # the-gate-paths-six-spawns-collapse-to-four.md § C2; mirrors the
+        # `extra_numstat_out` out-param idiom C1 landed alongside it). Not
+        # UUID-shape-filtered here (unlike `shas_by_sid` below) -- a caller
+        # reading this map for its own known-good sid does not need that
+        # guard re-applied.
+        trailer_map_out.clear()
+        trailer_map_out.update(trailer_map)
 
     wanted_sids = set(sid_to_start)
     shas_by_sid: "Dict[str, list]" = {}
@@ -828,6 +861,7 @@ def resolve_known_concurrent_paths(
     *,
     extra_shas: "Sequence[str]" = (),
     extra_numstat_out: "Optional[Dict[str, str]]" = None,
+    trailer_map_out: "Optional[Dict[str, str]]" = None,
 ) -> "frozenset[str]":
     """Step 3.0 case-(b)'s peer-exclusion set (`classify_session_authored_
     files`'s `known_concurrent_paths` parameter) — the producer that did not
@@ -906,6 +940,18 @@ def resolve_known_concurrent_paths(
     just those extra shas. Optional and additive: an empty/absent
     `extra_shas` reproduces this function's pre-C1 behaviour exactly, one
     spawn for peer attribution alone.
+
+    `trailer_map_out` (C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-
+    collapse-to-four.md § C2): optional out-param, same idiom as
+    `extra_numstat_out` -- see `_committed_paths_for_sids`'s own docstring
+    for the shape it is filled with. Threads straight through to that
+    function; cleared (never left stale) on every early-return path this
+    function itself takes before ever reaching `_committed_paths_for_sids`
+    (a falsy `this_session_id`, or the degrade-safely branch). Lets
+    `workstream_complete.__init__._session_owned_shas` read THIS session's
+    own attributed shas back out of the SAME bulk trailer walk this
+    function already spawns for peer attribution, instead of re-walking the
+    DAG a second time for exactly the same window.
     """
     extra_shas = list(extra_shas)
 
@@ -930,6 +976,8 @@ def resolve_known_concurrent_paths(
         extra_numstat_out.update({sha: blocks[sha] for sha in extra_shas if sha in blocks})
 
     if not this_session_id:
+        if trailer_map_out is not None:
+            trailer_map_out.clear()
         _resolve_extras_standalone()
         return frozenset()
 
@@ -939,6 +987,8 @@ def resolve_known_concurrent_paths(
     if not enumeration_reliable:
         for sid in _scan_subagent_share_session_dirs(repo_root, this_session_id):
             result.update(_peer_subagent_share_paths(repo_root, sid))
+        if trailer_map_out is not None:
+            trailer_map_out.clear()
         _resolve_extras_standalone()
         return frozenset(result)
 
@@ -966,6 +1016,7 @@ def resolve_known_concurrent_paths(
         sid_to_start,
         extra_shas=extra_shas,
         extra_blocks_out=extra_numstat_out,
+        trailer_map_out=trailer_map_out,
     ).values():
         result.update(paths)
 
