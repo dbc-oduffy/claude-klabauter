@@ -66,6 +66,31 @@ def test_record_exit_rejects_unknown_reason():
         t.record_exit("some-other-reason")
 
 
+def test_exit_detail_is_absent_unless_recorded():
+    """Seven days of rows predate this field. An absent key keeps them and
+    every reader of them working unchanged, so the field costs nothing to
+    anyone who does not ask for it."""
+    t = telemetry.ServerTelemetry()
+    t.record_exit(telemetry.EXIT_REASON_IDLE_DEMOTION)
+
+    assert "exit_detail" not in t.snapshot()
+
+
+def test_exit_detail_carries_the_skew_axis():
+    """WHAT THE COLLAPSED COUNT COULD NOT SAY. `skew` was the largest exit
+    reason on this box, and it fires from either the source-hash axis or the
+    build-stamp axis -- two mechanisms whose remediations point in opposite
+    directions (something editing engine source in the serving clone, versus
+    the publish cadence stranding servers). The reason alone sends the next
+    reader at whichever one they already suspected."""
+    t = telemetry.ServerTelemetry()
+    t.record_exit(telemetry.EXIT_REASON_SKEW, "source,token")
+
+    snap = t.snapshot()
+    assert snap["exit_reason"] == telemetry.EXIT_REASON_SKEW
+    assert snap["exit_detail"] == "source,token"
+
+
 def test_record_exit_first_call_wins():
     t = telemetry.ServerTelemetry()
     t.record_exit(telemetry.EXIT_REASON_SKEW)

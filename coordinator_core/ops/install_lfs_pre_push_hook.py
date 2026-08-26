@@ -96,12 +96,6 @@ GENERATES = []  # writes only the local .git/hooks/pre-push, which is never trac
 
 _PROG = "install-lfs-pre-push-hook"
 
-# The marker identifying ANY version of our own gate, and the marker
-# identifying the stock git-lfs shim we replace. Both are content probes --
-# see the module docstring on why detection may not key on anything else.
-_GATE_MARKER = "coordinator-lfs-gate"
-_STOCK_LFS_MARKER = "git lfs pre-push"
-
 # Cross-repo contract (AC7c). Re-exported so tests and consumers assert
 # against one definition instead of re-typing the strings.
 DECISION_LINE_SKIPPED = "coordinator-lfs-gate: not-tracked skipped"
@@ -182,11 +176,35 @@ def classify_existing(current: str | None) -> str:
     from `install()` so the asymmetry documented in the module docstring is
     testable directly rather than only through a filesystem side effect.
     """
+    # Review: code-reviewer P1 — both probes are anchored to LINE SHAPE, not
+    # matched as a plain substring of the whole blob. A foreign hook that
+    # merely MENTIONS either marker in a comment (e.g. `# do not run git lfs
+    # pre-push here`, or `# avoid coordinator-lfs-gate`) must classify as
+    # `foreign`, never `ours`/`stock-lfs` — a substring test would silently
+    # overwrite someone else's hook, which is exactly the asymmetric
+    # overwrite the module docstring calls "the correctness core."
+    #
+    # ours: a line whose STRIPPED form STARTS WITH "# coordinator-lfs-gate"
+    #   (both the current template and older renderings put the marker on a
+    #   comment line this way, so real upgrades keep working).
+    # stock-lfs: a line whose stripped form starts with "git lfs pre-push" or
+    #   "exec git lfs pre-push" — an actual INVOCATION, never a mention. A
+    #   line starting with "#" can never match this branch.
+    #
+    # ORDER IS LOAD-BEARING: check "ours" BEFORE "stock-lfs". Our own
+    # template's delegate arm contains `exec git lfs pre-push "$@"`, so a
+    # reversed order would misclassify our own current hook as stock-lfs.
     if current is None:
         return "absent"
-    if _GATE_MARKER in current:
+
+    lines = current.splitlines()
+    if any(line.strip().startswith("# coordinator-lfs-gate") for line in lines):
         return "ours"
-    if _STOCK_LFS_MARKER in current:
+    if any(
+        line.strip().startswith("git lfs pre-push")
+        or line.strip().startswith("exec git lfs pre-push")
+        for line in lines
+    ):
         return "stock-lfs"
     return "foreign"
 
@@ -220,20 +238,38 @@ def install(hooks_dir: Path) -> tuple[int, str]:
     if case == "ours" and current == desired:
         return 0, f"{_PROG}: {target} already current — no write."
 
+    # Review: code-reviewer P3 — write-temp-then-os.replace(), not a
+    # truncate-in-place open(target, "w"). A crash or a concurrent
+    # `git lfs install` between the read/classify above and the write below
+    # could otherwise interleave with a real git-lfs write to the same
+    # `target`, leaving a partial/corrupt hook on the push path. The temp
+    # file is chmodded BEFORE the replace so the hook is never briefly
+    # present on disk without its exec bit.
+    tmp_target = None
     try:
         hooks_dir.mkdir(parents=True, exist_ok=True)
+        tmp_target = hooks_dir / f".{HOOK_FILENAME}.tmp-{os.getpid()}"
         # newline="" keeps the LF endings the shebang line depends on; Python
         # would otherwise translate them to CRLF on Windows.
-        with open(target, "w", encoding="utf-8", newline="") as fh:
+        with open(tmp_target, "w", encoding="utf-8", newline="") as fh:
             fh.write(desired)
         if os.name != "nt":
             # Write-only: git needs this bit for its own shebang dispatch on
             # POSIX. Never read back as a decision input, and meaningless on
             # Windows. See check_posix_exec_assumptions._REASON_CHMOD_HOOK_POSIX_EXEC.
-            os.chmod(target, 0o755)
+            os.chmod(tmp_target, 0o755)
+        os.replace(tmp_target, target)
     except OSError as exc:
+        if tmp_target is not None:
+            try:
+                tmp_target.unlink(missing_ok=True)
+            except OSError:
+                pass
         return 1, f"{_PROG}: failed writing {target} ({exc})."
 
+    # Exhaustive over classify_existing's four return values minus "foreign"
+    # (returned earlier) — a KeyError here would be an unhandled crash inside
+    # a function documented as never raising (Review: code-reviewer P4).
     verb = {"absent": "installed", "ours": "upgraded", "stock-lfs": "replaced stock git-lfs shim at"}[case]
     return 0, f"{_PROG}: {verb} {target}."
 

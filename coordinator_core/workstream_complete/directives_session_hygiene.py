@@ -590,6 +590,44 @@ _ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _ACCEPTANCE_CRITERIA_PREFIX = "acceptance criteria"
 
 
+def _locate_acceptance_criteria_section(lines: list[str]) -> Optional[tuple[int, int]]:
+    """Shared by BOTH AC parsers (checkbox and table): finds the heading whose
+    case-folded text starts with `_ACCEPTANCE_CRITERIA_PREFIX` and returns
+    `(start_index, section_level)` — the line index immediately after the
+    heading, and the heading's ATX nesting level (used by the caller to know
+    where the section ends). `None` when no such heading exists.
+
+    Extracted so the two parsers' "same boundary rule" claim is enforced by
+    one call site each, not asserted twice in prose (Review: coordinator:
+    code-reviewer Finding 3 — duplicated verbatim risked silent divergence)."""
+    for index, line in enumerate(lines):
+        match = _ATX_HEADING_RE.match(line)
+        if not match:
+            continue
+        if match.group(2).strip().casefold().startswith(_ACCEPTANCE_CRITERIA_PREFIX):
+            return index + 1, len(match.group(1))
+    return None
+
+
+def _iter_acceptance_criteria_section_lines(lines: list[str], start_index: int, section_level: int) -> Iterable[str]:
+    """Yields the body lines of an already-located AC section (see
+    `_locate_acceptance_criteria_section`), stopping at the next ATX heading
+    whose level is <= `section_level`, and skipping any line inside a
+    ``` fenced code block — a fenced example table/checkbox row must not be
+    counted by either parser (Review: coordinator:code-reviewer Finding 6)."""
+    in_fence = False
+    for line in lines[start_index:]:
+        heading_match = _ATX_HEADING_RE.match(line)
+        if heading_match and len(heading_match.group(1)) <= section_level:
+            break
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        yield line
+
+
 def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, int]]:
     """Parses `- [ ]`/`- [x]` checkboxes under a consumed handoff's own
     `## Acceptance criteria` heading ONLY — a pure text parse over
@@ -634,28 +672,14 @@ def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, 
     `gates.*` evidence is the caller's job (see AC3b).
     """
     lines = text.splitlines()
-
-    section_level: Optional[int] = None
-    start_index: Optional[int] = None
-    for index, line in enumerate(lines):
-        match = _ATX_HEADING_RE.match(line)
-        if not match:
-            continue
-        heading_text = match.group(2).strip().casefold()
-        if heading_text.startswith(_ACCEPTANCE_CRITERIA_PREFIX):
-            section_level = len(match.group(1))
-            start_index = index + 1
-            break
-
-    if start_index is None or section_level is None:
+    located = _locate_acceptance_criteria_section(lines)
+    if located is None:
         return None
+    start_index, section_level = located
 
     done = 0
     total = 0
-    for line in lines[start_index:]:
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match and len(heading_match.group(1)) <= section_level:
-            break
+    for line in _iter_acceptance_criteria_section_lines(lines, start_index, section_level):
         if _AC_DONE_RE.match(line):
             done += 1
             total += 1
@@ -665,12 +689,30 @@ def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, 
     return {"done": done, "total": total, "open": total - done}
 
 
+# The status column is found by NAME, never by position. Measured over
+# docs/plans/ on 2026-08-26: 245 of 313 AC tables carry a column literally
+# headed "status"; the remaining 68 head their third column "verified by",
+# "discharged by", "oracle", "evidence", or "instrument" -- none of which is
+# a status, and several of which hold a chunk id (C8, C2) or a prose
+# instruction. Reading the last cell positionally misclassified every one of
+# those, which is why this is a named lookup and why a table without the
+# column is UNREADABLE rather than guessed at.
+_AC_TABLE_STATUS_HEADER = "status"
+
 _AC_TABLE_ROW_RE = re.compile(r"^\|\s*(AC[0-9][A-Za-z0-9]*)\s*\|")
-# Leading tokens in a status cell that mean "not discharged". Anything else
-# recognised (met/done/…) counts as done; an UNRECOGNISED leading token counts
-# as OPEN — see the docstring on why this direction is the safe one.
-_AC_TABLE_OPEN_TOKENS = frozenset({"open", "partial", "pending", "blocked", "todo", "wip", "n/a"})
-_AC_TABLE_DONE_TOKENS = frozenset({"met", "done", "closed", "complete", "completed", "shipped", "waived"})
+# Leading tokens in a status cell recognised as OPEN or DONE. Measured over
+# `docs/plans/*.md` on 2026-08-26: the leading token of every `| ACn |` row's
+# last cell spans ~300 DISTINCT tokens (703 'open', 596 'met', 465 '☐', 269
+# 'pending', 246 '☑', 103 '✅', 97 'done', then a long prose tail — 'the', 'a',
+# 'not', ...). No allowlist closes an open set that long, and the Unicode
+# checkbox glyphs are a MAJOR spelling, not an edge case — see the module's
+# three-outcome contract on `parse_plan_acceptance_criteria_table`.
+_AC_TABLE_OPEN_TOKENS = frozenset({"open", "partial", "pending", "blocked", "todo", "wip", "n/a", "☐"})
+_AC_TABLE_DONE_TOKENS = frozenset({
+    "met", "done", "closed", "complete", "completed", "shipped", "waived",
+    "satisfied", "discharged", "green", "pass", "passed", "landed", "void",
+    "☑", "✅",
+})
 
 
 def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
@@ -696,60 +738,89 @@ def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
     to fix a plan-reading bug.
 
     Heading match and section boundary are identical to the checkbox parser's
-    (same `_ATX_HEADING_RE`, same case-folded `startswith` prefix test, same
-    stop-at-same-or-higher-level rule), so the two agree on WHERE the section
-    is and differ only in WHAT they count inside it.
+    (both call `_locate_acceptance_criteria_section`/
+    `_iter_acceptance_criteria_section_lines`), so the two agree on WHERE the
+    section is — including fenced-code-block skipping (Finding 6) — and
+    differ only in WHAT they count inside it.
 
-    Status classification reads the LAST cell of the row, strips markdown
-    emphasis and whitespace, and takes its leading word:
-        - a token in `_AC_TABLE_OPEN_TOKENS`  -> open
-        - a token in `_AC_TABLE_DONE_TOKENS`  -> done
-        - anything else                       -> OPEN, deliberately.
-    An unrecognised status is counted open because this gate's entire purpose
-    is to refuse a false-clean close: mis-reading an unknown token as done
-    would let a landed plan with genuinely open criteria stamp `implemented`,
-    which is the exact failure it exists to prevent. Mis-reading it as open
-    costs one WARN a human resolves in a sentence.
+    THREE-OUTCOME STATUS CONTRACT (not two). A corpus scan of every `| ACn |`
+    row's last cell's leading token across `docs/plans/*.md` (2026-08-26)
+    found ~300 distinct tokens: the two Unicode checkbox glyphs `☐`/`☑`/`✅`
+    are major spellings (hundreds of occurrences each), and the tail is
+    unbounded prose ('the', 'a', 'not', 'every', 'test', ...). No allowlist
+    closes a 300-token open set, so a status cell is now one of three
+    outcomes, not two:
+        - a token in `_AC_TABLE_OPEN_TOKENS`         -> open
+        - a token in `_AC_TABLE_DONE_TOKENS`         -> done
+        - anything else, OR a row with fewer than 3
+          cells (no identifiable status column, the
+          `c1`/`c2`/`c3`/`c4` shape a differently-
+          columned table produces)                   -> UNREADABLE
+    An earlier version of this parser counted an unrecognised token as OPEN,
+    "deliberately, the safe direction" — but the safe direction fabricates a
+    number: a plan spelling its met criteria `satisfied` or `☑` would report
+    a false open-AC count with full confidence, which is worse than an
+    honest abstention (this gate already has one: `indeterminate`). Unreadable
+    rows are surfaced to the caller instead of silently folded into either
+    bucket, so the caller can refuse to conclude `not-applicable`/`applicable`
+    from a party-readable table (see `compute_landed_reconciliation_gate`).
 
-    Return contract mirrors the checkbox parser's three values exactly:
+    Return contract:
         - No `## Acceptance Criteria` heading at all -> `None`.
         - Heading present, no `| ACn |` rows before the boundary ->
-          `{"done": 0, "total": 0, "open": 0}` (`total == 0`).
-        - Otherwise -> real `done`/`total`/`open` counts.
+          `{"done": 0, "total": 0, "open": 0, "unreadable": 0}`.
+        - Otherwise -> `{"done", "total", "open", "unreadable"}`, where
+          `total == done + open + unreadable`.
+
+    KNOWN GAP (Finding 5, not fixed here — no corpus evidence of the shape):
+    a literal `\\|` escape or a `` `a|b` `` inline-code pipe inside the last
+    cell is not defended against; either would shift what `cells[-1]` actually
+    is. Left unfixed pending a real corpus example.
 
     Pure parser over already-read text: never opens a file, never builds
     `gates.*` evidence.
     """
     lines = text.splitlines()
-
-    section_level: Optional[int] = None
-    start_index: Optional[int] = None
-    for index, line in enumerate(lines):
-        match = _ATX_HEADING_RE.match(line)
-        if not match:
-            continue
-        if match.group(2).strip().casefold().startswith(_ACCEPTANCE_CRITERIA_PREFIX):
-            section_level = len(match.group(1))
-            start_index = index + 1
-            break
-
-    if start_index is None or section_level is None:
+    located = _locate_acceptance_criteria_section(lines)
+    if located is None:
         return None
+    start_index, section_level = located
 
     done = 0
     total = 0
-    for line in lines[start_index:]:
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match and len(heading_match.group(1)) <= section_level:
-            break
-        if not _AC_TABLE_ROW_RE.match(line):
+    unreadable = 0
+    status_column: Optional[int] = None
+    for line in _iter_acceptance_criteria_section_lines(lines, start_index, section_level):
+        if not line.lstrip().startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 2:
+        if not _AC_TABLE_ROW_RE.match(line):
+            # Not an AC row. It may be the header that names the status column.
+            # Header detection is the whole ballgame -- see the docstring: the
+            # LAST cell is a status in only some plans, and is a chunk id, a
+            # verification method, or an evidence pointer in the rest.
+            if status_column is None and any(
+                cell.casefold() == _AC_TABLE_STATUS_HEADER for cell in cells
+            ):
+                status_column = next(
+                    i for i, cell in enumerate(cells)
+                    if cell.casefold() == _AC_TABLE_STATUS_HEADER
+                )
             continue
         total += 1
-        token = cells[-1].lstrip("*_ ").split()[0].strip("*_:.,").casefold() if cells[-1].strip() else ""
+        if status_column is None or status_column >= len(cells):
+            # No column is NAMED status (or this row is too short to carry it).
+            # There is nothing here to read, and guessing at a positional cell
+            # is what produced wrong answers before. Unreadable, by design.
+            unreadable += 1
+            continue
+        cell = cells[status_column]
+        token = cell.lstrip("*_ ").split()[0].strip("*_:.,").casefold() if cell.strip() else ""
         if token in _AC_TABLE_DONE_TOKENS:
             done += 1
+        elif token in _AC_TABLE_OPEN_TOKENS:
+            pass
+        else:
+            unreadable += 1
 
-    return {"done": done, "total": total, "open": total - done}
+    return {"done": done, "total": total, "open": total - done - unreadable, "unreadable": unreadable}

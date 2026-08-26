@@ -226,3 +226,42 @@ def test_carve_out_register_names_this_hook_site() -> None:
 )
 def test_classification_of_an_existing_hook(content: str | None, expected: str) -> None:
     assert classify_existing(content) == expected
+
+
+def test_foreign_hook_merely_mentioning_git_lfs_pre_push_is_not_misclassified() -> None:
+    """Review: code-reviewer P1 — a hand-written foreign hook that merely
+    MENTIONS the stock-lfs marker inside a comment must classify as
+    `foreign`, never `stock-lfs`. A plain substring probe would misclassify
+    this and `install()` would silently overwrite it."""
+    foreign = "#!/bin/sh\n# do not run git lfs pre-push here\nexec ./run-my-checks.sh\n"
+    assert classify_existing(foreign) == "foreign"
+
+
+def test_foreign_hook_mentioning_coordinator_lfs_gate_in_prose_is_not_misclassified() -> None:
+    """Same edge for the `ours` marker: a comment that mentions
+    `coordinator-lfs-gate` without the line itself STARTING WITH the marker
+    (e.g. documenting a decision to avoid it) must not be read as `ours`."""
+    foreign = "#!/bin/sh\n# we deliberately avoid coordinator-lfs-gate here\nexec ./run-my-checks.sh\n"
+    assert classify_existing(foreign) == "foreign"
+
+
+def test_foreign_hook_mentioning_git_lfs_pre_push_is_not_overwritten_by_install(tmp_path: Path) -> None:
+    """End-to-end guard for the same edge: `install()` must leave this
+    foreign hook exactly as found, not silently overwrite it."""
+    hooks = tmp_path / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    foreign = "#!/bin/sh\n# do not run git lfs pre-push here\nexec ./run-my-checks.sh\n"
+    (hooks / HOOK_FILENAME).write_text(foreign, encoding="utf-8")
+
+    code, message = install(hooks)
+
+    assert code == 0
+    assert (hooks / HOOK_FILENAME).read_text(encoding="utf-8") == foreign
+    assert "left untouched" in message
+
+
+def test_our_own_current_hook_body_classifies_as_ours_not_stock_lfs() -> None:
+    """Order-of-checks regression guard: our own template's delegate arm
+    contains `exec git lfs pre-push "$@"`, so checking `stock-lfs` before
+    `ours` would misclassify our own current hook as the stock shim."""
+    assert classify_existing(hook_body()) == "ours"

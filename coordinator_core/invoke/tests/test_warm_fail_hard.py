@@ -41,7 +41,24 @@ def _registered_ping_op():
         ipc._REGISTRY["test.warm_fail_hard_ping"] = saved
 
 
-def _run(monkeypatch, tmp_path, *, warm_enabled: bool, warm_response, allow_unstamped: bool):
+def _run(
+    monkeypatch,
+    tmp_path,
+    *,
+    warm_enabled: bool,
+    warm_response,
+    allow_unstamped: bool,
+    boot_wait_secs: str = "0",
+    warm_dispatch=None,
+):
+    """`boot_wait_secs` defaults to "0" -- the bounded boot wait OFF.
+
+    Every test in this file that predates the wait is asserting the
+    MISS-TO-REFUSAL policy, not the wait, and a nonzero default would make
+    each of them sit through a real deadline to reach the same assertion.
+    The wait's own behaviour is covered by the tests at the bottom of this
+    file, which set this explicitly."""
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", boot_wait_secs)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", allow_unstamped)
     # Isolates the fail-hard warm policy under test from the SEPARATE
     # dispatch-axis stamp gate (already covered by test_dispatch_message.py's
@@ -53,7 +70,15 @@ def _run(monkeypatch, tmp_path, *, warm_enabled: bool, warm_response, allow_unst
         "coordinator_core.warm.settings.is_warm_enabled", lambda: warm_enabled
     )
     monkeypatch.setattr(
-        "coordinator_core.warm.client.try_warm_dispatch", lambda msg: warm_response
+        "coordinator_core.warm.client.try_warm_dispatch",
+        warm_dispatch if warm_dispatch is not None else (lambda msg: warm_response),
+    )
+    # The boot-wait instrument appends to the REAL per-clone runtime directory.
+    # A test's synthetic wait is not a sample of this box's boot, and letting one
+    # land would corrupt the only evidence that can settle how long boot takes.
+    monkeypatch.setattr(
+        "coordinator_core.warm.telemetry.record_client_boot_wait",
+        lambda **kwargs: None,
     )
     # No --repo: "test.warm_fail_hard_ping" is unregistered in op_scopes.py
     # and therefore "none"-scoped by default, on which --repo is REFUSED
@@ -126,10 +151,13 @@ def test_transient_miss_names_the_defect_rather_than_a_wait(monkeypatch, tmp_pat
     assert code != 0
     assert "warm dispatch unavailable" in stderr
     assert "THIS IS A DEFECT" in stderr, "an over-budget path must not read as a queue"
-    assert "immediate retry is expected to fail" in stderr
-    # Both phrasings that caused a misdiagnosis, pinned absent so neither returns.
+    # With the wait switched off (this helper's default), the message must say
+    # so rather than claim a wait that never happened.
+    assert "COORDINATOR_WARM_BOOT_WAIT_SECS=0" in stderr
+    # Every phrasing that caused a misdiagnosis, pinned absent so none returns.
     assert "retry in a moment" not in stderr
     assert "MINUTES" not in stderr, "unmeasured, and it made a P0 read as cadence"
+    assert "waiting it out" not in stderr
 
 
 def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
@@ -170,6 +198,110 @@ def test_warm_hit_never_reaches_the_policy_check(monkeypatch, tmp_path):
 
     assert code == 0
     assert "warm" in stdout
+
+
+def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch, tmp_path):
+    """THE P0 THIS CLOSES (2026-08-25/26). A miss triggers a respawn on its way
+    out, so the call that gets refused is the one whose fix is already in
+    flight. Refusing anyway made the retry interval a human's guess, and the
+    guess was unbounded: `cross-repo-memo send` took four minutes and three
+    hand-retries to move one file, and four sessions lost an evening's memo
+    traffic to it.
+
+    A server that starts answering DURING the bound must serve the call, not
+    watch it fail."""
+    calls = {"n": 0}
+
+    def _late(msg):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None
+        return {"jsonrpc": "2.0", "id": 1, "result": {"pong": "warm-after-boot"}}
+
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
+    stdout, stderr, code = _run(
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        warm_dispatch=_late,
+        allow_unstamped=False,
+        boot_wait_secs="5",
+    )
+
+    assert code == 0
+    assert "warm-after-boot" in stdout
+    assert "waiting up to" in stderr, "a wait must announce itself, never be silent"
+
+
+def test_bounded_wait_still_fails_hard_on_expiry(monkeypatch, tmp_path):
+    """NOT BACKSTOP 2. The wait ends in a refusal, never in a cold spawn: what
+    the PM retired was a SILENT degrade to cold on every miss, and this waits
+    for the WARM server, once, announced, then fails.
+
+    The refusal reports the duration it ACTUALLY waited -- a fact about this
+    call, which is the opposite of the ETA the negative-spec forbids."""
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
+    stdout, stderr, code = _run(
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        allow_unstamped=False,
+        boot_wait_secs="0.3",
+    )
+
+    assert code != 0
+    assert stdout == "", "expiry must not fall through to cold dispatch"
+    assert "THIS IS A DEFECT" in stderr
+    assert "without the warm server accepting connections" in stderr
+    assert "--allow-unstamped-dispatch" in stderr
+
+
+def test_bounded_wait_aborts_early_on_a_permanent_reason(monkeypatch, tmp_path):
+    """A reason established mid-wait recurs identically on every poll, so
+    waiting the bound out would spend it reaching a conclusion already in hand.
+    The permanent reason leads, and the retry advice stays absent."""
+    reason = "warm engine: resolved engine root does not exist: /nowhere/klabauter"
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: reason)
+
+    stdout, stderr, code = _run(
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        allow_unstamped=False,
+        boot_wait_secs="60",  # never reached: the abort fires on the first poll
+    )
+
+    assert code != 0
+    assert reason in stderr
+    assert "retrying will not clear this" in stderr
+
+
+def test_boot_wait_knob_parsing(monkeypatch):
+    """`0` is the only way to switch the wait off. A malformed or negative
+    value falls back to the default rather than silently disabling it --
+    a knob nobody can read must not be a knob that turns a safeguard off."""
+    from coordinator_core.invoke.__main__ import (
+        WARM_BOOT_WAIT_SECS,
+        _warm_boot_wait_deadline,
+    )
+
+    monkeypatch.delenv("COORDINATOR_WARM_BOOT_WAIT_SECS", raising=False)
+    assert _warm_boot_wait_deadline() == WARM_BOOT_WAIT_SECS
+
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
+    assert _warm_boot_wait_deadline() == 0.0
+
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "2.5")
+    assert _warm_boot_wait_deadline() == 2.5
+
+    for bad in ("", "   ", "soon", "-4"):
+        monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", bad)
+        assert _warm_boot_wait_deadline() == WARM_BOOT_WAIT_SECS, bad
 
 
 def test_warm_disabled_still_falls_through_to_cold(monkeypatch, tmp_path):

@@ -2050,28 +2050,35 @@ def compute_landed_reconciliation_gate(
             summary_line=_LANDED_RECONCILIATION_NOT_APPLICABLE_SUMMARY, verdict="not-applicable",
         )
 
-    parsed = directives_session_hygiene.parse_consumed_handoff_acceptance_criteria(source)
-    if parsed is None:
+    checkbox_parsed = directives_session_hygiene.parse_consumed_handoff_acceptance_criteria(source)
+    if checkbox_parsed is None:
         return _landed_reconciliation_indeterminate(
             f"governing plan {governing_plan_slug} is status: landed but carries no "
             "## Acceptance Criteria heading"
         )
-    if parsed["total"] == 0:
-        # Checkboxes are the HANDOFF spelling; plans overwhelmingly carry their
-        # criteria as `| ACn | criterion | status |` table rows (226 vs 21 over
-        # docs/plans/, measured 2026-08-26). Reading zero checkboxes on a plan
-        # therefore means "wrong grammar", not "nothing to reconcile", and
-        # abstaining here made this gate blind on ~91% of the corpus it guards
-        # -- it reported `indeterminate` against a plan whose every criterion
-        # was visibly met, and that indeterminate now blocks the implemented
-        # stamp. Fall back to the table reader before conceding; only a plan
-        # that carries NEITHER grammar is genuinely unreadable.
-        parsed = directives_session_hygiene.parse_plan_acceptance_criteria_table(source)
-        if parsed is None or parsed["total"] == 0:
-            return _landed_reconciliation_indeterminate(
-                f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
-                "Criteria heading carries neither checkboxes nor | ACn | table rows"
-            )
+    # Checkboxes are the HANDOFF spelling; plans overwhelmingly carry their
+    # criteria as `| ACn | criterion | status |` table rows (226 vs 21 over
+    # docs/plans/, measured 2026-08-26). Try both and prefer whichever grammar
+    # actually has rows (Review: coordinator:code-reviewer Finding 4 — a stray
+    # `- [ ]` task-list item elsewhere in the same section must not silently
+    # shadow a real table): if both parses find rows, the larger `total` wins.
+    table_parsed = directives_session_hygiene.parse_plan_acceptance_criteria_table(source)
+    if checkbox_parsed["total"] == 0 and (table_parsed is None or table_parsed["total"] == 0):
+        return _landed_reconciliation_indeterminate(
+            f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
+            "Criteria heading carries neither checkboxes nor | ACn | table rows"
+        )
+    if table_parsed is not None and table_parsed["total"] > checkbox_parsed["total"]:
+        parsed = table_parsed
+    else:
+        parsed = checkbox_parsed
+    unreadable = parsed.get("unreadable", 0)
+    if unreadable:
+        return _landed_reconciliation_indeterminate(
+            f"governing plan {governing_plan_slug} is status: landed but "
+            f"{unreadable} of {parsed['total']} Acceptance Criteria rows could not be read "
+            "(unrecognised status token or a row with no identifiable status column)"
+        )
     if parsed["open"] == 0:
         return LandedReconciliationGate(
             applies=False, open_count=0, total_count=parsed["total"], warn_text=None,
@@ -3070,6 +3077,8 @@ def _measure_session_review_scale_inputs(
     session_id: str = "",
     uncommitted_paths: Optional[list[str]] = None,
     commit_slices_out: Optional[list[dict[str, Any]]] = None,
+    precomputed_session_shas: Optional[list[str]] = None,
+    shared_numstat_blocks: Optional[dict[str, str]] = None,
 ) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
     """Measures `(gross_loc, code_loc, commit_count, surface_count)` — the
     four disk-derivable row-4 brightline inputs `decide_review_scale` reads
@@ -3130,6 +3139,21 @@ def _measure_session_review_scale_inputs(
     function already fetches for `gross_loc`/`code_loc` (no second spawn).
     This is a SIDE CHANNEL, not a return value — the four-tuple return
     stays byte-identical so every existing caller/test is unaffected.
+    `precomputed_session_shas`/`shared_numstat_blocks` (C1, spawn-collapse
+    dispatch brief `.../C1.md`): when the caller already resolved this
+    session's own shas AND already spawned the union `show --numstat`
+    covering them (via `directives_commit_tail.resolve_known_concurrent_
+    paths`'s own `extra_shas`/`extra_numstat_out`), it hands both back here
+    instead of letting this function re-derive `shas` (a second `_session_
+    owned_shas` spawn) and re-fetch the committed-leg numstat text (a
+    second `git show --numstat`, spawn #6 pre-C1) — the whole point of the
+    collapse. `shared_numstat_blocks` is `{sha: numstat_text}`, the same
+    per-sha shape `_split_per_commit_numstat` used to derive from a single
+    combined blob; supplying it directly skips that split step too. Either
+    kwarg absent (the pre-C1 default) reproduces this function's original
+    behaviour exactly — its own `_session_owned_shas` call and its own
+    `git show --numstat` spawn, unchanged.
+
     Left untouched (never appended to) when `shas` is `None`
     (unresolvable) or the committed-leg `git show` itself fails — a caller
     must read `commit_count is None` off this function's own return, not
@@ -3140,7 +3164,7 @@ def _measure_session_review_scale_inputs(
     needs to know uncommitted work contributed LOC not covered by any
     slice compares its own `code_loc` against the sum of `diff_loc` across
     the appended entries."""
-    shas = _session_owned_shas(root, session_id)
+    shas = precomputed_session_shas if precomputed_session_shas is not None else _session_owned_shas(root, session_id)
     if shas is None:
         return None, None, None, None
     commit_count = len(shas)
@@ -3150,18 +3174,28 @@ def _measure_session_review_scale_inputs(
     surfaces: set[str] = set()
 
     if shas:
-        # `--format=%H` (not the empty `--format=` this call used before A)
-        # -- puts a marker line at each commit's head so `_split_per_commit_
-        # numstat` can attribute LOC per commit from this SAME spawn; see
-        # that helper's own docstring for why the accumulators below are
-        # unaffected by the format change.
-        committed = _run_git_read_only(["show", "--numstat", "--format=%H", *shas], root)
-        if committed is None:
-            return None, None, None, None
+        if shared_numstat_blocks is not None:
+            # C1: the caller already spawned the union `show --numstat`
+            # (via `directives_commit_tail.resolve_known_concurrent_paths`'s
+            # `extra_shas`/`extra_numstat_out`) and handed back this
+            # session's own slice of it pre-partitioned by sha -- no second
+            # spawn, no re-split needed (`per_sha_text` IS the per-sha shape
+            # `_split_per_commit_numstat` would otherwise derive).
+            per_sha_text = shared_numstat_blocks
+            committed = "\n".join(per_sha_text.get(sha, "") for sha in shas)
+        else:
+            # `--format=%H` (not the empty `--format=` this call used before A)
+            # -- puts a marker line at each commit's head so `_split_per_commit_
+            # numstat` can attribute LOC per commit from this SAME spawn; see
+            # that helper's own docstring for why the accumulators below are
+            # unaffected by the format change.
+            committed = _run_git_read_only(["show", "--numstat", "--format=%H", *shas], root)
+            if committed is None:
+                return None, None, None, None
+            per_sha_text = _split_per_commit_numstat(committed, shas)
         gross_loc += _accumulate_numstat(committed, surfaces)
         code_loc += _accumulate_code_loc_numstat(committed)
         if commit_slices_out is not None:
-            per_sha_text = _split_per_commit_numstat(committed, shas)
             for sha in shas:
                 commit_slices_out.append(
                     {
@@ -3701,8 +3735,22 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     known_concurrent_paths: "Optional[frozenset[str]]" = None
     classified_session_files: Optional[list[dict[str, Any]]] = None
     measurement_paths = decisions.get("stage_paths")
+    # C1 (spawn-collapse dispatch brief `.../C1.md`): resolved once, up
+    # front, so it can ride along on the SAME `show --numstat` union
+    # `resolve_known_concurrent_paths` below spawns for peer attribution —
+    # `_session_owned_shas` itself is a separate (unmerged) trailer-walk
+    # spawn, unchanged; only the LATER `show --numstat` LOC spawn (#6)
+    # collapses into the peer-paths spawn (#2).
+    precomputed_session_shas = _session_owned_shas(root, gate.sid)
+    shared_numstat_blocks: Optional[dict[str, str]] = None
     if measurement_paths is None:
-        known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(root, gate.sid)
+        shared_numstat_blocks = {}
+        known_concurrent_paths = directives_commit_tail.resolve_known_concurrent_paths(
+            root,
+            gate.sid,
+            extra_shas=precomputed_session_shas or (),
+            extra_numstat_out=shared_numstat_blocks,
+        )
         classified_session_files = directives_memo_lifecycle.classify_session_authored_files(
             root, session_start_time, known_concurrent_paths=known_concurrent_paths
         )
@@ -3726,6 +3774,18 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             gate.sid,
             uncommitted_paths=measurement_paths,
             commit_slices_out=review_scale_commit_slices,
+            precomputed_session_shas=precomputed_session_shas,
+            # Only trusted together: `shared_numstat_blocks` is a partition
+            # of the union spawned FOR `precomputed_session_shas` specifically
+            # (see the `extra_shas=` call above) -- if that resolution came
+            # back `None` (unresolvable), the union was never keyed to the
+            # right shas, so this function must fall back to its own
+            # self-consistent `_session_owned_shas` + `show --numstat` pair
+            # rather than pairing a stale/empty blocks dict with a
+            # DIFFERENT shas list it resolves internally.
+            shared_numstat_blocks=(
+                shared_numstat_blocks if precomputed_session_shas is not None else None
+            ),
         )
     )
     resolved_gross_loc = decisions.get("gross_loc")

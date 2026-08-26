@@ -114,6 +114,10 @@ __all__ = [
     "record_client_cold_fallback",
     "client_cold_count",
     "warm_rate",
+    "BOOT_WAIT_FILENAME",
+    "boot_wait_path",
+    "record_client_boot_wait",
+    "boot_wait_samples",
 ]
 
 EXIT_REASON_SKEW = "skew"
@@ -185,6 +189,81 @@ def record_client_cold_fallback(*, engine_root: Optional[Path] = None) -> None:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         return
+
+
+BOOT_WAIT_FILENAME = "client-boot-wait.jsonl"
+
+
+def boot_wait_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/client-boot-wait.jsonl` -- one row per bounded wait a
+    client actually entered, alongside `client_cold_path()` and for the
+    same reason it is separate from the server's own file: only the
+    CLIENT can observe how long it waited for a server to start
+    answering."""
+    return svc_dir(engine_root) / BOOT_WAIT_FILENAME
+
+
+def record_client_boot_wait(
+    *,
+    waited_secs: float,
+    served: bool,
+    deadline_secs: float,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row for a bounded warm-boot wait entered by a client.
+
+    THE MEASUREMENT NOBODY HAD. Before this, the interval between a
+    detached spawn and the first call that server accepted was supplied by
+    a human retrying by hand, so every number on record was an operator's
+    patience, not a boot. `waited_secs` is measured from the moment the
+    client's own dispatch missed (which is also the moment its spawn
+    attempt went out) to the moment a warm server served it, or to the
+    deadline when none did -- `served` says which. Rows accumulate across
+    processes exactly like `record_client_cold_fallback`'s, and are the
+    only evidence that can settle whether this box's boot is seconds or
+    minutes.
+
+    Best-effort: never raises, same contract as
+    `record_client_cold_fallback` -- an instrument may not be the reason
+    an op fails.
+    """
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "waited_secs": round(waited_secs, 3),
+        "served": served,
+        "deadline_secs": deadline_secs,
+    }
+    path = boot_wait_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.boot_wait"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def boot_wait_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded boot-wait row, oldest first -- a plain file read, no
+    running server required. Absent file reads as an empty list, and an
+    unparseable row is skipped rather than failing the read (the file is
+    append-only from many processes; a torn line is a lost sample, not a
+    corrupt instrument)."""
+    path = boot_wait_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
 
 
 def client_cold_count(engine_root: Optional[Path] = None) -> int:
@@ -269,6 +348,7 @@ class ServerTelemetry:
         self._warm_count = 0
         self._cold_count = 0
         self._exit_reason: Optional[str] = None
+        self._exit_detail: Optional[str] = None
 
     def record_invocation(self, *, warm: bool) -> int:
         """Record one served invocation as warm or cold. Returns the
@@ -294,10 +374,21 @@ class ServerTelemetry:
         with self._lock:
             return self._served_count
 
-    def record_exit(self, reason: str) -> None:
+    def record_exit(self, reason: str, detail: Optional[str] = None) -> None:
         """Record why this server is exiting. `reason` must be one of
         `EXIT_REASONS` (skew / superseded / idle-demotion / operator-stop /
         degraded).
+
+        `detail` is an optional free-text refinement of `reason`, surfaced
+        as `exit_detail` and OMITTED when absent, so every row written
+        before this existed keeps its exact shape and no reader has to
+        learn a new key to keep working. Its first use is the skew axis
+        (`warm.skew.SKEW_AXIS_SOURCE` / `SKEW_AXIS_TOKEN`, comma-joined
+        when both hold): `skew` was the largest exit reason on this box and
+        collapsed two mechanisms whose remediations point in opposite
+        directions, so the aggregate could not tell anyone which one to go
+        fix.
+
         First call wins -- a server exits at most once (`warm.lifecycle`'s
         single-shot guard), so a second call is a caller bug, not a
         legitimate second exit; it is silently ignored rather than raised,
@@ -309,6 +400,7 @@ class ServerTelemetry:
         with self._lock:
             if self._exit_reason is None:
                 self._exit_reason = reason
+                self._exit_detail = detail
 
     def snapshot(self) -> dict:
         """A point-in-time dict of this server life's counters -- the
@@ -316,13 +408,30 @@ class ServerTelemetry:
         without touching disk.
         """
         with self._lock:
-            return {
+            record = {
                 "served_count": self._served_count,
                 "warm_count": self._warm_count,
                 "cold_count": self._cold_count,
                 "exit_reason": self._exit_reason,
                 "life_seconds": self._clock() - self._started_monotonic,
             }
+            # Present only when a detail was actually recorded, which keeps
+            # every row written before this field, and every reader of them,
+            # working unchanged.
+            #
+            # THE COST OF THAT, NAMED SO NOBODY READS IT AS A RESULT: absence
+            # is ambiguous. A `skew` row with no `exit_detail` is either a
+            # pre-2026-08-26 row that could not carry one or a server that
+            # recorded none, and nothing in the file tells them apart. The 112
+            # historical skews in this box's seven-day file therefore cannot be
+            # attributed to an axis, ever -- an axis split is a FORWARD
+            # measurement over rows written after `584c452b5`, not a re-read of
+            # what is already on disk. Anyone who goes back to the old rows
+            # will find no axes and must not conclude the axes were absent
+            # (claude-klabauter-22, 2026-08-26).
+            if self._exit_detail is not None:
+                record["exit_detail"] = self._exit_detail
+            return record
 
     def flush(self, *, engine_root: Optional[Path] = None) -> None:
         """Append this server life's `snapshot()` (plus a wall-clock

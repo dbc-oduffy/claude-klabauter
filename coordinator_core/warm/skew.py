@@ -193,6 +193,16 @@ def __getattr__(name: str):
 
 _REFRESH_INTERVAL_SECS = 2.0
 
+#: Which axis found a request skewed, recorded on the server's exit row so
+#: the two can be told apart after the fact. `SKEW_AXIS_SOURCE` is axis 2 --
+#: this server's own engine source changed since boot, including an
+#: uncommitted edit in the serving clone. `SKEW_AXIS_TOKEN` is axis 1 -- the
+#: client's build-stamp token disagrees with this server's, which happens
+#: when a publish ships engine-touching code. `ServerVersionState.is_skewed`
+#: may report both.
+SKEW_AXIS_SOURCE = "source"
+SKEW_AXIS_TOKEN = "token"
+
 
 def _default_engine_clone() -> Path:
     # Collapsed onto the single shared definition (plan
@@ -564,6 +574,7 @@ class ServerVersionState:
         self._last_mtime_prefilter = _max_source_mtime(_source_pkg_dir())
         self._last_refresh = self._clock()
         self._source_stale = False
+        self._last_skew_axes: tuple = ()
 
     def refresh(self, *, force: bool = False) -> None:
         """Run the throttled axis-2 check if `_REFRESH_INTERVAL_SECS` has
@@ -613,11 +624,38 @@ class ServerVersionState:
         isn't yet due, per the throttle), so callers need no separate
         timer -- calling `is_skewed` once per request is the entire
         server-side integration contract for axis 2.
+
+        BOTH AXES ARE EVALUATED, NOT SHORT-CIRCUITED, and the deciding set
+        is left on `last_skew_axes` for the exit record. An earlier version
+        tested `_source_stale` first and returned early, which is correct
+        for the boolean and wrong for attribution: when both axes hold,
+        only axis 2 was ever reachable, so any count built on it
+        under-reports axis 1 BY CONSTRUCTION (claude-klabauter-22,
+        2026-08-26). The two have opposite remediations -- axis 1 is the
+        publish cadence stranding servers, axis 2 is something editing
+        engine source in the clone that serves the fleet -- so a telemetry
+        row that cannot tell them apart sends the next reader at the wrong
+        one. The extra cost is one stat (`compute_client_token`'s stamp
+        read) on a request that is already about to evict this server, not
+        on the served path.
         """
         self.refresh()
+        axes = []
         if self._source_stale:
-            return True
-        return compute_client_token(self._root) != client_token
+            axes.append(SKEW_AXIS_SOURCE)
+        if compute_client_token(self._root) != client_token:
+            axes.append(SKEW_AXIS_TOKEN)
+        self._last_skew_axes = tuple(axes)
+        return bool(axes)
+
+    @property
+    def last_skew_axes(self) -> tuple:
+        """The axes that decided the most recent `is_skewed` call -- a
+        subset of (`SKEW_AXIS_SOURCE`, `SKEW_AXIS_TOKEN`), empty when that
+        call returned False or none has run yet. Read by `warm.server`'s
+        eviction path to record WHICH axis evicted; carries no meaning
+        outside the call that set it."""
+        return self._last_skew_axes
 
 
 def build_skew_response(request_id, server_sha: Optional[str], client_token: str) -> dict:

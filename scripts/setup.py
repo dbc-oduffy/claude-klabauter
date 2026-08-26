@@ -3045,6 +3045,12 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     engine this script has already verified importable, so this step costs no
     interpreter start (§ The brightline — an interpreter start ahead of
     warmth is break-class).
+
+    Review: code-reviewer P2 — the hooks directory is resolved via
+    `git rev-parse --git-path hooks` (one subprocess, cold install path
+    only), not hardcoded as `.git/hooks`, so a repo with `core.hooksPath`
+    set gets the gate written where git actually reads it. Falls back to
+    `repo_root/.git/hooks` on any resolution failure, advised on stderr.
     """
     print()
     print("--- Install: LFS pre-push gate ---")
@@ -3055,10 +3061,43 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
         print(f"[ADVISORY] LFS pre-push gate installer not importable ({exc}) — skipping.", file=sys.stderr)
         return
 
-    hooks_dir = repo_root / ".git" / "hooks"
     if not (repo_root / ".git").is_dir():
         print("[ADVISORY] no .git directory at the repo root — skipping LFS pre-push gate.")
         return
+
+    # Review: code-reviewer P2 — resolve the ACTUAL hooks directory via
+    # `git rev-parse --git-path hooks` rather than hardcoding `.git/hooks`.
+    # A repo with `core.hooksPath` set writes the gate somewhere git never
+    # reads, so the installer reports success while the vendor shim keeps
+    # running on the real push path — a silent no-op reported as done. One
+    # subprocess, cold install path only, never near the push hot path.
+    hooks_dir = repo_root / ".git" / "hooks"
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--git-path", "hooks"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            **_NO_CONSOLE,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            resolved = Path(proc.stdout.strip())
+            if not resolved.is_absolute():
+                resolved = repo_root / resolved
+            hooks_dir = resolved.resolve()
+        else:
+            print(
+                "[ADVISORY] git rev-parse --git-path hooks failed — falling back to "
+                f"{hooks_dir} (a core.hooksPath override, if any, would be missed).",
+                file=sys.stderr,
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(
+            f"[ADVISORY] could not resolve hooks directory via git ({exc}) — falling back to "
+            f"{hooks_dir} (a core.hooksPath override, if any, would be missed).",
+            file=sys.stderr,
+        )
 
     try:
         code, message = _install_gate(hooks_dir)

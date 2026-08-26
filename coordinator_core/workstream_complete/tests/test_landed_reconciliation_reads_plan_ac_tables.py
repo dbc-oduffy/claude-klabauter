@@ -20,11 +20,16 @@ Negative-spec:
       is also leg A of `consumed_handoff_completeness`, where the checkbox
       contract is right; teaching it a second grammar would change handoff
       semantics to fix a plan-reading bug. The table reader is a sibling, and
-      the gate tries checkboxes first and falls back.
-    - Does NOT assert that an unrecognised status token is treated as done. It
-      is treated as OPEN, on purpose, and this file pins that direction: a
-      false "done" lets a landed plan with open criteria stamp terminal, which
-      is the failure the gate exists to prevent; a false "open" costs one WARN.
+      the gate tries both and prefers whichever has rows.
+    - Does NOT assert that an unrecognised status token is treated as done OR
+      open. A corpus scan (2026-08-26) found ~300 distinct leading status
+      tokens, including the Unicode glyphs `☐`/`☑`/`✅` as major spellings —
+      no allowlist closes that set. An unrecognised token, or a status-column
+      row with fewer than 3 cells, is UNREADABLE: the gate reports
+      `indeterminate` rather than fabricate an open/done count. A false
+      "done" lets a landed plan with open criteria stamp terminal; a false
+      "open" would silently misreport a plan spelled `satisfied`/`☑` — both
+      are worse than an honest abstention.
 """
 from __future__ import annotations
 
@@ -58,7 +63,31 @@ _TABLE_PLAN_WITH_AN_OPEN_ROW = _TABLE_PLAN.replace(
 
 def test_table_rows_are_counted_where_checkboxes_find_nothing() -> None:
     assert parse_consumed_handoff_acceptance_criteria(_TABLE_PLAN)["total"] == 0
-    assert parse_plan_acceptance_criteria_table(_TABLE_PLAN) == {"done": 2, "total": 2, "open": 0}
+    assert parse_plan_acceptance_criteria_table(_TABLE_PLAN) == {
+        "done": 2, "total": 2, "open": 0, "unreadable": 0,
+    }
+
+
+def test_satisfied_and_checkbox_glyphs_count_as_done() -> None:
+    satisfied = _TABLE_PLAN.replace(
+        "| AC2 | second | **met** — landed at `def5678` |", "| AC2 | second | satisfied |"
+    )
+    assert parse_plan_acceptance_criteria_table(satisfied) == {
+        "done": 2, "total": 2, "open": 0, "unreadable": 0,
+    }
+    glyphs = _TABLE_PLAN.replace(
+        "| AC1 | first | **met** — landed at `abc1234` |", "| AC1 | first | ☑ |"
+    ).replace("| AC2 | second | **met** — landed at `def5678` |", "| AC2 | second | ✅ |")
+    assert parse_plan_acceptance_criteria_table(glyphs) == {
+        "done": 2, "total": 2, "open": 0, "unreadable": 0,
+    }
+
+
+def test_open_checkbox_glyph_counts_as_open() -> None:
+    open_glyph = _TABLE_PLAN.replace(
+        "| AC2 | second | **met** — landed at `def5678` |", "| AC2 | second | ☐ |"
+    )
+    assert parse_plan_acceptance_criteria_table(open_glyph)["open"] == 1
 
 
 def test_open_and_partial_rows_count_as_open() -> None:
@@ -69,12 +98,34 @@ def test_open_and_partial_rows_count_as_open() -> None:
     assert parse_plan_acceptance_criteria_table(partial)["open"] == 1
 
 
-def test_an_unrecognised_status_counts_as_open_not_done() -> None:
-    """The safe direction. A false 'done' stamps a terminal state over open
-    criteria; a false 'open' costs one WARN."""
+def test_an_unrecognised_status_is_unreadable_not_a_fabricated_open() -> None:
+    """A genuinely unrecognised prose token must not become a confident open
+    count -- an honest abstention (unreadable) beats a fabricated number in
+    either direction."""
     odd = _TABLE_PLAN.replace("| AC2 | second | **met** — landed at `def5678` |",
                               "| AC2 | second | probably fine? |")
-    assert parse_plan_acceptance_criteria_table(odd)["open"] == 1
+    result = parse_plan_acceptance_criteria_table(odd)
+    assert result["unreadable"] == 1
+    assert result["open"] == 0
+    assert result["done"] == 1
+
+
+def test_a_row_with_fewer_than_three_cells_is_unreadable() -> None:
+    two_cell = _TABLE_PLAN.replace("| AC2 | second | **met** — landed at `def5678` |",
+                                   "| AC2 | met |")
+    result = parse_plan_acceptance_criteria_table(two_cell)
+    assert result["unreadable"] == 1
+    assert result["total"] == 2
+
+
+def test_fenced_example_row_is_not_counted() -> None:
+    fenced = _TABLE_PLAN.replace(
+        "## Tasks",
+        "```\n| AC9 | example | met |\n```\n\n## Tasks",
+    )
+    assert parse_plan_acceptance_criteria_table(fenced) == {
+        "done": 2, "total": 2, "open": 0, "unreadable": 0,
+    }
 
 
 def test_no_acceptance_criteria_heading_still_returns_none() -> None:
@@ -124,6 +175,37 @@ def test_gate_is_still_indeterminate_when_neither_grammar_is_present(tmp_path: P
 
     assert gate.verdict == "indeterminate"
     assert "neither checkboxes nor" in gate.summary_line
+
+
+def test_gate_reports_indeterminate_on_an_unreadable_status_row(tmp_path: Path) -> None:
+    """A landed plan whose table has a genuinely unrecognised status token
+    must not fabricate an open/done count -- it reports indeterminate,
+    naming how many rows could not be read."""
+    plan = tmp_path / "plan.md"
+    plan.write_text(_TABLE_PLAN.replace(
+        "| AC2 | second | **met** — landed at `def5678` |", "| AC2 | second | probably fine? |"
+    ), encoding="utf-8")
+
+    gate = compute_landed_reconciliation_gate("plan", plan)
+
+    assert gate.verdict == "indeterminate"
+    assert "could not be read" in gate.summary_line or "could not be read" in (gate.warn_text or "")
+
+
+def test_gate_prefers_the_larger_total_on_mixed_grammar(tmp_path: Path) -> None:
+    """A stray checkbox-shaped line elsewhere in the AC section must not
+    shadow a real table -- the parse with the larger total wins."""
+    mixed = _TABLE_PLAN.replace(
+        "## Tasks",
+        "- [ ] unrelated follow-up note\n\n## Tasks",
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text(mixed, encoding="utf-8")
+
+    gate = compute_landed_reconciliation_gate("plan", plan)
+
+    assert gate.verdict == "not-applicable"
+    assert gate.total_count == 2
 
 
 def test_checkbox_plans_are_untouched_by_the_fallback(tmp_path: Path) -> None:

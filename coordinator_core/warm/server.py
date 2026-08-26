@@ -974,7 +974,7 @@ def _serve_line(
     dispatch: Callable[..., dict] = _run_dispatch,
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
-    record_exit: Callable[[str], None] = lambda reason: None,
+    record_exit: Callable[..., None] = lambda reason, detail=None: None,
 ) -> None:
     """Process one request frame for one connection: write exactly one
     response frame (or delegate that write to `warm.skew.evict_on_skew`'s
@@ -1040,7 +1040,20 @@ def _serve_line(
         return
 
     if version_state.is_skewed(client_token):
-        record_exit(telemetry.EXIT_REASON_SKEW)
+        # WHICH AXIS, not just that one fired. `is_skewed` evaluates both and
+        # leaves the deciding set behind precisely so this row can name it --
+        # axis 1 (token) means a publish stranded this server, axis 2 (source)
+        # means something edited engine source in the clone serving the fleet,
+        # and an undifferentiated `skew` count sends the next reader at
+        # whichever one they already suspected. `getattr` because
+        # `version_state` is an injected seam here, and a test double
+        # predating `last_skew_axes` must not start failing on an attribute it
+        # has no reason to carry.
+        axes = getattr(version_state, "last_skew_axes", ())
+        record_exit(
+            telemetry.EXIT_REASON_SKEW,
+            ",".join(axes) if axes else None,
+        )
         skew.evict_on_skew(
             respond=_write_and_release,
             close_listener=close_listener,
@@ -1074,7 +1087,7 @@ def _handle_connection(
     dispatch: Callable[..., dict] = _run_dispatch,
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
-    record_exit: Callable[[str], None] = lambda reason: None,
+    record_exit: Callable[..., None] = lambda reason, detail=None: None,
     already_entered: bool = False,
 ) -> None:
     """One connection's request/response lifecycle, run on its own thread.
@@ -1298,8 +1311,8 @@ class _ServerContext:
     def record_invocation(self, warm: bool) -> None:
         self.telemetry.record_invocation(warm=warm)
 
-    def record_exit(self, reason: str) -> None:
-        self.telemetry.record_exit(reason)
+    def record_exit(self, reason: str, detail: Optional[str] = None) -> None:
+        self.telemetry.record_exit(reason, detail)
 
     def _ensure_dispatch_pool(self) -> "concurrent.futures.ProcessPoolExecutor":
         """Build the `DISPATCH_PROCESS_POOL_SIZE`-worker-process pool on

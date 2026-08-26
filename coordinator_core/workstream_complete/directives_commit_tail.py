@@ -467,17 +467,108 @@ class PeerAttributionUnavailable(RuntimeError):
     """
 
 
+#: Numstat row shape (`added\tdeleted\tpath`), path-group only — mirrors
+#: `coordinator_core.workstream_complete`'s own
+#: `_REVIEW_SCALE_NUMSTAT_ROW_RE` (not imported: that module imports THIS
+#: one, so importing back would be circular; see `_SESSION_ID_UUID_RE`'s
+#: own "Ownership guard"-style precedent above for why a third small regex
+#: here beats a cross-direction import cycle). Only the path group is
+#: consumed on this side — the peer-attribution consumer never needed
+#: added/deleted, and still doesn't now that the spawn is shared with the
+#: LOC consumer.
+_NUMSTAT_ROW_RE = re.compile(r"^(?:-|\d+)\t(?:-|\d+)\t(.+)$")
+
+
+def chunked_show_numstat_blocks(
+    repo_root: Path, all_shas: "list[str]"
+) -> "Optional[Dict[str, str]]":
+    """THE single chunked `git show --numstat --format=<sentinel>%H <shas>`
+    spawn this module's peer-paths consumer and `__init__.py`'s session-LOC
+    consumer now both route through (C1: spawn #2's peer-paths walk and
+    spawn #6's session-LOC walk collapse to one `show --numstat`, since
+    `--numstat` is a strict superset of `--name-only`'s rows). Chunked at
+    `_COMMITTED_PATHS_CHUNK` shas per call, never one call per sha (see
+    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`) — a
+    union of two callers' sha sets is LARGER than either alone, so this is
+    MORE likely to need chunking, not less.
+
+    Returns `{sha: <raw numstat block text, one row per line, no header>}`
+    for every sha whose header line was seen in the output — a sha with a
+    header but zero rows still maps to `""`, never omitted. Returns `None`
+    (never a partial dict) on the FIRST chunk that still fails after
+    `_run_git_ok_retrying`'s bounded retry budget is exhausted — this
+    function does not itself decide fail-open vs fail-closed; each of its
+    two callers (`_chunked_committed_paths` here,
+    `_measure_session_review_scale_inputs` in `__init__.py`) applies its
+    OWN existing contract to a `None` result (raise
+    `PeerAttributionUnavailable`, or return the all-`None` four-tuple,
+    respectively) exactly as it did before this spawn was shared. Issues NO
+    spawn at all for an empty `all_shas` (returns `{}`) rather than one
+    over an empty argv.
+
+    `git show` on a merge sha defaults to combined-diff numstat rows
+    (verified empirically, restated at `_committed_paths_for_sids`'s own
+    `-c` paragraph) — identical to the former `git log --no-walk -c
+    --name-only`'s merge handling, so this format swap changes WHERE the
+    bytes come from, not what either consumer's merge-commit coverage is.
+    """
+    if not all_shas:
+        return {}
+    blocks: "Dict[str, str]" = {}
+    for i in range(0, len(all_shas), _COMMITTED_PATHS_CHUNK):
+        chunk = all_shas[i : i + _COMMITTED_PATHS_CHUNK]
+        out = _run_git_ok_retrying(
+            repo_root,
+            ["show", "--numstat", f"--format={_COMMIT_HEADER_SENTINEL}%H", *chunk],
+        )
+        if out is None:
+            return None
+        current_sha: Optional[str] = None
+        current_lines: "list[str]" = []
+        for line in out.splitlines():
+            if line.startswith(_COMMIT_HEADER_SENTINEL):
+                if current_sha is not None:
+                    blocks[current_sha] = "\n".join(current_lines)
+                current_sha = line[len(_COMMIT_HEADER_SENTINEL):].strip()
+                current_lines = []
+            elif current_sha is not None:
+                current_lines.append(line)
+        if current_sha is not None:
+            blocks[current_sha] = "\n".join(current_lines)
+    return blocks
+
+
+def _committed_paths_from_blocks(blocks: "Dict[str, str]") -> "Dict[str, Set[str]]":
+    """Projects `chunked_show_numstat_blocks`' `{sha: numstat_text}` down to
+    the peer-attribution consumer's own `{sha: touched_paths}` shape — the
+    superset-to-subset partition C1 names: `--numstat` carries
+    `added<TAB>deleted<TAB>path` per row, and this consumer only ever
+    needed the path column (the same rows `--name-only` alone used to hand
+    it)."""
+    result: "Dict[str, Set[str]]" = {}
+    for sha, text in blocks.items():
+        paths: "Set[str]" = set()
+        for line in text.splitlines():
+            match = _NUMSTAT_ROW_RE.match(line)
+            if match and match.group(1):
+                paths.add(match.group(1))
+        result[sha] = paths
+    return result
+
+
 def _chunked_committed_paths(
     repo_root: Path, all_shas: "list[str]"
 ) -> "Dict[str, Set[str]]":
-    """Spawn 2 of `_committed_paths_for_sids`, chunked at
-    `_COMMITTED_PATHS_CHUNK` shas per `git log --no-walk -c --name-only`
-    call (never one call per sha — see
-    `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`, the
-    standing guard this must not re-trip). Returns {sha: touched_paths},
-    the union across every chunk. Raises `PeerAttributionUnavailable` on
-    the FIRST chunk that STILL fails after `_run_git_ok_retrying`'s bounded
-    retry budget is exhausted — matches `coverage.py`'s `_bulk_trailer_
+    """Spawn 2 of `_committed_paths_for_sids`, now routed through the
+    shared `chunked_show_numstat_blocks` (see that function's own
+    docstring for the spawn/chunking contract this delegates to, and for
+    why the format changed from `log --no-walk -c --name-only` to `show
+    --numstat`). Returns {sha: touched_paths}, the union across every
+    chunk — same return shape as before this consolidation (AC2: frozen).
+
+    Raises `PeerAttributionUnavailable` when `chunked_show_numstat_blocks`
+    reports `None` (any chunk still failing after `_run_git_ok_retrying`'s
+    bounded retry budget) — matches `coverage.py`'s `_bulk_trailer_
     lookup`'s "never a partial map" posture; a partial union here would
     silently under-report a peer's touched paths for whichever shas fell in
     the failed chunk, which is the exact fail-open outcome this function
@@ -486,31 +577,22 @@ def _chunked_committed_paths(
     peer's git operation before this fail-closed raise ever fires — it does
     not weaken the raise itself.
     """
-    touched_by_sha: "Dict[str, Set[str]]" = {}
-    for i in range(0, len(all_shas), _COMMITTED_PATHS_CHUNK):
-        chunk = all_shas[i : i + _COMMITTED_PATHS_CHUNK]
-        touched_out = _run_git_ok_retrying(
-            repo_root,
-            ["log", "--no-walk", "-c", f"--format={_COMMIT_HEADER_SENTINEL}%H", "--name-only", *chunk],
+    blocks = chunked_show_numstat_blocks(repo_root, all_shas)
+    if blocks is None:
+        raise PeerAttributionUnavailable(
+            f"git show --numstat failed for one of {len(all_shas)} peer-committed "
+            "sha(s) after the bounded retry budget was exhausted — refusing to "
+            "return a partial/empty union."
         )
-        if touched_out is None:
-            raise PeerAttributionUnavailable(
-                f"git log --no-walk -c --name-only failed for a {len(chunk)}-sha chunk "
-                f"({i}:{i + len(chunk)} of {len(all_shas)} total) while resolving peer-"
-                "committed paths — refusing to return a partial/empty union."
-            )
-        current_sha: Optional[str] = None
-        for line in touched_out.splitlines():
-            if line.startswith(_COMMIT_HEADER_SENTINEL):
-                current_sha = line[len(_COMMIT_HEADER_SENTINEL):].strip()
-                touched_by_sha.setdefault(current_sha, set())
-            elif current_sha is not None and line.strip():
-                touched_by_sha[current_sha].add(line.strip())
-    return touched_by_sha
+    return _committed_paths_from_blocks(blocks)
 
 
 def _committed_paths_for_sids(
-    repo_root: Path, sid_to_start: "Dict[str, datetime]"
+    repo_root: Path,
+    sid_to_start: "Dict[str, datetime]",
+    *,
+    extra_shas: "Sequence[str]" = (),
+    extra_blocks_out: "Optional[Dict[str, str]]" = None,
 ) -> "Dict[str, Set[str]]":
     """The batched replacement for the former per-sha loop: for EVERY sid in
     `sid_to_start`, returns the set of paths touched by ITS OWN commits since
@@ -563,7 +645,22 @@ def _committed_paths_for_sids(
     mirrors one layer down.
     """
     result: "Dict[str, Set[str]]" = {sid: set() for sid in sid_to_start}
+    extra_shas = list(extra_shas)
     if not sid_to_start:
+        if extra_shas and extra_blocks_out is not None:
+            # No peer to attribute, but a session-LOC caller still needs its
+            # own shas' numstat blocks -- one spawn for its sake alone (still
+            # never per-sha, still through the shared chunked helper).
+            blocks = chunked_show_numstat_blocks(repo_root, extra_shas)
+            if blocks is None:
+                raise PeerAttributionUnavailable(
+                    f"git show --numstat failed for one of {len(extra_shas)} "
+                    "session-owned sha(s) after the bounded retry budget was "
+                    "exhausted while resolving peer-committed paths."
+                )
+            extra_blocks_out.update({sha: blocks[sha] for sha in extra_shas if sha in blocks})
+        elif extra_blocks_out is not None:
+            extra_blocks_out.clear()
         return result
 
     from coordinator_core.session_attribution import GitLogFailed, bulk_trailer_session_map
@@ -598,7 +695,11 @@ def _committed_paths_for_sids(
         shas_by_sid.setdefault(trailer, []).append(sha)
 
     all_shas = [sha for shas in shas_by_sid.values() for sha in shas]
-    if not all_shas:
+    peer_sha_set = set(all_shas)
+    union_shas = all_shas + [sha for sha in extra_shas if sha not in peer_sha_set]
+    if not union_shas:
+        if extra_blocks_out is not None:
+            extra_blocks_out.clear()
         return result
 
     # `-c` (combined diff) is load-bearing for a MERGE sha: plain `git log
@@ -612,8 +713,23 @@ def _committed_paths_for_sids(
     # sha's `-c` output is identical to its plain `--name-only` output.
     #
     # CHUNKED (never one call per sha, never a single unchunked argv) — see
-    # `_chunked_committed_paths` and `_COMMITTED_PATHS_CHUNK`.
-    touched_by_sha = _chunked_committed_paths(repo_root, all_shas)
+    # `chunked_show_numstat_blocks` and `_COMMITTED_PATHS_CHUNK`. `union_shas`
+    # (peer shas plus any caller-supplied `extra_shas`, deduped) is spawned
+    # ONCE here — C1's collapse of spawn #2 (this walk) and spawn #6
+    # (`__init__.py`'s session-LOC walk, when it supplies `extra_shas`) into
+    # one `show --numstat` over their union, partitioned back out below.
+    blocks = chunked_show_numstat_blocks(repo_root, union_shas)
+    if blocks is None:
+        raise PeerAttributionUnavailable(
+            f"git show --numstat failed for one of {len(union_shas)} sha(s) "
+            "(peer-committed plus any session-owned extras) after the bounded "
+            "retry budget was exhausted while resolving peer-committed paths."
+        )
+    if extra_blocks_out is not None:
+        extra_blocks_out.update({sha: blocks[sha] for sha in extra_shas if sha in blocks})
+    touched_by_sha = _committed_paths_from_blocks(
+        {sha: text for sha, text in blocks.items() if sha in peer_sha_set}
+    )
 
     for sid, shas in shas_by_sid.items():
         paths: Set[str] = set()
@@ -706,7 +822,13 @@ def _scan_subagent_share_session_dirs(repo_root: Path, this_session_id: str) -> 
     return paths
 
 
-def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "frozenset[str]":
+def resolve_known_concurrent_paths(
+    repo_root: Path,
+    this_session_id: str,
+    *,
+    extra_shas: "Sequence[str]" = (),
+    extra_numstat_out: "Optional[Dict[str, str]]" = None,
+) -> "frozenset[str]":
     """Step 3.0 case-(b)'s peer-exclusion set (`classify_session_authored_
     files`'s `known_concurrent_paths` parameter) — the producer that did not
     exist anywhere in this codebase until this function (see
@@ -774,8 +896,41 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
         try/except around this call, so an unresolvable commit-attribution
         read fails the whole ceremony pass loudly rather than silently
         committing over a live peer's work.
+
+    `extra_shas`/`extra_numstat_out` (C1, spawn-collapse dispatch brief
+    `.../C1.md`): an optional caller-supplied sha list (never peer shas —
+    the session's OWN owned shas, per `__init__.py`'s `_measure_session_
+    review_scale_inputs`) folded into the SAME `show --numstat` union this
+    function already spawns for peer attribution, with `extra_numstat_out`
+    (when not `None`) populated in place with `{sha: numstat_text}` for
+    just those extra shas. Optional and additive: an empty/absent
+    `extra_shas` reproduces this function's pre-C1 behaviour exactly, one
+    spawn for peer attribution alone.
     """
+    extra_shas = list(extra_shas)
+
+    def _resolve_extras_standalone() -> None:
+        # Reached only on a code path that returns before ever calling
+        # `_committed_paths_for_sids` (falsy `this_session_id`, or the
+        # degrade-safely branch below) -- a caller's `extra_shas` (C1's
+        # session-LOC union half) still needs its own numstat blocks even
+        # when this function has no peer-attribution work of its own to do.
+        if extra_numstat_out is None:
+            return
+        if not extra_shas:
+            extra_numstat_out.clear()
+            return
+        blocks = chunked_show_numstat_blocks(repo_root, extra_shas)
+        if blocks is None:
+            raise PeerAttributionUnavailable(
+                f"git show --numstat failed for one of {len(extra_shas)} "
+                "session-owned sha(s) after the bounded retry budget was "
+                "exhausted while resolving peer-committed paths."
+            )
+        extra_numstat_out.update({sha: blocks[sha] for sha in extra_shas if sha in blocks})
+
     if not this_session_id:
+        _resolve_extras_standalone()
         return frozenset()
 
     peer_sids, enumeration_reliable = _enumerate_peer_session_ids(repo_root, this_session_id)
@@ -784,6 +939,7 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
     if not enumeration_reliable:
         for sid in _scan_subagent_share_session_dirs(repo_root, this_session_id):
             result.update(_peer_subagent_share_paths(repo_root, sid))
+        _resolve_extras_standalone()
         return frozenset(result)
 
     live_sids = [sid for sid in peer_sids if _session_live_conservative(repo_root, sid)]
@@ -795,13 +951,22 @@ def resolve_known_concurrent_paths(repo_root: Path, this_session_id: str) -> "fr
     # called once per peer, unchanged from before this fix), then hand the
     # WHOLE set to _committed_paths_for_sids in a single call rather than
     # calling it once per peer — see that function's own docstring for why
-    # this is not the same cost.
+    # this is not the same cost. `extra_shas`/`extra_numstat_out` (C1) ride
+    # along on the SAME call so a caller needing both this exclusion set
+    # AND its own session-owned shas' numstat blocks (`__init__.py`'s
+    # `_measure_session_review_scale_inputs`) gets them from the union of
+    # ONE `show --numstat` spawn rather than two.
     sid_to_start: "dict[str, Any]" = {}
     for sid in live_sids:
         start = _memo_lifecycle.resolve_session_start_time(repo_root, sid)
         if start is not None:
             sid_to_start[sid] = start
-    for paths in _committed_paths_for_sids(repo_root, sid_to_start).values():
+    for paths in _committed_paths_for_sids(
+        repo_root,
+        sid_to_start,
+        extra_shas=extra_shas,
+        extra_blocks_out=extra_numstat_out,
+    ).values():
         result.update(paths)
 
     return frozenset(result)

@@ -4043,7 +4043,17 @@ def _rewrite_head_spine(
         return 0 if d == "" else d.count("/") + 1
 
     dirs_sorted = sorted(spine.keys(), key=_dir_depth, reverse=True)
-    new_subtree_sha: Dict[str, str] = {}
+    #: `None` marks a directory PRUNED -- emptied by this rewrite, so it must
+    #: not be written and must not be named in its parent. Git has no concept
+    #: of an empty directory: `git write-tree` omits one entirely rather than
+    #: emitting an entry for the canonical empty tree
+    #: (`4b825dc642cb6eb9a060e54bf8d69288fbee4904`). Writing one anyway
+    #: produced a root sha that diverged from git's for identical content,
+    #: and the commit landed at rc=0 with a tree git would never have built
+    #: -- no ladder, no refusal. Reported by claude-klabauter-15 against three
+    #: live callers and reproduced here; the triggering shape is a rename
+    #: that empties its source directory, i.e. exactly an archival batch.
+    new_subtree_sha: Dict[str, Optional[str]] = {}
 
     for d in dirs_sorted:
         entries: Dict[str, Tuple[int, str]] = dict(spine[d])
@@ -4054,8 +4064,22 @@ def _rewrite_head_spine(
                 entries[name] = val  # type: ignore[assignment]
         for child_full in [c for c in new_subtree_sha if c.rpartition("/")[0] == d]:
             child_name = child_full.rpartition("/")[2]
-            entries[child_name] = (0o40000, new_subtree_sha.pop(child_full))
-        new_subtree_sha[d] = _write_tree_level(gitdir, entries)
+            child_sha = new_subtree_sha.pop(child_full)
+            if child_sha is None:
+                # Pruned child: drop the entry `spine` carried for it rather
+                # than pointing the parent at an empty tree. This is what
+                # makes the prune CASCADE -- `dirs_sorted` is deepest-first,
+                # so a parent left empty by its last child's removal is
+                # itself seen as empty below and pruned in turn.
+                entries.pop(child_name, None)
+            else:
+                entries[child_name] = (0o40000, child_sha)
+        # The root is never pruned: a repo whose every path was deleted has a
+        # legitimately empty root tree, and returning `None` for it would be
+        # read as "take the ladder" rather than as the tree it really is.
+        new_subtree_sha[d] = (
+            None if not entries and d != "" else _write_tree_level(gitdir, entries)
+        )
 
     return new_subtree_sha.get("")
 

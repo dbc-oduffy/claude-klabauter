@@ -209,6 +209,60 @@ def test_is_skewed_true_on_axis1_primary_mismatch(monkeypatch, tmp_path):
     assert state.is_skewed("a-stale-client-token-from-before-a-checkout") is True
 
 
+def test_axis_attribution_records_both_axes_when_both_hold(monkeypatch, tmp_path):
+    """THE ATTRIBUTION TRAP (claude-klabauter-22, 2026-08-26). `is_skewed` used
+    to test axis 2 first and return early, so a count built on the deciding
+    axis could never see axis 1 when both held -- under-reporting it BY
+    CONSTRUCTION, in the exact case where a publish AND a local source edit
+    coincide. Both axes are evaluated; both are reported."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+
+    state = skew.ServerVersionState(root)
+    state._source_stale = True  # axis 2 already flagged
+
+    # ...and a client token from a different generation: axis 1 too.
+    assert state.is_skewed("a-stale-client-token") is True
+    assert state.last_skew_axes == (skew.SKEW_AXIS_SOURCE, skew.SKEW_AXIS_TOKEN)
+
+
+def test_axis_attribution_names_the_single_axis_that_fired(monkeypatch, tmp_path):
+    """Each axis alone is reported alone -- the discrimination the exit row
+    exists for, since the two have opposite remediations."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+
+    state = skew.ServerVersionState(root)
+    current = skew.compute_client_token(root)
+
+    assert state.is_skewed("a-stale-client-token") is True
+    assert state.last_skew_axes == (skew.SKEW_AXIS_TOKEN,)
+
+    state._source_stale = True
+    assert state.is_skewed(current) is True
+    assert state.last_skew_axes == (skew.SKEW_AXIS_SOURCE,)
+
+
+def test_axis_attribution_is_empty_when_not_skewed(monkeypatch, tmp_path):
+    """An unskewed request leaves nothing behind -- `last_skew_axes` describes
+    the call that set it and must not read as a stale verdict."""
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+
+    state = skew.ServerVersionState(root)
+    assert state.is_skewed(skew.compute_client_token(root)) is False
+    assert state.last_skew_axes == ()
+
+
 def test_is_skewed_true_on_axis2_secondary_staleness_via_dirty(monkeypatch, tmp_path):
     root = tmp_path / "clone"
     _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)

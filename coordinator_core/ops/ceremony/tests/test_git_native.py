@@ -1754,3 +1754,100 @@ def test_head_entry_falls_back_to_head_blobs_when_the_spine_is_unreadable(tmp_pa
         "existence read had been dropped rather than relocated" % (run_git_argvs,)
     )
     assert _committed_content_at_head(repo, "file.txt") == "LADDER CONTENT\n"
+
+
+def _spine_repo(tmp_path, files):
+    """A real repo with `files` ({relpath: content}) committed, returned as
+    (root, gitdir). Real git, never a fixture double -- the property under
+    test is agreement WITH git, so a stand-in would assert nothing."""
+    root = tmp_path / "spine"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+    for rel, content in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", "--", rel], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+    return root, root / ".git"
+
+
+def _git_out(root, *args):
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "head, moved, dest, expect_gone",
+    [
+        # Source dir emptied by the move -- `a/b` must vanish, and with it
+        # `a`, whose only child it was. The cascade is the half a
+        # single-level prune would miss.
+        (
+            {"a/b/only.txt": "payload\n", "c/existing.txt": "stay\n", "keep.txt": "r\n"},
+            "a/b/only.txt",
+            "c/only.txt",
+            ["a", "a/b"],
+        ),
+        # Source dir still occupied -- nothing may be pruned. Guards the
+        # prune against over-firing.
+        (
+            {"a/one.txt": "1\n", "a/two.txt": "2\n", "c/existing.txt": "stay\n"},
+            "a/one.txt",
+            "c/one.txt",
+            [],
+        ),
+    ],
+)
+def test_rewrite_head_spine_prunes_emptied_dirs_like_git(
+    tmp_path, head, moved, dest, expect_gone
+):
+    """`_rewrite_head_spine`'s root sha equals `git write-tree`'s for the same
+    content, including when a rename empties its source directory.
+
+    Git has no empty directory: `write-tree` OMITS one rather than emitting an
+    entry for the canonical empty tree. Before the prune, the rewrite wrote one
+    anyway, so the root sha diverged from git's and the commit landed at rc=0
+    carrying a tree git would never have produced -- no ladder, no refusal.
+    Reported by claude-klabauter-15 against three live callers; the triggering
+    shape is a rename that empties its source directory, i.e. an archival batch.
+
+    Negative-spec: do NOT relax this to "the tree contains the right files".
+    The whole property is SHA-IDENTITY with git, because a tree that merely
+    holds the right blobs still diverges, and divergence is the defect.
+    """
+    root, gitdir = _spine_repo(tmp_path, head)
+    blob = _git_out(root, "rev-parse", f"HEAD:{moved}")
+
+    from coordinator_core.git import git_state
+
+    spine = git_state.read_tree_spine(root, [moved, dest])
+    assert spine is not None, "probe shape wrong -- spine unreadable"
+
+    ours = git_native._rewrite_head_spine(
+        gitdir, spine, {moved: git_native._ABSENT, dest: (0o100644, blob)}
+    )
+
+    # Ground truth: let git perform the identical rename and compute the tree.
+    (root / dest).parent.mkdir(parents=True, exist_ok=True)
+    (root / dest).write_text((root / moved).read_text(encoding="utf-8"), encoding="utf-8")
+    (root / moved).unlink()
+    subprocess.run(["git", "add", "--", dest], cwd=root, check=True)
+    subprocess.run(["git", "add", "-u", "--", moved], cwd=root, check=True)
+    theirs = _git_out(root, "write-tree")
+
+    assert ours == theirs, (
+        f"root tree sha diverges from git: ours={ours} git={theirs}. "
+        f"ours:\n{_git_out(root, 'cat-file', '-p', ours)}\n"
+        f"git:\n{_git_out(root, 'cat-file', '-p', theirs)}"
+    )
+
+    listing = _git_out(root, "ls-tree", "-r", "-t", "--name-only", ours).splitlines()
+    for gone in expect_gone:
+        assert gone not in listing, (
+            f"{gone!r} survived as a phantom directory entry -- git prunes it, "
+            f"so an entry here is the empty-tree bug. Tree:\n{listing}"
+        )

@@ -407,6 +407,138 @@ def _fatal_stderr(message: str) -> None:
     raise SystemExit(1)
 
 
+#: How long `_wait_for_warm_boot` may wait for a just-spawned warm server to
+#: start answering, in seconds. `COORDINATOR_WARM_BOOT_WAIT_SECS` overrides it;
+#: `0` disables the wait entirely, restoring the pre-wait behaviour (miss ->
+#: immediate refusal).
+#:
+#: READ THE RIGHT CLOCK. This is WALL CLOCK at near-zero process time -- a
+#: sleeping poll loop, not work. CLAUDE.md's brightline is measured in process
+#: time and spawn count, "never wall clock", so a bounded wait does not breach
+#: the 500ms or 2s bars however long it sits: nothing on this box is occupied
+#: while it does. An AC or report that charges this number against those bars is
+#: reading the wrong clock (claude-klabauter-22, 2026-08-26, sharpening the
+#: defence from "it beats four minutes of human guessing").
+#:
+#: NOT A BUDGET AND NOT A MEASUREMENT. Reaching the engine is budgeted in
+#: hundreds of milliseconds (CLAUDE.md's brightline), and this number is an
+#: order of magnitude past it by construction: it bounds a FAULT -- the window
+#: in which a box that should already have had a resident server is standing
+#: one up. It is deliberately not fitted to an observed boot, because no boot
+#: on this box has ever been measured: the only intervals on record
+#: (2026-08-25/26: +0s, +30s, +4min) are the intervals four operators happened
+#: to retry at, which bound nothing. `record_client_boot_wait` exists to
+#: replace this guess with the real distribution. Until it has rows, 15s is
+#: chosen to be long enough that a genuine interpreter-plus-election boot is
+#: not cut off mid-flight, and short enough that nobody can mistake it for
+#: normal operation or absorb it as cadence.
+WARM_BOOT_WAIT_SECS = 15.0
+
+#: First poll interval, and the cap it backs off to. Fast at the start because
+#: the case this exists for is a server that is nearly up; capped at a second
+#: because a tighter tail buys nothing and every poll is a pipe open. Polling
+#: cannot storm the spawn path: `warm.client._spawn_once` is one-per-process
+#: (`_spawned_this_process`) and cross-process debounced by
+#: `breadcrumb.should_spawn`, so every poll after the first re-uses the spawn
+#: already in flight rather than triggering another.
+_BOOT_POLL_MIN_SECS = 0.1
+_BOOT_POLL_MAX_SECS = 1.0
+_BOOT_POLL_GROWTH = 1.6
+
+
+def _warm_boot_wait_deadline() -> float:
+    """The configured bound, in seconds. Unset -> `WARM_BOOT_WAIT_SECS`;
+    unparseable or negative -> the same default, since a malformed knob must
+    not silently turn the wait off -- that is what an explicit `0` is for."""
+    raw = os.environ.get("COORDINATOR_WARM_BOOT_WAIT_SECS")
+    if raw is None or raw.strip() == "":
+        return WARM_BOOT_WAIT_SECS
+    try:
+        value = float(raw)
+    except ValueError:
+        return WARM_BOOT_WAIT_SECS
+    if value < 0:
+        return WARM_BOOT_WAIT_SECS
+    return value
+
+
+def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
+    """Poll `try_warm_dispatch` until a warm server serves `msg` or the bound
+    expires. Returns `(response, waited_secs)`; `response` is None when nothing
+    served the call before the deadline.
+
+    THIS IS THE OP/CLI DOOR, NOT THE HOOK FAST PATH. `warm/client.py`'s
+    negative-spec forbids a poll loop inside that module by contract -- it is
+    imported on hook paths where blocking is never acceptable, and the value of
+    its cold-signal return is that it is bounded by a single round trip. This
+    function is the other side of that line: a human or a script invoked one op
+    and is already waiting on its result, so waiting a bounded moment for the
+    server that op needs beats handing back a refusal for a fault that is
+    already healing. Before this existed, the retry interval was supplied by an
+    operator guessing, and the guess was unbounded (four sessions lost an
+    evening's memo traffic to it, 2026-08-25/26).
+
+    WHY THIS IS NOT BACKSTOP 2. What the PM retired (2026-08-21) was a SILENT
+    degrade to a full cold spawn on every miss, forever. This waits for the
+    WARM server, announces itself on stderr before it waits, waits once, and
+    still fails hard when the bound expires -- there is no path from here to a
+    cold dispatch the caller did not ask for with `--allow-unstamped-dispatch`.
+
+    Aborts early on a PERMANENT reason established mid-wait
+    (`last_cold_reason`): those recur identically on every poll, so waiting the
+    deadline out would burn the bound to reach a conclusion already in hand.
+
+    Negative-spec:
+        - Does NOT retry a served error envelope. Anything well-formed coming
+          back is the server answering, which is the condition this waits for.
+        - Does NOT print an ETA or a countdown. Boot time is load-dependent
+          and, until `record_client_boot_wait` has rows, unknown -- an interval
+          an operator can satisfy is one they will draw a wrong conclusion from.
+    """
+    import time as _time
+
+    from coordinator_core.warm.client import last_cold_reason, try_warm_dispatch
+
+    deadline_secs = _warm_boot_wait_deadline()
+    if deadline_secs <= 0:
+        return None, 0.0
+
+    started = _time.monotonic()
+    print(
+        "[warm-client] no warm server answered; a respawn was triggered and this call "
+        f"is waiting up to {deadline_secs:g}s for it to start answering.",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+
+    interval = _BOOT_POLL_MIN_SECS
+    response = None
+    while True:
+        remaining = deadline_secs - (_time.monotonic() - started)
+        if remaining <= 0:
+            break
+        _time.sleep(min(interval, remaining))
+        response = try_warm_dispatch(msg)
+        if response is not None:
+            break
+        if last_cold_reason():
+            break
+        interval = min(interval * _BOOT_POLL_GROWTH, _BOOT_POLL_MAX_SECS)
+
+    waited = _time.monotonic() - started
+    try:
+        from coordinator_core.warm.telemetry import record_client_boot_wait
+
+        record_client_boot_wait(
+            waited_secs=waited,
+            served=response is not None,
+            deadline_secs=deadline_secs,
+        )
+    except Exception:  # noqa: BLE001 -- an instrument may not be why an op fails
+        pass
+    return response, waited
+
+
 def _exit_code_for_response(response: dict, structural_pin_error_code: int) -> int:
     """Select the process exit code for a completed JSON-RPC response.
 
@@ -790,37 +922,79 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                             "retrying will not clear this. For deliberate manual "
                             "testing, pass --allow-unstamped-dispatch."
                         )
-                    # A WAIT THIS LONG IS A DEFECT REPORT, NOT A DIAGNOSIS.
-                    # An earlier version of this block said "retry in a moment";
-                    # four sessions read that as seconds, retried twice, and
-                    # concluded the fault was permanent (2026-08-25/26). The
-                    # first correction merely told the truth about the delay --
-                    # "it takes MINUTES" -- which is the "the box was busy"
-                    # answer CLAUDE.md forbids: it made an over-budget path read
-                    # as normal operation and invited the operator to absorb it.
-                    #
-                    # Both framings were wrong for the same reason. Reaching the
-                    # engine is budgeted in HUNDREDS OF MILLISECONDS; anything
-                    # that turns into a multi-minute wait is over the brightline
-                    # by orders of magnitude and is a P0, not a cadence. Say that,
-                    # and do not instruct anyone to wait it out.
-                    #
-                    # Negative-spec: no ETA, no countdown, no "wait N minutes".
-                    # Boot time is load-dependent and unobservable from here, and
-                    # any interval printed is one the operator can satisfy and
-                    # then draw the same wrong conclusion from.
-                    _fatal_stderr(
-                        "warm dispatch unavailable and cold fallback is "
-                        "disabled (no live ops without warm). THIS IS A DEFECT, "
-                        "not a queue: reaching the engine is budgeted in "
-                        "hundreds of milliseconds, so an unreachable warm server "
-                        "is over budget by orders of magnitude however busy the "
-                        "box is. A respawn was triggered on the way out of this "
-                        "call; an immediate retry is expected to fail, and two "
-                        "fast refusals are not evidence of a permanent fault. "
-                        "Report it rather than waiting it out. For deliberate "
-                        "manual testing, pass --allow-unstamped-dispatch."
-                    )
+                    # WAIT ONCE, BOUNDED, RATHER THAN MAKE A HUMAN GUESS THE
+                    # INTERVAL. Every miss reaching this point has already
+                    # triggered a respawn on its way out (see the block above),
+                    # so the fix for this refusal is in flight while the
+                    # refusal is being printed. Refusing here regardless made
+                    # the retry interval an operator's guess, and the guess is
+                    # unbounded: on 2026-08-25/26 four sessions lost an
+                    # evening's memo traffic re-running `cross-repo-memo send`
+                    # by hand until one happened to land, the last at +4min.
+                    # None of those numbers measured a boot; they measured
+                    # patience. `_wait_for_warm_boot` replaces the guess with a
+                    # bound, and records what it actually waited so the boot
+                    # itself finally gets measured.
+                    response, waited = _wait_for_warm_boot(msg)
+                    if response is None:
+                        # A permanent reason can be established DURING the wait
+                        # (the first `try_warm_dispatch` had none, a later poll
+                        # did). Re-ask before reaching for the transient
+                        # wording, for the same reason the check above exists.
+                        reason = last_cold_reason()
+                        if reason:
+                            _fatal_stderr(
+                                f"{reason}\n"
+                                "Cold fallback is disabled (no live ops without warm); "
+                                "retrying will not clear this. For deliberate manual "
+                                "testing, pass --allow-unstamped-dispatch."
+                            )
+
+                        # A WAIT THIS LONG IS A DEFECT REPORT, NOT A DIAGNOSIS.
+                        # An earlier version of this block said "retry in a
+                        # moment"; four sessions read that as seconds, retried
+                        # twice, and concluded the fault was permanent
+                        # (2026-08-25/26). The first correction merely told the
+                        # truth about the delay -- "it takes MINUTES" -- which
+                        # is the "the box was busy" answer CLAUDE.md forbids: it
+                        # made an over-budget path read as normal operation and
+                        # invited the operator to absorb it.
+                        #
+                        # Both framings were wrong for the same reason. Reaching
+                        # the engine is budgeted in HUNDREDS OF MILLISECONDS;
+                        # anything that turns into a multi-minute wait is over
+                        # the brightline by orders of magnitude and is a P0, not
+                        # a cadence. Say that, and do not instruct anyone to wait
+                        # it out -- this process has already done the only
+                        # waiting anyone should do, and reports the duration it
+                        # ACTUALLY waited rather than an interval to aim at.
+                        #
+                        # Negative-spec: no ETA, no countdown, no "wait N
+                        # minutes". Boot time is load-dependent and, until
+                        # `record_client_boot_wait` has rows, unmeasured; any
+                        # interval printed is one the operator can satisfy and
+                        # then draw the same wrong conclusion from. A REPORTED
+                        # ELAPSED WAIT IS NOT AN ETA: it says what this call
+                        # spent, never what the next one will.
+                        waited_clause = (
+                            f"this call waited {waited:.1f}s without the warm server "
+                            "accepting connections"
+                            if waited > 0
+                            else "the bounded boot wait is switched off "
+                            "(COORDINATOR_WARM_BOOT_WAIT_SECS=0), so this call did not "
+                            "wait for it"
+                        )
+                        _fatal_stderr(
+                            "warm dispatch unavailable and cold fallback is disabled "
+                            f"(no live ops without warm). A respawn was triggered and "
+                            f"{waited_clause}. THIS IS A DEFECT, not a queue: reaching "
+                            "the engine is budgeted in hundreds of milliseconds, so an "
+                            "unreachable warm server is over budget by orders of "
+                            "magnitude however busy the box is. Check for a wedged or "
+                            "crash-looping warm server rather than retrying by hand. "
+                            "For deliberate manual testing, pass "
+                            "--allow-unstamped-dispatch."
+                        )
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
