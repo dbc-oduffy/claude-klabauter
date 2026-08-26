@@ -80,6 +80,12 @@ Saved/
 # `percolate/surface.py::PUBLISH_STAGING_DIR_RE` and its callers already draw.
 *publish-staging-*/
 
+# The round's own state directory -- working memory, not published product.
+# RULING, claude-central-em 2026-08-26, both mirrors: a path that should never
+# be tracked is ignored, not repeatedly deleted. Source of truth for this file
+# is project-makima dist/klabauter-toplevel/.gitignore.
+/.percolate/
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp
