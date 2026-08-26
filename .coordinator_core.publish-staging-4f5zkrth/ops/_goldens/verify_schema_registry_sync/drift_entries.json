@@ -1,8 +1,0 @@
-{
-  "exit_code": 0,
-  "schemas_checked": 48,
-  "stderr_lines": [],
-  "stdout_lines": [
-    "verify-schema-registry-sync: OK \u2014 all 48 schema applies_to types are recognised by query-records.js"
-  ]
-}
