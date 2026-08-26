@@ -2336,6 +2336,66 @@ def test_clean_session_shape_surfaces_no_session_shape_judgment_point(monkeypatc
     assert "jp-session-shape" not in ids
 
 
+@pytest.mark.parametrize("leg", ["archive", "detector-c", "live-consume", "memo-predecessor", "none"])
+def test_a_refused_live_consume_candidate_fires_on_every_leg(monkeypatch, tmp_path, leg):
+    """`live_consume_mirror_conflicts` is a REFUSAL fact, not a leg — the
+    primary scan set a live-consume candidate aside (its ledger claim names
+    this session, its frontmatter names somebody else) and whatever leg then
+    decided, the resulting shape is not a settled fact.
+
+    Parametrized over `memo-predecessor` deliberately: that leg is otherwise
+    a settled fact by construction (see
+    `test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_
+    detection_record`), and this branch is the ONE thing that must still
+    reach it — the refusal happened before any leg ran.
+
+    Parametrized over `live-consume` deliberately too, and not merely for
+    completeness: it is the leg the refusal is DISCOVERED on (the same
+    ledger-vs-mirror scan that produces `live_consume_mirror_conflicts` is
+    the one that would otherwise have let `live-consume` decide), so it is
+    the co-occurrence most likely in production and the exact shape of the
+    2026-08-26 incident this commit fixes — a CERTAIN `live-consume`
+    resolution against a peer's in_flight baton, reached before this branch
+    existed to refuse it. `test_an_empty_mirror_conflict_list_is_not_a_
+    refusal` covers the False path for this same leg; this is its True-path
+    counterpart."""
+    detection = {
+        "deciding_leg": leg,
+        "detector_c_status": None,
+        "live_consume_mirror_conflicts": ["state/handoffs/peer-baton.md"],
+    }
+    assert wsc._session_shape_is_uncertain(detection) is True
+
+    ids = _session_shape_jp_ids(
+        monkeypatch,
+        tmp_path,
+        _gate(
+            "single-session",
+            diagnostics=[],
+            consumed_handoff_paths=(),
+            detection=detection,
+        ),
+    )
+    assert "jp-session-shape" in ids
+
+
+def test_an_empty_mirror_conflict_list_is_not_a_refusal(monkeypatch, tmp_path):
+    """Presence, not the key itself, is the signal — `_detection()` omits
+    the key entirely when nothing was refused, and an empty list reaching
+    here (a producer that always sets it) must read the same way, not fire
+    a permanent alarm on every close."""
+    assert (
+        wsc._session_shape_is_uncertain(
+            {
+                "deciding_leg": "live-consume",
+                "detector_c_status": None,
+                "live_consume_mirror_conflicts": [],
+            }
+        )
+        is False
+    )
+
+
 def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detection_record(monkeypatch, tmp_path):
     """The settled-fact assertion (plan Execution Notes): a `memo-
     predecessor` deciding leg is NEVER flagged uncertain, even when its

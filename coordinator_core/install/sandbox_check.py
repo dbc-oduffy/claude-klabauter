@@ -920,7 +920,29 @@ def _tier1b_pointer_and_shim(
     _assert_gen_doe_root_pointer_interface(r)
 
     if doe_clone_resolved:
-        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone}
+        # COORDINATOR_SETTINGS_HOME pinned explicitly rather than inherited,
+        # matching the Step 3.5c gen-settings-hooks pin above and the F8
+        # tier's pin below. gen_doe_root_pointer writes
+        # <settings-home>/machine-local/.doe-root, so this env decides which
+        # machine's pointer a sandbox run touches, and deciding it from
+        # ambient process state is the wrong way to decide it.
+        #
+        # HONEST SCOPE, because the commit that added this claimed more: this
+        # is HARDENING, not a demonstrated fix. Measured 2026-08-26, os.environ
+        # already carries a sandbox-scoped COORDINATOR_SETTINGS_HOME by the
+        # time this branch runs, so the inherited value here is not observably
+        # the live one and no test could be made to fail without this pin --
+        # two attempts produced pins that passed either way. The live-pointer
+        # pollution that prompted this (state/bug-backlog/2026-08-26-a-test-
+        # writes-the-live-claude-machine-lo-6cdf6bc87771.yaml) is REAL and its
+        # writer is still UNIDENTIFIED. Do not read this pin as having closed
+        # it.
+        env = {
+            **os.environ,
+            "CLAUDE_HOME": sandbox,
+            "COORDINATOR_SETTINGS_HOME": os.path.join(sandbox, ".coordinator-claude-settings"),
+            "REPO_DOE_CLAUDE": doe_clone,
+        }
         rc, err = _call_gen_doe_root_pointer([], env)
         gp_err = os.path.join(sandbox, "gen-pointer-err.txt")
         Path(gp_err).write_text(err or "", encoding="utf-8", newline="\n")

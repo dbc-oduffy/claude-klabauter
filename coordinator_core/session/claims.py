@@ -1009,6 +1009,79 @@ def promote_claim_stage(
     return True
 
 
+def demote_claim_stage_to_brief(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """The inverse of ``promote_claim_stage``: hand an ``apply``-stage claim
+    THIS session holds back to ``brief`` stage, and with it back to the
+    ``brief_lease_expired`` lease it was promoted out of.
+
+    WHY THIS EXISTS (state/bug-backlog/2026-08-26-a-halted-pickup-leaves-a-
+    live-ledger-claim-on-a-peers-baton.yaml). ``pickup_assemble.apply``
+    promotes UNCONDITIONALLY, before any directive runs — correctly, since a
+    mid-mutation session must not have its claim taken out from under it. But
+    a run that then halts at a judgment point, or whose stamp directive is
+    refused, has mutated NOTHING while holding a lease-free claim for the
+    rest of the session's life. On a handoff another session is carrying,
+    that claim is what ``/workstream-complete``'s live-consume leg later
+    reads as "this session consumed that baton" — it capped a peer's
+    workstream and cost the capping session its own completion entry
+    (2026-08-26, session 2f937280 vs. baton holder 24d63e82).
+
+    A halted run is BY DEFINITION not mid-mutation, so the lease the
+    promotion exists to suspend is exactly the right thing to give it back:
+    demote, never release. The reservation itself survives — the EM answers
+    the judgment point and re-runs ``apply``, which re-promotes — so this
+    costs an abandoned pickup its indefinite hold and costs a live one
+    nothing.
+
+    Returns True when the stage file now reads ``brief`` for a claim this
+    session holds, False on every other path (no claim dir, held by someone
+    else, unresolvable session id or base, write failure). A no-op success
+    for a claim already at ``brief`` stage, so a caller may call it
+    unconditionally.
+
+    Never touches a claim held by a DIFFERENT session, live or dead — same
+    guard, and the same reason, as ``promote_claim_stage``: demoting
+    somebody else's claim would strip a lease-free hold from a session that
+    may be mid-mutation behind it.
+
+    Negative-spec: does NOT clear the ``stamped`` marker, and callers must
+    not demote a claim that carries one — a landed frontmatter stamp is a
+    mutation, and handing its claim back to the lease is the harm this
+    function exists to avoid, inverted. ``claim_stamped`` is the caller's
+    gate; this function does not re-check it, so that the "did the stamp
+    land" question keeps exactly one home.
+    """
+    if not class_:
+        raise ValueError("artifact class required")
+    if not basename:
+        raise ValueError("basename required")
+
+    sid = core.resolve_session_id(cwd)
+    if not sid:
+        return False
+    base = _claim_base(class_, baton_repo_root, cwd)
+    if base is None:
+        return False
+
+    claim_dir = Path(base) / f"{class_}-claims" / basename
+    if not claim_dir.is_dir():
+        return False
+    if not liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+        return False
+    if claim_stage(claim_dir) == CLAIM_STAGE_BRIEF:
+        return True
+    try:
+        (claim_dir / "stage").write_text(f"{CLAIM_STAGE_BRIEF}\n", encoding="utf-8", newline="\n")
+    except OSError:
+        return False
+    return True
+
+
 def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
     """Record that the frontmatter stamp backing this claim actually LANDED —
     a durable ``stamped`` marker file, written ONLY after the caller confirms

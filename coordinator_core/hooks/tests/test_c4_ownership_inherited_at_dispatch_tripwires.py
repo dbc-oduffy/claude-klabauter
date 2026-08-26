@@ -62,13 +62,21 @@ import pytest
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.scope_report import assert_paths_in_session_scope
-from coordinator_core.session import scope as touch_scope
+from coordinator_core.session import touch_record
 
 # Real git is load-bearing for the AC6 behavioural tripwire: it dispatches
 # real payloads at track_touched_files._handler against a real repo's
 # `git_common_dir`, asserting claims land under the actual
-# `.git/coordinator-sessions/<sid>/touched.txt` path -- a mocked common_dir
-# would not exercise the real session-dir bootstrap this pin covers.
+# `.git/coordinator-sessions/<sid>/touch-record.jsonl` sink -- a mocked
+# common_dir would not exercise the real session-dir bootstrap this pin
+# covers.
+#
+# That sink was `touched.txt` until `pln-the-legacy-touched-txt-record-44ce48`
+# § C7 retired the legacy record for the self-describing T-event log. Both
+# tripwires below still named the retired file, which cost the Bash one its
+# teeth entirely: `assert not touched.txt.exists()` holds for every tool name
+# once nothing writes that file, so the DR-258 widening it exists to catch
+# would have gone green.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -182,6 +190,26 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
+def _touch_record_entries(common_dir: Path, session_id: str) -> list[str]:
+    """Paths recorded as `T` events for `session_id`, or `[]` when the hook
+    recorded nothing. Reads through `touch_record.decode_line` rather than
+    splitting the line by hand -- the encoding is that module's contract and
+    a hand-rolled parser here would drift from it exactly as the retired
+    `touched.txt` path did."""
+    sink = common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+    entries: list[str] = []
+    # `discover_family` resolves the base sink PLUS any rotated siblings --
+    # the same read contract `session/scope.py` and `session/claims.py` use.
+    # Reading the literal path alone would pass these single-write fixtures
+    # while silently missing a rotated record, which is the shape that let
+    # the retired touched.txt assertion go vacuous.
+    for member in touch_record.discover_family(sink):
+        for line in member.read_text(encoding="utf-8").splitlines():
+            if line:
+                entries.append(touch_record.decode_line(line).path)
+    return entries
+
+
 class TestAC6DR258MatcherBehavioural:
     """Behavioural pin (PRIMARY layer): dispatch a Bash-tool-shaped payload at
     the real `_handler` and confirm no claim lands; dispatch a Write-shaped
@@ -216,13 +244,10 @@ class TestAC6DR258MatcherBehavioural:
         }
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
-        touched_file = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
-        )
         # DR-258: a Bash-tool-shaped call records NO claim at all — the
         # matcher fast-exits before even the session-dir bootstrap runs, so
-        # touched.txt is never created.
-        assert not touched_file.exists(), (
+        # the sink is never created.
+        assert _touch_record_entries(common_dir, params["session_id"]) == [], (
             "a Bash-tool-shaped payload recorded a claim — the DR-258 matcher "
             "widened to include Bash, which is the doctrine reversal DR-258 "
             "forecloses without a decision record + memo to claude-central-em"
@@ -243,15 +268,11 @@ class TestAC6DR258MatcherBehavioural:
         }
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
-        touched_file = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touched.txt"
-        )
-        assert touched_file.exists(), (
+        entries = _touch_record_entries(common_dir, params["session_id"])
+        assert entries, (
             f"a {tool_name}-shaped payload recorded no claim — the DR-258 "
             "matcher narrowed to exclude a tool it must cover"
         )
-        lines = [ln for ln in touched_file.read_text(encoding="utf-8").splitlines() if ln]
-        entries = [touch_scope.parse_touch_event(ln)[2] for ln in lines]
         assert f"src/{tool_name.lower()}_written.py" in entries
 
 
@@ -566,16 +587,35 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 #: artifact-has-no-clear-path.md) -- the decision record this pin's own
 #: docstring asks for before widening. A new entry re-added to the commit
 #: path needs K-008's Returns-when discharged, not just this set edited.
+#: Every production `claim_index.lookup(...)` call site, each entry carrying
+#: why it is NOT the second ownership GATE this census exists to catch.
+#: `lookup` returns raw claimants; a gate is a caller that turns that into a
+#: refusal. The gate itself answers through `commit_set`/`classify_paths` and
+#: is pinned separately by `_EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES`.
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
     {
+        # Reaper: drops a dead session's claim. Writes, never refuses.
         (
             "coordinator_core/session/claims.py",
             "_clear_path_claim_if_dead._claimants",
         ),
+        # Neighbour discovery: who else holds paths near mine. Fail-soft by
+        # its own contract (a raising lookup degrades every path to
+        # `unanswerable_paths`), and its product is an advisory list.
+        (
+            "coordinator_core/session/claim_neighbours.py",
+            "find_neighbours_for_paths",
+        ),
+        # Holder-liveness evidence: does a claimed scope overlap a named
+        # holder. Ternary by construction -- an unanswerable path yields
+        # `None` (evidence gap), never a refusal.
+        (
+            "coordinator_core/session/holder_evidence.py",
+            "_claim_scope_overlap",
+        ),
     }
 )
 
-_LOOKUP_CALL_RE = re.compile(r"\bclaim_index\.lookup\(")
 
 
 def _census_claim_index_call_sites(root: Path, attr: str) -> frozenset:
@@ -652,6 +692,17 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
     appearing anywhere in `coordinator_core/` (a second ownership-gate-shaped
     check, reached from a different sink) fails loudly and names itself.
 
+    The gate this was written against, `ops/ceremony/scoped_git_commit.py`,
+    no longer exists — DR-344's kill bar deleted it, and its successor gate
+    (`ops/session/scope_report.py`) answers through `commit_set`/
+    `classify_paths`, so it is the sibling ANSWER pin below that guards the
+    gate now. This pin's own subject narrowed accordingly: it enumerates the
+    raw-claimant readers and catches a NEW one, each entry justified at
+    `_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES`. A third test here asserted
+    that the killed module still called `lookup`; it was deleted with its
+    subject rather than repointed, because kill means kill (CLAUDE.md
+    § brightline) and there is no file left for it to read.
+
     Spec backlink: pln-the-claim-index-the-commit-gat-5d33ee
     § C7.
     """
@@ -662,12 +713,13 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
             "claim_index.lookup()'s call-site inventory changed — "
             f"found={sorted(found)!r} expected="
             f"{sorted(_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES)!r}. Each pair "
-            "is (file, enclosing def). A NEW call site is a second "
-            "ownership-gate-shaped check appearing outside "
-            "scoped_git_commit.py — update "
-            "_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES deliberately if that is "
-            "genuinely intended, with a decision record; do not delete this "
-            "pin."
+            "is (file, enclosing def). A NEW call site reads raw claimants "
+            "from a sink none of the enumerated readers use; if it turns "
+            "them into a refusal it is a second ownership gate, which needs "
+            "a decision record. Update "
+            "_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES deliberately, with the "
+            "same per-entry justification the others carry; do not delete "
+            "this pin."
         )
 
     def test_answer_surface_call_site_inventory_is_exactly_the_enumerated_set(self):
@@ -688,14 +740,10 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
             "pin."
         )
 
-    def test_source_grep_confirms_the_single_production_caller(self):
-        text = _read_scoped_git_commit_source()
-        assert _LOOKUP_CALL_RE.search(text), (
-            "scoped_git_commit.py no longer calls claim_index.lookup(...) — "
-            "expected production call site is missing"
-        )
-
-
-def _read_scoped_git_commit_source() -> str:
-    path = _REPO_ROOT / "coordinator_core" / "ops" / "ceremony" / "scoped_git_commit.py"
-    return path.read_text(encoding="utf-8")
+    # test_source_grep_confirms_the_single_production_caller lived here. It
+    # read the ceremony scoped-commit module and asserted that file still
+    # called claim_index.lookup(...). DR-344's kill bar deleted that module
+    # outright, so the test raised FileNotFoundError on every run and no edit
+    # to it could pass. Deleted rather than repointed: its subject is gone,
+    # and the successor gate answers through commit_set/classify_paths,
+    # already pinned by the sibling test above.

@@ -3485,14 +3485,14 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
       - Pointer present but content diverges from resolved root -> DEGRADED (actionable,
         not hard FAIL) — stale pointer, same remediation as absent.
       - Pointer absent -> DEGRADED (actionable, not hard FAIL) — remediation points at
-        the install-time writer (gen-claude-klabauter-live-root-pointer.py).
+        the install-time writer (gen-claude-klabauter-root-pointer.py).
       - claude_klabauter_root is None (probe 1 unresolved) -> pointer existence is still checked;
         content-match is skipped (nothing to compare against) but presence alone is
         reported PASS/DEGRADED.
 
     Negative-spec:
       - Does NOT write the pointer file — read-only diagnostic; the writer is a
-        separate install-time step (gen-claude-klabauter-live-root-pointer.py, DoE-claude C1b).
+        separate install-time step (gen-claude-klabauter-root-pointer.py, DoE-claude C1b).
       - Does NOT emit BROKEN/hard-fail on absence — a missing pointer degrades
         per-invoke latency, it does not break correctness (the ladder fallback still
         resolves COORDINATOR_ENGINE_ROOT, just slowly).
@@ -3517,7 +3517,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                     "per-invoke/hook round-trips."
                 ),
                 remediation=(
-                    "Run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) to "
+                    "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to "
                     f"populate {str(pointer_path)!r} with the resolved COORDINATOR_ENGINE_ROOT path."
                 ),
                 required=False,
@@ -3533,7 +3533,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                 detail=f"claude-klabauter-live-root pointer present but unreadable: {exc}",
                 remediation=(
                     "Check permissions on the pointer file, or re-run the install-time "
-                    f"pointer writer (gen-claude-klabauter-live-root-pointer.py) to regenerate {str(pointer_path)!r}."
+                    f"pointer writer (gen-claude-klabauter-root-pointer.py) to regenerate {str(pointer_path)!r}."
                 ),
                 required=False,
                 data={"pointer_path": str(pointer_path), "present": True},
@@ -3573,7 +3573,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                         f"resolved COORDINATOR_ENGINE_ROOT {resolved_str!r} — stale pointer."
                     ),
                     remediation=(
-                        "Re-run the install-time pointer writer (gen-claude-klabauter-live-root-pointer.py) "
+                        "Re-run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) "
                         f"to refresh {str(pointer_path)!r} with the current COORDINATOR_ENGINE_ROOT."
                     ),
                     required=False,

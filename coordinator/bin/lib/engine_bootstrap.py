@@ -158,7 +158,7 @@ def _machine_local_get(key: str) -> str | None:
     Native Python replacement for the bash `machine-local` forwarder: invokes
     bin/_machine_local.py (the real reader) directly with the same interpreter
     that loaded this module — no shell, no bash. Mirrors
-    gen-claude-klabauter-live-root-pointer.py::_machine_local_get and
+    gen-claude-klabauter-root-pointer.py::_machine_local_get and
     coordinator_core.engine_root.coordinator_engine_root's own rung-2 lookup.
 
     Returns the resolved value, or None on any failure (missing impl, non-zero

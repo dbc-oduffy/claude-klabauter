@@ -135,7 +135,7 @@ class TestRootPointerProbe:
             "claude-klabauter.root.pointer must carry required=False (WARN, not hard FAIL)"
         )
         assert isinstance(result.remediation, str) and len(result.remediation) > 0
-        assert "gen-claude-klabauter-live-root-pointer" in result.remediation, (
+        assert "gen-claude-klabauter-root-pointer" in result.remediation, (
             f"Remediation should point at the install-time writer, got: {result.remediation!r}"
         )
 

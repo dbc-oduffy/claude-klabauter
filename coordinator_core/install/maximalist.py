@@ -123,6 +123,19 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
+# C1 (docs/plans/2026-08-26-the-installers-two-halves-come-from-two-repos.md):
+# make this entry point load ITS OWN repo's plane by construction, not by
+# environment. Inserted before the first `from coordinator_core...` import
+# below so it takes effect before any coordinator_core module resolves --
+# a stale `.pth` elsewhere on `sys.path` (fleet_env.py's sibling-binding
+# writer, see that module) can otherwise put a DIFFERENT checkout's
+# coordinator_core ahead of this one. Only inserted when this root is not
+# already present anywhere on `sys.path` -- if it is, some other mechanism
+# already accounts for it and a duplicate leading entry adds nothing.
+_EXPECTED_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_EXPECTED_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_EXPECTED_REPO_ROOT))
+
 from coordinator_core._settings_home import native_path_form
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
@@ -301,6 +314,7 @@ def _registry_get_for_check(key: str) -> Optional[str]:
 
 from coordinator_core.install._shared import RequireHomeError, require_home
 from coordinator_core.install._shared import env_overlay as _env_overlay
+from coordinator_core.install import substrate as _substrate_plane_check_module
 from coordinator_core.install.substrate import BYTE_COPIED_BIN_SOURCES
 from coordinator_core.install.write_surface import (
     ShapedClause,
@@ -308,6 +322,70 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+
+
+def _find_responsible_pth(actual_root: Path) -> Optional[Path]:
+    """Best-effort: locate the ``.pth`` file (if any) on ``sys.path`` whose
+    contents mention ``actual_root``, so a wrong-plane load names its CAUSE
+    and not just its symptom. Scans every directory already on
+    ``sys.path`` for ``*.pth`` files containing ``actual_root``'s string
+    form; returns the first match, or ``None`` when no such file is found
+    (e.g. the responsible entry is a real editable install pointing
+    somewhere else entirely, or the ``.pth`` was removed between load and
+    this check)."""
+    seen: set = set()
+    for entry in sys.path:
+        if not entry:
+            continue
+        d = Path(entry)
+        if d in seen:
+            continue
+        seen.add(d)
+        if not d.is_dir():
+            continue
+        try:
+            pth_files = sorted(d.glob("*.pth"))
+        except OSError:
+            continue
+        for pth in pth_files:
+            try:
+                content = pth.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if str(actual_root) in content:
+                return pth
+    return None
+
+
+def _assert_own_plane_loaded() -> None:
+    """C1: catch every OTHER way ``coordinator_core`` can resolve to a
+    DIFFERENT repo than this file's own -- ``python -m``, a wrapper, a
+    future caller -- not just this entry point's own invocation. The
+    ``sys.path[0]`` insert above fixes THIS process's resolution order; this
+    assertion makes every other path legible instead of surfacing three
+    phases later as an unrelated staleness report.
+
+    Register: one fact (which root loaded, which root should have),
+    plus the terse alternative (fix the ``.pth``/PYTHONPATH named), nothing
+    else -- no override key.
+    """
+    actual_module_file = _substrate_plane_check_module.__file__
+    actual_root = Path(actual_module_file).resolve().parents[2]
+    if actual_root == _EXPECTED_REPO_ROOT:
+        return
+    pth = _find_responsible_pth(actual_root)
+    print(
+        f"FATAL: coordinator_core.install.substrate loaded from "
+        f"{actual_module_file}, not this file's own repo root "
+        f"{_EXPECTED_REPO_ROOT} -- "
+        + (f"caused by {pth}" if pth is not None else "no responsible .pth file found on sys.path"),
+        file=sys.stderr,
+    )
+    print("  install-maximalist.sh stops here -- fix the reported error and re-run.", file=sys.stderr)
+    sys.exit(1)
+
+
+_assert_own_plane_loaded()
 
 
 def _collect_writer_declarations(
@@ -1112,7 +1190,7 @@ def run(
     to the run, and covers any phase that writes env without this fix noticing.
 
     ``claude_klabauter_root`` is REQUIRED (not defaulted here) -- the phases it feeds
-    (``claude-doe`` wrapper install, ``gen-claude-klabauter-live-root-pointer.py``) resolve
+    (``claude-doe`` wrapper install, ``gen-claude-klabauter-root-pointer.py``) resolve
     real subprocess/file-copy targets, so silently defaulting to
     ``Path(__file__).resolve().parents[2]`` inside this function would make
     every direct-call test (this module's own coverage in
@@ -1357,7 +1435,7 @@ def _run_body(
     # it here, from the claude-klabauter clone that is running THIS install, closes the
     # loop from the claude-klabauter side without waiting on a coordinator-side fix.
     #
-    # This block MUST run before Step 3.5a.1b (gen-claude-klabauter-live-root-pointer.py) below:
+    # This block MUST run before Step 3.5a.1b (gen-claude-klabauter-root-pointer.py) below:
     # that advisory step resolves the claude-klabauter root via REPO_CLAUDE_KLABAUTER or
     # `machine-local get repos.claude_klabauter`, which is exactly the read this
     # write makes possible for the first time on a fresh machine.
@@ -1375,7 +1453,7 @@ def _run_body(
         else:
             orch.skip_note(f"Seed repos.claude_klabauter registry key -- check-only (would seed: {claude_klabauter_clone})")
     elif not (claude_klabauter_clone / "coordinator_core").is_dir():
-        # Mirrors gen-claude-klabauter-live-root-pointer.py's own sanity guard: a bare
+        # Mirrors gen-claude-klabauter-root-pointer.py's own sanity guard: a bare
         # directory-existence check on the wrong marker cannot distinguish
         # "the claude-klabauter clone" from "some directory" (an unrelated 18-entry
         # bin/ sits at this repo's root alongside coordinator/bin's real 563
@@ -1400,7 +1478,7 @@ def _run_body(
                 _verify_registry_seed("repos.claude_klabauter", str(claude_klabauter_clone))
             else:
                 print(
-                    "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-live-root-pointer.py "
+                    "WARN: machine-local set repos.claude_klabauter failed -- gen-claude-klabauter-root-pointer.py "
                     "(Step 3.5a.1b below) may not resolve this run",
                     file=sys.stderr,
                 )
@@ -1427,26 +1505,26 @@ def _run_body(
         env=env,
     )
 
-    # -- Step 3.5a.1b -- gen-claude-klabauter-live-root-pointer.py (advisory) --
+    # -- Step 3.5a.1b -- gen-claude-klabauter-root-pointer.py (advisory) --
     # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
     # `claude-doe` below: this script lives at
-    # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-live-root-pointer.py` post
+    # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
     # b644d5a9, not under the DoE clone's `coord_root/bin/`.
     py_bin = shutil.which("python3") or shutil.which("python")
     if py_bin:
         claude_klabauter_pointer_args = ["--check-only"] if check_only else []
         orch.run_advisory(
-            "gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
+            "gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
             [
                 py_bin,
-                os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-live-root-pointer.py"),
+                os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),
                 *claude_klabauter_pointer_args,
             ],
             env=env,
         )
     else:
         print(
-            "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-live-root-pointer.py (Step 3.5a.1b)",
+            "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",
             file=sys.stderr,
         )
 

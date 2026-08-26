@@ -701,13 +701,24 @@ def _careful_write(
     return backup_path
 
 
-def _install_one_effective_bytes(src: Path, python_bin_substitution: Optional[str]) -> bytes:
+def _install_one_effective_bytes(
+    src: Path, dst: Path, python_bin_substitution: Optional[str]
+) -> bytes:
     """The bytes `_install_one` actually writes/compares for `src` — a plain
     byte-substring replace of every ``__PYTHON_BIN__`` occurrence when
     ``python_bin_substitution`` is not ``None`` (C2), else `src`'s raw
     content unchanged. See `_install_one`'s own docstring for why this
     function does not itself decide WHICH sources get a substitution
-    value — only what to do once one is supplied."""
+    value — only what to do once one is supplied.
+
+    ``dst`` is carried through only to name it in the diagnostic below — a
+    missing ``src`` is the single point every read in this module passes
+    through, so the existence check lives here rather than at each of the
+    three call sites."""
+    if not src.is_file():
+        raise SubstrateFatalError(
+            f"install-substrate: missing source {src} — would write to {dst}"
+        )
     raw = src.read_bytes()
     if python_bin_substitution is None:
         return raw
@@ -722,7 +733,7 @@ def _install_one_content_matches(
     ``filecmp.cmp(src, dst, shallow=False)`` every `_install_one` branch
     used before C2. `dst` must already be known to exist; callers gate on
     that themselves (mirrors `filecmp.cmp`'s own precondition)."""
-    return dst.read_bytes() == _install_one_effective_bytes(src, python_bin_substitution)
+    return dst.read_bytes() == _install_one_effective_bytes(src, dst, python_bin_substitution)
 
 
 def _install_one(
@@ -802,6 +813,17 @@ def _install_one(
     written by the shim's own runtime probe (never touched by the sweep,
     which only iterates ``templates/bin/``) — this function does not write
     that sidecar; see C1."""
+    reason = None
+    name = src.name
+    if src.suffix in (".py", ".sh"):
+        force_overwrite = True
+        reason = "code file"
+    if name in ("machine-local", "resolve-coordinator-clone", "claude-home") or src.suffix == ".cmd":
+        force_overwrite = True
+        reason = "code file"
+    if reason is None and force_overwrite:
+        reason = "tracked template"
+
     if check_only:
         if dst.exists() and _install_one_content_matches(src, dst, python_bin_substitution):
             print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
@@ -818,26 +840,26 @@ def _install_one(
                 "not reported as stale"
             )
             return
+        if dst.exists() and not force_overwrite:
+            # Same classification the live path uses (`reason`/`force_overwrite`
+            # above): a destination outside the code-file/tracked-template
+            # classes is preserve-on-diff live, exit 0 — check-mode must agree
+            # rather than demanding a state (a rewritten, byte-identical
+            # destination) the live path itself refuses to produce (C3/AC5).
+            print(
+                f"[install-substrate] check: {dst.name} operator-customized "
+                f"(preserve-on-diff) at {dst} — not reported as stale"
+            )
+            return
         status = "stale" if dst.exists() else "absent"
         raise SubstrateFatalError(
             f"install-substrate: check failed: {dst.name} is {status} at {dst} "
             f"(would write from {src})"
         )
 
-    reason = None
-    name = src.name
-    if src.suffix in (".py", ".sh"):
-        force_overwrite = True
-        reason = "code file"
-    if name in ("machine-local", "resolve-coordinator-clone", "claude-home") or src.suffix == ".cmd":
-        force_overwrite = True
-        reason = "code file"
-    if reason is None and force_overwrite:
-        reason = "tracked template"
-
     if not dst.exists():
         atomic_write_bytes(
-            dst, _install_one_effective_bytes(src, python_bin_substitution),
+            dst, _install_one_effective_bytes(src, dst, python_bin_substitution),
             preserve_mode=True,
         )
         if exec_bit:
@@ -894,7 +916,7 @@ def _install_one(
                 # the new complete content, never a torn write.
                 print(f"[{warn_prefix}] updated {dst.name} ({reason}; re-install overwrites)")
                 atomic_write_bytes(
-                    dst, _install_one_effective_bytes(src, python_bin_substitution),
+                    dst, _install_one_effective_bytes(src, dst, python_bin_substitution),
                     preserve_mode=True,
                 )
                 if exec_bit:

@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.claim_state import ClaimState
+
 # Declared, not excused: this file spawns a real git process because the properties
 # under test are real merge-base/log/commit-trailer plumbing (session-id resolution
 # against actual git history, Detector B's git-provenance leg) that no mock stands in
@@ -280,6 +282,92 @@ class TestPrimaryScan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             self.assertEqual(wsc.primary_consumed_handoff_paths(repo, "sid-123"), [])
+
+    # --- HOLDER-MISMATCH PARTITION (2026-08-26) -------------------------
+    # `resolve_claim_state` is stubbed rather than driven through a real
+    # ledger: these cases turn entirely on the ClaimState fields the scan
+    # partitions on, and building a live-holder claim dir would test
+    # `claim_state.py`'s own resolution instead of this partition.
+
+    def _scan_with_states(self, states):
+        import tempfile
+        import unittest.mock as mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            handoffs = repo / "state" / "handoffs"
+            handoffs.mkdir(parents=True)
+            for name in states:
+                (handoffs / name).write_text("---\nkind: session-handoff\n---\nbody\n")
+
+            def _fake(path, **_kwargs):
+                return states[Path(path).name]
+
+            with mock.patch.object(wsc, "resolve_claim_state", _fake):
+                return wsc.primary_consumed_handoff_scan(repo, "sid-me")
+
+    @staticmethod
+    def _state(holder, mirror_holder):
+        return ClaimState(
+            holder=holder,
+            claimed_at=None,
+            source="ledger",
+            disagreement=holder is not None and mirror_holder is None,
+            ledger_holder=holder,
+            mirror_holder=mirror_holder,
+        )
+
+    def test_ledger_claim_whose_mirror_names_a_peer_is_not_adopted(self):
+        """The 2026-08-26 incident: a pickup promoted its ledger claim to
+        `apply` stage and halted before d2 stamped the frontmatter, leaving
+        this session as ledger holder of a peer's in_flight baton."""
+        result = self._scan_with_states(
+            {"peer-baton.md": self._state("sid-me", "sid-peer")}
+        )
+        self.assertEqual(result.adopted, [])
+        self.assertEqual(result.mirror_conflicts, ["state/handoffs/peer-baton.md"])
+
+    def test_ledger_claim_with_empty_mirror_is_still_adopted(self):
+        """The branch-switch-revert case the ledger-first read exists for —
+        mirror EMPTY, not naming somebody else. Must be untouched."""
+        result = self._scan_with_states(
+            {"reverted.md": self._state("sid-me", None)}
+        )
+        self.assertEqual(result.adopted, ["state/handoffs/reverted.md"])
+        self.assertEqual(result.mirror_conflicts, [])
+
+    def test_agreeing_mirror_is_adopted(self):
+        result = self._scan_with_states(
+            {"mine.md": self._state("sid-me", "sid-me")}
+        )
+        self.assertEqual(result.adopted, ["state/handoffs/mine.md"])
+        self.assertEqual(result.mirror_conflicts, [])
+
+    def test_clean_candidate_survives_alongside_a_conflicted_one(self):
+        """The partition is per-handoff — one bad ledger claim must not
+        suppress a genuine consume."""
+        result = self._scan_with_states(
+            {
+                "a-peer-baton.md": self._state("sid-me", "sid-peer"),
+                "b-mine.md": self._state("sid-me", "sid-me"),
+            }
+        )
+        self.assertEqual(result.adopted, ["state/handoffs/b-mine.md"])
+        self.assertEqual(result.mirror_conflicts, ["state/handoffs/a-peer-baton.md"])
+
+    def test_conflicted_candidate_is_absent_from_the_legacy_scalar_readers(self):
+        import tempfile
+        import unittest.mock as mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "state" / "handoffs").mkdir(parents=True)
+            (repo / "state" / "handoffs" / "peer-baton.md").write_text("---\n---\n")
+            with mock.patch.object(
+                wsc, "resolve_claim_state", lambda p, **k: self._state("sid-me", "sid-peer")
+            ):
+                self.assertEqual(wsc.primary_consumed_handoff_paths(repo, "sid-me"), [])
+                self.assertIsNone(wsc.primary_consumed_handoff(repo, "sid-me"))
 
 
 class TestDetectorA(unittest.TestCase):

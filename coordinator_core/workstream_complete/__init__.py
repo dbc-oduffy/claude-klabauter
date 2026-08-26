@@ -709,7 +709,11 @@ def _session_shape_is_uncertain(detection: dict[str, Any]) -> bool:
     has a `diagnostics` parameter (DR-259's "notes never beat structure",
     applied one layer over).
 
-    Two structurally uncertain cases:
+    Three structurally uncertain cases:
+
+      - a live-consume candidate was REFUSED for a ledger-vs-mirror holder
+        mismatch (`live_consume_mirror_conflicts`, leg-agnostic — see the
+        branch below).
 
       - the deciding leg reported `indeterminate` or `ambiguous` — a
         liveness-detection gap the assembler cannot settle from disk (the
@@ -782,7 +786,9 @@ def _session_shape_is_uncertain(detection: dict[str, Any]) -> bool:
     `exact_match_count == 0`: presence-vs-absence, not value, selects the
     branch.
 
-    This exact rule is DUPLICATED, not delegated, in
+    The DETECTOR-C branch alone (not the leg-agnostic
+    `live_consume_mirror_conflicts` branch above, which has no counterpart
+    there) is DUPLICATED, not delegated, in
     `wsc-session-disposition.py`'s own `is_coincidence_prone_detection`
     (called from that module's `resolve_disposition` memo-preemption gate)
     — see that function's docstring for why a module-load delegation was
@@ -815,12 +821,35 @@ def _session_shape_is_uncertain(detection: dict[str, Any]) -> bool:
     diagnostics along as diagnostics-only even when the memo, not Detector
     C, decided the disposition (plan Execution Notes precedence contract).
     That is NOT the producer leak the `deciding_leg` guard above defends
-    against: this predicate's first branch only matches `deciding_leg in
-    ("detector-c", "none")`, so a `"memo-predecessor"` leg never enters
-    either branch and this function always returns `False` for it, by
-    construction, regardless of what `detector_c_status`/match-facts it
-    carries. `memo-predecessor` is a settled fact once resolved — do not
-    read the presence of `detector_c_status` on that leg as ambiguity."""
+    against: this predicate's DETECTOR-C/`detector_c_status` branch only
+    matches `deciding_leg in ("detector-c", "none")`, so a
+    `"memo-predecessor"` leg never enters that branch and this function
+    always returns `False` for it on `detector_c_status`/match-facts alone,
+    by construction, regardless of what those fields carry.
+    `memo-predecessor` is a settled fact once resolved WITH RESPECT TO
+    `detector_c_status`/match-facts specifically — do not read the presence
+    of `detector_c_status` on that leg as ambiguity. This scoped claim does
+    NOT extend to the leg-agnostic `live_consume_mirror_conflicts` branch
+    above (the first branch in this function, ahead of every leg check):
+    that branch fires on `memo-predecessor` exactly like every other leg,
+    because a refused live-consume candidate is a fact about a DIFFERENT
+    part of the session's shape than whatever memo-predecessor itself
+    settled — see that branch's own comment for why."""
+    # Leg-agnostic, and deliberately ahead of every leg-keyed branch below:
+    # `live_consume_mirror_conflicts` is a REFUSAL fact, not a leg. The
+    # primary scan declined one or more ledger claims this session holds
+    # whose frontmatter mirror names a DIFFERENT holder (see
+    # `primary_consumed_handoff_scan`'s HOLDER-MISMATCH PARTITION in
+    # wsc-session-disposition.py) — an incomplete takeover, most often a
+    # pickup that promoted its ledger claim to `apply` stage and then halted
+    # before d2's frontmatter stamp landed. Whatever leg then decided, this
+    # session's shape was computed with a live-consume candidate set aside,
+    # so it is not a settled fact and the operator gets the alarm. Before the
+    # refusal this same state produced a CERTAIN `live-consume` resolution
+    # against a peer's in_flight baton with no channel to correct it — the
+    # 2026-08-26 incident this branch closes.
+    if detection.get("live_consume_mirror_conflicts"):
+        return True
     if detection.get("deciding_leg") in ("detector-c", "none") and detection.get(
         "detector_c_status"
     ) in ("indeterminate", "ambiguous"):
@@ -966,7 +995,10 @@ def build_session_shape_judgment_point(gate: SessionShapeGate) -> Optional[dict[
         ],
         evidence="gates.session_shape.detection",
         reason=(
-            "wsc-session-disposition.py's structured detection record reports either an "
+            "wsc-session-disposition.py's structured detection record reports either a "
+            "live-consume candidate REFUSED because its ledger claim names this session "
+            "while its frontmatter names a different holder (an incomplete takeover, not a "
+            "consume), an "
             "INDETERMINATE/AMBIGUOUS detector result, or a Detector C (crash-recovery) "
             "attribution resolved from a single matched scope entry whose breadth is weak — "
             "the matched baton's scope has other, uncorroborated entries, or the single match "

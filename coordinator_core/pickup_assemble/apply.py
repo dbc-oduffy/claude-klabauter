@@ -200,6 +200,8 @@ from coordinator_core.session.claims import (
     CLAIM_STAGE_BRIEF,
     claim_artifact,
     claim_stage,
+    claim_stamped,
+    demote_claim_stage_to_brief,
     mark_claim_stamped,
     promote_claim_stage,
     release_artifact,
@@ -1188,6 +1190,78 @@ def apply(
             # `detail` reported, and correctly falls through to `None` again
             # when nothing did.
             report["commit_sha"] = scoped_sha if scoped_sha is not None else _op_commit_sha_from_results(report)
+
+        # Hand the lease back when this run stamped NOTHING (state/bug-backlog/
+        # 2026-08-26-a-halted-pickup-leaves-a-live-ledger-claim-on-a-peers-
+        # baton.yaml). The promotion above fires before any directive runs, so
+        # a run that halts at a judgment point — the ordinary outcome when the
+        # EM has a decision to make — otherwise ends holding a lease-free
+        # claim on a baton it never touched, for the rest of the session's
+        # life. `/workstream-complete`'s live-consume leg reads that claim
+        # ledger-first and resolves `predecessor-consumed` against it; on
+        # somebody else's baton that caps a PEER's workstream.
+        #
+        # `claim_stamped` alone is NOT the gate (2026-08-26 code review,
+        # coordinator:code-reviewer P2): `mark_claim_stamped` has exactly one
+        # writer, `_dispatch_archive_stamp_cli`'s `claim-handoff` verb, but the
+        # same dispatch table has two other handoff-facing verbs —
+        # `gate-recheck-handoff`/`gate-recheck` and `restamp-execution-sha` —
+        # that mutate real state and can land (and, under BANK-THE-GRAB above,
+        # get `_scoped_commit`'d) on an `APPLY_EXIT_HALTED_AT_JUDGMENT` run
+        # that halts at a LATER judgment point before `claim-handoff` (d2)
+        # ever executes. `claim_stamped` reads `False` for that claim dir no
+        # matter how real the banked mutation was, since no writer ever
+        # touched the marker for those two verbs. Demoting on `claim_stamped`
+        # alone would therefore reintroduce exactly the "claim taken out from
+        # under a mid-mutation session" hazard the unconditional promotion
+        # above exists to prevent. The gate is widened to also require that
+        # no directive OTHER than "d1" (`build_handoff_directives`'s
+        # mechanical `claim-artifact` reservation grab, ALWAYS present and
+        # ALWAYS landed once a claim exists — it is exactly the reservation
+        # `promote_claim_stage`/`demote_claim_stage_to_brief` already govern,
+        # never itself an external-state mutation) appear in
+        # `report["landed"]`. `report["landed"]` names every directive that
+        # DISPATCHED without raising, not only ones that mutated durable
+        # state on THIS artifact — "d1" lands on every claimed handoff apply
+        # regardless of outcome (confirmed against
+        # `test_apply_hands_the_lease_back_when_no_stamp_landed`, whose
+        # refused `claim-handoff` still leaves `report["landed"] == ["d1"]`),
+        # so treating any non-empty `landed` as "banked something" would
+        # never demote a handoff run again. A run that banked ANYTHING BEYOND
+        # the reservation grab — via `claim-handoff`'s marker OR any other
+        # verb's landed directive — keeps its promotion; only a run that
+        # banked nothing beyond the reservation AND left no marker gets
+        # demoted.
+        #
+        # HANDOFF ONLY, and deliberately: `mark_claim_stamped` has exactly one
+        # writer, `_dispatch_archive_stamp_cli`'s `claim-handoff` verb. A memo
+        # claim never carries the marker no matter how cleanly its apply ran,
+        # so reading `claim_stamped` there would demote every successful memo
+        # pickup. Memos reach their own terminal state through
+        # `memo.transition` and are out of scope for this rule until they have
+        # an equivalent landed-fact of their own.
+        #
+        # Demote, never release: the reservation and its `brief`-stage lease
+        # survive, so the EM answers the judgment point and re-runs `apply`,
+        # which re-promotes. Best-effort by construction — the return value is
+        # deliberately unread, exactly as `mark_claim_stamped`'s is, since a
+        # ledger-hygiene write must never change what an otherwise-complete
+        # apply run reports.
+        _banked_beyond_reservation = [
+            d for d in (report.get("landed") or []) if d != "d1"
+        ]
+        if class_ == "handoff" and not _banked_beyond_reservation:
+            try:
+                _common_dir = git_common_dir(root)
+            except Exception:
+                _common_dir = None
+            if _common_dir is not None and not claim_stamped(
+                # `basename`, not the artifact path — it is the exact claim key
+                # `demote_claim_stage_to_brief` resolves below, so the read and
+                # the write cannot address different dirs.
+                handoff_claim_dir(_common_dir, Path(basename))
+            ):
+                demote_claim_stage_to_brief(class_, basename, cwd=str(root))
 
         return exit_code, report
 

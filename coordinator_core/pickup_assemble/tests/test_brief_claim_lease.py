@@ -835,6 +835,132 @@ def test_promote_claim_stage_on_an_absent_claim_is_false(tmp_path, as_session):
     assert claims_mod.promote_claim_stage("handoff", "h1.md", cwd=str(repo)) is False
 
 
+# ---------------------------------------------------------------------------
+# Demotion — the inverse, for a run that stamped nothing
+# (state/bug-backlog/2026-08-26-a-halted-pickup-leaves-a-live-ledger-claim-
+# on-a-peers-baton.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_demote_claim_stage_hands_a_self_held_apply_claim_back_to_the_lease(
+    tmp_path, as_session
+):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+    cdir = _write_claim(repo, "handoff", "h1.md", "sid-a", stage="apply", age_minutes=1)
+
+    assert claims_mod.demote_claim_stage_to_brief("handoff", "h1.md", cwd=str(repo)) is True
+    assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_BRIEF
+
+
+def test_demote_claim_stage_never_touches_a_peers_claim(tmp_path, as_session):
+    """Same guard, same reason, as `promote_claim_stage`'s: demoting somebody
+    else's claim would strip a lease-free hold from a session that may be
+    mid-mutation behind it."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+    cdir = _write_claim(repo, "handoff", "h1.md", "sid-peer", stage="apply", age_minutes=1)
+
+    assert claims_mod.demote_claim_stage_to_brief("handoff", "h1.md", cwd=str(repo)) is False
+    assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_APPLY
+
+
+def test_demote_claim_stage_is_a_no_op_success_on_a_brief_claim(tmp_path, as_session):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+    _write_claim(repo, "handoff", "h1.md", "sid-a", stage="brief", age_minutes=1)
+
+    assert claims_mod.demote_claim_stage_to_brief("handoff", "h1.md", cwd=str(repo)) is True
+
+
+def test_demote_claim_stage_on_an_absent_claim_is_false(tmp_path, as_session):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+
+    assert claims_mod.demote_claim_stage_to_brief("handoff", "h1.md", cwd=str(repo)) is False
+
+
+def test_apply_hands_the_lease_back_when_no_stamp_landed(
+    tmp_path, as_session, holder_reads_live, monkeypatch
+):
+    """The 2026-08-26 incident, end to end. `apply` promotes before any
+    directive runs; when the stamp that follows is REFUSED, the promotion
+    must not survive it — otherwise the session holds a lease-free claim on
+    this baton for the rest of its life, and `/workstream-complete`'s
+    live-consume leg reads that claim as "I consumed this", capping the
+    workstream of whoever actually holds the baton.
+
+    The refusal is driven through the real seam (`cs_claim_handoff` returning
+    a non-zero exit), not by suppressing `mark_claim_stamped` — a refused
+    write is exactly the state `stage == apply` cannot distinguish on its own,
+    which is why the marker exists."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", deployment_state="active")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    cdir = _claim_dir(repo, "handoff", "h1.md")
+    assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_BRIEF
+
+    monkeypatch.setattr(
+        pa_apply,
+        "cs_claim_handoff",
+        lambda *a, **k: {"exit_code": 1, "error": "refused by _validate_fm"},
+    )
+
+    pa_apply.apply("state/handoffs/h1.md", session_id="sid-a", repo_root=repo)
+
+    assert not claims_mod.claim_stamped(cdir)
+    assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_BRIEF
+    # Demoted, NOT released — the reservation the EM took survives so the
+    # judgment point can be answered and `apply` re-run.
+    assert cdir.is_dir()
+
+
+def test_apply_keeps_its_promotion_once_the_stamp_has_landed(
+    tmp_path, as_session, holder_reads_live
+):
+    """The other side of the same gate, on the unmocked happy path: a run
+    whose frontmatter stamp genuinely landed IS mid-mutation and must keep the
+    lease-free claim the promotion gave it. Without this, the demotion above
+    would be handing every successful pickup's claim back to the lease."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", deployment_state="active")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    cdir = _claim_dir(repo, "handoff", "h1.md")
+
+    pa_apply.apply("state/handoffs/h1.md", session_id="sid-a", repo_root=repo)
+
+    assert claims_mod.claim_stamped(cdir)
+    assert claims_mod.claim_stage(cdir) == claims_mod.CLAIM_STAGE_APPLY
+
+
+def test_demote_restores_the_lease_a_promotion_suspended(tmp_path, as_session):
+    """The point of demoting rather than releasing: the reservation survives,
+    and with it the `brief_lease_expired` clock an abandoned pickup must be
+    subject to again."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+    cdir = _write_claim(repo, "handoff", "h1.md", "sid-a", stage="apply", age_minutes=999)
+    assert claims_mod.brief_lease_expired(cdir) is False
+
+    claims_mod.demote_claim_stage_to_brief("handoff", "h1.md", cwd=str(repo))
+
+    assert cdir.is_dir()
+    assert claims_mod.brief_lease_expired(cdir) is True
+
+
 def test_apply_promotes_the_reservation_left_by_brief(tmp_path, as_session, holder_reads_live):
     """End to end: the reservation `brief` took must not still be carrying a
     lease once `apply` is mutating behind it — otherwise a peer could take the
@@ -941,3 +1067,64 @@ def test_dropping_an_apply_stage_claim_still_runs_the_class_inverse(
     assert exit_code == pa_apply.APPLY_EXIT_OK
     assert called == ["unclaim"]
     assert report["claim_stage"] == claims_mod.CLAIM_STAGE_APPLY
+
+
+def test_git_common_dir_resolvers_agree(tmp_path, as_session):
+    """P3 (2026-08-26 code review): the demote gate's read side resolves the
+    common dir via `lifecycle.git_common_dir` (pure-Python walk) while
+    `claims._claim_base`'s legacy branch resolves via `core.sessions_dir`
+    (a `git rev-parse --git-common-dir` spawn). Both are documented to agree,
+    including in a linked worktree, but nothing asserted it — pin it directly
+    so the read and write halves of the demote gate cannot silently address
+    different directories."""
+    from coordinator_core import lifecycle
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-a")
+
+    common_dir = lifecycle.git_common_dir(repo)
+    sessions_dir = session_core.sessions_dir(str(repo))
+
+    assert common_dir is not None
+    assert sessions_dir is not None
+    assert Path(sessions_dir).parent.resolve() == Path(common_dir).resolve()
+
+
+def test_apply_keeps_its_promotion_when_a_non_stamp_verb_banks_a_mutation(
+    tmp_path, as_session
+):
+    """The 2026-08-26 code review P2 gap: `claim_stamped` is written only by
+    `claim-handoff`, but `gate-recheck-handoff`/`restamp-execution-sha` can
+    also bank a real, committed mutation on a halted run without ever
+    writing that marker. The gate must not demote such a run just because
+    the marker is absent — it must also check `report["landed"]` is empty.
+
+    Driven as a direct test of the widened condition (excluding "d1", the
+    ever-present mechanical claim-artifact reservation, `report["landed"]`
+    must be empty) rather than end-to-end through
+    `gate-recheck-handoff`/`restamp-execution-sha`, per the reviewer's
+    disproportionate-cost carve-out: constructing a real halted run that
+    exercises one of those two verbs ahead of `claim-handoff` requires
+    fabricating `depends_on` ordering machinery this suite does not
+    otherwise touch."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", deployment_state="active")
+    as_session("sid-a")
+    cdir = _write_claim(repo, "handoff", "h1.md", "sid-a", stage="apply", age_minutes=1)
+    assert not claims_mod.claim_stamped(cdir)
+
+    def _should_demote(landed: list[str]) -> bool:
+        banked_beyond_reservation = [d for d in landed if d != "d1"]
+        return not banked_beyond_reservation
+
+    # A `gate-recheck-handoff`/`restamp-execution-sha`-only halted run: the
+    # mechanical reservation grab ("d1") always lands too, but so does the
+    # real mutation directive — must NOT demote.
+    assert _should_demote(["d1", "d-gate-recheck"]) is False
+
+    # A run that banked NOTHING beyond the reservation grab and left no
+    # marker is still demoted.
+    assert _should_demote(["d1"]) is True
+    assert _should_demote([]) is True

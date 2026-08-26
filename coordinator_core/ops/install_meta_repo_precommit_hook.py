@@ -945,6 +945,80 @@ def _marker_is_installed(text: str, marker: str) -> bool:
     return False
 
 
+def _refuse_if_not_engine_root() -> Optional[str]:
+    """Refuse to install when THIS module's tree is not the resolved engine root.
+
+    `_bin_dir()` is self-relative and correct by construction — it names the
+    `coordinator/bin/` of whichever engine copy is running. That path is then
+    baked ABSOLUTE into the emitted hook and frozen there. So the emitter has
+    never had a path bug; the hole is that nothing checks WHO is allowed to
+    run it. Install from a working tree and the hook tracks that tree forever:
+    a branch switch that removes a gate script leaves the hook unable to run
+    it, and its only offered remedy is a `COORDINATOR_OVERRIDE_PRECOMMIT_*`
+    env var. That is a resolution bug teaching an operator to switch off a
+    safety gate. Observed 2026-08-26 (doe-claude-6b): three of four gates
+    resolved, one did not, purely because a sibling checkout had moved.
+
+    WHY A REFUSAL AND NOT A RESOLVER CALL IN THE HOOK. Emitting a resolver
+    call would move the resolution to fire time and cost an interpreter start
+    on the commit hot path, every commit, forever — against a 500ms
+    brightline. A refusal is one check paid once at install. It also fails in
+    the safe direction: loud at install, versus silent until a gate goes
+    missing months later.
+
+    THE DISCRIMINATOR IS THE RESOLUTION CLASS, NOT A PATH COMPARISON. A first
+    cut of this guard compared `coordinator_engine_root()` against this
+    module's own root and was very nearly a no-op: called from a live working
+    tree, that resolver ANSWERS with that tree
+    (`('/…/claude-klabauter', 'live-working-tree')` measured here), so the two
+    paths agree precisely in the case worth refusing. What distinguishes the
+    hazard is the class the resolver already reports beside the path —
+    `live-working-tree` means the gate paths about to be frozen into the hook
+    belong to a tree whose branches move.
+
+    A PUBLISHED MIRROR MUST EXIST TO REFUSE TOWARD. On a single-tree box
+    `live-working-tree` is the only resolution there is, and refusing would
+    break the ordinary install to guard a case that needs two trees. So this
+    refuses only when `published_engine_mirror_path()` names a registered,
+    on-disk mirror that could have been installed from instead — which also
+    makes the refusal message able to name the exact command to re-run.
+    """
+    from coordinator_core.engine_root import (  # noqa: PLC0415 - lazy, install-only path
+        coordinator_engine_root_with_class,
+        published_engine_mirror_path,
+    )
+
+    self_root = Path(__file__).resolve().parents[2]
+    try:
+        _engine_root, resolution_class = coordinator_engine_root_with_class()
+    except (RuntimeError, OSError):
+        return None
+    if resolution_class != "live-working-tree":
+        return None
+
+    mirror = published_engine_mirror_path()
+    if not mirror:
+        return None
+    try:
+        mirror_resolved = Path(mirror).resolve()
+    except OSError:
+        return None
+    if mirror_resolved == self_root:
+        return None
+
+    return (
+        f"install-meta-repo-precommit-hook: refusing — running from a live working "
+        f"tree ({self_root}), with a published engine mirror registered at "
+        f"{mirror_resolved}.\n"
+        f"    Gate paths are absolute and frozen into the hook at install time, so a "
+        f"hook installed from here tracks this tree's branches: a checkout that moves "
+        f"a gate script away leaves the hook unable to run it, and the only remedy it "
+        f"offers is disabling the gate.\n"
+        f"    Re-run from the mirror: "
+        f"python3 {mirror_resolved}/coordinator/bin/install-meta-repo-precommit-hook.py"
+    )
+
+
 def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gate]) -> int:
     """Shared install/append logic for a SINGLE named git hook
     (`.git/hooks/<hook_filename>`) against `gates` (in registry order).
@@ -954,6 +1028,11 @@ def _install_or_append_hook(repo_root: str, hook_filename: str, gates: List[_Gat
     identical regardless of which hook filename or registry is in play, so
     it lives in exactly one place rather than being re-derived per hook
     type."""
+    refusal = _refuse_if_not_engine_root()
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
     hook_path = os.path.join(repo_root, ".git", "hooks", hook_filename)
     bin_dir = _bin_dir()
 

@@ -289,7 +289,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("bin", "coordinator-queue-append.py", "_write_out_path_overwrite", "os.replace", "os.replace(tmp_path, out_path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "workday-start-handoff-triage.py", "trim_orphan_sweep_notes", "Path.replace", "tmp_path.replace(path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "seed-marketplace-enabledplugins.py", "_atomic_write", "os.replace", "os.replace(tmp, target)", 1): "atomic tmp->final; temp source never claimed",
-    ("bin", "gen-claude-klabauter-live-root-pointer.py", "main", "os.replace", "os.replace(tmp_live, pointer_file)", 1): "atomic tmp->final; temp source never claimed",
+    ("bin", "gen-claude-klabauter-root-pointer.py", "main", "os.replace", "os.replace(tmp_live, pointer_file)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "repomap/generate-repomap.py", "save_cache", "os.replace", "os.replace(tmp_path, cache_path)", 1): "atomic tmp->final; temp source never claimed (save_cache)",
     ("bin", "repomap/generate-repomap.py", "generate_task_scoped_map", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (generate_task_scoped_repomap)",
     ("bin", "repomap/generate-repomap.py", "generate_repomap", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (main, final write)",

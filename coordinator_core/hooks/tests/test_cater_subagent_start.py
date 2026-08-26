@@ -682,6 +682,39 @@ def test_raw_fallback_shape_gets_no_sentinel(git_repo: Path) -> None:
     assert not session_dir.exists() or list(session_dir.glob("*.md")) == []
 
 
+def test_canonical_shape_without_a_session_id_does_not_litter_subagent_share(git_repo: Path) -> None:
+    """The sibling of the raw-fallback gate above, and the arm that gate
+    does NOT cover: an agent_id ALREADY in the canonical
+    `<name>@session-<short>` shape passes `resolve_effective_types`
+    through unchanged even when the payload carries no `session_id` at all
+    (canonicalization has nothing to do), so it satisfies
+    `_NAMED_TEAMMATE_CANONICAL_SHAPE_RE` and reaches
+    `_write_miss_sentinel`. The only thing standing between that and a
+    write is that function's own `if not session_id` guard, which nothing
+    pinned: deleted, the whole hooks suite stayed green while
+    `_sanitize_segment(str(None))` sent the sentinel to
+    `state/subagent-share/None/` -- a directory created in the repo's
+    load-bearing state tree, named for a bug, that no session owns or
+    cleans up, with the child told to persist its findings there.
+
+    Asserts on the DIRECTORY, not just the marker: a no-path body is
+    necessary but not sufficient here, since the litter is a side effect
+    the returned text would not reveal."""
+    payload = {"agent_id": "worker@session-deadbeef", "agent_type": "worker",
+               "cwd": str(git_repo)}
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    share_root = git_repo / "state" / "subagent-share"
+    assert not share_root.exists() or list(share_root.iterdir()) == [], (
+        "a payload with no session_id created a subagent-share directory — "
+        f"found {[p.name for p in share_root.iterdir()]}; _write_miss_"
+        "sentinel's `if not session_id` guard is the one that prevents this"
+    )
+
+
 def test_resolver_exception_arm_gets_no_path_marker_body(git_repo: Path) -> None:
     """AC3: the third miss arm -- `agent_type` and `subagent_type` both
     falsy -- has an empty `agent_id`, so no sentinel is possible; the

@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.commit_trailers import (
+    _extract_trailer_block,
     can_format_trailers_in_process,
     compute_missing_trailer_args,
     format_trailers_in_process,
@@ -1647,16 +1648,25 @@ def _mark_unreconciled(
 
 
 def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
-    """Return the (stripped) value of the first line in `msg_text` starting
-    with `prefix` (e.g. `"Deliverable-Id:"`), or `None` if no such line
-    exists. Same prefix-match convention as `coordinator_core.git.
-    commit_trailers._has_trailer_line` (a plain `str.startswith`, not a
+    """Return the (stripped) value of the first line in `msg_text`'s TRAILER
+    BLOCK starting with `prefix` (e.g. `"Deliverable-Id:"`), or `None` when
+    the block carries no such line. Same block-aware convention as
+    `coordinator_core.git.commit_trailers._has_trailer_line` (a plain
+    `str.startswith` scoped to git's own last-paragraph trailer block, not a
     `git interpret-trailers --parse` round-trip), widened here to return the
     VALUE rather than a bool -- `commit_scoped`'s precedence ruling (2) needs
     to compare an existing message trailer's value against an explicit
     caller-supplied `deliverable_id`, not merely know a trailer is present.
+
+    Scoped to the block, not the whole message, because a `Deliverable-Id:`
+    line sitting in the BODY is prose git never parses: honouring it made
+    `_check_deliverable_id_precedence` raise a conflict against a value no
+    consumer could ever read, and let `commit_authored_new_file` accept a
+    message whose asserted trailer was unjoinable. Spec: cross-repo/inbox/
+    2026-08-26-example-retrieval-repo-em-chunk-trailer-misplacement-defeats-presence-
+    check.md.
     """
-    for line in msg_text.splitlines():
+    for line in _extract_trailer_block(msg_text):
         if line.startswith(prefix):
             return line[len(prefix):].strip()
     return None

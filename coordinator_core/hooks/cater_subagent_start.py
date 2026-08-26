@@ -198,6 +198,15 @@ SIDECAR_PATH_MARKER_PREFIX = "sidecar_path: "
 #: path: " (the same key an ordinary offer uses) finds the sentinel too.
 SIDECAR_MISS_MARKER = "sidecar_provisioning: missed"
 
+#: Opening clause shared by all three `_compose_sidecar_miss_text` bodies.
+#: The two markers above do NOT discriminate a miss: the path-bearing
+#: sentinel body carries `SIDECAR_PATH_MARKER_PREFIX`, the same key an
+#: ordinary offer uses, so a consumer keying off markers alone cannot tell
+#: "you have a sidecar" from "provisioning missed, here is a sentinel".
+#: This lead is the one string every miss body carries and no offer body
+#: does.
+SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning did not complete for this dispatch"
+
 #: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`
 #: (AC9 amendment) -- the pointer a spilled-blocks companion file leaves in
 #: `additionalContext` in place of the inlined blocks text.
@@ -260,8 +269,9 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
     the string is gone by construction (AC3)."""
     if sentinel_path:
         return (
-            "\n\nSidecar provisioning did not complete for this dispatch, "
-            "but a sentinel scaffold was written for you -- persist your "
+            "\n\n"
+            + SIDECAR_MISS_NOTICE_LEAD
+            + ", but a sentinel scaffold was written for you -- persist your "
             "findings there as normal, and say in them that provisioning "
             "missed.\n" + SIDECAR_PATH_MARKER_PREFIX + sentinel_path
         )
@@ -277,7 +287,9 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
         # and were recovered only by reading their transcripts off disk.
         # They followed this instruction exactly.
         return (
-            "\n\nSidecar provisioning did not complete for this dispatch -- "
+            "\n\n"
+            + SIDECAR_MISS_NOTICE_LEAD
+            + " -- "
             "no scaffold exists on disk, and you are a NAMED teammate, whose "
             "final reply text is not returned to the dispatcher. Deliver your "
             "findings with SendMessage to the session that dispatched you, "
@@ -286,7 +298,9 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
             + SIDECAR_MISS_MARKER
         )
     return (
-        "\n\nSidecar provisioning did not complete for this dispatch -- no "
+        "\n\n"
+        + SIDECAR_MISS_NOTICE_LEAD
+        + " -- no "
         "scaffold exists on disk. Report your findings inline in your "
         "reply and say in them that provisioning missed.\n"
         + SIDECAR_MISS_MARKER
@@ -715,12 +729,20 @@ def _resolve_sidecar_leg(
         leaves-a-file-the-em-ca.md`), and the miss notice names its literal
         path; the raw `a<name>-<16hex>` fallback shape gets no sentinel
         (its hex is not EM-derivable) and takes the no-path body instead.
+        That fallback is the MINORITY arm, not the ordinary named dispatch.
+        The block comment at the gate itself carries the reachability
+        precondition and which sub-case the gate is load-bearing for --
+        stated once, there, rather than restated here where the two copies
+        would drift.
       - NO type resolved at all (`agent_type` and `subagent_type` both
         falsy) ALSO emits the miss notice -- the resolver-exception arm
         (`compose_catering`'s own `except` catching a `resolve_effective_
         types` raise) and any other payload shape that yields empty legs
-        for both. `agent_id` is empty in this arm, so no sentinel is
-        possible; always the no-path body.
+        for both. `agent_id` here is whatever the payload
+        carried -- empty on the resolver-raise path, but a real bare-hex id
+        for an unnamed dispatch that resolved no type at all -- and no arm
+        below re-derives a name from it, so no sentinel is possible either
+        way; always the no-path body.
       - an UNNAMED dispatch (bare-hex or unresolvable `agent_id`) whose
         `agent_type` resolved but is genuinely absent from `policy.
         report_sidecar` stays SILENT (unchanged) -- `compose_catering`
@@ -752,8 +774,9 @@ def _resolve_sidecar_leg(
     module's own docstring says to avoid.
     """
     if not agent_type and not subagent_type:
-        # Resolver-exception arm: `agent_id` is empty here (AC3), so no
-        # sentinel is possible -- the no-path body, unconditionally.
+        # Nothing-resolved arm: no name leg exists to key a sentinel off
+        # (AC3), whether `agent_id` is empty (resolver raised) or a bare-hex
+        # unnamed id -- the no-path body, unconditionally.
         return "", _compose_sidecar_miss_text()
 
     if not subagent_type and agent_id and _is_named_teammate_agent_id(agent_id):
@@ -762,6 +785,26 @@ def _resolve_sidecar_leg(
         # fallback carries 16 hex digits no EM can derive, so a sentinel
         # there would be unpollable by construction -- write none, take
         # the no-path body.
+        # WHEN THIS GATE IS REACHED, since nothing beside it says so and a
+        # reader who checks finds `compose_catering` canonicalizing first:
+        # `resolve_effective_types` hands back the canonical
+        # `<name>@session-<short>` form for every payload carrying a usable
+        # `session_id`, so the raw form survives ONLY on the Staff Engineer F4
+        # fallback -- `session_id` absent, or shorter than the 8 chars the
+        # `<short>` half needs. This gate is NOT dead code; deleting it
+        # fails `tests/test_cater_subagent_start.py ::
+        # test_raw_fallback_shape_gets_no_sentinel`, which drives that
+        # fallback with a 3-char session_id.
+        #
+        # It is load-bearing for exactly one of those two sub-cases. With
+        # `session_id` absent, `_write_miss_sentinel` returns "" on its own
+        # `if not session_id` guard, so the gate is redundant there -- do
+        # not "simplify" by removing that guard instead, it is the one this
+        # arm does not cover. With `session_id` present but short, the write
+        # WOULD succeed, and the gate is the only thing stopping it: the EM
+        # knows that session_id (it dispatched with it) but never the 16 hex
+        # digits the subagent minted, so the path is unpollable by
+        # construction and a sentinel there is a file nobody comes for.
         sentinel_path = ""
         if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
             sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)

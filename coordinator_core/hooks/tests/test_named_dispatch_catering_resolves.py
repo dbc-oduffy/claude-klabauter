@@ -69,6 +69,7 @@ import coordinator_core.ipc as ipc
 from coordinator_core.hooks.cater_subagent_start import (
     OP_NAME,
     SIDECAR_MISS_MARKER,
+    SIDECAR_MISS_NOTICE_LEAD,
     SIDECAR_PATH_MARKER_PREFIX,
     _is_named_teammate_agent_id,
     compose_catering,
@@ -209,6 +210,26 @@ def test_named_report_sidecar_eligible_type_gets_a_real_sidecar_path(git_repo: P
 # spec. Reports the actual behaviour rather than papering over it.
 # ---------------------------------------------------------------------------
 
+def _assert_sentinel_miss_notice(context: str, repo: Path) -> None:
+    """A miss notice for a population `4dc874adb` writes a sentinel for:
+    the notice fires, its trailing marker is the path key (never the
+    no-path `SIDECAR_MISS_MARKER`), and the named path is a file that
+    actually exists -- the whole point of that change was a file the EM can
+    poll, so a body naming a path nothing wrote would satisfy a
+    string-only assertion while delivering nothing."""
+    assert SIDECAR_MISS_NOTICE_LEAD in context, context
+    assert SIDECAR_MISS_MARKER not in context, context
+    assert SIDECAR_PATH_MARKER_PREFIX in context, context
+
+    sentinel_rel = context.rsplit(SIDECAR_PATH_MARKER_PREFIX, 1)[1].strip()
+    assert (repo / sentinel_rel).is_file(), (
+        f"the miss notice names {sentinel_rel!r}, but no sentinel exists "
+        f"there under {repo} -- an unpollable path is the failure AC3 of "
+        f"docs/plans/2026-08-25-a-missed-sidecar-leaves-a-file-the-em-ca.md "
+        f"exists to prevent"
+    )
+
+
 def test_named_dispatch_genuinely_off_roster_type_stays_silent_not_missed(git_repo: Path) -> None:
     _write_backpointer(git_repo, REAL_CANONICAL_AGENT_ID, "em-session-real-2", OFF_ROSTER_TYPE)
     payload = _real_shaped_payload(str(git_repo), session_id=REAL_SESSION_ID)
@@ -245,13 +266,20 @@ def test_named_dispatch_eligible_type_with_no_backpointer_gets_the_miss_marker(
     back-pointer to read). The roster lookup below is structurally
     incapable of matching either leg, so before the fix this silently
     dropped an eligible dispatch's sidecar with no signal at all. This is
-    the regression this chunk closes."""
+    the regression this chunk closes.
+
+    Asserts the miss NOTICE, not `SIDECAR_MISS_MARKER`: `4dc874adb` gave
+    this population a sentinel scaffold on disk, so it takes the
+    path-bearing body (`_compose_sidecar_miss_text` with a non-empty
+    `sentinel_path`), whose trailing marker is `SIDECAR_PATH_MARKER_PREFIX`.
+    The no-path marker is now reserved for the arms where no sentinel could
+    be written at all -- pinned by `test_named_dispatch_unresolved_type_
+    gets_the_miss_marker`."""
     payload = _real_shaped_payload(str(git_repo))
 
     result = compose_catering(payload, cwd=str(git_repo))
 
-    assert SIDECAR_MISS_MARKER in result
-    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    _assert_sentinel_miss_notice(result, git_repo)
 
 
 def test_named_dispatch_with_separator_in_teammate_name_gets_the_miss_marker(
@@ -267,7 +295,12 @@ def test_named_dispatch_with_separator_in_teammate_name_gets_the_miss_marker(
     Before the fix, `_is_named_teammate_agent_id` returned False for that
     canonical id, so an unresolved `subagent_type` fell through to total
     silence instead of the miss marker -- exactly the silence
-    `2c6783315a28325b10769d50ea1d9f3141c64bc7` was written to remove."""
+    `2c6783315a28325b10769d50ea1d9f3141c64bc7` was written to remove.
+
+    As above, the observable is the miss NOTICE: `_canonical_agent_id`
+    canonicalizes this raw id, so `_resolve_sidecar_leg`'s shape gate
+    matches and `4dc874adb`'s sentinel is written, putting this dispatch on
+    the path-bearing body."""
     raw_agent_id = "afeature/auth-review-aaaabbbbccccdddd"
     payload = {
         "agent_id": raw_agent_id,
@@ -278,8 +311,7 @@ def test_named_dispatch_with_separator_in_teammate_name_gets_the_miss_marker(
 
     result = compose_catering(payload, cwd=str(git_repo))
 
-    assert SIDECAR_MISS_MARKER in result
-    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    _assert_sentinel_miss_notice(result, git_repo)
 
 
 @pytest.mark.parametrize(
@@ -406,7 +438,10 @@ def test_back_pointer_not_yet_written_gets_the_miss_marker(git_repo: Path) -> No
     `_resolve_sidecar_leg`'s named-teammate leg recognizes the unresolved
     `subagent_type` and surfaces the miss notice instead, so a subagent
     whose sidecar catering lost the ordering race is told, not left to
-    read silence as "nothing to recover from".
+    read silence as "nothing to recover from". `4dc874adb` then gave that
+    notice a sentinel scaffold on disk and named its path, so the
+    observable is the miss NOTICE plus a real file, not the no-path
+    `SIDECAR_MISS_MARKER`.
     """
     results = ipc.dispatch_ops_from_hook(
         [
@@ -420,9 +455,7 @@ def test_back_pointer_not_yet_written_gets_the_miss_marker(git_repo: Path) -> No
     for result in results:
         assert not isinstance(result, ipc.HookDispatchError), result
 
-    context = _additional_context(results[0])
-    assert SIDECAR_MISS_MARKER in context
-    assert SIDECAR_PATH_MARKER_PREFIX not in context
+    _assert_sentinel_miss_notice(_additional_context(results[0]), git_repo)
 
 
 # ---------------------------------------------------------------------------

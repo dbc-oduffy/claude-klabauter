@@ -597,11 +597,19 @@ def _extract_trailer_block(text: str) -> List[str]:
     if not lines:
         return []
 
-    start = 0
+    start = None
     for i in range(len(lines) - 1, -1, -1):
         if lines[i].strip() == "":
             start = i + 1
             break
+    if start is None:
+        # No blank line anywhere: the whole message is one paragraph, which
+        # git reads as the SUBJECT, never as a trailer block -- verified
+        # against `git interpret-trailers --parse`, which returns nothing for
+        # both "Deliverable-Id: x" alone and "subj\nDeliverable-Id: x".
+        # Reporting a trailer here would re-open the very suppression this
+        # block-awareness exists to close.
+        return []
 
     block = lines[start:]
     if not block:

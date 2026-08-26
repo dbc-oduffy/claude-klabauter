@@ -2975,7 +2975,16 @@ def test_pathspec_from_manifest_names_head_only_path_for_removal(tmp_path, monke
 
     Kept green while the gate is shut so the derivation itself stays under
     test: what is gated is whether the round ACTS on this set, never whether
-    the set is computed correctly."""
+    the set is computed correctly.
+
+    `published_dest_dirs` is now REQUIRED for this to name anything: the
+    removal rule is `(head_tree n row_scope) - declared_payload`, and a
+    manifest carrying no fourth set yields an empty `row_scope` and therefore
+    an empty removal set, always (§ `RoundManifest.published_dest_dirs`). This
+    fixture publishes into the mirror root, the flat-mirror row shape, which
+    `rel_id` renders as "." -- see
+    `test_removal_side_scopes_whole_tree_for_a_root_published_row` for the
+    matching that keeps that entry from reading as a directory named `.`."""
     monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
 
     repo = _init_head_repo(
@@ -2984,11 +2993,62 @@ def test_pathspec_from_manifest_names_head_only_path_for_removal(tmp_path, monke
     (repo / "gone.md").unlink()  # physically gone from the worktree already
 
     manifest = _mod._RoundManifest(
-        round_id="r1", declared_payload=frozenset({"kept.md"})
+        round_id="r1",
+        declared_payload=frozenset({"kept.md"}),
+        published_dest_dirs=frozenset({"."}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
     assert "gone.md" in pathspec
     assert "kept.md" not in pathspec
+
+
+def test_removal_side_scopes_whole_tree_for_a_root_published_row(tmp_path, monkeypatch):
+    """A row publishing into the mirror root records `published_dest_dirs`
+    as `{"."}` (`rel_id` of a path against itself), and every dest-HEAD path
+    is beneath it. Read as a literal directory prefix, "." matches nothing --
+    so the removal side would fire on NOTHING for exactly the flat mirrors it
+    was built for (`coordinator-claude`, `claude-klabauter`), and the round
+    would report a clean pass rather than a mis-scope. Pinned against a
+    subdirectory path, not just a root-level one, since the prefix form is
+    what a nested path would have needed."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
+    repo = _init_head_repo(
+        tmp_path,
+        {
+            "whoami/cli.py": "retired package\n",
+            "LICENSE": "license\n",
+        },
+    )
+    (repo / "whoami" / "cli.py").unlink()
+
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"LICENSE"}),
+        published_dest_dirs=frozenset({"."}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "whoami/cli.py" in pathspec
+    assert "LICENSE" not in pathspec
+
+
+def test_removal_side_still_fires_on_nothing_without_published_dest_dirs(tmp_path, monkeypatch):
+    """The complement, so the root-scope widening above cannot be mistaken for
+    "an empty scope means the whole tree": a manifest with NO fourth set (one
+    written before the field existed, or a round that published nothing) still
+    yields an empty removal set, gate open or not."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
+    repo = _init_head_repo(
+        tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
+    )
+    (repo / "gone.md").unlink()
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"kept.md"})
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    assert "gone.md" not in pathspec
 
 
 def test_pathspec_from_manifest_never_names_undeclared_staging_directory(tmp_path):

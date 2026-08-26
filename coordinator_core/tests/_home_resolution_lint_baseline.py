@@ -369,7 +369,7 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
 #   coordinator_core/ops/migrate_state_to_claude_klabauter.py:313 (main)
 #   coordinator/bin/check-machine-path-leak.py:327 (already independently
 #     F4-reviewed -- see this file's RUNG_ORDER_BASELINE removal note)
-#   coordinator/bin/gen-claude-klabauter-live-root-pointer.py:78 (_settings_home)
+#   coordinator/bin/gen-claude-klabauter-root-pointer.py:78 (_settings_home)
 #   coordinator/bin/tests/test_claude_machine_local.py:54 (_default_settings_home)
 #
 # Deliberately NOT baselined here. `find_bare_home_or_chains`'s own

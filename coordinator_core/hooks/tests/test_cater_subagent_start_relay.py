@@ -25,7 +25,13 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ipc as ipc
-from coordinator_core.hooks.cater_subagent_start import OP_NAME
+from coordinator_core import hooks as hooks_pkg
+from coordinator_core.hooks.cater_subagent_start import (
+    OP_NAME,
+    SIDECAR_MISS_MARKER,
+    SIDECAR_MISS_NOTICE_LEAD,
+    SIDECAR_PATH_MARKER_PREFIX,
+)
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -105,7 +111,25 @@ def _additional_context(result: dict) -> str:
 def test_cater_op_registered_under_documented_name_alongside_bookkeeping() -> None:
     """Both ops must be reachable off the SAME `ipc._REGISTRY` the
     SubagentStart shim's `dispatch_ops_from_hook` call resolves against --
-    this op takes no separate hooks.json registration of its own."""
+    this op takes no separate hooks.json registration of its own.
+
+    `_eager_import_all()` first, deliberately. Lazy is the only mode since
+    2026-08-22 (`hooks/__init__.py`: "a bare `import coordinator_core.hooks`
+    never does" register anything), so `_REGISTRY` holds a hooks op only
+    after something imports its module -- this file's module-scope import
+    for `cater_subagent_start`, and NOTHING for `track_dispatched_agents`.
+    Read cold, this asserted a registration no code in this module causes.
+    It passed anyway because the dispatch tests below reach the same op
+    through `ipc`'s registry-miss fallback, which imports and registers it
+    as a side effect -- so the assertion held on leftover state from an
+    earlier test, in this file or another, and failed the moment this file
+    ran alone. Forcing the registration path is what makes the pin measure
+    its own subject: both ops register under their documented names when
+    the documented full-load routine runs. Every production reader of
+    `_REGISTRY` (`op_census/occupancy_scan.py`, `op_census/spawn_bearing_
+    ops.py`) eagerly imports before reading it for the same reason."""
+    hooks_pkg._eager_import_all()
+
     assert OP_NAME == "hooks.cater_subagent_start"
     assert ipc._REGISTRY.get(OP_NAME) is not None
     assert ipc._REGISTRY.get("hooks.track_dispatched_agents") is not None
@@ -142,8 +166,19 @@ def test_reversed_order_fails_to_cater_the_named_dispatch(git_repo: Path) -> Non
     """The reverse order -- cater op dispatched BEFORE the bookkeeping leg
     writes the back-pointer -- resolves no subagent_type (lookup-miss,
     fail-open per `_read_backpointer_subagent_type`), so the same eligible
-    type gets NEITHER offer nor miss notice. This is the nondeterminism the
-    plan names, made deterministic and asserted on directly."""
+    type gets no sidecar OFFER. This is the nondeterminism the plan names,
+    made deterministic and asserted on directly.
+
+    It no longer gets silence. This test asserted `results[0] == {}` until
+    `2c6783315` ("the sidecar miss marker fires for a named dispatch whose
+    type never resolved") deliberately replaced that silence with a miss
+    notice, and never followed. `AGENT_ID` here is bare-hex and
+    `_cater_params` carries no `agent_type`, so both type legs come back
+    empty and `_resolve_sidecar_leg`'s nothing-resolved arm takes the
+    no-path body -- no name leg exists to key a sentinel off, so
+    `SIDECAR_MISS_MARKER` (not the path key) is the right observable for
+    THIS population, unlike the named-dispatch tests in
+    `test_named_dispatch_catering_resolves.py`."""
     results = ipc.dispatch_ops_from_hook(
         [
             (OP_NAME, _cater_params(str(git_repo))),
@@ -157,8 +192,16 @@ def test_reversed_order_fails_to_cater_the_named_dispatch(git_repo: Path) -> Non
         assert not isinstance(result, ipc.HookDispatchError), result
 
     # Cater op ran first: no back-pointer exists yet, so it resolves
-    # neither agent_type nor subagent_type -> not eligible -> no_advisory().
-    assert results[0] == {}
+    # neither agent_type nor subagent_type -- the dispatch that genuinely
+    # lost its sidecar, and it is told so rather than left to read silence
+    # as ineligibility.
+    context = _additional_context(results[0])
+    assert SIDECAR_MISS_NOTICE_LEAD in context, context
+    assert SIDECAR_MISS_MARKER in context, context
+    assert SIDECAR_PATH_MARKER_PREFIX not in context, (
+        "no name leg resolved, so no sentinel is derivable -- a path here "
+        "would name a file nothing wrote"
+    )
 
 
 def test_sequential_not_concurrent_same_result_regardless_of_python_scheduling(

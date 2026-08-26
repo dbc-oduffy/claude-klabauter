@@ -80,10 +80,19 @@ Saved/
 # `percolate/surface.py::PUBLISH_STAGING_DIR_RE` and its callers already draw.
 *publish-staging-*/
 
-# The round's own state directory -- working memory, not published product.
-# RULING, claude-central-em 2026-08-26, both mirrors: a path that should never
-# be tracked is ignored, not repeatedly deleted. Source of truth for this file
-# is project-makima dist/klabauter-toplevel/.gitignore.
+# The round's own state directory -- `.percolate/round-manifest.json`
+# (`round.default_manifest_path`), one file per dest repo, overwritten every
+# round. Working memory, not published product: 62KB of payload paths that
+# describe how the last round was computed. Tracking it makes every round's
+# manifest a diff in the next round, and leaves it declared by no row, so the
+# removal side reads it as deletable and would churn it delete-then-rewrite
+# forever.
+#
+# RULING, claude-central-em 2026-08-26, for BOTH mirrors: a path that should
+# never be tracked is ignored, not repeatedly deleted -- do not lean on the
+# removal rule to clear it. Untracked-but-unignored is the state this closes:
+# it was one `git add -A` away from being committed on coordinator-claude, and
+# was already tracked at HEAD on claude-klabauter.
 /.percolate/
 
 # --- Editor / OS detritus ---

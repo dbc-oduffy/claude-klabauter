@@ -279,7 +279,7 @@ def _machine_local_impl_resolver():
 def _claude_home() -> str:
     """Return the ~/.claude root, honoring CLAUDE_HOME for test isolation.
 
-    Mirrors gen-claude-klabauter-live-root-pointer.py::_claude_home — this is the install root
+    Mirrors gen-claude-klabauter-root-pointer.py::_claude_home — this is the install root
     that hosts the machine-local Python reader (bin/_machine_local.py), distinct
     from the settings-home used for the rung-1.5 pointer file. Delegates to
     machine_local_impl_resolve.claude_home() (shared resolver — see that

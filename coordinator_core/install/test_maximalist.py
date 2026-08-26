@@ -185,7 +185,7 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     (claude_home / ".claude" / "bin").mkdir(parents=True)
 
     # `claude_klabauter_root` is a SEPARATE fixture tree from `coord_root` -- the
-    # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-live-root-pointer.py`)
+    # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-root-pointer.py`)
     # migrated wholesale to claude-klabauter in commit `b644d5a9` (2026-07-22),
     # so production code now resolves these two paths under
     # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the DoE clone's
@@ -198,14 +198,14 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
 
-    # gen-claude-klabauter-live-root-pointer.py is invoked as `python3 <path>` via a real
+    # gen-claude-klabauter-root-pointer.py is invoked as `python3 <path>` via a real
     # subprocess (Step 3.5a.1b, advisory, out of C13's scope) -- must be
     # valid Python, not a shell stub.
-    claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
+    claude_klabauter_pointer = claude_klabauter_root / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"
     claude_klabauter_pointer.write_text(
         "import os, sys\n"
         'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
+        '    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
         'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
     )
 
@@ -361,7 +361,7 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
         "detect-existing-claude-home",
         "install-health-run",
         "gen-doe-root-pointer",
-        "gen-claude-klabauter-live-root-pointer.py",
+        "gen-claude-klabauter-root-pointer.py",
         "gen-claude-doe-shim",
         "gen-claude-doe-launcher",
         "gen-settings-hooks",
@@ -1501,7 +1501,7 @@ def test_seed_claude_klabauter_machine_local_absent_degrades_to_note(stub_env, m
     """(c) When machine-local cannot be resolved at all (no sibling CLI, no
     PATH fallback), the block must print a NOTE and continue -- never raise.
     `shutil.which` is faked to miss ONLY "machine-local" (delegating every
-    other lookup, e.g. gen-claude-klabauter-live-root-pointer.py's own python3/python probe,
+    other lookup, e.g. Gen-claude-klabauter-root-pointer.py's own python3/python probe,
     to the real resolver) so this test isolates the seed block's own
     degrade-to-NOTE path from unrelated advisory phases elsewhere in the chain."""
     monkeypatch.setattr(_shared_module, "resolve_machine_local_cli", lambda plugin_root: None)
@@ -1718,17 +1718,17 @@ def test_env_var_propagated_to_subprocess_phase(stub_env, monkeypatch, tmp_path)
     # about the env var reaching a real subprocess, not about the mutation
     # guard itself.
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    # Rewrite the real subprocess-invoked phase (gen-claude-klabauter-live-root-pointer.py)
+    # Rewrite the real subprocess-invoked phase (gen-claude-klabauter-root-pointer.py)
     # to record the resolution-journal env var it inherits, proving it
     # reaches a subprocess phase's environment, not only in-process ones.
     seen_log = tmp_path / "journal-env-seen.log"
-    claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-live-root-pointer.py"
+    claude_klabauter_pointer = stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "gen-claude-klabauter-root-pointer.py"
     claude_klabauter_pointer.write_text(
         "import os, sys\n"
         f'with open({str(seen_log)!r}, "w") as f:\n'
         '    f.write(os.environ.get("COORDINATOR_INSTALL_RESOLUTION_JOURNAL", ""))\n'
         'with open(os.environ["CALL_LOG"], "a") as f:\n'
-        '    f.write("gen-claude-klabauter-live-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
+        '    f.write("gen-claude-klabauter-root-pointer.py " + " ".join(sys.argv[1:]) + "\\n")\n'
         'sys.exit(int(os.environ.get("RC_GEN_CLAUDE_KLABAUTER_ROOT_POINTER_PY", "0")))\n'
     )
 
@@ -1941,3 +1941,124 @@ def test_seed_doe_claude_verify_match_reports_verified(stub_env, monkeypatch, ca
 
     out = capsys.readouterr().out
     assert f"repos.doe_claude: seeded and verified ({doe_clone})" in out
+
+
+# ---------------------------------------------------------------------------
+# C1 -- maximalist loads the engine it shipped with, whatever the .pth says
+#
+# Both guards run as a subprocess with a controlled environment (a fresh
+# repo-copy tree + a crafted sys.path) -- an in-process import proves nothing
+# about which plane got loaded, since this process already has the real
+# coordinator_core imported under its real path before the test body runs.
+# ---------------------------------------------------------------------------
+
+_REAL_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _copy_coordinator_core_tree(dest_root: Path) -> Path:
+    """Build a second, independent copy of this repo's coordinator_core
+    package tree under dest_root/coordinator_core, so a subprocess can be
+    made to load a WRONG plane distinguishable by real file identity (not
+    just by name) from the real one on sys.path."""
+    import shutil as _shutil
+
+    dst_pkg = dest_root / "coordinator_core"
+    _shutil.copytree(
+        _REAL_REPO_ROOT / "coordinator_core",
+        dst_pkg,
+        ignore=_shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    return dst_pkg
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_own_plane_wins_over_pth_shadowing_sys_path(tmp_path):
+    """A `.pth`-style shadow copy of coordinator_core sitting ahead of this
+    file's own repo root on `sys.path` must NOT win -- the `sys.path[0]`
+    insert makes this entry point load its own plane by construction."""
+    shadow_root = tmp_path / "shadow-repo"
+    shadow_root.mkdir()
+    _copy_coordinator_core_tree(shadow_root)
+
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    (site_dir / "shadow_sibling.pth").write_text(str(shadow_root) + "\n", encoding="utf-8")
+
+    env = dict(os.environ)
+    # PYTHONPATH puts the shadow tree's containing dir ahead of everything,
+    # simulating a `.pth`/sitecustomize-planted entry the real install
+    # environment cannot fully control.
+    env["PYTHONPATH"] = str(shadow_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import coordinator_core.install.maximalist as m; print(m._EXPECTED_REPO_ROOT)",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(_REAL_REPO_ROOT) in result.stdout
+
+
+class _FakeSubstrateModule:
+    def __init__(self, file_path: str) -> None:
+        self.__file__ = file_path
+
+
+def test_own_plane_mismatch_refuses_naming_root_actual_path_and_pth(tmp_path, monkeypatch, capsys):
+    """`_assert_own_plane_loaded` is exercised directly against the RESOLVED
+    PATH VALUE it computes -- the module under test's own function, not a
+    re-parsed transcription of it -- rather than a subprocess: an in-process
+    import of `coordinator_core.install.maximalist` proves nothing about
+    which plane got loaded ONLY when the thing under test is the module's
+    own import-time `sys.path` insertion (covered by the subprocess test
+    above); the mismatch-detection/messaging logic itself is a pure
+    function of `_substrate_plane_check_module.__file__` and `sys.path`
+    contents, which asserting on the resolved path value covers exactly as
+    the C1 body's "or on the resolved path value" alternative allows.
+
+    Refuses (SystemExit) naming: the expected root, the loaded module's
+    actual `__file__`, and the responsible `.pth` file."""
+    other_root = tmp_path / "other-plane-repo"
+    other_substrate_file = other_root / "coordinator_core" / "install" / "substrate.py"
+    other_substrate_file.parent.mkdir(parents=True)
+    other_substrate_file.write_text("", encoding="utf-8")
+
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    responsible_pth = site_dir / "other_sibling.pth"
+    responsible_pth.write_text(str(other_root) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        maximalist, "_substrate_plane_check_module", _FakeSubstrateModule(str(other_substrate_file))
+    )
+    monkeypatch.setattr(sys, "path", [str(site_dir), *sys.path])
+
+    with pytest.raises(SystemExit) as excinfo:
+        maximalist._assert_own_plane_loaded()
+    assert excinfo.value.code == 1
+
+    err = capsys.readouterr().err
+    assert "coordinator_core.install.substrate loaded from" in err
+    assert str(other_substrate_file) in err
+    assert str(maximalist._EXPECTED_REPO_ROOT) in err
+    assert str(responsible_pth) in err
+
+
+def test_own_plane_match_is_a_no_op(monkeypatch, capsys):
+    """The matching case (the common, healthy one) must not print or exit."""
+    real_substrate_file = str(
+        maximalist._EXPECTED_REPO_ROOT / "coordinator_core" / "install" / "substrate.py"
+    )
+    monkeypatch.setattr(
+        maximalist, "_substrate_plane_check_module", _FakeSubstrateModule(real_substrate_file)
+    )
+    maximalist._assert_own_plane_loaded()  # must not raise
+    assert capsys.readouterr().err == ""
