@@ -25,9 +25,11 @@ WHAT THIS MODULE OWNS, per the Director of Engineering's enumeration (C11's chun
       name (the `"http."`-prefixed token below) so this election can never
       collide with the pipe-transport server's own (`warm.server.main`)
       election on the identical clone;
-    - fail-open parity (P12) -- `ensure_listener()` NEVER waits for a
-      listener to come up (mirrors `warm.client`'s "NO CLIENT EVER WAITS
-      FOR A SERVER TO BOOT") and returns `None` on every failure mode
+    - fail-open parity (P12) -- `ensure_listener()` never waits for a
+      listener to BOOT (mirrors `warm.client`'s "NO CLIENT EVER WAITS
+      FOR A SERVER TO BOOT"; it does wait up to `HEALTH_CHECK_TIMEOUT_SECS`
+      on a live-pid-but-hung listener, see that function's own docstring)
+      and returns `None` on every failure mode
       (no discovery record, a dead pid, a failed health check, a spawn
       that hasn't bound a port yet). `None` is this module's whole
       fail-open contract: a caller sees "no reachable http listener this
@@ -70,8 +72,8 @@ convention per `warm.breadcrumb`'s own docstring) --
     (`DISCOVERY_FILENAME`) in the same per-clone `svc_dir()`, reusing that
     resolution helper (a pure read, not a shared mutable file) without
     touching `breadcrumb.py`'s writes: at all.
-  - Does NOT wait for a listener to come up, ever -- see fail-open bullet
-    above.
+  - Does NOT wait for a listener to BOOT -- see fail-open bullet above for
+    the health-probe wait it does pay.
 """
 
 from __future__ import annotations
@@ -89,7 +91,7 @@ from coordinator_core.warm.engine_root import current_engine_clone, is_engine_ro
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
-from coordinator_core.warm import breadcrumb, election, hook_http, lifecycle, skew
+from coordinator_core.warm import breadcrumb, election, hook_http, lifecycle, skew, telemetry
 from coordinator_core.warm.http_listener import _collect_response, _frame_from_request
 from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
 
@@ -690,6 +692,15 @@ class _ServerContext:
         self.httpd = httpd
         self.engine_root = engine_root
         self.in_flight = InFlightCounter()
+        # THIS TRANSPORT HAD NO TELEMETRY AT ALL until 2026-08-26, so every
+        # death on it -- including a listener outliving the clone it was
+        # spawned from, observed twice in the succession investigation's own
+        # sandbox teardown -- was invisible in every file on disk, and every
+        # exit-reason census over `telemetry.jsonl` was silently a census of
+        # the pipe transport alone. `transport=` tags these rows so the two
+        # populations stay separable rather than merging into one denominator
+        # (see `telemetry.ServerTelemetry.__init__`).
+        self.telemetry = telemetry.ServerTelemetry(transport="http")
         self.version_state = version_state
         self.server_sha = version_state.server_sha
         # `dispatch` overrides `_serve_line`'s own default (`_run_dispatch`) -- production
@@ -717,6 +728,12 @@ class _ServerContext:
         except Exception:  # noqa: BLE001 -- fail-open parity: a bad stamp must not crash boot
             return None
 
+    def record_invocation(self, warm: bool) -> None:
+        self.telemetry.record_invocation(warm=warm)
+
+    def record_exit(self, reason: str, detail: Optional[str] = None) -> None:
+        self.telemetry.record_exit(reason, detail)
+
     def drain(self) -> None:
         """The `drain` `_serve_line` requires for a detected skew eviction. A no-op here:
         unlike the pipe transport's bounded worker pool, this listener has no queue of
@@ -732,6 +749,10 @@ class _ServerContext:
 
     def ctx_shutdown(self) -> None:
         self._skew_watchdog_stop.set()
+        # Before the discovery unlink, matching `warm.server`'s own step-3
+        # ordering: `flush` never raises, so it cannot cost the unlink, and a
+        # row written first is a row that survives a crash between the two.
+        self.telemetry.flush(engine_root=self.engine_root)
         unlink_discovery(self.engine_root)
 
     def stop(self) -> None:
@@ -894,12 +915,18 @@ def _make_handler(ctx: "_ServerContext"):
                 request_frame = hook_http.build_request(event, op_name)
                 request_frame = _frame_from_request(request_frame, ctx.engine_token)
 
+                # `record_invocation` / `record_exit` were falling through to
+                # `_serve_line`'s own no-op lambda defaults, which is how a
+                # skew eviction on this transport left no row while the
+                # identical eviction on the pipe transport left one.
                 serve_kwargs = {
                     "version_state": ctx.version_state,
                     "server_sha": ctx.server_sha,
                     "close_listener": ctx.close_listener,
                     "drain": ctx.drain,
                     "release_in_flight": _release_once,
+                    "record_invocation": ctx.record_invocation,
+                    "record_exit": ctx.record_exit,
                 }
                 if ctx.dispatch is not None:
                     serve_kwargs["dispatch"] = ctx.dispatch

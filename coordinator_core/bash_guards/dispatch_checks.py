@@ -151,6 +151,11 @@ from coordinator_core.bash_guards._dialect import (
     resolve_segments_for_dialect,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards.block_subagent_destructive_action import (
+    _PS_REMOVE_VERBS,
+    _ps_normalize_verb_token,
+    _ps_resolve_head_verb,
+)
 
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
@@ -2586,7 +2591,35 @@ def check_destructive_rm(
     cmd = _join_backslash_newlines(cmd)
     cmd = _strip_heredoc_bodies(cmd)
 
-    if not re.search(r"\brm\b", cmd):
+    # C3 (pln-the-destructive-core-learns-the-she): the pre-existing
+    # `\brm\b` gate is BASH-shaped -- none of PowerShell's `Remove-Item`
+    # spelling or its `ri`/`rd`/`del`/`erase` aliases contains the substring
+    # `rm`, so a PowerShell-native invocation returned None here before ever
+    # reaching a target check. Widen the gate (cheap pre-filter only, never
+    # the real detection -- that is `_PS_REMOVE_VERBS` membership below).
+    #
+    # Deliberately NOT gated on `dialect_from_tool_name(payload["tool_name"])
+    # is Dialect.POWERSHELL`. Per this plan's own "Row 2 is the load-bearing
+    # row": DoE-claude's `_rearm_command_tool_name` rewrites a genuine
+    # `PowerShell` tool call to `tool_name: "Bash"` BEFORE this payload ever
+    # reaches the dispatcher, so a real `Remove-Item -Recurse -Force .git`
+    # issued from PowerShell arrives here labeled `"Bash"` -- the exact shape
+    # AC5's oracle pins (`Remove-Item ...` must deny under BOTH tool_name
+    # values, not only under a `tool_name` that happens to say
+    # `"PowerShell"`). Trusting the declared `tool_name` to gate PowerShell
+    # vocabulary detection would silently keep this guard blind on that
+    # relabeled row -- the one case the plan's § Problem measured as the
+    # load-bearing gap. The PowerShell verb scan below therefore always
+    # runs, independent of `tool_name`; the risk this widens is a literal
+    # `Remove-Item`/`ri`/`rd`/`del`/`erase` WORD appearing in an otherwise
+    # unrelated bash command, which is not a realistic false-positive shape
+    # (none of those words collides with ordinary bash vocabulary the way a
+    # narrower alias might).
+    _has_bash_rm_word = bool(re.search(r"\brm\b", cmd))
+    _has_ps_remove_word = bool(
+        re.search(r"(?i)\b(remove-item|ri|rd|del|erase)\b", cmd)
+    )
+    if not _has_bash_rm_word and not _has_ps_remove_word:
         return None
 
     rm_override = _override("COORDINATOR_ALLOW_RM", payload=payload)
@@ -2601,7 +2634,58 @@ def check_destructive_rm(
     if rc == 0:
         cur_repo = out.strip()
 
-    for seg in _split_segments(cmd):
+    _rm_segments = list(_split_segments(cmd))
+    if _has_ps_remove_word:
+        # AC3: alias/flag resolution is TABLE-DRIVEN AND SHARED, reusing
+        # `block_subagent_destructive_action`'s own `_PS_REMOVE_VERBS`/
+        # `_ps_resolve_head_verb`/`_ps_normalize_verb_token` (which already
+        # unwind the `&('Remove-Item') ...` / `&(Get-Command Remove-Item)
+        # ...` call-operator forms) rather than a second, per-check alias
+        # list. `resolve_segments_for_dialect` itself already expands
+        # `Start-Process`/`saps`/`start` invocations before segmentation
+        # (`_dialect.expand_start_process_invocations`) and its
+        # tree-sitter-pwsh parser natively resolves backtick escapes and
+        # `@'...'@`/`@"..."@` here-strings at the token level -- the
+        # anti-bypass surface this chunk's brief names is inherited from
+        # that seam, not reinvented here.
+        #
+        # Each recognized invocation is rewritten to an EQUIVALENT
+        # bash-shaped `rm -rf <remaining argv>` segment string and appended
+        # to the same segment list the loop below already walks -- this
+        # reuses the ~300-line target-resolution/deny ladder byte-for-byte
+        # for both dialects instead of forking a parallel PowerShell copy of
+        # it. `-Recurse`/`-Force` (any order, abbreviated `-r`/`-fo`) and a
+        # named `-Path`/`-LiteralPath` flag all survive into `rest` and are
+        # filtered by the SAME `startswith("-")` flag test the bash leg
+        # already applies when it walks `after.split()` below -- a
+        # positional target (`Remove-Item .git -Recurse -Force`) or a
+        # named-flag target (`Remove-Item -Path .git`) both leave exactly
+        # the target token as the sole non-flag operand. Gating is
+        # deliberately NOT conditioned on `-Recurse`/`-Force` presence: the
+        # bash leg denies a `.git`/repo-root target regardless of `-r`,
+        # since the irreversibility is a property of the TARGET, not of
+        # whether the caller also passed a flag -- matching that posture is
+        # the safe direction, not a widening of it.
+        _ps_segments = resolve_segments_for_dialect(
+            cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
+        )
+        if _ps_segments:
+            for _ps_tokens, _ps_pipe_before in _ps_segments:
+                if not _ps_tokens:
+                    continue
+                _ps_clean = [_ps_normalize_verb_token(t) for t in _ps_tokens]
+                _ps_verb, _ps_rest = _ps_resolve_head_verb(_ps_clean)
+                if _ps_verb not in _PS_REMOVE_VERBS:
+                    continue
+                _rm_segments.append("rm -rf " + " ".join(_ps_rest))
+        # `_ps_segments is None` (unparseable PowerShell) -- SILENT already
+        # recorded by `resolve_segments_for_dialect`; no synthetic segment
+        # is added, preserving today's fail-open posture (AC4) rather than
+        # falling through to the bash-shaped free-text scan below, which
+        # would misattribute a PowerShell parse failure as a bash
+        # unparseable-command fail-close.
+
+    for seg in _rm_segments:
         if not seg.strip():
             continue
         if not _rm_is_rm_segment(seg):

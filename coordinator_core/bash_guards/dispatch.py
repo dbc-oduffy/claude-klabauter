@@ -1602,9 +1602,18 @@ def _build_guard_chain(
         # through a NON-`os.environ` payload at this layer. Additive-only: a payload
         # carrying no `"env"` key (every cold caller, every pre-existing test) falls back
         # to `os.environ` unchanged -- see `_override`'s own docstring.
-        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # C3 (pln-the-destructive-core-learns-the-she, docs/plans/2026-08-26-
+        # the-destructive-core-learns-the-shell-it-guards.md): declaration
+        # LAST, per entry, only once the check's own detection reads the
+        # dialect -- `check_no_verify` already does (C2's dialect-aware
+        # segmentation seam) and `check_destructive_rm` now does (this
+        # chunk's `_PS_REMOVE_VERBS` table-driven PowerShell leg). Both
+        # widen to `COMMAND_TOOL_NAMES` here; the other four Bucket A
+        # entries below stay `("Bash",)` pending their own PowerShell
+        # anti-bypass work.
+        GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Hard-deny leg ONLY -- never returns the advisory half (Review:
         # staff-eng, Finding 0: an advisory returned from THIS

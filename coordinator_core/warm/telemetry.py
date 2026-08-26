@@ -536,9 +536,25 @@ class ServerTelemetry:
     a single lock, mirroring `warm.server.InFlightCounter`'s own shape.
     """
 
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        transport: Optional[str] = None,
+    ):
+        # `transport` names which transport's life this row describes, and is
+        # OMITTED from `snapshot()` when None. That default is what keeps the
+        # pipe server's rows byte-identical to the ~seven days already on disk.
+        # It exists because the HTTP transport was untelemetered until
+        # 2026-08-26 and, once it is not, both transports append to the SAME
+        # `telemetry.jsonl` -- an undifferentiated file would silently change
+        # the denominator under every existing census. Absence therefore means
+        # "the pipe server, or a row written before this field", and a reader
+        # separating the two populations filters on the presence of this key
+        # rather than inferring one.
         self._lock = threading.Lock()
         self._clock = clock
+        self._transport = transport
         self._started_monotonic = clock()
         self._served_count = 0
         self._warm_count = 0
@@ -627,6 +643,8 @@ class ServerTelemetry:
             # (claude-klabauter-22, 2026-08-26).
             if self._exit_detail is not None:
                 record["exit_detail"] = self._exit_detail
+            if self._transport is not None:
+                record["transport"] = self._transport
             return record
 
     def flush(self, *, engine_root: Optional[Path] = None) -> None:

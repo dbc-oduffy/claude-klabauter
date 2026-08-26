@@ -9,14 +9,26 @@ F-5 swap (2026-08-21, docs/plans/2026-08-20-the-close-ceremony-stops-paying-
 for-the-join.md C5) removed both: `git mv` is no longer the mover (see
 _common.archive_and_commit's docstring), so there is no stale private-index
 blob for the drift guard to detect or restage_src to route around --
-os.replace always carries current on-disk content. What survives from C4's
-batching discipline is the ONE remaining git spawn per archive_and_commit
-call that scales with the move count: the batched `git add -- <every acted
-src AND dst>` staging call. This module now pins THAT batch: one spawn
-covers an arbitrarily large move set, per-item attribution on a batch
-failure is exact (every acted move is reversed and reclassified, not just
-some), and an unrelated already-failed move (a pre-existing dst) is
-unaffected by a staging failure among the OTHER moves in the same call.
+os.replace always carries current on-disk content. What survived from C4's
+batching discipline was, until 2026-08-26, the ONE remaining git spawn per
+archive_and_commit call that scaled with the move count: the batched `git
+add -- <every acted src AND dst>` staging call.
+
+RE-TARGETED, 2026-08-26 (C2 `dccf2fc01`, this plan's C7): `git add --`
+itself is now gone too -- `archive_and_commit` no longer stages through any
+index at all. The batched spawn that scales with move count is now `git
+hash-object -w --stdin-paths`, issued once for every acted move's `dst`
+content via `_hash_object_stdin_paths` (imported from `ops.ceremony.
+git_native`, a SYNCHRONOUS wrapper offloaded through `asyncio.to_thread` --
+not an `asyncio.create_subprocess_exec` call, so intercepting it means
+wrapping the module-level name itself, the same technique this plan's
+sibling `test_head_race_between_read_tree_and_commit.py` uses and explains
+at more length). This module still pins the SAME behaviour C4's batching
+discipline established -- one spawn covers an arbitrarily large move set,
+per-item attribution on a batch failure is exact (every acted move is
+reversed and reclassified, not just some), and an unrelated already-failed
+move (a pre-existing dst) is unaffected by a failure among the OTHER moves
+in the same call -- only the observed mechanism moved.
 
 Real git is load-bearing: the private index staging behaviour this module
 pins needs a real index, not a mocked git with none to diverge from --
@@ -36,7 +48,9 @@ from unittest.mock import patch
 
 import pytest
 
+import coordinator_core.ops.fleet._common as _common_mod
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
+from coordinator_core.ops.ceremony.git_native import GitResult
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -94,9 +108,27 @@ def _make_spawn_counter():
     return counts, counting_spawn
 
 
-def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path) -> None:
-    """3 moves, all clean -- ONE `git add --` spawn stages every acted
-    move's src+dst pair; there is no per-item `git mv` left to count."""
+def _patch_counting_hash_object(monkeypatch):
+    """Counts calls to `_hash_object_stdin_paths` (RE-TARGETED from `git
+    add --`, see module docstring) by wrapping the module-level name
+    `archive_and_commit` actually calls -- a synchronous wrapper, not an
+    `asyncio.create_subprocess_exec` call, so `_make_spawn_counter`'s
+    argv-based interception cannot see it."""
+    orig = _common_mod._hash_object_stdin_paths
+    calls = {"n": 0}
+
+    def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _counting)
+    return calls
+
+
+def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path, monkeypatch) -> None:
+    """3 moves, all clean -- ONE `git hash-object -w --stdin-paths` spawn
+    hashes every acted move's dst content; there is no per-item `git mv` or
+    `git add` left to count."""
     root = tmp_path / "repo"
     _init_repo(root)
     handoffs = root / "state" / "handoffs"
@@ -123,13 +155,17 @@ def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path) -> Non
     ]
 
     counts, counting_spawn = _make_spawn_counter()
+    hash_object_calls = _patch_counting_hash_object(monkeypatch)
     with patch("asyncio.create_subprocess_exec", side_effect=counting_spawn):
         acted, failed = _run(
             archive_and_commit(worktree_root=root, moves=moves, subject="fleet: archive 3 shipped handoff(s)")
         )
 
+    assert hash_object_calls["n"] == 1, (
+        f"hash-object must spawn ONCE for the whole batch; got {hash_object_calls['n']}"
+    )
     add_calls = counts.get(("git", "add", "--"), 0)
-    assert add_calls == 1, f"stage must spawn ONCE for the whole batch; counts={counts}"
+    assert add_calls == 0, "git add must never be spawned -- hash-object replaces staging entirely"
     mv_calls = counts.get(("git", "mv"), 0)
     assert mv_calls == 0, "git mv must never be spawned -- os.replace is the mover"
 
@@ -140,12 +176,13 @@ def test_batched_stage_spawns_once_for_a_multi_move_batch(tmp_path: Path) -> Non
         assert _dst(s).exists()
 
 
-def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path) -> None:
-    """A batched `git add -- <src, dst>` failure (mocked -- a generic
-    staging failure, not an index/worktree divergence) reverses EVERY acted
-    move's os.replace on disk and reclassifies all of them to failed[] --
-    per-item attribution on a whole-batch stage failure is "all or
-    nothing", unlike the per-move `git mv` failure loop it replaced."""
+def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path, monkeypatch) -> None:
+    """A batched `git hash-object -w --stdin-paths` failure (mocked --
+    RE-TARGETED from a `git add --` failure, see module docstring; a
+    generic staging failure, not an index/worktree divergence) reverses
+    EVERY acted move's os.replace on disk and reclassifies all of them to
+    failed[] -- per-item attribution on a whole-batch stage failure is "all
+    or nothing", unlike the per-move `git mv` failure loop it replaced."""
     root = tmp_path / "repo"
     _init_repo(root)
     handoffs = root / "state" / "handoffs"
@@ -169,29 +206,21 @@ def test_stage_batch_failure_reverses_every_acted_move(tmp_path: Path) -> None:
         Move(src=src2, dst=_dst(src2), candidate_id="state/handoffs/2026-08-02-b.md"),
     ]
 
-    real_spawn = asyncio.create_subprocess_exec
+    def _fail_hash_object(*args, **kwargs):
+        return GitResult(returncode=1, stdout="", stderr="synthetic stage failure")
 
-    async def _fail_add(*argv, **kwargs):
-        if len(argv) >= 2 and argv[0] == "git" and argv[1] == "add":
-            class _FakeProc:
-                returncode = 1
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _fail_hash_object)
 
-                async def communicate(self):
-                    return b"", b"synthetic stage failure"
-
-            return _FakeProc()
-        return await real_spawn(*argv, **kwargs)
-
-    with patch("asyncio.create_subprocess_exec", side_effect=_fail_add):
-        acted, failed = _run(
-            archive_and_commit(worktree_root=root, moves=moves, subject="fleet: archive 2 shipped handoff(s)")
-        )
+    acted, failed = _run(
+        archive_and_commit(worktree_root=root, moves=moves, subject="fleet: archive 2 shipped handoff(s)")
+    )
 
     assert acted == []
     failed_ids = {f["id"] for f in failed}
     assert failed_ids == {m.candidate_id for m in moves}
     for item in failed:
-        assert "stage-failed" in item["reason"]
+        assert "hash-object-failed" in item["reason"]
+        assert "synthetic stage failure" in item["reason"]
 
     # Every move's os.replace is reversed -- both srcs restored, neither dst survives.
     assert src1.exists() and src1.read_text(encoding="utf-8") == "---\nstatus: claimed\n---\n\nA.\n"

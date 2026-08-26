@@ -846,6 +846,33 @@ def test_explicit_stage_relative_path_outside_worktree_is_missing(tmp_path):
     assert outcome.missing_caller_paths == [outsider]
 
 
+def test_explicit_stage_in_bounds_dotdot_path_stages_normally(tmp_path):
+    """A relative path whose `..` segment stays inside the worktree (e.g.
+    `sub/../README.md`, which resolves to a tracked file at the root) is
+    NOT misclassified as an out-of-worktree escape.
+
+    Coverage gap closed (code-reviewer, 275b795 P2): the out-of-worktree
+    tests above only exercise the escaping case. Classification here goes
+    through `(root / p).exists()` (commit_pipeline.py's `explicit_stage`),
+    which resolves `..` the same way the filesystem does -- this pins that
+    an in-bounds `..` spelling is treated as an ordinary existing path, the
+    same risk class as the escape case but the opposite disposition.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    (repo / "sub").mkdir()
+    _seed_file(repo, "README.md", "y")
+
+    in_bounds = "sub/../README.md"
+    outcome = explicit_stage(repo, [in_bounds], caller_paths={in_bounds})
+
+    assert outcome.exit_code == 0
+    assert outcome.missing_caller_paths == []
+    assert in_bounds in outcome.staged_paths
+
+
 def test_explicit_stage_genuinely_missing_generated_path_benign(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")

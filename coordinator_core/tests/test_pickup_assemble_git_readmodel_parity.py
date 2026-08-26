@@ -353,13 +353,13 @@ def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root
     # Object nearest the FRONT of the pack file — the old whole-tail-decompress
     # code's worst case, since everything after it is the longest possible tail.
     offset = min(pidx.offsets)
-    # `_PACK_OBJECT_AT_CACHE` is process-lifetime (module-level, per the
-    # cache-scoping precedent in `__init__.py`); an earlier test in this same
-    # pytest process may have already resolved this object, which would let
-    # this test pass trivially via the cache hit rather than actually
-    # exercising the decompress path. Evict this one entry to force a real
-    # decompress; do not clear the whole cache, other tests may rely on it.
-    pa._PACK_OBJECT_AT_CACHE.pop((str(pack_path), offset), None)
+    # No eviction needed: `_read_pack_object_at` is called here directly and
+    # is itself uncached, so this always exercises a real decompress. The
+    # by-sha cache (`git_objects._OBJECT_CACHE`) sits a layer above and is
+    # not on this call path. This used to evict a per-(pack, offset) cache
+    # that no longer exists; the stale reference made the whole test error
+    # out rather than run, which is how the pack-read cost below went
+    # unguarded long enough to be rediscovered on 2026-08-26.
 
     max_slice_len = 0
     real_memoryview = memoryview
@@ -393,6 +393,61 @@ def test_read_pack_object_at_does_not_scale_with_pack_size(claude_klabauter_root
     assert max_slice_len < 1_000_000, (
         f"_read_pack_object_at fed a {max_slice_len}-byte slice into zlib — "
         "input is scaling with pack size again, not object size"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pack-lookup filesystem-call regression (2026-08-26). `pickup-assemble brief`
+# did not complete in 13 minutes against this repo. The cost was not git, not
+# zlib and not the DAG: `_iter_pack_files` re-listed `objects/pack/` on every
+# object lookup and `_parse_pack_index` re-stat'd every `.idx` on every call,
+# so a lookup cost one `glob` plus ~2 `stat`s PER PACK. Profiled: 2,937
+# `nt.stat` calls and 32s of a 40s window, on a volume where a single `stat`
+# measures ~15ms. Fixed by caching the listing and the parsed indexes against
+# the pack directory's own mtime, revalidated on a MISS only (a hit is
+# content-addressed and no newly-arrived pack can change it).
+#
+# This test pins the shape, not a millisecond figure: repeated lookups must
+# not issue filesystem calls proportional to lookups x packs. A per-lookup
+# re-list reappearing would put this back over a hundred stats immediately.
+# ---------------------------------------------------------------------------
+
+
+def test_repeated_object_lookups_do_not_restat_the_pack_directory(claude_klabauter_root, monkeypatch):
+    from coordinator_core.git import git_objects as go
+
+    common_dir = pa._discover_git_dirs(claude_klabauter_root)[1].common_dir
+    packs = go._iter_pack_files(common_dir)
+    assert len(packs) >= 2, "expected a multi-pack repo to make the regression observable"
+
+    idx_path, _pack_path = packs[0]
+    pidx = go._parse_pack_index(idx_path)
+    assert pidx is not None
+    shas = [pidx.shas[i * 20:i * 20 + 20].hex() for i in range(0, min(40, len(pidx.offsets)))]
+    assert len(shas) >= 20
+
+    # Warm the caches the way any real caller does, then count from cold-of-stats.
+    for sha in shas:
+        go._read_object(common_dir, sha)
+
+    real_stat = __import__("os").stat
+    calls = {"n": 0}
+
+    def counting_stat(*args, **kwargs):
+        calls["n"] += 1
+        return real_stat(*args, **kwargs)
+
+    monkeypatch.setattr("os.stat", counting_stat)
+    # Bypass the object cache so each lookup really re-enters the pack search.
+    go._OBJECT_CACHE.clear()
+    for sha in shas:
+        go._read_object(common_dir, sha)
+
+    budget = len(shas) * 2
+    assert calls["n"] <= budget, (
+        f"{len(shas)} pack lookups issued {calls['n']} os.stat calls against "
+        f"{len(packs)} packs (budget {budget}) - the pack listing or the .idx "
+        "parse is being revalidated per lookup again"
     )
 
 

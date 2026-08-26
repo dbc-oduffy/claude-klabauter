@@ -13,18 +13,25 @@ silently no-op.
 F-5 swap (2026-08-21, docs/plans/2026-08-20-the-close-ceremony-stops-paying-
 for-the-join.md C5): `git mv` is no longer the mover -- `os.replace` is, and
 it has no split-failure mode of its own (see _common.archive_and_commit's
-docstring). The reversal guard this module pins now sits at the ONE
-remaining post-move split-failure point: the batched `git add -- src dst`
-staging call that runs after every move's `os.replace` has already landed.
-This module carries that coverage forward onto the new failure point rather
-than dropping it:
+docstring). The reversal guard this module pinned then sat at the batched
+`git add -- src dst` staging call that ran after every move's `os.replace`
+had already landed.
+
+RE-TARGETED, 2026-08-26 (C2 `dccf2fc01`, this plan's C7): `git add --`
+itself is gone too -- the ONE remaining post-move split-failure point is now
+the batched `git hash-object -w --stdin-paths` call
+(`_hash_object_stdin_paths`, a SYNCHRONOUS wrapper offloaded through
+`asyncio.to_thread`, not an `asyncio.create_subprocess_exec` call -- see
+this plan's sibling `test_head_race_between_read_tree_and_commit.py` for
+the same technique explained at more length). This module carries that
+coverage forward onto the new failure point rather than dropping it:
 
 1. Quiet path (no reversal attempted at all): dst pre-exists and force is
    False -- archive_and_commit refuses the move BEFORE calling os.replace
    (see the `dst-exists` guard), so nothing moved and there is nothing to
    reverse or WARN about.
-2. Elif-fires path: os.replace succeeds, then the batched stage step fails
-   (mocked -- a generic subprocess-failure shape, not an index/worktree
+2. Elif-fires path: os.replace succeeds, then the batched hash-object step
+   fails (mocked -- a generic failure shape, not an index/worktree
    divergence, so no real-git requirement here) with a concurrent write
    recreating src's original path before the reversal attempt runs. The
    reversal cannot rename dst back over a reappeared src, so it WARNs and
@@ -52,7 +59,9 @@ from unittest.mock import patch
 
 import pytest
 
+import coordinator_core.ops.fleet._common as _common_mod
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
+from coordinator_core.ops.ceremony.git_native import GitResult
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -123,12 +132,12 @@ def test_quiet_when_dst_exists_refusal_never_touches_disk(tmp_path: Path, caplog
 
 
 def test_reversal_elif_fires_when_src_reappears_before_stage_reversal(
-    tmp_path: Path, caplog,
+    tmp_path: Path, caplog, monkeypatch,
 ) -> None:
-    """os.replace succeeds, the batched stage (`git add -- src dst`) then
-    fails, and a concurrent writer recreates src's original path before the
-    reversal runs -- the elif must fire: WARN, leave dst orphaned, annotate
-    failed[] with "reversal-skipped-src-reappeared" rather than clobber the
+    """os.replace succeeds, the batched hash-object step then fails, and a
+    concurrent writer recreates src's original path before the reversal
+    runs -- the elif must fire: WARN, leave dst orphaned, annotate failed[]
+    with "reversal-skipped-src-reappeared" rather than clobber the
     reappeared src."""
     root = tmp_path / "repo"
     _init_repo(root)
@@ -142,34 +151,23 @@ def test_reversal_elif_fires_when_src_reappears_before_stage_reversal(
 
     dst = root / "b" / "dst.txt"
 
-    real_spawn = asyncio.create_subprocess_exec
+    def _hash_object_and_reappear_src(*args, **kwargs):
+        # The real batched hash-object spawn (`git hash-object -w
+        # --stdin-paths`) is left to fail synthetically rather than
+        # engineered through real git state: the mock recreates src
+        # (simulating a concurrent writer landing on the vacated path) and
+        # returns a synthetic failed GitResult directly.
+        src.write_text("concurrent writer content\n", encoding="utf-8")
+        return GitResult(returncode=1, stdout="", stderr="synthetic stage failure")
 
-    async def _spawn_and_reappear_src(*argv, **kwargs):
-        # Real staging spawn (`git add -- src dst`) is left to fail
-        # naturally: a bogus GIT_INDEX_FILE swap would be more invasive than
-        # this module needs to pin the elif narrowing, so instead the mock
-        # recreates src (simulating a concurrent writer landing on the
-        # vacated path) and returns a synthetic nonzero rc directly, without
-        # spawning real git for this one call.
-        if len(argv) >= 2 and argv[0] == "git" and argv[1] == "add":
-            src.write_text("concurrent writer content\n", encoding="utf-8")
-
-            class _FakeProc:
-                returncode = 1
-
-                async def communicate(self):
-                    return b"", b"synthetic stage failure"
-
-            return _FakeProc()
-        return await real_spawn(*argv, **kwargs)
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _hash_object_and_reappear_src)
 
     with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.fleet._common"):
-        with patch("asyncio.create_subprocess_exec", side_effect=_spawn_and_reappear_src):
-            acted, failed = _run(archive_and_commit(
-                worktree_root=root,
-                moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
-                subject="test: reappeared-src reversal at stage-failure",
-            ))
+        acted, failed = _run(archive_and_commit(
+            worktree_root=root,
+            moves=[Move(src=src, dst=dst, candidate_id="a/src.txt")],
+            subject="test: reappeared-src reversal at stage-failure",
+        ))
 
     assert acted == []
     assert len(failed) == 1

@@ -64,6 +64,7 @@ def _make_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
 _WRAPPER_INVOCATIONS = [
     (git_native.status_porcelain, ("/tmp/repo",), {}),
     (git_native.status_porcelain_scoped, ("/tmp/repo", ["sub"]), {}),
+    (git_native.status_porcelain_v2, ("/tmp/repo",), {}),
     (git_native.patch_touched_paths, ("/tmp/patch.diff", "/tmp/repo"), {}),
     (git_native.diff_cached_name_status, ("/tmp/repo",), {}),
     (git_native.diff_cached_name_only, ("/tmp/repo",), {}),

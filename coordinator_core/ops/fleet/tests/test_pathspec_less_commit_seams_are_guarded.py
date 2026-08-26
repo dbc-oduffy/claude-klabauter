@@ -149,23 +149,65 @@ def test_every_pathspec_less_commit_seam_calls_the_empty_tree_guard():
     )
 
 
+#: The in-process, spawn-free commit-landing helper `archive_and_commit`
+#: (2026-08-26, C2, `dccf2fc01`) and — pending C3 — `rm_and_commit` call
+#: instead of a spawned `git commit`/`commit-tree`. It carries its OWN
+#: CAS-guarded landing (a locked `cas_ref` compare-and-swap keyed on
+#: `old_head`) rather than `_empty_private_index_breach`'s write-tree-based
+#: refusal, so a fleet seam that calls it in place of a spawned commit is a
+#: DELIBERATE, still-guarded replacement — not the seam quietly vanishing.
+COMMIT_LANDING_HELPERS = frozenset({"_commit_via_head_spine"})
+
+
+def _calls_any(fn: ast.AST, names: frozenset[str]) -> bool:
+    return any(
+        (getattr(c.func, "id", "") in names or getattr(c.func, "attr", "") in names)
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call)
+    )
+
+
 def test_the_known_fleet_seams_are_still_pathspec_less_and_guarded():
     """Pins the FORWARD-B design: these two must stay pathspec-less AND guarded.
 
     Guards against the wrong fix — someone silencing the test above by adding a
     pathspec, which trades a loud recoverable failure for a silent recurring leak.
+
+    A fleet seam satisfies this test ONE of two ways, and the two must not be
+    conflated: (1) a spawned `git commit`/`commit-tree` seam, pathspec-less and
+    calling `_empty_private_index_breach`; or (2) no spawned commit seam at all,
+    but a call to `_commit_via_head_spine` — the CAS-guarded in-process landing
+    path C2 moved `archive_and_commit` onto (`dccf2fc01`). A function with
+    NEITHER is a silent loss of commit capability (or the seam moved somewhere
+    this AST walk cannot see) and must fail loudly rather than pass vacuously
+    on "found no seam, nothing to check."
     """
     fleet = ENGINE_ROOT / "coordinator_core" / "ops" / "fleet" / "_common.py"
+    source = fleet.read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(source)
+    fn_by_name = {
+        fn.name: fn
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     seams = {
         fn: (has_pathspec, guarded)
         for p, fn, _lineno, has_pathspec, guarded in _commit_seams()
         if p == fleet
     }
     for name in ("archive_and_commit", "rm_and_commit"):
-        assert name in seams, f"{name} no longer contains a `git commit` seam"
-        has_pathspec, guarded = seams[name]
-        assert not has_pathspec, (
-            f"{name} gained a trailing pathspec — that is FORWARD-B, the "
-            f"mechanism that laundered 34 hand-edited changes on 2026-07-26."
-        )
-        assert guarded, f"{name} no longer calls {GUARD_NAME}()"
+        assert name in fn_by_name, f"{name} no longer exists in {fleet.name}"
+        if name in seams:
+            has_pathspec, guarded = seams[name]
+            assert not has_pathspec, (
+                f"{name} gained a trailing pathspec — that is FORWARD-B, the "
+                f"mechanism that laundered 34 hand-edited changes on 2026-07-26."
+            )
+            assert guarded, f"{name} no longer calls {GUARD_NAME}()"
+        else:
+            assert _calls_any(fn_by_name[name], COMMIT_LANDING_HELPERS), (
+                f"{name} contains neither a spawned `git commit`/`commit-tree` "
+                f"seam nor a call to {sorted(COMMIT_LANDING_HELPERS)} — its "
+                f"commit landing has silently disappeared rather than moved to "
+                f"a known, still-guarded path."
+            )

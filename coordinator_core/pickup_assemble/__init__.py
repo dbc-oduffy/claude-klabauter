@@ -111,9 +111,11 @@ from coordinator_core.git.git_objects import (
     _PackIndex,
     _apply_git_delta,
     _iter_pack_files,
+    _pack_indexes,
     _parse_pack_index,
     _read_loose_object,
     _read_object,
+    _read_pack_bytes,
     _read_pack_object_at,
     _read_pack_object_by_sha,
 )
@@ -441,10 +443,7 @@ def _find_object_by_prefix(common_dir: Path, prefix_hex: str) -> Optional[str]:
                     candidate = subdir.name + entry.name
                     if candidate.startswith(prefix):
                         matches.add(candidate)
-    for idx_path, _ in _iter_pack_files(common_dir):
-        pidx = _parse_pack_index(idx_path)
-        if pidx is None:
-            continue
+    for _idx_path, _pack_path, pidx in _pack_indexes(common_dir):
         matches.update(_pack_index_prefix_matches(pidx, prefix))
     if len(matches) == 1:
         return next(iter(matches))

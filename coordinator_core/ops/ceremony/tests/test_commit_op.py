@@ -49,6 +49,7 @@ real op and the real transport-classification code, not a stand-in.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import textwrap
@@ -437,3 +438,166 @@ def test_ac8_table_is_exhaustive_over_client_post_delivery_branches() -> None:
         "this file proving the AC8 invariant for it, then update "
         "_EXPECTED_POST_DELIVERY_RETURNS to match."
     )
+
+
+# ---------------------------------------------------------------------------
+# AC9 (C6): the cold fallback path still commits correctly when the door
+# falls through -- proved against Set A doubts named in
+# docs/reference/commit-hook-warm-reach-contract.md (that document's own
+# transport, the pre-commit-hook door, is superseded/deleted per its own
+# banner, but the Set A/Set B split it records is the live semantics
+# `warm/client.py::try_warm_dispatch` still implements for THIS op's
+# caller -- a PRE-delivery doubt (no pipe found) never reaches the server at
+# all, and a post-delivery doubt whose error code is one of the
+# `is_provably_undispatched` codes -- ENGINE_SKEW among them -- is PROOF the
+# op never ran, so both fall through to cold rather than reporting
+# indeterminate. AC8's table above already proves the double-commit
+# invariant across every POST-delivery shape client.py can produce for a
+# DELIVERED mutation; AC9's job is different and narrower: prove the cold
+# leg itself -- the thing every Set A doubt falls through TO -- still lands
+# a correct commit, not merely a safe (zero-or-one) one.
+# ---------------------------------------------------------------------------
+
+
+def test_ac9_cold_dispatch_from_unstamped_live_tree_commits_correctly(
+    tmp_path: Path,
+) -> None:
+    """The everyday Set A member for this repo's own dev tree
+    (docs/reference/commit-hook-warm-reach-contract.md: "This repo cannot
+    observe a warm win on its own commits -- every call from this tree goes
+    cold by ruling [DR-315 s2], not by defect"). No warm server is stood up
+    at all -- the real `coordinator_core.invoke` CLI door, run from this
+    live checkout with `--allow-unstamped-dispatch`, has no stamped engine
+    root to dial and falls through to its ordinary in-process cold dispatch
+    unconditionally. Proves the cold leg lands a real, correctly-authored
+    commit end to end -- not merely that dispatch returns something -- and
+    that the import deferrals this deliverable already shipped keep paying
+    on the leg that runs on every single call from this tree.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "test@example.invalid"], root)
+    _git(["config", "user.name", "Test"], root)
+    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(["add", "seed.txt"], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+
+    (root / "tracked.txt").write_text("ac9 cold content\n", encoding="utf-8")
+    params = {
+        "subject": "AC9 cold-dispatch commit",
+        "stage_paths": ["tracked.txt"],
+        "caller_paths": ["tracked.txt"],
+        "push_mode": "none",
+    }
+    params_path = root / "params.json"
+    params_path.write_text(json.dumps(params), encoding="utf-8")
+
+    argv = [
+        sys.executable,
+        "-m",
+        "coordinator_core.invoke",
+        _OP_NAME,
+        "--params-file",
+        str(params_path),
+        "--repo",
+        str(root),
+        "--allow-unstamped-dispatch",
+    ]
+    completed = subprocess.run(
+        argv,
+        cwd=str(Path(__file__).resolve().parents[4]),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        **_CNW,
+    )
+    assert completed.returncode == 0, (
+        f"cold dispatch from an unstamped tree must still commit: "
+        f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
+    )
+    response = json.loads(completed.stdout)
+    assert "error" not in response, f"cold commit returned an error envelope: {response!r}"
+
+    log = _git(["log", "-1", "--format=%s"], root)
+    assert log.stdout.strip() == "AC9 cold-dispatch commit"
+    assert (root / "tracked.txt").read_text(encoding="utf-8") == "ac9 cold content\n"
+    count = _git(["rev-list", "--count", "HEAD"], root)
+    assert count.stdout.strip() == "2", "exactly one new commit must land on the cold leg"
+
+
+def test_ac9_cold_fallback_after_no_pipe_found_commits_correctly(
+    monkeypatch: pytest.MonkeyPatch, _repo: Path
+) -> None:
+    """Set A pre-delivery doubt: `FileNotFoundError` on pipe-open -- "no pipe,
+    nobody home" -- the anti-storm table's only spawn trigger. The request
+    never reaches a server, so this is not a candidate for AC8's reconcile
+    table at all (nothing was ever delivered); `try_warm_dispatch` must
+    return `None` and the caller's ordinary cold path (`ceremony.commit`'s
+    own handler, exactly what `invoke.__main__`'s in-process cold dispatch
+    reaches) must still land the correct commit.
+    """
+    from coordinator_core.warm import client as warm_client
+
+    monkeypatch.setattr(warm_client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(warm_client, "engine_token", lambda: "faketoken")
+    monkeypatch.setattr(warm_client.election, "pipe_name", lambda token: r"\\.\pipe\fake")
+    monkeypatch.setattr(warm_client, "_spawned_this_process", False)
+    monkeypatch.setattr(warm_client, "_live_tree_cold", False)
+    monkeypatch.setattr(warm_client, "_cold_reason", None)
+    # Neutralise Backstop 1's real spawn attempt -- this test proves the
+    # CALLER's cold-fallback correctness, not the spawn-detached mechanism.
+    monkeypatch.setattr(warm_client, "_spawn_once", lambda: None)
+
+    def _raise_not_found(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(warm_client, "_open_pipe", _raise_not_found)
+
+    file_name = "no_pipe_found.txt"
+    msg = _warm_msg(uuid.uuid4().hex, file_name)
+    response = warm_client.try_warm_dispatch(msg)
+    assert response is None, "a pre-delivery doubt must never fabricate a served response"
+
+    result = _commit_via_op(_repo, file_name=file_name, trailers="")
+    assert result["committed"] is True, result
+    assert (_repo / file_name).exists()
+    log = _git(["log", "-1", "--format=%s"], _repo)
+    assert log.stdout.strip() == f"AC8 row: {file_name}"
+
+
+def test_ac9_cold_fallback_after_engine_skew_commits_correctly(
+    monkeypatch: pytest.MonkeyPatch, _repo: Path
+) -> None:
+    """Set A post-delivery doubt classified as PROOF the op never ran:
+    `ENGINE_SKEW` (-32002) -- one of the `is_provably_undispatched` codes
+    docs/reference/commit-hook-warm-reach-contract.md pins verbatim, and the
+    plan's own Problem section names `ceremony.commit` as self-skewing
+    (committing anything rotates the live-tree generation token a resident
+    server was elected under). `try_warm_dispatch` treats this as "server up
+    and stale: go cold" -- distinct from AC8's indeterminate shapes, which
+    all classify as UNKNOWN outcome, never as proof of non-execution. The
+    caller's cold path must still land the correct commit.
+    """
+    from coordinator_core.warm import client as warm_client
+
+    file_name = "engine_skew_fallback.txt"
+    open_pipe = build_open_pipe = lambda pipe: _FakePipe(
+        read_result=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": warm_client.ENGINE_SKEW, "message": "stale engine"},
+            }
+        ).encode("utf-8")
+        + b"\n"
+    )
+    msg = _warm_msg(uuid.uuid4().hex, file_name)
+    response = _drive_dispatch(monkeypatch, msg, open_pipe)
+    assert response is None, "ENGINE_SKEW must go cold, never a served response"
+
+    result = _commit_via_op(_repo, file_name=file_name, trailers="")
+    assert result["committed"] is True, result
+    assert (_repo / file_name).exists()
+    log = _git(["log", "-1", "--format=%s"], _repo)
+    assert log.stdout.strip() == f"AC8 row: {file_name}"

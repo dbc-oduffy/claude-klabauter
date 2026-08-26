@@ -47,10 +47,13 @@ Negative-spec (hard-won, this chunk):
   - Does NOT support `stage_patch` (Out of scope: "stage_patch's private-index
     branch") or `on_committed` (no wire representation for a callback) — both
     are left at `run_commit_pipeline`'s own defaults.
-  - Does NOT push — `push_mode` defaults to `PUSH_MODE_SYNC` (the pipeline's
-    own untouched default) only when a caller explicitly asks for it; this
-    chunk does no push-mode policy of its own beyond passing the param
-    through. The push leg itself is Out of scope for the whole plan.
+  - Does NOT push — `push_mode` is forwarded only when a caller explicitly
+    supplies it; this op does no push-mode policy of its own beyond passing
+    the param through. An omitting caller therefore inherits
+    `run_commit_pipeline`'s own default, which is `PUSH_MODE_NONE` as of
+    2026-08-26 (it was `PUSH_MODE_SYNC`, which silently put a synchronous
+    push inside this op's 2.0s ceremony clamp -- see that constant's block).
+    The commit still publishes, via the post-commit hook's detached push.
 """
 
 from __future__ import annotations
@@ -121,7 +124,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             `set(stage_paths)`, mirroring every existing in-process caller
             (`safe_commit_offer.py`, `close_out_and_stamp.py`).
         push_mode (str, optional) — passed straight through; `None`/absent
-            leaves `run_commit_pipeline`'s own default (`PUSH_MODE_SYNC`)
+            leaves `run_commit_pipeline`'s own default (`PUSH_MODE_NONE`)
             unchanged.
         allow_protected_branch (bool, optional, default False).
         protected_branch_override_reason (str, optional).

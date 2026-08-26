@@ -10,7 +10,7 @@ ports from: `state/audits/2026-08-22-zero-spawn-commit-spike.py`.
 
 This module sits on `coordinator_core.ops.ipc`'s cold-start path (see
 `coordinator_core/git/run.py`'s IMPORT COST section) -- it imports only
-`hashlib`/`os`/`re`/`struct`/`zlib`/`pathlib`, never `subprocess` and
+`hashlib`/`mmap`/`os`/`re`/`struct`/`zlib`/`pathlib`, never `subprocess` and
 never `coordinator_core.ops`. A caller that needs the shared packer
 (argv chunking, `_NO_CONSOLE`, ...) imports it function-locally at the
 one call site that needs it -- mirrors `git_state.head_blobs`'s
@@ -37,6 +37,7 @@ Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk 
 from __future__ import annotations
 
 import hashlib
+import mmap
 import os
 import struct
 import zlib
@@ -156,20 +157,97 @@ def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
     return otype.decode("ascii", errors="replace"), payload
 
 
-def _iter_pack_files(common_dir: Path) -> list[tuple[Path, Path]]:
-    """Lists `(idx_path, pack_path)` pairs under `objects/pack/`. NOT
-    cached -- unlike `pickup_assemble`'s one-process-per-`brief()`-call
-    lifetime (where the pack directory cannot change mid-call), this
-    module lives in a warm long-running engine where a `git gc` or an
-    incoming fetch can add/remove packs between calls; caching the
-    listing by `common_dir` would go stale silently."""
+# Caches the pack LISTING per `common_dir`, revalidated against the pack
+# directory's own `(st_mtime_ns, st_size)` rather than by re-listing it.
+# The listing was previously rebuilt on every object lookup, costing one
+# `glob` plus two `stat`s per pack per lookup. On a volume where `stat`
+# costs ~15ms -- measured, X: on the normal tier -- that put 2,937 `stat`
+# calls and 32s of a 40s profile of one `pickup-assemble brief` into this
+# function alone, and the brief did not complete inside 13 minutes.
+#
+# Staleness, which the previous no-cache docstring correctly cared about:
+# git adds and removes packs by creating and unlinking entries IN this
+# directory, so any change to the pack set moves the directory's own
+# mtime. Revalidation is therefore one `stat` of the directory rather than
+# a re-listing, and a `git gc` or incoming fetch between calls is still
+# seen. A lookup that HITS needs no revalidation at all -- a sha is
+# content-addressed, so an object found in a pack the cached listing
+# already knows about is the right object whether or not another pack has
+# since appeared. Only a MISS can be changed by a new pack, and only a
+# miss pays the revalidating `stat` (see `_read_pack_object_by_sha`).
+_PACK_LISTING_CACHE: "dict[str, tuple[Optional[tuple[int, int]], list[tuple[Path, Path]]]]" = {}
+
+
+def _pack_dir_generation(pack_dir: Path) -> Optional[tuple[int, int]]:
+    """`(st_mtime_ns, st_size)` of the pack directory itself, or None when
+    it does not exist. One `stat`, and it moves whenever a pack is added
+    or removed."""
+    try:
+        st = pack_dir.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple[Path, Path]]:
+    """Lists `(idx_path, pack_path)` pairs under `objects/pack/`, cached per
+    `common_dir` -- see `_PACK_LISTING_CACHE` above for why that is safe in
+    the warm long-running engine this module sits in.
+
+    `revalidate=True`, the default and what every caller outside this module
+    gets, stats the pack directory and rebuilds when the pack set has
+    changed, so no caller ever sees a stale pack set. A caller whose answer
+    cannot be changed by a newly-arrived pack passes `revalidate=False` to
+    skip even that one stat."""
+    key = str(common_dir)
     pack_dir = common_dir / "objects" / "pack"
+    cached = _PACK_LISTING_CACHE.get(key)
+    if cached is not None:
+        if not revalidate:
+            return cached[1]
+        generation = _pack_dir_generation(pack_dir)
+        if cached[0] == generation:
+            return cached[1]
+    else:
+        generation = _pack_dir_generation(pack_dir)
     result: list[tuple[Path, Path]] = []
-    if pack_dir.is_dir():
+    if generation is not None:
         for idx_path in sorted(pack_dir.glob("*.idx")):
             pack_path = idx_path.with_suffix(".pack")
             if pack_path.is_file():
                 result.append((idx_path, pack_path))
+    _PACK_LISTING_CACHE[key] = (generation, result)
+    _PACK_INDEXES_BY_LISTING.pop(key, None)
+    return result
+
+
+# Parsed `.idx` bodies for the CURRENT cached listing, keyed the same way.
+# `_parse_pack_index` memoizes by `(path, st_mtime_ns, st_size)` and so
+# stats every `.idx` on every call -- 1,939 of the 2,937 `stat` calls in
+# the profile above. This layer holds the parse for exactly as long as the
+# listing it came from is valid, which is exactly as long as the pack set
+# is unchanged, so the per-lookup stat disappears without widening the
+# staleness window: it is dropped whenever `_iter_pack_files` rebuilds.
+_PACK_INDEXES_BY_LISTING: "dict[str, list[tuple[Path, Path, _PackIndex]]]" = {}
+
+
+def _pack_indexes(
+    common_dir: Path, *, revalidate: bool = True
+) -> list[tuple[Path, Path, "_PackIndex"]]:
+    """`(idx_path, pack_path, parsed_index)` for every pack under
+    `common_dir`, skipping any pack whose `.idx` fails to parse."""
+    key = str(common_dir)
+    listing = _iter_pack_files(common_dir, revalidate=revalidate)
+    cached = _PACK_INDEXES_BY_LISTING.get(key)
+    if cached is not None:
+        return cached
+    result: list[tuple[Path, Path, _PackIndex]] = []
+    for idx_path, pack_path in listing:
+        pidx = _parse_pack_index(idx_path)
+        if pidx is None:
+            continue
+        result.append((idx_path, pack_path, pidx))
+    _PACK_INDEXES_BY_LISTING[key] = result
     return result
 
 
@@ -274,8 +352,39 @@ def _pack_index_find(pidx: _PackIndex, sha_hex: str) -> Optional[int]:
     return None
 
 
-def _read_pack_bytes(pack_path: Path) -> bytes:
-    return pack_path.read_bytes()
+def _read_pack_bytes(pack_path: Path) -> bytes | mmap.mmap:
+    """Maps the pack file rather than reading it. Returns a read-only mmap,
+    which satisfies every use the pack byte-string is put to below --
+    `len()`, integer indexing, slicing, and `memoryview()` in
+    `_zlib_decompress_bounded` -- while faulting in only the pages an
+    object read actually touches.
+
+    This was `pack_path.read_bytes()`, one whole-file read per object
+    lookup. Measured on one `pickup-assemble brief` against this repo:
+    2,026 calls reading **22.33GB** to serve a working set of a few
+    thousand objects, 9.46s of an 11.78s run even with every byte already
+    in the OS page cache. The pack set here is 427MB across 8 packs and
+    the largest single pack is 150MB -- a cold read of that pack, once per
+    object, is the shape this replaces.
+
+    Deliberately NOT cached and NOT held open across calls: the map drops
+    when the caller's last reference to it goes, so this process never
+    holds a file mapping that would stop a concurrent `git gc` from
+    unlinking a pack it has just repacked (on Windows an open mapping
+    makes that unlink fail). Mapping is cheap enough that caching buys
+    nothing worth that hazard -- the OS page cache already holds the pages
+    across calls, which is where the reuse belongs.
+
+    Falls back to reading the file whole for the one case mmap cannot
+    serve: a zero-length pack, which `mmap` rejects outright."""
+    fh = open(pack_path, "rb")
+    try:
+        return mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+    except ValueError:
+        fh.seek(0)
+        return fh.read()
+    finally:
+        fh.close()
 
 
 def _delta_read_size(data: bytes, pos: int) -> tuple[int, int]:
@@ -436,11 +545,13 @@ def _read_pack_object_at(
     return type_num, content
 
 
-def _read_pack_object_by_sha(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    for idx_path, pack_path in _iter_pack_files(common_dir):
-        pidx = _parse_pack_index(idx_path)
-        if pidx is None:
-            continue
+def _search_packs_for_sha(
+    common_dir: Path, sha: str, *, revalidate: bool
+) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
+    """Searches one pack set for `sha`. Returns None when the sha is in no
+    pack of that set -- distinct from a 1-tuple whose single element is the
+    found object, or None for a pack entry of an unsupported type."""
+    for _idx_path, pack_path, pidx in _pack_indexes(common_dir, revalidate=revalidate):
         offset = _pack_index_find(pidx, sha)
         if offset is None:
             continue
@@ -448,9 +559,23 @@ def _read_pack_object_by_sha(common_dir: Path, sha: str) -> Optional[tuple[str, 
         type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
         type_name = _PACK_TYPE_NAMES.get(type_num)
         if type_name is None:
-            return None
-        return type_name, content
+            return (None,)
+        return ((type_name, content),)
     return None
+
+
+def _read_pack_object_by_sha(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
+    """Finds `sha` in any pack under `common_dir`. Searched at most twice:
+    once against the cached pack set with no revalidating stat, and -- only
+    if that misses -- once more against a revalidated one, because a miss is
+    the only outcome a newly-arrived pack can change (a hit is
+    content-addressed and cannot be)."""
+    found = _search_packs_for_sha(common_dir, sha, revalidate=False)
+    if found is None:
+        found = _search_packs_for_sha(common_dir, sha, revalidate=True)
+    if found is None:
+        return None
+    return found[0]
 
 
 # Bounded, content-addressed-only cache: keyed on (common_dir, sha), which

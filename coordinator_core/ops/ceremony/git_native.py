@@ -988,30 +988,6 @@ def ls_files_deleted(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
     return _git(["ls-files", "--deleted", "--", *paths], cwd=cwd)
 
 
-def ls_files_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
-    """`git ls-files -z -- <paths>` -- the INDEX-TRACKED subset of *paths*,
-    NUL-separated.
-
-    Purpose: `commit_pipeline._worktree_deleted_paths_chunked`'s absent-
-    record settling step. `git status --porcelain=v2` emits NOTHING for a
-    path that is either CLEAN-TRACKED or MATCHED-NOTHING (a pathspec that
-    matched no path at all) -- the two silences are indistinguishable from
-    the status read alone (docs/research/spike-verdicts/2026-08-26-one-
-    porcelain-v2-read-replaces-the-probe-suite.md § U1). This settles the
-    question in-process, one batched call, never per path: a path present
-    in this call's output is tracked (CLEAN-TRACKED, since it produced no
-    status record); a path absent from it was never in the index at all
-    (MATCHED-NOTHING).
-
-    Scoped to `paths` (never called bare) -- an unscoped `git ls-files`
-    lists the WHOLE index, unrelated to what the caller is resolving.
-    Empty `paths` returns immediately with an empty, `ok=True` result.
-    """
-    if not paths:
-        return GitResult(returncode=0, stdout="", stderr="")
-    return _git(["ls-files", "-z", "--", *paths], cwd=cwd)
-
-
 def status_porcelain_v2(
     cwd: Union[str, Path], paths: Optional[Sequence[str]] = None
 ) -> GitResult:
@@ -1046,7 +1022,12 @@ def status_porcelain_v2(
     or `!` record -- it only classifies `1`/`2` records' `D` worktree
     status. `-uall` without `--ignored` would still expand untracked
     directories into per-file `?` records this caller discards anyway, so
-    neither flag earns its cost here.
+    neither flag earns its cost here. `status_porcelain_scoped()` above
+    keeps `-uall` for its own caller, which DOES need per-file untracked
+    expansion (`commit_pipeline.explicit_stage` refuses a directory
+    pathspec) -- the two seams intentionally diverge on this flag, not by
+    oversight. <!-- Review: coordinator:code-reviewer -- cross-reference
+    added so the omission here reads as deliberate, not a miss. -->
 
     `--no-optional-locks`: read-only call, no reason to contend for
     `.git/index.lock` on a shared worktree, same as every other read in
@@ -2992,18 +2973,23 @@ def _commit_scoped_private_index(
     staged_paths = [p for p in diverged if resolution[p] == _SOURCE_STAGED]
     worktree_paths = [p for p in non_diverged if resolution[p] == _SOURCE_WORKTREE]
 
+    # `old_head` is `None` on an unborn branch (a fresh `git init`, no
+    # commits yet -- `_git_state_head_sha` returns `None` for it, same as a
+    # genuinely unresolvable symref). This branch used to refuse loud here,
+    # unconditionally, on the theory that "no HEAD" always means "nothing
+    # to read the parent/spine from" -- that theory is wrong for the unborn
+    # case specifically: there IS a well-defined answer (a root commit, no
+    # `-p` parent, CAS-create against an absent ref), it just is not the
+    # SAME answer as the ordinary case. `None` flows through below instead:
+    # `_commit_via_head_spine`'s own precondition (`root_tree_sha is None`)
+    # already bails to the ladder for it (see that helper's own docstring),
+    # and the ladder below branches explicitly on `old_head is None` at
+    # every step that needs a parent (`read-tree HEAD`, `commit-tree -p`,
+    # the no-op comparison, `update-ref`'s CAS old-value). A genuinely
+    # unresolvable symref (packed-only, corrupt) still reaches a real git
+    # failure further down (`update-ref`/`commit-tree` refuse it loud on
+    # their own), never a silent wrong commit.
     old_head = _git_state_head_sha(root)
-    if old_head is None:
-        return GitResult(
-            returncode=-1,
-            stdout="",
-            stderr=(
-                "_commit_scoped_private_index: HEAD has no resolvable commit "
-                "(unborn branch or a symref with no loose ref and no "
-                "packed-refs entry) -- this branch requires an existing HEAD "
-                "commit to read the parent and the spine to rewrite from"
-            ),
-        )
 
     # AC11(a): the ONE real-index snapshot this whole commit is built from,
     # read fresh, in process, no git spawn -- never re-read below.
@@ -3111,6 +3097,7 @@ def _commit_scoped_private_index(
         root, assembled, old_head, msg_file,
         index_stat_identity=index_snapshot.stat_identity,
         caller="_commit_scoped_private_index",
+        refuse_noop=True,
     )
     if fast_result is not None:
         if not fast_result.ok:
@@ -3129,9 +3116,18 @@ def _commit_scoped_private_index(
             # index, never via `shutil.copy2` of the shared `.git/index`
             # (DR-272 § 3.4 drift 2) -- same idiom `commit_authored_content`'s
             # own ladder and the pre-rewire private index both used.
-            read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
-            if not read_tree_result.ok:
-                return read_tree_result
+            #
+            # `old_head is None` -- unborn branch, no HEAD to seed from.
+            # `read-tree HEAD` would itself fail loud on an unresolvable
+            # HEAD; skip it and let the temp index start genuinely empty
+            # (never created on disk until the cacheinfo writes below --
+            # `_empty_private_index_refusal`'s own docstring already
+            # establishes a MISSING `GIT_INDEX_FILE` is a valid empty index
+            # to `write-tree`, not an error).
+            if old_head is not None:
+                read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
+                if not read_tree_result.ok:
+                    return read_tree_result
 
             # Every resolved path lands via an explicit cacheinfo entry --
             # never from the worktree (`git add`) -- so a brand-new
@@ -3208,12 +3204,29 @@ def _commit_scoped_private_index(
             if empty_tree_refusal is not None:
                 return empty_tree_refusal
 
+            # No-op refusal (DEFECT 1 fix, mirrors the fast path's own
+            # `refuse_noop` check in `_commit_via_head_spine`): a byte-
+            # identical re-commit computes the SAME tree HEAD already
+            # points at -- landing it would create a phantom commit with
+            # no real content change, exactly the "nothing to commit"
+            # no-op `git commit` itself refused for free pre-C3. Only
+            # meaningful with a real parent to compare against -- an
+            # unborn branch's first commit has no HEAD tree to diff.
+            if old_head is not None:
+                parent_tree_sha = _git_state_head_tree_sha(root)
+                if parent_tree_sha is not None and tree_sha == parent_tree_sha:
+                    return GitResult(returncode=1, stdout="", stderr="")
+
             msg_text = Path(msg_file).read_text(encoding="utf-8")
             subject_lines = msg_text.splitlines()
             subject = subject_lines[0] if subject_lines else "commit"
 
+            commit_tree_args = ["commit-tree", tree_sha]
+            if old_head is not None:
+                commit_tree_args += ["-p", old_head]
+            commit_tree_args += ["-F", str(msg_file)]
             commit_tree_result = _git(
-                ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
+                commit_tree_args,
                 cwd=root,
                 env=private_env,
             )
@@ -3227,8 +3240,16 @@ def _commit_scoped_private_index(
             # env-scoped: `update-ref` moves the real branch ref, which
             # lives in the shared git-dir regardless of which index built
             # the tree being pointed at.
+            #
+            # `old_head is None` -- unborn branch: git's own CAS convention
+            # for "must not already exist" is the EMPTY STRING old-value
+            # (never a bare 3-arg omission, which drops the CAS guarantee
+            # entirely) -- a concurrent peer racing to create the same
+            # branch's root commit still fails loud here rather than
+            # silently orphaning it.
+            old_head_arg = old_head if old_head is not None else ""
             update_ref_result = _git(
-                ["update-ref", "-m", subject, "HEAD", new_sha, old_head],
+                ["update-ref", "-m", subject, "HEAD", new_sha, old_head_arg],
                 cwd=root,
             )
             if not update_ref_result.ok:
@@ -4323,6 +4344,7 @@ def _commit_via_head_spine(
     *,
     index_stat_identity: Optional[Any] = None,
     create_missing_dirs: bool = False,
+    refuse_noop: bool = False,
     caller: str,
 ) -> Optional[GitResult]:
     """The shared "rewrite HEAD's tree spine -> build the commit object ->
@@ -4331,6 +4353,19 @@ def _commit_via_head_spine(
     already carry every trailer this commit needs (`interpret-trailers`,
     the caller's own spawn, has already run against it); this helper only
     reads its final bytes for the commit object's message body.
+
+    `refuse_noop` (default `False` -- `commit_authored_content` is
+    byte-identical without it, unchanged) -- when `True`, a computed
+    `new_tree_sha` equal to the CURRENT HEAD tree (`root_tree_sha`, already
+    read above for the same-tree precondition) refuses with a
+    `GitResult(returncode=1, stdout="", stderr="")` BEFORE any object is
+    written or the ref moved, rather than landing a commit whose tree is
+    byte-identical to its own parent's. Opt-in because it changes an
+    observable contract (a caller re-committing identical content used to
+    get a real, if pointless, commit) -- `_commit_scoped_private_index`
+    passes `True` on both its own call sites (see that function's own
+    docstring), matching the "nothing to commit" refusal `git commit -F
+    ... -- paths` gave for free before C3 rebuilt this branch in process.
 
     `create_missing_dirs` (default `False` -- every pre-existing caller is
     byte-identical without it) fills in empty spine levels for a CREATION
@@ -4425,6 +4460,13 @@ def _commit_via_head_spine(
     )
     if empty_tree_refusal is not None:
         return empty_tree_refusal
+
+    # `refuse_noop` -- see this function's own docstring paragraph. Checked
+    # against `root_tree_sha`, the SAME HEAD-tree read this function's own
+    # precondition already took above (never a second read that could race
+    # a concurrent mutation between the two).
+    if refuse_noop and new_tree_sha == root_tree_sha:
+        return GitResult(returncode=1, stdout="", stderr="")
 
     msg_bytes = Path(msg_file).read_bytes()
     subject_line, _, _ = msg_bytes.decode("utf-8", errors="replace").partition("\n")

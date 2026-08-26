@@ -154,67 +154,73 @@ def test_seeded_index_is_permitted(tmp_path: Path):
 
 
 def test_archive_and_commit_refuses_rather_than_emptying_the_repo(tmp_path: Path):
-    """End-to-end pin on the incident itself.
+    """End-to-end pin on the incident's CLASS, RE-SITED (2026-08-26, C7).
 
-    The index is deleted after `read-tree HEAD` has already seeded it --
-    exactly the shape that produced `fbfbd061d`, where seeding succeeded and
-    the index was gone by commit time. Before the guard, this committed the
-    empty tree and every tracked file vanished from HEAD; after it, the op
-    fails loud and HEAD is untouched.
+    `archive_and_commit` no longer opens a `GIT_INDEX_FILE` at all
+    (`dccf2fc01`, C2) -- there is no private index left to go missing, so the
+    exact `fbfbd061d` failure mode (delete the index between seed and
+    commit) cannot recur on this path, and simulating it here would be a
+    false positive: the interception would never fire and the test would
+    pass vacuously. See `_assembled_commit_is_noop`'s own docstring for the
+    re-siting this test now pins: the guarantee that survives is "never land
+    a commit whose assembled tree is byte-identical to HEAD's tree", checked
+    the same way -- loud, before the commit, before any disk state is
+    committed.
+
+    Fixture: `dst` is ALREADY tracked in HEAD with the exact bytes and mode
+    the move would (redundantly) write there again, and `src` is untracked
+    in HEAD (so its removal from the tree is not a real deletion either) --
+    every entry `archive_and_commit` would assemble already matches what
+    `read_tree_spine` reports for HEAD, so `_assembled_commit_is_noop`
+    refuses before `_commit_via_head_spine` is ever called.
     """
     root = tmp_path / "repo"
-    src = _seed_repo(root)
+    _seed_repo(root)
+    identical_bytes = "already archived, byte-identical\n"
+
+    dst = root / "cross-repo" / "archive" / "already-archived.md"
+    dst.parent.mkdir(parents=True)
+    dst.write_text(identical_bytes, encoding="utf-8")
+    _git(["add", "--", str(dst)], root)
+    _git(["commit", "-q", "-m", "seed: dst already archived"], root)
+
     head_before = _git(["rev-parse", "HEAD"], root).stdout.strip()
     tracked_before = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout.split()
-    assert len(tracked_before) == 6, "fixture sanity: 1 memo + 5 bystanders"
 
-    real_exec = asyncio.create_subprocess_exec
+    src = root / "cross-repo" / "inbox" / "already-archived.md"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(identical_bytes, encoding="utf-8")  # untracked in HEAD
 
-    async def _exec_losing_the_index(*args, **kwargs):
-        # Delete the private index the moment the guard's own probe runs --
-        # i.e. after seeding, before the commit. Simulates the vanished-index
-        # condition without asserting any particular cause for it.
-        if "write-tree" in args:
-            idx = (kwargs.get("env") or {}).get("GIT_INDEX_FILE")
-            if idx and os.path.exists(idx):
-                os.unlink(idx)
-        return await real_exec(*args, **kwargs)
+    # force=True: a byte-identical duplicate delivery, per `Move.force`'s own
+    # docstring -- os.replace always clobbers, and dst already existing is
+    # exactly the shape this fixture needs to reach the noop-commit guard
+    # rather than the earlier dst-exists refusal.
+    move = Move(
+        src=src, dst=dst, candidate_id="cross-repo/inbox/already-archived.md",
+        force=True,
+    )
 
-    dst = root / "cross-repo" / "archive" / src.name
-    move = Move(src=src, dst=dst, candidate_id="cross-repo/inbox/" + src.name)
-
-    # Patch `asyncio` ITSELF, not `_common.asyncio`. `_common` imports asyncio
-    # inside each function that spawns (module-scope `import asyncio` dragged
-    # asyncio.base_events into every warm-engine boot, ~8ms — see the comment
-    # at that import), so `_common.asyncio` is not a module attribute and
-    # reaching for it raised AttributeError, leaving this guard dead rather
-    # than failing on its own subject. A function-local import resolves
-    # through `sys.modules`, so swapping the attribute here is what the code
-    # under test actually sees.
-    original = asyncio.create_subprocess_exec
-    asyncio.create_subprocess_exec = _exec_losing_the_index
-    try:
-        acted, failed = _run(
-            archive_and_commit(
-                worktree_root=root,
-                moves=[move],
-                subject="fleet: archive 1 actioned memo(s)",
-            )
+    acted, failed = _run(
+        archive_and_commit(
+            worktree_root=root,
+            moves=[move],
+            subject="fleet: archive 1 actioned memo(s)",
         )
-    finally:
-        asyncio.create_subprocess_exec = original
+    )
 
     assert acted == [], "nothing may be reported as archived when the commit was refused"
     assert len(failed) == 1
-    assert "empty-private-index" in failed[0]["reason"]
-    assert EMPTY_TREE_SHA in failed[0]["reason"]
+    assert "empty-spine-commit" in failed[0]["reason"]
+    assert "computed tree equals HEAD's tree" in failed[0]["reason"]
 
     # The load-bearing assertions: HEAD did not move, and no tracked file was
-    # deleted. This is what `fbfbd061d` violated.
+    # touched.
     assert _git(["rev-parse", "HEAD"], root).stdout.strip() == head_before
     tracked_after = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout.split()
     assert tracked_after == tracked_before
 
     # The rename was reversed on disk — a refused commit leaves no half-move.
+    # (os.replace moved src's bytes onto dst; the commit-failure reversal
+    # renames dst back to src, since src no longer exists post-replace.)
     assert src.exists()
     assert not dst.exists()

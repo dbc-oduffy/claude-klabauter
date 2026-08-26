@@ -2329,23 +2329,36 @@ async def rm_and_commit(
 ) -> Tuple[List[dict], List[dict]]:
     """DR-211 D3/D4 git-rm helper: reap each tracked path and commit all successes.
 
-    Sibling of archive_and_commit — same private-index isolation, async-only,
-    index-sourced-commit mechanics (amended 2026-07-26 to match archive_and_commit's
-    no-trailing-pathspec form, see WHY note below) — but a genuinely different
-    reversal mechanism because the unit of work is a DELETE, not a rename.
+    Sibling of archive_and_commit — still isolates its per-path staging
+    through a private HEAD-seeded `GIT_INDEX_FILE` (unlike archive_and_commit,
+    which retired that seam on 2026-08-26 — see this module's docstring), but
+    the eventual commit no longer reads that index: it lands via
+    `_commit_via_head_spine` (imported from `ops.ceremony.git_native`, peer-
+    to-peer import, see the module-level import comment above
+    `archive_and_commit`), same as archive_and_commit's own landing call
+    (C3, 2026-08-26; `commit-tree`/`update-ref` retired in favour of it). A
+    genuinely different reversal mechanism from archive_and_commit either
+    way, because the unit of work is a DELETE, not a rename.
 
     For each path:
     1. Runs awaited asyncio.create_subprocess_exec("git", "rm", path) with
        GIT_INDEX_FILE pointing to a private temp-file index (DR-211 D3 isolation
-       — a concurrent 'git add -A' cannot absorb our staging).
+       — a concurrent 'git add -A' cannot absorb our staging). The private
+       index is seeded via `git read-tree HEAD` first, so `git rm` can locate
+       each tracked path — deleting that seed step reopens "pathspec did not
+       match any files" before `git rm`'s own refusal check ever runs.
     2. Plain `git rm` (NEVER `git rm -f`) — see NEGATIVE-SPEC below for why this
        is load-bearing, not an oversight.
     3. On per-item git rm failure: the file was NOT deleted (plain git rm refuses
        before deleting) — item lands in failed[]; processing continues.
 
-    After all paths: ONE git commit from the private index with NO trailing
-    pathspec — the index already IS the exact scope (every successfully-reaped
-    path, nothing else), mirroring archive_and_commit's C4 fix.
+    After all paths: ONE call to `_commit_via_head_spine` lands an `assembled`
+    dict mapping every successfully-reaped path to `_ABSENT`, with NO trailing
+    pathspec — the dict already IS the exact scope (every successfully-reaped
+    path, nothing else), mirroring archive_and_commit's own no-trailing-
+    pathspec landing. The private index still guards `git rm`'s per-path
+    fail-closed refusal (see WHY note below); it is simply no longer the
+    commit's own source of scope.
 
     WHY this site is safe without ever having exhibited FORWARD-B (DR-211 D3
     amendment): unlike archive_and_commit, a trailing `-- <paths>` pathspec here
@@ -2415,11 +2428,13 @@ async def rm_and_commit(
       the pathspec is dropped anyway to match the amended primary form.
     - NEVER uses blocking subprocess.run — all git calls are
       asyncio.create_subprocess_exec + await (DR-211 D4 async mandate).
-    - GIT_INDEX_FILE isolates staging; the main index is only touched in the
-      post-commit resync step, and only via --remove (no --add). See the
-      INVARIANT note above the resync code for why --remove-only cannot
-      reproduce archive_and_commit's D + ?? residue shape — conditional on
-      the commit-success path, not a blanket "--remove is always safe" claim.
+    - GIT_INDEX_FILE isolates `git rm`'s per-path staging only; the commit
+      landing itself reads no index (`_commit_via_head_spine`). The main
+      index is only touched in the post-commit resync step, and only via
+      --remove (no --add). See the INVARIANT note above the resync code for
+      why --remove-only cannot reproduce archive_and_commit's D + ?? residue
+      shape — conditional on the commit-success path, not a blanket
+      "--remove is always safe" claim.
     - stdout/stderr captured as bytes — decoded with errors="replace" on failure.
 
     Spec: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (C4)
@@ -2576,74 +2591,71 @@ async def rm_and_commit(
         if index_breach is not None:
             commit_rc, err_msg = 1, index_breach
         else:
-            # HEAD-race CAS landing — see archive_and_commit's identical
-            # block for the full rationale. write-tree + commit-tree -p
-            # <old_head> + a 4-arg `update-ref` refuses atomically on a
-            # concurrent commit instead of silently reverting it.
-            # write-tree is `_empty_private_index_breach`'s own, reused rather than
-            # re-spawned (2026-08-25): that guard already computes this exact tree
-            # sha and used to throw it away. See its docstring.
-            # Message on stdin, not `-m` — see archive_and_commit's
-            # identical block and `_message_with_hookless_trailers`. The
-            # reaped paths are already deleted from disk here, so tier-0
-            # artifact resolution finds nothing and the resolver falls
-            # through to its session-keyed tiers; passing them anyway
-            # keeps both call sites' argument shape identical.
+            # HEAD-race CAS landing via `_commit_via_head_spine` (imported
+            # from ops.ceremony.git_native — peer-to-peer import, deliberate,
+            # see the module-level import note above archive_and_commit).
+            # `assembled` maps every reaped path to `_ABSENT` — a plain
+            # deletion set, mirroring archive_and_commit's own `{path:
+            # (mode, sha) | _ABSENT}` shape but with no additions here since
+            # `git rm` (above) already deleted the worktree content; there
+            # is no fresh blob to hash. This replaces `git commit-tree
+            # tree_sha -p old_head` + a 4-arg `git update-ref` (net -2
+            # spawns) with the same CAS atomicity, landed in process —
+            # `tree_sha` above is `_empty_private_index_breach`'s own
+            # write-tree output, kept only for the empty-index refusal it
+            # already performs; it is not passed to the spine helper, which
+            # computes its own tree from `assembled` against HEAD.
+            # Message on stdin-equivalent (a real temp file, read in
+            # process) — see archive_and_commit's identical block and
+            # `_message_with_hookless_trailers`. The reaped paths are
+            # already deleted from disk here, so tier-0 artifact resolution
+            # finds nothing and the resolver falls through to its
+            # session-keyed tiers; passing them anyway keeps both call
+            # sites' argument shape identical.
             message = _message_with_hookless_trailers(
                 subject,
                 worktree_root,
                 [str(p) for p in paths if _rel_id(p) in reaped_ids],
             )
-            commit_tree_proc = await asyncio.create_subprocess_exec(
-                "git", "commit-tree", tree_sha, "-p", old_head,
-                cwd=str(worktree_root),
-                env=base_env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            # Publish the child to the `finally:` BEFORE awaiting it — see
-            # `_kill_orphaned_commit`.
-            commit_proc = commit_tree_proc
-            ct_out, ct_stderr = await commit_tree_proc.communicate(
-                message.encode("utf-8")
-            )
-            if commit_tree_proc.returncode != 0:
-                commit_rc = commit_tree_proc.returncode
-                err_msg = ct_stderr.decode(errors="replace").strip() or "commit-tree-failed"
-            else:
-                new_sha = ct_out.decode(errors="replace").strip()
-                update_ref_proc = await asyncio.create_subprocess_exec(
-                    "git", "update-ref", "-m", subject, "HEAD", new_sha, old_head,
-                    cwd=str(worktree_root),
-                    # `_make_git_env()` with NO idx_path: update-ref must
-                    # not inherit the private index, but it must still run
-                    # inside this module's hardened allowlist rather than
-                    # the ambient `os.environ` — an inherited GIT_DIR /
-                    # GIT_COMMON_DIR would move a ref in a different
-                    # git-dir than the one commit-tree just wrote into.
-                    # Same env the commit-failure restore path builds.
-                    env=_make_git_env(),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            assembled: Dict[str, Union[Tuple[int, str], object]] = {
+                _rel_id(p): _ABSENT for p in paths if _rel_id(p) in reaped_ids
+            }
+            msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
+            try:
+                with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(message)
+                spine_result = _commit_via_head_spine(
+                    worktree_root,
+                    assembled,
+                    old_head,
+                    msg_path,
+                    caller="rm_and_commit",
                 )
-                commit_proc = update_ref_proc
-                _ur_out, ur_stderr = await update_ref_proc.communicate()
-                commit_rc = update_ref_proc.returncode
-                if commit_rc != 0:
-                    err_msg = (
-                        "compare-and-swap failed -- HEAD moved concurrently "
-                        f"since {old_head} was captured; refusing to land a "
-                        "commit built against a stale parent (a retry needs "
-                        "a tree rebuilt against the new HEAD). "
-                        f"{ur_stderr.decode(errors='replace').strip()}"
-                    )
-                else:
-                    err_msg = ""
-                    # The commit is landed; replay the `post-commit` hook
-                    # the replaced `git commit` used to fire. See
-                    # `_replay_post_commit_hook`.
-                    _replay_post_commit_hook(worktree_root)
+            finally:
+                try:
+                    os.unlink(msg_path)
+                except OSError:
+                    pass
+
+            if spine_result is None:
+                commit_rc, err_msg = 1, (
+                    "spine-commit-preconditions-failed: _commit_via_head_spine "
+                    "declined (unresolvable HEAD tree spine, a structurally "
+                    "missing parent directory, an unresolvable CAS ref "
+                    "target, a lock-held ref, or no resolvable commit "
+                    "identity) -- nothing was committed"
+                )
+            elif not spine_result.ok:
+                commit_rc = spine_result.returncode
+                err_msg = spine_result.stderr.strip() or "spine-commit-failed"
+            else:
+                commit_rc = 0
+                err_msg = ""
+                # The commit is landed; replay the `post-commit` hook
+                # the replaced `git commit`/`update-ref` ladder used to
+                # fire. `_commit_via_head_spine` itself fires no hooks
+                # (a direct locked-ref CAS). See `_replay_post_commit_hook`.
+                _replay_post_commit_hook(worktree_root)
 
         if commit_rc != 0:
             _LOG.error(

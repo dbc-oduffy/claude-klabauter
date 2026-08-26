@@ -18,27 +18,69 @@ against a single call site and the class re-armed at a second one (mirrors
 fixes vs. class coverage) -- both `archive_and_commit` and `rm_and_commit`
 are covered here, one test each, against the SAME race shape.
 
-Mechanism: `asyncio.create_subprocess_exec` is monkeypatched to land a peer
-commit into the throwaway repo the instant the function under test issues
-its own first post-`read-tree` git spawn (`git write-tree`) -- i.e. strictly
-AFTER `old_head` was captured, strictly BEFORE the commit is landed. This is
-exactly the window the incident's own timeline occupies (drift
-check/os.replace/stage all sit between read-tree and commit; write-tree is
-the first call point downstream of ALL of them, so intercepting there
-exercises the full window, not merely the narrowest slice of it).
+Mechanism (RE-TARGETED, 2026-08-26, C7 -- see this module's own dispatch
+brief in `docs/plans/2026-08-26-the-archival-commit-helper-computes-its-own-
+tree.md` C7): C2 (`dccf2fc01`) deleted `archive_and_commit`'s `git
+write-tree` spawn entirely -- it now lands via `_commit_via_head_spine`,
+whose own tree build is a spawn-free in-process spine read. The original
+interception point (the first `git write-tree` argv after `read-tree HEAD`)
+therefore NEVER FIRES on the post-C2 path: the monkeypatch's guard condition
+is dead code, no peer commit is ever landed, and the peer-survival assertion
+below trivially passes -- a false-positive green mistakeable for "the race is
+closed", when the true state was "this path is untested for the race".
 
-Must FAIL against the pre-fix `git commit` (bare, no CAS) and PASS against
-the write-tree + commit-tree -p <old_head> + 4-arg `update-ref` CAS.
+Two different interception points now, one per function, because the two
+functions no longer share a spawn shape in the race window:
 
-Verification (2026-08-25, both directions, both call sites, against a
-`git archive` extraction of `8350b8fa0^` -- the run report the original
-docstring pointed at never existed; the session that wrote this module died
-before reporting): pre-fix, archive_and_commit lands
-`fleet: archive 1` with the peer commit as parent and the peer's file absent
-from the committed tree, and rm_and_commit does the same; post-fix, both
-refuse with `compare-and-swap failed`, fully reverse their disk moves, and
-leave the peer's commit at HEAD. See `_seed_unrelated_tracked_file` for the
-fixture condition the pre-fix red depends on.
+- `archive_and_commit`: intercepts `_hash_object_stdin_paths` (the ONE spawn
+  C2 left between `old_head`'s capture and the commit landing for a
+  `restage_src=True` move -- the drift-check `git diff` spawn is skipped
+  entirely for such a move, see `Move.restage_src`'s docstring). This is a
+  synchronous wrapper (`git_native`'s own `_git()`, `subprocess.run` under
+  the hood, offloaded via `asyncio.to_thread`) -- NOT an
+  `asyncio.create_subprocess_exec` call -- so it is intercepted by wrapping
+  the module-level name itself, not by patching `asyncio.create_subprocess_exec`.
+- `rm_and_commit`: intercepts the per-path `git rm --` spawn (still
+  `asyncio.create_subprocess_exec`-based). Chosen over `write-tree` because
+  C3 (`docs/plans/...archival-commit-helper...md` C3, landing concurrently
+  in this same wave) removes `rm_and_commit`'s own `commit-tree`/`update-ref`
+  pair but explicitly, in its own dispatch brief, keeps `git rm --` --
+  "MUTATES THE WORKTREE... it stays" -- so this interception point is stable
+  across both the pre-C3 and post-C3 shape of the function, unlike
+  `write-tree`, which C3's re-siting of `_empty_private_index_breach` may
+  remove the same way C2 removed it from `archive_and_commit`.
+
+Both interception points sit strictly AFTER `old_head` is captured and
+strictly BEFORE the commit lands, in both the current and (for
+`rm_and_commit`) the anticipated post-C3 shape -- the same window the
+incident's own timeline occupies.
+
+Must FAIL against a pre-fix `git commit` (bare, no CAS) and PASS against
+the CAS-bridged landing (`_commit_via_head_spine`'s locked `cas_ref`
+compare-and-swap for `archive_and_commit`; the write-tree + commit-tree -p
+<old_head> + 4-arg `update-ref` CAS, or its post-C3 spine equivalent, for
+`rm_and_commit`).
+
+Verification (2026-08-26, re-run against this re-targeted mechanism, HEAD at
+dispatch time): both tests pass, and passing is itself proof the
+interception fired rather than a vacuous green -- reasoned explicitly rather
+than by weakening the CAS in `_common.py` (out of this chunk's writes, owned
+by C3's concurrent executor). The fixture starts with NO peer file and NO
+peer commit; the only code path that ever creates
+`peer-landed-while-we-were-committing.md` or commits it is
+`_land_peer_commit`, called exclusively from inside the interception
+wrapper. The final assertion greps that exact file's content out of
+`HEAD`'s tree. A pass is therefore only reachable if `_land_peer_commit` ran
+-- i.e. the interception fired -- AND the peer's commit survived at HEAD.
+Had the wrapped call site never fired (the pre-re-target false-positive this
+chunk exists to close), `git show HEAD:peer-landed-while-we-were-committing.md`
+would exit 128 with empty stdout and the assertion would fail, not pass
+vacuously. Both functions currently land their own commit successfully
+alongside the peer's (rather than refusing) in this exercise, which is
+itself an acceptable outcome per this module's negative-spec -- the one
+unacceptable outcome, the peer's commit disappearing from history, does not
+occur either way. See `_seed_unrelated_tracked_file` for the fixture
+condition the pre-fix red depends on.
 
 Negative-spec: does NOT assert archive_and_commit/rm_and_commit's OWN
 candidate succeeds under the race -- either outcome (refusal, or landing
@@ -111,18 +153,39 @@ def _land_peer_commit(root: Path) -> str:
     return peer_file.name
 
 
-def _patch_write_tree_lands_peer_commit(monkeypatch, root: Path) -> None:
-    """Intercepts the FIRST `git write-tree` spawn `archive_and_commit`/
-    `rm_and_commit` issue after `read-tree HEAD` (i.e. strictly after
-    `old_head` is captured) and lands a peer commit just before letting it
-    run for real -- landing the peer's commit exactly inside the window this
-    fix closes, once per test (idempotent guard so a caller's OWN later
-    `write-tree`-argv git call, if any, is not re-intercepted)."""
+def _patch_hash_object_lands_peer_commit(monkeypatch, root: Path) -> None:
+    """`archive_and_commit`-specific interception (see module docstring's
+    2026-08-26 re-target). `_hash_object_stdin_paths` is the one spawn C2
+    left between `old_head`'s capture and the commit landing for a
+    `restage_src=True` move; it is a synchronous wrapper (`subprocess.run`
+    under the hood, offloaded to a thread), so it is intercepted by wrapping
+    the module-level name `archive_and_commit` actually calls, not by
+    patching `asyncio.create_subprocess_exec`."""
+    import coordinator_core.ops.fleet._common as _common_mod
+
+    orig = _common_mod._hash_object_stdin_paths
+
+    def _intercepting(*args, **kwargs):
+        _land_peer_commit(root)
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _intercepting)
+
+
+def _patch_git_rm_lands_peer_commit(monkeypatch, root: Path) -> None:
+    """`rm_and_commit`-specific interception (see module docstring's
+    2026-08-26 re-target). Intercepts the FIRST per-path `git rm --` spawn --
+    strictly after `old_head` is captured, strictly before the commit lands,
+    and stable across both the pre-C3 and post-C3 shape of the function (C3's
+    own dispatch brief keeps `git rm --` explicitly: "MUTATES THE WORKTREE...
+    it stays"), unlike `write-tree`, which C3 may re-site the same way C2
+    re-sited it out of `archive_and_commit`. Idempotent guard so a caller's
+    own later `git rm` call, if any, is not re-intercepted."""
     orig_exec = asyncio.create_subprocess_exec
     landed = {"done": False}
 
     async def _intercepting_exec(*args, **kwargs):
-        if not landed["done"] and len(args) >= 2 and args[0] == "git" and args[1] == "write-tree":
+        if not landed["done"] and len(args) >= 2 and args[0] == "git" and args[1] == "rm":
             landed["done"] = True
             _land_peer_commit(root)
         return await orig_exec(*args, **kwargs)
@@ -141,7 +204,7 @@ def test_archive_and_commit_never_reverts_a_peer_commit_landed_mid_race(tmp_path
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: candidate handoff"], root)
 
-    _patch_write_tree_lands_peer_commit(monkeypatch, root)
+    _patch_hash_object_lands_peer_commit(monkeypatch, root)
 
     dst = root / "archive" / "handoffs" / "candidate.md"
     move = Move(src=src, dst=dst, candidate_id="state/handoffs/candidate.md", restage_src=True)
@@ -181,7 +244,7 @@ def test_rm_and_commit_never_reverts_a_peer_commit_landed_mid_race(tmp_path, mon
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "seed: candidate review-trail entry"], root)
 
-    _patch_write_tree_lands_peer_commit(monkeypatch, root)
+    _patch_git_rm_lands_peer_commit(monkeypatch, root)
 
     reaped, failed = _run(
         rm_and_commit(worktree_root=root, paths=[target], subject="fleet: reap 1 candidate")

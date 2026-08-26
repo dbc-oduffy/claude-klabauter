@@ -4,19 +4,33 @@ coordinator_core.benchmarks.tests.test_commit_op_wallclock_budget
 C2 of docs/plans/2026-08-26-the-commit-becomes-a-warm-served-op.md — "Give
 the op a real wallclock and spawn baseline through the warm transport."
 
-WHAT THIS FILE IS, AND IS NOT. This chunk is explicitly NOT contingent (plan
-body: "it cannot invalidate what follows") — it builds the INSTRUMENT the
-plan's remaining ACs (AC4/AC5/AC7) are read against, and its own numbers are
-expected to be BAD at this point: C1 (already landed) wires `ceremony.commit`
-to `run_commit_pipeline` UNCHANGED, so every sample here still pays the
-pipeline's two-git-invocation agree branch. C3 is the chunk that replaces
-that shape with the in-process object write; C6 is the chunk that reads
-these numbers against the plan's own AC4/AC5/AC7 targets and closes them.
-This file therefore RECORDS wallclock/process-time/spawn-count, asserting
-only instrument sanity (rc==0, correct sample shape) — never a numeric
-budget ceiling, which would either be vacuously true (loose enough to pass a
-known-bad baseline) or fail this NOT-a-contingent-chunk by design. Move any
-numeric AC assertion to C6, against a design C3 has actually changed.
+WHAT THIS FILE WAS, AND WHAT C6 CHANGES. This chunk was originally
+NOT-contingent instrument-only (C2's own body: "it cannot invalidate what
+follows") — C1 wired `ceremony.commit` to `run_commit_pipeline` UNCHANGED,
+so every sample here paid the pipeline's two-git-invocation agree branch and
+was expected to be BAD by construction. C3 (in-process object write) and C5
+(safe-commit routing) have since landed. C6
+(docs/plans/2026-08-26-the-commit-becomes-a-warm-served-op.md) is the chunk
+that reads these numbers against the plan's own AC4/AC7 targets and closes
+them — so the two numeric gates below (AC4's 150ms wallclock median, AC7's
+"AC4's target holds under concurrent load") are now REAL assertions, not
+recorded-only instrument sanity.
+
+MEASURED 2026-08-26, POST-C3/C5, this repo's own isolated warm server (this
+file's own `warm_engine_root` fixture): wallclock median 551.6ms / p95
+849.4ms (target 150ms), process_time 695.3ms at 35.75 job-object
+processes/call, and an 8-way concurrent p50 of 3959.1ms / p95 3990.7ms —
+each roughly 3.7-26x over AC4's target, not a rounding-distance miss. AC5's
+dial leg alone (a zero-git `ping` through the identical door) measures 1
+process / ~82ms, so the transport itself is not the residual cost: the
+excess sits inside the commit op's own handler path (the four commit-leg
+gates, trailer assembly, and/or hooks still walking `subprocess.run` rather
+than the in-process object-write machinery C3 shipped for the commit itself)
+— a design/mechanism gap in files this chunk's `writes:` scope excludes
+(`commit_op.py`, `git_native.py`, `commit_pipeline.py`), not a measurement
+artifact of this instrument. Recorded here, gated below, and reported back
+to the plan rather than silently loosened: per the plan's own AC4 section,
+"the answer is to make the op cheaper... not to widen AC4."
 
 THREE COLUMNS, NEVER COLLAPSED (plan task body, verbatim instruction).
 wallclock (median/p50/p95), process time, and job-object spawn count are
@@ -132,6 +146,12 @@ plan's own C3/C4 methodology (`k>=8`) elsewhere in this package."""
 
 N_CONCURRENT = 8
 """AC7: "at least 8 simultaneous commits from distinct worktrees"."""
+
+AC4_TARGET_MS = 150.0
+"""Plan's own AC4 row: "Warm-served, the op commits in <=150ms wallclock
+measured end-to-end from the caller." AC7 reuses this same figure -- its
+own row is "AC4's wallclock holds ... under concurrent load", not a
+distinct number."""
 
 _ENGINE_ROOT_OVERRIDE_ENV = "COORDINATOR_WARM_GATE_ENGINE_ROOT"
 _BOOT_WAIT_DEADLINE_SECS = 20.0
@@ -412,11 +432,12 @@ def _wallclock_samples(cmd: List[str], k: int, cwd: str, env: dict) -> dict:
 def test_commit_op_wallclock_and_spawn_baseline_are_recorded(
     tmp_path_factory, warm_engine_root
 ) -> None:
-    """AC4's instrument (recorded, not gated — module docstring). Three
-    separate columns from three separate measurement passes over the same
-    driver/argv: wallclock quantiles (this pass, spawn-to-exit, k=15),
-    process time, and job-object spawn count (a second pass,
-    `batched_process_time_ms`, k=8) — never collapsed into one figure.
+    """AC4's instrument, now GATED (C6 — module docstring's "MEASURED
+    2026-08-26" note). Three separate columns from three separate
+    measurement passes over the same driver/argv: wallclock quantiles (this
+    pass, spawn-to-exit, k=15), process time, and job-object spawn count (a
+    second pass, `batched_process_time_ms`, k=8) — never collapsed into one
+    figure; only the wallclock column carries AC4's numeric gate.
     """
     tmp_path = tmp_path_factory.mktemp("commit_wallclock")
     repo = _build_fixture_repo(tmp_path, "work/c2-wallclock-baseline")
@@ -449,10 +470,19 @@ def test_commit_op_wallclock_and_spawn_baseline_are_recorded(
         f"(n={wall['n']}). process_time={proc['process_time_ms']}ms "
         f"procs_per_call={proc['procs_per_call']} (k={proc['k']})."
     )
+    print(detail)
     assert proc["rc"] == 0, f"process-time leg's driver must exit 0: {proc!r}. {detail}"
     assert wall["n"] == K_WALLCLOCK_SAMPLES
     assert wall["median_ms"] > 0.0, f"a zero-ms wallclock sample means the instrument is not measuring anything. {detail}"
     assert proc["procs_per_call"] >= 1.0, f"the op's own interpreter must count as at least one process. {detail}"
+    # AC4 (C6): the real numeric gate, not a recorded-only baseline. See
+    # module docstring's "MEASURED 2026-08-26" note for the current delta
+    # and why it is a mechanism gap outside this chunk's writes: scope
+    # rather than a loosening candidate.
+    assert wall["median_ms"] <= AC4_TARGET_MS, (
+        f"AC4 FAILS: wallclock median {wall['median_ms']}ms exceeds the "
+        f"{AC4_TARGET_MS}ms target by {round(wall['median_ms'] - AC4_TARGET_MS, 3)}ms. {detail}"
+    )
 
 
 def test_commit_op_dial_leg_process_time_is_recorded(warm_engine_root) -> None:
@@ -467,23 +497,40 @@ def test_commit_op_dial_leg_process_time_is_recorded(warm_engine_root) -> None:
         k=K_PROCESS_TIME_INVOCATIONS,
         cwd=str(warm_engine_root),
     )
+    AC5_TARGET_MS = 60.0
+    """DR-347 Ruling 1's amended figure (plan Problem section: "AC5 uses
+    ~60ms"). Reported here, NOT gated: this AC is PROVISIONAL per this
+    chunk's own brief, pending the sibling plan named in the parent plan's
+    § Blocked by (docs/plans/2026-08-26-the-op-clis-dial-warm-from-the-
+    process.md, chunks C1/C5/C6/C7/C9 landed per that plan's own tracker)."""
+    delta = round(result["process_time_ms"] - AC5_TARGET_MS, 3)
+    print(
+        f"AC5 dial leg (PROVISIONAL, ungated -- see docstring): "
+        f"process_time={result['process_time_ms']}ms procs_per_call="
+        f"{result['procs_per_call']} vs ~{AC5_TARGET_MS}ms target (delta={delta}ms)"
+    )
     assert result["rc"] == 0, f"AC5 dial-leg ping must exit 0: {result!r}"
     assert result["process_time_ms"] >= 0.0, (
-        f"AC5 dial-leg baseline (reported separately from AC4's total): "
+        f"AC5 dial-leg baseline (reported separately from AC4's total, "
+        f"PROVISIONAL -- see docstring): "
         f"process_time={result['process_time_ms']}ms procs_per_call="
-        f"{result['procs_per_call']} (k={result['k']})"
+        f"{result['procs_per_call']} (k={result['k']}) vs ~{AC5_TARGET_MS}ms "
+        f"target (delta={delta}ms)"
     )
 
 
 def test_commit_op_concurrent_load_wallclock_is_recorded(
     tmp_path_factory, warm_engine_root
 ) -> None:
-    """AC7's instrument: >=8 simultaneous commits from DISTINCT worktrees
+    """AC7's instrument, now GATED on p50 (C6 -- module docstring's "MEASURED
+    2026-08-26" note): >=8 simultaneous commits from DISTINCT worktrees
     (never a shared one -- `index.lock` contention is a separate experiment
     this file does not run, module docstring), all dialing the SAME
     isolated warm server, so engine queueing (not `index.lock`) is the term
-    under measurement. Reports wallclock p50 AND p95 -- p95 is what exposes
-    queueing tail latency a p50/mean would hide.
+    under measurement. Reports wallclock p50 AND p95 -- p95 is exposition
+    only (queueing tail latency a p50/mean would hide); AC7's own text
+    ("AC4's wallclock holds ... under concurrent load") gates p50 against
+    AC4_TARGET_MS, the same figure AC4 itself gates.
     """
     tmp_path = tmp_path_factory.mktemp("commit_wallclock_concurrent")
     base_repo = _build_fixture_repo(tmp_path, "work/c2-wallclock-concurrent-base")
@@ -537,6 +584,15 @@ def test_commit_op_concurrent_load_wallclock_is_recorded(
         f"expected BAD -- module docstring): wallclock p50={p50}ms p95={p95}ms "
         f"min={round(ordered[0], 3)}ms max={round(ordered[-1], 3)}ms samples={ordered}"
     )
+    print(detail)
     assert len(ordered) == N_CONCURRENT, detail
     assert p95 >= p50, detail
     assert p50 > 0.0, f"a zero-ms concurrent sample means the instrument is not measuring anything. {detail}"
+    # AC7 (C6): "AC4's wallclock holds under concurrent load" -- the same
+    # target as AC4, read against p50 (p95 stays reported-only above: its
+    # job is exposing queueing tail latency, not carrying a second gate).
+    assert p50 <= AC4_TARGET_MS, (
+        f"AC7 FAILS: concurrent-load wallclock p50 {p50}ms exceeds AC4's "
+        f"{AC4_TARGET_MS}ms target by {round(p50 - AC4_TARGET_MS, 3)}ms under "
+        f"{N_CONCURRENT}-way distinct-worktree load. {detail}"
+    )

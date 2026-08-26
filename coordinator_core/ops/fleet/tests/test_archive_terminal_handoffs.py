@@ -55,6 +55,7 @@ from unittest.mock import patch
 
 import pytest
 
+import coordinator_core.ops.fleet._common as _common_mod
 from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     _REASON_DEST_CONFLICT,
     _SCAN_REASON_CONSUMED_BY_LIVE,
@@ -455,7 +456,24 @@ def test_ac1_plan_sweep_spawns_zero_git_on_in_plane_path(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 
-def test_f3_git_add_and_commit_plumbing_pathspec_scoping(repo: Path):
+def test_f3_git_add_and_commit_plumbing_pathspec_scoping(repo: Path, monkeypatch):
+    """RE-TARGETED 2026-08-26 (C2 `dccf2fc01`, this plan's C7).
+
+    The FORWARD-B property this test pins -- the mover's write path is
+    explicitly SCOPED to only the paths it means to touch, never a
+    repo-wide `-A`/`.` sweep, and never an implicit pathspec-less read of a
+    shared index -- moved with the mechanism, not away from it.
+    `archive_and_commit` no longer spawns `git add` or any commit-plumbing
+    (`write-tree`/`commit-tree`/`update-ref`/`commit`) at all: staging is
+    `git hash-object -w --stdin-paths` (`_hash_object_stdin_paths`, a
+    SYNCHRONOUS wrapper offloaded via `asyncio.to_thread`, invisible to an
+    `asyncio.create_subprocess_exec` spy -- see this plan's sibling
+    `test_head_race_between_read_tree_and_commit.py` for the same
+    technique), fed an EXPLICIT path list over stdin (never argv, never
+    `-A`/`.`), and the commit is built from an in-process `assembled` dict
+    scoped to exactly this batch's acted src/dst paths
+    (`_commit_via_head_spine`), never from reading any index.
+    """
     name = "2026-01-20-pathspec-scoping.md"
     _seed(repo, name, "status: claimed")
     cid = _cid(name)
@@ -468,32 +486,56 @@ def test_f3_git_add_and_commit_plumbing_pathspec_scoping(repo: Path):
         captured_argv.append(list(args))
         return await real_exec(*args, **kwargs)
 
+    real_hash_object = _common_mod._hash_object_stdin_paths
+    hash_object_calls = []
+
+    def _spy_hash_object(paths, **kwargs):
+        hash_object_calls.append(list(paths))
+        return real_hash_object(paths, **kwargs)
+
+    real_spine = _common_mod._commit_via_head_spine
+    spine_calls = []
+
+    def _spy_spine(root, assembled, *args, **kwargs):
+        spine_calls.append(dict(assembled))
+        return real_spine(root, assembled, *args, **kwargs)
+
+    monkeypatch.setattr(_common_mod, "_hash_object_stdin_paths", _spy_hash_object)
+    monkeypatch.setattr(_common_mod, "_commit_via_head_spine", _spy_spine)
+
     with patch("asyncio.create_subprocess_exec", _spy_exec):
         act = _run(_handle_act("already-terminal", repo, common_dir, [cid], cap=10))
 
     acted_ids = [item["id"] for item in act.get("acted", [])]
     assert cid in acted_ids, f"setup sanity: candidate must archive cleanly; got {act!r}"
 
+    # The whole class this test used to police (a wide-open `-A`/`.`
+    # staging call, or a pathspec'd commit-plumbing call reading the shared
+    # index) is now structurally impossible rather than merely avoided:
+    # there is no index-reading spawn left in this path to police.
     add_calls = [argv for argv in captured_argv if len(argv) >= 2 and argv[1] == "add"]
-    assert add_calls, f"expected at least one `git add` spawn; captured {captured_argv!r}"
-    for argv in add_calls:
-        assert "-A" not in argv, f"git add must never use -A; got {argv!r}"
-        assert "." not in argv, f"git add must never use a bare '.'; got {argv!r}"
-        assert "--" in argv, f"git add must scope via an explicit '--' pathspec; got {argv!r}"
-
+    assert not add_calls, f"git add must never be spawned again; captured {add_calls!r}"
     commit_plumbing_calls = [
         argv for argv in captured_argv
         if len(argv) >= 2 and argv[1] in ("write-tree", "commit-tree", "update-ref", "commit")
     ]
-    assert commit_plumbing_calls, (
-        f"expected at least one commit-plumbing spawn; captured {captured_argv!r}"
+    assert not commit_plumbing_calls, (
+        f"commit-plumbing spawns must never return -- landing is fully "
+        f"in-process via _commit_via_head_spine; captured {commit_plumbing_calls!r}"
     )
-    for argv in commit_plumbing_calls:
-        assert "--" not in argv, (
-            f"commit-plumbing spawn must carry no trailing pathspec — the private "
-            f"index IS the scope (FORWARD-B); got {argv!r}"
-        )
-        assert "-A" not in argv and "." not in argv, f"got {argv!r}"
+
+    # The replacement staging call: hash-object, fed an EXPLICIT path list
+    # -- never -A, never a bare '.', never empty.
+    assert hash_object_calls, f"expected at least one hash-object call; captured {captured_argv!r}"
+    for paths in hash_object_calls:
+        assert "-A" not in paths and "." not in paths, f"got {paths!r}"
+        assert paths, "hash-object must be fed an explicit non-empty path list"
+
+    # The replacement commit call: _commit_via_head_spine, scoped to
+    # exactly this batch's acted paths -- never the whole worktree/index.
+    assert spine_calls, "expected at least one _commit_via_head_spine call"
+    for assembled in spine_calls:
+        assert assembled, "assembled tree delta must be non-empty and explicit"
 
 
 # ---------------------------------------------------------------------------

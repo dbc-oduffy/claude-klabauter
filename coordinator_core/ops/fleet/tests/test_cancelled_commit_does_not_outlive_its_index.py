@@ -340,12 +340,80 @@ def _index_cleanup_finallys():
                 )
 
 
-def test_every_index_cleanup_kills_the_commit_before_unlinking():
+#: A synthetic private-index seam carrying the exact hazard shape this file
+#: exists to catch: a pathspec-less `commit-tree` spawn whose `finally:`
+#: unlinks a private index. Used ONLY to prove `_index_cleanup_finallys`'s
+#: detection logic still fires (RE-SITED, 2026-08-26, C7) — see
+#: `test_the_ast_walk_detects_a_synthetic_offender` for why: both fleet
+#: seams retired their live `commit-tree`/`update-ref` spawns in favour of
+#: `_commit_via_head_spine` (C2 `dccf2fc01`, C3 concurrently), which lands
+#: fully in-process with no child to orphan — so the engine can now
+#: legitimately have ZERO real instances of this hazard, and "found none"
+#: stopped being distinguishable from "the walk is broken" on its own.
+_SYNTHETIC_OFFENDER_SOURCE = '''
+import asyncio
+import os
+
+
+def _make_git_env(idx_path=None):
+    return {}
+
+
+def _kill_orphaned_commit(proc, caller):
+    pass
+
+
+async def _synthetic_seam(worktree_root, idx_path):
+    commit_proc = None
+    try:
+        commit_proc = await asyncio.create_subprocess_exec(
+            "git", "commit-tree", "sha",
+        )
+    finally:
+        _kill_orphaned_commit(commit_proc, "synthetic")
+        os.unlink(idx_path)
+'''
+
+
+def test_the_ast_walk_detects_a_synthetic_offender(monkeypatch):
+    """Proves the detection logic itself still fires, independent of whether
+    the real engine currently contains any live instance of the hazard —
+    see the module-level comment on `_SYNTHETIC_OFFENDER_SOURCE`. Without
+    this, an empty `_index_cleanup_finallys()` result is ambiguous between
+    "the hazard is genuinely retired" and "the walk quietly broke", and the
+    two tests below can no longer tell those apart from a bare `assert
+    blocks`/`assert seams == {...}` the way they could when real specimens
+    existed to anchor them."""
+    synthetic_tree = ast.parse(_SYNTHETIC_OFFENDER_SOURCE)
+    monkeypatch.setattr(
+        "coordinator_core.ops.fleet.tests.test_cancelled_commit_does_not_outlive_its_index"
+        "._iter_private_index_sources",
+        lambda: iter([(Path("synthetic.py"), synthetic_tree)]),
+    )
     blocks = list(_index_cleanup_finallys())
     assert blocks, (
-        "found no `finally:` that unlinks a private index — the AST walk is "
-        "broken, not the engine"
+        "the AST walk did not detect a synthetic offender carrying the exact "
+        "hazard shape (pathspec-less commit-tree spawn + finally: unlinking "
+        "an idx-named path) — the detection logic itself is broken"
     )
+    names = {fn_name for _path, fn_name, _kill, _unlink in blocks}
+    assert names == {"_synthetic_seam"}
+    _path, _fn, kill_line, unlink_line = blocks[0]
+    assert kill_line is not None and kill_line < unlink_line, (
+        "the synthetic fixture's own kill-before-unlink ordering was not "
+        "read correctly — fixture or walk logic mismatch"
+    )
+
+
+def test_every_index_cleanup_kills_the_commit_before_unlinking():
+    """`blocks` legitimately empty means the hazard has ZERO live instances
+    right now — both fleet seams retired their private-index commit-tree
+    spawns onto `_commit_via_head_spine`, which lands in process with no
+    child to orphan (see `_SYNTHETIC_OFFENDER_SOURCE`'s comment).
+    `test_the_ast_walk_detects_a_synthetic_offender` is what proves this is
+    not the walk quietly breaking instead — an empty result here no longer
+    fails on its own; a NON-empty result with a bad ordering still must."""
+    blocks = list(_index_cleanup_finallys())
 
     offenders = []
     for path, fn_name, kill_line, unlink_line in blocks:
@@ -376,18 +444,59 @@ def test_every_index_cleanup_kills_the_commit_before_unlinking():
     )
 
 
+#: See `test_pathspec_less_commit_seams_are_guarded.py`'s identically-named
+#: constant — same helper, same reason: a fleet seam that no longer spawns a
+#: pathspec-less `git commit`/`commit-tree` under a private index satisfies
+#: this file's own subject vacuously unless the replacement is checked for
+#: explicitly.
+_COMMIT_LANDING_HELPERS = frozenset({"_commit_via_head_spine"})
+
+
+def _calls_any(fn: ast.AST, names: frozenset) -> bool:
+    return any(
+        (getattr(c.func, "id", "") in names or getattr(c.func, "attr", "") in names)
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call)
+    )
+
+
 def test_both_fleet_seams_are_covered():
-    """Pins the two seams that actually fired, so the walk cannot silently narrow."""
+    """Pins the two seams that actually fired, so the walk cannot silently
+    narrow — RE-SITED 2026-08-26, C7. Each of `archive_and_commit` and
+    `rm_and_commit` satisfies this ONE of two ways, and the two must not be
+    conflated: (1) still detected by `_index_cleanup_finallys` (a live
+    pathspec-less commit-tree spawn with a kill-before-unlink `finally:`);
+    or (2) no such spawn at all, but a call to `_commit_via_head_spine` —
+    the in-process, spawn-free landing path both seams now use (C2
+    `dccf2fc01`, C3 concurrently), which has no child process to orphan and
+    so cannot re-arm this exact race. A seam with NEITHER is a silent loss
+    of coverage, not a narrowed-but-still-correct walk.
+    """
+    fleet = ENGINE_ROOT / "coordinator_core" / "ops" / "fleet" / "_common.py"
+    source = fleet.read_text(encoding="utf-8", errors="replace")
+    fn_by_name = {
+        fn.name: fn
+        for fn in ast.walk(ast.parse(source))
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
     covered = {
         (path.name, fn_name)
         for path, fn_name, kill_line, _unlink in _index_cleanup_finallys()
         if kill_line is not None
     }
     seams = {fn for name, fn in covered if name == "_common.py"}
-    assert seams == {"archive_and_commit", "rm_and_commit"}, (
-        "the two fleet seams that actually committed the empty tree must both "
-        "stay covered; found: " + (", ".join(sorted(seams)) or "none")
-    )
+
+    for name in ("archive_and_commit", "rm_and_commit"):
+        if name in seams:
+            continue
+        assert name in fn_by_name, f"{name} no longer exists in {fleet.name}"
+        assert _calls_any(fn_by_name[name], _COMMIT_LANDING_HELPERS), (
+            f"{name} has neither a kill-before-unlink-guarded private-index "
+            f"commit spawn nor a call to {sorted(_COMMIT_LANDING_HELPERS)} — "
+            f"its commit landing has silently disappeared, or the orphaned-"
+            f"commit-vs-unlink race re-armed without this walk noticing."
+        )
 
 
 # ---------------------------------------------------------------------------

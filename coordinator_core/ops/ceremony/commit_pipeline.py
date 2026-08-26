@@ -210,9 +210,30 @@ _COMPOSITION_SPAN_PRE_PUSH = "commit_pipeline.pre_push"
 _COMPOSITION_SPAN_PUSH = "commit_pipeline.push"
 
 #: `push_mode` values for `run_commit_pipeline()` (wsc-tail-sub-2s-invoke-
-#: budget DEC-1/F1). "sync" (default) is `scoped_git_commit.py`'s wire
-#: contract, untouched -- that caller never passes `push_mode`, so it always
-#: gets "sync" by construction. "deferred"/"none" both skip the in-pipeline
+#: budget DEC-1/F1).
+#:
+#: THE DEFAULT IS "none" AS OF 2026-08-26, and was "sync" before that. The
+#: reason "sync" held the slot has expired: it was `scoped_git_commit.py`'s
+#: wire contract, and that op was killed (K-001, `state/kill-ledger.md`) --
+#: the file is gone and the name is unregistered, so the default was
+#: protecting a caller that no longer exists.
+#:
+#: What it was costing meanwhile: `ceremony.commit` forwards `push_mode` only
+#: when a caller supplies one, so every cross-repo caller that omitted it
+#: inherited "sync" and pushed SYNCHRONOUSLY inside a `ceremony.*` op -- under
+#: `ipc.CEREMONY_BUDGET_SECS` (2.0s), a wall-clock clamp `asyncio.wait_for`
+#: can fire only mid-leg, leaving an `unconfirmed` push that may still land.
+#: Nobody chose that for those callers; they got it by omission.
+#:
+#: Why "none" and NOT "never", which is the tempting reading of "push runs on
+#: a cadence now": "never" ALSO stands the post-commit hook's detached push
+#: down, so nothing would publish the commit at all. "none" skips only the
+#: in-pipeline push and leaves the hook armed, so publication still happens --
+#: detached, off the ceremony's critical path, under no 2s clamp. A caller
+#: that genuinely must not publish still says "never" explicitly, and all five
+#: in-repo callers that mean it already do.
+#:
+#: "deferred"/"none" both skip the in-pipeline
 #: `push_with_retry()` call (the caller becomes responsible for the push, or
 #: for never issuing one); "deferred" additionally signals the caller
 #: (`wsc_tail.py`) to spawn ONE detached background push after its own
@@ -3966,7 +3987,7 @@ def run_commit_pipeline(
     stage_paths: Sequence[str] = (),
     caller_paths: Optional[Set[str]] = None,
     on_committed: Optional[Callable[[str], None]] = None,
-    push_mode: str = PUSH_MODE_SYNC,
+    push_mode: str = PUSH_MODE_NONE,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     deliverable_id: Optional[str] = None,
