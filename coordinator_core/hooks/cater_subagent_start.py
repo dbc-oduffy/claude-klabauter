@@ -123,7 +123,16 @@ full breakdown and the plan-level disposition this needs.
 from __future__ import annotations
 
 import hashlib
-import os
+# NOT `import os`. `test_cater_subagent_start_budget.py :: test_module_source_
+# never_spawns_a_process` flags the bare module import, because `os.system`/
+# `os.popen`/`os.spawn*` are in its `_SPAWN_SIGNATURES` and an import cannot
+# be told apart from them statically. The only use here was `os.replace` for
+# an atomic rename -- no spawn -- but `Path.replace` is the exact equivalent
+# and `Path` is already imported, so the gate stays strict rather than
+# learning an exception. Keep it that way: this module has a 5s SubagentStart
+# budget and a zero-added-spawn contract, and "does not import os at all" is
+# a brighter line to hold than "imports os but promises not to call three of
+# its functions".
 import re
 import secrets
 import sys
@@ -587,7 +596,7 @@ def _write_miss_sentinel(
     marker text entirely, strictly worse than today.
 
     ATOMICITY (anti-scope): write to a `.tmp-<nonce>` sibling and
-    `os.replace` onto the target, never bare `open(path, "x")` then a
+    `Path.replace` onto the target, never bare `open(path, "x")` then a
     separate `write()` -- a hook killed between those two steps would leave
     a zero-byte sentinel with no frontmatter key, which an existence-only
     idempotent-hit check would then reuse forever. An existing file at the
@@ -663,7 +672,7 @@ def _write_miss_sentinel(
         tmp_path = session_dir / f"{leaf}.tmp-{secrets.token_hex(4)}.md"
         with open(tmp_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
-        os.replace(tmp_path, doc_path)
+        tmp_path.replace(doc_path)
 
         # SUBSUME: touch-claim (docs/plans/2026-08-05-in-process-writers-
         # declare-their-writes.md C2), same rationale as `_provision`'s own

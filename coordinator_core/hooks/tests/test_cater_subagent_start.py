@@ -721,17 +721,22 @@ def test_sentinel_write_failure_falls_back_to_miss_marker_not_dropped(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC7: the try/except lives INSIDE `_write_miss_sentinel`, around the
-    write alone -- monkeypatching the underlying `os.replace` (not the
+    write alone -- monkeypatching the underlying atomic rename (not the
     whole function) to raise proves the marker survives a write failure
     rather than being dropped by `compose_catering`'s outer wrap, which
     would zero BOTH `_resolve_sidecar_leg` return values and lose the miss
-    marker entirely (strictly worse than today)."""
-    import coordinator_core.hooks.cater_subagent_start as mod
+    marker entirely (strictly worse than today).
+
+    Patches `pathlib.Path.replace`, not `mod.os.replace`: the module stopped
+    importing `os` (it used it for exactly this rename, and the bare import
+    tripped `test_module_source_never_spawns_a_process`, whose
+    `_SPAWN_SIGNATURES` cannot statically tell `import os` from
+    `os.system`). Same seam, same single call, one layer down."""
 
     def _boom(*a, **k):
-        raise OSError("simulated os.replace failure")
+        raise OSError("simulated atomic-rename failure")
 
-    monkeypatch.setattr(mod.os, "replace", _boom)
+    monkeypatch.setattr(Path, "replace", _boom)
 
     agent_id_raw = "write-fail@session-44444444"
     payload = _payload("write-fail", "session-writefail-1", str(git_repo))
