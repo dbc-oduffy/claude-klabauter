@@ -37,7 +37,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     # Type-checking only. `asyncio` is imported at FUNCTION scope by the two
@@ -1687,7 +1687,8 @@ def _argv_path_chunks(paths: list, budget: int = _ARGV_PATHSPEC_BUDGET) -> list:
 
 
 def _assembled_commit_is_noop(
-    worktree_root: Path, assembled: Dict[str, Union[Tuple[int, str], object]]
+    spine: Mapping[str, Mapping[str, Tuple[int, str]]],
+    assembled: Mapping[str, Union[Tuple[int, str], object]],
 ) -> bool:
     """True iff every entry in `assembled` already matches HEAD's tree --
     the RE-SITED form, for `archive_and_commit`'s assembled-dict commit path,
@@ -1714,15 +1715,24 @@ def _assembled_commit_is_noop(
     original guard applied to its own failure mode: never land a no-op
     archival commit silently.
 
-    Spawn-free: `read_tree_spine` reads loose/packed tree objects in
-    process, never spawns git. Returns False (a real change is present, or
-    HEAD's spine could not be read at all -- not this function's job to
-    refuse that; `_commit_via_head_spine`'s own precondition check does)
-    whenever any entry differs from what `read_tree_spine` reports for it.
+    TAKES THE SPINE, DOES NOT READ ONE (2026-08-27). This function used to
+    call `read_tree_spine(worktree_root, assembled.keys())` itself, which
+    made it the SECOND full walk of HEAD's tree inside a single
+    `archive_and_commit` -- its caller had already walked the same tree for
+    the src paths a few lines earlier. The two walks were cheap in a warm
+    process (`git_objects`' pack caches serve the second one from memory)
+    and that is not a reason to make them: caching a redundant call is not
+    the same as not making it. The caller now walks once over src UNION dst
+    and passes the result here, so the second walk and this function's own
+    `worktree_root` parameter are both gone.
+
+    `spine` is what `read_tree_spine` returned for a path set covering every
+    key in `assembled` -- a SUPERSET is fine (lookups are by key), a subset
+    is a caller bug that reads as "entry absent from HEAD". A `None` spine
+    is the caller's to refuse before calling: `archive_and_commit` already
+    branches on `head_spine is None` into `spine_error` and never reaches
+    this guard.
     """
-    spine = read_tree_spine(worktree_root, list(assembled.keys()))
-    if spine is None:
-        return False
     for path, val in assembled.items():
         parent, _, leaf = path.rpartition("/")
         existing = spine.get(parent, {}).get(leaf)
@@ -2063,7 +2073,21 @@ async def archive_and_commit(
         # recorded for src, and `head_entry[1]` (probed identical to
         # `git hash-object`'s own answer, 20/20 paths) needs no spawn to
         # confirm.
-        head_spine = read_tree_spine(worktree_root, list(src_rel_by_id.values()))
+        # ONE walk of HEAD's tree for this whole call, over src UNION dst.
+        # src supplies each move's (mode, sha); dst is walked here only so
+        # `_assembled_commit_is_noop` below can be handed this same spine
+        # instead of walking the tree a second time for the assembled keys
+        # (= src union dst). Widening the path set is strictly cheaper than a
+        # second walk: `read_tree_spine` descends only the directory
+        # components its paths need, and the dst dirs are a handful of
+        # archive/ parents. Extra keys are inert -- both consumers look up by
+        # key. (2026-08-27: the second walk was cheap warm, because
+        # git_objects' pack caches served it from memory. That is not a
+        # reason to make it.)
+        head_spine = read_tree_spine(
+            worktree_root,
+            list(src_rel_by_id.values()) + list(dst_rel_by_id.values()),
+        )
 
         # `restage_src=True` moves are the ONLY ones needing a fresh hash:
         # their content was authored fresh on disk immediately before this
@@ -2187,7 +2211,13 @@ async def archive_and_commit(
         # a no-op archival commit. `_empty_private_index_breach` itself is
         # UNCHANGED and still guards `rm_and_commit`'s own private-index seam
         # below; this is a second, independent guard for this function only.
-        if spine_error is None and _assembled_commit_is_noop(worktree_root, assembled):
+        # `head_spine is not None` is implied by `spine_error is None` (the
+        # only way spine_error gets set first is an unreadable spine), but it
+        # is stated rather than inferred: the guard now takes the spine as a
+        # value, so its non-None-ness is this call site's stated precondition.
+        if spine_error is None and head_spine is not None and _assembled_commit_is_noop(
+            head_spine, assembled
+        ):
             spine_error = (
                 "empty-spine-commit: computed tree equals HEAD's tree -- "
                 "nothing to commit; refused (re-sited form of "

@@ -1155,3 +1155,151 @@ def test_ac12_prefilter_never_disqualifies_a_full_parse_admit():
         f"pre-filter disqualified a record the full parse would have "
         f"admitted (under-archive risk): {failures!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC-4 (happy limb) and AC-6 -- the two criteria C2 shipped with only half
+# their evidence. AC-4's stall/timeout limb lives beside the in-plane fold-in
+# suite (`test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout`);
+# what was never asserted is that a NORMAL dispatch of the now-sync handler
+# still returns `exit_code: 0` and never `-32006`. AC-6's negative half
+# (`test_ac4_scan_reasons_never_reach_the_cockpit_wire`) pinned that no NEW
+# reason leaks to the wire; the envelope's own key set -- the thing the
+# producer contract freezes -- had nothing holding it.
+# ---------------------------------------------------------------------------
+
+
+_OP_METHOD = "fleet.archive_completed_handoffs"
+
+#: The FROZEN envelope, per
+#: `coordinator_core/contract/cockpit-invoke-producer-contract.md` section 2.1
+#: ("All three slice-1 ops share one params/result shape") and
+#: `_common.build_dry_run_result` / `build_act_result`. BOTH arms carry the
+#: same seven keys -- the act arm returns `candidates: []` rather than
+#: dropping the key, which is what makes the shape shared rather than
+#: per-arm. `deferred` is additive and appears only when the cap actually
+#: bounds the candidate list.
+_ENVELOPE_KEYS = {
+    "exit_code", "mode", "dry_run", "candidates", "acted", "skipped", "failed",
+}
+
+
+def test_ac4_a_normal_dispatch_of_the_sync_handler_returns_exit_code_zero(repo: Path):
+    """AC-4's happy limb: `fleet.archive_completed_handoffs` returns
+    `exit_code: 0` with no `-32006` through a REAL dispatch.
+
+    The sibling test proves the per-op timeout now fires via `ipc.py`'s own
+    sync branch -- but it only ever exercises the stalled arm, where the
+    dispatch returns an error by construction. An op that went sync and then
+    stopped resolving, or that got suspended out from under the plan, would
+    pass that test and fail every caller. `-32006` is `ipc.OP_SUSPENDED_ERROR`
+    and is named explicitly because the sweep op has been suspended before
+    (`d2738e6d9` un-suspended it) and a killed op's name lives on in
+    string-keyed registries.
+    """
+    import coordinator_core.ipc as _ipc
+
+    _seed(repo, "2026-06-01-dispatchable.md", "status: claimed")
+
+    msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": _OP_METHOD,
+        "_origin_worktree": str(repo),
+        "params": {"mode": "already-terminal", "dry_run": True, "cap": 10},
+    }
+    reply = asyncio.run(_ipc.dispatch_message(msg))
+
+    assert "error" not in reply, (
+        f"a normal dispatch of the sync handler must not error; got {reply!r}"
+    )
+    result = reply.get("result")
+    assert isinstance(result, dict), f"expected a result envelope; got {reply!r}"
+    assert result.get("exit_code") == 0, (
+        f"a normal dry_run dispatch must return exit_code:0; got {result!r}"
+    )
+    assert _cid("2026-06-01-dispatchable.md") in [
+        c["id"] for c in result.get("candidates", [])
+    ], f"the seeded terminal record must surface as a candidate; got {result!r}"
+
+
+def test_ac4_the_op_is_not_suspended_so_dispatch_never_yields_32006():
+    """The `-32006` half of AC-4, asserted at the registry rather than
+    inferred from one dispatch that happened not to hit it."""
+    import coordinator_core.ipc as _ipc
+
+    reply = asyncio.run(_ipc.dispatch_message({
+        "jsonrpc": "2.0", "id": 1, "method": _OP_METHOD, "params": {},
+    }))
+    error = reply.get("error") or {}
+    assert error.get("code") != _ipc.OP_SUSPENDED_ERROR, (
+        f"{_OP_METHOD} must not be suspended -- AC-4 pins it dispatchable; "
+        f"got {reply!r}"
+    )
+
+
+def test_ac6_the_cockpit_wire_envelope_key_set_is_unchanged(repo: Path):
+    """AC-6: the wire envelope is byte-identical against the producer
+    contract, `cap` param included -- the predecessor's freeze still binds and
+    C2's de-async does not renegotiate it.
+
+    Asserted as an EXACT key-set equality in both directions: a dropped key
+    breaks every consumer reading it, and an added key is a bilateral,
+    memo-gated change this plan had no authority to make (see
+    `_common.build_act_result`'s own WIRE-SAFETY block, which strips exactly
+    such an additive annotation before it reaches the wire).
+    """
+    _seed(repo, "2026-06-02-envelope.md", "status: claimed")
+    common_dir = _common_dir(repo)
+
+    preview = _run(_handler(
+        {"mode": "already-terminal", "dry_run": True, "cap": 10},
+        repo_root=common_dir,
+    ))
+    assert set(preview) == _ENVELOPE_KEYS, (
+        f"dry_run:true envelope drifted from the producer contract; "
+        f"missing={_ENVELOPE_KEYS - set(preview)!r} "
+        f"added={set(preview) - _ENVELOPE_KEYS!r}"
+    )
+    assert preview["dry_run"] is True and preview["exit_code"] == 0
+
+    act = _run(_handler(
+        {
+            "mode": "already-terminal", "dry_run": False, "cap": 10,
+            "candidate_ids": [_cid("2026-06-02-envelope.md")],
+        },
+        repo_root=common_dir,
+    ))
+    assert set(act) == _ENVELOPE_KEYS, (
+        f"dry_run:false envelope drifted from the producer contract; "
+        f"missing={_ENVELOPE_KEYS - set(act)!r} "
+        f"added={set(act) - _ENVELOPE_KEYS!r}"
+    )
+    assert act["candidates"] == [], (
+        "the act arm carries `candidates` as an EMPTY LIST, never a dropped "
+        f"key -- that is what makes the shape shared; got {act['candidates']!r}"
+    )
+    for item in act.get("acted", []):
+        assert set(item) == {"id", "archived"}, (
+            f"contract section 2.1 pins acted[] as exactly {{id, archived}}; "
+            f"got {item!r}"
+        )
+
+
+def test_ac6_cap_is_still_a_required_param_on_both_arms(repo: Path):
+    """AC-6's `cap`-included half: the BREAKING 2026-08-25 param is still
+    required on `dry_run:true` and `dry_run:false` alike. The act arm had a
+    covering test (`test_ac2_absent_cap_is_a_setup_error_never_unbounded`);
+    the preview arm did not, and an unbounded preview is the cheaper of the
+    two mistakes to ship unnoticed.
+    """
+    common_dir = _common_dir(repo)
+    for dry_run in (True, False):
+        result = _run(_handler(
+            {"mode": "already-terminal", "dry_run": dry_run},
+            repo_root=common_dir,
+        ))
+        assert result.get("exit_code") == 1, (
+            f"an absent cap must be a setup error on the dry_run={dry_run} "
+            f"arm too, never an unbounded sweep; got {result!r}"
+        )

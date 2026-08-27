@@ -69,6 +69,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.ops.ceremony.git_native import _ABSENT
 from coordinator_core.ops.fleet import _common as _common_mod
 from coordinator_core.ops.fleet._common import (
@@ -207,21 +208,30 @@ def test_assembled_commit_is_noop_true_when_assembled_matches_head(
     mode = int(head_mode_sha[0], 8)
     sha = head_mode_sha[2]
 
+    # The guard TAKES a spine rather than reading one (2026-08-27) -- its
+    # caller walks HEAD once for src union dst and hands the result down, so
+    # a single walk here covers every path the four cases below assert on.
+    # Built with the real `read_tree_spine` rather than a hand-shaped dict:
+    # the guard's contract is "whatever read_tree_spine returns", and a fixture
+    # that cannot express the real shape is not coverage of it.
+    spine = read_tree_spine(root, ["tracked.txt", "never-tracked.txt"])
+    assert spine is not None
+
     # Byte-identical to what HEAD already records -- no real change.
     noop_assembled = {"tracked.txt": (mode, sha)}
-    assert _assembled_commit_is_noop(root, noop_assembled) is True
+    assert _assembled_commit_is_noop(spine, noop_assembled) is True
 
     # A genuinely different sha for the same path IS a real change.
     real_change_assembled = {"tracked.txt": (mode, "0" * 40)}
-    assert _assembled_commit_is_noop(root, real_change_assembled) is False
+    assert _assembled_commit_is_noop(spine, real_change_assembled) is False
 
     # A deletion of a path that does not exist in HEAD is also a no-op.
     absent_noop = {"never-tracked.txt": _ABSENT}
-    assert _assembled_commit_is_noop(root, absent_noop) is True
+    assert _assembled_commit_is_noop(spine, absent_noop) is True
 
     # A deletion of a path HEAD DOES track is a real change.
     real_deletion = {"tracked.txt": _ABSENT}
-    assert _assembled_commit_is_noop(root, real_deletion) is False
+    assert _assembled_commit_is_noop(spine, real_deletion) is False
 
 
 def _patch_counting_hash_object(monkeypatch):

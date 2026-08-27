@@ -99,6 +99,13 @@ class PathResolutionReport:
     checks: "list[EntrypointCheck]" = field(default_factory=list)
     platform_caveat: "str | None" = None
     transport_error: "str | None" = None
+    #: Bare-name shadows found beside a resolved entrypoint (Windows only; see
+    #: `_detect_bare_name_shadows`). Deliberately NOT folded into `all_ok`: a
+    #: shadowed door still resolves and still executes, so every check passes.
+    #: What it costs is the door's whole reason to exist -- an interpreter start
+    #: on the hot path -- which is a performance defect to report, not a
+    #: resolution failure to fail the probe on.
+    shadow_warnings: "list[str]" = field(default_factory=list)
 
     @property
     def all_ok(self) -> bool:
@@ -209,6 +216,57 @@ def _check_posix(names: "tuple[str, ...]") -> PathResolutionReport:
     )
 
 
+def _detect_bare_name_shadows(resolved: "list[str]") -> "list[str]":
+    """Reports any `install_bin_forwarders`-written sibling sitting beside an
+    INSTALLED door that would win bare-name resolution over it.
+
+    The strip that prevents this (`door_install.claim_bare_name`) runs once, at
+    install time, on the path that lands the door. Nothing re-checks a box
+    afterwards, so a hand-edit or a partial re-install can reintroduce the
+    sibling with no error and no exit code -- only a silent fall back to the
+    cold path (measured 579ms vs 165ms). This is the surface that makes that
+    state self-reporting; it does not repair it, deliberately. Repair has to be
+    conditioned on whether a door is SUPPOSED to be there, which this probe
+    cannot know and the installer already does.
+
+    Windows-only by construction: PATHEXT-style bare-name resolution of a `.ps1`
+    is a Windows behaviour, and on POSIX the door is the extensionless
+    `coordinator-invoke` with no suffixed sibling able to outrank it.
+
+    Reuses `door_install`'s own constants rather than restating the suffix list
+    -- a second copy is how the two drift. Imported lazily: `door_install` pulls
+    `coordinator_core.warm.door.build`, which this probe has no other reason to
+    load. Non-raising, matching every other leg here: a detector that cannot run
+    reports nothing rather than failing the probe it is advising on.
+    """
+    try:
+        from coordinator_core.install import door_install
+    except Exception:  # noqa: BLE001 -- advisory leg, never crashes the probe
+        return []
+
+    warnings: "list[str]" = []
+    seen: "set[Path]" = set()
+    for where in resolved:
+        bin_dir = Path(where).parent
+        if bin_dir in seen:
+            continue
+        seen.add(bin_dir)
+        door = bin_dir / door_install.DOOR_INSTALLED_NAME
+        if not door.exists():
+            continue
+        for suffix in door_install._SHADOWING_SIBLING_SUFFIXES:
+            shadow = bin_dir / (door_install.BARE_FORWARDER_NAME + suffix)
+            if shadow.exists():
+                warnings.append(
+                    f"{shadow} shadows the installed door at {door}: PowerShell ranks a "
+                    f"same-directory {suffix} above .exe, so every bare-name "
+                    f"`{door_install.BARE_FORWARDER_NAME}` call from PowerShell pays an "
+                    f"interpreter start instead of the door's native relay. Re-run the "
+                    f"installer, or remove the sibling, to restore the door."
+                )
+    return warnings
+
+
 def _check_windows(names: "tuple[str, ...]") -> PathResolutionReport:
     checks: "list[EntrypointCheck]" = []
     for name in names:
@@ -243,6 +301,7 @@ def _check_windows(names: "tuple[str, ...]") -> PathResolutionReport:
     return PathResolutionReport(
         platform="Windows", method="shutil.which() against the inherited PATH, then direct exec",
         checks=checks, platform_caveat=_windows_caveat(),
+        shadow_warnings=_detect_bare_name_shadows([c.resolved_path for c in checks if c.resolved_path]),
     )
 
 
@@ -280,6 +339,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if report.transport_error:
         print(f"[path-resolution-probe] TRANSPORT ERROR: {report.transport_error}", file=sys.stderr)
         return 1
+    for warning in report.shadow_warnings:
+        print(f"[path-resolution-probe] WARN shadowed-door: {warning}", file=sys.stderr)
     ok = True
     for check in report.checks:
         status = "PASS" if (check.resolved_path and check.executed_ok) else "FAIL"

@@ -125,6 +125,7 @@ capability.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -139,6 +140,9 @@ __all__ = [
     "install_door",
     "is_door_installed",
     "rebuild_and_verify_prebuilt",
+    "named_forwarder_path",
+    "install_named_forwarder",
+    "remove_shadowing_ps1_sibling",
 ]
 
 #: Installed name is platform-resolved, not a single `.exe`-spelled
@@ -348,6 +352,106 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     door_build.write_sidecar(dest_exe, engine_root)
 
     return dest_exe
+
+
+def named_forwarder_path(bin_dst: Path, name: str) -> Path:
+    """The install path a per-name native door forwarder image (C5,
+    docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md)
+    lands at: `name` plus the platform-appropriate suffix -- `.exe` on
+    Windows (PATHEXT ranks `.EXE` ahead of `.CMD`, so this wins bare-name
+    resolution over any pre-existing `.cmd` forwarder for the same name
+    without that forwarder needing to be touched at all -- it becomes
+    unreachable dead weight, not a live shadow, exactly as
+    `_remove_shadowing_forwarder_siblings`'s own docstring already argues
+    for `DOOR_INSTALLED_NAME` itself), no suffix on POSIX (there is no
+    PATHEXT-style ranking there -- the bare name IS the file name, and on
+    POSIX this path is the SAME path the Python agent-helper forwarder for
+    `name` already occupies, so installing here intentionally overwrites
+    it rather than colliding with it). Mirrors `DOOR_INSTALLED_NAME`'s own
+    platform branch exactly, generalized from a single literal to an
+    arbitrary `name`."""
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return Path(bin_dst) / f"{name}{suffix}"
+
+
+def install_named_forwarder(
+    bin_dst: Path, engine_root: Path, name: str, *, check_only: bool = False
+) -> Path:
+    """Installs a per-name native door forwarder image at
+    `named_forwarder_path(bin_dst, name)` -- additive to `install_door()`'s
+    single-name `DOOR_INSTALLED_NAME` surface, never replacing it (C5).
+
+    HARDLINKS OR COPIES (spike verdict 2026-08-27, f4e754bad): 393
+    hardlinks measured at 179ms process time and ~0 real disk (extents
+    shared) against 344ms/65.6MiB real for 393 copies, on a 171.0 KiB
+    image. Hardlinks are SAME-VOLUME ONLY (`WinError 17` confirmed linking
+    `X:` to `C:`), so this function first ensures the door is installed at
+    `bin_dst / DOOR_INSTALLED_NAME` via `install_door()` (idempotent -- a
+    call where it is already present and current just re-copies the same
+    171.0 KiB, never a correctness issue) and links the named forwarder to
+    THAT sibling, never straight out of the repo -- the install chain
+    already copies the door into `bin_dst`, so the same-volume constraint
+    is satisfied by construction. Falls back to `shutil.copy2` if the link
+    itself fails for any reason (e.g. a filesystem without hardlink
+    support) -- correctness over the perf win.
+
+    `check_only=True` verifies presence only, mirroring `install_door`'s
+    own `check_only` convention -- never re-derives content equality, and
+    never calls `install_door` (no mutation permitted in check-only mode).
+    """
+    dest = named_forwarder_path(bin_dst, name)
+
+    if check_only:
+        if dest.exists():
+            return dest
+        raise DoorInstallError(
+            f"door_install: named forwarder check failed -- {dest} missing (would install)"
+        )
+
+    source = install_door(bin_dst, engine_root, check_only=False)
+
+    if dest.exists() or dest.is_symlink():
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+
+    try:
+        os.link(source, dest)
+    except OSError:
+        shutil.copy2(source, dest)
+
+    return dest
+
+
+def remove_shadowing_ps1_sibling(bin_dst: Path, name: str) -> Optional[Path]:
+    """Removes `name + ".ps1"` at `bin_dst` if present -- the per-name
+    counterpart to `_remove_shadowing_forwarder_siblings` for an arbitrary
+    native-forwarder `name` rather than only `BARE_FORWARDER_NAME`. Same
+    reasoning as that function's own docstring: PowerShell ranks a
+    same-directory `.ps1` ABOVE a same-directory `.exe`, so a leftover
+    `.ps1` for a cut-over name would silently shadow its native forwarder
+    on PowerShell alone. `.cmd` needs no matching removal -- PATHEXT ranks
+    `.EXE` ahead of `.CMD`, so a `.cmd` sibling is unreachable dead weight,
+    not a live shadow, once the native image exists (mirrors
+    `_remove_shadowing_forwarder_siblings`'s own `.cmd` paragraph).
+
+    Non-raising, idempotent, best-effort: returns the removed path, or
+    `None` if there was nothing to remove or the removal failed -- matches
+    `_remove_shadowing_forwarder_siblings`'s own posture (a failure to
+    clear a shadow must not un-succeed the forwarder install it follows).
+    """
+    candidate = Path(bin_dst) / f"{name}.ps1"
+    try:
+        if candidate.exists():
+            candidate.unlink()
+            return candidate
+    except OSError as exc:
+        print(
+            f"[door-install] could not remove shadowing sibling {candidate}: {exc}",
+            file=sys.stderr,
+        )
+    return None
 
 
 def main(argv: Optional[list] = None) -> int:

@@ -5,13 +5,26 @@ chunk C1. Every fixture here is a synthetic session/agent dir tree built
 under ``tmp_path`` — no process is spawned, and the real
 ``.git/coordinator-sessions/`` is never touched (every call passes
 ``sessions_dir=str(tmp_path)`` explicitly).
+
+The two exceptions are C8's ``TestAC18RebuildAtCorpusCWidth`` (docs/plans/
+2026-08-25-the-touched-files-record-gets-a-designed-shape.md), which spawn
+real ``sys.executable`` driver processes through
+``benchmarks.process_time.batched_process_time_ms`` to get a real
+process-time/spawn-count figure for ``rebuild()`` at Corpus C width — each
+is marked ``spawns_process`` and ``cadence`` per this repo's spawn ratchet
+(``coordinator_core/tests/test_no_new_spawning_tests.py``).
 """
 
 import os
+import sys
+import textwrap
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.session import claim_index, touch_record
 
 
@@ -919,3 +932,250 @@ def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
 # chunk's own report for the AC21-deletion writeup; no replacement pin is
 # owed, mirroring C5's removal of the peer-release tests in
 # test_scope.py (scope.py module docstring, `release_committed_claims`).
+
+
+# ---------------------------------------------------------------------------
+# C8 / AC18 — the process-time re-key is pinned, and the abort residual is
+# re-measured at Corpus C width post-cutover.
+# docs/plans/2026-08-25-the-touched-files-record-gets-a-designed-shape.md
+# ---------------------------------------------------------------------------
+
+
+def test_ac18_rebuild_cap_is_immune_to_time_monotonic(tmp_path, monkeypatch):
+    """AC18's second half, pin (not redo): confirm
+    ``REBUILD_WALL_CLOCK_CAP_SECS`` is read against ``time.process_time()``,
+    never ``time.monotonic()``. Freezes ``time.monotonic`` at a value that
+    would trip an old-style wall-clock deadline instantly (module-wide, for
+    the whole rebuild) while leaving the real ``time.process_time()`` free
+    to advance normally -- a rebuild that still completes proves nothing in
+    this module reads the frozen clock at all, closing the exact gap the
+    module docstring names (a wall-clock cap "measures PEER LOAD, not this
+    index's cost" at 50-70 concurrent sessions)."""
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+    _session_touched(base, "sess-b", [_touch_line("T", "bar.py")])
+
+    monkeypatch.setattr(claim_index.time, "monotonic", lambda: 1e12)
+
+    state = claim_index.rebuild(sessions_dir=base)
+
+    assert state.complete is True
+    assert state.abort_cause is None
+    assert state.claims == {"foo.py": ["sess-a"], "bar.py": ["sess-b"]}
+
+
+def test_ac18_lookup_cap_withheld_returns_unanswerable_never_empty(tmp_path, monkeypatch):
+    """AC18's second half, other direction: a cap that withholds returns
+    C3's typed ``UNANSWERABLE`` signal, never a silent empty set. Already
+    exercised via ``REBUILD_WALL_CLOCK_CAP_SECS=-1.0`` above
+    (``test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed``); this
+    is the same property driven through the process-time construction
+    instead, so the pin does not depend on the wall-clock-shaped patch
+    surviving a future edit to that constant's own semantics."""
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+    _session_touched(base, "sess-b", [_touch_line("T", "bar.py")])
+
+    ticks = iter([0.0, 0.0, 10_000.0] + [10_000.0] * 64)
+    monkeypatch.setattr(claim_index.time, "process_time", lambda: next(ticks))
+
+    result = claim_index.lookup(["foo.py", "bar.py"], sessions_dir=base)
+
+    assert result.complete is False
+    assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+    # sess-a sorts first and is consumed before the deadline trips; sess-b
+    # is never reached -- its resolved-known claim (`foo.py`) is NOT
+    # downgraded to UNANSWERABLE by the abort (a peer claim the walk DID
+    # reach is a fact the abort does not undo), while the path the walk
+    # never reached comes back UNANSWERABLE, never a silent `[]`.
+    assert result["foo.py"] == ["sess-a"]
+    assert result["bar.py"] == [claim_index.UNANSWERABLE]
+
+
+def _write_corpus_c_peer(base: Path, peer_index: int, lines_per_peer: int) -> None:
+    """One Corpus C peer (docs/research/spike-verdicts/2026-08-25-what-the-
+    peer-scan-actually-costs.md): `lines_per_peer` T/R events on ONE sink,
+    written directly as raw encoded bytes (bypassing rotation) so this
+    fixture reproduces the SAME single-file-per-peer shape the spike's own
+    541.48ms figure was measured against -- an apples-to-apples corpus
+    width, not a rotation-mitigated rebuild of it. Verb churns 80% T / 20%
+    R over 1000 distinct paths, matching the spike's own "T/R lines"
+    description of one long-running, heavily-churning session."""
+    sid = f"corpus-c-peer-{peer_index:03d}"
+    sink = base / sid / "touch-record.jsonl"
+    sink.parent.mkdir(parents=True, exist_ok=True)
+    ts = 1_700_000_000.0
+    lines = []
+    for i in range(lines_per_peer):
+        verb = touch_record.VERB_RELEASE if i % 5 == 0 else touch_record.VERB_TOUCH
+        lines.append(
+            touch_record.encode_line(
+                session_id=sid,
+                agent_id=None,
+                verb=verb,
+                path=f"file_{i % 1000}.py",
+                timestamp=ts + i * 0.01,
+            )
+        )
+    sink.write_bytes(b"".join(lines))
+
+
+def _write_rebuild_driver(
+    driver_path: Path, sessions_dir: Path, cap_secs: Optional[float] = None
+) -> None:
+    """Driver that times one `rebuild()` over `sessions_dir`.
+
+    `cap_secs` lifts `REBUILD_WALL_CLOCK_CAP_SECS` out of the way so the
+    WORK can be priced.
+
+    WHY THAT IS NOT CHEATING, AND WHY THE DEFAULT WOULD BE. `rebuild()`
+    self-aborts the moment its own cap is exceeded and returns
+    `complete=False, abort_cause='cap_exceeded'`. Timing the capped call
+    therefore measures the CAP, not the walk: at Corpus C it returns
+    ~500ms whatever the corpus costs, because ~500ms is when it gives up
+    (measured: 531ms capped, having reached 16 of 50 peers, vs 766ms for
+    the complete walk). A number pinned to its own governor cannot answer
+    "is this site under the bar" -- it can only ever say "the cap works".
+    That is how a 541.48ms figure survived this whole workstream looking
+    like a near-miss when the real cost is half again the brightline.
+    """
+    cap_line = (
+        f"claim_index.REBUILD_WALL_CLOCK_CAP_SECS = {cap_secs!r}\n"
+        if cap_secs is not None
+        else ""
+    )
+    script = textwrap.dedent(
+        f"""\
+        import sys
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[3])!r})
+        from coordinator_core.session import claim_index
+        """
+    ) + cap_line + textwrap.dedent(
+        f"""\
+        state = claim_index.rebuild(sessions_dir={str(sessions_dir)!r})
+        print(state.complete, len(state.claims), state.abort_cause)
+        """
+    )
+    driver_path.write_text(script, encoding="utf-8")
+
+
+def _write_rebuild_floor_driver(driver_path: Path) -> None:
+    """The AC18 driver with `rebuild()` removed and nothing else changed.
+
+    NEGATIVE SPEC -- this must stay byte-identical to `_write_rebuild_driver`
+    above its `rebuild()` call, imports included. Its whole job is to price
+    the interpreter start and the `claim_index` import graph so they can be
+    subtracted out; a floor that imports less than the real driver
+    under-states the floor and over-states `rebuild()`, which is the same
+    apples-to-oranges error in the opposite direction.
+    """
+    script = textwrap.dedent(
+        f"""\
+        import sys
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[3])!r})
+        from coordinator_core.session import claim_index
+        """
+    )
+    driver_path.write_text(script, encoding="utf-8")
+
+
+_CORPUS_C_PEER_COUNT = 50
+_CORPUS_C_LINES_PER_PEER = 5000
+_CORPUS_C_PRIOR_MS = 541.48
+_BRIGHTLINE_MS = 500.0
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.designed_red
+def test_ac18_rebuild_at_corpus_c_width_process_time_and_spawn_count(tmp_path):
+    """AC18's live re-measurement: `claim_index.rebuild()` at the SAME
+    Corpus C width (50 peers x 5000 lines/peer) C0's spike measured at
+    541.48ms -- the one site that spike found over the 500ms brightline --
+    re-run post-cutover (AC17's write-time rotation bound, AC16's reorder)
+    as process time and spawn count via `batched_process_time_ms`, never
+    wall clock.
+
+    RED BY DESIGN, not narrowed to force a pass.
+
+    THE PRIOR 541.48ms FIGURE WAS NOT THE COST OF A COMPLETE WALK, and
+    neither was the first cut of this test. Both timed the CAPPED call, and
+    `rebuild()` gives up the instant its own `REBUILD_WALL_CLOCK_CAP_SECS`
+    is exceeded, returning `complete=False, abort_cause='cap_exceeded'`.
+    Verified directly on this corpus: the same driver prints
+    `False 800 cap_exceeded` capped and `True 800 None` with the cap
+    lifted. A capped timing cannot exceed its own cap by much by
+    construction, so it prices the governor and puts a floor under nothing
+    -- which is why the figure drifted 541 -> 537 -> 509 -> 531 across runs
+    while carrying no information.
+
+    Measured here with the cap lifted, so this is the COMPLETE walk:
+    ~537ms process time floor-subtracted, `complete=True`, 37.5ms over the
+    500ms brightline. Spawn count is 1.0 -- pure in-process CPU, not a
+    spawn problem, so no batching or spawn-cutting fix reaches it. A
+    cProfile run at this width puts roughly 72% of the time in
+    `touch_record.decode_line` and about half of THAT in `json.loads`, at a
+    few microseconds per event: the per-event cost is already near
+    CPython's floor for this shape.
+
+    That reframes what the amendment must do. AC17's rotation bound caps a
+    SINGLE generation's bytes without reducing the TOTAL a multi-generation
+    family sums to, and `rebuild()` reads every claimant's whole family
+    unconditionally (module docstring, AC17 note); AC16's liveness reorder
+    does not reach `rebuild()` either. Neither delivered measurable relief
+    here -- the complete-walk cost is a near-floor per-event constant times
+    a corpus size nothing bounds. The fix is therefore to READ LESS, not to
+    parse faster, and it belongs in C2 as an amendment, not absorbed here
+    (C8's own dispatch brief). Do not narrow the corpus, and do not re-cap
+    this driver, to make this green."""
+    base = tmp_path / "corpus-c"
+    for peer_index in range(_CORPUS_C_PEER_COUNT):
+        _write_corpus_c_peer(base, peer_index, _CORPUS_C_LINES_PER_PEER)
+
+    # Cap lifted: price the WALK, not the governor. See
+    # `_write_rebuild_driver`'s docstring for why the capped call cannot
+    # answer this AC's question.
+    driver = tmp_path / "rebuild_driver.py"
+    _write_rebuild_driver(driver, base, cap_secs=600.0)
+
+    # The startup floor is measured, never assumed. `batched_process_time_ms`
+    # times a SPAWNED process, so the full driver's figure carries this
+    # interpreter start plus the `claim_index` import graph on top of
+    # `rebuild()`'s own cost. C0's 541.48ms is a `rebuild()`-only figure, so
+    # comparing the startup-inclusive total against it is apples-to-oranges
+    # and manufactures a regression that is not there. Subtract, then
+    # compare like for like -- and gate on the subtracted number, because
+    # the interpreter floor is not this index's cost to answer for.
+    floor_driver = tmp_path / "rebuild_floor_driver.py"
+    _write_rebuild_floor_driver(floor_driver)
+
+    floor = batched_process_time_ms([sys.executable, str(floor_driver)], k=5)
+    result = batched_process_time_ms([sys.executable, str(driver)], k=5)
+
+    assert floor["rc"] == 0, f"floor driver failed: {floor!r}"
+    assert result["rc"] == 0, f"rebuild driver failed: {result!r}"
+
+    rebuild_only_ms = round(result["process_time_ms"] - floor["process_time_ms"], 3)
+    delta_vs_prior = round(rebuild_only_ms - _CORPUS_C_PRIOR_MS, 3)
+    delta_vs_bar = round(rebuild_only_ms - _BRIGHTLINE_MS, 3)
+    verdict = "PASSES" if rebuild_only_ms <= _BRIGHTLINE_MS else "FAILS"
+    detail = (
+        f"AC18 Corpus C rebuild() re-measurement: rebuild_only="
+        f"{rebuild_only_ms}ms (total {result['process_time_ms']}ms minus "
+        f"{floor['process_time_ms']}ms interpreter+import floor) "
+        f"procs_per_call={result['procs_per_call']} (k={result['k']}) vs "
+        f"C0's prior {_CORPUS_C_PRIOR_MS}ms (delta {delta_vs_prior}ms) and "
+        f"the {_BRIGHTLINE_MS}ms brightline (delta {delta_vs_bar}ms) -- "
+        f"AC18 {verdict}."
+    )
+    print(detail)
+    assert result["procs_per_call"] == pytest.approx(1.0, abs=0.01), (
+        f"a pure-Python rebuild driver must spawn no subprocess of its "
+        f"own. {detail}"
+    )
+    # `designed_red`: this is the real AC18 gate, expected to fail on this
+    # measurement -- see this test's own docstring for why, and for why
+    # that is C2's amendment to make, not this chunk's to force green.
+    assert rebuild_only_ms <= _BRIGHTLINE_MS, (
+        f"AC18 UNMET: {detail}"
+    )

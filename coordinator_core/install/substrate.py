@@ -1126,6 +1126,60 @@ def _write_native_forwarder_manifest(dst_dir: Path, names: "set[str]") -> None:
             except OSError:
                 pass
 
+
+# DOOR-ELIGIBLE BUCKET CUTOVER (C5, docs/plans/2026-08-26-every-forwarder-
+# that-can-reach-the-door-does.md). `warm_entrypoint_allowlist.json` is the
+# committed artifact C2's census populates from its `door-eligible` bucket
+# (both the op-equivalent and warm-loadable axes pass) -- this module reads
+# it back as installed-forwarder NAMES, never re-derives eligibility itself.
+# A name in this set gets an ADDITIVE native `.exe`-direct forwarder
+# alongside its existing `.py`/`.cmd` pair (never a replacement of them on
+# Windows -- see `door_install.named_forwarder_path`'s own docstring for why
+# the old pair becomes unreachable dead weight rather than a live shadow);
+# on POSIX the native image lands at the SAME bare-name path the Python
+# forwarder already occupies, an intentional overwrite, not a collision.
+_DOOR_ELIGIBLE_ALLOWLIST_PATH = (
+    Path(__file__).resolve().parents[1] / "ops" / "warm_entrypoint_allowlist.json"
+)
+
+
+def _door_eligible_forwarder_names() -> "frozenset[str]":
+    """The door-eligible bucket, as installed forwarder names, read from the
+    committed allowlist C2's census writes. Best-effort: an absent or
+    malformed allowlist degrades to the empty set (nothing cut over this
+    run) rather than failing the install -- matches this module's other
+    best-effort side-file reads (`_read_native_forwarder_manifest`)."""
+    try:
+        raw = _DOOR_ELIGIBLE_ALLOWLIST_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return frozenset()
+    names = data.get("entrypoints") if isinstance(data, dict) else None
+    if not isinstance(names, list):
+        return frozenset()
+    return frozenset(n for n in names if isinstance(n, str))
+
+
+def _write_native_door_forwarder(
+    name: str, bin_dst: Path, check_only: bool, *, engine_root: Path
+) -> Path:
+    """Writes the native `.exe`-direct door forwarder for one door-eligible
+    `name` (C5) via `door_install.install_named_forwarder` (hardlink-to-
+    the-installed-door-or-copy; see that function's own docstring for the
+    mechanics), then strips any `.ps1` sibling for this name
+    (`door_install.remove_shadowing_ps1_sibling`) -- PowerShell ranks a
+    same-directory `.ps1` above `.exe`, the same shadow `door_install.
+    claim_bare_name` already defuses for the door's own bare name.
+    `check_only` performs no removal (no mutation permitted in check-only
+    mode, matching `install_named_forwarder`'s own contract)."""
+    from coordinator_core.install import door_install
+
+    dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
+    if not check_only:
+        door_install.remove_shadowing_ps1_sibling(bin_dst, name)
+    return dest
+
+
 # RAW-CMDLINE-PRESERVATION TARGETS -- mirrored from, not imported from,
 # ``coordinator/bin/gen-launcher-shim.py``'s ``_RAW_CMDLINE_ENTRYPOINTS``
 # (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-
@@ -1259,6 +1313,21 @@ def _write_dispatch_root_bake(engine_root: Path, root: str, resolution_class: st
                 pass
 
 
+# C5 NOTE (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
+# does.md): "cross-repo-memo.py" and "merge-assemble.py" below are also
+# door-eligible (C2's census) and now get an additive native `.exe`-direct
+# forwarder that wins bare-name resolution ahead of their `.cmd` on both
+# hosts (PATHEXT ranking) -- their raw-cmdline workaround below is
+# therefore unreachable dead weight for those two names once cut over, the
+# same "harmless, not a hazard" shape `door_install.py`'s own docstring
+# argues for a shadowed `.cmd`. DELIBERATELY left in this set rather than
+# removed: this set is guarded 1:1 against `gen-launcher-shim.py ::
+# _RAW_CMDLINE_ENTRYPOINTS` by `test_bin_launcher_parity.py ::
+# test_raw_cmdline_entrypoints_matches_substrate_targets`, and
+# `gen-launcher-shim.py` is outside this chunk's `writes:` scope --
+# removing only this side would desynchronise the guarded pair rather than
+# retire it. Follow-up: shrink both sets together in a chunk that owns
+# `coordinator/bin/gen-launcher-shim.py`.
 _RAW_CMDLINE_TARGETS = frozenset(
     {
         "coordinator-write-review-trail.py",
@@ -2154,6 +2223,8 @@ def _sweep_orphaned_agent_helpers(
     agent_helper_target_map: "dict[str, str]",
     agent_cmd_dest_map: "dict[str, str]",
     check_only: bool,
+    *,
+    extra_protected_names: "frozenset[str]" = frozenset(),
 ) -> None:
     """Delete agent-helper forwarder files THIS installer previously wrote
     into ``dst_dir`` but would no longer write on this run — the launcher
@@ -2252,6 +2323,16 @@ def _sweep_orphaned_agent_helpers(
     This makes the sweep idempotent by construction: once a file is
     removed, or once a name is (re)installed this run, condition 2 is never
     met again on the next run.
+
+    ``extra_protected_names`` (C5, docs/plans/2026-08-26-every-forwarder-
+    that-can-reach-the-door-does.md): additional names to fold into
+    ``protected_names`` -- specifically the door-eligible bucket's per-name
+    native forwarder filenames (`door_install.named_forwarder_path`'s
+    output, e.g. ``cross-repo-memo.exe`` on Windows), which are NOT keys or
+    values of either map above (they are a THIRD filename this run writes
+    for a door-eligible name, additive to its existing `.py`/`.cmd` pair)
+    and so would otherwise satisfy condition 2 (absence from the write set)
+    on the very same run that wrote them.
     """
     if not dst_dir.is_dir():
         # WRITE_SURFACE clause 13 (`_CLAUSE_ORPHAN_SWEEP`): the destination
@@ -2260,7 +2341,10 @@ def _sweep_orphaned_agent_helpers(
         # to nothing". No journal row (leaves the clause unreported for
         # this run) rather than a misleading empty-tuple resolution.
         return
-    protected_names = _static_bin_family_names() | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
+    protected_names = (
+        _static_bin_family_names() | set(agent_helper_target_map)
+        | set(agent_cmd_dest_map.values()) | extra_protected_names
+    )
     # Limb 2 of the `.ps1` launcher class (companion to the marker branch
     # above): every protected bare name's `.ps1` sibling is protected too,
     # so a currently-valid CLI's `.ps1` forwarder is never swept merely
@@ -3310,6 +3394,7 @@ def _emit_and_verify_ps1_forwarders(
     check_only: bool,
     *,
     python3_cmd_resolved_bin: str,
+    exclude_names: "frozenset[str]" = frozenset(),
 ) -> "Optional[PolicyGateVerdict]":
     """Emit the `.ps1` leg of every agent-helper forwarder, driven off the
     RESOLVED `.cmd` map (``agent_cmd_dest_map``, `_resolve_agent_cmd_dest_
@@ -3374,9 +3459,24 @@ def _emit_and_verify_ps1_forwarders(
     durable declaration this repo asks for; the resolution journal is a
     per-run log of what a writer actually committed, and a rolled-back
     write was never a commitment.
+
+    ``exclude_names`` (C5, docs/plans/2026-08-26-every-forwarder-that-can-
+    reach-the-door-does.md): door-eligible names to skip entirely -- their
+    native `.exe`-direct forwarder already wins bare-name resolution over
+    any `.cmd` on PATHEXT alone, but PowerShell ranks a same-directory
+    `.ps1` ABOVE `.exe`, so a `.ps1` emitted here for one of them would
+    silently shadow the cutover on PowerShell specifically. Never emitting
+    one for these names is simpler and safer than emit-then-remove: this
+    function runs (Step 3b2) after the native forwarder is already written
+    (Step 3b), so a removal here would just be undone by this function
+    re-creating the shadow it was meant to defuse. Default-empty so every
+    other caller (there are none today besides `_install_bin_resolvers`)
+    is unaffected.
     """
     if check_only:
         for name, cmd_dest in sorted(agent_cmd_dest_map.items()):
+            if name in exclude_names:
+                continue
             ps1_dst = bin_dst / _agent_ps1_dest_name(cmd_dest)
             _write_agent_ps1_forwarder(
                 name, ps1_dst, True, python3_cmd_resolved_bin=python3_cmd_resolved_bin,
@@ -3385,6 +3485,8 @@ def _emit_and_verify_ps1_forwarders(
 
     written: "list[Path]" = []
     for name, cmd_dest in sorted(agent_cmd_dest_map.items()):
+        if name in exclude_names:
+            continue
         ps1_dst = bin_dst / _agent_ps1_dest_name(cmd_dest)
         _write_agent_ps1_forwarder(
             name, ps1_dst, False, python3_cmd_resolved_bin=python3_cmd_resolved_bin,
@@ -3595,6 +3697,8 @@ def _write_agent_helper_forwarders(
     check_only: bool,
     *,
     python3_cmd_resolved_bin: str,
+    door_eligible_names: "frozenset[str]" = frozenset(),
+    engine_root: "Optional[Path]" = None,
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
@@ -3640,7 +3744,27 @@ def _write_agent_helper_forwarders(
     unlocked (pure read/compare, safe to race). A `LockTimeout` here
     propagates (unlike self-heal's silent best-effort swallow): this is
     the fail-loud installer path, not a best-effort session-boot heal.
+
+    C5 CUTOVER (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-
+    door-does.md): ``door_eligible_names`` and ``engine_root`` are additive,
+    default-empty/``None`` keyword-only parameters -- the self-heal caller
+    above passes neither, so it is byte-for-byte unaffected. When both are
+    supplied (the real installer's own call site, ``_install_bin_resolvers``
+    below), every name that is BOTH a door-eligible name AND a key of
+    ``agent_helper_target_map`` also gets a native ``.exe``-direct forwarder
+    via ``_write_native_door_forwarder`` -- additive to, never instead of,
+    the ``.py``/``.cmd`` pair this loop already writes for it (see that
+    function's own docstring for the PATHEXT/PowerShell mechanics). The
+    complete set actually written this run is persisted to the native-
+    forwarder manifest (``_write_native_forwarder_manifest``) so
+    ``_sweep_orphaned_agent_helpers`` never mistakes a freshly-cut-over
+    image for an orphan -- see that function's condition 0. Manifest write
+    is skipped when ``engine_root`` is ``None`` (the self-heal caller, or
+    any other caller that never opted into native writing) so as to never
+    clobber a REAL install run's manifest with an empty one.
     """
+    native_written: "set[str]" = set()
+
     if check_only:
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
         for f, target in sorted(agent_helper_target_map.items()):
@@ -3656,6 +3780,9 @@ def _write_agent_helper_forwarders(
                     target=target,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
+            if f in door_eligible_names and engine_root is not None:
+                native_dst = _write_native_door_forwarder(f, bin_dst, check_only, engine_root=engine_root)
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
         return agent_helper_resolved
 
     agent_helper_resolved = []
@@ -3673,6 +3800,14 @@ def _write_agent_helper_forwarders(
                     target=target,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
+            if f in door_eligible_names and engine_root is not None:
+                native_dst = _write_native_door_forwarder(f, bin_dst, check_only, engine_root=engine_root)
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                native_written.add(f)
+
+    if engine_root is not None:
+        _write_native_forwarder_manifest(bin_dst, native_written)
+
     return agent_helper_resolved
 
 
@@ -3825,6 +3960,12 @@ def _install_bin_resolvers(
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_FAMILY, ml_family_resolved)
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_EXPLICIT, ml_explicit_resolved)
 
+    # C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
+    # does.md): imported once, here, for every call site below that needs
+    # `door_install.named_forwarder_path` (the sweep guard and Step 3e's
+    # orphan-prune union) -- local import: avoid import cost on --help.
+    from coordinator_core.install import door_install
+
     # --- Step 3b: agent/skill bare-name helper forwarders ---
     # `.cmd` twins are sourced from claude-klabauter's OWN coordinator/bin/, resolved
     # here (in-process, importable) rather than in the emitted forwarder body
@@ -3837,10 +3978,19 @@ def _install_bin_resolvers(
     agent_helper_target_map = _derive_agent_helper_target_map(agent_bin)
     agent_cmd_dest_map = _resolve_agent_cmd_dest_collisions(agent_helper_target_map)
 
+    # C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
+    # does.md): the door-eligible bucket, restricted to names this run
+    # actually derived a CLI for -- `_write_agent_helper_forwarders` itself
+    # re-intersects against `agent_helper_target_map`'s keys per entry, this
+    # narrowing is only for the `.ps1`-skip call below.
+    door_eligible_names = _door_eligible_forwarder_names() & set(agent_helper_target_map)
+
     rm_family(bin_dst, "resolve-claude-klabauter")
     agent_helper_resolved = _write_agent_helper_forwarders(
         agent_helper_target_map, agent_cmd_dest_map, bin_dst, check_only,
         python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+        door_eligible_names=door_eligible_names,
+        engine_root=claude_klabauter_root_resolved,
     )
     if not check_only:
         resolution_journal.record_resolution(
@@ -3855,14 +4005,22 @@ def _install_bin_resolvers(
     # nothing was emitted -- `check_only`, or an empty resolved map, in
     # which case there is nothing to report). AC13's durable status write
     # runs on every non-`None` verdict; AC9's loud stdout skip is RED-only.
+    # `exclude_names=door_eligible_names` (C5): a door-eligible name's `.ps1`
+    # is never (re-)emitted here -- see that parameter's own docstring.
     ps1_gate_verdict = _emit_and_verify_ps1_forwarders(
         bin_dst, agent_cmd_dest_map, check_only,
         python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+        exclude_names=door_eligible_names,
     )
     if ps1_gate_verdict is not None:
         _handle_ps1_gate_verdict(ps1_gate_verdict, bin_dst)
 
-    _sweep_orphaned_agent_helpers(bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only)
+    _sweep_orphaned_agent_helpers(
+        bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
+        extra_protected_names=frozenset(
+            door_install.named_forwarder_path(bin_dst, name).name for name in door_eligible_names
+        ),
+    )
 
     # --- Step 3c: platform-localize hook ---
     # C0: same force-overwrite/concurrency reasoning as the ml/ch family
@@ -3907,9 +4065,19 @@ def _install_bin_resolvers(
     # `_prune_orphaned_static_bin_names` only considers names dropped from
     # THIS union across runs, so an unregistered name is never a prune
     # candidate in the first place.
+    # C5: the native forwarder filenames (`.exe` on Windows, bare on POSIX --
+    # see `door_install.named_forwarder_path`) also join this run's complete
+    # name set, so a cut-over name is never pruned here as an unregistered
+    # orphan. On POSIX this filename is identical to its own entry in
+    # `agent_helper_target_map` already, a no-op addition to the union.
+    native_forwarder_filenames = {
+        door_install.named_forwarder_path(bin_dst, name).name for name in door_eligible_names
+    }
+
     all_current_names = (
         _static_bin_family_names(claude_klabauter_root_resolved)
         | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
+        | native_forwarder_filenames
         | {SITEPACKAGES_POINTER_NAME}
     )
     _prune_orphaned_static_bin_names(bin_dst, all_current_names, check_only)

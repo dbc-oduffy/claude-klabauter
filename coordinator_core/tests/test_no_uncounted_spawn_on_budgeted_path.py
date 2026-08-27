@@ -965,12 +965,29 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # HEAD) shows this is a genuine RESOLVER GAP, not spawn-freedom: `_merge_assemble_brief`
     # calls `merge_assemble.brief()` (`coordinator_core/merge_assemble/__init__.py`), which
     # calls `compute_branch_state`/`compute_version_bump_proposal` (same file), each of which
-    # calls `_run_git` (same file) -> `subprocess.run` directly. A same-file, 3-hop, plain
-    # direct-call chain the walker's current call-depth does not follow -- a different
-    # resolver-gap shape from `merge_assemble.apply`'s by-reference dispatch table, so D8's
-    # fix does not cover it. Enrolling `merge_assemble.brief` here with an empty spawn tuple
-    # would certify a live, git-spawning op as spawn-free, which is false. Extending the
-    # walker's direct-call depth is out of this chunk's `writes:` scope (this test file only);
+    # calls `_run_git` (same file) -> `subprocess.run` directly.
+    #
+    # CAUSE CORRECTED BY THE EM, 2026-08-27, same session that landed D11. D11's own note
+    # called this "a same-file, 3-hop, plain direct-call chain the walker's current call-depth
+    # does not follow". That is NOT the gap, and the distinction decides what a future chunk
+    # has to build. `_reachable_functions` is a transitive BFS with no depth limit and
+    # `_direct_call_targets` resolves same-file direct calls, so hops 2-4 (`brief` ->
+    # `compute_branch_state` -> `_run_git` -> `subprocess.run`, all inside `__init__.py`) are
+    # followed fine. The chain dies at HOP 1, and it is CROSS-module: `ops.py` reaches the
+    # handler's callee via `from coordinator_core.merge_assemble import brief as _brief`, a
+    # `from <PACKAGE> import <fn>` whose function is defined in that package's `__init__.py`.
+    # `_import_function_aliases` pins the alias to the module NAMED in the import statement,
+    # and `coordinator_core.merge_assemble` resolves to a package directory rather than to
+    # `coordinator_core/merge_assemble/__init__.py`, so the alias never lands in `func_defs`
+    # and the seed set is empty from the first hop. The fix a future chunk owes is package-
+    # `__init__` alias resolution, NOT a deeper call walk -- and it is a class, not one op:
+    # every `from pkg import fn` where `fn` lives in `pkg/__init__.py` measures empty the same
+    # way. Distinct from `merge_assemble.apply`'s by-reference dispatch table, so D8's fix does
+    # not cover it.
+    #
+    # Enrolling `merge_assemble.brief` here with an empty spawn tuple would certify a live,
+    # git-spawning op as spawn-free, which is false. Fixing the resolver was out of D11's
+    # `writes:` scope (this test file only);
     # `_KNOWN_RESOLVER_GAP_OPS` below keeps it out of both the enrolment ratchet and the
     # residual-emptiness assertion until a future chunk either widens the walker or gives it a
     # real (non-empty) legitimization. Reported, not silenced.
@@ -3786,9 +3803,18 @@ def _op_keyed_uncovered_pairs():
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live)
     evidence = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
 
-    legitimized_ops: dict[str, set[tuple[str, str, int]]] = {}
-    for key in _LEGITIMIZED_SITES:
-        legitimized_ops.setdefault(key[0], set()).add((key[1], key[2], key[3]))
+    # SITE-keyed, never op-keyed -- AC19b: shared machinery is "legitimized once per site, with a
+    # counter valid for any caller". `_LEGITIMIZED_SITES` is keyed `(relpath, enclosing, argv0,
+    # ordinal)` and carries NO op, so a per-op grouping was never expressible from it. The prior
+    # shape grouped on `key[0]` (a RELPATH) and looked that group up by OP NAME below -- two
+    # disjoint namespaces, so the lookup always missed and `legit_keys` was always empty: a
+    # legitimization path that never legitimized anything. Masked rather than benign -- every op
+    # currently carries a D7 static pin and `if op in pinned: continue` returns before the
+    # subtraction is reached. Corrected 2026-08-27. Subtracting a real set can only SHRINK the
+    # reported pairs, so this cannot buy green for a site nobody legitimized.
+    legitimized_site_keys: set[tuple[str, str, int]] = {
+        (key[1], key[2], key[3]) for key in _LEGITIMIZED_SITES
+    }
 
     (
         index,
@@ -3816,7 +3842,7 @@ def _op_keyed_uncovered_pairs():
         site_keys = {(site.enclosing, site.argv0, site.ordinal) for site in sites}
         if op in pinned:
             continue
-        legit_keys = legitimized_ops.get(op, set())
+        legit_keys = legitimized_site_keys
         for sk in sorted(site_keys - legit_keys):
             pairs.append((op, sk))
     return pairs
@@ -5854,9 +5880,18 @@ def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live)
     evidence = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
 
-    legitimized_ops: dict[str, set[tuple[str, str, int]]] = {}
-    for key in _LEGITIMIZED_SITES:
-        legitimized_ops.setdefault(key[0], set()).add((key[1], key[2], key[3]))
+    # SITE-keyed, never op-keyed -- AC19b: shared machinery is "legitimized once per site, with a
+    # counter valid for any caller". `_LEGITIMIZED_SITES` is keyed `(relpath, enclosing, argv0,
+    # ordinal)` and carries NO op, so a per-op grouping was never expressible from it. The prior
+    # shape grouped on `key[0]` (a RELPATH) and looked that group up by OP NAME below -- two
+    # disjoint namespaces, so the lookup always missed and `legit_keys` was always empty: a
+    # legitimization path that never legitimized anything. Masked rather than benign -- every op
+    # currently carries a D7 static pin and `if op in pinned: continue` returns before the
+    # subtraction is reached. Corrected 2026-08-27. Subtracting a real set can only SHRINK the
+    # reported pairs, so this cannot buy green for a site nobody legitimized.
+    legitimized_site_keys: set[tuple[str, str, int]] = {
+        (key[1], key[2], key[3]) for key in _LEGITIMIZED_SITES
+    }
 
     (
         index,
@@ -5881,7 +5916,7 @@ def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
         )
         sites = _on_path_spawn_sites(reached, spawn_sites_by_file, exempt=frozenset())
         site_keys = {(site.enclosing, site.argv0, site.ordinal) for site in sites}
-        legit_keys = legitimized_ops.get(op, set())
+        legit_keys = legitimized_site_keys
         if site_keys and site_keys <= legit_keys:
             continue
         targets.append(op)
