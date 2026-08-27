@@ -128,3 +128,88 @@ def test_active_branch_guard_gh_failure_halts(monkeypatch, capsys):
     rc = _mod.main(["active-branch-guard", "--pr", "123"])
     assert rc == 1
     assert "could not read commit timestamps" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# coverage-gate
+# ---------------------------------------------------------------------------
+#
+# The relay this subcommand restores per docs/plans/2026-08-27-the-merge-gate-
+# is-pointed-back-at-the-coverage-engine.md § C1: it calls
+# gate.validate_invocable's "review" dimension (gate_dimension_review.py) and
+# refuses on FAIL. `_run_gate_validate_invocable` is the isolation seam so
+# these tests never touch the real engine, git, or the review-trail corpus.
+
+
+def test_coverage_gate_no_changed_files_passes(monkeypatch, capsys):
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: [])
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("gate.validate_invocable should not be called for an empty diff")
+
+    monkeypatch.setattr(_mod, "_run_gate_validate_invocable", _fail)
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 0
+    assert "nothing to check" in capsys.readouterr().out
+
+
+def test_coverage_gate_covered_passes(monkeypatch, capsys):
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
+    monkeypatch.setattr(
+        _mod,
+        "_run_gate_validate_invocable",
+        lambda changed_files, diff_base, repo_root: {
+            "dimensions": [
+                {
+                    "dimension": "review",
+                    "verdict": "PASS",
+                    "detail": "covered: all 1 commit(s) touching changed_files are review-trail stamped",
+                }
+            ]
+        },
+    )
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 0
+    assert "covered" in capsys.readouterr().out
+
+
+def test_coverage_gate_uncovered_refuses(monkeypatch, capsys):
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
+    monkeypatch.setattr(
+        _mod,
+        "_run_gate_validate_invocable",
+        lambda changed_files, diff_base, repo_root: {
+            "dimensions": [
+                {
+                    "dimension": "review",
+                    "verdict": "FAIL",
+                    "detail": "uncovered: 1/2 commit(s) touching changed_files have no review-trail stamp (e.g. deadbeef1234)",
+                }
+            ]
+        },
+    )
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "deadbeef1234" in err
+    assert "not enforced at the git-push layer" in err
+
+
+def test_coverage_gate_dimension_unavailable_passes(monkeypatch, capsys):
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
+    monkeypatch.setattr(
+        _mod,
+        "_run_gate_validate_invocable",
+        lambda changed_files, diff_base, repo_root: {
+            "dimensions": [
+                {
+                    "dimension": "review",
+                    "verdict": "UNAVAILABLE",
+                    "detail": "review-trail corpus unavailable: boom",
+                }
+            ]
+        },
+    )
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 0
+    assert "unavailable" in capsys.readouterr().out

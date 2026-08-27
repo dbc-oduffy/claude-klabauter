@@ -1018,6 +1018,18 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.archive_release_accumulator":     "common_dir",
     "fleet.archive_paper_trail":              "common_dir",
     "fleet.archive_queue_entry":              "common_dir",
+    # fleet.archive_actioned_memos (K-052 reinstatement), fleet.archive_completed_plans
+    # (K-051 rebuild), session.sweep_consumed_handoffs — common_dir, the same
+    # archival-writer verdict as every fleet.* sweep above and for the same reason:
+    # each git-mv's terminal content (cross-repo/inbox/, docs/plans/, consumed
+    # handoffs) within the CALLER's own repo tree, so the key must resolve
+    # main_worktree_root(common_dir) or the archive lands in claude-klabauter's clone rather
+    # than the caller's. Not "show_top": linked worktrees of one repo share the one
+    # corpus each of these sweeps classifies, so a per-worktree key would let two
+    # worktrees sweep the same rows concurrently.
+    "fleet.archive_actioned_memos":          "common_dir",
+    "fleet.archive_completed_plans":         "common_dir",
+    "session.sweep_consumed_handoffs":       "common_dir",
     "fleet.migrate_handoff_vocabulary":       "common_dir",
     # fleet.archive_terminal_sizings — common_dir: git-mv's terminal
     # sizing entries into archive/sizings/YYYY-MM/ under the caller's own

@@ -381,8 +381,8 @@ def _machine_local_get_in_process(key: str) -> str | None:
 # `_walk_up_to_checkout`, and the resolution constants/exceptions moved
 # alongside it because `_resolve_engine_root`'s bare-name references to them
 # bind against THAT module's globals now — imported back here so every OTHER
-# function in THIS file that also references them (route(), engine_source_root(),
-# _state1_remediation_message(), resolve_engine_root(), _machine_local_get_in_process())
+# function in THIS file that also references them (route(), resolve_engine_root(),
+# _state1_remediation_message(), _machine_local_get_in_process())
 # keeps resolving them through cc_invoke's own globals, unchanged.
 #
 # `_resolve_claude_klabauter_root = _resolve_engine_root` immediately below is a PLAIN
@@ -920,13 +920,31 @@ def require_dispatch_engine_on_path() -> str:
     A ``match``, ``unimported``, or ``unresolved`` verdict is unaffected —
     this only raises on the one verdict that means "running the wrong tree".
 
+    SOURCE-TWIN CARVE-OUT (pytest-under-source-checkout case). A ``divergent``
+    verdict does not by itself mean a THIRD, unrelated tree — it is also the
+    verdict for the one EXPECTED pair this function's own docstring above
+    already documents: an already-bound ``coordinator_core`` from the SOURCE
+    checkout (e.g. bound by a repo-root ``conftest.py`` importing
+    ``coordinator_core.ops`` during ``pytest_load_initial_conftests``,
+    strictly before any test module runs) against a dispatch ``root`` that
+    correctly resolves to the PUBLISHED MIRROR of that same source checkout.
+    Both trees are legitimate; the comparison inside ``provenance_against``
+    just cannot tell "known mirror twin" from "unrelated third tree" on its
+    own, because it only compares paths, never checkout identity.
+    ``_is_source_twin`` closes exactly that gap: it resolves the LOCATOR axis
+    for THIS file (``resolve_engine_root(__file__)`` — the existing
+    self-location ladder, not a new resolver) and asks whether the
+    already-bound module's ``__file__`` sits under that locator root. When it
+    does, the two roots are the source-checkout/published-mirror pair by
+    construction, and this returns normally instead of raising.
+
     Spec backlink: docs/plans/2026-08-20-an-engine-root-is-not-named-for-the-repo.md
     (C16), and docs/reference/engine-root-env-var-routing.md for which call sites
     are on which axis.
     """
     root = _front_insert_on_path(_resolve_claude_klabauter_root())
     report = _report_provenance("require_dispatch_engine_on_path", root, "dispatch")
-    if report.verdict == PROVENANCE_DIVERGENT:
+    if report.verdict == PROVENANCE_DIVERGENT and not _is_source_twin(report):
         raise ProvenanceDivergenceError(
             "require_dispatch_engine_on_path: coordinator_core already bound "
             f"from {report.imported_file!r}, diverges from dispatch root "
@@ -934,6 +952,36 @@ def require_dispatch_engine_on_path() -> str:
             "module-level coordinator_core-binding import."
         )
     return root
+
+
+def _is_source_twin(report: "ProvenanceReport") -> bool:
+    """True when `report`'s already-bound `coordinator_core` (`imported_file`)
+    sits under THIS file's own locator-axis root — the source-checkout half
+    of the source-checkout/published-mirror pair `require_dispatch_engine_on_path`
+    carves out of its `divergent` raise (see that function's own SOURCE-TWIN
+    CARVE-OUT docstring section).
+
+    Uses the EXISTING locator-axis helper, `resolve_engine_root(__file__)` —
+    this file's own self-location ladder — never a new resolver: the source
+    checkout that a published dispatch mirror is a mirror OF is, by
+    definition, the checkout `cc_invoke.py` itself lives in.
+
+    Degrades to False (never raises) on any resolution failure or missing
+    `imported_file` — an unresolvable locator root is not evidence of a
+    twin, and this function's caller must still raise on a genuinely
+    divergent, unrelated third tree.
+    """
+    if not report.imported_file:
+        return False
+    try:
+        source_root = resolve_engine_root(__file__)
+    except (RuntimeError, OSError):
+        return False
+    try:
+        Path(report.imported_file).resolve().relative_to(Path(source_root).resolve())
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

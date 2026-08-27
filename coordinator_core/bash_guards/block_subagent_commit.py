@@ -3234,6 +3234,18 @@ def _has_coordinator_safe_commit(cmd: str, *, legs: Optional[Set[str]] = None) -
 #: "LESSON" entry).
 _COMMITTING_OP_NAMES = frozenset(
     {
+        # "ceremony.scoped_git_commit" RETAINED DELIBERATELY, not an
+        # oversight (coordinator:code-reviewer, 2026-08-27, Finding 4 on the
+        # `ceremony.commit` sixth-pass diff): the op was KILLED (K-045) and
+        # its module deleted -- nothing can invoke this name any more. It
+        # cannot desync from the census the way the removed dead entries
+        # below could: `test_committing_op_names_covers_registry_sink_scan`
+        # derives its "true" set from `OP_MODULE_MAP`, which a killed,
+        # unregistered op is invisible to by construction, so this entry can
+        # only ever be a no-op member of the hand-maintained set, never a
+        # stale one the ratchet would catch or miss. Left in place because
+        # the whole test corpus uses this literal name as its canonical
+        # denial fixture -- removing it is pure churn, not a correctness fix.
         "ceremony.scoped_git_commit",
         "session.boot_sweep",
         "distill.apply_disposal",
@@ -3317,6 +3329,20 @@ _COMMITTING_OP_NAMES = frozenset(
         # `_COMMIT_SINK_CALL_MARKERS` in
         # tests/test_subagent_commit_prefilter_and_flags.py.
         "ceremony.commit",                  # ops/ceremony/commit_op.py -- run_commit_pipeline(...)
+        # Seventh pass (2026-08-27), and this one is the ratchet earning its
+        # keep in real time: these three registered DURING the session that
+        # added `ceremony.commit` above -- the scan passed at the start of it
+        # and failed thirty minutes later, naming exactly the three new
+        # arrivals. Each verified against its handler's source before being
+        # added here, per the fourth-pass rule, not taken from the failure
+        # message. Note `fleet.archive_actioned_memos` is a RETURN: it was
+        # removed from this set as a dead allowlist entry (see the comment
+        # above) after a PM ruling killed the op and its module; the module
+        # exists and is registered again, so the name is live once more and
+        # its removal comment above now describes only that earlier era.
+        "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
+        "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
+        "session.sweep_consumed_handoffs",   # ops/session/sweep_consumed_handoffs.py -- archive_and_commit(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
