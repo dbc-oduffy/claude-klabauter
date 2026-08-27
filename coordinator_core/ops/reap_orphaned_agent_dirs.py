@@ -124,13 +124,21 @@ def _read_owner_id(agent_dir: Path) -> Optional[str]:
     return text or None
 
 
+#: The retired bare-path record. Read by nothing here -- named only so R3a can
+#: recognise a dir the current seam cannot speak for.
+_LEGACY_TOUCH_RECORD_FILENAME = "touched.txt"
+
+
 def _read_touched_paths(agent_dir: Path) -> List[str]:
     """Return the bare repo-relative paths this agent dir's touch record names.
 
     C2 — reads through `session.scope._read_agent_touch_record_as_legacy_lines`,
     the C0 seam's agent-dir-dialect counterpart, rather than parsing a sibling
-    `touched.txt` directly. That adapter unions the `touch-record.jsonl` family
-    with a sibling `touched.txt` (legacy first) and renders every surviving line
+    `touched.txt` directly. That adapter read the `touch-record.jsonl` family
+    UNIONED with a sibling `touched.txt` (legacy first) until the writers were
+    repointed to the jsonl sink (pln-the-legacy-touched-txt-record-44ce48 C7);
+    it now reads the jsonl family ALONE, and a legacy-only dir is refused by R3a
+    rather than served by a second read path here. It renders every surviving line
     in the bare-path dialect this reader already expects — no verb/timestamp
     prefix to strip, unlike the session-keyed seam's dialect. A degraded read
     (an unreadable/malformed family member) is treated the same as the prior
@@ -146,6 +154,48 @@ def _read_touched_paths(agent_dir: Path) -> List[str]:
     if degraded:
         return []
     return [line.strip() for line in lines if line.strip()]
+
+
+def _has_unreadable_legacy_record(agent_dir: Path) -> bool:
+    """True when this agent dir carries ONLY the retired `touched.txt` record.
+
+    The current seam reads `touch-record.jsonl` exclusively. A dir with the
+    legacy file and no jsonl therefore reports zero touched paths while
+    actually holding claims -- see R3a's comment for why that is a reap of
+    uncommitted work rather than a cosmetic gap.
+
+    Negative-spec: does NOT parse the legacy file or resurrect a second read
+    path for it. The retirement stands; this only refuses to treat its
+    absence-from-the-seam as evidence of an empty claim set.
+    """
+    try:
+        legacy_present = (agent_dir / _LEGACY_TOUCH_RECORD_FILENAME).exists()
+        jsonl_present = (agent_dir / _TOUCH_RECORD_FILENAME).exists()
+    except OSError:
+        # `Path.exists()` already swallows OSError and answers False, so this
+        # catch is the belt to that brace, not the whole guard -- see the
+        # `stat()` probe below for the case it cannot see.
+        return True
+    if legacy_present and not jsonl_present:
+        return True
+    if jsonl_present:
+        return False
+    # Neither `exists()` answered True. That is "absent" OR "present but
+    # unstattable": `Path.exists()` returns False on ANY stat failure,
+    # PermissionError included, so a legacy record we cannot read reports
+    # identically to one that was never written -- reopening, by a different
+    # route, exactly the hole R3a exists to close. Every other fail-closed
+    # check in `_classify` (R1 liveness, R4 mtime) uses an explicit
+    # try/except OSError with a stated verdict; this one silently failed open.
+    # Re-probe with `stat()`, which RAISES instead of swallowing.
+    # Review: code-reviewer Finding 1 (P2).
+    try:
+        (agent_dir / _LEGACY_TOUCH_RECORD_FILENAME).stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _dirty_paths(repo_root: Path) -> set:
@@ -241,6 +291,37 @@ def _classify(
         # returns whenever owner_id is falsy, so this arm never executes.
         # Kept only as a defensive fallback matching the R1 branch's verdict.
         return Verdict(agent_dir, False, "em-session-id.txt missing/unreadable — unknown ownership", owner_id, touched_paths)
+
+    # R3a: a legacy-only touch record is UNREADABLE by the current seam, not
+    # empty. `_read_agent_touch_record_as_legacy_lines` stopped unioning a
+    # sibling `touched.txt` when the writers were repointed to
+    # `touch-record.jsonl` (pln-the-legacy-touched-txt-record-44ce48 C7), so a
+    # dir carrying only the legacy file yields `[]` here -- indistinguishable,
+    # at R3, from a dir that touched nothing. R3 would clear, R4 would clear on
+    # age (and a pre-migration dir is old BY CONSTRUCTION), and the dir would be
+    # archived with its uncommitted work unexamined. Measured 2026-08-27 on this
+    # box: 0 such dirs, and 0 live TOUCH claims absent from the jsonl across the
+    # 123 dirs carrying both -- the migration is complete. This rail is not for
+    # today's corpus; it is so that a legacy-only dir arriving from an older
+    # checkout, a restored backup, or an un-migrated peer is refused rather than
+    # silently reaped. Fail-closed, because this module archives and deletes.
+    #
+    # SCOPE, stated because the rail reads stronger than it is: this refusal
+    # binds THIS module only. `ops/session/reap.py` sub-reap (ii) archives a
+    # stale agent dir on `touched.txt` mtime alone -- no liveness check, no
+    # dirty check -- and sub-reap (iv) deletes what (ii) archived after 14 days.
+    # A legacy-only dir with genuinely dirty work is refused here and still
+    # reachable there. Pre-existing and out of this module's scope, filed rather
+    # than left implied. Review: code-reviewer Finding 3 (informational).
+    if _has_unreadable_legacy_record(agent_dir):
+        return Verdict(
+            agent_dir,
+            False,
+            "legacy-only touched.txt with no touch-record.jsonl -- claims "
+            "unreadable by the current seam, fail-closed",
+            owner_id,
+            touched_paths,
+        )
 
     # R3: nothing in touched.txt currently dirty.
     dirty_reason = _touched_path_is_dirty(touched_paths, dirty)

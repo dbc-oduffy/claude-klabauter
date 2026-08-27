@@ -1740,13 +1740,22 @@ def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[L
     RELEASE survivor contributes no entry here — dropped, never rendered as
     a phantom claim), and renders each as its bare ``event.path`` — already
     canonicalized at write time (AC4), so no further transform is applied.
-    Then, exactly as the session-keyed adapter does, prepends a sibling
-    ``touched.txt``'s raw bare-path lines ahead of the jsonl-derived ones
-    (legacy first). Today no writer emits `.agents/<aid>/touch-record.jsonl`
-    yet (`hooks.track_touched_files` still writes the old dialect only — see
-    this chunk's report, Blocker 2), so every live call reads exactly the
-    legacy file, byte-for-byte unchanged from before this chunk; a future
-    writer migration is picked up here for free.
+    A sibling ``touched.txt``'s raw bare-path lines used to be prepended ahead
+    of the jsonl-derived ones (legacy first), because at that time no writer
+    emitted ``.agents/<aid>/touch-record.jsonl`` and every live call therefore
+    read exactly the legacy file. Both halves of that are now false:
+    ``hooks.track_touched_files`` writes the jsonl sink for the agent dir as
+    well as the session dir, and this adapter reads the jsonl family ALONE
+    (pln-the-legacy-touched-txt-record-44ce48 C7).
+
+    Consumers must NOT read a legacy-only dir's empty result as "this agent
+    claimed nothing" -- it means "this dir predates the migration and this seam
+    cannot speak for it." `reap_orphaned_agent_dirs` fails closed on exactly
+    that shape (its R3a rail), because its action is ``rm -rf``. Verified
+    2026-08-27 on the claude-klabauter corpus: 0 legacy-only agent dirs, and across the
+    123 dirs carrying both records, 0 live TOUCH claims present in
+    ``touched.txt`` and absent from the jsonl -- the 1,257 legacy-only lines
+    are all RELEASE events, which are correctly dropped here.
 
     Returns ``(lines, degraded)`` with the same AC6 degrade semantics as the
     session-keyed adapter.

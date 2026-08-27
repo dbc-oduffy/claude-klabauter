@@ -41,6 +41,7 @@ def _make_agent_dir(
     *,
     owner_id: str = "em-owner-1",
     touched: list = None,
+    legacy_touched: list = None,
     age_seconds: float = reaper._AGE_THRESHOLD_SECONDS + 3600,
 ) -> Path:
     adir = agents_base / name
@@ -48,7 +49,29 @@ def _make_agent_dir(
     if owner_id is not None:
         (adir / "em-session-id.txt").write_text(owner_id, encoding="utf-8")
     if touched:
-        (adir / "touched.txt").write_text("\n".join(touched) + "\n", encoding="utf-8")
+        # The LIVE record, not the retired `touched.txt`. The writers were
+        # repointed to the jsonl sink (pln-the-legacy-touched-txt-record-44ce48
+        # C7) and the reader's seam no longer unions the legacy file, so a
+        # fixture writing `touched.txt` builds an agent dir the reader reports
+        # as having touched NOTHING, so the three R3 dirty-rail tests below
+        # asserted against a verdict of "cleared all 4 rails". They failed LOUDLY
+        # rather than passing vacuously -- they were among this file's reds, and
+        # that is how the gap was found. Review: code-reviewer Finding 7 (P3),
+        # correcting an earlier "silently" in this comment.
+        # `legacy_touched=` exists for the tests that mean the retired file.
+        for _p in touched:
+            touch_record.append_event(
+                adir / reaper._TOUCH_RECORD_FILENAME,
+                session_id=owner_id or "em-owner-1",
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=_p,
+            )
+    if legacy_touched:
+        (adir / "touched.txt").write_text(
+            "\n".join(legacy_touched) + "\n",
+            encoding="utf-8",
+        )
     stamp = time.time() - age_seconds
     os.utime(adir, (stamp, stamp))
     return adir
@@ -181,12 +204,29 @@ def test_r4_age_within_threshold_is_not_a_candidate(sessions_dir, monkeypatch, t
     assert "R4 fails" in verdict.reason
 
 
-def test_read_touched_paths_legacy_only(sessions_dir):
-    """C2 — a sibling `touched.txt` with no `touch-record.jsonl` family still
-    reads through the seam, unchanged from the pre-C2 direct read."""
-    adir = _make_agent_dir(sessions_dir / ".agents", "agent-k", touched=["src/foo.py"])
+def test_legacy_only_record_reads_empty_and_is_refused_by_r3a(sessions_dir, monkeypatch, tmp_path):
+    """A sibling `touched.txt` with no `touch-record.jsonl` no longer reads
+    through the seam -- the union was dropped when the writers were repointed
+    (pln-the-legacy-touched-txt-record-44ce48 C7).
 
-    assert reaper._read_touched_paths(adir) == ["src/foo.py"]
+    This test used to assert that union still held. It is kept, inverted, and
+    paired with the consequence that actually matters: an empty read from a
+    legacy-only dir does NOT mean the agent touched nothing, and R3 alone would
+    clear its dirty rail and let R4 archive it on age -- which a pre-migration
+    dir passes by construction. R3a refuses that shape instead. The action
+    behind this verdict is `rm -rf`, so fail-closed is the only admissible
+    direction.
+    """
+    adir = _make_agent_dir(
+        sessions_dir / ".agents", "agent-k", legacy_touched=["src/foo.py"]
+    )
+    monkeypatch.setattr(reaper, "session_live", lambda *a, **k: False)
+
+    assert reaper._read_touched_paths(adir) == []
+
+    verdict = reaper._classify(adir, sessions_dir, {"src/foo.py"}, time.time(), tmp_path)
+    assert verdict.candidate is False
+    assert "fail-closed" in verdict.reason
 
 
 def test_read_touched_paths_jsonl_only(sessions_dir):
@@ -205,11 +245,20 @@ def test_read_touched_paths_jsonl_only(sessions_dir):
     assert reaper._read_touched_paths(adir) == ["src/bar.py"]
 
 
-def test_read_touched_paths_unions_legacy_and_jsonl(sessions_dir):
-    """C2 — the seam prepends legacy `touched.txt` lines ahead of the
-    jsonl-derived ones, so a reader that unions both dialects sees both
-    paths."""
-    adir = _make_agent_dir(sessions_dir / ".agents", "agent-m", touched=["src/legacy.py"])
+def test_jsonl_is_the_sole_source_when_both_records_exist(sessions_dir):
+    """With both records present the jsonl is authoritative and the retired
+    `touched.txt` contributes nothing.
+
+    Verified against the live corpus 2026-08-27 before this test was inverted:
+    across the 123 agent dirs carrying both records, ZERO live TOUCH claims
+    appear in `touched.txt` and not in the jsonl -- the 1,257 legacy-only lines
+    are all RELEASE events, which the seam drops by design. Ignoring the legacy
+    file here therefore loses no claim. R3a covers the legacy-ONLY shape, which
+    is the one that would.
+    """
+    adir = _make_agent_dir(
+        sessions_dir / ".agents", "agent-m", legacy_touched=["src/legacy.py"]
+    )
     touch_record.append_event(
         adir / reaper._TOUCH_RECORD_FILENAME,
         session_id="em-owner-1",
@@ -218,7 +267,7 @@ def test_read_touched_paths_unions_legacy_and_jsonl(sessions_dir):
         path="src/jsonl.py",
     )
 
-    assert reaper._read_touched_paths(adir) == ["src/legacy.py", "src/jsonl.py"]
+    assert reaper._read_touched_paths(adir) == ["src/jsonl.py"]
 
 
 def test_read_touched_paths_absent_record_is_empty(sessions_dir):
@@ -254,3 +303,43 @@ def test_touched_path_is_dirty_directory_and_case_helper_directly():
     assert reaper._touched_path_is_dirty(["src/subdir"], dirty) is not None
     # Clean — no match.
     assert reaper._touched_path_is_dirty(["totally/unrelated.py"], dirty) is None
+
+
+def test_unstattable_legacy_record_fails_closed(sessions_dir, monkeypatch, tmp_path):
+    """`Path.exists()` answers False on ANY stat failure, PermissionError
+    included, so an unreadable legacy record reported identically to an absent
+    one -- reopening R3a's own hole by a different route. Review: code-reviewer
+    Finding 1 (P2). No permission-denied fixture existed before this."""
+    adir = _make_agent_dir(sessions_dir / ".agents", "agent-perm")
+    monkeypatch.setattr(reaper, "session_live", lambda *a, **k: False)
+
+    real_exists = reaper.Path.exists
+    real_stat = reaper.Path.stat
+
+    def _blind_exists(self, *a, **k):
+        if self.name in ("touched.txt", reaper._TOUCH_RECORD_FILENAME):
+            return False
+        return real_exists(self, *a, **k)
+
+    def _denied_stat(self, *a, **k):
+        if self.name == "touched.txt":
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(reaper.Path, "exists", _blind_exists)
+    monkeypatch.setattr(reaper.Path, "stat", _denied_stat)
+
+    assert reaper._has_unreadable_legacy_record(adir) is True
+
+    verdict = reaper._classify(adir, sessions_dir, set(), time.time(), tmp_path)
+    assert verdict.candidate is False
+    assert "fail-closed" in verdict.reason
+
+
+def test_genuinely_absent_record_is_not_treated_as_unreadable(sessions_dir):
+    """The other half: no record at all must NOT trip R3a, or every fresh agent
+    dir becomes permanently unreapable."""
+    adir = sessions_dir / ".agents" / "agent-bare"
+    adir.mkdir(parents=True)
+
+    assert reaper._has_unreadable_legacy_record(adir) is False

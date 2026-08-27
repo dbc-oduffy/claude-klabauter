@@ -1303,3 +1303,211 @@ def test_ac6_cap_is_still_a_required_param_on_both_arms(repo: Path):
             f"an absent cap must be a setup error on the dry_run={dry_run} "
             f"arm too, never an unbounded sweep; got {result!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# AC-5 -- every refusal is preserved across C3's reorder, asserted as the
+# three byte-identical comparisons the criterion actually names.
+#
+# The "before" side is not on disk, which is not the same fact as there being
+# no oracle: `21f2e4539^` is C3's own parent and git holds that module
+# permanently. It loads and runs against the same fixture with an identical
+# `_scan_terminal` signature, so the comparison the criterion names is
+# runnable after the fact -- it just has to be reconstructed rather than read.
+# ---------------------------------------------------------------------------
+
+
+#: C3 ("Classify handoffs in-memory before dirt-check; scope git query to
+#: survivors"). Its parent is the last commit whose `_scan_terminal` still
+#: dirty-checked before classifying -- the "before" side of AC-5's comparison.
+_C3_REORDER_COMMIT = "21f2e4539"
+
+
+def _load_pre_reorder_module(tmp_path: Path):
+    """Materialise `archive_terminal_handoffs.py` as it stood immediately
+    before C3's reorder, and import it under its own module name.
+
+    Loaded from git rather than vendored as a fixture copy on purpose: a
+    checked-in copy is a snapshot someone has to remember to keep honest,
+    while `21f2e4539^` cannot drift.
+
+    REGISTRY RESTORATION IS LOAD-BEARING, not tidiness. Executing this module
+    re-runs its `@register_op("fleet.archive_completed_handoffs")` side
+    effect, which REBINDS the live op key in `ipc._REGISTRY` to the
+    pre-reorder handler process-wide. Left in place, every later real
+    dispatch in the session resolves to a stale handler that no other test's
+    monkeypatch can reach — which is exactly how this first landed, turning
+    `test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout` red
+    under a shuffled test order and nowhere else.
+    """
+    import importlib.util
+    import sys
+
+    import coordinator_core.ipc as _ipc
+
+    shown = subprocess.run(
+        ["git", "show", f"{_C3_REORDER_COMMIT}^:coordinator_core/ops/fleet/archive_terminal_handoffs.py"],
+        cwd=str(Path(__file__).resolve().parents[4]),
+        capture_output=True, text=True, timeout=30,
+        stdin=subprocess.DEVNULL, **no_console_creationflags(),
+    )
+    assert shown.returncode == 0, (
+        f"the pre-reorder module must be retrievable from git; "
+        f"`git show {_C3_REORDER_COMMIT}^:...` failed: {shown.stderr!r}"
+    )
+    path = tmp_path / "pre_reorder_atho.py"
+    path.write_text(shown.stdout, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("pre_reorder_atho", str(path))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pre_reorder_atho"] = module
+    registry_before = dict(_ipc._REGISTRY)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop("pre_reorder_atho", None)
+        _ipc._REGISTRY.clear()
+        _ipc._REGISTRY.update(registry_before)
+    return module
+
+
+def test_loading_the_pre_reorder_module_leaves_the_live_op_registry_intact(tmp_path):
+    """Guards the loader above, not the sweep: the restoration is what keeps
+    these AC-5 comparisons from silently breaking an unrelated test that
+    dispatches the real op."""
+    import coordinator_core.ipc as _ipc
+
+    key = "fleet.archive_completed_handoffs"
+    before = _ipc._REGISTRY.get(key)
+    _load_pre_reorder_module(tmp_path)
+    assert _ipc._REGISTRY.get(key) is before, (
+        "loading the pre-reorder module must not leave its own handler bound "
+        "to the live op key"
+    )
+
+
+def _seed_every_rail(repo: Path) -> None:
+    """One fixture reaching every rail AC-5 cares about, including the record
+    that is refused by BOTH the worktree-dirty rail and classification --
+    the single class whose reason the reorder is designed to change."""
+    _seed(repo, "2026-07-01-archivable.md", "status: claimed")
+    _seed(repo, "2026-07-02-open.md", "status: open\ndeployment_state: ready_to_fire")
+    parent = "2026-07-03-retained-parent.md"
+    _seed(repo, parent, "status: claimed\ndeployment_state: continued")
+    _seed(
+        repo, "2026-07-04-live-child.md",
+        f'status: open\npredecessor: "none"\nforked_from: "{parent}"\n'
+        'deployment_state: in_flight',
+    )
+    dirty = _seed(repo, "2026-07-05-dirty.md", "status: claimed")
+    dirty.write_text(dirty.read_text(encoding="utf-8") + "edit\n", encoding="utf-8")
+    both = _seed(
+        repo, "2026-07-06-dirty-and-non-terminal.md",
+        "status: open\ndeployment_state: ready_to_fire",
+    )
+    both.write_text(both.read_text(encoding="utf-8") + "edit\n", encoding="utf-8")
+
+
+def _scan_both_sides(repo: Path, tmp_path: Path):
+    """Run pre-reorder and post-reorder `_scan_terminal` over the SAME
+    fixture; return `(pre, post)` as `{refused: {id: reason}, survivors: [id]}`."""
+    import inspect
+
+    from coordinator_core.ops.fleet import archive_terminal_handoffs as post_mod
+
+    pre_mod = _load_pre_reorder_module(tmp_path)
+    common_dir = _common_dir(repo)
+
+    sides = []
+    for module in (pre_mod, post_mod):
+        refused: "list[dict]" = []
+        survivors = module._scan_terminal(repo, common_dir, skipped=refused)
+        if inspect.iscoroutine(survivors):
+            survivors = asyncio.run(survivors)
+        sides.append({
+            "refused": {item["id"]: item["reason"] for item in refused},
+            "survivors": sorted(rel_id(entry[0], repo) for entry in survivors),
+        })
+    return sides[0], sides[1]
+
+
+def test_ac5_refused_id_set_is_byte_identical_across_the_reorder(repo, tmp_path):
+    """AC-5 (1): the SET OF REFUSED IDS is byte-identical before and after
+    the reorder over the same fixture -- genuinely invariant. Classifying
+    first changes WHICH rail names a record, never WHETHER it is refused.
+    """
+    _seed_every_rail(repo)
+    pre, post = _scan_both_sides(repo, tmp_path)
+
+    assert set(pre["refused"]) == set(post["refused"]), (
+        "C3's reorder must refuse exactly the same records; "
+        f"only-before={sorted(set(pre['refused']) - set(post['refused']))!r} "
+        f"only-after={sorted(set(post['refused']) - set(pre['refused']))!r}"
+    )
+    assert pre["refused"], "fixture sanity: the fixture must refuse something"
+
+
+def test_ac5_survivor_set_is_byte_identical_across_the_reorder(repo, tmp_path):
+    """AC-5 (3): the SURVIVOR SET is byte-identical -- the property that
+    actually matters, because it is what the sweep goes on to archive."""
+    _seed_every_rail(repo)
+    pre, post = _scan_both_sides(repo, tmp_path)
+
+    assert pre["survivors"] == post["survivors"], (
+        f"the reorder must not change what survives classification; "
+        f"before={pre['survivors']!r} after={post['survivors']!r}"
+    )
+    assert post["survivors"], (
+        "fixture sanity: something must survive, else this comparison is "
+        "vacuously true against two empty sets"
+    )
+
+
+def test_ac5_reasons_are_byte_identical_except_the_documented_both_rails_class(
+    repo, tmp_path
+):
+    """AC-5 (2): the REASON is byte-identical for every record refused by
+    exactly one rail. The single documented exception is a record refused by
+    BOTH the worktree-dirty rail and classification, which now reports
+    `not-terminal: ...` instead of `worktree-dirty` -- categorical for that
+    class, not merely relabeled for some instances.
+
+    Asserted as an exact partition rather than a diff budget: a second
+    changed-reason shape would pass a "at most one diff" check and is
+    precisely the drift this criterion exists to catch.
+    """
+    _seed_every_rail(repo)
+    pre, post = _scan_both_sides(repo, tmp_path)
+
+    diffs = {
+        rid: (pre["refused"].get(rid), post["refused"].get(rid))
+        for rid in set(pre["refused"]) | set(post["refused"])
+        if pre["refused"].get(rid) != post["refused"].get(rid)
+    }
+
+    unexplained = {
+        rid: pair for rid, pair in diffs.items()
+        if not (
+            (pair[0] or "").startswith(_SCAN_REASON_WORKTREE_DIRTY)
+            and (pair[1] or "").startswith(_SCAN_REASON_NOT_TERMINAL)
+        )
+    }
+    assert not unexplained, (
+        "the ONLY reason change the reorder is designed to produce is "
+        "worktree-dirty -> not-terminal for a record refused by both rails; "
+        f"got {unexplained!r}"
+    )
+
+    both_rails_id = _cid("2026-07-06-dirty-and-non-terminal.md")
+    assert both_rails_id in diffs, (
+        "fixture sanity: the both-rails record must actually change reason, "
+        "else the exception clause above is vacuous and would pass against a "
+        f"reorder that changed nothing at all; diffs={diffs!r}"
+    )
+
+    # Categorical for the class, not merely relabeled for some instances:
+    # `worktree-dirty` must disappear from the both-rails record's census
+    # entirely rather than surviving alongside the new reason.
+    assert not (post["refused"][both_rails_id] or "").startswith(
+        _SCAN_REASON_WORKTREE_DIRTY
+    ), post["refused"][both_rails_id]

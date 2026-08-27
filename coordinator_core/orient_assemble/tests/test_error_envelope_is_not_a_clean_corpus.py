@@ -76,3 +76,41 @@ def test_none_response_still_stays_silent(monkeypatch):
 
     assert not result.judgment_points
     assert not result.directives
+
+
+def test_a_non_dict_error_still_surfaces(monkeypatch):
+    """A truthy non-dict `error` -- a bare string, from a non-conforming
+    transport -- carries no `result` either, so falling through to the result
+    branch would reproduce the exact silence this module exists to end.
+    Review: code-reviewer Finding 1."""
+    _patch_error(monkeypatch, {"jsonrpc": "2.0", "error": "engine exploded"})
+
+    result = rbr._read_auto_reconcile()
+
+    assert result.judgment_points
+    assert "engine exploded" in result.judgment_points[0]["evidence"]
+
+
+def test_a_codeless_error_does_not_leak_literal_none(monkeypatch):
+    """Operator-facing text, not a Python repr. Review: code-reviewer Finding 3."""
+    _patch_error(monkeypatch, {"jsonrpc": "2.0", "error": {"message": "no code here"}})
+
+    evidence = rbr._read_auto_reconcile().judgment_points[0]["evidence"]
+
+    assert "code unknown" in evidence
+    assert "None" not in evidence
+
+
+def test_result_and_error_together_report_the_error(monkeypatch):
+    """A probe that reported an error has not established a clean corpus, so a
+    malformed both-keys envelope resolves pessimistically. Review:
+    code-reviewer Finding 4."""
+    _patch_error(
+        monkeypatch,
+        {"jsonrpc": "2.0", "result": {"surfaced": []}, "error": {"code": -1, "message": "x"}},
+    )
+
+    result = rbr._read_auto_reconcile()
+
+    assert result.judgment_points
+    assert result.judgment_points[0]["id"] == "j-auto-reconcile-probe-failed"

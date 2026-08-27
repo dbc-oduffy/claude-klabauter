@@ -153,6 +153,48 @@ _CLIENT_SIDE_WORK_MARKERS = (
 #: docstring). Bare top-level `Expr(Call(...))` statements (a call whose
 #: return value is discarded) are flagged unconditionally alongside these,
 #: since a call made purely for its side effect is definitionally one.
+#: Module-exec-time shapes `invoke_from_argv._run_entrypoint` CONTAINS, and
+#: which therefore do not disqualify a CLI from being warm-served. Each entry
+#: names the containment that neutralises it, because an entry added here
+#: without one is how a real hazard gets waved through:
+#:
+#:   sys.path.insert / *_engine_on_path()  -- `sys.path` is snapshotted before
+#:       the module exec and restored in the `finally`, so the shared server's
+#:       import path is identical before and after.
+#:   sys.exit / exit / raise SystemExit    -- caught as `SystemExit` at the op
+#:       boundary and converted to an ordinary `exit_code`.
+#:   print / sys.stdout / sys.stderr writes / traceback.print_exc
+#:                                         -- both streams are redirected into
+#:       the response buffers; a warm worker's real streams are never written.
+#:
+#: NOT contained, and deliberately absent: `os.chdir` (the caller's cwd is
+#: already restored per call, but a chdir DURING exec races other requests in
+#: the same process), `logging.basicConfig`, `warnings.filterwarnings`,
+#: `random.seed` -- each mutates interpreter-global state no `finally` here
+#: puts back.
+_CONTAINED_EXEC_TIME_HAZARD_SUBSTRINGS = (
+    "sys.path.insert",
+    "sys.path.append",
+    "_engine_on_path",
+    "ensure_engine_on_path",
+    "sys.exit",
+    "raise SystemExit",
+    "print()",
+    "print(",
+    "sys.stdout.write",
+    "sys.stderr.write",
+    "traceback.print_exc",
+)
+
+
+def _is_contained_hazard(hazard: str) -> bool:
+    """True when `hazard` (one `_scan_top_level_exec_hazards` string) names a
+    shape the op boundary neutralises -- see
+    `_CONTAINED_EXEC_TIME_HAZARD_SUBSTRINGS`, which records the containment
+    per shape rather than listing names to wave through."""
+    return any(s in hazard for s in _CONTAINED_EXEC_TIME_HAZARD_SUBSTRINGS)
+
+
 _HARD_EXEC_TIME_MARKERS = (
     "sys.exit",
     "exit",
@@ -328,16 +370,39 @@ def classify_one(name: str, target: str, bin_dir: Optional[Path] = None) -> Forw
     op_evidence = _scan_client_side_work(tree)
     warm_evidence = _scan_top_level_exec_hazards(tree)
     op_equivalent = not op_evidence
-    warm_loadable = not warm_evidence
 
-    if op_equivalent and warm_loadable:
+    # A hazard the op boundary CONTAINS is not a reason to exclude a CLI --
+    # it is a reason the containment exists. `_run_entrypoint` snapshots and
+    # restores `sys.path` around the module exec, catches `SystemExit` and
+    # every `Exception`, and redirects stdout/stderr into the response, so
+    # the shapes in `_CONTAINED_EXEC_TIME_HAZARDS` cannot reach the shared
+    # warm server. Classifying on the raw scan instead condemned 315 of 384
+    # CLIs on one shared bootstrap line and reported 3% coverage as if it
+    # were the ceiling.
+    #
+    # The scan output is still recorded per row: containment is a property of
+    # the loader, so if that containment is ever narrowed, this evidence is
+    # what re-derives which names were relying on it.
+    uncontained = tuple(h for h in warm_evidence if not _is_contained_hazard(h))
+    warm_loadable = not uncontained
+
+    # DOOR-ELIGIBILITY IS AXIS (b) ALONE. Axis (a) -- op-equivalence -- asks
+    # whether a CLI's whole behaviour is reachable by dispatching an OP, and
+    # that is not the mechanism the door uses. `invoke.from_argv` runs the
+    # CLI's OWN `main(argv)` inside the warm process, so a CLI that does real
+    # client-side work does that work warm, in Python, exactly as it does
+    # cold -- it simply stops paying an interpreter start to get there.
+    # Gating warm service on (a) condemned 104 CLIs for doing legitimate
+    # local work the warm process is perfectly able to do.
+    #
+    # (a) is still SCANNED and recorded per row, because it answers a real
+    # and different question: which CLIs could one day be replaced by a
+    # server-side op rather than merely hosted warm. It is a roadmap axis,
+    # never a coverage one.
+    if warm_loadable:
         bucket = "door-eligible"
-    elif not op_equivalent and warm_loadable:
-        bucket = "needs-op-extension"
-    elif op_equivalent and not warm_loadable:
-        bucket = "needs-warm-safety"
     else:
-        bucket = "engine-unreachable"
+        bucket = "needs-warm-safety"
 
     return ForwarderVerdict(
         name=name,

@@ -184,13 +184,20 @@ def _auto_reconcile_probe_failed(error: dict[str, Any]) -> ReaderResult:
     rows in ~10h against 3,301 rows from its peers, and nothing in the briefing
     said so.
 
+    Precedence: an envelope carrying BOTH `result` and `error` (malformed, but
+    the shape permits it) is reported as the error and its `result` discarded —
+    a probe that reported an error has not established a clean corpus, so the
+    safe reading is the pessimistic one. Review: code-reviewer Finding 4.
+
     Negative-spec:
       - Does NOT re-dispatch, retry, or fall back to a second probe path — one
         failed observation is reported as one failed observation.
       - Does NOT emit a directive: an unreachable probe is a fact for the
         reader to act on, never an action this module applies on its own.
     """
-    code = error.get("code")
+    code = error.get("code", "unknown")
+    if code is None:
+        code = "unknown"
     message = truncate_external_text(str(error.get("message") or "(no message)"))
     return ReaderResult(
         judgment_points=[
@@ -269,6 +276,12 @@ def _read_auto_reconcile() -> ReaderResult:
     error = response.get("error")
     if isinstance(error, dict):
         return _auto_reconcile_probe_failed(error)
+    if error is not None:
+        # A truthy non-dict `error` (a bare string, from a non-conforming
+        # transport) carries no `result` either, so falling through here would
+        # reproduce the exact silence this branch exists to end. Normalised
+        # rather than trusted for shape. Review: code-reviewer Finding 1.
+        return _auto_reconcile_probe_failed({"code": None, "message": str(error)})
     result = response.get("result") or {}
     surfaced = result.get("surfaced") or []
     reconciled = result.get("reconciled") or []

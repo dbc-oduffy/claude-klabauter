@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -119,25 +120,59 @@ def test_health_reaper_collect_is_read_only_including_the_accepted_dry_run_subpr
     assert not any("fetch" in call for call in forbid_git_fetch)
 
 
-def test_reaper_dry_run_subprocess_call_never_carries_fetch(monkeypatch, forbid_git_fetch):
-    """`_read_reaper_dry_run` is the SOLE accepted subprocess in the whole
-    assembler (per readers_health_reaper's module docstring); assert its
-    real subprocess.run invocation is inert (mocked returncode/stdout) and
-    still never carries `fetch` in argv."""
+def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git_fetch):
+    """Zero-spawn contract, matching the sibling
+    `test_working_repo_registration_reader_never_spawns_a_subprocess` below.
 
-    class _FakeCompleted:
-        returncode = 0
-        stdout = "0 orphaned in_flight handoffs would be released (dry-run)\n"
-        stderr = ""
+    This test used to assert the WEAKER property that the reader's one
+    accepted `subprocess.run` never carried `fetch` in argv. That accepted
+    subprocess no longer exists: `_read_reaper_dry_run` calls
+    `reap_in_flight_claims.survey()` in-process, and
+    `readers_health_reaper`'s own negative-spec now reads "Does NOT spawn a
+    subprocess anywhere in this module." The old form did not merely go
+    stale, it went VACUOUS -- it patched `subprocess.run`, which the reader
+    never calls, so its inner `assert "fetch" not in argv` never executed
+    and the guarantee went unasserted. No spawn is the stronger claim: it
+    forecloses `fetch` along with everything else.
 
-    def _fake_run(cmd, *args, **kwargs):
-        argv = list(cmd)
-        assert "fetch" not in argv
-        return _FakeCompleted()
+    It was also non-deterministic. With the stub bypassed, the real
+    `survey()` walked the live corpus, so `assert result.directives == []`
+    held only while this repo happened to carry no orphaned in_flight
+    handoff -- it failed the moment one existed. `_reap_survey` is stubbed
+    here so the assertion is about the reader, not about corpus weather.
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    Negative-spec: does NOT stub `_read_reaper_dry_run` wholesale -- the
+    real function's directive construction must run, or this asserts
+    nothing about the code under test.
+    """
+
+    # Assert zero-spawn through `forbid_git_fetch`'s OWN wrapper, which records
+    # every `subprocess.run` argv. Re-patching `subprocess.run` here would
+    # overwrite that fixture's patch (fixtures run first), leaving its list
+    # unconditionally empty and the assertion below vacuous -- the exact defect
+    # class this test was written to retire, in a new shape. Review: code-reviewer
+    # Finding 2.
+    monkeypatch.setattr(
+        rhr, "_reap_survey", lambda _root: SimpleNamespace(would_release=1, would_reclaim=0)
+    )
+
     result = rhr._read_reaper_dry_run()
-    assert result.directives == []
+
+    assert [d["cli"] for d in result.directives] == ["reap-orphaned-in-flight-handoffs"]
+    assert forbid_git_fetch == [], (
+        f"reaper-dry-run reader must be zero-spawn; observed {forbid_git_fetch!r}"
+    )
+
+
+def test_reaper_dry_run_reader_is_quiet_when_the_corpus_is_clean(monkeypatch, forbid_git_fetch):
+    """The other half of the above: nothing to reap must emit no directive,
+    or every orientation grows a permanent empty nudge."""
+
+    monkeypatch.setattr(
+        rhr, "_reap_survey", lambda _root: SimpleNamespace(would_release=0, would_reclaim=0)
+    )
+
+    assert rhr._read_reaper_dry_run().directives == []
 
 
 def test_working_repo_registration_reader_never_spawns_a_subprocess(forbid_git_fetch, monkeypatch):

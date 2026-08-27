@@ -90,6 +90,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Callable, Optional, cast
 
@@ -224,6 +225,7 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     previous_cwd = os.getcwd()
+    previous_sys_path = list(sys.path)
     try:
         os.chdir(cwd)
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
@@ -245,6 +247,7 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
                     exit_code = 0 if exit_code is None else 1
     finally:
         os.chdir(previous_cwd)
+        sys.path[:] = previous_sys_path
 
     return {
         "stdout": stdout_buf.getvalue(),

@@ -28,8 +28,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import PushOutcome
 def _envelope(monkeypatch, outcome: PushOutcome) -> dict:
     monkeypatch.setattr(po, "push_outstanding", lambda *a, **k: outcome)
     monkeypatch.setattr(po, "main_worktree_root", lambda p: Path(p))
-    handler = po._handler.__wrapped__ if hasattr(po._handler, "__wrapped__") else po._handler
-    return handler({}, repo_root=Path("X:/nonexistent"))
+    return po._handler({}, repo_root=Path("X:/nonexistent"))
 
 
 def test_a_failed_push_carries_its_reason(monkeypatch):

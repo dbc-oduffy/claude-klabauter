@@ -34,6 +34,7 @@ to a deterministic fixture, mirroring `test_cadence_matrix.py`'s pattern.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from pathlib import Path
 
 from coordinator_core.install.substrate import _derive_agent_helper_target_map
@@ -148,20 +149,20 @@ def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
     monkeypatch.setattr(rhr, "_cmd_claude_klabauter_bin_sentinel", _fake_claude_klabauter_bin_sentinel)
     monkeypatch.setattr(rhr, "_cmd_ceremony_hook", _fake_ceremony_hook)
 
-    # Stub the subprocess call itself (the ONE accepted subprocess in this
-    # reader family — see readers_health_reaper.py's own
-    # _REAP_SUBPROCESS_EXCEPTION) rather than replacing `_read_reaper_dry_run`
-    # wholesale: the real function's own dict-construction/regex-parsing
-    # logic must run so this test actually exercises (and can catch a bug
-    # in) the source's own emitted `cli` value, not a hand-authored fixture
-    # dict standing in for it.
-    class _FakeCompletedProcess:
-        stdout = (
-            "1 orphaned in_flight handoffs would be released (dry-run)\n"
-        )
-        stderr = ""
-
-    monkeypatch.setattr(rhr.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess())
+    # Stub the reader's DATA SOURCE (`_reap_survey`) rather than replacing
+    # `_read_reaper_dry_run` wholesale: the real function's own directive
+    # construction must run so this test actually exercises (and can catch a
+    # bug in) the source's own emitted `cli` value, not a hand-authored
+    # fixture dict standing in for it. That intent is unchanged; only the
+    # seam moved. This used to stub `rhr.subprocess.run` -- the reader's one
+    # accepted subprocess -- which no longer exists: the reader now calls
+    # `reap_in_flight_claims.survey()` in-process and the module's
+    # negative-spec forbids spawning anywhere. Stubbing the vanished
+    # attribute raised AttributeError and took all four tests in this file
+    # down with it.
+    monkeypatch.setattr(
+        rhr, "_reap_survey", lambda _root: SimpleNamespace(would_release=1, would_reclaim=0)
+    )
 
     from coordinator_core.ops import check_weekly_staleness
 
