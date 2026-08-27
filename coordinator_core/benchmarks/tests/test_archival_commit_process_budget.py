@@ -52,6 +52,21 @@ re-run this file: the delta is C5's own justification, not a reason to gate
 this measurement on it (this plan's C6 body: "DELIBERATELY NOT GATED ON
 C5").
 
+DECOMPOSED (2026-08-27, docs/research/2026-08-27-the-archival-per-
+invocation-figure-decomposed.md): this file's per-invocation figure is
+NOT one cost. Measured on this file's own fixture, imported not re-
+implemented: interpreter start + `fleet._common` import 78.1ms (37%),
+`archive_and_commit`'s own in-process body 39-55ms (26%, isolated via
+`time.process_time()` bracketing the call -- parent CPU only, children
+excluded), and the two disclosed out-of-scope git children 75-98ms (36%,
+derived as the residual). Total accounts to 100%, zero unexplained.
+Two figures a reader may have met elsewhere are RETIRED by it: "the op
+is 15.6ms" (it is 39-55ms on a 20-move batch against a 36k-entry index)
+and "~22ms per remaining spawn" (each is ~38-49ms -- a spawn's cost on
+this repo is its INDEX LOAD, not its process creation; `git status
+--porcelain -- <40 paths>` measures 34.4ms against a 16.4ms `git
+--version` floor re-priced the same session).
+
 UNIT: process time (job-object `TotalUserTime + TotalKernelTime`) and spawn
 count (`TotalProcesses`), both via `batched_process_time_ms`/
 `batched_process_time_quantiles`, NEVER wall clock -- CLAUDE.md § The

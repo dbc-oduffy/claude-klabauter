@@ -37,6 +37,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from coordinator_core.win_portability import leaf_spawn_creationflags
+
 # Real-git spawn is load-bearing for section (g) below: `reset_paths` is
 # asserted against a real index/worktree so the "unstage-only, never a bare
 # reset" hazard is proven against git's actual porcelain output, not a
@@ -1114,10 +1116,18 @@ def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path)
 def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
     """`cat_file_batch()` deliberately bypasses `_git()` (raw-bytes stdin/
     stdout, not `_git()`'s `text=True` leg -- see its own docstring), so it
-    re-implements the `creationflags=CREATE_NO_WINDOW` Windows-safe flag
-    independently rather than inheriting it -- mirrors
+    re-implements its Windows-safe creationflag independently rather than
+    inheriting it -- mirrors
     `test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag`
-    above for the other bytes-mode bypass in this module."""
+    above for the other bytes-mode bypass in this module.
+
+    LEAF, not merely windowless. `git cat-file --batch` spawns nothing of
+    its own, so it takes `leaf_spawn_creationflags()` (DETACHED_PROCESS --
+    no console object at all), never `no_console_creationflags()`
+    (CREATE_NO_WINDOW -- a windowless console the subtree can inherit).
+    Asserted against the primitive rather than a literal so the two cannot
+    drift apart again: this assertion was left behind at CREATE_NO_WINDOW
+    when the call site migrated, and read as a red for three sessions."""
     repo = _init_real_repo(tmp_path)
     (repo / "file.txt").write_text("original\n", encoding="utf-8")
     _real_git(["add", "--", "file.txt"], repo)
@@ -1136,7 +1146,7 @@ def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
     assert result == {"file.txt": "original\n"}
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs["creationflags"] == leaf_spawn_creationflags().get("creationflags", 0)
     assert kwargs["input"] == b"HEAD:file.txt\n"
     assert "text" not in kwargs
 
@@ -1225,9 +1235,10 @@ def test_cat_file_batch_objects_resolves_specs_across_different_revs_in_one_call
 
 def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
     """Same bytes-mode `_git()` bypass as `cat_file_batch` (which now delegates
-    here), so the `creationflags=CREATE_NO_WINDOW` flag is re-implemented
-    rather than inherited and must be asserted at this layer -- mirrors
-    `test_cat_file_batch_carries_the_windows_safe_creationflag` above."""
+    here), so the creationflag is re-implemented rather than inherited and
+    must be asserted at this layer -- mirrors
+    `test_cat_file_batch_carries_the_windows_safe_creationflag` above,
+    including its LEAF-not-merely-windowless rationale."""
     repo = _init_real_repo(tmp_path)
     (repo / "file.txt").write_text("original\n", encoding="utf-8")
     _real_git(["add", "--", "file.txt"], repo)
@@ -1246,7 +1257,7 @@ def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
     assert result == {"HEAD:file.txt": "original\n"}
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kwargs["creationflags"] == leaf_spawn_creationflags().get("creationflags", 0)
     assert kwargs["input"] == b"HEAD:file.txt\n"
     assert "text" not in kwargs
 

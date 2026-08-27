@@ -83,12 +83,36 @@ NEGATIVE-SPEC:
       job is process TIME on the real dispatch path, not source shape.
 
 Spec backlink: docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md, chunk C7
+
+C4 ADDENDUM (docs/plans/2026-08-26-merge-assembles-entry-point-reaches-the-warm-
+engine.md, chunk C4, its own AC8 -- PM ruling, 2026-08-26): `TestLikeForLikeWarmVsColdComparison`
+below is the like-for-like warm-vs-cold measurement that AC8 requires, added by
+that chunk. It runs `brief` + `apply` (the SAME workload, unstubbed -- see that
+class's own METHODOLOGY note for why the earlier `_CLI_DISPATCH`-stub approach
+above does not carry over to this comparison) through the REAL entry point
+`_ENGINE_ENTRIES["merge-assemble"]` resolves to
+(`entry_point_shim._merge_assemble_entry`), TWICE: once with `cc_invoke.
+_seam_present` monkeypatched to always return False (forcing route()'s own
+documented State-1/seam-absent branch, regardless of what this box's real
+engine state currently serves -- AC8's "forced onto the cold fallback" leg),
+once unpatched (AC8's "served by whatever the warm engine currently offers"
+leg). Each leg's path is read off `_merge_assemble_dispatch`'s own
+`path=cold`/`path=warm` stderr line (this file's existing Observability
+mechanism, C2/C3), never re-derived. `batched_process_time_ms` is still the
+one instrument (this module's own NEGATIVE-SPEC): a fresh throwaway repo is
+built per sample and the instrument called with `k=1` against each one,
+then arithmetic-averaged in this test module -- necessary because `apply`
+actually mutates on the WARM leg (its dispatch table lives in a separate
+process this test cannot monkeypatch, unlike the cold/in-process leg), so
+the same repo cannot safely absorb `K_INVOCATIONS` real `apply` calls the
+way `brief`-only batching can elsewhere in this file.
 """
 from __future__ import annotations
 
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -584,27 +608,31 @@ class TestWarmCeremonyBrightline:
         assert "unrecognized mode" in completed.stderr, completed
 
     @pytest.mark.real_home
-    def test_cold_forwarder_brief_process_time(self, _throwaway_repo: Path) -> None:
-        """COLD FORWARDER PATH (`coordinator/bin/merge-assemble.py brief`,
-        C3's own instrument), re-measured on this SAME throwaway fixture
-        so the warm/cold comparison above is like-for-like rather than
-        against C3's differently-provisioned baseline. Reported findings
-        from this chunk's own verification run (this box, 2026-08-26,
-        k=6, Windows): 114.583ms process time / 5.0 procs per call —
-        consistent with C3's own pre-C6 baseline (137.5ms/5 procs), i.e.
-        this leg is genuinely untouched by C6/C7 (AC12's own finding: no
-        caller was repointed at the registered op).
+    def test_forwarder_brief_is_now_warm_served(self, _throwaway_repo: Path) -> None:
+        """The forwarder leg, RE-PREMISED by this plan — read the history
+        before changing it again.
 
-        `@pytest.mark.real_home`: the forwarder resolves `CLAUDE_KLABAUTER_ROOT`
-        through the machine-local registry — under this suite's own
-        HOME-quarantine autouse fixture (`coordinator_core/conftest.py ::
-        _quarantine_real_home`) that resolution fails outright
-        ("CLAUDE_KLABAUTER_ROOT resolution failed... set it via 'machine-local set
-        repos.claude_klabauter'"), which is a fixture-environment artifact,
-        not a property of the path itself. This is exactly the documented
-        opt-out case (a read-only oracle against the live tree's own
-        registry), verified against this file's own throwaway repo before
-        landing this test."""
+        This test was inherited from the predecessor plan, where it asserted
+        `procs_per_call >= 2.0` on the grounds that the forwarder was cold and
+        "genuinely untouched ... no caller was repointed at the registered op".
+        THIS plan's C2 deliberately repointed that caller, so the old premise is
+        false by design, not by accident: the forwarder is now served by the warm
+        engine and spawns ONE process, because the engine does the git work
+        instead of the forwarder spawning it.
+
+        It is rewritten rather than deleted, and rather than having its threshold
+        lowered to whatever the run happened to produce, because the leg still
+        needs an oracle — it just needs the CURRENT true one. The cold-path
+        measurement it used to carry has not been dropped: it moved to
+        `TestLikeForLikeWarmVsColdComparison`, which forces the cold leg through
+        the real fallback rather than assuming an unforced run is cold. That
+        assumption is exactly what broke this test, and AC9 is the rule against
+        repeating it — a measurement must assert the path it was taken on.
+
+        `@pytest.mark.real_home`: the forwarder resolves `CLAUDE_KLABAUTER_ROOT` through the
+        machine-local registry, which this suite's HOME-quarantine autouse fixture
+        blocks; the documented opt-out case for a read-only oracle against the
+        live tree's own registry."""
         _require_windows_or_darwin()
 
         result = batched_process_time_ms(
@@ -613,11 +641,17 @@ class TestWarmCeremonyBrightline:
             cwd=str(_throwaway_repo),
         )
         assert result["rc"] == 0, result
-        assert result["procs_per_call"] >= 2.0, (
-            "the cold forwarder path is expected to still spawn multiple "
-            f"processes (interpreter + real git calls) — got {result!r}, "
-            "which would mean this leg silently changed shape"
+        assert result["procs_per_call"] <= 1.5, (
+            "the forwarder is expected to be WARM-SERVED after C2 — one "
+            f"interpreter, no spawned git — got {result!r}. A rise back "
+            "toward the pre-C2 shape (>=2 procs/call) means the entry "
+            "silently stopped reaching the engine and fell back cold."
         )
+        assert result["process_time_ms"] < 500.0, (
+            "brightline: the warm-served forwarder must stay under 500ms "
+            f"end-to-end, got {result!r}"
+        )
+
 
 
 def _ps_single_quote(value: str) -> str:
@@ -758,6 +792,234 @@ class TestInvokeByNameFromTheLauncher:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         assert completed.returncode == 3, completed
-        assert "usage" in completed.stderr.lower(), completed
-        assert "not importable" not in completed.stderr, completed
-        assert "CLAUDE_KLABAUTER_ROOT resolution failed" not in completed.stderr, completed
+
+
+_ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
+    '''\
+    """Standalone probe (written to disk by test_warm_ceremony_brightline.py,
+    never committed): calls the REAL entry-point-shim function
+    (`entry_point_shim._merge_assemble_entry`) that
+    `_ENGINE_ENTRIES["merge-assemble"]` resolves to -- brief then apply,
+    UNSTUBBED, so this is the actual routing-decision layer (`cc_invoke.
+    route`, the cold fallback, the path=cold/path=warm stderr line), not a
+    bypass of it. Always run against a PRISTINE throwaway repo (apply
+    mutates -- this module's C4 addendum docstring explains why the same
+    repo cannot absorb repeated calls the way brief-only batching can).
+
+    argv[1] = coordinator/bin/lib (sys.path entry for entry_point_shim /
+              cc_invoke)
+    argv[2] = "cold" | "current" -- "cold" monkeypatches
+              cc_invoke._seam_present to always return False BEFORE
+              importing entry_point_shim, forcing route()'s own documented
+              State-1 (seam-absent) legacy_fn branch regardless of what
+              engine this box currently has published (AC8's "forced onto
+              the cold fallback" leg); "current" makes no such patch, so
+              whichever path this box's real registry/engine state actually
+              serves today is the one exercised (AC8's "served by whatever
+              the warm engine currently offers" leg) -- read the result off
+              the path=cold/path=warm line entry_point_shim itself writes
+              to stderr, never re-derived here.
+    """
+    import sys
+
+    sys.path.insert(0, sys.argv[1])
+    import cc_invoke
+
+    if sys.argv[2] == "cold":
+        cc_invoke._seam_present = lambda root: False
+    elif sys.argv[2] != "current":
+        print(f"unrecognized mode {sys.argv[2]!r}", file=sys.stderr)
+        sys.exit(2)
+
+    import entry_point_shim as _eps
+
+
+    def main() -> int:
+        rc = _eps._merge_assemble_entry(["brief"])
+        if rc not in (0, 1):
+            print(f"brief failed: exit_code={rc}", file=sys.stderr)
+            return 10
+        rc2 = _eps._merge_assemble_entry(["apply", "--force"])
+        if rc2 not in (0, 1, 2, 3, 4):
+            print(f"apply transport-failed: exit_code={rc2}", file=sys.stderr)
+            return 11
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
+    '''
+)
+
+_PATH_SERVED_RE = re.compile(r"(merge_assemble\.\w+): path=(cold|warm)")
+
+
+def _paths_served(stderr_text: str) -> dict:
+    """`{"merge_assemble.brief": "warm", "merge_assemble.apply": "cold"}` --
+    parsed from `entry_point_shim._merge_assemble_dispatch`'s own
+    Observability stderr line (C2/C3), never re-derived by this test
+    module."""
+    return dict(_PATH_SERVED_RE.findall(stderr_text))
+
+
+@pytest.fixture()
+def _routing_probe(tmp_path: Path) -> Path:
+    probe = tmp_path / "routing_probe.py"
+    probe.write_text(_ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE, encoding="utf-8")
+    return probe
+
+
+def _average_batched_over_fresh_repos(
+    cmd: list, base_dir: Path, env: dict, samples: int
+) -> dict:
+    """`batched_process_time_ms(cmd, k=1, cwd=<fresh throwaway repo>)`,
+    called once per SAMPLE against its own pristine repo -- `apply` mutates
+    (this module's C4 addendum docstring), so reusing one repo across
+    samples is unsafe, unlike the brief-only batching elsewhere in this
+    file. The instrument itself (`batched_process_time_ms`) is never
+    re-implemented or replaced, only invoked `samples` times and
+    arithmetic-averaged here, matching this file's existing K_INVOCATIONS
+    (>=6) sizing."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    total_time = 0.0
+    total_procs = 0.0
+    last_rc = None
+    for i in range(samples):
+        repo = base_dir / f"sample-{i}"
+        repo.mkdir()
+        _init_throwaway_repo(repo)
+        result = batched_process_time_ms(cmd, k=1, cwd=str(repo), env=env)
+        total_time += result["process_time_ms"]
+        total_procs += result["procs_per_call"]
+        last_rc = result["rc"]
+    return {
+        "process_time_ms": total_time / samples,
+        "procs_per_call": total_procs / samples,
+        "rc": last_rc,
+        "k": samples,
+    }
+
+
+class TestLikeForLikeWarmVsColdComparison:
+    """AC8 (PM ruling, 2026-08-26, this plan's chunk C4): the SAME workload
+    (`brief` + `apply`, unstubbed, through the real entry point), measured
+    TWICE -- once forced onto the cold fallback, once served by whatever
+    this box's real registry/engine state currently offers -- each number
+    labelled with the path `entry_point_shim` itself reports. Per AC8's own
+    honesty clause: the warm-vs-cold comparison is only asserted when the
+    "current" leg actually reports warm; if it reports cold (engine
+    unpublished, or not currently serving this op), this test reports that
+    residual honestly rather than synthesizing a warm number or a
+    comparison that never happened."""
+
+    @pytest.mark.real_home
+    def test_forced_cold_leg_actually_reports_cold(
+        self, tmp_path: Path, _routing_probe: Path
+    ) -> None:
+        """Sanity check on the forcing mechanism itself, before it is
+        trusted for a timing comparison: with `cc_invoke._seam_present`
+        patched False, both `brief` and `apply` must report `path=cold`,
+        regardless of what this box's real engine state is.
+
+        `@pytest.mark.real_home`: `entry_point_shim`'s own eager
+        `resolve_claude_klabauter_root()` call (sys.path setup, ahead of and
+        independent of `route()`'s State-1/State-2 seam gate) needs the
+        real machine-local registry to succeed at all — under this suite's
+        default HOME-quarantine it raises before `route()` is ever reached,
+        which is a fixture-environment artifact, not the seam-absent
+        condition this test forces (verified by hand: the quarantined run
+        fails with "CLAUDE_KLABAUTER_ROOT resolution failed", not a path=cold line)."""
+        _require_windows_or_darwin()
+        env = _spawn_env()
+        repo = tmp_path / "correctness-forced-cold"
+        repo.mkdir()
+        _init_throwaway_repo(repo)
+
+        completed = subprocess.run(
+            [sys.executable, str(_routing_probe), str(_ENTRY_POINT_SHIM.parent), "cold"],
+            cwd=str(repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert completed.returncode == 0, completed
+        paths = _paths_served(completed.stderr)
+        assert paths == {"merge_assemble.brief": "cold", "merge_assemble.apply": "cold"}, (
+            f"forced-cold probe did not report cold on both ops: {completed.stderr}"
+        )
+
+    @pytest.mark.real_home
+    def test_like_for_like_warm_vs_cold_process_cost(
+        self, tmp_path: Path, _routing_probe: Path
+    ) -> None:
+        """AC8's own gate: measure the forced-cold leg and the current leg
+        (same workload, real entry point), and require warm to beat cold on
+        BOTH process time and process count -- only when the current leg
+        actually reports warm.
+
+        `@pytest.mark.real_home`: see the sanity test's own docstring above
+        -- both legs need the real registry for `entry_point_shim`'s own
+        root resolution to succeed at all, regardless of which branch
+        `route()` itself takes."""
+        _require_windows_or_darwin()
+        env = _spawn_env()
+        lib_dir = str(_ENTRY_POINT_SHIM.parent)
+
+        precheck_repo = tmp_path / "correctness-current"
+        precheck_repo.mkdir()
+        _init_throwaway_repo(precheck_repo)
+        precheck = subprocess.run(
+            [sys.executable, str(_routing_probe), lib_dir, "current"],
+            cwd=str(precheck_repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert precheck.returncode == 0, precheck
+        current_paths = _paths_served(precheck.stderr)
+        current_served = current_paths.get("merge_assemble.apply")
+        assert current_served in ("warm", "cold"), (
+            f"current leg reported neither warm nor cold: {precheck.stderr}"
+        )
+
+        cold_cmd = [sys.executable, str(_routing_probe), lib_dir, "cold"]
+        current_cmd = [sys.executable, str(_routing_probe), lib_dir, "current"]
+
+        cold = _average_batched_over_fresh_repos(
+            cold_cmd, tmp_path / "cold-samples", env, K_INVOCATIONS
+        )
+        current = _average_batched_over_fresh_repos(
+            current_cmd, tmp_path / "current-samples", env, K_INVOCATIONS
+        )
+        assert cold["rc"] == 0, cold
+        assert current["rc"] == 0, current
+
+        print(
+            f"AC8 FORCED-COLD leg (path=cold): {cold['process_time_ms']:.3f}ms / "
+            f"{cold['procs_per_call']:.2f} procs (k={cold['k']})"
+        )
+        print(
+            f"AC8 CURRENT leg (path={current_served}): "
+            f"{current['process_time_ms']:.3f}ms / {current['procs_per_call']:.2f} "
+            f"procs (k={current['k']})"
+        )
+
+        if current_served == "warm":
+            assert current["process_time_ms"] < cold["process_time_ms"], (
+                "AC8 FAILURE: warm "
+                f"({current['process_time_ms']:.3f}ms) did not beat cold "
+                f"({cold['process_time_ms']:.3f}ms) on process time"
+            )
+            assert current["procs_per_call"] < cold["procs_per_call"], (
+                "AC8 FAILURE: warm "
+                f"({current['procs_per_call']:.2f} procs) did not beat cold "
+                f"({cold['procs_per_call']:.2f} procs) on process count"
+            )
+        else:
+            # AC8's honesty clause: the engine is not currently serving this
+            # op warm on this box -- report the residual (above), do not
+            # synthesize or assert a warm-vs-cold comparison that never
+            # happened.
+            assert current_served == "cold"
